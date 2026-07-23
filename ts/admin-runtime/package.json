@@ -1,0 +1,48 @@
+{
+  "name": "@w17/admin-runtime",
+  "version": "0.1.0",
+  "description": "wandering-compiler admin SPA runtime \u2014 Mantine v7 + react-hook-form + spec-driven list/detail. Consumed as an npm dep by per-bundle admin SPA scaffolds emitted by REV-150.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "@mantine/charts": "^9.0.0",
+    "@mantine/core": "^9.0.0",
+    "@mantine/form": "^9.0.0",
+    "@mantine/hooks": "^9.0.0",
+    "@mantine/notifications": "^9.0.0",
+    "clsx": "^2.1.1",
+    "mantine-datatable": "^9.2.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "jsdom": "^25.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

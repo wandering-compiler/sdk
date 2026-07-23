@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package wctest.kvhash;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// FlatEntity exercises every scalar kind kvhash claims to support.
+// Used by the lib's tests; not consumed by codegen.
+message FlatEntity {
+  string                     id            = 1;
+  bool                       active        = 2;
+  int32                      score32       = 3;
+  int64                      score64       = 4;
+  uint32                     count32       = 5;
+  uint64                     count64       = 6;
+  float                      ratio32       = 7;
+  double                     ratio64       = 8;
+  bytes                      payload       = 9;
+  Status                     status        = 10;
+  google.protobuf.Timestamp  created_at    = 11;
+  google.protobuf.Duration   ttl           = 12;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    OPEN               = 1;
+    DONE               = 2;
+  }
+}
+
+// OptionalEntity pairs a proto3-`optional` scalar (which carries
+// presence via a synthetic oneof) with a plain proto3 scalar (no
+// presence). Drives the Q7-kvhash-1 presence-preservation path:
+// an unset optional must be omitted from the HASH, while the plain
+// scalar is always emitted.
+message OptionalEntity {
+  string         name = 1;
+  optional int32 age  = 2;
+}
+
+// NestedEntity carries an unsupported nested message — drives the
+// refusal path. The kvhash walker rejects this with a clear error
+// pointing at the offending field.
+message NestedEntity {
+  string id = 1;
+  Inner  inner = 2;
+
+  message Inner {
+    string label = 1;
+  }
+}
+
+// RepeatedEntity exercises the repeated-field refusal path.
+message RepeatedEntity {
+  string id = 1;
+  repeated string tags = 2;
+}
+
+// MapEntity exercises the map-field refusal path.
+message MapEntity {
+  string id = 1;
+  map<string, string> attributes = 2;
+}
