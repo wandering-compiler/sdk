@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "comment": "Shared golden vectors for locale-aware value formatting. Run by BOTH sdk/go/lib/i18n (format_vectors_test.go) and sdk/ts/admin-runtime (valueformat.test.ts) from this one file, mirrored by `make sync-i18n-formats`. It is what makes 'Go and TS format identically' a checked property instead of a hope, so a new formatting behaviour belongs here FIRST. `places` is ignored by kinds that take no argument; `value` is a string for the decimal-string path and a number for the float-adapter path.",
+  "cases": [
+    { "name": "cs decimal groups with a space and a comma", "locale": "cs", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1 234,50" },
+    { "name": "en decimal groups with a comma and a dot", "locale": "en", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1,234.50" },
+    { "name": "de decimal swaps both separators", "locale": "de", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1.234,50" },
+
+    { "name": "grouping starts above three digits", "locale": "cs", "kind": "number", "value": "999", "want": "999" },
+    { "name": "grouping at exactly four digits", "locale": "cs", "kind": "number", "value": "1000", "want": "1 000" },
+    { "name": "grouping repeats every three", "locale": "cs", "kind": "number", "value": "1234567", "want": "1 234 567" },
+    { "name": "grouping with a two-digit lead", "locale": "en", "kind": "number", "value": "12345", "want": "12,345" },
+
+    { "name": "number keeps natural precision", "locale": "cs", "kind": "number", "value": "1234.5", "want": "1 234,5" },
+    { "name": "number drops trailing fraction zeros", "locale": "cs", "kind": "number", "value": "1234.50", "want": "1 234,5" },
+    { "name": "number drops an all-zero fraction entirely", "locale": "cs", "kind": "number", "value": "1234.00", "want": "1 234" },
+    { "name": "number keeps a leading fraction zero", "locale": "cs", "kind": "number", "value": "0.05", "want": "0,05" },
+    { "name": "number of a bare dot-prefixed value", "locale": "en", "kind": "number", "value": ".5", "want": "0.5" },
+
+    { "name": "decimal rounds half UP, not half even", "locale": "en", "kind": "decimal", "places": 2, "value": "2.345", "want": "2.35" },
+    { "name": "decimal rounds half up on an even digit too", "locale": "en", "kind": "decimal", "places": 2, "value": "2.335", "want": "2.34" },
+    { "name": "decimal truncates below half", "locale": "en", "kind": "decimal", "places": 2, "value": "2.344", "want": "2.34" },
+    { "name": "decimal rounds away from zero when negative", "locale": "en", "kind": "decimal", "places": 2, "value": "-2.345", "want": "-2.35" },
+    { "name": "rounding carries across the decimal point", "locale": "en", "kind": "decimal", "places": 2, "value": "9.999", "want": "10.00" },
+    { "name": "rounding carries into a new group", "locale": "cs", "kind": "decimal", "places": 0, "value": "999.5", "want": "1 000" },
+    { "name": "decimal pads a short fraction", "locale": "en", "kind": "decimal", "places": 3, "value": "1.5", "want": "1.500" },
+    { "name": "decimal pads an integer", "locale": "en", "kind": "decimal", "places": 2, "value": "7", "want": "7.00" },
+    { "name": "zero places drops the separator", "locale": "cs", "kind": "decimal", "places": 0, "value": "1234.7", "want": "1 235" },
+
+    { "name": "negative sign is ASCII and precedes the grouping", "locale": "cs", "kind": "number", "value": "-1234567.5", "want": "-1 234 567,5" },
+    { "name": "a value that rounds to zero loses its sign", "locale": "en", "kind": "decimal", "places": 2, "value": "-0.004", "want": "0.00" },
+    { "name": "negative zero renders unsigned", "locale": "en", "kind": "number", "value": "-0", "want": "0" },
+    { "name": "an explicit plus sign is dropped", "locale": "en", "kind": "number", "value": "+42", "want": "42" },
+
+    { "name": "int64 beyond 2^53 keeps every digit (no float path)", "locale": "cs", "kind": "number", "value": "9007199254740993", "want": "9 007 199 254 740 993" },
+    { "name": "int64 max groups exactly", "locale": "en", "kind": "number", "value": "9223372036854775807", "want": "9,223,372,036,854,775,807" },
+    { "name": "a long decimal keeps its precision", "locale": "en", "kind": "decimal", "places": 10, "value": "0.1234567891", "want": "0.1234567891" },
+
+    { "name": "cs percent takes a space before the sign", "locale": "cs", "kind": "percent", "places": 1, "value": "12.34", "want": "12,3 %" },
+    { "name": "en percent takes no space", "locale": "en", "kind": "percent", "places": 1, "value": "12.34", "want": "12.3%" },
+    { "name": "percent does not multiply the value", "locale": "en", "kind": "percent", "places": 0, "value": "50", "want": "50%" },
+
+    { "name": "an omitted places means natural precision, not zero (percent)", "locale": "cs", "kind": "percent", "value": "12.3456", "want": "12,3456 %" },
+    { "name": "an omitted places means natural precision, not zero (decimal)", "locale": "en", "kind": "decimal", "value": "1234.50", "want": "1,234.5" },
+    { "name": "natural precision still groups and still drops an all-zero fraction", "locale": "cs", "kind": "percent", "value": "1234.00", "want": "1 234 %" },
+
+
+    { "name": "cs date is day-first dotted", "locale": "cs", "kind": "date", "value": "2026-07-26T14:03:00Z", "want": "26.07.2026" },
+    { "name": "en date is day-first slashed", "locale": "en", "kind": "date", "value": "2026-07-26T14:03:00Z", "want": "26/07/2026" },
+    { "name": "en-US date is month-first", "locale": "en-US", "kind": "date", "value": "2026-07-26T14:03:00Z", "want": "07/26/2026" },
+    { "name": "cs short date drops the padding", "locale": "cs", "kind": "short_date", "value": "2026-07-06T14:03:00Z", "want": "6.7.2026" },
+    { "name": "en-US short date drops the padding", "locale": "en-US", "kind": "short_date", "value": "2026-07-06T14:03:00Z", "want": "7/6/2026" },
+
+    { "name": "cs time is 24h unpadded hour", "locale": "cs", "kind": "time", "value": "2026-07-26T09:03:00Z", "want": "9:03" },
+    { "name": "de time pads the hour", "locale": "de", "kind": "time", "value": "2026-07-26T09:03:00Z", "want": "09:03" },
+    { "name": "en-US time is 12h with a meridiem", "locale": "en-US", "kind": "time", "value": "2026-07-26T14:03:00Z", "want": "2:03 PM" },
+    { "name": "en-US midnight is 12 AM", "locale": "en-US", "kind": "time", "value": "2026-07-26T00:30:00Z", "want": "12:30 AM" },
+    { "name": "en-US noon is 12 PM", "locale": "en-US", "kind": "time", "value": "2026-07-26T12:00:00Z", "want": "12:00 PM" },
+
+    { "name": "cs datetime composes date then time", "locale": "cs", "kind": "datetime", "value": "2026-07-26T14:03:00Z", "want": "26.07.2026 14:03" },
+    { "name": "en-US datetime composes its own halves", "locale": "en-US", "kind": "datetime", "value": "2026-07-26T14:03:00Z", "want": "07/26/2026 2:03 PM" },
+
+    { "name": "an offset is converted to UTC", "locale": "cs", "kind": "datetime", "value": "2026-07-26T23:30:00+02:00", "want": "26.07.2026 21:30" },
+    { "name": "an offset can move the DATE", "locale": "cs", "kind": "date", "value": "2026-07-27T00:30:00+02:00", "want": "26.07.2026" },
+    { "name": "a negative offset moves the other way", "locale": "cs", "kind": "datetime", "value": "2026-07-26T22:30:00-05:00", "want": "27.07.2026 3:30" },
+    { "name": "fractional seconds parse", "locale": "cs", "kind": "time", "value": "2026-07-26T14:03:09.512Z", "want": "14:03" },
+    { "name": "a naive datetime is taken as UTC", "locale": "cs", "kind": "datetime", "value": "2026-07-26T14:03:00", "want": "26.07.2026 14:03" },
+    { "name": "a date-only value formats as a date", "locale": "cs", "kind": "date", "value": "2026-07-26", "want": "26.07.2026" },
+    { "name": "a date-only value has a zero clock", "locale": "cs", "kind": "time", "value": "2026-07-26", "want": "0:00" },
+    { "name": "a time-only value formats as a time", "locale": "de", "kind": "time", "value": "14:03:00", "want": "14:03" },
+    { "name": "a time-only value without seconds parses", "locale": "de", "kind": "time", "value": "14:03", "want": "14:03" },
+    { "name": "a single-digit year pads to four", "locale": "cs", "kind": "date", "value": "0007-01-02", "want": "02.01.0007" },
+
+    { "name": "an unknown locale falls back to en", "locale": "xx", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1,234.50" },
+    { "name": "a regional tag falls back to its base language", "locale": "cs-CZ", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1 234,50" },
+    { "name": "an underscore tag normalizes", "locale": "cs_CZ", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1 234,50" },
+    { "name": "case is irrelevant", "locale": "CS", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1 234,50" },
+    { "name": "an exact regional row wins over its base", "locale": "en-US", "kind": "date", "value": "2026-07-26", "want": "07/26/2026" },
+
+    { "name": "a non-numeric value passes through unchanged", "locale": "cs", "kind": "number", "value": "abc", "want": "abc" },
+    { "name": "exponent notation is not a decimal", "locale": "cs", "kind": "number", "value": "1e3", "want": "1e3" },
+    { "name": "an empty value passes through", "locale": "cs", "kind": "number", "value": "", "want": "" },
+    { "name": "a lone dot is not a decimal", "locale": "cs", "kind": "number", "value": ".", "want": "." },
+    { "name": "a trailing dot is not a decimal", "locale": "cs", "kind": "number", "value": "5.", "want": "5." },
+    { "name": "an unparseable date passes through unchanged", "locale": "cs", "kind": "date", "value": "not-a-date", "want": "not-a-date" },
+    { "name": "an unparseable datetime passes through unchanged", "locale": "cs", "kind": "datetime", "value": "26/07/2026", "want": "26/07/2026" },
+
+    { "name": "float adapter: a plain double", "locale": "cs", "kind": "decimal", "places": 2, "float": 1234.5, "want": "1 234,50" },
+    { "name": "float adapter: an integral double drops its fraction", "locale": "cs", "kind": "number", "float": 1234, "want": "1 234" },
+    { "name": "float adapter: a negative double", "locale": "en", "kind": "decimal", "places": 2, "float": -0.005, "want": "-0.01" },
+    { "name": "float adapter: zero", "locale": "en", "kind": "decimal", "places": 2, "float": 0, "want": "0.00" },
+    { "name": "float adapter: never exponent notation", "locale": "en", "kind": "number", "float": 1e21, "want": "1,000,000,000,000,000,000,000" },
+    { "name": "float adapter: a small magnitude keeps its digits", "locale": "en", "kind": "decimal", "places": 7, "float": 0.0000001, "want": "0.0000001" }
+  ]
+}

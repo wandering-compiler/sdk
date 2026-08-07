@@ -1,0 +1,14 @@
+syntax = "proto2";
+
+package wctest.kvhash2;
+
+// GroupEntity carries a proto2 group field. proto3 schemas (the
+// only input kvhash sees in production) cannot express groups, so
+// this fixture exists purely to drive the defense-in-depth
+// GroupKind rejection / fall-through branches in checkFlatField,
+// encodeField and decodeField.
+message GroupEntity {
+  optional group MyGroup = 1 {
+    optional string label = 1;
+  }
+}

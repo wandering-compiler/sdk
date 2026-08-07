@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "locales": {
+    "en": {
+      "decimal_separator": ".",
+      "thousand_separator": ",",
+      "grouping": 3,
+      "date_format": "DD/MM/YYYY",
+      "short_date_format": "D/M/YYYY",
+      "time_format": "H:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value}%",
+      "first_day_of_week": 1
+    },
+    "en-US": {
+      "decimal_separator": ".",
+      "thousand_separator": ",",
+      "grouping": 3,
+      "date_format": "MM/DD/YYYY",
+      "short_date_format": "M/D/YYYY",
+      "time_format": "h:mm A",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value}%",
+      "first_day_of_week": 0
+    },
+    "cs": {
+      "decimal_separator": ",",
+      "thousand_separator": " ",
+      "grouping": 3,
+      "date_format": "DD.MM.YYYY",
+      "short_date_format": "D.M.YYYY",
+      "time_format": "H:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    },
+    "sk": {
+      "decimal_separator": ",",
+      "thousand_separator": " ",
+      "grouping": 3,
+      "date_format": "DD.MM.YYYY",
+      "short_date_format": "D.M.YYYY",
+      "time_format": "H:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    },
+    "de": {
+      "decimal_separator": ",",
+      "thousand_separator": ".",
+      "grouping": 3,
+      "date_format": "DD.MM.YYYY",
+      "short_date_format": "D.M.YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    },
+    "fr": {
+      "decimal_separator": ",",
+      "thousand_separator": " ",
+      "grouping": 3,
+      "date_format": "DD/MM/YYYY",
+      "short_date_format": "D/M/YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    },
+    "es": {
+      "decimal_separator": ",",
+      "thousand_separator": ".",
+      "grouping": 3,
+      "date_format": "DD/MM/YYYY",
+      "short_date_format": "D/M/YYYY",
+      "time_format": "H:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    },
+    "it": {
+      "decimal_separator": ",",
+      "thousand_separator": ".",
+      "grouping": 3,
+      "date_format": "DD/MM/YYYY",
+      "short_date_format": "D/M/YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value}%",
+      "first_day_of_week": 1
+    },
+    "nl": {
+      "decimal_separator": ",",
+      "thousand_separator": ".",
+      "grouping": 3,
+      "date_format": "DD-MM-YYYY",
+      "short_date_format": "D-M-YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value}%",
+      "first_day_of_week": 1
+    },
+    "pl": {
+      "decimal_separator": ",",
+      "thousand_separator": " ",
+      "grouping": 3,
+      "date_format": "DD.MM.YYYY",
+      "short_date_format": "D.M.YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    },
+    "pt": {
+      "decimal_separator": ",",
+      "thousand_separator": ".",
+      "grouping": 3,
+      "date_format": "DD/MM/YYYY",
+      "short_date_format": "D/M/YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value}%",
+      "first_day_of_week": 1
+    },
+    "ru": {
+      "decimal_separator": ",",
+      "thousand_separator": " ",
+      "grouping": 3,
+      "date_format": "DD.MM.YYYY",
+      "short_date_format": "D.M.YYYY",
+      "time_format": "HH:mm",
+      "datetime_format": "{date} {time}",
+      "percent_format": "{value} %",
+      "first_day_of_week": 1
+    }
+  }
+}
