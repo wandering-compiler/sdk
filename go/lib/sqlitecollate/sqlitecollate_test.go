@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 
 	_ "modernc.org/sqlite"
 
@@ -168,5 +171,36 @@ func TestCompare(t *testing.T) {
 		if sign != tc.want {
 			t.Errorf("Compare(%q,%q) sign = %d, want %d", tc.a, tc.b, sign, tc.want)
 		}
+	}
+}
+
+// B-F5. The fingerprint has to be stable within a build (or every connect
+// would look like drift) and has to actually depend on the ordering (or it
+// would certify nothing).
+func TestFingerprint_StableAndOrderingDerived(t *testing.T) {
+	first := sqlitecollate.Fingerprint()
+	if first != sqlitecollate.Fingerprint() {
+		t.Error("fingerprint is not stable within a build — every connect would read as drift")
+	}
+	if !strings.HasPrefix(first, "w17c1:") {
+		t.Errorf("fingerprint lost its scheme prefix: %q", first)
+	}
+	// Diagnosable, not just detectable: the two Unicode table versions
+	// must be readable out of it, so a mismatch says WHICH side moved.
+	if !strings.Contains(first, unicode.Version) {
+		t.Errorf("fingerprint does not name the Go Unicode version: %q", first)
+	}
+	if !strings.Contains(first, norm.Version) {
+		t.Errorf("fingerprint does not name the x/text Unicode version: %q", first)
+	}
+	// It must be derived from THIS package's comparison, not from version
+	// strings alone — otherwise a vendored or patched build with the same
+	// versions but different tables reads as identical.
+	if len(strings.Split(first, ":")) != 4 {
+		t.Errorf("fingerprint shape changed, expected scheme:unicode:xtext:digest — %q", first)
+	}
+	digest := strings.Split(first, ":")[3]
+	if len(digest) != 16 {
+		t.Errorf("fingerprint digest is %d chars, want 16: %q", len(digest), first)
 	}
 }

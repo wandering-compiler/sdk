@@ -570,7 +570,15 @@ func (c *authCache) evict() {
 // the cached result, which is the whole point of the cache. Surfaces
 // whose auth method trusts a header beyond this set extend it via
 // [CachedAuthFuncWithKeyHeaders] / `<PREFIX>_AUTH_CACHE_CRED_HEADERS`.
-var defaultAuthCacheKeyHeaders = []string{"Authorization", "Cookie", "X-Api-Key"}
+//
+// [CredentialHeader] (REV-162) is in the set because a URL-carried
+// credential is a credential like any other — the gateway extracts it
+// from the path/query and injects it into this slot before the auth
+// call, so keying on it is what keeps two capability links from sharing
+// one cache entry. It is safe to key on despite being client-settable
+// in principle, because [StripReservedHeadersMiddleware] removes any
+// inbound copy: at auth time the value is always the gateway's own.
+var defaultAuthCacheKeyHeaders = []string{"Authorization", "Cookie", "X-Api-Key", CredentialHeader}
 
 // authCacheKnownNonCredHeaders is the curated allowlist of request
 // headers KNOWN not to carry a credential — standard representation /

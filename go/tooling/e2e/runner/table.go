@@ -21,7 +21,26 @@ type Endpoint struct {
 
 	// AuthRequired tells the runner to inject the reserved
 	// `auth.token` capture as the call's credential.
+	//
+	// Read together with CredentialInURL: authentication is three
+	// states, not two. Unauthenticated (`exclude_auth`) has both
+	// false; ordinary bearer auth has AuthRequired true; a REV-162
+	// capability-link endpoint has BOTH true — it authenticates,
+	// but its credential is a path segment or query parameter, so
+	// the bearer injection must not happen.
 	AuthRequired bool
+
+	// CredentialInURL (REV-162) marks an endpoint whose credential
+	// travels in the URL rather than the Authorization header.
+	//
+	// The runner must NOT inject `auth.token` for these, and must
+	// not require one upstream: a capability link is opened by a
+	// recipient with no session at all, and a case that quietly
+	// sent a Bearer header alongside would be testing a request no
+	// real caller ever makes. The token belongs in the step's
+	// `input`, where it binds into the path/query like any other
+	// field.
+	CredentialInURL bool
 
 	// --- REST routing (Transport == "rest") ---
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wandering-compiler/sdk/go/lib/sqlitecollate"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/sqlite"
 )
@@ -255,5 +256,76 @@ func TestURLToDriverDSN_CarriesTheRuntimeSessionPragmas(t *testing.T) {
 	}
 	if fk != 1 {
 		t.Errorf("applier session has foreign_keys OFF (got %d); DSN was %q", fk, driverDSN)
+	}
+}
+
+// B-F5. The applier records which collator built this database's indexes,
+// and refuses to add more DDL on top of a database built with a different
+// one.
+//
+// sqlitecollate promises that the ordering an index was built with is the
+// ordering a query compares with. That is true inside one BUILD, and the
+// applier, the dev-DB snapshotter and every generated runtime are separate
+// binaries: the x/text tables driving the collation and the Go toolchain
+// tables driving the upper/lower UDFs move independently. A mismatch sorts
+// an index one way and reads it another, with nothing to see.
+//
+// Refusal happens at APPLY because that is the moment the damage would be
+// done — applying DDL under a foreign collator is what builds the
+// mismatched index.
+func TestApply_RefusesADatabaseBuiltWithAnotherCollator(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "stamped.db")
+
+	a, err := sqlite.New(ctx, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := a.Apply(ctx, &applyfetchpb.Migration{
+		Id:    "m1",
+		UpSql: `CREATE TABLE t (id INTEGER PRIMARY KEY)`,
+	}); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+
+	side, err := sql.Open("sqlite", sqlite.URLToDriverDSN(path))
+	if err != nil {
+		t.Fatalf("sibling open: %v", err)
+	}
+	defer func() { _ = side.Close() }()
+
+	var stored string
+	if err := side.QueryRow(`SELECT fingerprint FROM wc_collation WHERE id = 1`).Scan(&stored); err != nil {
+		t.Fatalf("no collation stamp written: %v", err)
+	}
+	if stored != sqlitecollate.Fingerprint() {
+		t.Errorf("stamp = %q, want this build's fingerprint %q", stored, sqlitecollate.Fingerprint())
+	}
+
+	// Re-applying under the SAME binary must stay allowed.
+	if err := a.Apply(ctx, &applyfetchpb.Migration{
+		Id:    "m2",
+		UpSql: `CREATE TABLE t2 (id INTEGER PRIMARY KEY)`,
+	}); err != nil {
+		t.Fatalf("same-collator re-apply must be allowed: %v", err)
+	}
+
+	// Stand in for a binary built from different Unicode tables.
+	if _, err := side.Exec(`UPDATE wc_collation SET fingerprint = ? WHERE id = 1`,
+		"w17c1:9.0.0:9.0.0:deadbeefdeadbeef"); err != nil {
+		t.Fatalf("rewrite stamp: %v", err)
+	}
+	err = a.Apply(ctx, &applyfetchpb.Migration{
+		Id:    "m3",
+		UpSql: `CREATE TABLE t3 (id INTEGER PRIMARY KEY)`,
+	})
+	if err == nil {
+		t.Fatal("apply proceeded onto a database built with a different collator — the index it creates would be sorted by one collator and read by another")
+	}
+	// The diagnostic has to say WHICH side moved, or the operator cannot act.
+	for _, want := range []string{"9.0.0", sqlitecollate.Fingerprint()} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not name %q: %v", want, err)
+		}
 	}
 }

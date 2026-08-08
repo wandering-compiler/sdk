@@ -34,6 +34,13 @@ const (
 // parked — both need configurable name (which cookie? which
 // header?) and the right shape for that deserves a separate
 // decision pulled by a real fixture.
+//
+// URL_TOKEN un-parks exactly that shape for the URL carrier —
+// the fixture arrived (a customer opens an invoice from a link
+// in an e-mail, with no session and no way to set a header).
+// It is NOT classified from the Authorization header like the
+// others; it is selected by the endpoint's `credential`
+// declaration. See TOKEN_TYPE_URL_TOKEN + `Credential` below.
 type TokenType int32
 
 const (
@@ -56,6 +63,31 @@ const (
 	// disappears for ANY-typed methods since they get invoked
 	// for every non-scheme-specific request.
 	TokenType_TOKEN_TYPE_ANY TokenType = 3
+	// URL_TOKEN — the credential travels in the URL itself (a
+	// path segment or a query parameter), declared per endpoint
+	// via `RestEndpoint.credential`. For capability links: a
+	// customer opens an invoice from an e-mail with no session,
+	// a share link, a one-click unsubscribe.
+	//
+	// Unlike the other types this one is NOT reached by peeking
+	// the Authorization header — a URL_TOKEN method is invoked
+	// ONLY for endpoints that declare `credential`, never as a
+	// fall-through for the rest of the surface. That is the whole
+	// point of the per-endpoint declaration: without it a
+	// URL-carried credential would have to be an ANY catch-all,
+	// and appending `?token=<stolen>` to any other route on the
+	// surface would authenticate the caller as that token's
+	// principal.
+	//
+	// This is NOT `exclude_auth`. The endpoint stays fully
+	// authenticated: the auth method resolves the token into the
+	// same AuthResp everything else produces, so `scopes` still
+	// isolate tenants, ACL still gates, and the request still
+	// logs, traces and re-authenticates like any other. What the
+	// handler then writes by hand is row SELECTION, not tenant
+	// ISOLATION — and getting selection wrong leaks a sibling row
+	// inside the same scope, never another tenant's.
+	TokenType_TOKEN_TYPE_URL_TOKEN TokenType = 4
 )
 
 // Enum value maps for TokenType.
@@ -65,12 +97,14 @@ var (
 		1: "TOKEN_TYPE_BEARER",
 		2: "TOKEN_TYPE_BASIC",
 		3: "TOKEN_TYPE_ANY",
+		4: "TOKEN_TYPE_URL_TOKEN",
 	}
 	TokenType_value = map[string]int32{
 		"TOKEN_TYPE_UNSPECIFIED": 0,
 		"TOKEN_TYPE_BEARER":      1,
 		"TOKEN_TYPE_BASIC":       2,
 		"TOKEN_TYPE_ANY":         3,
+		"TOKEN_TYPE_URL_TOKEN":   4,
 	}
 )
 
@@ -742,6 +776,95 @@ func (x *AuthMethod) GetTokenTypes() []TokenType {
 	return nil
 }
 
+// Credential (REV-162) — declares that THIS endpoint carries its
+// credential in the URL rather than in a header, and names where.
+// Presence routes the endpoint's auth call to the surface's
+// URL_TOKEN auth method; absence means the endpoint authenticates
+// the ordinary way (Authorization header, scheme-classified).
+//
+//	{ ref: "documents.DocumentQuery.GetPublicDocument",
+//	  method: GET, path: "/public/invoices/{token}",
+//	  credential: { path_param: "token" } }
+//
+// The gateway extracts the value and hands it to the auth method
+// as a reserved entry in `AuthReq.headers` under the fixed key
+// `x-w17-credential` — so the auth backend contract does not
+// change at all, and a hand-written auth service sees it exactly
+// like the auth plugin would. That key is stripped from every
+// inbound request before the map is built, on every endpoint,
+// declared or not: a client that could set the header itself
+// would be forging the channel.
+//
+// `credential` and `exclude_auth` on one endpoint is a parse-time
+// error. They are opposites — one says "this request has an
+// identity, it just arrives elsewhere", the other says "this
+// request has no identity at all".
+//
+// Not available on `RestStream` yet — see the note there.
+type Credential struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Name of the `{placeholder}` in the endpoint's `path` that
+	// holds the credential. Must match a placeholder actually
+	// present in the template.
+	//
+	// Prefer this over `query_param` when you control the link
+	// shape: query strings are the part of a URL most eagerly
+	// recorded by proxies and analytics.
+	PathParam string `protobuf:"bytes,1,opt,name=path_param,json=pathParam,proto3" json:"path_param,omitempty"`
+	// Name of the query parameter that holds the credential, for
+	// link shapes that cannot put it in the path (`?t=…`).
+	//
+	// Exactly one of `path_param` / `query_param` must be set;
+	// neither or both is a parse-time error.
+	QueryParam    string `protobuf:"bytes,2,opt,name=query_param,json=queryParam,proto3" json:"query_param,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Credential) Reset() {
+	*x = Credential{}
+	mi := &file_w17_rest_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Credential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Credential) ProtoMessage() {}
+
+func (x *Credential) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rest_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Credential.ProtoReflect.Descriptor instead.
+func (*Credential) Descriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Credential) GetPathParam() string {
+	if x != nil {
+		return x.PathParam
+	}
+	return ""
+}
+
+func (x *Credential) GetQueryParam() string {
+	if x != nil {
+		return x.QueryParam
+	}
+	return ""
+}
+
 // MetadataPropagation declares which HTTP request headers
 // the gateway forwards as gRPC metadata to the backend
 // handlers. Headers do not surface on any request message —
@@ -809,7 +932,7 @@ type MetadataPropagation struct {
 
 func (x *MetadataPropagation) Reset() {
 	*x = MetadataPropagation{}
-	mi := &file_w17_rest_proto_msgTypes[3]
+	mi := &file_w17_rest_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -821,7 +944,7 @@ func (x *MetadataPropagation) String() string {
 func (*MetadataPropagation) ProtoMessage() {}
 
 func (x *MetadataPropagation) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[3]
+	mi := &file_w17_rest_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -834,7 +957,7 @@ func (x *MetadataPropagation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataPropagation.ProtoReflect.Descriptor instead.
 func (*MetadataPropagation) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{3}
+	return file_w17_rest_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *MetadataPropagation) GetHeaders() []string {
@@ -880,7 +1003,7 @@ type HeaderRename struct {
 
 func (x *HeaderRename) Reset() {
 	*x = HeaderRename{}
-	mi := &file_w17_rest_proto_msgTypes[4]
+	mi := &file_w17_rest_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -892,7 +1015,7 @@ func (x *HeaderRename) String() string {
 func (*HeaderRename) ProtoMessage() {}
 
 func (x *HeaderRename) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[4]
+	mi := &file_w17_rest_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -905,7 +1028,7 @@ func (x *HeaderRename) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeaderRename.ProtoReflect.Descriptor instead.
 func (*HeaderRename) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{4}
+	return file_w17_rest_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HeaderRename) GetHttp() string {
@@ -969,7 +1092,7 @@ type RestGroup struct {
 
 func (x *RestGroup) Reset() {
 	*x = RestGroup{}
-	mi := &file_w17_rest_proto_msgTypes[5]
+	mi := &file_w17_rest_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -981,7 +1104,7 @@ func (x *RestGroup) String() string {
 func (*RestGroup) ProtoMessage() {}
 
 func (x *RestGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[5]
+	mi := &file_w17_rest_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -994,7 +1117,7 @@ func (x *RestGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestGroup.ProtoReflect.Descriptor instead.
 func (*RestGroup) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{5}
+	return file_w17_rest_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RestGroup) GetPrefix() string {
@@ -1205,14 +1328,26 @@ type RestEndpoint struct {
 	// the method name (lowerCamel, group-noun-stripped in the facade).
 	// Set this to resolve a within-group naming collision, or to give
 	// an operation a friendlier name than its gRPC method.
-	OperationId   string `protobuf:"bytes,16,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OperationId string `protobuf:"bytes,16,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	// REV-162 — this endpoint's credential travels in the URL, not
+	// in a header. Routes the auth call to the surface's URL_TOKEN
+	// auth method and names the path/query slot the token sits in.
+	// Unset (the default) = ordinary header authentication.
+	//
+	// Mutually exclusive with `exclude_auth`. See `Credential`.
+	//
+	// (Field numbers 6 and 7 are free but deliberately unused —
+	// they have never appeared in any released shape and their
+	// absence is unexplained, so new fields take fresh numbers
+	// rather than gamble on wire history.)
+	Credential    *Credential `protobuf:"bytes,17,opt,name=credential,proto3" json:"credential,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestEndpoint) Reset() {
 	*x = RestEndpoint{}
-	mi := &file_w17_rest_proto_msgTypes[6]
+	mi := &file_w17_rest_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1224,7 +1359,7 @@ func (x *RestEndpoint) String() string {
 func (*RestEndpoint) ProtoMessage() {}
 
 func (x *RestEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[6]
+	mi := &file_w17_rest_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1237,7 +1372,7 @@ func (x *RestEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestEndpoint.ProtoReflect.Descriptor instead.
 func (*RestEndpoint) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{6}
+	return file_w17_rest_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RestEndpoint) GetRef() string {
@@ -1331,6 +1466,13 @@ func (x *RestEndpoint) GetOperationId() string {
 	return ""
 }
 
+func (x *RestEndpoint) GetCredential() *Credential {
+	if x != nil {
+		return x.Credential
+	}
+	return nil
+}
+
 // MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata
 // routing entry. Sibling of `FieldBinding` (REV-020) which
 // targets a request-msg field; this one targets a metadata key.
@@ -1359,7 +1501,7 @@ type MetadataBinding struct {
 
 func (x *MetadataBinding) Reset() {
 	*x = MetadataBinding{}
-	mi := &file_w17_rest_proto_msgTypes[7]
+	mi := &file_w17_rest_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1371,7 +1513,7 @@ func (x *MetadataBinding) String() string {
 func (*MetadataBinding) ProtoMessage() {}
 
 func (x *MetadataBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[7]
+	mi := &file_w17_rest_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1384,7 +1526,7 @@ func (x *MetadataBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataBinding.ProtoReflect.Descriptor instead.
 func (*MetadataBinding) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{7}
+	return file_w17_rest_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *MetadataBinding) GetRef() string {
@@ -1442,7 +1584,7 @@ type PagedConfig struct {
 
 func (x *PagedConfig) Reset() {
 	*x = PagedConfig{}
-	mi := &file_w17_rest_proto_msgTypes[8]
+	mi := &file_w17_rest_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1454,7 +1596,7 @@ func (x *PagedConfig) String() string {
 func (*PagedConfig) ProtoMessage() {}
 
 func (x *PagedConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[8]
+	mi := &file_w17_rest_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1467,7 +1609,7 @@ func (x *PagedConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PagedConfig.ProtoReflect.Descriptor instead.
 func (*PagedConfig) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{8}
+	return file_w17_rest_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PagedConfig) GetEnabled() bool {
@@ -1533,7 +1675,7 @@ type FieldBinding struct {
 
 func (x *FieldBinding) Reset() {
 	*x = FieldBinding{}
-	mi := &file_w17_rest_proto_msgTypes[9]
+	mi := &file_w17_rest_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1545,7 +1687,7 @@ func (x *FieldBinding) String() string {
 func (*FieldBinding) ProtoMessage() {}
 
 func (x *FieldBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[9]
+	mi := &file_w17_rest_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1558,7 +1700,7 @@ func (x *FieldBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldBinding.ProtoReflect.Descriptor instead.
 func (*FieldBinding) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{9}
+	return file_w17_rest_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *FieldBinding) GetRef() string {
@@ -1646,7 +1788,7 @@ type RestStream struct {
 
 func (x *RestStream) Reset() {
 	*x = RestStream{}
-	mi := &file_w17_rest_proto_msgTypes[10]
+	mi := &file_w17_rest_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1658,7 +1800,7 @@ func (x *RestStream) String() string {
 func (*RestStream) ProtoMessage() {}
 
 func (x *RestStream) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[10]
+	mi := &file_w17_rest_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1671,7 +1813,7 @@ func (x *RestStream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestStream.ProtoReflect.Descriptor instead.
 func (*RestStream) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{10}
+	return file_w17_rest_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RestStream) GetRef() string {
@@ -1806,7 +1948,7 @@ type DownloadEndpoint struct {
 
 func (x *DownloadEndpoint) Reset() {
 	*x = DownloadEndpoint{}
-	mi := &file_w17_rest_proto_msgTypes[11]
+	mi := &file_w17_rest_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1818,7 +1960,7 @@ func (x *DownloadEndpoint) String() string {
 func (*DownloadEndpoint) ProtoMessage() {}
 
 func (x *DownloadEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[11]
+	mi := &file_w17_rest_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1831,7 +1973,7 @@ func (x *DownloadEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadEndpoint.ProtoReflect.Descriptor instead.
 func (*DownloadEndpoint) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{11}
+	return file_w17_rest_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DownloadEndpoint) GetPath() string {
@@ -1942,7 +2084,13 @@ const file_w17_rest_proto_rawDesc = "" +
 	"AuthMethod\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12/\n" +
 	"\vtoken_types\x18\x02 \x03(\x0e2\x0e.w17.TokenTypeR\n" +
-	"tokenTypes\"\x92\x01\n" +
+	"tokenTypes\"L\n" +
+	"\n" +
+	"Credential\x12\x1d\n" +
+	"\n" +
+	"path_param\x18\x01 \x01(\tR\tpathParam\x12\x1f\n" +
+	"\vquery_param\x18\x02 \x01(\tR\n" +
+	"queryParam\"\x92\x01\n" +
 	"\x13MetadataPropagation\x12\x18\n" +
 	"\aheaders\x18\x01 \x03(\tR\aheaders\x12'\n" +
 	"\x0fextend_defaults\x18\x02 \x01(\bR\x0eextendDefaults\x128\n" +
@@ -1956,7 +2104,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\xf9\x03\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\xaa\x04\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -1971,7 +2119,10 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x05paged\x18\r \x01(\v2\x10.w17.PagedConfigR\x05paged\x12A\n" +
 	"\x11metadata_bindings\x18\x0e \x03(\v2\x14.w17.MetadataBindingR\x10metadataBindings\x12$\n" +
 	"\x0eraw_body_field\x18\x0f \x01(\tR\frawBodyField\x12!\n" +
-	"\foperation_id\x18\x10 \x01(\tR\voperationIdJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
+	"\foperation_id\x18\x10 \x01(\tR\voperationId\x12/\n" +
+	"\n" +
+	"credential\x18\x11 \x01(\v2\x0f.w17.CredentialR\n" +
+	"credentialJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
 	"\x0fMetadataBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1a\n" +
@@ -1986,7 +2137,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fFieldBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1b\n" +
-	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xbe\x02\n" +
+	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xd0\x02\n" +
 	"\n" +
 	"RestStream\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
@@ -1995,7 +2146,9 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fexclude_auth\x18\x04 \x01(\bR\vexcludeAuth\x12A\n" +
 	"\x11metadata_bindings\x18\x06 \x03(\v2\x14.w17.MetadataBindingR\x10metadataBindings\x12!\n" +
 	"\foperation_id\x18\a \x01(\tR\voperationId\x12)\n" +
-	"\x06fields\x18\b \x03(\v2\x11.w17.FieldBindingR\x06fieldsJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
+	"\x06fields\x18\b \x03(\v2\x11.w17.FieldBindingR\x06fieldsJ\x04\b\x05\x10\x06J\x04\b\t\x10\n" +
+	"R\vauth_scopesR\n" +
+	"credential\"\xf0\x02\n" +
 	"\x10DownloadEndpoint\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\ainclude\x18\x02 \x03(\tR\ainclude\x12\x18\n" +
@@ -2006,12 +2159,13 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fdisable_etag\x18\b \x01(\bR\vdisableEtag\x12#\n" +
 	"\rdisable_range\x18\t \x01(\bR\fdisableRange\x12'\n" +
 	"\burl_form\x18\n" +
-	" \x01(\x0e2\f.w17.URLFormR\aurlFormJ\x04\b\x05\x10\x06R\vauth_scopes*h\n" +
+	" \x01(\x0e2\f.w17.URLFormR\aurlFormJ\x04\b\x05\x10\x06R\vauth_scopes*\x82\x01\n" +
 	"\tTokenType\x12\x1a\n" +
 	"\x16TOKEN_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11TOKEN_TYPE_BEARER\x10\x01\x12\x14\n" +
 	"\x10TOKEN_TYPE_BASIC\x10\x02\x12\x12\n" +
-	"\x0eTOKEN_TYPE_ANY\x10\x03*e\n" +
+	"\x0eTOKEN_TYPE_ANY\x10\x03\x12\x18\n" +
+	"\x14TOKEN_TYPE_URL_TOKEN\x10\x04*e\n" +
 	"\vFieldSource\x12\x1c\n" +
 	"\x18FIELD_SOURCE_UNSPECIFIED\x10\x00\x12\f\n" +
 	"\bPATH_VAR\x10\x01\x12\x0f\n" +
@@ -2055,7 +2209,7 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 }
 
 var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
 	(FieldSource)(0),                 // 1: w17.FieldSource
@@ -2066,45 +2220,47 @@ var file_w17_rest_proto_goTypes = []any{
 	(*RestApi)(nil),                  // 6: w17.RestApi
 	(*PluginInclude)(nil),            // 7: w17.PluginInclude
 	(*AuthMethod)(nil),               // 8: w17.AuthMethod
-	(*MetadataPropagation)(nil),      // 9: w17.MetadataPropagation
-	(*HeaderRename)(nil),             // 10: w17.HeaderRename
-	(*RestGroup)(nil),                // 11: w17.RestGroup
-	(*RestEndpoint)(nil),             // 12: w17.RestEndpoint
-	(*MetadataBinding)(nil),          // 13: w17.MetadataBinding
-	(*PagedConfig)(nil),              // 14: w17.PagedConfig
-	(*FieldBinding)(nil),             // 15: w17.FieldBinding
-	(*RestStream)(nil),               // 16: w17.RestStream
-	(*DownloadEndpoint)(nil),         // 17: w17.DownloadEndpoint
-	(*descriptorpb.FileOptions)(nil), // 18: google.protobuf.FileOptions
+	(*Credential)(nil),               // 9: w17.Credential
+	(*MetadataPropagation)(nil),      // 10: w17.MetadataPropagation
+	(*HeaderRename)(nil),             // 11: w17.HeaderRename
+	(*RestGroup)(nil),                // 12: w17.RestGroup
+	(*RestEndpoint)(nil),             // 13: w17.RestEndpoint
+	(*MetadataBinding)(nil),          // 14: w17.MetadataBinding
+	(*PagedConfig)(nil),              // 15: w17.PagedConfig
+	(*FieldBinding)(nil),             // 16: w17.FieldBinding
+	(*RestStream)(nil),               // 17: w17.RestStream
+	(*DownloadEndpoint)(nil),         // 18: w17.DownloadEndpoint
+	(*descriptorpb.FileOptions)(nil), // 19: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
 	8,  // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
-	11, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
-	9,  // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
+	12, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
+	10, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
 	7,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
 	0,  // 4: w17.AuthMethod.token_types:type_name -> w17.TokenType
-	10, // 5: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
-	12, // 6: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	16, // 7: w17.RestGroup.streams:type_name -> w17.RestStream
-	17, // 8: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	11, // 5: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
+	13, // 6: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
+	17, // 7: w17.RestGroup.streams:type_name -> w17.RestStream
+	18, // 8: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
 	4,  // 9: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	15, // 10: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	14, // 11: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	13, // 12: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
-	1,  // 13: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 14: w17.FieldBinding.from:type_name -> w17.FieldSource
-	5,  // 15: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	13, // 16: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	15, // 17: w17.RestStream.fields:type_name -> w17.FieldBinding
-	3,  // 18: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 19: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	18, // 20: w17.rest_api:extendee -> google.protobuf.FileOptions
-	6,  // 21: w17.rest_api:type_name -> w17.RestApi
-	22, // [22:22] is the sub-list for method output_type
-	22, // [22:22] is the sub-list for method input_type
-	21, // [21:22] is the sub-list for extension type_name
-	20, // [20:21] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	16, // 10: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	15, // 11: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	14, // 12: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	9,  // 13: w17.RestEndpoint.credential:type_name -> w17.Credential
+	1,  // 14: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 15: w17.FieldBinding.from:type_name -> w17.FieldSource
+	5,  // 16: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	14, // 17: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	16, // 18: w17.RestStream.fields:type_name -> w17.FieldBinding
+	3,  // 19: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 20: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	19, // 21: w17.rest_api:extendee -> google.protobuf.FileOptions
+	6,  // 22: w17.rest_api:type_name -> w17.RestApi
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	22, // [22:23] is the sub-list for extension type_name
+	21, // [21:22] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2118,7 +2274,7 @@ func file_w17_rest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 1,
 			NumServices:   0,
 		},

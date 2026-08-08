@@ -225,7 +225,14 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		input = map[string]any{}
 	}
 	token := ""
-	if s.Endpoint.AuthRequired {
+	// REV-162 — a capability-link endpoint IS auth-required, but its
+	// credential rides in the URL. Injecting the scenario's bearer
+	// token here would be worse than redundant: the case would pass
+	// while exercising a request no recipient of such a link can
+	// make, and it would fail outright in any scenario that never
+	// signed anyone in — which is the only honest way to write this
+	// case in the first place.
+	if s.Endpoint.AuthRequired && !s.Endpoint.CredentialInURL {
 		v, ok := scope.Get("auth.token")
 		if !ok {
 			return fmt.Errorf("auth-required endpoint but no auth.token captured upstream in this scenario")
