@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wandering-compiler/sdk/go/lib/dbsession"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -66,7 +67,18 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("postgres.New: dsn is empty")
 	}
-	conn, err := pgx.Connect(ctx, dsn)
+	// B-F9 / B-F15: pin the session settings the emitted SQL depends on,
+	// from the same declaration the generated runtime reads. The applier
+	// was NOT self-guarding here, contrary to how it looked: pgx checks
+	// standard_conforming_strings inside sanitizeForSimpleQuery, which
+	// execSimpleProtocol calls only when a query HAS bind arguments —
+	// migration bodies have none, so their literals were parsed under
+	// whatever the session happened to carry. search_path matters for the
+	// same reason in the other direction: bare identifiers (including
+	// `wc_migrations`) resolve through it, so an applier running as a role
+	// that owns a same-named schema creates the tables somewhere the
+	// runtime never looks.
+	conn, err := pgx.Connect(ctx, dbsession.ApplyPGDSNParams(dsn))
 	if err != nil {
 		return nil, fmt.Errorf("postgres.New: %w", err)
 	}

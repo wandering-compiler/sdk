@@ -106,3 +106,63 @@ func ApplyMySQLDSNParams(dsn string) string {
 	}
 	return dsn
 }
+
+// PGDSNParams returns the libpq-style DSN parameters every process that
+// opens a w17 PostgreSQL database must carry. Both drivers forward
+// unrecognised parameters as server startup options — lib/pq through its
+// Runtime map, pgx through its config — so one spelling reaches both.
+//
+//   - standard_conforming_strings (B-F9) — the PG emitter inlines string
+//     literals by doubling quotes ONLY, which is correct exactly while
+//     this is on. It is settable per database and per role, and with it
+//     off the server reads backslashes inside a literal as escapes, so an
+//     emitted `'a\b'` stops meaning what the declaration said. Both PG
+//     surfaces were exposed: lib/pq has no scs handling at all, and the
+//     applier's pgx only checks scs when a query HAS bind arguments,
+//     which migration bodies do not.
+//   - search_path (B-F15) — w17 puts every table in one schema and
+//     addresses it with bare identifiers (the namespace decision chose a
+//     prefix over a schema per module), so bare names resolve through
+//     search_path. Its default is `"$user", public`, which means an
+//     applier running as a role that owns a same-named schema creates
+//     `wc_migrations` and the tables somewhere the runtime does not look.
+//     Pinning it turns the decision's premise into a fact.
+//
+// A parameter the operator named themselves is left alone, same rule as
+// the MySQL set: these refuse to inherit an ACCIDENTAL setting, they do
+// not overrule a chosen one.
+func PGDSNParams() []string {
+	return []string{
+		"standard_conforming_strings=on",
+		"search_path=public",
+	}
+}
+
+// ApplyPGDSNParams appends every parameter from [PGDSNParams] the DSN does
+// not already speak to, matching on the parameter NAME so an operator's
+// own value survives. Handles both the URL form (`postgres://…?k=v`) and
+// the keyword form (`host=… user=…`). Idempotent.
+func ApplyPGDSNParams(dsn string) string {
+	keyword := !strings.Contains(dsn, "://")
+	for _, p := range PGDSNParams() {
+		name, value, _ := strings.Cut(p, "=")
+		if strings.Contains(dsn, name+"=") {
+			continue
+		}
+		if keyword {
+			// libpq keyword/value form: space-separated, and a value with
+			// no spaces needs no quoting (both of ours qualify).
+			if dsn != "" {
+				dsn += " "
+			}
+			dsn += name + "=" + value
+			continue
+		}
+		if strings.Contains(dsn, "?") {
+			dsn += "&" + p
+			continue
+		}
+		dsn += "?" + p
+	}
+	return dsn
+}
