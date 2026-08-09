@@ -365,12 +365,13 @@ var _ grpc.ServerTransportStream = (*inprocServerTransportStream)(nil)
 //
 // Three steps, one per thing the wire does:
 //
-//  1. Relay the principal. Every dialled inter-tier conn installs
+//  1. Relay the gateway's stamps. Every dialled inter-tier conn installs
 //     principal.ForwardToOutgoing (core/grpcx.DialOpts) — a CLIENT-side
 //     interceptor, so it does not exist on this path and has to be applied
-//     here. It copies the verified principal (`x-w17-user` + every
-//     `x-w17-scope-*`) from the caller's incoming side onto its outgoing
-//     side, never overwriting an explicit value, and moves nothing else.
+//     here. It copies what the gateway wrote from its verified auth
+//     response (`x-w17-user`, every `x-w17-scope-*`, every `w17-label-*`)
+//     from the caller's incoming side onto its outgoing side, never
+//     overwriting an explicit value, and moves nothing else.
 //  2. Deliver: the transport hands the server the caller's OUTGOING
 //     metadata as INCOMING, so handlers reading
 //     metadata.FromIncomingContext (principal, language, paging, tx-id, …)

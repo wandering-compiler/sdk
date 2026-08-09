@@ -13,28 +13,37 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/inprocgrpc"
 )
 
-// The metadata a gateway hands its first backend hop: the principal it
-// verified (relayed onward on every hop by design) plus three namespaces
-// that are deliberately NOT relayed across a wire hop — tx routing, the
-// proxy conn id, and the request language.
+// The metadata a gateway hands its first backend hop: everything it stamps
+// from the verified auth response (the principal envelope, the data scopes,
+// the broadcast labels — all relayed onward on every hop by design) plus
+// three namespaces that are deliberately NOT relayed across a wire hop — tx
+// routing, the proxy conn id, and the request language.
 //
 // `w17-tx-id` is the sharp one: principal.ForwardToOutgoing relays the
-// principal and nothing else, and lib/principal/forward_test.go
+// gateway-stamped set and nothing else, and lib/principal/forward_test.go
 // (TestForwardToOutgoing_ExcludesNonPrincipal) PINS `w17-tx-id` out of the
 // relay — "tx-routing … must stay put". So the wire side of this contract
 // is already tested; these tests are its in-process half.
 const (
 	mdUser     = "x-w17-user"
 	mdScopeOrg = "x-w17-scope-org_id"
+	mdLabelOrg = "w17-label-org_id"
 	mdTxID     = "w17-tx-id"
 	mdConnID   = "w17-conn-id"
 	mdLanguage = "w17-language"
 )
 
+// relayed is the exact key set a hop beyond the first may see — what the
+// gateway wrote from its verified auth response, in sorted order. Spelled
+// once: every nested-hop assertion below compares against this, so a
+// namespace that starts or stops riding along changes one list.
+var relayed = []string{mdLabelOrg, mdScopeOrg, mdUser}
+
 func gatewayMD() metadata.MD {
 	return metadata.Pairs(
 		mdUser, "envelope-bytes",
 		mdScopeOrg, "org-7",
+		mdLabelOrg, "org-7",
 		mdTxID, "tx-abc",
 		mdConnID, "conn-9",
 		mdLanguage, "cs",
@@ -131,10 +140,10 @@ func keys(md metadata.MD) []string {
 // standalone one: two deployments of one declaration disagreeing about
 // transaction boundaries.
 //
-// The invariant is the wire's: a nested hop receives the principal (the
-// dialled-conn interceptor relays it — core/grpcx.DialOpts) and nothing
-// else. Stated as an exact key set, so a future namespace that starts
-// riding along uninvited fails here rather than in a target project.
+// The invariant is the wire's: a nested hop receives what the gateway
+// stamped (the dialled-conn interceptor relays it — core/grpcx.DialOpts)
+// and nothing else. Stated as an exact key set, so a future namespace that
+// starts riding along uninvited fails here rather than in a target project.
 func TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver(t *testing.T) {
 	conn, _, inner := nestedCallFixture(t)
 
@@ -144,11 +153,11 @@ func TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver(t *testing.T) {
 		t.Fatalf("Invoke: %v", err)
 	}
 
-	want := []string{mdScopeOrg, mdUser}
+	want := relayed
 	got := keys(inner.incoming)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("nested in-process call saw incoming metadata %v, want %v.\n"+
-			"Across a wire hop a nested call carries the relayed principal and NOTHING else "+
+			"Across a wire hop a nested call carries the relayed gateway stamps and NOTHING else "+
 			"(lib/principal/forward_test.go pins %s out of the relay); anything extra here is a "+
 			"composed-vs-standalone divergence — %s in particular makes the nested handler adopt the "+
 			"caller's distributed transaction in a composed binary only.", got, want, mdTxID, mdTxID)
@@ -156,6 +165,19 @@ func TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver(t *testing.T) {
 	if v := inner.incoming.Get(mdUser); len(v) != 1 || v[0] != "envelope-bytes" {
 		t.Errorf("the principal must still reach the nested handler (composed tiers rely on it and the "+
 			"storage scope guard fails closed without it): x-w17-user = %v", v)
+	}
+	// The label is here for the same reason the scope is, one field over:
+	// the scope decides which ROWS the nested handler may touch, the label
+	// decides who the event it emits is DELIVERED to. A tier reached at
+	// depth ≥ 2 — a facade calling storage, a subscriber handler calling
+	// back into it — is where most emits actually fire, and an unlabelled
+	// event reaches nobody on a label-partitioned surface. Losing it here
+	// is silent: the write succeeds and only the event disappears.
+	if v := inner.incoming.Get(mdLabelOrg); len(v) != 1 || v[0] != "org-7" {
+		t.Errorf("the broadcast label must reach the nested handler too: %s = %v. Without it an event "+
+			"emitted from this tier is unlabelled, and an unlabelled event is delivered to NOBODY on a "+
+			"label-partitioned surface — a public event that silently never reaches /w17-events.",
+			mdLabelOrg, v)
 	}
 }
 
@@ -208,7 +230,7 @@ func TestConn_CallerWithNoOutgoingMetadata_DoesNotLeakItsIncoming(t *testing.T) 
 		t.Fatalf("Invoke: %v", err)
 	}
 
-	want := []string{mdScopeOrg, mdUser}
+	want := relayed
 	got := keys(rec.incoming)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("a caller that set NO outgoing metadata delivered %v, want %v: the bridge used to skip "+
@@ -278,7 +300,7 @@ func TestConn_Stream_NestedCall_SeesOnlyWhatAWireHopWouldDeliver(t *testing.T) {
 	if len(handlerOutgoing) != 0 {
 		t.Errorf("stream handler's OUTGOING metadata = %v, want empty (same contract as unary)", keys(handlerOutgoing))
 	}
-	want := []string{mdScopeOrg, mdUser}
+	want := relayed
 	got := keys(inner.incoming)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("call nested inside a STREAMING handler saw %v, want %v", got, want)

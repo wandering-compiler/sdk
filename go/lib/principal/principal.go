@@ -197,11 +197,28 @@ func ScopeKey(name string) string {
 // (see [core/grpcx.DialOpts]); it is exported for the rare hand-built dial
 // that bypasses that path.
 //
-// It moves EXACTLY the principal contract — the `x-w17-user` envelope and
-// every `x-w17-scope-<name>` key — and nothing else. Paging (`x-w17-paging-*`),
-// tracing, i18n, and tx-routing metadata have their own propagation and are
-// deliberately left alone; blanket-forwarding paging in particular would
-// bleed one query's LIMIT / keyset onto sibling storage calls.
+// It moves EXACTLY what the gateway stamps from its verified auth response —
+// the `x-w17-user` envelope, every `x-w17-scope-<name>` key, and every
+// `w17-label-<name>` broadcast label — and nothing else. Paging
+// (`x-w17-paging-*`), tracing, i18n, and tx-routing metadata have their own
+// propagation and are deliberately left alone; blanket-forwarding paging in
+// particular would bleed one query's LIMIT / keyset onto sibling storage
+// calls.
+//
+// The labels are here because they decide an event's AUDIENCE exactly as the
+// scopes decide its rows, and an emit fires from whichever tier the call
+// reached — usually not the first one. Relaying only the scopes made the two
+// disagree by HOP COUNT: a storage-tier emit one hop from the gateway kept
+// its labels (the gateway's own outgoing metadata carried them), and the same
+// emit reached through one more tier — a facade, or a subscriber handler
+// calling back into storage — arrived unlabelled. An unlabelled event is
+// delivered to NOBODY on a label-partitioned surface (restgw.entitled), so
+// the failure is a public event that silently never reaches `/w17-events`,
+// three tiers from the relay that dropped the key. Forwarding them is as safe
+// as forwarding the scopes and for the same reason: a client's own
+// `w17-label-*` never survives the edge ([SanitizeGatewayMD] clears the
+// namespace before the gateway stamps its own), so everything reaching this
+// relay is gateway-written.
 //
 // A key already present in the outgoing metadata is left untouched — an
 // explicit value the caller set wins and is never duplicated — so the
@@ -219,7 +236,9 @@ func ForwardToOutgoing(ctx context.Context) context.Context {
 	out, _ := metadata.FromOutgoingContext(ctx)
 	var pairs []string
 	for key, vals := range in {
-		if key != userMetadataKey && !strings.HasPrefix(key, scopeKeyPrefix) {
+		if key != userMetadataKey &&
+			!strings.HasPrefix(key, scopeKeyPrefix) &&
+			!strings.HasPrefix(key, LabelKeyPrefix) {
 			continue
 		}
 		if _, set := out[key]; set {

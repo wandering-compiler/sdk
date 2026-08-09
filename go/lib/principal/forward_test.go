@@ -83,6 +83,82 @@ func TestForwardToOutgoing_PreservesExplicitOutgoing(t *testing.T) {
 	}
 }
 
+// TestForwardToOutgoing_RelaysBroadcastLabels pins the label half of the
+// relay, which is not decoration on the principal half: `w17-label-*`
+// decides which principals an event emitted downstream is DELIVERED to,
+// exactly as `x-w17-scope-*` decides which rows the same call may touch.
+//
+// Relaying one and not the other made the two disagree by HOP COUNT. A
+// storage-tier emit ONE hop from the gateway kept its labels — the
+// gateway's own outgoing metadata carried them — while the identical emit
+// reached through one more tier (a facade, or a subscriber handler calling
+// back into storage, which is where results-of-work events are actually
+// emitted) arrived unlabelled. Unlabelled means delivered to nobody
+// (restgw.entitled), so the observable failure was a public event that
+// never showed up on /w17-events while its write succeeded, three tiers
+// from the relay that dropped the key.
+func TestForwardToOutgoing_RelaysBroadcastLabels(t *testing.T) {
+	in := metadata.Pairs(
+		"x-w17-user", "envelope-bytes",
+		"x-w17-scope-org_id", "org-1",
+		"w17-label-org_id", "org-1",
+		"w17-label-region", "eu",
+	)
+	ctx := principal.ForwardToOutgoing(metadata.NewIncomingContext(context.Background(), in))
+
+	out, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		t.Fatal("no outgoing metadata produced")
+	}
+	for k, want := range map[string]string{
+		"w17-label-org_id": "org-1",
+		"w17-label-region": "eu",
+	} {
+		if got := out.Get(k); len(got) != 1 || got[0] != want {
+			t.Errorf("outgoing[%q] = %v, want [%q] — a tier reached beyond the first emits unlabelled "+
+				"events without it, and an unlabelled event reaches nobody", k, got, want)
+		}
+	}
+}
+
+// TestForwardToOutgoing_SecondHopKeepsTheLabel walks the shape the bug
+// actually had: the relay is applied per hop, and the hop that loses a key
+// is not the one that reads it. Each `hop` here is what a transport does —
+// relay, deliver the outgoing side as incoming, hand the handler a clean
+// outgoing side (service/inprocgrpc.serverContext, and the wire's
+// equivalent) — so hop 2 is a facade calling storage, or a subscriber
+// handler calling back into it.
+//
+// Asserting only hop 1 is what let this ship: hop 1 passes on the caller's
+// own outgoing metadata and cannot tell a relayed key from an inherited
+// one.
+func TestForwardToOutgoing_SecondHopKeepsTheLabel(t *testing.T) {
+	hop := func(ctx context.Context) context.Context {
+		ctx = principal.ForwardToOutgoing(ctx)
+		md, _ := metadata.FromOutgoingContext(ctx)
+		return metadata.NewOutgoingContext(metadata.NewIncomingContext(ctx, md), nil)
+	}
+
+	// The gateway's first call: stamps sit on the OUTGOING side.
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
+		"x-w17-user", "envelope-bytes",
+		"x-w17-scope-org_id", "org-1",
+		"w17-label-org_id", "org-1",
+	))
+
+	for hopN := 1; hopN <= 3; hopN++ {
+		ctx = hop(ctx)
+		md, _ := metadata.FromIncomingContext(ctx)
+		for _, k := range []string{"x-w17-user", "x-w17-scope-org_id", "w17-label-org_id"} {
+			if got := md.Get(k); len(got) != 1 {
+				t.Fatalf("hop %d: %q = %v, want it still relayed. An emit fires from whichever tier "+
+					"the call reached, so every key the emit envelope is built from has to survive "+
+					"an arbitrary number of hops, not just the first.", hopN, k, got)
+			}
+		}
+	}
+}
+
 // TestForwardToOutgoing_NoIncomingIsNoop confirms an unauthenticated /
 // gateway-bypassed call (no incoming principal) yields no outgoing metadata,
 // so a downstream scope guard still fails closed rather than seeing a forged
