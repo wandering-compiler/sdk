@@ -269,7 +269,14 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 			}
 		}
 		for _, ae := range s.AwaitEvents {
-			sub, err := cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, evToken)
+			// The step's headers ride the subscribe too. The stream is
+			// authenticated by the same auth method as the call, and that
+			// method reads client-chosen headers: `W17-Org` picks the active
+			// org, whose id is the label the /w17-events hub partitions by.
+			// Subscribing without them would connect a label-less principal
+			// — which on an isolating surface is entitled to NO event — so
+			// the await would time out on a surface that works.
+			sub, err := cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, evToken, headers)
 			if err != nil {
 				return err
 			}

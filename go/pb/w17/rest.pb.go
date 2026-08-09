@@ -1781,7 +1781,36 @@ type RestStream struct {
 	// sent once at connect, so binding a header / query param into it is
 	// the same operation it is for a unary call. Path-template tokens
 	// already auto-promote to implicit PATH_VAR bindings.
-	Fields        []*FieldBinding `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
+	Fields []*FieldBinding `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
+	// REV-163 — this stream's credential travels in the URL. Same
+	// shape and same meaning as RestEndpoint.credential: the stream
+	// stays fully authenticated, its credential simply arrives
+	// somewhere a browser opening an EventSource can put it.
+	//
+	// It landed one revision AFTER the unary form, and the gap was
+	// not the shape — that was identical and the extraction helper
+	// is shared. It was the RUNTIME POLICY a long-lived connection
+	// needs, because a stream authenticates ONCE at upgrade and
+	// then never again.
+	//
+	// For a session client that barely shows: the client reconnects
+	// on token refresh / reload / network blip, so a revoked
+	// credential stops working within minutes. A capability link
+	// has no session lifecycle at all, so nothing ever forces a
+	// reconnect and a revoked token would keep streaming for as
+	// long as the TCP connection survives. The hole was never
+	// URL_TOKEN's — a Bearer-authenticated stream had it too — but
+	// a capability link turns "in practice it closes itself" into
+	// "it does not". So REV-163 ships periodic re-auth for EVERY
+	// authenticated stream and this field on top of it; see
+	// docs/specs/gateway/url-credentials.md.
+	//
+	// The `?ticket=` flow (ws_auth.go) is a different tool and not
+	// a substitute: a ticket is a SWAP for an existing credential —
+	// you must already be authenticated to mint one — and its
+	// safety comes from being one-shot with a 30s TTL, which is
+	// exactly what a customer link cannot be.
+	Credential    *Credential `protobuf:"bytes,9,opt,name=credential,proto3" json:"credential,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1861,6 +1890,13 @@ func (x *RestStream) GetOperationId() string {
 func (x *RestStream) GetFields() []*FieldBinding {
 	if x != nil {
 		return x.Fields
+	}
+	return nil
+}
+
+func (x *RestStream) GetCredential() *Credential {
+	if x != nil {
+		return x.Credential
 	}
 	return nil
 }
@@ -2137,7 +2173,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fFieldBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1b\n" +
-	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xd0\x02\n" +
+	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xef\x02\n" +
 	"\n" +
 	"RestStream\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
@@ -2146,9 +2182,10 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fexclude_auth\x18\x04 \x01(\bR\vexcludeAuth\x12A\n" +
 	"\x11metadata_bindings\x18\x06 \x03(\v2\x14.w17.MetadataBindingR\x10metadataBindings\x12!\n" +
 	"\foperation_id\x18\a \x01(\tR\voperationId\x12)\n" +
-	"\x06fields\x18\b \x03(\v2\x11.w17.FieldBindingR\x06fieldsJ\x04\b\x05\x10\x06J\x04\b\t\x10\n" +
-	"R\vauth_scopesR\n" +
-	"credential\"\xf0\x02\n" +
+	"\x06fields\x18\b \x03(\v2\x11.w17.FieldBindingR\x06fields\x12/\n" +
+	"\n" +
+	"credential\x18\t \x01(\v2\x0f.w17.CredentialR\n" +
+	"credentialJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
 	"\x10DownloadEndpoint\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\ainclude\x18\x02 \x03(\tR\ainclude\x12\x18\n" +
@@ -2252,15 +2289,16 @@ var file_w17_rest_proto_depIdxs = []int32{
 	5,  // 16: w17.RestStream.transport_override:type_name -> w17.StreamTransport
 	14, // 17: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
 	16, // 18: w17.RestStream.fields:type_name -> w17.FieldBinding
-	3,  // 19: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 20: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	19, // 21: w17.rest_api:extendee -> google.protobuf.FileOptions
-	6,  // 22: w17.rest_api:type_name -> w17.RestApi
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	22, // [22:23] is the sub-list for extension type_name
-	21, // [21:22] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	9,  // 19: w17.RestStream.credential:type_name -> w17.Credential
+	3,  // 20: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 21: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	19, // 22: w17.rest_api:extendee -> google.protobuf.FileOptions
+	6,  // 23: w17.rest_api:type_name -> w17.RestApi
+	24, // [24:24] is the sub-list for method output_type
+	24, // [24:24] is the sub-list for method input_type
+	23, // [23:24] is the sub-list for extension type_name
+	22, // [22:23] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }

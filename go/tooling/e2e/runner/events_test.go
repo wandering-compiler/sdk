@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wandering-compiler/sdk/go/tooling/e2e/internal/runtime"
 )
 
 // eventHub is a tiny in-test SSE broadcaster: subscribers register a channel
@@ -220,6 +222,127 @@ func TestAwaitEvent_PayloadMismatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "await_event") || !strings.Contains(err.Error(), "payload") {
 		t.Errorf("error = %q, want an await_event payload mismatch", err)
+	}
+}
+
+// TestAwaitEvent_StepHeadersAuthenticateTheStream — a step's `headers:` ride
+// the SSE subscribe, not just the call.
+//
+// The server here is the shape a tenant-partitioned gateway actually has:
+// the events route reads `W17-Org` (which the real gateway forwards to the
+// auth method, whose AuthResp.labels the hub partitions by) and a subscriber
+// that named no org is entitled to NOTHING — the fail-closed rule
+// restgw.entitled applies to an unlabelled principal. So a subscribe that
+// dropped the step's headers connects as a different, label-less principal
+// than the call it is meant to observe, and the await times out on a surface
+// that works. Revert the header pass-through and this test fails on the
+// timeout, not on the payload.
+func TestAwaitEvent_StepHeadersAuthenticateTheStream(t *testing.T) {
+	var mu sync.Mutex
+	subs := map[chan Event]string{} // subscriber → the org it subscribed as
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/w17-events", func(w http.ResponseWriter, r *http.Request) {
+		fl := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl.Flush()
+		ch := make(chan Event, 4)
+		mu.Lock()
+		subs[ch] = r.Header.Get("W17-Org")
+		mu.Unlock()
+		defer func() { mu.Lock(); delete(subs, ch); mu.Unlock() }()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case ev := <-ch:
+				payload, _ := json.Marshal(ev.Data)
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Topic, payload)
+				fl.Flush()
+			}
+		}
+	})
+	mux.HandleFunc("/api/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		org := r.Header.Get("W17-Org")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"task_id": "t-1"})
+		go func() {
+			time.Sleep(15 * time.Millisecond)
+			mu.Lock()
+			defer mu.Unlock()
+			for ch, subOrg := range subs {
+				// The event carries the emitting request's org label; an
+				// unlabelled principal (subOrg == "") satisfies no label.
+				if subOrg != org {
+					continue
+				}
+				select {
+				case ch <- Event{Topic: "task.created", Data: map[string]any{"task_id": "t-1", "org": org}}:
+				default:
+				}
+			}
+		}()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	step := createTaskStep(&AwaitEvent{
+		Topic: "task.created", Path: "/api/v1/w17-events", TimeoutMs: 1500,
+		Match: map[string]any{"org": "acme"},
+	})
+	step.Headers = map[string]string{"W17-Org": "acme"}
+	cs := map[string]Caller{"rest": NewRESTCaller(srv.URL, nil)}
+	if err := RunScenario(context.Background(), []Step{step}, cs, WithEventSubscriber(NewSSESubscriber(srv.URL, nil))); err != nil {
+		t.Fatalf("scenario failed: %v", err)
+	}
+}
+
+// TestAwaitEvent_SubscribeKeepsItsOwnCredential — a `headers:` entry cannot
+// override the stream's Authorization or its SSE Accept. The step names both;
+// the server asserts the built-ins survived (otherwise a scenario could
+// authenticate its stream as somebody else, or ask for a non-SSE body and
+// hang).
+func TestAwaitEvent_SubscribeKeepsItsOwnCredential(t *testing.T) {
+	got := make(chan [2]string, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/w17-events", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case got <- [2]string{r.Header.Get("Authorization"), r.Header.Get("Accept")}:
+		default:
+		}
+		fl := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl.Flush()
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("/api/v1/tasks", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"task_id": "t-1"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	step := createTaskStep(&AwaitEvent{Topic: "task.created", Path: "/api/v1/w17-events", TimeoutMs: 100})
+	step.Endpoint.AuthRequired = true
+	step.Headers = map[string]string{"Authorization": "Bearer forged", "Accept": "application/json"}
+	scope := runtime.NewRun().NewScope()
+	scope.Capture("auth.token", "real-token")
+	cs := map[string]Caller{"rest": NewRESTCaller(srv.URL, nil)}
+	// The await itself times out (nothing is broadcast) — irrelevant here;
+	// the assertion is on what the subscribe sent.
+	_ = RunSteps(context.Background(), scope, []Step{step}, cs, WithEventSubscriber(NewSSESubscriber(srv.URL, nil)))
+	select {
+	case h := <-got:
+		if h[0] != "Bearer real-token" {
+			t.Errorf("stream Authorization = %q, want the scenario's own token", h[0])
+		}
+		if h[1] != "text/event-stream" {
+			t.Errorf("stream Accept = %q, want text/event-stream", h[1])
+		}
+	default:
+		t.Fatal("subscribe never reached the events route")
 	}
 }
 

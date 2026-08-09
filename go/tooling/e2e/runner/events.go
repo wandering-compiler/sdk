@@ -64,7 +64,18 @@ type EventSubscriber interface {
 	// the surface has no auth). The returned Subscription is live — the
 	// server-side bus subscription is registered — by the time Subscribe
 	// returns, so the caller may trigger the event immediately after.
-	Subscribe(ctx context.Context, path string, topics []string, token string) (Subscription, error)
+	//
+	// headers are the step's own `headers:` (already interpolated). They
+	// matter here for the same reason they matter on the call: the gateway
+	// forwards every request header to the auth method, and a
+	// client-chosen header can decide WHICH principal the token resolves
+	// to — `W17-Org` picks the active org, and the org's id is the
+	// broadcast label the hub partitions by. Subscribing without them
+	// authenticates the stream as a DIFFERENT (label-less) principal than
+	// the call it is meant to observe, and on an isolating surface a
+	// label-less principal receives nothing at all: the await would time
+	// out while the feature under test worked.
+	Subscribe(ctx context.Context, path string, topics []string, token string, headers map[string]string) (Subscription, error)
 }
 
 // Subscription is a live event stream. Await blocks for the next event on a
@@ -93,12 +104,17 @@ func NewSSESubscriber(baseURL string, client *http.Client) *SSESubscriber {
 	return &SSESubscriber{BaseURL: strings.TrimRight(baseURL, "/"), Client: client}
 }
 
-// Subscribe opens GET <base><path>?topics=<t,...> with an SSE Accept header
-// and the bearer token, and returns once the response headers arrive — at
-// which point the gateway has already registered the bus subscription
-// (HandleW17Events subscribes before flushing headers), so an event
-// triggered next can't be missed.
-func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []string, token string) (Subscription, error) {
+// Subscribe opens GET <base><path>?topics=<t,...> with an SSE Accept header,
+// the bearer token and the step's own headers, and returns once the response
+// headers arrive — at which point the gateway has already registered the bus
+// subscription (HandleW17Events subscribes before flushing headers), so an
+// event triggered next can't be missed.
+//
+// The step's headers are applied AFTER the built-ins and skip Authorization
+// and Accept, so a `headers:` entry can override neither the credential nor
+// the SSE content negotiation — the same rule [RESTCaller.Call] applies to
+// the call itself.
+func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []string, token string, headers map[string]string) (Subscription, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	target := s.BaseURL + path + "?topics=" + url.QueryEscape(strings.Join(topics, ","))
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, target, nil)
@@ -109,6 +125,12 @@ func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []str
 	req.Header.Set("Accept", "text/event-stream")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Accept") {
+			continue
+		}
+		req.Header.Set(k, v)
 	}
 	resp, err := s.Client.Do(req)
 	if err != nil {

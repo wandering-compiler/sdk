@@ -21,7 +21,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -313,62 +312,22 @@ func URLToDriverDSN(dsn string) string {
 	return dbsession.ApplySQLitePragmas(dsn)
 }
 
-// collationStampTable holds the text-ordering provenance of whoever built
-// this database's indexes. It sits next to `wc_migrations` because that is
-// what it describes: the stamp belongs where the index it characterises
-// lives, so it survives an independent redeploy of either the applier or
-// the runtime. PostgreSQL solves the same problem the same way
-// (`pg_collation.collversion` alongside the catalog).
-const collationStampTable = "wc_collation"
-
 // stampCollation records the collator this binary sorts with, and refuses
 // to apply on top of a database whose indexes were built with a different
 // one.
 //
 // T1-4 pass #12, B-F5 (Jiri 2026-08-08: stamp in the DB, next to the
-// migrations). sqlitecollate's contract is that the ordering an index was
-// built with is byte-for-byte the ordering a query compares with. That
-// holds inside one BUILD, and the applier, the dev-DB snapshotter and each
-// generated runtime are separate binaries compiled at different times: the
-// x/text tables that drive the collation, and the Go toolchain tables that
-// drive the upper/lower UDFs, move independently. When they disagree, an
-// index is sorted one way and read another, silently.
+// migrations). The comparison itself lives in sqlitecollate, next to the
+// collation it characterises, so the applier and every generated runtime
+// read ONE implementation of "do these two builds order text the same
+// way" — writing it twice is the shape this pass keeps finding.
 //
-// Refusing rather than warning, and refusing HERE, because this is the
-// moment the damage would be done: applying DDL under a different collator
-// is what builds the mismatched index. A database whose stamp matches is
-// left alone; a fresh one is stamped; a mismatched one stops.
+// Refusing HERE, at apply, because this is the moment the damage would be
+// done: applying DDL under a different collator is what builds the
+// mismatched index.
 func (a *Applier) stampCollation(ctx context.Context) error {
-	if _, err := a.db.ExecContext(ctx,
-		`CREATE TABLE IF NOT EXISTS `+collationStampTable+` (
-			id          INTEGER PRIMARY KEY CHECK (id = 1),
-			fingerprint TEXT NOT NULL
-		)`); err != nil {
-		return fmt.Errorf("sqlite apply: ensure %s: %w", collationStampTable, err)
+	if err := sqlitecollate.EnsureStamp(ctx, a.db); err != nil {
+		return fmt.Errorf("sqlite apply: %w", err)
 	}
-
-	mine := sqlitecollate.Fingerprint()
-	var stored string
-	err := a.db.QueryRowContext(ctx,
-		`SELECT fingerprint FROM `+collationStampTable+` WHERE id = 1`).Scan(&stored)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		if _, err := a.db.ExecContext(ctx,
-			`INSERT INTO `+collationStampTable+` (id, fingerprint) VALUES (1, ?)`, mine); err != nil {
-			return fmt.Errorf("sqlite apply: write collation stamp: %w", err)
-		}
-		return nil
-	case err != nil:
-		return fmt.Errorf("sqlite apply: read collation stamp: %w", err)
-	case stored == mine:
-		return nil
-	}
-
-	return fmt.Errorf(
-		"sqlite apply: this database's indexes were built with a different text collator\n"+
-			"  stored: %s\n"+
-			"  this binary: %s\n"+
-			"  why: the collation ordering an index was built with must be the ordering queries compare with; the two Unicode table versions in the stamp say which side moved (scheme:go-unicode:x-text:digest)\n"+
-			"  fix: rebuild the applier and the service binaries from one dependency set, or rebuild the affected indexes under the current collator",
-		stored, mine)
+	return nil
 }

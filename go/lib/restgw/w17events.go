@@ -56,8 +56,13 @@ func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource,
 	// The principal's AuthResp bytes (stashed by RequireAuth) carry
 	// the labels used for per-principal broadcast filtering. nil on
 	// the NoAuth path / direct (non-RequireAuth) calls — the source
-	// then treats the principal as label-less (sees only unlabelled
-	// events, which is every event today).
+	// then treats the principal as label-less. What that means depends
+	// on the surface, and the difference is the whole isolation
+	// contract: with no labels deriver (the single-tenant default) a
+	// label-less principal sees every unlabelled event, which is every
+	// event; on a surface that DOES partition (its auth response
+	// declares `labels`), a label-less principal is entitled to
+	// nothing — see the `entitled` rule in w17events_eventbus.go.
 	userData := AuthUserDataFromContext(ctx)
 
 	ch, err := source.Subscribe(ctx, topics, userData)
