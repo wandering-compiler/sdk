@@ -24,9 +24,9 @@
 //     valued fields are emitted as their
 //     label too so round-trip is exact.
 //   - google.protobuf.Timestamp → RFC3339Nano (UTC)
-//   - google.protobuf.Duration  → "<seconds>s" form
-//     (e.g. "1.500000s") — protojson
-//     parity, parseable by time.ParseDuration
+//   - google.protobuf.Duration  → protojson's own "<seconds>s"
+//     form (e.g. "1.500s"), produced BY
+//     protojson — see [durationText]
 //
 // Refused at runtime (defense-in-depth — IR-build also rejects):
 //
@@ -40,10 +40,12 @@ package kvhash
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -185,13 +187,7 @@ func encodeField(fd protoreflect.FieldDescriptor, v protoreflect.Value) (string,
 			t := m.AsTime().UTC()
 			return t.Format(time.RFC3339Nano), nil
 		case *durationpb.Duration:
-			d := m.AsDuration()
-			// protojson Duration form is "<seconds>s" with up to
-			// nine fractional digits. time.Duration.String emits
-			// composite ("1m2s") which Redis consumers can't parse
-			// the same way; render explicit float seconds + "s".
-			seconds := float64(d) / float64(time.Second)
-			return strconv.FormatFloat(seconds, 'f', -1, 64) + "s", nil
+			return durationText(m)
 		default:
 			return "", fmt.Errorf("unsupported well-known type %T", msg)
 		}
@@ -274,17 +270,60 @@ func decodeField(fd protoreflect.FieldDescriptor, raw string) (protoreflect.Valu
 			ts := timestamppb.New(t)
 			return protoreflect.ValueOfMessage(ts.ProtoReflect()), nil
 		case "google.protobuf.Duration":
-			// Accept the protojson "<n>s" form. time.ParseDuration
-			// chokes on the bare-seconds form for fractional parts
-			// > 9 digits, but the encoder uses '-1' precision so we
-			// stay within range.
-			d, err := time.ParseDuration(raw)
+			dp, err := parseDurationText(raw)
 			if err != nil {
-				return protoreflect.Value{}, fmt.Errorf("invalid duration %q: %w", raw, err)
+				return protoreflect.Value{}, err
 			}
-			dp := durationpb.New(d)
 			return protoreflect.ValueOfMessage(dp.ProtoReflect()), nil
 		}
 	}
 	return protoreflect.Value{}, fmt.Errorf("unsupported kind %s", fd.Kind())
+}
+
+// durationText renders a Duration the way protojson renders it — by ASKING
+// protojson and unwrapping the JSON string, so the two layouts of this one
+// capability cannot say different things about the same value.
+//
+// T1-4 pass #12, C-F6. The previous encoder computed
+// `float64(d.AsDuration()) / float64(time.Second)`, and both hops lose:
+//
+//   - float64 carries 53 significand bits, so a duration past ~104 days lands
+//     on a NEIGHBOURING value. 100 days + 1ns round-tripped as 2ns — not a
+//     dropped nanosecond, a DIFFERENT one — and 200 days + 1ns dropped it;
+//   - AsDuration goes through time.Duration, whose int64 nanoseconds cap at
+//     ~292 years. A durationpb may hold ±10000, so a legal 317-year value
+//     saturated on write, and the saturated text then failed to parse on
+//     EVERY read: the entity was bricked, not merely inexact.
+//
+// The read side is symmetric ([parseDurationText]) and, because protojson is
+// the one that answers, an out-of-range Duration is REFUSED here rather than
+// stored as something nothing can read back.
+func durationText(d *durationpb.Duration) (string, error) {
+	b, err := protojson.Marshal(d)
+	if err != nil {
+		return "", fmt.Errorf("kvhash: duration (seconds=%d nanos=%d) is not a valid google.protobuf.Duration: %w", d.GetSeconds(), d.GetNanos(), err)
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return "", fmt.Errorf("kvhash: duration encoding %q is not a JSON string: %w", b, err)
+	}
+	return s, nil
+}
+
+// parseDurationText is [durationText]'s inverse, and likewise protojson's own
+// parse — so every spelling the encoder has EVER produced is readable. That
+// includes the values already sitting in Redis from the float encoder
+// ("8640000.000000002s", "1.5s"): protojson accepts any fraction up to nine
+// digits, where the previous reader went through time.ParseDuration and
+// inherited its ±292-year ceiling.
+func parseDurationText(raw string) (*durationpb.Duration, error) {
+	quoted, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid duration %q: %w", raw, err)
+	}
+	var d durationpb.Duration
+	if err := protojson.Unmarshal(quoted, &d); err != nil {
+		return nil, fmt.Errorf("invalid duration %q: %w", raw, err)
+	}
+	return &d, nil
 }

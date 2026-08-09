@@ -99,7 +99,10 @@ func TestMarshalEntity_FlatScalars(t *testing.T) {
 		"payload":    base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0xff}),
 		"status":     "DONE",
 		"created_at": "2026-05-06T12:30:45.123Z",
-		"ttl":        "1.5s",
+		// protojson's own spelling — fractional seconds in groups of three
+		// (C-F6). The float encoder wrote "1.5s"; the reader still takes that
+		// form, so values already in Redis keep decoding.
+		"ttl": "1.500s",
 	}
 
 	for k, v := range want {
@@ -371,4 +374,103 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// T1-4 pass #12, C-F6. The Duration encoder went through
+// `float64(d) / float64(time.Second)`, so the wire value stopped being the
+// declared value long before anything complained:
+//
+//	100d + 1ns  → round-trips as nanos=2  (a DIFFERENT wrong value, not a
+//	              dropped one — past 2^53 the float lands on a neighbour)
+//	200d + 1ns  → the nanosecond is dropped
+//	317y        → legal durationpb; AsDuration saturates on write and the
+//	              saturated text then fails to parse on EVERY read
+//
+// protojson — the JSON layout of the SAME capability, over the same
+// declaration — encodes all of these exactly, so the two layouts disagreed
+// about what the value is. The fix reads the durationpb FIELDS (seconds,
+// nanos int32) and never builds a float or a time.Duration, which also lifts
+// the ±292y ceiling time.Duration imposed on a field durationpb allows to
+// hold ±10000 years.
+func TestKvHash_DurationExactAcrossTheFullDurationpbRange(t *testing.T) {
+	md := msgByName(t, compileFixture(t), "FlatEntity")
+	ttl := findField(t, md, "ttl")
+
+	cases := []struct {
+		name string
+		d    *durationpb.Duration
+		want string // the stored field value
+	}{
+		{"zero", &durationpb.Duration{}, "0s"},
+		{"1.5s", &durationpb.Duration{Seconds: 1, Nanos: 500000000}, "1.500s"},
+		{"one nanosecond", &durationpb.Duration{Nanos: 1}, "0.000000001s"},
+		{"100d + 1ns", &durationpb.Duration{Seconds: 100 * 86400, Nanos: 1}, "8640000.000000001s"},
+		{"200d + 1ns", &durationpb.Duration{Seconds: 200 * 86400, Nanos: 1}, "17280000.000000001s"},
+		// Past the time.Duration ceiling (~292y) and inside durationpb's own
+		// range — the case that used to saturate on write and brick the read.
+		{"317 years", &durationpb.Duration{Seconds: 10000000000}, "10000000000s"},
+		{"negative 1.5s", &durationpb.Duration{Seconds: -1, Nanos: -500000000}, "-1.500s"},
+		{"negative nanosecond", &durationpb.Duration{Nanos: -1}, "-0.000000001s"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rm := dynamicpb.NewMessage(md)
+			setField(rm, ttl, protoreflect.ValueOfMessage(c.d.ProtoReflect()))
+			out, err := MarshalEntity(rm.Interface())
+			if err != nil {
+				t.Fatalf("MarshalEntity: %v", err)
+			}
+			hash := pairsToMap(t, out)
+			if got := hash["ttl"]; got != c.want {
+				t.Errorf("stored %q, want %q", got, c.want)
+			}
+
+			back := dynamicpb.NewMessage(md)
+			if err := UnmarshalEntity(hash, back.Interface()); err != nil {
+				t.Fatalf("UnmarshalEntity: %v", err)
+			}
+			got := back.Get(ttl).Message().Interface().(*durationpb.Duration)
+			if got.GetSeconds() != c.d.GetSeconds() || got.GetNanos() != c.d.GetNanos() {
+				t.Errorf("round-trip = (%d,%d), want (%d,%d)",
+					got.GetSeconds(), got.GetNanos(), c.d.GetSeconds(), c.d.GetNanos())
+			}
+		})
+	}
+}
+
+// A durationpb the library itself calls invalid must be REFUSED at marshal,
+// not silently stored: a value nothing can read back is worse than a write
+// that fails where the author can see it.
+func TestKvHash_DurationOutOfRangeRefused(t *testing.T) {
+	md := msgByName(t, compileFixture(t), "FlatEntity")
+	rm := dynamicpb.NewMessage(md)
+	setField(rm, findField(t, md, "ttl"),
+		protoreflect.ValueOfMessage((&durationpb.Duration{Seconds: 1 << 60}).ProtoReflect()))
+	if _, err := MarshalEntity(rm.Interface()); err == nil {
+		t.Error("an out-of-range Duration must be refused at marshal")
+	}
+}
+
+// Values written by the float encoder are already in Redis, so the reader has
+// to keep accepting the shapes it produced (plain seconds, and a fraction of
+// any length up to nine digits).
+func TestKvHash_DurationReadsLegacyFloatForm(t *testing.T) {
+	md := msgByName(t, compileFixture(t), "FlatEntity")
+	ttl := findField(t, md, "ttl")
+	for raw, want := range map[string]*durationpb.Duration{
+		"1.5s":               {Seconds: 1, Nanos: 500000000},
+		"2s":                 {Seconds: 2},
+		"8640000.000000002s": {Seconds: 8640000, Nanos: 2},
+		"-0.25s":             {Seconds: 0, Nanos: -250000000},
+	} {
+		back := dynamicpb.NewMessage(md)
+		if err := UnmarshalEntity(map[string]string{"ttl": raw}, back.Interface()); err != nil {
+			t.Fatalf("UnmarshalEntity(%q): %v", raw, err)
+		}
+		got := back.Get(ttl).Message().Interface().(*durationpb.Duration)
+		if got.GetSeconds() != want.GetSeconds() || got.GetNanos() != want.GetNanos() {
+			t.Errorf("%q → (%d,%d), want (%d,%d)", raw, got.GetSeconds(), got.GetNanos(), want.GetSeconds(), want.GetNanos())
+		}
+	}
 }

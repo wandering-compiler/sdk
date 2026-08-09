@@ -178,10 +178,13 @@ type Event struct {
 	//  4. Framework hard default — max_deliver=3, ack_wait=30s,
 	//     backoff=EXPONENTIAL.
 	Retry *RetryPolicy `protobuf:"bytes,3,opt,name=retry,proto3" json:"retry,omitempty"`
-	// Public marks the event as eligible for the auto-mounted
-	// WebSocket broadcast endpoint (when the gateway codegen
-	// grows that capability — currently parked; flag is stored
-	// but consumed only by hand-authored broadcast handlers).
+	// Public marks the event as reaching the gateway's
+	// auto-mounted `/w17-events` SSE broadcast — a shipped path,
+	// not a reserved flag: the gateway codegen emits one transcode
+	// case per public event, the JS/TS client subscribes, and
+	// an e2e step asserts a delivery with `await_events:` (only
+	// public events are awaitable — an internal one never lands
+	// there to be seen).
 	//
 	// Original devlog's `protobridge.event.visibility: PUBLIC`
 	// maps directly to this. Internal events (lifecycle
@@ -190,10 +193,19 @@ type Event struct {
 	// frontend stream — only the backend durable consumers
 	// pick them up.
 	//
+	// Public is about the STREAM, not about the audience. On a
+	// surface whose auth response declares the `labels` map, the
+	// hub partitions delivery: a public event reaches only the
+	// principals holding its labels, and an UNLABELLED event on
+	// such a surface reaches nobody (fail-closed — it cannot be
+	// scoped to a tenant). A surface with no labels field is
+	// single-tenant, and there every public event reaches every
+	// authenticated client.
+	//
 	// Orthogonal to channel transport: a PUBLIC event can ride
 	// on a durable NATS channel (has an internal consumer too)
 	// or on an in-memory channel (broadcast-only). The
-	// public/internal distinction only governs WS surfacing.
+	// public/internal distinction only governs stream surfacing.
 	Public bool `protobuf:"varint,4,opt,name=public,proto3" json:"public,omitempty"`
 	// REV-090 — optional FE delivery-reliability policy. When set,
 	// the generated FE client polls `delivery.fallback.query`,
