@@ -76,6 +76,14 @@ func ApplySQLitePragmas(dsn string) string {
 //     stops being a no-op and `'a\\b'` becomes the four-character `a\b`.
 //   - parseTime (B-F3) — generated code scans DATETIME straight into
 //     time.Time, which the driver refuses without it.
+//   - collation (B-F2) — this pin lived in the DEV DSN only, while
+//     go-sql-driver's default handshake collation is utf8mb4_general_ci:
+//     a string comparison no column anchors (literal↔literal,
+//     param↔literal) was case-SENSITIVE in dev and case-INSENSITIVE on an
+//     operator-supplied DSN, silently. `'Foo' = 'foo'` answers 0 under the
+//     pin and 1 without it, live on 8.4.10. Column comparisons were never
+//     exposed — DDL `COLLATE` anchors those, and the emitter appends
+//     `COLLATE` to every character-result cast.
 //
 // A parameter the DSN already names is left alone: these are safety pins
 // for an ACCIDENTAL setting, not a way to overrule a chosen one. The
@@ -86,6 +94,7 @@ func MySQLDSNParams() []string {
 	return []string{
 		"sql_mode=REPLACE(@@sql_mode,'NO_BACKSLASH_ESCAPES','')",
 		"parseTime=true",
+		"collation=utf8mb4_0900_as_cs",
 	}
 }
 
