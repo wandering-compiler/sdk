@@ -36,39 +36,25 @@ import (
 	"time"
 )
 
-// Driver is the storage primitive every kvfs backend
-// implements. Methods take a context so cancellation /
-// timeouts propagate from the gateway request down to the
-// underlying I/O.
+// Reader is the READ half of [Driver] — everything a holder of an
+// existing storage handle needs, and nothing that creates or destroys
+// one.
 //
-// Keys are caller-managed strings. Convention is
-// `<bucket_path>/<sub_bucket_path>/<object_key>` produced
-// by [BuildKey], but the driver itself doesn't validate the
-// shape — it stores whatever string the caller passes.
-type Driver interface {
-	// PutFromTempFile atomically moves the file at tmpPath
-	// into storage at key. The implementation MUST guarantee
-	// that concurrent readers either see the previous value
-	// (or "missing" if first write) or the new value, never
-	// a half-written body. After a successful Put the tmp
-	// file is gone (renamed or copied + unlinked); on error
-	// the tmp file is left in place so the caller can
-	// inspect / clean up.
-	//
-	// The returned `handle` is normally equal to `key`; it
-	// exists as a separate return value so future drivers
-	// that rewrite keys (e.g. content-addressed storage that
-	// derives the final key from a hash) can surface the
-	// canonical handle to the caller.
-	PutFromTempFile(ctx context.Context, key string, tmpPath string) (handle string, err error)
-
+// It exists because the two halves have different owners. An upload
+// connection has exactly ONE writer: the REST gateway, which derives
+// the key from the field's `bucket_path` + sub-bucketing knobs via
+// [BuildKey] and hands the resulting handle to the storage tier. Every
+// other tier is a reader — it receives that handle in a column and
+// wants the bytes back. Handing those readers a full Driver would give
+// away PutFromTempFile, i.e. a second component deriving keys, which is
+// exactly the duplicated path logic the single-writer rule prevents.
+//
+// The generated business tier's ClientSet therefore exposes Reader (see
+// docs/specs/bundles/business-service.md); the gateway keeps the Driver.
+type Reader interface {
 	// Open returns a streaming reader for the stored object.
 	// Returns ErrNotFound for a missing key.
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
-
-	// Delete removes the stored object. Idempotent on
-	// missing keys (no error when the key was already gone).
-	Delete(ctx context.Context, key string) error
 
 	// Stat reports the object's size and modification time.
 	// Returns ErrNotFound for a missing key. Used by the
@@ -86,6 +72,39 @@ type Driver interface {
 	// the cheap Open contract but not Seek; keeping them
 	// separate lets non-HTTP consumers stay on Open.
 	OpenSeekable(ctx context.Context, key string) (io.ReadSeekCloser, error)
+}
+
+// Driver is the storage primitive every kvfs backend
+// implements. Methods take a context so cancellation /
+// timeouts propagate from the gateway request down to the
+// underlying I/O.
+//
+// Keys are caller-managed strings. Convention is
+// `<bucket_path>/<sub_bucket_path>/<object_key>` produced
+// by [BuildKey], but the driver itself doesn't validate the
+// shape — it stores whatever string the caller passes.
+type Driver interface {
+	Reader
+
+	// PutFromTempFile atomically moves the file at tmpPath
+	// into storage at key. The implementation MUST guarantee
+	// that concurrent readers either see the previous value
+	// (or "missing" if first write) or the new value, never
+	// a half-written body. After a successful Put the tmp
+	// file is gone (renamed or copied + unlinked); on error
+	// the tmp file is left in place so the caller can
+	// inspect / clean up.
+	//
+	// The returned `handle` is normally equal to `key`; it
+	// exists as a separate return value so future drivers
+	// that rewrite keys (e.g. content-addressed storage that
+	// derives the final key from a hash) can surface the
+	// canonical handle to the caller.
+	PutFromTempFile(ctx context.Context, key string, tmpPath string) (handle string, err error)
+
+	// Delete removes the stored object. Idempotent on
+	// missing keys (no error when the key was already gone).
+	Delete(ctx context.Context, key string) error
 }
 
 // StagingDirProvider is the OPTIONAL capability a driver backed by a

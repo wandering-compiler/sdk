@@ -403,8 +403,16 @@ const (
 	// gateway owns the actual file write into the configured KV
 	// connection. The field's value at runtime is the storage handle
 	// (the key under the connection — e.g. `/avatars/ab/cd/<sha>`),
-	// NOT the file bytes; business code reads files back through the
-	// same handle via the resolved `lib/kvfs` driver.
+	// NOT the file bytes.
+	//
+	// Business code reads those bytes back through the same handle: the
+	// generated business bundle's ClientSet carries one `kvfs.Reader` per
+	// upload connection the domain declares (`<Conn>Store()`), resolved
+	// from the connection's bucket root, and the handle is passed to it
+	// verbatim — it already carries bucket_path and sub-bucket. The reader
+	// is READ-ONLY on purpose: the gateway derives keys and is the
+	// connection's only writer, so a second writer would be a second key
+	// layout. See docs/specs/bundles/business-service.md.
 	//
 	// Required companion config: `(w17.field).upload` submessage with
 	// connection / bucket_path / sub-bucketing knobs. The parser
