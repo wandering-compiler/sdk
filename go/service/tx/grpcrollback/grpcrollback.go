@@ -45,10 +45,12 @@ package grpcrollback
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
@@ -65,6 +67,26 @@ import (
 // running (T3-7 pass #7 C-F2).
 type TxRoller interface {
 	Rollback(ctx context.Context, txID string) error
+}
+
+// CausedRoller is the optional slice of a [TxRoller] that can record
+// WHY a transaction was discarded. `*txregistry.Memory` implements it.
+//
+// Optional rather than part of [TxRoller] so an existing third-party
+// roller keeps compiling — such a roller simply loses the diagnostic,
+// never the rollback.
+//
+// It exists because this interceptor destroys transactions on behalf of
+// a caller that did not ask for it, and the caller finds out somewhere
+// else entirely: its own Commit, several calls later, answering
+// "unknown tx_id". That message describes the state of the registry
+// rather than the reason for it, and a caller reading it reasonably
+// concludes its transaction plumbing is broken — the one thing that is
+// NOT happening. Handing the reason over here is what lets the later
+// surface name this call instead.
+type CausedRoller interface {
+	TxRoller
+	RollbackCaused(ctx context.Context, txID, cause string) error
 }
 
 // Interceptor returns a gRPC unary server interceptor that
@@ -128,7 +150,20 @@ func Interceptor(roller TxRoller) grpc.UnaryServerInterceptor {
 		// ErrUnknownTxID) are intentionally ignored — we don't
 		// want a registry-side drain race to mask the handler's
 		// real error.
-		_ = roller.Rollback(ctx, txID)
+		//
+		// The cause travels with it when the roller can hold one, so
+		// the coordinator's Commit can name THIS call. Note what it
+		// carries: the method and the status code, never the handler's
+		// error string — that has not been through the error layer's
+		// sanitisation and must not reach a client via the back door of
+		// a diagnostic (no schema / table / column leakage).
+		if cr, ok := roller.(CausedRoller); ok {
+			_ = cr.RollbackCaused(ctx, txID, fmt.Sprintf(
+				"a call to %s inside it failed with %s, and any failure inside a transaction discards it",
+				info.FullMethod, status.Code(err)))
+		} else {
+			_ = roller.Rollback(ctx, txID)
+		}
 		return resp, err
 	}
 }

@@ -56,7 +56,29 @@ type Memory struct {
 	// handler to release, and how long a second adopter waits
 	// for the first. See [DefaultFinishWait] / [WithFinishWait].
 	finishWait time.Duration
+
+	// outcomes remembers, for the last [tombstoneCap] drained ids, WHY
+	// the entry is gone. An id that resolved once and no longer does is
+	// the single most confusing state this registry produces — the
+	// caller is holding an id its own Begin returned, and every surface
+	// answers "unknown", which reads as expired plumbing rather than as
+	// the consequence of something the caller itself did three RPCs
+	// earlier. Keeping the reason turns that into a sentence naming the
+	// culprit (see [Memory.explainUnknownLocked]).
+	//
+	// Diagnostic only — nothing branches on it. `order` is the
+	// insertion sequence backing the eviction of the oldest entry, so
+	// the map cannot grow with the process.
+	outcomes     map[string]string
+	outcomeOrder []string
 }
+
+// tombstoneCap bounds how many drained tx ids keep their reason. The
+// window only has to cover the gap between a transaction being drained
+// and its coordinator noticing — a Commit that follows within the same
+// flow — so a few hundred is generously past the point of usefulness
+// while staying negligible (an id plus a short sentence each).
+const tombstoneCap = 256
 
 // txEntry records the connection a tx was opened on alongside
 // the live *sql.Tx. LookupTx checks the recorded connection
@@ -197,6 +219,7 @@ func NewMemory(dbs map[string]*sql.DB, opts ...MemoryOption) *Memory {
 		dbs:        owned,
 		txs:        map[string]txEntry{},
 		finishWait: DefaultFinishWait,
+		outcomes:   map[string]string{},
 	}
 	for _, o := range opts {
 		o(m)
@@ -261,6 +284,43 @@ func (m *Memory) Begin(ctx context.Context, opts BeginOptions) (string, error) {
 	return id, nil
 }
 
+// noteOutcomeLocked records why txID is no longer in the registry,
+// evicting the oldest reason once [tombstoneCap] is reached. Caller
+// must hold m.mu.
+func (m *Memory) noteOutcomeLocked(txID, reason string) {
+	if _, seen := m.outcomes[txID]; !seen {
+		if len(m.outcomeOrder) >= tombstoneCap {
+			delete(m.outcomes, m.outcomeOrder[0])
+			m.outcomeOrder = m.outcomeOrder[1:]
+		}
+		m.outcomeOrder = append(m.outcomeOrder, txID)
+	}
+	m.outcomes[txID] = reason
+}
+
+// explainUnknownLocked builds the [ErrUnknownTxID] every surface
+// returns for an id this registry does not hold, appending the
+// recorded reason when there is one. Caller must hold m.mu.
+//
+// The error still wraps the sentinel — callers branch on
+// `errors.Is(err, ErrUnknownTxID)` and the gRPC layer still maps it to
+// NotFound. Only the human-readable half changes, which is the half
+// that was pointing at the wrong thing.
+func (m *Memory) explainUnknownLocked(txID string) error {
+	if reason, ok := m.outcomes[txID]; ok {
+		return fmt.Errorf("%w %q: %s", ErrUnknownTxID, txID, reason)
+	}
+	return fmt.Errorf("%w %q", ErrUnknownTxID, txID)
+}
+
+// noteOutcome is [Memory.noteOutcomeLocked] for callers that do not
+// already hold the mutex.
+func (m *Memory) noteOutcome(txID, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.noteOutcomeLocked(txID, reason)
+}
+
 // watchTimeout drains the registry entry for `txID` when its
 // ctx fires. Best-effort Rollback is issued on the underlying
 // *sql.Tx — the sql package likely already auto-rolled back
@@ -286,6 +346,7 @@ func (m *Memory) watchTimeout(ctx context.Context, txID string) {
 	entry, ok := m.txs[txID]
 	if ok {
 		delete(m.txs, txID)
+		m.noteOutcomeLocked(txID, "the transaction exceeded its tx_timeout_ms and was rolled back by the registry's orphan watcher")
 	}
 	// Deliberately NOT lease-aware, unlike Commit / Rollback.
 	// This is the reclaimer of last resort and its ctx has
@@ -320,7 +381,7 @@ func (m *Memory) watchTimeout(ctx context.Context, txID string) {
 // issuing statements (see [Memory.take]); [ErrTxBusy] when that
 // wait runs out, with the transaction left open and retryable.
 func (m *Memory) Commit(ctx context.Context, txID string) error {
-	entry, err := m.take(ctx, txID)
+	entry, err := m.take(ctx, txID, "the transaction was committed")
 	if err != nil {
 		return err
 	}
@@ -338,6 +399,7 @@ func (m *Memory) Commit(ctx context.Context, txID string) error {
 		// out for clarity. Deferred work is dropped: the writes it
 		// would announce do not exist.
 		_ = entry.tx.Rollback()
+		m.noteOutcome(txID, "the underlying database transaction failed to commit")
 		return fmt.Errorf("txregistry: Commit %q: %w", txID, err)
 	}
 	// The writes are durable now — release the work that was waiting on
@@ -362,7 +424,30 @@ func (m *Memory) Commit(ctx context.Context, txID string) error {
 // database side, but it makes that handler fail halfway with a
 // bare `sql.ErrTxDone`.
 func (m *Memory) Rollback(ctx context.Context, txID string) error {
-	entry, err := m.take(ctx, txID)
+	return m.RollbackCaused(ctx, txID, "")
+}
+
+// RollbackCaused is [Memory.Rollback] with a note of what asked for
+// it — the optional cause-carrying form the auto-rollback interceptor
+// (`grpcrollback.CausedRoller`) prefers when the registry offers it.
+//
+// The rollback itself is identical — `cause` is remembered only so
+// that the NEXT surface to be asked about this id can say why it is
+// gone. That matters most for the caller that did not ask for the
+// rollback: when the auto-rollback interceptor discards a transaction
+// because one call inside it failed, the coordinator's own Commit is
+// the first place the consequence shows up, and without the cause it
+// reads as broken transaction plumbing rather than as its own tolerated
+// error three calls back.
+//
+// An empty `cause` means the holder asked for this directly and needs
+// no explanation.
+func (m *Memory) RollbackCaused(ctx context.Context, txID, cause string) error {
+	outcome := "the transaction was rolled back"
+	if cause != "" {
+		outcome = "the transaction was rolled back: " + cause
+	}
+	entry, err := m.take(ctx, txID, outcome)
 	if err != nil {
 		return err
 	}
@@ -415,8 +500,9 @@ func (m *Memory) LookupTx(ctx context.Context, txID, connectionName string) (*sq
 		m.mu.Lock()
 		entry, ok := m.txs[txID]
 		if !ok {
+			err := m.explainUnknownLocked(txID)
 			m.mu.Unlock()
-			return nil, noopRelease, ErrUnknownTxID
+			return nil, noopRelease, err
 		}
 		if entry.connName != connectionName {
 			m.mu.Unlock()
@@ -548,7 +634,13 @@ func (m *Memory) OnCommit(txID string, fn func()) bool {
 //
 // `finishing` is published before parking so no new adopter can
 // queue ahead and starve the finisher.
-func (m *Memory) take(ctx context.Context, txID string) (txEntry, error) {
+//
+// `outcome` is recorded against the id in the same critical section
+// that removes it, so a racing Commit / LookupTx that misses the entry
+// by a hair still gets told what happened to it rather than a bare
+// "unknown". The finisher refines it afterwards if the underlying
+// Commit / Rollback then fails.
+func (m *Memory) take(ctx context.Context, txID, outcome string) (txEntry, error) {
 	var timeout <-chan time.Time
 	var timer *time.Timer
 	announced := false
@@ -569,11 +661,13 @@ func (m *Memory) take(ctx context.Context, txID string) (txEntry, error) {
 		m.mu.Lock()
 		entry, ok := m.txs[txID]
 		if !ok {
+			err := m.explainUnknownLocked(txID)
 			m.mu.Unlock()
-			return txEntry{}, ErrUnknownTxID
+			return txEntry{}, err
 		}
 		if entry.adopters == 0 {
 			delete(m.txs, txID)
+			m.noteOutcomeLocked(txID, outcome)
 			m.mu.Unlock()
 			announced = false
 			return entry, nil

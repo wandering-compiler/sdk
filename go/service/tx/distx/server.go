@@ -180,7 +180,12 @@ func isolationLevel(i distxpb.Isolation) sql.IsolationLevel {
 func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distxpb.CommitResponse, error) {
 	if err := s.registry.Commit(ctx, req.GetTxId()); err != nil {
 		if errors.Is(err, txregistry.ErrUnknownTxID) {
-			return nil, status.Errorf(codes.NotFound, "unknown tx_id %q", req.GetTxId())
+			// The registry's message carries the id AND, when it still
+			// remembers, what became of the transaction — most usefully
+			// that a failed call inside it triggered the auto-rollback.
+			// Formatting the id here instead would throw that away and
+			// leave the caller with a symptom.
+			return nil, status.Errorf(codes.NotFound, "commit: %v", err)
 		}
 		if errors.Is(err, txregistry.ErrTxBusy) {
 			return nil, status.Errorf(codes.FailedPrecondition, "commit: %v", err)
@@ -196,7 +201,7 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 func (s *Server) Rollback(ctx context.Context, req *distxpb.RollbackRequest) (*distxpb.RollbackResponse, error) {
 	if err := s.registry.Rollback(ctx, req.GetTxId()); err != nil {
 		if errors.Is(err, txregistry.ErrUnknownTxID) {
-			return nil, status.Errorf(codes.NotFound, "unknown tx_id %q", req.GetTxId())
+			return nil, status.Errorf(codes.NotFound, "rollback: %v", err)
 		}
 		if errors.Is(err, txregistry.ErrTxBusy) {
 			return nil, status.Errorf(codes.FailedPrecondition, "rollback: %v", err)
