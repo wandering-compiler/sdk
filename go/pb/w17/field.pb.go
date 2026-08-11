@@ -906,7 +906,20 @@ type Field struct {
 	Type Type `protobuf:"varint,1,opt,name=type,proto3,enum=w17.Type" json:"type,omitempty"`
 	// Primary key.
 	Pk bool `protobuf:"varint,2,opt,name=pk,proto3" json:"pk,omitempty"`
-	// Annotation for future iterations; not enforced in SQL in iter-1.
+	// Write-once: the column may be assigned at INSERT time (including
+	// an UPSERT's insert side) and never afterwards. Enforced by the
+	// COMPILER, at typecheck: naming the column in `UPDATE … SET` or in
+	// `UPSERT … DO UPDATE SET` is a compile error. The whole-message
+	// shortcut (`SET :doc`) names no column, so there the expansion
+	// drops it with a warning and the stored value survives the UPDATE.
+	//
+	// No DDL carries the rule — no CHECK, no trigger, no column-level
+	// grant is emitted, which is what "not enforced in SQL" meant here
+	// before. Anything that bypasses generated DQL (a raw-SQL escape
+	// hatch, psql, a data migration) can still write the column.
+	//
+	// Typical use: `created_at`, an external system's id, an audit
+	// trail's payload.
 	Immutable bool `protobuf:"varint,4,opt,name=immutable,proto3" json:"immutable,omitempty"`
 	// Opt-out of NOT NULL. When true the column is nullable AND the generated
 	// internal proto emits the field as proto3 `optional`.
