@@ -42,10 +42,24 @@ import "strings"
 //   - foreign_keys(1) (B-F1) — modernc defaults it OFF; without it the
 //     `ON DELETE CASCADE | RESTRICT | SET NULL` actions the migrator
 //     emits are declared but never enforced.
+//   - _time_format=sqlite (T1-4 pass #14, B14-1) — a driver PARAMETER rather
+//     than a pragma, and the one entry here that is not spelled `_pragma=`.
+//     Without it modernc writes a time.Time with `time.Time.String()`, so the
+//     stored text reads `2026-08-11 12:34:56 +0000 UTC` — which `strftime`,
+//     `datetime()` and every comparison against `CURRENT_TIMESTAMP` cannot
+//     parse. Every temporal predicate then answers NULL and the query matches
+//     nothing, silently. This is the SQLite sibling of the MySQL `parseTime`
+//     alignment (B-F3): the same question was asked of one driver and never of
+//     the other.
+//
+// Note the name says "pragmas" and the list is DSN settings. Adding the entry
+// beat renaming a seam six call sites read; the distinction is stated here
+// rather than left for the next reader to discover from a failing parse.
 func SQLitePragmas() []string {
 	return []string{
 		"_pragma=case_sensitive_like(1)",
 		"_pragma=foreign_keys(1)",
+		"_time_format=sqlite",
 	}
 }
 

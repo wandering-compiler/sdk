@@ -905,6 +905,20 @@ type Field struct {
 	// The full carrier × type matrix is enforced at IR build time.
 	Type Type `protobuf:"varint,1,opt,name=type,proto3,enum=w17.Type" json:"type,omitempty"`
 	// Primary key.
+	//
+	// The row's identity, and the column an UPDATE's `WHERE` addresses
+	// it by — so the whole-message shortcut (`SET :doc`, which names no
+	// column) does NOT expand to it on either UPDATE-side SET: it would
+	// re-key the row from the payload while the WHERE targeted it by a
+	// different parameter. Dropped with a warning, same as `immutable`
+	// below. The INSERT side keeps writing it — that is where a key is
+	// supplied.
+	//
+	// Unlike `immutable`, naming the column explicitly is still allowed:
+	// `UPDATE … SET id = :new_id` re-keys the row, which is a legitimate
+	// thing to ask for and is visible in the DQL when you ask for it.
+	// The drop covers only the shortcut, where nothing in the statement
+	// shows the write.
 	Pk bool `protobuf:"varint,2,opt,name=pk,proto3" json:"pk,omitempty"`
 	// Write-once: the column may be assigned at INSERT time (including
 	// an UPSERT's insert side) and never afterwards. Enforced by the
