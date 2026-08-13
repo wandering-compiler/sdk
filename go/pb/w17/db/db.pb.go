@@ -1190,10 +1190,12 @@ type Materialize struct {
 	// author already declared, now enforced at runtime). Ignored by
 	// the fused Subselect path.
 	MaxIntermediateRows uint64 `protobuf:"varint,2,opt,name=max_intermediate_rows,json=maxIntermediateRows,proto3" json:"max_intermediate_rows,omitempty"`
-	// Max concurrent fetch batches (B′, parked emit). 0 / 1 →
-	// sequential. When the bounded-parallel fetch lands, this is
-	// capped at runtime by connection-pool headroom and auto-
-	// disabled when the fetch carries an ORDER BY.
+	// Max concurrent fetch batches (B′). 0 / 1 → the sequential
+	// inline loop. Above that the batched fetch runs through
+	// `materialize.FetchBatches` with this many windows in flight,
+	// capped at runtime by connection-pool headroom. Only meaningful
+	// together with `batch_size` — there are no batches to overlap
+	// without it.
 	MaxParallel uint32 `protobuf:"varint,3,opt,name=max_parallel,json=maxParallel,proto3" json:"max_parallel,omitempty"`
 	// force — pin the execution strategy instead of letting the
 	// optimizer pick. AUTO (default) keeps the automatic decision
@@ -1490,10 +1492,32 @@ type Table struct {
 	//	    predicate: "name IS NOT NULL OR email IS NOT NULL" }
 	//	]
 	//
-	// Internally lowers to a raw_check IR entry (same SQL output, same
-	// differ shape, same emit path); the distinction is purely at
-	// authoring time. Names share the same collision namespace as
-	// raw_checks / raw_indexes / derived constraint names.
+	// The predicate is COMPILED, not passed through: it is parsed,
+	// checked, and rendered back to the SQL that goes into the schema.
+	// Two consequences worth knowing:
+	//   - Enum-name literals lower like they do in a query. An
+	//     int-carrier enum column stores the NUMBER, so
+	//     `predicate: "type <> 'DOCUMENT_TYPE_UNSPECIFIED'"` is
+	//     emitted as `CHECK (type <> 0)`. Write the name, not the
+	//     number — the number is what it compiles to today and means
+	//     something else after a renumbering.
+	//   - Constructs a constraint cannot carry are refused at build
+	//     time rather than emitted: subqueries, EXISTS, window
+	//     functions, aggregate FILTER, `:param` bindings, qualified
+	//     column refs, and proto-canonical CAST targets (`INT64` and
+	//     friends resolve per dialect, and a schema has no dialect
+	//     left to resolve against — write the engine's own type).
+	//
+	// A body that needs none of that round-trips exactly as written.
+	//
+	// Lands in the same RawCheck IR entry as raw_checks (same differ
+	// shape, same emit path); the distinction is at authoring time —
+	// and in whether anything between the annotation and the database
+	// ever reads the body. Names share the same collision namespace as
+	// raw_checks / raw_indexes / derived constraint names, and that
+	// namespace is checked across the whole schema, not just per
+	// table: the generated constraint→error-code registry is keyed by
+	// name and flat, so two tables claiming one name is refused.
 	Checks        []*TableCheck `protobuf:"bytes,12,rep,name=checks,proto3" json:"checks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1695,8 +1719,9 @@ func (x *TableValidationMessage) GetMessage() string {
 // partial-index support there). Expression indexes ship via the
 // `IndexField.expr` slot (REV-135; all three dialects render
 // `(<expr>)` in the column list, XOR with `name`). Cross-column
-// CHECK predicates still park on raw_checks pending the
-// structured-via-DQL slice 3c.
+// CHECK predicates have their own structured slot — see
+// (w17.db.table).checks (REV-136); raw_checks is now only for
+// bodies the DQL grammar cannot spell.
 type Index struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Proto-field list with per-field sort / nulls / opclass metadata.
@@ -1771,18 +1796,31 @@ type Index struct {
 	// bare column refs, literals, comparisons, AND/OR/NOT, IS NULL,
 	// IN with literal list, function calls (LOWER / COALESCE / …).
 	//
-	// Validated at IR build time by parsing the body with
-	// `lib/dql.Parse`. Two refusals, both with file:line:col +
-	// WithWhy / WithFix:
+	// Compiled at IR build time: the body is parsed with
+	// `lib/dql.Parse`, checked, and rendered back to the SQL that
+	// goes into the schema. Refusals carry file:line:col + WithWhy /
+	// WithFix:
 	//   - `:param` bindings — an index has no runtime call site.
 	//   - qualified column refs (`alias.col`) — CREATE INDEX has no
 	//     FROM clause for the qualifier to resolve against.
+	//   - constructs that read another row (subquery, EXISTS, window
+	//     function, aggregate FILTER) or resolve per dialect (a
+	//     proto-canonical CAST target such as `INT64`) — an index is
+	//     compiled once, into a schema with no dialect left to
+	//     resolve against.
 	//
-	// NOT validated: column existence, types, and dialect-divergent
-	// constructs (ILIKE, INTERVAL, …). The body is emitted verbatim
-	// and the DB is left as the authority on it, so a portability
-	// mistake surfaces at apply time rather than at build time. This
-	// is deliberate for the MVP — the validator graduates to a full
+	// Enum-name literals lower the way they do in a query: an
+	// int-carrier enum column stores the NUMBER, so
+	// `where: "status = 'STATUS_DRAFT'"` is emitted as
+	// `WHERE (status = 1)`. Writing the number yourself works too and
+	// is what the name compiles to — but it silently means something
+	// else the day the enum is renumbered.
+	//
+	// Anything else round-trips exactly as written. NOT validated:
+	// column existence, types, and dialect-divergent constructs
+	// (ILIKE, INTERVAL, …) — the DB stays the authority on those, so
+	// a portability mistake surfaces at apply time. Deliberate for
+	// the MVP; the validator graduates to a full
 	// `lib/dql/typecheck` pass when real portability pain shows up.
 	//
 	// Authoring:
@@ -1913,13 +1951,14 @@ type IndexField struct {
 	// type. HASH method rejects opclass (HASH uses the type's default
 	// hash function exclusively).
 	Opclass string `protobuf:"bytes,4,opt,name=opclass,proto3" json:"opclass,omitempty"`
-	// Expression-index body (REV-135). DQL expression carried verbatim
-	// from authoring to emit. Mutually exclusive with `name` — exactly
-	// one of (`name`, `expr`) must be set per IndexField entry. IR
-	// build validates syntax via lib/dql.Parse and refuses `:param`
-	// refs + qualified column refs, on the same reasoning as
-	// `Index.where` (which documents what is deliberately left to the
-	// DB); emit renders `(<body>)` as one entry in the column list.
+	// Expression-index body (REV-135). DQL expression, compiled to SQL
+	// at IR build time. Mutually exclusive with `name` — exactly one
+	// of (`name`, `expr`) must be set per IndexField entry. Same
+	// compile path as `Index.where`: syntax via lib/dql.Parse, the
+	// same refusals (`:param`, qualified column refs, row-reading and
+	// dialect-resolved constructs), the same enum-name lowering, and
+	// everything else rendered as written. Emit puts `(<body>)` in the
+	// column list as one entry.
 	//
 	// Authoring:
 	//
