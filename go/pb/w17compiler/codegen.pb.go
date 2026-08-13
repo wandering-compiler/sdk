@@ -5302,9 +5302,23 @@ type GenerateRequest struct {
 	// the ADMIN spec has to carry translated strings, and the spec is
 	// written here — one layer below where the merge used to live. Empty
 	// on a first codegen, or for a project with no languages.
-	ExistingPo    []*GeneratedFile `protobuf:"bytes,19,rep,name=existing_po,json=existingPo,proto3" json:"existing_po,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ExistingPo []*GeneratedFile `protobuf:"bytes,19,rep,name=existing_po,json=existingPo,proto3" json:"existing_po,omitempty"`
+	// BusinessDomains lists the domains the project declares a
+	// `<domain>-business` bundle for (lock `business_bundles[]`).
+	//
+	// It decides where a facade's `(w17.event_emit)` helpers may be
+	// rendered. The wrapper that fires an emit is installed by the
+	// binary that SERVES the method, so a facade's belongs to its
+	// business bundle — and where the project declares no such bundle,
+	// no generated binary registers that facade at all, so the
+	// annotation would be configuration nothing can act on. Codegen
+	// refuses that rather than emitting a helper into a bundle whose
+	// process never reaches it (the shape that shipped a silent no-op
+	// to a consumer: it compiled, it read as configured, and the event
+	// was never published).
+	BusinessDomains []string `protobuf:"bytes,20,rep,name=business_domains,json=businessDomains,proto3" json:"business_domains,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GenerateRequest) Reset() {
@@ -5459,6 +5473,13 @@ func (x *GenerateRequest) GetAdminLanguages() []string {
 func (x *GenerateRequest) GetExistingPo() []*GeneratedFile {
 	if x != nil {
 		return x.ExistingPo
+	}
+	return nil
+}
+
+func (x *GenerateRequest) GetBusinessDomains() []string {
+	if x != nil {
+		return x.BusinessDomains
 	}
 	return nil
 }
@@ -7050,7 +7071,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x04base\x18\x01 \x01(\fR\x04base\x12\x12\n" +
 	"\x04head\x18\x02 \x01(\fR\x04head\"$\n" +
 	"\x0ePlanIRResponse\x12\x12\n" +
-	"\x04plan\x18\x01 \x01(\fR\x04plan\"\x9e\b\n" +
+	"\x04plan\x18\x01 \x01(\fR\x04plan\"\xc9\b\n" +
 	"\x0fGenerateRequest\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x01 \x01(\tR\tserviceId\x124\n" +
@@ -7072,7 +7093,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x10format_overrides\x18\x11 \x03(\v2(.w17.storage.codegen.FormatOverrideEntryR\x0fformatOverrides\x12'\n" +
 	"\x0fadmin_languages\x18\x12 \x03(\tR\x0eadminLanguages\x12C\n" +
 	"\vexisting_po\x18\x13 \x03(\v2\".w17.storage.codegen.GeneratedFileR\n" +
-	"existingPo\x1a;\n" +
+	"existingPo\x12)\n" +
+	"\x10business_domains\x18\x14 \x03(\tR\x0fbusinessDomains\x1a;\n" +
 	"\rReplicasEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"]\n" +
