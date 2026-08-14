@@ -22,6 +22,80 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// AclRoleScope says WHERE a role's grants apply once a project has more
+// than one tenant to apply them in.
+//
+// It exists because a role assignment with no organization on it means
+// "in EVERY organization". That is the right reading for staff and
+// admin roles, and the wrong one for anything a customer's own people
+// hold — a declared `default: true` role would otherwise hand every
+// signup its permissions inside every company they ever join, a
+// cross-tenant grant introduced by the very feature that adds tenant
+// isolation. Making the choice explicit is what turns that into a
+// question the author answers instead of a default they inherit.
+type AclRoleScope int32
+
+const (
+	// Unspecified = REALM. Every role that predates this field keeps
+	// behaving exactly as it did.
+	AclRoleScope_ACL_ROLE_SCOPE_UNSPECIFIED AclRoleScope = 0
+	// REALM — the grant applies everywhere, in every organization. Staff
+	// and support roles; the operator's own access.
+	AclRoleScope_ACL_ROLE_SCOPE_REALM AclRoleScope = 1
+	// ORG — the grant applies only inside the organization it was
+	// assigned in. The ordinary shape for a customer-facing role.
+	//
+	// Mutually exclusive with `first_user` / `default`: both are
+	// SIGNUP-time hooks, and joining an organization is not signing up.
+	// Creating memberships is deliberately left to the project (see
+	// docs/specs/plugins/auth-cli-login-and-orgs.md), so the project
+	// assigns the joining member's role from its own handler. Codegen
+	// refuses the combination rather than assigning nothing and letting
+	// the author discover it from an empty permission set.
+	AclRoleScope_ACL_ROLE_SCOPE_ORG AclRoleScope = 2
+)
+
+// Enum value maps for AclRoleScope.
+var (
+	AclRoleScope_name = map[int32]string{
+		0: "ACL_ROLE_SCOPE_UNSPECIFIED",
+		1: "ACL_ROLE_SCOPE_REALM",
+		2: "ACL_ROLE_SCOPE_ORG",
+	}
+	AclRoleScope_value = map[string]int32{
+		"ACL_ROLE_SCOPE_UNSPECIFIED": 0,
+		"ACL_ROLE_SCOPE_REALM":       1,
+		"ACL_ROLE_SCOPE_ORG":         2,
+	}
+)
+
+func (x AclRoleScope) Enum() *AclRoleScope {
+	p := new(AclRoleScope)
+	*p = x
+	return p
+}
+
+func (x AclRoleScope) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AclRoleScope) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_acl_proto_enumTypes[0].Descriptor()
+}
+
+func (AclRoleScope) Type() protoreflect.EnumType {
+	return &file_w17_acl_proto_enumTypes[0]
+}
+
+func (x AclRoleScope) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AclRoleScope.Descriptor instead.
+func (AclRoleScope) EnumDescriptor() ([]byte, []int) {
+	return file_w17_acl_proto_rawDescGZIP(), []int{0}
+}
+
 // AclRole declares one role in a domain's role catalogue
 // (`(w17.acl_roles)`). The permission membership is expressed as
 // include/exclude globs over the domain's `AclPermission`
@@ -33,6 +107,30 @@ type AclRole struct {
 	// Role name — becomes a Role row (SLUG). Required, unique within
 	// the catalogue.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// key — the role's STABLE IDENTITY. Required, unique within the
+	// catalogue, and never shown to an end user.
+	//
+	// The seeded Role row's primary key is derived from this, not from
+	// `name`. That distinction is the whole reason it exists: with the PK
+	// derived from the name, renaming a declared role minted a NEW row,
+	// left the old one in place (a fixture seed never deletes), and every
+	// `UserRole` kept pointing at the old id — so the rename silently kept
+	// granting the old permission set while the new role sat unheld by
+	// anyone. Nothing reported it; the rename looked like it worked.
+	//
+	// It also separates the supplier's identity from the customer's label.
+	// A project may let its customers rename a shipped preset (`Role.name`
+	// is theirs to change); the key is what pairs the renamed row back to
+	// this declaration on the next codegen.
+	//
+	// Required rather than defaulting to the name: a key that falls back
+	// leaves the defect in place for everyone who does not opt in, and the
+	// day it matters is the day someone renames a role — which is exactly
+	// when nobody is thinking about seed identity.
+	Key string `protobuf:"bytes,9,opt,name=key,proto3" json:"key,omitempty"`
+	// scope — WHERE this role's grants apply. Consumed by a plugin whose
+	// activation has per-organization membership; ignored otherwise.
+	Scope AclRoleScope `protobuf:"varint,10,opt,name=scope,proto3,enum=w17.AclRoleScope" json:"scope,omitempty"`
 	// realm — opaque credential-class hint consumed by the auth
 	// plugin: "session" → bearer-session roles, "api" / "mcp" → API
 	// / MCP-token roles. Empty defaults to "session". w17 itself
@@ -131,6 +229,20 @@ func (x *AclRole) GetName() string {
 		return x.Name
 	}
 	return ""
+}
+
+func (x *AclRole) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *AclRole) GetScope() AclRoleScope {
+	if x != nil {
+		return x.Scope
+	}
+	return AclRoleScope_ACL_ROLE_SCOPE_UNSPECIFIED
 }
 
 func (x *AclRole) GetRealm() string {
@@ -327,9 +439,12 @@ var File_w17_acl_proto protoreflect.FileDescriptor
 
 const file_w17_acl_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/acl.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xe9\x01\n" +
+	"\rw17/acl.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xa4\x02\n" +
 	"\aAclRole\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03key\x18\t \x01(\tR\x03key\x12'\n" +
+	"\x05scope\x18\n" +
+	" \x01(\x0e2\x11.w17.AclRoleScopeR\x05scope\x12\x14\n" +
 	"\x05realm\x18\x02 \x01(\tR\x05realm\x12\x18\n" +
 	"\ainclude\x18\x03 \x03(\tR\ainclude\x12\x18\n" +
 	"\aexclude\x18\x04 \x03(\tR\aexclude\x12\x1d\n" +
@@ -339,7 +454,11 @@ const file_w17_acl_proto_rawDesc = "" +
 	"\x0fall_permissions\x18\a \x01(\bR\x0eallPermissions\x12\x1e\n" +
 	"\n" +
 	"activation\x18\b \x01(\tR\n" +
-	"activation:@\n" +
+	"activation*`\n" +
+	"\fAclRoleScope\x12\x1e\n" +
+	"\x1aACL_ROLE_SCOPE_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14ACL_ROLE_SCOPE_REALM\x10\x01\x12\x16\n" +
+	"\x12ACL_ROLE_SCOPE_ORG\x10\x02:@\n" +
 	"\n" +
 	"acl_models\x12\x1c.google.protobuf.FileOptions\x18\xe6\x87\x03 \x01(\bR\taclModels\x88\x01\x01:F\n" +
 	"\racl_endpoints\x12\x1c.google.protobuf.FileOptions\x18\xe7\x87\x03 \x01(\bR\faclEndpoints\x88\x01\x01:I\n" +
@@ -361,27 +480,30 @@ func file_w17_acl_proto_rawDescGZIP() []byte {
 	return file_w17_acl_proto_rawDescData
 }
 
+var file_w17_acl_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_w17_acl_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_w17_acl_proto_goTypes = []any{
-	(*AclRole)(nil),                     // 0: w17.AclRole
-	(*descriptorpb.FileOptions)(nil),    // 1: google.protobuf.FileOptions
-	(*descriptorpb.ServiceOptions)(nil), // 2: google.protobuf.ServiceOptions
-	(*descriptorpb.MessageOptions)(nil), // 3: google.protobuf.MessageOptions
-	(*descriptorpb.MethodOptions)(nil),  // 4: google.protobuf.MethodOptions
+	(AclRoleScope)(0),                   // 0: w17.AclRoleScope
+	(*AclRole)(nil),                     // 1: w17.AclRole
+	(*descriptorpb.FileOptions)(nil),    // 2: google.protobuf.FileOptions
+	(*descriptorpb.ServiceOptions)(nil), // 3: google.protobuf.ServiceOptions
+	(*descriptorpb.MessageOptions)(nil), // 4: google.protobuf.MessageOptions
+	(*descriptorpb.MethodOptions)(nil),  // 5: google.protobuf.MethodOptions
 }
 var file_w17_acl_proto_depIdxs = []int32{
-	1, // 0: w17.acl_models:extendee -> google.protobuf.FileOptions
-	1, // 1: w17.acl_endpoints:extendee -> google.protobuf.FileOptions
-	1, // 2: w17.acl_roles:extendee -> google.protobuf.FileOptions
-	2, // 3: w17.acl_service:extendee -> google.protobuf.ServiceOptions
-	3, // 4: w17.acl_model:extendee -> google.protobuf.MessageOptions
-	4, // 5: w17.acl_endpoint:extendee -> google.protobuf.MethodOptions
-	0, // 6: w17.acl_roles:type_name -> w17.AclRole
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	6, // [6:7] is the sub-list for extension type_name
-	0, // [0:6] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: w17.AclRole.scope:type_name -> w17.AclRoleScope
+	2, // 1: w17.acl_models:extendee -> google.protobuf.FileOptions
+	2, // 2: w17.acl_endpoints:extendee -> google.protobuf.FileOptions
+	2, // 3: w17.acl_roles:extendee -> google.protobuf.FileOptions
+	3, // 4: w17.acl_service:extendee -> google.protobuf.ServiceOptions
+	4, // 5: w17.acl_model:extendee -> google.protobuf.MessageOptions
+	5, // 6: w17.acl_endpoint:extendee -> google.protobuf.MethodOptions
+	1, // 7: w17.acl_roles:type_name -> w17.AclRole
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	7, // [7:8] is the sub-list for extension type_name
+	1, // [1:7] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_w17_acl_proto_init() }
@@ -394,13 +516,14 @@ func file_w17_acl_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_acl_proto_rawDesc), len(file_w17_acl_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   1,
 			NumExtensions: 6,
 			NumServices:   0,
 		},
 		GoTypes:           file_w17_acl_proto_goTypes,
 		DependencyIndexes: file_w17_acl_proto_depIdxs,
+		EnumInfos:         file_w17_acl_proto_enumTypes,
 		MessageInfos:      file_w17_acl_proto_msgTypes,
 		ExtensionInfos:    file_w17_acl_proto_extTypes,
 	}.Build()

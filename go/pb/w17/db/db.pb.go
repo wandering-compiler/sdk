@@ -1841,9 +1841,48 @@ type Index struct {
 	//
 	// Default empty → non-partial (full) index — unchanged behaviour
 	// for indexes that don't author the field.
-	Where         string `protobuf:"bytes,8,opt,name=where,proto3" json:"where,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Where string `protobuf:"bytes,8,opt,name=where,proto3" json:"where,omitempty"`
+	// plugin_feature / plugin_feature_unless — STAGING-TIME gate for a
+	// single index entry, evaluated against a plugin activation's
+	// enabled feature set (the `(w17.contrib.plugin_feature*)` family,
+	// applied by `featurefilter` before the file is compiled).
+	//
+	//	plugin_feature        — keep this entry only when the feature IS
+	//	                        enabled.
+	//	plugin_feature_unless — keep it only when the feature is NOT.
+	//
+	// Both on one entry is a contradiction with no reading and is
+	// refused, exactly like the rpc-level pair.
+	//
+	// WHY an index needs its own gate. `(w17.contrib.plugin_feature_field)`
+	// drops a COLUMN when its feature is off, but an index entry naming
+	// that column lives inside this option — not in a field declaration —
+	// so it used to survive into a build where the column no longer
+	// exists. That made a feature-gated column unable to participate in
+	// any composite constraint.
+	//
+	// Dropping the entry along with the column would not be enough on its
+	// own: the feature-off build usually needs a DIFFERENT constraint, not
+	// none. `auth.UserRole` is the motivating case — `(user_id, role_id)`
+	// is unique without `org_membership`, while with it the pair is unique
+	// only among realm-wide rows and the triple `(user_id, role_id,
+	// org_id)` is unique among org-scoped ones (two partial indexes,
+	// because PostgreSQL treats NULLs as DISTINCT in a unique index, so a
+	// plain three-column UNIQUE would silently stop constraining the
+	// realm-wide rows). Expressing "this index, but only in that build"
+	// needs both polarities. Same shape that put
+	// `plugin_feature_rpc_unless` in contrib.proto.
+	//
+	// Empty (both) = ungated — the entry is emitted in every build, which
+	// is what every index that doesn't author these fields does.
+	//
+	// Staging-time metadata only: the fields carry no SQL and the IR
+	// ignores them. An entry that survives the filter still carries its
+	// tag, so the staged proto keeps documenting why it is there.
+	PluginFeature       string `protobuf:"bytes,9,opt,name=plugin_feature,json=pluginFeature,proto3" json:"plugin_feature,omitempty"`
+	PluginFeatureUnless string `protobuf:"bytes,10,opt,name=plugin_feature_unless,json=pluginFeatureUnless,proto3" json:"plugin_feature_unless,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Index) Reset() {
@@ -1928,6 +1967,20 @@ func (x *Index) GetConcurrent() bool {
 func (x *Index) GetWhere() string {
 	if x != nil {
 		return x.Where
+	}
+	return ""
+}
+
+func (x *Index) GetPluginFeature() string {
+	if x != nil {
+		return x.PluginFeature
+	}
+	return ""
+}
+
+func (x *Index) GetPluginFeatureUnless() string {
+	if x != nil {
+		return x.PluginFeatureUnless
 	}
 	return ""
 }
@@ -2698,7 +2751,7 @@ const file_w17_db_proto_rawDesc = "" +
 	"\n" +
 	"constraint\x18\x01 \x01(\tR\n" +
 	"constraint\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xe2\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xbd\x03\n" +
 	"\x05Index\x12*\n" +
 	"\x06fields\x18\x01 \x03(\v2\x12.w17.db.IndexFieldR\x06fields\x12\x16\n" +
 	"\x06unique\x18\x02 \x01(\bR\x06unique\x12\x12\n" +
@@ -2709,7 +2762,10 @@ const file_w17_db_proto_rawDesc = "" +
 	"\n" +
 	"concurrent\x18\a \x01(\bH\x00R\n" +
 	"concurrent\x88\x01\x01\x12\x14\n" +
-	"\x05where\x18\b \x01(\tR\x05where\x1a:\n" +
+	"\x05where\x18\b \x01(\tR\x05where\x12%\n" +
+	"\x0eplugin_feature\x18\t \x01(\tR\rpluginFeature\x122\n" +
+	"\x15plugin_feature_unless\x18\n" +
+	" \x01(\tR\x13pluginFeatureUnless\x1a:\n" +
 	"\fStorageEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\r\n" +
