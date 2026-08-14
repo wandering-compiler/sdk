@@ -22,6 +22,7 @@ import {
   Collapse,
   Group,
   NavLink,
+  ScrollArea,
   Stack,
   Text,
   UnstyledButton,
@@ -60,6 +61,15 @@ export function App({ spec, slots }: AppProps) {
   const t = translatorFor(spec);
   const [authState, setAuthState] = useState<"unknown" | "anon" | "authed">("unknown");
   const [whoami, setWhoami] = useState<WhoAmIResp | null>(null);
+  // Bumped by Login. The whoami fetch below is keyed on it because a
+  // fresh sign-in changes the token WITHOUT changing any prop: on the
+  // first mount there is no token, the effect short-circuits to "anon",
+  // and `whoami` stays null. Signing in used to flip authState straight
+  // to "authed" with that null still in place — and since the nav, the
+  // overview tiles and the identity menu are all filtered by
+  // whoami.permission_ids, the user landed on an EMPTY shell that only a
+  // manual reload (token present at mount) would populate.
+  const [authNonce, setAuthNonce] = useState(0);
   const [opened, { toggle }] = useDisclosure();
   // Hash-source-of-truth. setHash fires on every hashchange event
   // (back/forward/manual edit/programmatic navigate). The view is
@@ -117,13 +127,23 @@ export function App({ spec, slots }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [spec.auth.whoami_endpoint]);
+  }, [spec.auth.whoami_endpoint, authNonce]);
 
   if (authState === "unknown") {
     return <Text>{t("Loading…")}</Text>;
   }
   if (authState === "anon") {
-    return <Login spec={spec} onLogin={() => setAuthState("authed")} />;
+    // Back to "unknown", not straight to "authed": the shell must not
+    // render until whoami has answered, or it renders with no perms.
+    return (
+      <Login
+        spec={spec}
+        onLogin={() => {
+          setAuthState("unknown");
+          setAuthNonce((n) => n + 1);
+        }}
+      />
+    );
   }
 
   const view = parseHash(hash, spec) ?? defaultView;
@@ -164,63 +184,77 @@ export function App({ spec, slots }: AppProps) {
           </Group>
         </AppShell.Header>
 
+        {/* The navbar is a fixed-position viewport-height box, so nav
+          that outgrows the viewport is not reachable by the page
+          scrollbar the way a Django admin sidebar is (Django keeps the
+          sidebar in flow and lets the document scroll). Everything that
+          can grow — groups, pages, consumer nav slots — therefore lives
+          in one `grow` scroll section that owns its own scrollbar.
+          A bundle with many pages, or a few open groups, hits this. */}
         <AppShell.Navbar p="md">
-          {showOverview && (
-            <NavLink
-              key="__overview"
-              label={t("Overview")}
-              leftSection={<IconDashboard size={18} />}
-              active={view?.kind === "overview"}
-              onClick={() => navigate({ kind: "overview" })}
-              mb="md"
-            />
-          )}
-          {spec.nav && spec.nav.length > 0 ? (
-            // Grouped nav — render each group as a collapsible
-            // section (title + chevron toggle over its pages list).
-            // Orphan pages are refused at parse time when nav is
-            // declared, so every page lands in exactly one group.
-            // Pages the user lacks perms for are filtered out; a
-            // group that ends up empty is skipped entirely (avoids
-            // dangling group titles with no entries — UX confusion).
-            <Stack gap="md">
-              {spec.nav.map((g) => {
-                const visible = g.pages.filter((pName) => {
-                  const p = spec.pages[pName];
-                  return p && pageVisibleTo(p, whoami?.permission_ids);
-                });
-                if (visible.length === 0) return null;
-                return (
-                  <NavGroup
-                    key={g.title}
-                    title={g.title}
-                    pageNames={visible}
-                    spec={spec}
-                    activePageName={view?.kind === "list" ? view.pageName : null}
-                    onNavigate={(pageName) => navigate({ kind: "list", pageName })}
+          {/* scrollbars="y": a nav never scrolls sideways, and the
+            default "xy" adds a horizontal bar as soon as one page label
+            is long. type="auto" over the default "hover" so the bar is
+            visible whenever there IS more nav — the whole complaint was
+            not being able to tell, or reach. */}
+          <AppShell.Section grow component={ScrollArea} scrollbars="y" type="auto">
+            {showOverview && (
+              <NavLink
+                key="__overview"
+                label={t("Overview")}
+                leftSection={<IconDashboard size={18} />}
+                active={view?.kind === "overview"}
+                onClick={() => navigate({ kind: "overview" })}
+                mb="md"
+              />
+            )}
+            {spec.nav && spec.nav.length > 0 ? (
+              // Grouped nav — render each group as a collapsible
+              // section (title + chevron toggle over its pages list).
+              // Orphan pages are refused at parse time when nav is
+              // declared, so every page lands in exactly one group.
+              // Pages the user lacks perms for are filtered out; a
+              // group that ends up empty is skipped entirely (avoids
+              // dangling group titles with no entries — UX confusion).
+              <Stack gap="md">
+                {spec.nav.map((g) => {
+                  const visible = g.pages.filter((pName) => {
+                    const p = spec.pages[pName];
+                    return p && pageVisibleTo(p, whoami?.permission_ids);
+                  });
+                  if (visible.length === 0) return null;
+                  return (
+                    <NavGroup
+                      key={g.title}
+                      title={g.title}
+                      pageNames={visible}
+                      spec={spec}
+                      activePageName={view?.kind === "list" ? view.pageName : null}
+                      onNavigate={(pageName) => navigate({ kind: "list", pageName })}
+                    />
+                  );
+                })}
+              </Stack>
+            ) : (
+              // Flat nav — page declaration order, already filtered
+              // to visiblePages above.
+              <Stack gap={2}>
+                {pages.map((p) => (
+                  <NavLink
+                    key={p.name}
+                    label={pageLabel(p, t)}
+                    leftSection={<NavMonogram label={pageLabel(p, t)} />}
+                    active={view?.kind === "list" && view.pageName === p.name}
+                    onClick={() => navigate({ kind: "list", pageName: p.name })}
                   />
-                );
-              })}
-            </Stack>
-          ) : (
-            // Flat nav — page declaration order, already filtered
-            // to visiblePages above.
-            <Stack gap={2}>
-              {pages.map((p) => (
-                <NavLink
-                  key={p.name}
-                  label={pageLabel(p, t)}
-                  leftSection={<NavMonogram label={pageLabel(p, t)} />}
-                  active={view?.kind === "list" && view.pageName === p.name}
-                  onClick={() => navigate({ kind: "list", pageName: p.name })}
-                />
-              ))}
-            </Stack>
-          )}
-          {/* global:nav:item — consumer-registered nav extension
+                ))}
+              </Stack>
+            )}
+            {/* global:nav:item — consumer-registered nav extension
             (external links, custom views). Renders below every
             declared page so spec-driven entries stay first. */}
-          {slots?.[globalNavItemSlotKey()] && slots[globalNavItemSlotKey()]({ spec, whoami })}
+            {slots?.[globalNavItemSlotKey()] && slots[globalNavItemSlotKey()]({ spec, whoami })}
+          </AppShell.Section>
         </AppShell.Navbar>
 
         <AppShell.Main>
