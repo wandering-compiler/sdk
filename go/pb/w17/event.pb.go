@@ -630,10 +630,22 @@ func (x *EmitConfig) GetPayload() *PayloadMapping {
 // non-breaking additions.
 type PayloadMapping struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Keys are event-message field names (proto names —
-	// snake_case as declared in the event's .proto); values are
-	// source expressions per the syntax above.
-	Fields        map[string]string `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Each entry maps one event-message field to a source
+	// expression per the syntax above.
+	//
+	// This is a `repeated PayloadField`, not a `map<string,
+	// string>`, and the change is invisible to authors: proto text
+	// format writes the two identically (`fields: [{ key: "x",
+	// value: "$response.x" }]`), and a map entry is encoded on the
+	// wire as exactly this message, so field 1 keeps its meaning.
+	//
+	// The reason is [PayloadField.plugin_feature]: a map entry has
+	// nowhere to hang a feature tag, so a payload entry could not be
+	// gated, so an event could not carry a feature-gated field. Same
+	// problem, same solution as `(w17.db.table).indexes` entries,
+	// which gate on plain fields of `w17.db.Index` for the same
+	// "a value inside an option has no options of its own" reason.
+	Fields        []*PayloadField `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -668,11 +680,102 @@ func (*PayloadMapping) Descriptor() ([]byte, []int) {
 	return file_w17_event_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *PayloadMapping) GetFields() map[string]string {
+func (x *PayloadMapping) GetFields() []*PayloadField {
 	if x != nil {
 		return x.Fields
 	}
 	return nil
+}
+
+// PayloadField is one entry of a [PayloadMapping] — the event field
+// to populate, where its value comes from, and optionally the plugin
+// feature the entry depends on.
+type PayloadField struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Event-message field name (a proto name — snake_case as
+	// declared in the event's .proto).
+	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// Source expression per the PayloadMapping syntax above.
+	Value string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	// plugin_feature gates this ENTRY on a plugin feature, in step with
+	// the event field it populates.
+	//
+	// An event field added by a feature is itself
+	// `plugin_feature_field`-gated, so with the feature off the field
+	// does not exist — and an entry naming a field that is not there
+	// is a hard parse-time error ("payload entry has no field by that
+	// name on event"). Without a gate here the two halves cannot drop
+	// together, which means a feature-gated event field is not
+	// expressible at all.
+	//
+	// NO inverse sibling here, deliberately. `w17.db.Index` carries both
+	// polarities because a feature-off build sometimes needs a DIFFERENT
+	// index rather than none; no payload entry has asked for the same, and
+	// contrib.proto's rule for the rpc-level tags applies here too — the
+	// sibling lands when a consumer needs it, not for symmetry. Shipping
+	// it unused would be vocabulary with no example, which is exactly what
+	// `tests/vocabcov` exists to catch. Field 4 is left free for it.
+	//
+	// Empty = ungated, which is what every entry that does not author this
+	// field is.
+	//
+	// Staging-time metadata only: the eventbus parser ignores it. An entry
+	// that survives the filter keeps its tag, so the staged proto goes on
+	// documenting why it is there.
+	PluginFeature string `protobuf:"bytes,3,opt,name=plugin_feature,json=pluginFeature,proto3" json:"plugin_feature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PayloadField) Reset() {
+	*x = PayloadField{}
+	mi := &file_w17_event_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PayloadField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PayloadField) ProtoMessage() {}
+
+func (x *PayloadField) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_event_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PayloadField.ProtoReflect.Descriptor instead.
+func (*PayloadField) Descriptor() ([]byte, []int) {
+	return file_w17_event_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PayloadField) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *PayloadField) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *PayloadField) GetPluginFeature() string {
+	if x != nil {
+		return x.PluginFeature
+	}
+	return ""
 }
 
 // RetryPolicy — delivery-retry shape, shared across per-event
@@ -709,7 +812,7 @@ type RetryPolicy struct {
 
 func (x *RetryPolicy) Reset() {
 	*x = RetryPolicy{}
-	mi := &file_w17_event_proto_msgTypes[5]
+	mi := &file_w17_event_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -721,7 +824,7 @@ func (x *RetryPolicy) String() string {
 func (*RetryPolicy) ProtoMessage() {}
 
 func (x *RetryPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_event_proto_msgTypes[5]
+	mi := &file_w17_event_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -734,7 +837,7 @@ func (x *RetryPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryPolicy.ProtoReflect.Descriptor instead.
 func (*RetryPolicy) Descriptor() ([]byte, []int) {
-	return file_w17_event_proto_rawDescGZIP(), []int{5}
+	return file_w17_event_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RetryPolicy) GetMaxDeliver() int32 {
@@ -862,12 +965,13 @@ const file_w17_event_proto_rawDesc = "" +
 	"\n" +
 	"EmitConfig\x12\x14\n" +
 	"\x05event\x18\x01 \x01(\tR\x05event\x12-\n" +
-	"\apayload\x18\x02 \x01(\v2\x13.w17.PayloadMappingR\apayload\"\x84\x01\n" +
-	"\x0ePayloadMapping\x127\n" +
-	"\x06fields\x18\x01 \x03(\v2\x1f.w17.PayloadMapping.FieldsEntryR\x06fields\x1a9\n" +
-	"\vFieldsEntry\x12\x10\n" +
+	"\apayload\x18\x02 \x01(\v2\x13.w17.PayloadMappingR\apayload\";\n" +
+	"\x0ePayloadMapping\x12)\n" +
+	"\x06fields\x18\x01 \x03(\v2\x11.w17.PayloadFieldR\x06fields\"]\n" +
+	"\fPayloadField\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12%\n" +
+	"\x0eplugin_feature\x18\x03 \x01(\tR\rpluginFeature\"\x80\x01\n" +
 	"\vRetryPolicy\x12\x1f\n" +
 	"\vmax_deliver\x18\x01 \x01(\x05R\n" +
 	"maxDeliver\x12(\n" +
@@ -912,20 +1016,20 @@ var file_w17_event_proto_goTypes = []any{
 	(*EventFallback)(nil),               // 4: w17.EventFallback
 	(*EmitConfig)(nil),                  // 5: w17.EmitConfig
 	(*PayloadMapping)(nil),              // 6: w17.PayloadMapping
-	(*RetryPolicy)(nil),                 // 7: w17.RetryPolicy
-	nil,                                 // 8: w17.PayloadMapping.FieldsEntry
+	(*PayloadField)(nil),                // 7: w17.PayloadField
+	(*RetryPolicy)(nil),                 // 8: w17.RetryPolicy
 	(*descriptorpb.MessageOptions)(nil), // 9: google.protobuf.MessageOptions
 	(*descriptorpb.MethodOptions)(nil),  // 10: google.protobuf.MethodOptions
 }
 var file_w17_event_proto_depIdxs = []int32{
-	7,  // 0: w17.Event.retry:type_name -> w17.RetryPolicy
+	8,  // 0: w17.Event.retry:type_name -> w17.RetryPolicy
 	3,  // 1: w17.Event.delivery:type_name -> w17.EventDelivery
 	4,  // 2: w17.EventDelivery.fallback:type_name -> w17.EventFallback
 	6,  // 3: w17.EventFallback.request:type_name -> w17.PayloadMapping
 	0,  // 4: w17.EventFallback.diff:type_name -> w17.DiffKind
 	6,  // 5: w17.EventFallback.payload:type_name -> w17.PayloadMapping
 	6,  // 6: w17.EmitConfig.payload:type_name -> w17.PayloadMapping
-	8,  // 7: w17.PayloadMapping.fields:type_name -> w17.PayloadMapping.FieldsEntry
+	7,  // 7: w17.PayloadMapping.fields:type_name -> w17.PayloadField
 	1,  // 8: w17.RetryPolicy.backoff:type_name -> w17.Backoff
 	9,  // 9: w17.event:extendee -> google.protobuf.MessageOptions
 	10, // 10: w17.event_emit:extendee -> google.protobuf.MethodOptions
