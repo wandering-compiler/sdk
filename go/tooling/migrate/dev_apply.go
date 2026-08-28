@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	applyplanpb "github.com/wandering-compiler/sdk/go/pb/applyplan"
@@ -44,7 +45,76 @@ func DevApply(ctx context.Context, plan *applyplanpb.DevApplyPlan, applierFor Ap
 // whitespace) so a planner-emitted online index build runs inside the
 // dev transaction. Case-insensitive; matches the keyword as a whole
 // word so it never mangles an identifier that merely contains it.
+//
+// The word boundary is not enough on its own: it says nothing about WHERE
+// in the body the match sits (T2-5 pass #12, A12-12). Applied blind, the
+// strip rewrote string literals and comments too — a post-tx body holding
+// `VALUES ('built CONCURRENTLY')` came out as `VALUES ('built')`. post_tx is
+// where authored raw bodies live, and "the author owns what they persist" is
+// a standing owner decision, so a tool silently editing their text breaks it
+// even in dev. stripConcurrently skips quoted text and comments.
 var concurrentlyRe = regexp.MustCompile(`(?i)\s+CONCURRENTLY\b`)
+
+// stripConcurrently removes the CONCURRENTLY keyword from executable SQL
+// while leaving string literals, quoted identifiers and comments untouched.
+//
+// It is a scanner rather than a cleverer regexp because the thing being
+// decided — "is this offset inside a literal" — is not something a regular
+// expression can answer about SQL.
+func stripConcurrently(sql string) string {
+	var out strings.Builder
+	out.Grow(len(sql))
+	for i := 0; i < len(sql); {
+		switch {
+		case strings.HasPrefix(sql[i:], "--"):
+			end := strings.IndexByte(sql[i:], '\n')
+			if end < 0 {
+				out.WriteString(sql[i:])
+				return out.String()
+			}
+			out.WriteString(sql[i : i+end])
+			i += end
+		case strings.HasPrefix(sql[i:], "/*"):
+			end := strings.Index(sql[i+2:], "*/")
+			if end < 0 {
+				out.WriteString(sql[i:])
+				return out.String()
+			}
+			out.WriteString(sql[i : i+2+end+2])
+			i += 2 + end + 2
+		case sql[i] == '\'' || sql[i] == '"':
+			q := sql[i]
+			j := i + 1
+			for j < len(sql) {
+				if sql[j] == q {
+					// A doubled quote is an escaped one and stays inside.
+					if j+1 < len(sql) && sql[j+1] == q {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			out.WriteString(sql[i:j])
+			i = j
+		default:
+			// Executable run: up to the next literal/comment opener.
+			j := i
+			for j < len(sql) {
+				if sql[j] == '\'' || sql[j] == '"' ||
+					strings.HasPrefix(sql[j:], "--") || strings.HasPrefix(sql[j:], "/*") {
+					break
+				}
+				j++
+			}
+			out.WriteString(concurrentlyRe.ReplaceAllString(sql[i:j], ""))
+			i = j
+		}
+	}
+	return out.String()
+}
 
 // devApplySQL renders the SQL dev executes for one migration: the
 // transactional up_sql followed by the post-tx ops with CONCURRENTLY
@@ -57,5 +127,5 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	if post == "" {
 		return sql
 	}
-	return sql + "\n" + concurrentlyRe.ReplaceAllString(post, "")
+	return sql + "\n" + stripConcurrently(post)
 }

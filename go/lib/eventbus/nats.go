@@ -160,7 +160,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		opts.DefaultAckWait = 30 * time.Second
 	}
 	if opts.Observer == nil {
-		opts.Observer = NopObserver{}
+		opts.Observer = DefaultObserver{}
 	}
 	if opts.InstanceID == "" {
 		opts.InstanceID = newInstanceID()

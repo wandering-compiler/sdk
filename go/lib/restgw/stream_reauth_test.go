@@ -180,3 +180,63 @@ func TestStreamReauthIntervalFromEnv(t *testing.T) {
 		t.Errorf("nil getenv = %v, want the default", got)
 	}
 }
+
+// TestWatchStreamAuth_TicketStreamSurvivesTheTick — the two features that
+// shipped together and cancel each other out.
+//
+// A ticket is ONE-SHOT by contract: Redeem deletes it. The watchdog probes
+// by re-running the surface's auth against the request it was given — and
+// for a ticket-authed stream that request still carries only `?ticket=`,
+// whose ticket was consumed at the handshake seconds earlier. So the first
+// tick redeems nothing, reads ErrTicketInvalid, and cancels a stream whose
+// principal was never revoked: every bearer'd browser WS dies at the
+// default 300s with no transparent reconnect, and a raw EventSource
+// reconnect replays the consumed ticket into a permanent 401.
+//
+// T2-6 pass #9, B9-9. The stream must survive as long as the credential the
+// ticket STOOD FOR is still good — which is what the watchdog is for.
+func TestWatchStreamAuth_TicketStreamSurvivesTheTick(t *testing.T) {
+	store := restgw.NewMemoryTicketStore()
+	ticket, err := store.Issue(context.Background(), map[string]string{
+		restgw.WSAuthTicketHeaderLabel: "Bearer still-valid",
+	}, time.Minute)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+
+	// Inner is the real credential check: it answers for the bearer the
+	// ticket stood for, and never for a request with no Authorization.
+	var innerCalls atomic.Int32
+	inner := restgw.AuthFunc(func(_ context.Context, r *http.Request) ([]byte, error) {
+		innerCalls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer still-valid" {
+			return nil, errors.New("no credential")
+		}
+		return nil, nil
+	})
+	authFn := restgw.NewWSAuth(restgw.WSAuthConfig{
+		Inner:       inner,
+		Modes:       []string{restgw.WSAuthModeHeader, restgw.WSAuthModeTicket},
+		TicketStore: store,
+	})
+
+	// The handshake: the surface authenticates the upgrade request, which
+	// consumes the ticket. This is exactly what serve.go does before the
+	// generated handler runs.
+	r := httptest.NewRequest(http.MethodGet, "/public/notes/live?ticket="+ticket, nil)
+	if _, err := authFn(context.Background(), r); err != nil {
+		t.Fatalf("handshake auth: %v", err)
+	}
+
+	// The watchdog then gets that same request — the generated handler
+	// passes `r`.
+	ctx, stop := restgw.WatchStreamAuth(context.Background(), authFn, r, 5*time.Millisecond)
+	defer stop()
+
+	if waitCancelled(ctx, 300*time.Millisecond) {
+		t.Fatal("a ticket-authed stream was torn down by its own re-auth probe: the ticket was consumed at the handshake, so the probe re-presented a spent credential and read the failure as a revocation")
+	}
+	if innerCalls.Load() < 2 {
+		t.Errorf("the probe never reached the real credential check (inner called %d times) — the watchdog must still be ASKING, not silently skipping", innerCalls.Load())
+	}
+}

@@ -92,7 +92,12 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
   // return a shape the SPA can introspect; iter-3 lift.
   const columns = targetPage.list?.columns || [];
   const columnNames = columns.map((c) => c.name);
-  const linkCol = targetPage.list?.detail_link_column || columnNames[0];
+  // Same rule as ListPage: an inlined pivot page may itself be list-only,
+  // and the inline table's link column would open a detail it has not got
+  // (T2-6 pass #9, B9-2 — the same defect through the inline door).
+  const linkCol = targetPage.detail
+    ? targetPage.list?.detail_link_column || columnNames[0]
+    : undefined;
 
   // Editable field list for the create/update form. Prefer the
   // child page's `detail.fields` (those are the consumer's

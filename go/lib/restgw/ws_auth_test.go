@@ -34,8 +34,16 @@ func TestWSAuth_HeaderOnly_Passthrough(t *testing.T) {
 }
 
 // G3i3-GW-F: ticket mode — query carries ticket, store
-// redeems, recorded Authorization replays into a CLONE of
-// the request (caller's r.Header NOT mutated).
+// redeems, recorded Authorization is replayed as a header.
+//
+// The replay lands on the CALLER'S request, not on a private clone.
+// That was the reverse until T2-6 pass #9 (B9-9): a ticket is one-shot,
+// so a stream re-auth probe re-running this function against the
+// handler's request found only the spent `?ticket=`, failed, and tore
+// down a stream nobody had revoked. The request is the only carrier the
+// watchdog gets, so the credential the ticket stood for has to survive
+// on it. Nothing is widened: the header holds exactly what the ticket's
+// labels held, and only after a successful redemption.
 func TestWSAuth_TicketMode_Replays(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
@@ -60,9 +68,11 @@ func TestWSAuth_TicketMode_Replays(t *testing.T) {
 	if seenAuth != "Bearer xyz" {
 		t.Errorf("inner saw Authorization = %q, want replayed Bearer xyz", seenAuth)
 	}
-	// Caller's request header MUST be untouched (clone semantic).
-	if r.Header.Get("Authorization") != "" {
-		t.Errorf("caller's request header was mutated: %q", r.Header.Get("Authorization"))
+	// The caller's request MUST carry the redeemed credential
+	// afterwards — a stream's re-auth probe re-runs this function
+	// against exactly this request, and the ticket is already spent.
+	if got := r.Header.Get("Authorization"); got != "Bearer xyz" {
+		t.Errorf("caller's request must carry the redeemed credential for re-auth, got %q", got)
 	}
 }
 

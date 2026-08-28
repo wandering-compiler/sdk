@@ -455,7 +455,14 @@ func (s *Server) CallUnary(
 		return nil, err
 	}
 
-	out, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(respMsg)
+	// UseEnumNumbers mirrors restgw: enum values are INTEGERS on every w17
+	// JSON surface (docs/decisions/json-dialect.md §2a, which names MCP
+	// explicitly). This site emitted NAMES while the comment below claimed
+	// the result matches "the tool's registered schema … and every other
+	// JSON surface" — and the registered schema advertises integers, so a
+	// client validating a result against the schema it was given saw a type
+	// mismatch on every enum field (T2-6 pass #9, A9-4).
+	out, err := protojson.MarshalOptions{UseProtoNames: true, UseEnumNumbers: true}.Marshal(respMsg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal response: %w", err)
 	}

@@ -9,9 +9,11 @@
 //     cannot set custom headers).
 //
 // On ticket redemption, the recorded Authorization header is
-// replayed into a cloned request before the inner AuthFunc
-// runs, so backend auth sees the same shape it would for a
-// direct header upgrade.
+// set on the request before the inner AuthFunc runs, so
+// backend auth sees the same shape it would for a direct
+// header upgrade — and so a stream's periodic re-auth probe,
+// which re-runs this wrapper against that same request, finds
+// the credential instead of the ticket it already spent.
 
 package restgw
 
@@ -33,18 +35,19 @@ const (
 // WSAuthTicketHeaderLabel is the reserved ticket-label key
 // the issuer's Principal MUST populate with the original
 // Authorization header. NewWSAuth reads this exact key when
-// redeeming + replays it as Authorization on the cloned
-// request. Fixed on purpose — a configurable name is more
-// footgun than flexibility.
+// redeeming + replays it as Authorization on the request.
+// Fixed on purpose — a configurable name is more footgun
+// than flexibility.
 const WSAuthTicketHeaderLabel = "authorization"
 
 // WSAuthConfig configures NewWSAuth.
 type WSAuthConfig struct {
 	// Inner is the upstream AuthFunc that calls the auth RPC.
 	// Required. NewWSAuth decorates it: on ticket redemption,
-	// the replayed Authorization header lands on a cloned
-	// request before Inner runs, so Inner's view is
-	// indistinguishable from a header upgrade.
+	// the replayed Authorization header is set on the request
+	// before Inner runs, so Inner's view is indistinguishable
+	// from a header upgrade — and so a stream's later re-auth
+	// probes see the credential rather than a spent ticket.
 	Inner AuthFunc
 
 	// TicketStore redeems one-shot tickets minted by
@@ -104,8 +107,8 @@ func WSAuthTicketPrincipal(r *http.Request) (map[string]string, error) {
 //   - "header,ticket"   → Authorization wins when set;
 //     otherwise ticket is redeemed +
 //     labels[WSAuthTicketHeaderLabel] is
-//     replayed as Authorization on a
-//     cloned request before Inner runs.
+//     set as Authorization on the request
+//     before Inner runs.
 //
 // When both sources are accepted but neither is present,
 // the request is forwarded to Inner unchanged so Inner's
@@ -164,12 +167,33 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 			if auth == "" {
 				return nil, errors.New("restgw: ticket labels missing authorization")
 			}
-			// r.Clone deep-copies the Header map; safe to
-			// mutate the clone without touching the caller's
-			// request.
-			replayed := r.Clone(ctx)
-			replayed.Header.Set("Authorization", auth)
-			return cfg.Inner(ctx, replayed)
+			// The redeemed credential is written onto the
+			// CALLER'S request, not onto a private clone.
+			//
+			// A ticket is one-shot: Redeem deleted it. For a
+			// unary call that is the end of the story, but a
+			// STREAM authenticates once and is then re-probed
+			// for its whole life by [WatchStreamAuth], which
+			// re-runs this very function against the request
+			// the handler was given. On a clone, that request
+			// still carries nothing but the spent `?ticket=`,
+			// so the first probe redeemed nothing, read
+			// ErrTicketInvalid, and tore down a stream whose
+			// principal was never revoked — every bearer'd
+			// browser WS dying at the first tick, and an
+			// EventSource reconnect replaying the consumed
+			// ticket into a permanent 401 (T2-6 pass #9, B9-9).
+			//
+			// Promoting the ticket to the credential it stood
+			// for is what makes the two features compose: the
+			// probe re-asks the auth backend about the BEARER,
+			// which is the question the watchdog exists to ask
+			// and the one that can still answer "revoked".
+			// Nothing is widened — the header carries exactly
+			// what the ticket's own labels carried, and it is
+			// set only after a successful redemption.
+			r.Header.Set("Authorization", auth)
+			return cfg.Inner(ctx, r)
 		}
 		return cfg.Inner(ctx, r)
 	}

@@ -14,10 +14,11 @@
 //      {"ticket":"...","expires_in":<seconds>} as JSON.
 //   4. FE opens the WS / SSE URL with `?ticket=<t>` appended.
 //   5. WS-auth wrapper redeems the ticket on the upgrade,
-//      replays the recorded Authorization header into a
-//      cloned request, and dispatches to the inner AuthFunc
-//      so backend auth sees the same shape as a direct
-//      header-authenticated upgrade.
+//      sets the recorded Authorization header on the request,
+//      and dispatches to the inner AuthFunc so backend auth
+//      sees the same shape as a direct header-authenticated
+//      upgrade. The header stays on the request: a stream is
+//      re-probed for its whole life, and the ticket is spent.
 //
 // Tickets are one-shot (Redeem deletes) so a leaked ticket
 // expires on first use. TTL bounds the replay window.

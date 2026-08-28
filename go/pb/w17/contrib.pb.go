@@ -167,14 +167,6 @@ var file_w17_contrib_proto_extTypes = []protoimpl.ExtensionInfo{
 		Filename:      "w17/contrib.proto",
 	},
 	{
-		ExtendedType:  (*descriptorpb.MethodOptions)(nil),
-		ExtensionType: (*string)(nil),
-		Field:         51027,
-		Name:          "w17.contrib.plugin_feature_rpc_unless",
-		Tag:           "bytes,51027,opt,name=plugin_feature_rpc_unless",
-		Filename:      "w17/contrib.proto",
-	},
-	{
 		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 		ExtensionType: (*string)(nil),
 		Field:         51026,
@@ -228,35 +220,6 @@ var (
 	//
 	// optional string plugin_feature_rpc = 51025;
 	E_PluginFeatureRpc = &file_w17_contrib_proto_extTypes[3]
-	// (w17.contrib.plugin_feature_rpc_unless) on an `rpc` — the
-	// INVERSE gate: the method is emitted only when the named
-	// feature is NOT in the activation's set. Like
-	// `plugin_feature_rpc` it is a method-level tag and overrides
-	// the enclosing service's tag.
-	//
-	// It exists because a positive gate cannot express a BASELINE
-	// that a feature REPLACES. The auth plugin's `CreateUser` is
-	// the case that forced it: `User.tenant_id` is NOT NULL and
-	// gated on `tenant_scope`, and `CreateUserWithTenant` is the
-	// create path for that feature — so with `tenant_scope` on,
-	// the untagged baseline was still emitted and could not insert
-	// a row at all. It was not merely dead; every call failed the
-	// NOT NULL constraint, and nothing said so until INSERT
-	// completeness started comparing SET lists against the schema
-	// (`domains/storage/generate/insertcomplete.go`).
-	//
-	// Declaring BOTH tags on one method is a contradiction the
-	// filter refuses rather than resolves — "emit only with X" and
-	// "emit only without Y" have no reading when X == Y, and for
-	// X != Y the author means a conjunction the vocabulary does
-	// not offer.
-	//
-	// The Go half of the same idea is `go_files_unless` in
-	// plugin.yaml: an rpc that disappears takes its authored
-	// caller with it, or the staged bundle stops compiling.
-	//
-	// optional string plugin_feature_rpc_unless = 51027;
-	E_PluginFeatureRpcUnless = &file_w17_contrib_proto_extTypes[4]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
@@ -278,7 +241,7 @@ var (
 	// declaration dangles a reference to a dropped type.
 	//
 	// optional string plugin_feature_field = 51026;
-	E_PluginFeatureField = &file_w17_contrib_proto_extTypes[5]
+	E_PluginFeatureField = &file_w17_contrib_proto_extTypes[4]
 )
 
 var File_w17_contrib_proto protoreflect.FileDescriptor
@@ -291,8 +254,7 @@ const file_w17_contrib_proto_rawDesc = "" +
 	"\aextends\x12\x1f.google.protobuf.MessageOptions\x18Ύ\x03 \x01(\v2\x14.w17.contrib.ExtendsR\aextends:H\n" +
 	"\x0eplugin_feature\x12\x1f.google.protobuf.MessageOptions\x18ώ\x03 \x01(\tR\rpluginFeature:O\n" +
 	"\x12plugin_feature_svc\x12\x1f.google.protobuf.ServiceOptions\x18Ў\x03 \x01(\tR\x10pluginFeatureSvc:N\n" +
-	"\x12plugin_feature_rpc\x12\x1e.google.protobuf.MethodOptions\x18ю\x03 \x01(\tR\x10pluginFeatureRpc:[\n" +
-	"\x19plugin_feature_rpc_unless\x12\x1e.google.protobuf.MethodOptions\x18ӎ\x03 \x01(\tR\x16pluginFeatureRpcUnless:Q\n" +
+	"\x12plugin_feature_rpc\x12\x1e.google.protobuf.MethodOptions\x18ю\x03 \x01(\tR\x10pluginFeatureRpc:Q\n" +
 	"\x14plugin_feature_field\x12\x1d.google.protobuf.FieldOptions\x18Ҏ\x03 \x01(\tR\x12pluginFeatureFieldB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
 
 var (
@@ -320,13 +282,12 @@ var file_w17_contrib_proto_depIdxs = []int32{
 	1, // 1: w17.contrib.plugin_feature:extendee -> google.protobuf.MessageOptions
 	2, // 2: w17.contrib.plugin_feature_svc:extendee -> google.protobuf.ServiceOptions
 	3, // 3: w17.contrib.plugin_feature_rpc:extendee -> google.protobuf.MethodOptions
-	3, // 4: w17.contrib.plugin_feature_rpc_unless:extendee -> google.protobuf.MethodOptions
-	4, // 5: w17.contrib.plugin_feature_field:extendee -> google.protobuf.FieldOptions
-	0, // 6: w17.contrib.extends:type_name -> w17.contrib.Extends
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	6, // [6:7] is the sub-list for extension type_name
-	0, // [0:6] is the sub-list for extension extendee
+	4, // 4: w17.contrib.plugin_feature_field:extendee -> google.protobuf.FieldOptions
+	0, // 5: w17.contrib.extends:type_name -> w17.contrib.Extends
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	5, // [5:6] is the sub-list for extension type_name
+	0, // [0:5] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
@@ -342,7 +303,7 @@ func file_w17_contrib_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_contrib_proto_rawDesc), len(file_w17_contrib_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   1,
-			NumExtensions: 6,
+			NumExtensions: 5,
 			NumServices:   0,
 		},
 		GoTypes:           file_w17_contrib_proto_goTypes,

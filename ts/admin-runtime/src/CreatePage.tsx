@@ -76,8 +76,12 @@ export function CreatePage({ page, whoami, slots, onBack, onCreated }: CreatePag
         if (f in values) payload[f] = values[f];
       }
       const created = await apiPost<Record<string, unknown>>(endpoint as string, payload, {
-        request: page.detail.create_request_ref,
-        response: page.detail.create_response_ref,
+        // Optional-chained: the page's detail is nullable (a list-only
+        // page has none), and the create route already refuses to mount
+        // this component without one — but the type has to be honest
+        // rather than assert (T2-6 pass #9, B9-1).
+        request: page.detail?.create_request_ref,
+        response: page.detail?.create_response_ref,
       });
       onCreated(extractCreatedId(created));
     } catch (err) {

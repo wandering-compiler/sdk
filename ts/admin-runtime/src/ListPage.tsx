@@ -302,7 +302,14 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
   // 26.07.2026, which is the whole point of §3 of the formatting spec.
   const columnFormats = page.list?.column_formats || {};
   const formatCtx: FormatContext = formatContextFor(spec);
-  const linkCol = page.list?.detail_link_column || (page.list?.columns ?? [])[0]?.name || "";
+  // The link cell exists only when there is a detail to open. The SPA
+  // defaults it to the first column ON ITS OWN, so suppressing the
+  // emitter's `detail_link_column` is not enough — two surfaces
+  // independently turned the link on, and a list-only page linked into a
+  // null detail spec either way (T2-6 pass #9, B9-1).
+  const linkCol = page.detail
+    ? page.list?.detail_link_column || (page.list?.columns ?? [])[0]?.name || ""
+    : "";
   // Each AdminColumn carries its own presentation: the item field
   // `name`, an optional header `label` (Django verbose_name), and an
   // optional FK `ref`. A column with a ref renders the referenced

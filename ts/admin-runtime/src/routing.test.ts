@@ -19,6 +19,14 @@ const spec = {
       name: "ReadOnly",
       detail: { read_endpoint: "/y", fields: [] },
     },
+    // A list-only page: a model with no single-column identity cannot be
+    // keyed by a row id, so it declares no detail and Go serialises the
+    // field as a literal null.
+    TaskTags: {
+      name: "TaskTags",
+      list: { endpoint: "/admin/api/list/TaskTags", columns: [{ name: "task_id" }] },
+      detail: null,
+    },
   },
 } as unknown as AdminSpec;
 
@@ -63,5 +71,20 @@ describe("parseHash", () => {
       pageName: "Notes",
       rowId: "a/b",
     });
+  });
+});
+
+// T2-6 pass #9, B9-1. The detail route checked only that the page EXISTS,
+// while the sibling create route one branch below checked that the page
+// declares one. So a hand-typed or stale-bookmarked #/detail/<list-only
+// page>/<id> resolved, mounted DetailPage, and dereferenced a null detail
+// spec — a crash, not a 404.
+describe("parseHash — a list-only page has no detail route", () => {
+  it("refuses #/detail for a page whose detail is null", () => {
+    expect(parseHash("#/detail/TaskTags/0", spec)).toBeNull();
+  });
+
+  it("still resolves the list route for that page", () => {
+    expect(parseHash("#/list/TaskTags", spec)).toEqual({ kind: "list", pageName: "TaskTags" });
   });
 });

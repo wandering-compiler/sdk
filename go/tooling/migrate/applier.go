@@ -3,8 +3,8 @@
 // record loop, but is dialect-neutral: per-target execution is
 // delegated to an `Applier` whose concrete implementations
 // (PG / MySQL / SQLite over `database/sql`; Redis / NATS / S3
-// over per-dialect SDKs) land in Phase E together with the
-// e2e harness migration.
+// over per-dialect SDKs) live in `internal/` — all six shipped; this said
+// they were still to "land in Phase E" until T2-5 pass #14 (D14-14).
 //
 // D30 adapter pattern: orchestration (this package) is pure
 // orchestration. No I/O beyond what the Client + Applier +

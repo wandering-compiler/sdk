@@ -173,3 +173,92 @@ func TestPlan_MarksAdoptOnlyTheSatisfiedBaseline(t *testing.T) {
 		}
 	}
 }
+
+// T2-5 pass #15 (T25-A15-5, HIGH) — a MID-RANGE head is not a database the
+// baseline describes, and adopting for one skips the tail's DDL forever.
+//
+// The adopt decision was `head != "" && supersedes(m, head)` — ANY membership.
+// The justification (the baseline "describes the schema already in front of
+// us") holds only when the head is the LAST id the baseline collapsed. A
+// database sitting mid-range applied a PREFIX of the collapsed set, so the
+// remainder of that set is exactly the DDL it still needs — and adopting
+// records the baseline as done and runs none of it.
+//
+// It is permanent. The superseded rows never appear in a fetch again, and
+// after the adopt the head is the baseline, so even resurrecting them leaves
+// their ids under the cutoff. Silent, durable schema divergence on a genuine,
+// console-signed artifact.
+//
+// The reachable sequence is ordinary: trunk pushes m031…m050 while production
+// still sits at m030 (registry-ahead-of-prod is the normal state of a trunk),
+// someone runs `w17ctl migrate squash --all` — the freeze reads REGISTRY live
+// rows and the applied audit is contract-excluded from that reasoning — the
+// baseline stamps supersedes = m001…m050 and moves the pin, and the next
+// deploy adopts.
+func TestPlan_RefusesAdoptFromAMidRangeHead(t *testing.T) {
+	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');",
+		"ts-1", "ts-2", "ts-3")
+	dir := seedDir(t, base)
+	stubA := stub.New()
+	stubA.Head = "ts-2" // applied ts-1 and ts-2; ts-3's DDL never ran here
+
+	_, err := migrate.Plan(context.Background(), migrate.Config{
+		Targets:       targets(lockTarget{"main", base.GetId(), base.GetContentSha256()}),
+		MigrationsDir: dir,
+		ApplierFor:    func(_ string) (migrate.Applier, error) { return stubA, nil },
+	})
+	if err == nil {
+		t.Fatal("planned an adopt from a head in the MIDDLE of the collapsed range — the " +
+			"database applied a prefix, so the rest of the range is DDL it still needs, and " +
+			"adopting records the baseline while running none of it. The superseded rows are " +
+			"never served again, so the gap is permanent")
+	}
+	if !strings.Contains(err.Error(), "ts-2") || !strings.Contains(err.Error(), "ts-3") {
+		t.Errorf("the refusal must name where the database is and what it is missing; got %v", err)
+	}
+}
+
+// The mirror: a head at the LAST collapsed id is the case squash exists for
+// and must still adopt. Without this the fix reads as "adopt is refused",
+// which would break every real squash deploy.
+func TestPlan_StillAdoptsFromTheLastSupersededID(t *testing.T) {
+	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');",
+		"ts-1", "ts-2", "ts-3")
+	dir := seedDir(t, base)
+	stubA := stub.New()
+	stubA.Head = "ts-3" // the whole collapsed range is applied here
+
+	pending, err := migrate.Plan(context.Background(), migrate.Config{
+		Targets:       targets(lockTarget{"main", base.GetId(), base.GetContentSha256()}),
+		MigrationsDir: dir,
+		ApplierFor:    func(_ string) (migrate.Applier, error) { return stubA, nil },
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(pending) != 1 || !pending[0].Adopt {
+		t.Fatalf("a database at the last superseded id must still adopt; got %+v", pending)
+	}
+}
+
+// A database that applied NONE of the collapsed set gets the real CREATE —
+// the branch the original comment describes, kept honest.
+func TestPlan_UnrelatedHeadStillDoesNotAdopt(t *testing.T) {
+	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');",
+		"ts-1", "ts-2")
+	dir := seedDir(t, base)
+	stubA := stub.New()
+	stubA.Head = "" // fresh database
+
+	pending, err := migrate.Plan(context.Background(), migrate.Config{
+		Targets:       targets(lockTarget{"main", base.GetId(), base.GetContentSha256()}),
+		MigrationsDir: dir,
+		ApplierFor:    func(_ string) (migrate.Applier, error) { return stubA, nil },
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(pending) != 1 || pending[0].Adopt {
+		t.Fatalf("a fresh database must run the baseline's DDL, not adopt it; got %+v", pending)
+	}
+}

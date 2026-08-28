@@ -1870,8 +1870,11 @@ type Index struct {
 	// because PostgreSQL treats NULLs as DISTINCT in a unique index, so a
 	// plain three-column UNIQUE would silently stop constraining the
 	// realm-wide rows). Expressing "this index, but only in that build"
-	// needs both polarities. Same shape that put
-	// `plugin_feature_rpc_unless` in contrib.proto.
+	// needs both polarities — which is why the INDEX pair keeps its
+	// `plugin_feature_unless` even though the rpc-level inverse gate was
+	// retired (contrib.proto reserves its number). An index has no
+	// equivalent of a feature-gated DQL fragment to fold the two
+	// polarities into one entry, so here both are still load-bearing.
 	//
 	// Empty (both) = ungated — the entry is emitted in every build, which
 	// is what every index that doesn't author these fields does.

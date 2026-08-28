@@ -349,6 +349,50 @@ func nthPlaceholder(s string, n int) int {
 	return idx
 }
 
+// Bytes returns a NON-NIL byte slice, so an empty `bytes` value binds as
+// the empty SQL value rather than as NULL.
+//
+// Arr's problem, one type over, and reachable the same way: proto3 has no
+// presence for `bytes`, so an empty payload arrives as a nil slice — which
+// lib/pq sends as NULL, and a NOT NULL `bytea` column refuses. The console's
+// deploy registry hit it on the first EMPTY fixture pushed: a fixture with no
+// rows marshals to zero bytes, the map store stores it happily, and the write
+// failed with a constraint violation naming nothing the operator wrote.
+//
+// It composes with [NullIfEmpty] rather than fighting it: that helper nulls on
+// LENGTH, so a nullable column still stores NULL for an empty value and only a
+// NOT NULL one gets the empty payload.
+func Bytes(b []byte) []byte {
+	if b == nil {
+		return []byte{}
+	}
+	return b
+}
+
+// Arr returns a NON-NIL slice, so an empty repeated value binds as the
+// empty SQL array rather than as NULL.
+//
+// `pq.Array` is where the difference is decided: its Value() returns
+// untyped nil for a nil slice, which lib/pq sends as NULL. A repeated
+// COLUMN is declared NOT NULL — the model says "always a list, possibly
+// empty" — so an empty list would fail the constraint instead of storing
+// `{}`. And there is nothing the caller can do about it from the proto
+// side: proto3 repeated fields have no presence, so an empty list and an
+// absent one arrive identically as nil on the server.
+//
+// It is applied to every array binding, filters included, rather than
+// only to writes. A filter binds `col = ANY($1)`, where NULL and `{}`
+// both match no rows, so the coercion changes nothing there — and one
+// rule ("a repeated binding is an array, never NULL") is worth more than
+// a second emit path that has to know which side of the statement it is
+// on.
+func Arr[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 // NullIfEmpty returns `nil` when `v` carries a zero-length
 // payload, otherwise returns `v` unchanged. The codegen wraps
 // SQL bindings for `(w17.field).null = true` scalar fields

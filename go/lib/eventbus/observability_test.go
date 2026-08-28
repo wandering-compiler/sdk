@@ -1,8 +1,11 @@
 package eventbus_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -300,4 +303,63 @@ func timeoutCtx(t *testing.T, d time.Duration) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+// TestDefaultObserver_EmitFailureLeavesATrace — the promise four documents
+// make must be true of the bus a generated main actually builds.
+//
+// T2-6 pass #9, D9-3. `docs/specs/eventbus/emit.md` says emit failures are
+// "logged + counted in observability metrics", and uses that as its
+// justification for not failing the RPC; `dispatcher.go`'s header says it
+// again; and every emitted helper comments that failures are "observed via
+// runtime metrics, not propagated" while doing `_ = bus.Dispatch(...)`.
+//
+// The only failure sink Dispatch has is Observer.OnEmitFailure, every bus
+// defaulted that to NopObserver, and the whole tree contained exactly two
+// Observer implementations — both test recorders. So a failed dispatch
+// after a committed mutation was a lost event with no trace anywhere, and
+// the generated main gives a project no seam to add one: the bus is built
+// inside DO-NOT-EDIT code, and no annotation, env var or hook reaches it.
+//
+// The test builds the bus the way the generated main does — options with no
+// Observer — and asserts a failure leaves a record.
+func TestDefaultObserver_EmitFailureLeavesATrace(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	bus := eventbus.NewMemoryBus()
+
+	// An invalid-UTF-8 string field fails proto.Marshal, so Dispatch
+	// fails before publish — exactly the OnEmitFailure case the spec
+	// describes as "logged + counted".
+	bad := wrapperspb.String(string([]byte{0xff, 0xfe}))
+	if err := bus.Dispatch(context.Background(), "default", "task.created", bad); err == nil {
+		t.Fatal("expected the dispatch to fail; without a failure this test proves nothing about the failure path")
+	}
+	if buf.Len() == 0 {
+		t.Fatal("a failed emit left no trace: the spec promises it is logged and counted, the emitted helper discards the error on that promise, and the default observer is the only thing that can keep it")
+	}
+	if got := buf.String(); !strings.Contains(got, "task.created") {
+		t.Errorf("the trace does not name the topic that was lost, so an operator cannot tell WHICH event vanished: %q", got)
+	}
+}
+
+// TestNopObserver_StaysSilent — the explicit opt-out must still be silent.
+// Without this, "the default traces failures" could be satisfied by making
+// every observer trace, taking the opt-out away from anyone who measured
+// that the hot path cannot afford it.
+func TestNopObserver_StaysSilent(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	bus := eventbus.NewMemoryBusWithOptions(eventbus.MemoryBusOptions{Observer: eventbus.NopObserver{}})
+
+	_ = bus.Dispatch(context.Background(), "default", "task.created", wrapperspb.String(string([]byte{0xff, 0xfe})))
+	if buf.Len() != 0 {
+		t.Errorf("NopObserver is the documented silent opt-out but something logged: %q", buf.String())
+	}
 }

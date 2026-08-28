@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -311,5 +312,38 @@ func WriteUploadError(w http.ResponseWriter, err error) {
 		// (restgw-sec-3).
 		observx.ReportError(context.Background(), err)
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+	}
+}
+
+// UploadedObject names one object a request stored durably, so a later
+// failure on the same request can take it back out.
+type UploadedObject struct {
+	Connection string
+	Handle     string
+}
+
+// RollbackUploads deletes objects a failed request had already written.
+//
+// A multipart handler stores each part DURABLY (ProcessFilePart →
+// PutFromTempFile) before it parses path params, before it validates, and
+// before it calls the backend — every one of which can still fail. Nothing
+// referenced the object at that point, so a later failure used to leave
+// bytes in the bucket that no row points at, permanently: no GC, no sweep
+// and no orphan posture exists anywhere in the stack (T2-6 pass #9, D9-2).
+//
+// Best-effort by design. The request has already failed; an undeletable
+// orphan must not turn a 400 into a 500. Delete is idempotent on a missing
+// key, so this is safe on any exit path, including one where the object was
+// never written. A driver that is absent from the map (a connection the
+// bundle does not carry) is skipped rather than treated as an error.
+func RollbackUploads(ctx context.Context, drivers map[string]kvfs.Driver, objs []UploadedObject) {
+	for _, o := range objs {
+		d := drivers[o.Connection]
+		if d == nil || o.Handle == "" {
+			continue
+		}
+		if err := d.Delete(ctx, o.Handle); err != nil {
+			log.Printf("restgw: upload rollback %s/%s: %v", o.Connection, o.Handle, err)
+		}
 	}
 }

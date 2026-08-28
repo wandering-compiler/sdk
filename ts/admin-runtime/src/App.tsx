@@ -470,8 +470,16 @@ export function parseHash(hash: string, spec: AdminSpec): View | null {
   if (parts.length === 2 && parts[0] === "list") {
     return spec.pages[parts[1]] ? { kind: "list", pageName: parts[1] } : null;
   }
+  // Only route to a detail when the page actually declares one. A
+  // list-only page (a model with no single-column identity CANNOT have a
+  // detail) has `detail: null`, and DetailPage dereferences
+  // page.detail.read_endpoint unconditionally — so a hand-typed or
+  // stale-linked #/detail/<page>/<id> crashed the view. The sibling
+  // `create` branch below has had this guard all along; this one did not
+  // (T2-6 pass #9, B9-1).
   if (parts.length === 3 && parts[0] === "detail") {
-    return spec.pages[parts[1]] ? { kind: "detail", pageName: parts[1], rowId: parts[2] } : null;
+    const p = spec.pages[parts[1]];
+    return p?.detail ? { kind: "detail", pageName: parts[1], rowId: parts[2] } : null;
   }
   // Only route to a create form when the page actually declares one —
   // a hand-typed #/create/<page> on a read-only page falls back to the

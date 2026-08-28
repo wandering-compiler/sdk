@@ -14,6 +14,7 @@ import {
   Select,
   Stack,
   Tabs,
+  Text,
   TextInput,
   Title,
 } from "@mantine/core";
@@ -90,6 +91,13 @@ export function DetailPage({
   onBack,
   onSelectInlineRow,
 }: DetailPageProps) {
+  // `detail` is nullable: a model with no single-column identity may
+  // declare a list-only page, and Go serialises that as a literal `null`.
+  // Bound to a const so the guard below narrows it inside the effects and
+  // callbacks too — a property access re-widens in every closure
+  // (T2-6 pass #9, B9-1).
+  const detail = page.detail;
+
   const [row, setRow] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -100,9 +108,10 @@ export function DetailPage({
   const t = useT();
 
   useEffect(() => {
+    if (!detail) return;
     let cancelled = false;
-    const url = page.detail.read_endpoint.replace("{id}", encodeURIComponent(rowId));
-    apiGet<Record<string, unknown>>(url, { response: page.detail.read_response_ref })
+    const url = detail.read_endpoint.replace("{id}", encodeURIComponent(rowId));
+    apiGet<Record<string, unknown>>(url, { response: detail.read_response_ref })
       .then((resp) => {
         if (cancelled) return;
         setRow(resp);
@@ -122,7 +131,19 @@ export function DetailPage({
     // read_response_ref is spec data, constant for the life of the page; it
     // is in the closure but not a reason to refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page.detail.read_endpoint, rowId, reset, reloadTick]);
+  }, [detail?.read_endpoint, rowId, reset, reloadTick]);
+
+  // Every hook has run by here, so the early return is safe — and placing
+  // it here (rather than just before the JSX) is what narrows `detail` for
+  // the whole body below instead of leaving twenty dereferences to guard
+  // one at a time.
+  //
+  // It should be unreachable: App.tsx no longer routes to a detail a page
+  // has not got, and ListPage no longer links into one. But a hand-typed
+  // URL or a stale bookmark must land on a message, not a crash.
+  if (!detail) {
+    return <Text c="dimmed">{t("This page has no detail view.")}</Text>;
+  }
 
   // DETAIL-target actions render as buttons in the detail header
   // alongside Delete. BOTH-target actions render here too.
@@ -137,30 +158,24 @@ export function DetailPage({
 
   // Per-endpoint perm gates (REV-150 iter-3). Backend handler
   // still enforces; SPA hides UI consumers shouldn't trigger.
-  const canUpdate = hasAllPermissions(
-    whoami?.permission_ids,
-    page.detail.required_permissions_update,
-  );
-  const canDelete = hasAllPermissions(
-    whoami?.permission_ids,
-    page.detail.required_permissions_delete,
-  );
+  const canUpdate = hasAllPermissions(whoami?.permission_ids, detail.required_permissions_update);
+  const canDelete = hasAllPermissions(whoami?.permission_ids, detail.required_permissions_delete);
 
-  async function onSave(values: Record<string, unknown>) {
-    if (!page.detail.update_endpoint) return;
+  const onSave = async (values: Record<string, unknown>) => {
+    if (!detail.update_endpoint) return;
     setSaving(true);
     setError(null);
     try {
-      const url = page.detail.update_endpoint.replace("{id}", encodeURIComponent(rowId));
+      const url = detail.update_endpoint.replace("{id}", encodeURIComponent(rowId));
       // Send only the editable fields; readonly + auto-generated
       // fields stay where they were read from.
       const payload: Record<string, unknown> = {};
-      for (const f of page.detail.fields ?? []) {
+      for (const f of detail.fields ?? []) {
         if (f in values) payload[f] = values[f];
       }
       const updated = await apiPatch<Record<string, unknown>>(url, payload, {
-        request: page.detail.update_request_ref,
-        response: page.detail.update_response_ref,
+        request: detail.update_request_ref,
+        response: detail.update_response_ref,
       });
       setRow(updated);
       reset(updated);
@@ -169,23 +184,23 @@ export function DetailPage({
     } finally {
       setSaving(false);
     }
-  }
+  };
 
-  async function onDelete() {
-    if (!page.detail.delete_endpoint) return;
+  const onDelete = async () => {
+    if (!detail.delete_endpoint) return;
     // Walking-skeleton: simple confirm(); iter-2 wires Mantine modal.
     if (!window.confirm(t("Delete this row?"))) return;
     setSaving(true);
     setError(null);
     try {
-      const url = page.detail.delete_endpoint.replace("{id}", encodeURIComponent(rowId));
-      await apiDelete(url, { response: page.detail.delete_response_ref });
+      const url = detail.delete_endpoint.replace("{id}", encodeURIComponent(rowId));
+      await apiDelete(url, { response: detail.delete_response_ref });
       onBack();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSaving(false);
     }
-  }
+  };
 
   if (error) {
     return (
@@ -204,13 +219,13 @@ export function DetailPage({
     );
   }
 
-  const readonlySet = new Set(page.detail.readonly_fields || []);
-  const fieldsets = page.detail.fieldsets || [];
+  const readonlySet = new Set(detail.readonly_fields || []);
+  const fieldsets = detail.fieldsets || [];
   const hasFieldsets = fieldsets.length > 0;
-  const flatEditableFields = page.detail.fields.filter((f) => !readonlySet.has(f));
-  const flatReadonlyFields = (page.detail.readonly_fields || []).slice();
-  const fieldTypes = page.detail.field_types || {};
-  const fieldFormats = page.detail.field_formats || {};
+  const flatEditableFields = detail.fields.filter((f) => !readonlySet.has(f));
+  const flatReadonlyFields = (detail.readonly_fields || []).slice();
+  const fieldTypes = detail.field_types || {};
+  const fieldFormats = detail.field_formats || {};
   const formatCtx = formatContextFor(spec);
   // A value the form can SUBMIT renders RAW. It round-trips through the
   // input and back out on save, so a grouped "1 234,50" or a day-first date
@@ -218,7 +233,7 @@ export function DetailPage({
   // therefore applies exactly where the value is display-only: a readonly
   // field, or any field on a form that cannot be submitted at all (no update
   // endpoint, or no permission to use it).
-  const canSubmit = Boolean(page.detail.update_endpoint) && canUpdate;
+  const canSubmit = Boolean(detail.update_endpoint) && canUpdate;
   const displayFor = (field: string, readonly: boolean): FieldDisplay | undefined =>
     readonly || !canSubmit ? { format: fieldFormats[field], ctx: formatCtx } : undefined;
 
@@ -258,7 +273,7 @@ export function DetailPage({
                 fieldsets={fieldsets}
                 readonlySet={readonlySet}
                 row={row}
-                disabled={!page.detail.update_endpoint || !canUpdate || saving}
+                disabled={!detail.update_endpoint || !canUpdate || saving}
                 register={register}
                 control={control}
                 fieldTypes={fieldTypes}
@@ -274,9 +289,9 @@ export function DetailPage({
                     mode: "editable",
                     semType: fieldTypes[f],
                     rawValue: row[f],
-                    disabled: !page.detail.update_endpoint || !canUpdate || saving,
+                    disabled: !detail.update_endpoint || !canUpdate || saving,
                     display: displayFor(f, false),
-                    choices: page.detail.field_choices?.[f],
+                    choices: detail.field_choices?.[f],
                     t,
                     register,
                     control,
@@ -292,7 +307,7 @@ export function DetailPage({
                     rawValue: row[f],
                     disabled: true,
                     display: displayFor(f, true),
-                    choices: page.detail.field_choices?.[f],
+                    choices: detail.field_choices?.[f],
                     t,
                     register,
                     control,
@@ -302,7 +317,7 @@ export function DetailPage({
                 )}
               </>
             )}
-            {page.detail.update_endpoint && canUpdate && (
+            {detail.update_endpoint && canUpdate && (
               <Group justify="flex-end">
                 <Button type="submit" loading={saving}>
                   {t("Save")}
@@ -333,7 +348,7 @@ export function DetailPage({
                 {action.label ? t(action.label) : humanizeLabel(name)}
               </Button>
             ))}
-            {page.detail.delete_endpoint && canDelete && (
+            {detail.delete_endpoint && canDelete && (
               <Button color="red" variant="light" onClick={onDelete} loading={saving}>
                 {t("Delete")}
               </Button>
@@ -704,7 +719,7 @@ function FieldsetBody({
           rawValue: row[f],
           disabled: isReadonly || disabled,
           display: displayFor(f, isReadonly),
-          choices: page.detail.field_choices?.[f],
+          choices: page.detail?.field_choices?.[f],
           t,
           register,
           control,

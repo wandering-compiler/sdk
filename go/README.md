@@ -92,7 +92,7 @@ sdk/go/
 │   ├── paging/      keyset / cursor pagination helpers.
 │   ├── grpcclient/  gRPC client dial helpers for the generated stub clients.
 │   ├── grpcserver/  gRPC server bootstrap helper used by generated mains.
-│   ├── mcp/         MCP server runtime (protobridge).
+│   ├── mcp/         MCP server runtime (w17's own; both MCP surfaces run on it).
 │   ├── protojsonx/  the w17 JSON dialect (discriminated-union oneof reshape).
 │   ├── randstr/     random-id helper (Token) for generated INSERT defaults.
 │   └── typere/      typed-regex validation used by generated validators.

@@ -17,7 +17,7 @@
 //                   violations accumulate; non-validation
 //                   errors typically carry one detail).
 //
-// JSON-over-REST shape (protobridge translates):
+// JSON-over-REST shape (the gateway translates):
 //
 //   {
 //     "code": "InvalidArgument",

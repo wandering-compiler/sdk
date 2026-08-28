@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -39,14 +40,45 @@ func mkMigFull(id, conn, up, upPostTx, downPreTx, downSql string) *applyfetchpb.
 		m.DownPreTx = downPreTx
 		m.DownSql = downSql
 	}
-	m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql())
+	m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
 	return m
 }
 
 // seedDir writes every migration to a temp directory using the
 // canonical fetch-side layout (migrate.WriteMigration). Returns the
 // root directory.
+//
+// It CHAINS them first, per connection in id order, exactly as the console's
+// storeMigrations does when it appends to a connection's history (T2-5
+// B11-1) — so what a test seeds is what a real fetch delivers. Stamping the
+// links here rather than in every test is deliberate: a fixture that forgets
+// them is not a weaker fixture, it is an artifact set the apply path now
+// refuses, and chasing that refusal through thirty tests teaches nothing.
+//
+// Tests that need an UNCHAINED set (the compatibility refusal, the tamper
+// cases) build it explicitly — see seedDirUnchained.
 func seedDir(t *testing.T, migs ...*applyfetchpb.Migration) string {
+	t.Helper()
+	ordered := append([]*applyfetchpb.Migration(nil), migs...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].GetConnection() != ordered[j].GetConnection() {
+			return ordered[i].GetConnection() < ordered[j].GetConnection()
+		}
+		return ordered[i].GetId() < ordered[j].GetId()
+	})
+	prev := map[string]string{}
+	for _, m := range ordered {
+		m.PrevContentSha256 = prev[m.GetConnection()]
+		m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
+		prev[m.GetConnection()] = m.GetContentSha256()
+	}
+	return seedDirUnchained(t, ordered...)
+}
+
+// seedDirUnchained writes the migrations exactly as given, links and all —
+// the pre-chaining behaviour of seedDir. Anything that seeds a deliberately
+// malformed history goes through here.
+func seedDirUnchained(t *testing.T, migs ...*applyfetchpb.Migration) string {
 	t.Helper()
 	dir := t.TempDir()
 	for _, m := range migs {

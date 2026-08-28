@@ -145,7 +145,7 @@ func NewMemoryBusWithOptions(opts MemoryBusOptions) *MemoryBus {
 	}
 	observer := opts.Observer
 	if observer == nil {
-		observer = NopObserver{}
+		observer = DefaultObserver{}
 	}
 	return &MemoryBus{
 		handlers:     map[string][]registeredHandler{},

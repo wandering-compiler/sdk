@@ -197,7 +197,7 @@ func NewRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 		opts.ReadBatch = 10
 	}
 	if opts.Observer == nil {
-		opts.Observer = NopObserver{}
+		opts.Observer = DefaultObserver{}
 	}
 	if opts.InstanceID == "" {
 		opts.InstanceID = newInstanceID()

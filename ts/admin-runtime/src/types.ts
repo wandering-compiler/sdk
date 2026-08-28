@@ -243,7 +243,13 @@ export interface AdminPageSpec {
   model: string;
   title?: string;
   list?: AdminListSpec;
-  detail: AdminDetailSpec;
+  // Nullable, and the type has to say so. The Go side emits
+  // `json:"detail"` with no omitempty, so a page with no detail — a
+  // model with no single-column identity, which cannot have one —
+  // serialises as a literal `null`. Declaring it non-nullable made tsc
+  // blind to exactly that page, and every consumer dereferenced it
+  // (T2-6 pass #9, B9-1).
+  detail: AdminDetailSpec | null;
   actions?: Record<string, AdminActionSpec>;
   inlines?: AdminInlineSpec[];
 }

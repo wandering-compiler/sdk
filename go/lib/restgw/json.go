@@ -53,10 +53,26 @@ var (
 
 // Marshaller / Unmarshaller carry the project-wide proto-JSON
 // settings. Exported via package-level vars so generated code
-// + helpers below share one configuration source — operators
-// who need different JSON shapes (different default-value
-// emission, name casing) flip the var at process startup, not
-// per-request.
+// + helpers below share ONE configuration source.
+//
+// They are not an operator knob, and this comment used to say they
+// were ("flip the var at process startup"). Two things make that
+// false. The settings ARE the w17 JSON dialect — snake_case names,
+// enum values as integers, 64-bit ints as strings
+// (docs/decisions/json-dialect.md §2a) — so changing them means
+// leaving the dialect every client, every published schema and every
+// sibling surface was generated against. And a flip would only
+// half-apply anyway: [MarshalProtoAppend] consults the generated
+// fast-path codec FIRST (lookupJSONMarshaler), and that codec bakes
+// the settings in at generation time, so a message with a registered
+// codec would keep the old shape while one without it changed —
+// the same endpoint answering two ways depending on whether codegen
+// happened to emit a codec for that type (T2-6 pass #9, A9-5).
+//
+// The vars stay exported because generated code and the helpers below
+// read them. Changing their VALUES is a compiler-level decision: the
+// jctest oracle derives from Marshaller precisely so the fast path and
+// the reflective fallback cannot disagree about what it says.
 //
 // Defaults:
 //   - EmitDefaultValues: false   — zero-valued fields drop out
