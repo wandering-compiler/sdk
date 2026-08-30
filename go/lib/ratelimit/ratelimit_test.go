@@ -1,9 +1,13 @@
 package ratelimit
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,5 +202,138 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("X_RATELIMIT_PER_MINUTE", "0")
 	if New(FromEnv("X")) != nil {
 		t.Fatal("PER_MINUTE=0 must disable")
+	}
+}
+
+// newTestCtx builds a context whose gRPC peer is addr, optionally behind a
+// trusted proxy that forwarded xff.
+func newTestCtx(peerAddr string, xff ...string) context.Context {
+	ctx := peer.NewContext(context.Background(), &peer.Peer{
+		Addr: &net.TCPAddr{IP: net.ParseIP(peerAddr), Port: 40000},
+	})
+	if len(xff) > 0 {
+		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-forwarded-for", strings.Join(xff, ", ")))
+	}
+	return ctx
+}
+
+// TestLimiter_IPv6BucketsByPrefixNotByAddress — an IPv6 /64 is one caller.
+//
+// Hosted review 2026-08-30, HOST-A-4, and these are the measured numbers the
+// finding was filed on: 1000 attempts from one /64 produced ZERO refusals
+// while 1000 from a single IPv4 produced 990. Every ordinary IPv6 assignment
+// is a /64 or shorter, so keying the full /128 gave an attacker 2^64 free
+// buckets — the limiter was absent exactly where credential stuffing comes
+// from, and strict everywhere else.
+func TestLimiter_IPv6BucketsByPrefixNotByAddress(t *testing.T) {
+	const trusted = "10.0.0.1"
+	proxies := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+
+	count := func(addrs func(i int) string) (blocked int) {
+		l := New(Config{PerMinute: 30, Burst: 10, TTL: time.Minute, MaxKeys: 10000, TrustedProxies: proxies})
+		for i := 0; i < 1000; i++ {
+			if !l.Allow(newTestCtx(trusted, addrs(i))) {
+				blocked++
+			}
+		}
+		return blocked
+	}
+
+	// One /64, rotating the host part — what an attacker actually has.
+	v6 := count(func(i int) string { return fmt.Sprintf("2001:db8:1:1::%x", i) })
+	if v6 < 900 {
+		t.Errorf("1000 attempts from ONE IPv6 /64 were blocked only %d times — an attacker rotating the host part of a single assigned block gets unmetered attempts", v6)
+	}
+
+	// A single IPv4 address: unchanged behaviour, the control case.
+	v4 := count(func(int) string { return "203.0.113.7" })
+	if v4 < 900 {
+		t.Errorf("1000 attempts from one IPv4 address were blocked only %d times — the limit stopped working at all", v4)
+	}
+
+	// And distinct /64s must still get distinct buckets, or the fix would
+	// have meant "meter the whole internet as one caller".
+	l := New(Config{PerMinute: 30, Burst: 10, TTL: time.Minute, MaxKeys: 10000, TrustedProxies: proxies})
+	for i := 0; i < 100; i++ {
+		if !l.Allow(newTestCtx(trusted, fmt.Sprintf("2001:db8:%x::1", i))) {
+			t.Fatalf("a caller from a distinct /64 (#%d) was refused — separate networks must get separate buckets", i)
+		}
+	}
+}
+
+// TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket — the control must
+// not invert silently.
+//
+// Hosted review 2026-08-30, HOST-A-3, measured: behind a trusted terminator
+// that forwards no address, two distinct external clients key to ONE bucket,
+// and draining it refuses a victim's SignIn. That is the protection turned
+// into the attack — any single client can lock the whole surface out of the
+// methods the limiter exists to protect. An L4/TCP load balancer forwards no
+// X-Forwarded-For, so this is a deployment the docs describe, not a
+// hypothetical.
+//
+// The limiter cannot invent the missing address, so the requirement is that
+// it SAYS SO rather than quietly becoming a global cap.
+func TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	l := New(Config{
+		PerMinute:      30,
+		Burst:          10,
+		TTL:            time.Minute,
+		MaxKeys:        100,
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	})
+
+	// A trusted terminator that forwarded nothing — the L4 case.
+	if !l.Allow(newTestCtx("10.0.0.1")) {
+		t.Fatal("the first request must not be refused; the limit is still supposed to work")
+	}
+	if buf.Len() == 0 {
+		t.Fatal("every caller now shares one bucket and nothing said so — the operator learns about it from an outage instead")
+	}
+	for _, want := range []string{"ONE bucket", "PROXY protocol"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("the warning must name the condition and the fix; missing %q in: %s", want, buf.String())
+		}
+	}
+
+	// It must not repeat per request — the condition holds for every call
+	// while the deployment is wrong.
+	before := buf.Len()
+	for i := 0; i < 50; i++ {
+		l.Allow(newTestCtx("10.0.0.1"))
+	}
+	if buf.Len() != before {
+		t.Errorf("the warning repeated per request (%d → %d bytes); a message that floods is one nobody reads", before, buf.Len())
+	}
+}
+
+// TestLimiter_NoWarningWhenTheClientIsResolvable — the other direction. A
+// correctly-fronted deployment must stay silent, or the warning is noise and
+// gets muted.
+func TestLimiter_NoWarningWhenTheClientIsResolvable(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	l := New(Config{
+		PerMinute:      30,
+		Burst:          10,
+		TTL:            time.Minute,
+		MaxKeys:        100,
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	})
+	// Behind a trusted proxy that DID forward the client.
+	l.Allow(newTestCtx("10.0.0.1", "203.0.113.7"))
+	// And with no proxy at all — the peer is the client.
+	l.Allow(newTestCtx("203.0.113.8"))
+
+	if buf.Len() != 0 {
+		t.Errorf("a resolvable client produced a collapse warning: %s", buf.String())
 	}
 }

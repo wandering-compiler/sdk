@@ -19,6 +19,7 @@ package ratelimit
 
 import (
 	"context"
+	"log"
 	"net/netip"
 	"os"
 	"strconv"
@@ -121,6 +122,11 @@ type Limiter struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
 	now     func() time.Time // swapped in tests
+
+	// collapsedAt throttles the warning on [Limiter.warnCollapsed]: the
+	// condition fires on every request for as long as the deployment is
+	// wrong, and a line printed per request is a line nobody reads.
+	collapsedAt time.Time
 }
 
 // New builds a Limiter, or returns nil when the config disables it.
@@ -150,7 +156,36 @@ func (l *Limiter) Allow(ctx context.Context) bool {
 	if l == nil {
 		return true
 	}
-	return l.allowKey(l.ClientKey(ctx))
+	key, resolved := l.clientKey(ctx)
+	if !resolved {
+		l.warnCollapsed()
+	}
+	return l.allowKey(key)
+}
+
+// warnCollapsed reports the deployment fault described on [Limiter.clientKey]
+// — once, and then at most once an hour, because it fires on every request
+// while it lasts and a message that floods is a message nobody reads.
+//
+// It does NOT disable the limit. Turning the protection off on a
+// misconfiguration would swap a visible outage for a silent hole, and this
+// package's whole reason for defaulting ON is that the surfaces it guards are
+// the ones nobody revisits. The operator gets told; the brake stays on.
+func (l *Limiter) warnCollapsed() {
+	now := l.now()
+	l.mu.Lock()
+	if !l.collapsedAt.IsZero() && now.Sub(l.collapsedAt) < time.Hour {
+		l.mu.Unlock()
+		return
+	}
+	l.collapsedAt = now
+	l.mu.Unlock()
+
+	log.Printf("ratelimit: the peer is a trusted proxy but forwarded no client address — " +
+		"every caller is now sharing ONE bucket, so any single client can exhaust it and " +
+		"lock everyone else out of the methods this limit protects. The real address is not " +
+		"reaching this process: an L4/TCP load balancer forwards no X-Forwarded-For. " +
+		"Terminate HTTP at the proxy (so it appends one), or enable PROXY protocol.")
 }
 
 func (l *Limiter) allowKey(key string) bool {
@@ -211,15 +246,38 @@ func (l *Limiter) evictLocked(now time.Time) {
 // the leftmost entry is whatever the client sent before any proxy appended
 // to it, which is to say whatever the client made up.
 func (l *Limiter) ClientKey(ctx context.Context) string {
+	key, _ := l.clientKey(ctx)
+	return key
+}
+
+// clientKey is ClientKey plus the answer to "did we actually resolve a
+// caller, or is this everyone at once".
+//
+// The second return is false in exactly one situation: the peer IS a trusted
+// terminator — so a forwarded address is expected — and none arrived. Then
+// every caller on the surface buckets under the terminator's own address,
+// the per-client limit becomes one global cap, and any single client can
+// drain it and refuse everybody else's SignIn. That is the inversion of the
+// protection: the limiter stops being a brake on an attacker and becomes the
+// attacker's lever (hosted review 2026-08-30, HOST-A-3, measured — two
+// distinct clients keyed to one bucket and draining it refused a victim).
+//
+// It is a DEPLOYMENT fault, not a runtime state to paper over: an L4 (TCP)
+// load balancer forwards no X-Forwarded-For, so the real address never
+// reaches the process. The fix is upstream — terminate HTTP at the proxy, or
+// enable PROXY protocol — which is why this reports rather than guesses.
+func (l *Limiter) clientKey(ctx context.Context) (string, bool) {
 	peerAddr := peerIP(ctx)
 
 	if !l.trusted(peerAddr) {
-		return addrKey(peerAddr, ctx)
+		// The peer IS the client (no terminator in front, or an untrusted
+		// one whose header we correctly refuse to believe).
+		return addrKey(peerAddr, ctx), true
 	}
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return addrKey(peerAddr, ctx)
+		return addrKey(peerAddr, ctx), false
 	}
 	var hops []string
 	for _, v := range md.Get("x-forwarded-for") {
@@ -235,10 +293,11 @@ func (l *Limiter) ClientKey(ctx context.Context) string {
 			continue
 		}
 		if !l.trusted(ip) {
-			return ip.String()
+			return bucketForAddr(ip), true
 		}
 	}
-	return addrKey(peerAddr, ctx)
+	// A trusted peer that forwarded nothing usable — the collapse.
+	return addrKey(peerAddr, ctx), false
 }
 
 func (l *Limiter) trusted(ip netip.Addr) bool {
@@ -258,9 +317,34 @@ func (l *Limiter) trusted(ip netip.Addr) bool {
 // cannot read must not get an unmetered bucket each time.
 func addrKey(ip netip.Addr, _ context.Context) string {
 	if ip.IsValid() {
-		return ip.String()
+		return bucketForAddr(ip)
 	}
 	return "unknown"
+}
+
+// bucketForAddr collapses an address to the unit a limit should actually
+// count: one IPv4 address, or one IPv6 **/64**.
+//
+// Keying the full /128 measured as no protection at all — 1000 attempts from
+// a single /64 produced 0 refusals, while 1000 from one IPv4 produced 990.
+// Every ordinary IPv6 assignment hands out a /64 or shorter, so "one address"
+// is not a unit of anything on that side of the wire: an attacker rotates
+// through 2^64 free buckets while a legitimate IPv4 caller is metered
+// normally. The limiter was strict against the callers it should not have
+// been strict about, and absent against the one it existed for
+// (hosted review 2026-08-30, HOST-A-4).
+//
+// /64 is the smallest block an operator is reliably assigned, so it is the
+// smallest unit that cannot be widened for free. Going shorter (/48) would
+// meter unrelated customers of one ISP together.
+func bucketForAddr(ip netip.Addr) string {
+	ip = ip.Unmap()
+	if ip.Is6() {
+		if pfx, err := ip.Prefix(64); err == nil {
+			return pfx.String()
+		}
+	}
+	return ip.String()
 }
 
 func peerIP(ctx context.Context) netip.Addr {
