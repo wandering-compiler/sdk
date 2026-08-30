@@ -249,5 +249,5 @@ func TestRunRollback_OffChainMigrationIsNotRolledBack(t *testing.T) {
 func selfConsistent(m *applyfetchpb.Migration) {
 	m.ContentSha256 = migrate.ContentHash(
 		m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(),
-		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
+		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), "")
 }

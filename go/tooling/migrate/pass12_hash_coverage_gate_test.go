@@ -41,6 +41,13 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 			"stored digest and every lock pin in existence to close a hole that is already shut in the " +
 			"one direction that matters. The statements it carries are also never applied as a " +
 			"migration: apply runs up_sql, and only the explicit adopt path runs this",
+		"manifest_json": "bound by PROJECTION, not by its bytes — see TestContentHash_BindsTheExtensionSet, " +
+			"which is what keeps this excuse from being a promise about another layer. The manifest is " +
+			"protojson over a message the compiler keeps growing, so hashing the blob would move the " +
+			"digest of a migration whose SQL never changed the first time a field was added, breaking " +
+			"every lock pin on a release that changed nothing executable. The one part the client ACTS " +
+			"on — required_extensions — IS hashed, sorted and deduplicated, because an empty list means " +
+			"\"proceed\" and stripping it would license a run the preflight would have refused",
 		"id": "bound by ORDER instead: the console assigns ids monotonically per connection, " +
 			"and chainFromTarget requires them to increase along the chain. Hashing it would " +
 			"change every stored digest to close a hole the order check closes for free — see " +
@@ -104,5 +111,52 @@ func fieldMovesTheDigest(t *testing.T, fd protoreflect.FieldDescriptor) bool {
 func digestOf(m *applyfetchpb.Migration) string {
 	return migrate.ContentHash(
 		m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(),
-		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
+		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson())
+}
+
+// The excuse above says manifest_json is bound by its projection. This is the
+// test that makes that a fact rather than a claim: "another layer covers it"
+// is worth nothing unless something drives the other layer.
+//
+// Both directions matter. Changing the extension set MUST move the digest, or
+// stripping a prerequisite from a fetched artifact goes unnoticed. Changing
+// anything else in the manifest MUST NOT, or the first console release that
+// adds a manifest field invalidates every pin in every lock.
+func TestContentHash_BindsTheExtensionSet(t *testing.T) {
+	digest := func(manifest string) string {
+		return migrate.ContentHash("SELECT 1;", "", "", "", "", nil, "", manifest)
+	}
+	base := digest(`{"required_extensions":["vector"]}`)
+
+	if base == digest(`{"required_extensions":["postgis"]}`) {
+		t.Error("swapping the required extension leaves the digest unchanged — a fetched artifact could have its prerequisites rewritten")
+	}
+	if base == digest(`{"required_extensions":[]}`) {
+		t.Error("stripping required_extensions leaves the digest unchanged — the preflight would be silently disarmed and the run licensed")
+	}
+	if base == digest(`{"required_extensions":["vector","postgis"]}`) {
+		t.Error("adding an extension leaves the digest unchanged")
+	}
+
+	// Order and duplication are not edits anybody can act on: the preflight
+	// enforces the SET. Pinning them would make the digest depend on how the
+	// console happened to serialise a list.
+	if base != digest(`{"required_extensions":["vector","vector"]}`) {
+		t.Error("a duplicated entry moved the digest — the set is the semantics")
+	}
+	if two := digest(`{"required_extensions":["postgis","vector"]}`); two != digest(`{"required_extensions":["vector","postgis"]}`) {
+		t.Error("reordering moved the digest — the console's serialisation order would become part of the pin")
+	}
+
+	// The rest of the manifest is metadata. This is the half that protects
+	// existing locks from a console release.
+	if base != digest(`{"required_extensions":["vector"],"tables":[{"name":"users"}],"a_field_added_next_year":7}`) {
+		t.Error("unrelated manifest content moved the digest — adding a manifest field on the console would break every pin in existence")
+	}
+	if noManifest := migrate.ContentHash("SELECT 1;", "", "", "", "", nil, "", ""); noManifest != digest(`{"tables":[]}`) {
+		t.Error("a manifest declaring no extensions must hash exactly as no manifest at all — every digest minted before the manifest travelled has to keep its value")
+	}
+	if noManifest := migrate.ContentHash("SELECT 1;", "", "", "", "", nil, "", ""); noManifest == base {
+		t.Error("declaring an extension must differ from declaring none")
+	}
 }

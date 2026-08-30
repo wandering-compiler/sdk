@@ -352,6 +352,14 @@ func Run(ctx context.Context, cfg Config) error {
 	ac := newRunApplierCache(cfg.ApplierFor, out)
 	defer ac.closeAll()
 
+	// Before ANYTHING is written: does the target hold what the schema says it
+	// needs? `required_extensions` used to be a declaration nobody read — see
+	// preflightExtensions. Refusing here leaves the database untouched;
+	// refusing later would leave it half-migrated.
+	if err := preflightExtensions(ctx, ac, pending); err != nil {
+		return err
+	}
+
 	logger := newLogger(out, cfg.LogFormat)
 	for _, p := range pending {
 		fmt.Fprintf(out, "apply: %s :: %s\n", p.Connection, p.Migration.GetId())
@@ -1055,7 +1063,7 @@ func loadConnectionMigrations(root, connection string) ([]*applyfetchpb.Migratio
 		if err := protojson.Unmarshal(buf, m); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		if got := ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql()); got != m.GetContentSha256() {
+		if got := ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()); got != m.GetContentSha256() {
 			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (want %s, got %s — someone hand-edited)",
 				path, m.GetContentSha256(), got)
 		}
@@ -1095,7 +1103,7 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if m.GetConnection() == "" {
 		return fmt.Errorf("WriteMigration: empty connection_name on %s", m.GetId())
 	}
-	if got := ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql()); got != m.GetContentSha256() {
+	if got := ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()); got != m.GetContentSha256() {
 		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s)",
 			m.GetId(), m.GetContentSha256(), got)
 	}

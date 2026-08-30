@@ -40,7 +40,7 @@ func mkMigFull(id, conn, up, upPostTx, downPreTx, downSql string) *applyfetchpb.
 		m.DownPreTx = downPreTx
 		m.DownSql = downSql
 	}
-	m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
+	m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), "")
 	return m
 }
 
@@ -69,7 +69,7 @@ func seedDir(t *testing.T, migs ...*applyfetchpb.Migration) string {
 	prev := map[string]string{}
 	for _, m := range ordered {
 		m.PrevContentSha256 = prev[m.GetConnection()]
-		m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
+		m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), "")
 		prev[m.GetConnection()] = m.GetContentSha256()
 	}
 	return seedDirUnchained(t, ordered...)

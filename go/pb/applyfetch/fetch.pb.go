@@ -275,8 +275,30 @@ type Migration struct {
 	// express the question renders empty, and so does a migration that
 	// introduces nothing.
 	AdoptPreflightSql string `protobuf:"bytes,11,opt,name=adopt_preflight_sql,json=adoptPreflightSql,proto3" json:"adopt_preflight_sql,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// manifest_json — the plan Manifest as protojson, carried so apply can
+	// CHECK what the schema declares it needs before it writes anything.
+	//
+	// It is here because `required_extensions` was a constraint that did
+	// nothing. An author declared it, the compiler aggregated it into the
+	// manifest, the console stored the manifest — and nobody ever read it. Not
+	// because the check was skipped, but because the manifest stopped at the
+	// console: it rides `registry.Migration`, and this apply-facing message,
+	// the only one the client ever sees, did not carry it. The whole apparatus
+	// existed except the last hop.
+	//
+	// What that cost: migrations deliberately carry no CREATE EXTENSION —
+	// provisioning is the deploying platform's step — so an unprovisioned
+	// target failed in the MIDDLE of a migration, on a raw Postgres error,
+	// with part of the schema already written.
+	//
+	// JSON rather than the typed message on purpose. planpb is private and the
+	// client may not import it (public-split); shipping the bytes lets the
+	// client read the one repeated string it needs without learning the
+	// compiler's types. A client that cannot parse it simply has nothing to
+	// check — an additive field must never turn into a refused apply.
+	ManifestJson  string `protobuf:"bytes,12,opt,name=manifest_json,json=manifestJson,proto3" json:"manifest_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Migration) Reset() {
@@ -382,6 +404,13 @@ func (x *Migration) GetAdoptSql() string {
 func (x *Migration) GetAdoptPreflightSql() string {
 	if x != nil {
 		return x.AdoptPreflightSql
+	}
+	return ""
+}
+
+func (x *Migration) GetManifestJson() string {
+	if x != nil {
+		return x.ManifestJson
 	}
 	return ""
 }
@@ -796,7 +825,7 @@ const file_w17apply_fetch_proto_rawDesc = "" +
 	"\x17FetchMigrationsResponse\x124\n" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x14.w17.apply.MigrationR\n" +
-	"migrations\"\xef\x02\n" +
+	"migrations\"\x94\x03\n" +
 	"\tMigration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n" +
 	"\n" +
@@ -814,7 +843,8 @@ const file_w17apply_fetch_proto_rawDesc = "" +
 	"supersedes\x18\b \x03(\tR\n" +
 	"supersedes\x12\x1b\n" +
 	"\tadopt_sql\x18\t \x01(\tR\badoptSql\x12.\n" +
-	"\x13adopt_preflight_sql\x18\v \x01(\tR\x11adoptPreflightSql\"V\n" +
+	"\x13adopt_preflight_sql\x18\v \x01(\tR\x11adoptPreflightSql\x12#\n" +
+	"\rmanifest_json\x18\f \x01(\tR\fmanifestJson\"V\n" +
 	"\x18RenderFixtureSeedRequest\x12\x0e\n" +
 	"\x02ir\x18\x01 \x01(\fR\x02ir\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x12\n" +

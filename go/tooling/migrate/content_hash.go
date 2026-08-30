@@ -3,6 +3,7 @@ package migrate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -91,9 +92,28 @@ import (
 //     connection, so `chainFromTarget` requires ids to increase along the
 //     chain. That is what catches a relabel; hashing the id would change every
 //     stored digest to close the same hole.
-func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL string) string {
+func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, manifestJSON string) string {
+	// The manifest is bound by its PROJECTION, not by its bytes.
+	//
+	// `manifest_json` is protojson over a message the compiler keeps growing,
+	// so hashing the blob would move the digest of a migration whose SQL never
+	// changed the first time the console added a field — every pin in every
+	// lock would break on a release that changed nothing about what executes.
+	//
+	// What the client acts on is the required-extension set, and that is what
+	// gets hashed: sorted and deduplicated, because the set is the semantics.
+	// Reordering it is not an edit anybody can act on, unlike `supersedes`
+	// below, where order is deliberately part of the digest.
+	//
+	// Not excused as metadata, though the rest of the manifest is: an empty
+	// list means "no prerequisites, proceed", so stripping the list from a
+	// fetched artifact LICENSES a run that would have been refused. That is
+	// the opposite direction from adopt_preflight_sql, which fails closed and
+	// is excused for exactly that reason.
+	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
+
 	var b strings.Builder
-	if prev == "" && len(supersedes) == 0 && adoptSQL == "" {
+	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && len(exts) == 0 {
 		b.WriteString("w17.content.v1\n")
 	} else {
 		b.WriteString("w17.content.v2\n")
@@ -118,6 +138,15 @@ func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 	if adoptSQL != "" {
 		writeSeg(&b, "adopt", adoptSQL)
 	}
+	// Written only when non-empty, so every digest minted before the manifest
+	// travelled keeps its value. A migration declaring no extensions hashes
+	// exactly as it did before this segment existed.
+	if len(exts) > 0 {
+		writeSeg(&b, "reqext.n", strconv.Itoa(len(exts)))
+		for _, e := range exts {
+			writeSeg(&b, "reqext", e)
+		}
+	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
@@ -129,4 +158,27 @@ func writeSeg(b *strings.Builder, tag, body string) {
 	b.WriteByte('\n')
 	b.WriteString(body)
 	b.WriteByte('\n')
+}
+
+// canonicalExtensions sorts and deduplicates, so the digest binds the SET the
+// preflight enforces rather than the order the manifest happened to serialise.
+func canonicalExtensions(exts []string) []string {
+	if len(exts) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(exts))
+	out := make([]string, 0, len(exts))
+	for _, e := range exts {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if _, dup := seen[e]; dup {
+			continue
+		}
+		seen[e] = struct{}{}
+		out = append(out, e)
+	}
+	sort.Strings(out)
+	return out
 }

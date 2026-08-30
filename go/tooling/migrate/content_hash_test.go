@@ -12,15 +12,15 @@ import "testing"
 // keeps verifying. If chaining had changed them, this test would have had to be
 // rewritten — and rewriting it is exactly how a silent break gets normalised.
 func TestContentHash(t *testing.T) {
-	if got := ContentHash("up", "post", "pre", "down", "", nil, ""); got != "d514736f2f182df57c65459a84b11592fba6579a3f184a54297f3cf26036e109" {
+	if got := ContentHash("up", "post", "pre", "down", "", nil, "", ""); got != "d514736f2f182df57c65459a84b11592fba6579a3f184a54297f3cf26036e109" {
 		t.Errorf("ContentHash 4-segment vector changed: %s", got)
 	}
 	// A zero-SQL migration (all segments empty) still hashes to a stable value.
-	if got := ContentHash("", "", "", "", "", nil, ""); got != "e6ecd712cc84f6ba8e6d4a8bdbab6ad62b5a7ea819a813a3eb2945a9bc230b7a" {
+	if got := ContentHash("", "", "", "", "", nil, "", ""); got != "e6ecd712cc84f6ba8e6d4a8bdbab6ad62b5a7ea819a813a3eb2945a9bc230b7a" {
 		t.Errorf("ContentHash empty vector changed: %s", got)
 	}
 	// Injectivity: moving a byte across a segment boundary changes the hash.
-	if ContentHash("ab", "", "", "", "", nil, "") == ContentHash("a", "b", "", "", "", nil, "") {
+	if ContentHash("ab", "", "", "", "", nil, "", "") == ContentHash("a", "b", "", "", "", nil, "", "") {
 		t.Error("ContentHash is not injective across segment boundaries")
 	}
 }
@@ -33,7 +33,7 @@ func TestContentHash(t *testing.T) {
 // changes its hash, which changes its successor's input, all the way up to the
 // target whose hash the signed lock pins.
 func TestContentHash_PredecessorIsHashedIn(t *testing.T) {
-	body := func(prev string) string { return ContentHash("up", "post", "pre", "down", prev, nil, "") }
+	body := func(prev string) string { return ContentHash("up", "post", "pre", "down", prev, nil, "", "") }
 
 	root := body("")
 	chained := body("aaaa")
@@ -48,7 +48,7 @@ func TestContentHash_PredecessorIsHashedIn(t *testing.T) {
 
 	// The version tags make the two encodings disjoint, so no chained input
 	// can collide with an unchained one by construction (not by luck).
-	if ContentHash("", "", "", "", "x", nil, "") == ContentHash("x", "", "", "", "", nil, "") {
+	if ContentHash("", "", "", "", "x", nil, "", "") == ContentHash("x", "", "", "", "", nil, "", "") {
 		t.Error("v1 and v2 encodings collided — the version tag is not separating them")
 	}
 }
@@ -57,8 +57,8 @@ func TestContentHash_PredecessorIsHashedIn(t *testing.T) {
 // the walk looks predecessors up by exact hash, and a truncation-tolerant link
 // would let a near-miss resolve.
 func TestContentHash_PredecessorIsNotTruncated(t *testing.T) {
-	full := ContentHash("up", "", "", "", "0123456789abcdef", nil, "")
-	short := ContentHash("up", "", "", "", "0123456789abcde", nil, "")
+	full := ContentHash("up", "", "", "", "0123456789abcdef", nil, "", "")
+	short := ContentHash("up", "", "", "", "0123456789abcde", nil, "", "")
 	if full == short {
 		t.Error("predecessor hash length is not covered")
 	}

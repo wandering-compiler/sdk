@@ -66,7 +66,7 @@ func signedMig(t *testing.T, id, conn, body string) *applyfetchpb.Migration {
 		Connection:    conn,
 		UpSql:         body,
 		DownSql:       down,
-		ContentSha256: ContentHash(body, "", "", down, "", nil, ""),
+		ContentSha256: ContentHash(body, "", "", down, "", nil, "", ""),
 	}
 }
 
@@ -576,7 +576,7 @@ func TestLoadConnectionMigrations_BackfillsConnectionName(t *testing.T) {
 	m := &applyfetchpb.Migration{
 		Id:            "ts-1",
 		UpSql:         body,
-		ContentSha256: ContentHash(body, "", "", "", "", nil, ""),
+		ContentSha256: ContentHash(body, "", "", "", "", nil, "", ""),
 		// Connection intentionally empty.
 	}
 	buf, err := protojson.Marshal(m)

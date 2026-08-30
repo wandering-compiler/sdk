@@ -47,7 +47,7 @@ func rewriteOnDisk(t *testing.T, dir, conn, id, newUpSQL string) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	m.UpSql = newUpSQL
-	m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql())
+	m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), "")
 	out, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true, Indent: "  "}.Marshal(m)
 	if err != nil {
 		t.Fatalf("marshal %s: %v", path, err)
@@ -125,7 +125,7 @@ func TestPlan_InsertedMigrationIsNotOnTheChain(t *testing.T) {
 	// Forged, self-consistent, and squarely inside the applied range.
 	inserted := mkMig("ts-2", "main", "GRANT ALL ON ALL TABLES IN SCHEMA public TO attacker;")
 	inserted.PrevContentSha256 = m1.GetContentSha256()
-	inserted.ContentSha256 = migrate.ContentHash(inserted.GetUpSql(), "", "", inserted.GetDownSql(), inserted.GetPrevContentSha256(), nil, "")
+	inserted.ContentSha256 = migrate.ContentHash(inserted.GetUpSql(), "", "", inserted.GetDownSql(), inserted.GetPrevContentSha256(), nil, "", "")
 	if err := migrate.WriteMigration(dir, inserted); err != nil {
 		t.Fatalf("seed the inserted migration: %v", err)
 	}
