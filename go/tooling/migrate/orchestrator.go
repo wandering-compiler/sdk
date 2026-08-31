@@ -1232,6 +1232,28 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 	cache := newRunApplierCache(cfg.ApplierFor, out)
 	defer cache.closeAll()
 
+	// PASS 1 — every check, on every connection, before any connection is
+	// recorded.
+	//
+	// The artifact-shape hoist above was only a third of the rule it claimed.
+	// The two DB-dependent refusals — a non-empty ledger, and a preflight the
+	// database does not satisfy — still fired from inside the per-connection
+	// loop, so connection A was fully recorded before connection B's refusal
+	// raised. That is the very state the inner two-pass split exists to
+	// prevent, one level up, and the commit that hoisted the shape check
+	// certified the whole invariant as delivered ("verify everything, then
+	// record everything") while delivering it for one cause of three
+	// (hosted review 2026-08-30, HOST-D-1).
+	//
+	// A retry does converge — Plan's applied-head cutoff drops the connection
+	// that was recorded — so this is a transient window rather than a wedge.
+	// It is still a window in which the project is neither adopted nor clean,
+	// and the fix costs one extra pass over connections that are already open
+	// in the cache.
+	//
+	// The preflight's own ledger-table CREATE stays the one permitted write:
+	// that is what a preflight IS, and the doc comment on AdoptPreflight
+	// already says so.
 	for _, conn := range order {
 		applier, err := cache.get(ctx, conn)
 		if err != nil {
@@ -1246,17 +1268,11 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("adopt %s: read applied head: %w", conn, err)
 		}
 		if head != "" {
-			return fmt.Errorf("adopt %s: refusing — this database is already under migration management (its ledger is at %s). Adopt brings an UNMANAGED database in; from here on the ordinary `migrate apply` is the way forward",
+			return fmt.Errorf("adopt %s: refusing before writing anything — this database is already under migration management (its ledger is at %s). Adopt brings an UNMANAGED database in; from here on the ordinary `migrate apply` is the way forward",
 				conn, head)
 		}
 
-		ms := byConn[conn]
-		// Every preflight first, then every record. Splitting the two
-		// passes is what makes a partial failure leave nothing behind: a
-		// database missing the third migration's tables must not come out
-		// of this with the first two recorded, because that state is
-		// neither adopted nor clean and no later command knows it happened.
-		for _, p := range ms {
+		for _, p := range byConn[conn] {
 			// Non-empty by the hoisted check above; read without re-testing
 			// so there is ONE place that decides what is adoptable.
 			preflight := p.Migration.GetAdoptPreflightSql()
@@ -1266,10 +1282,19 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 				UpSql:      preflight,
 			}
 			if err := applier.Apply(ctx, probe); err != nil {
-				return fmt.Errorf("adopt %s/%s: this database does not hold what the migration describes: %w", conn, p.Migration.GetId(), err)
+				return fmt.Errorf("adopt %s/%s: refusing before writing anything — this database does not hold what the migration describes: %w", conn, p.Migration.GetId(), err)
 			}
 		}
+	}
 
+	// PASS 2 — records. Every check above passed on every connection, so
+	// from here the only failures left are transport ones.
+	for _, conn := range order {
+		applier, err := cache.get(ctx, conn)
+		if err != nil {
+			return err
+		}
+		ms := byConn[conn]
 		for _, p := range ms {
 			adoptSQL := p.Migration.GetAdoptSql()
 			rec := &applyfetchpb.Migration{
