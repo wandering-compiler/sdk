@@ -22,6 +22,25 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ⚠ PERMISSION GATING DIFFERS BY HOW A TOOL IS PUBLISHED, and the
+// difference is not cosmetic:
+//
+//	include: [ "<plugin>" ]  and  (w17.mcp) on a method
+//	    → served by the GATEWAY, gated per tool. Codegen emits
+//	      `SetToolPerms(name, endpointPerm[, modelPerm])` and a
+//	      resolver that reads the caller's permission ids, and it
+//	      hard-errors rather than emit a tool whose perm resolves to 0.
+//
+//	tools: [ { ref: ... } ]
+//	    → served by the STANDALONE `<domain>-mcp-server` bundle, which
+//	      is emitted with NO permission gate at all: any authenticated
+//	      session may call those tools regardless of ACL. Codegen warns
+//	      on every such bundle.
+//
+// Wiring the standalone gate needs an auth-realm decision that has not
+// been made. Until it is, publish anything ACL-sensitive via `include[]`
+// or `(w17.mcp)`, and treat a `tools[]` bundle as trusted-callers-only.
+//
 // McpApi declares one MCP proxy — the in-container tool surface
 // the LLM reaches into during a session. One McpApi → one
 // generated proxy bundle at `<out>/<domain>-mcp-server/`.
@@ -36,11 +55,20 @@ type McpApi struct {
 	// diagnostics. Must be a snake_case identifier.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Version of this surface — "v1" / "0.0.0". Free-form
-	// string; surfaces in OpenRPC / mcp-tools.json `info.version`.
+	// string; becomes the generated MCP server's advertised
+	// version, which a client reads on initialize.
+	//
+	// It does NOT surface in a static `mcp-tools.json` or an
+	// OpenRPC document: this comment promised both for a long
+	// time and neither is emitted. The tool list an MCP client
+	// consumes is served by the generated bundle over the
+	// protocol itself (`tools/list`), so there was never a file
+	// to read (deinvo went looking for one, 2026-08-31).
 	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
 	// Human-readable description of the MCP surface. Surfaces
-	// verbatim in the generated tools manifest. Empty = no
-	// description block.
+	// verbatim in the generated bundle, which serves it to a
+	// client over the protocol — not in a static manifest file;
+	// see the note on `version`. Empty = no description block.
 	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	// Tools exposed via this MCP surface. Each entry references
 	// one gRPC RPC by `<module>.<Service>.<Method>` (same ref
@@ -282,6 +310,21 @@ var (
 	// Driven by the compiler's MCP parser: every loaded
 	// `.proto` carrying `option (w17.mcp_api) = { ... }`
 	// produces one MCP proxy binary at codegen time.
+	//
+	// Discovery is by THIS OPTION, anywhere under
+	// `proto/domains/<domain>/` — the module subdirectory a
+	// surface naturally lives in counts, not just the domain
+	// root. The `mcp.proto` / `mcp_<surface>.proto` filename is
+	// a convention that also matches; the option is the
+	// contract. Until 2026-08-31 discovery read only each
+	// domain's immediate files, so a surface one level down was
+	// silently absent — codegen exited 0 with no bundle and no
+	// complaint about the refs it never read.
+	//
+	// Still one surface per DOMAIN: two sentinels under the same
+	// domain would render to the same bundle directory, and that
+	// is refused at codegen rather than letting the second
+	// overwrite the first.
 	//
 	// optional w17.McpApi mcp_api = 50109;
 	E_McpApi = &file_w17_mcp_proto_extTypes[2]
