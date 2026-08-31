@@ -263,7 +263,27 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// triaging — gated behind W17_OBSERVX_DEBUG, off by default.
 	observx.ReportEvent(ctx, fmt.Errorf("%s: %s constraint hit (name=%q field=%q): %w",
 		method, ce.Kind, ce.Name, info.Field, err))
-	st := status.New(codeForKind(ce.Kind), method+": "+ce.Kind+" violation")
+	// The status MESSAGE names the field and says what is wrong with it.
+	// It used to read `<method>: not_null violation` — a sentence that
+	// names no column, no request field, and leaks a database word into an
+	// API whose callers see fields, not columns. The mapping was not
+	// missing: `info` carries exactly this, and it was already attached as
+	// an ErrorDetail — but a caller reading the status message (which is
+	// what a REST gateway surfaces, and what a human reads first) got none
+	// of it. deinvo reported this on 2026-08-30 after a `customer_id` they
+	// omitted came back as `DocumentMutation.CreateDocument: not_null
+	// violation`.
+	//
+	// `info.Message` is written to follow the field name — "is required",
+	// "already exists" — so field + message composes into the sentence the
+	// detail channel was already carrying. The constraint KIND stays on
+	// the debug event above, where an operator triaging by SQLSTATE looks;
+	// it is not something the caller can act on.
+	detail := ce.Kind + " violation"
+	if info.Field != "" && info.Message != "" {
+		detail = info.Field + " " + info.Message
+	}
+	st := status.New(codeForKind(ce.Kind), method+": "+detail)
 	with, errWith := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
 		Field:   info.Field,
 		Code:    info.Code,

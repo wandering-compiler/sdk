@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -135,6 +136,73 @@ func TestWrap_PgConstraint_RegistryHit_ByName(t *testing.T) {
 	}
 	if d.GetField() != "email" || d.GetCode() != "UNIQUE_VIOLATION" || d.GetMessage() != "email already exists" {
 		t.Errorf("detail mismatch: %+v", d)
+	}
+}
+
+// INVARIANT: a mapped violation's status MESSAGE names the field and says
+// what is wrong with it — it does not merely classify the failure.
+//
+// deinvo, 2026-08-30: omitting `customer_id` answered
+// `DocumentMutation.CreateDocument: not_null violation`. That sentence
+// names no column, no request field, and spends its only noun on a
+// database concept the caller cannot see — callers address fields. The
+// information was never missing; it rode the ErrorDetail, which a REST
+// gateway does not surface and a human does not read first.
+//
+// Asserted on the MESSAGE deliberately, not on the detail: the detail was
+// already correct while the bug was live, so a test reading it would have
+// passed throughout.
+func TestWrap_PgConstraint_MessageNamesTheField(t *testing.T) {
+	registry := &ConstraintRegistry{
+		ByColumns: map[string]ConstraintInfo{
+			"documents:not_null:customer_name": {
+				Field:   "customer_name",
+				Code:    "REQUIRED_VIOLATION",
+				Message: "is required",
+			},
+		},
+	}
+	pgErr := &pgconn.PgError{
+		Code:       "23502", // not_null
+		TableName:  "documents",
+		ColumnName: "customer_name",
+	}
+	var got error
+	withCapturedLog(t, func() {
+		got = Wrap(context.Background(), "DocumentMutation.CreateDocument", pgErr, registry, DialectPostgres)
+	})
+	st, _ := status.FromError(got)
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Code = %v, want InvalidArgument", st.Code())
+	}
+	want := "DocumentMutation.CreateDocument: customer_name is required"
+	if st.Message() != want {
+		t.Errorf("Message() = %q, want %q", st.Message(), want)
+	}
+	if strings.Contains(st.Message(), "not_null") || strings.Contains(st.Message(), "violation") {
+		t.Errorf("Message() = %q — still leaks the database term into the API surface", st.Message())
+	}
+}
+
+// A mapped constraint whose registry entry carries no field falls back to
+// the classification rather than emitting a sentence with a hole in it
+// (" is required"). Nothing generates such an entry today; the fallback
+// exists so a hand-written or older registry degrades to the previous
+// behaviour instead of to nonsense.
+func TestWrap_PgConstraint_MessageFallsBackWithoutAField(t *testing.T) {
+	registry := &ConstraintRegistry{
+		ByName: map[string]ConstraintInfo{
+			"users_email_unique": {Code: "UNIQUE_VIOLATION"},
+		},
+	}
+	pgErr := &pgconn.PgError{Code: "23505", ConstraintName: "users_email_unique", TableName: "users"}
+	var got error
+	withCapturedLog(t, func() {
+		got = Wrap(context.Background(), "UserMutation.CreateUser", pgErr, registry, DialectPostgres)
+	})
+	st, _ := status.FromError(got)
+	if want := "UserMutation.CreateUser: unique violation"; st.Message() != want {
+		t.Errorf("Message() = %q, want %q", st.Message(), want)
 	}
 }
 
