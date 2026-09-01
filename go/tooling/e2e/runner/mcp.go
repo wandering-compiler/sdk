@@ -175,6 +175,24 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 		return nil, fmt.Errorf("mcp %s: decode envelope: %w (body: %s)", ep.Ref, err, truncate(raw, 256))
 	}
 	if out.Error != nil {
+		// A tool error whose message carries a gRPC status IS the surface
+		// answering — unwrap it into a CallError so `expect_error` can
+		// match on the code.
+		//
+		// Without this every MCP failure arrived as a bare error, which
+		// matchCallError classifies as "the call failed before the surface
+		// answered". The consequence was total: NO MCP case could assert a
+		// refusal at all, because no code ever reached the matcher. It went
+		// unnoticed because no example published the gateway's MCP port, so
+		// no MCP scenario had ever run (2026-08-31).
+		if code, msg, ok := grpcStatusFromMCPError(out.Error.Message); ok {
+			return nil, &CallError{
+				Op:      "mcp " + ep.Ref,
+				Code:    code,
+				Message: msg,
+				Raw:     out.Error.Message,
+			}
+		}
 		return nil, fmt.Errorf("mcp %s: tool error %d: %s", ep.Ref, out.Error.Code, out.Error.Message)
 	}
 	if out.Result == nil {
@@ -224,4 +242,50 @@ func unwrapToolResult(ref string, r *toolResult) (map[string]any, error) {
 		}
 	}
 	return map[string]any{}, nil
+}
+
+// grpcStatusFromMCPError pulls the canonical code out of a tool error the
+// gateway produced by proxying a gRPC call. mcp-go carries the upstream
+// failure as prose in the JSON-RPC error message, in the shape the Go
+// gRPC client prints:
+//
+//	rpc error: code = NotFound desc = CachedSession not found
+//
+// Returns ok=false for anything else — a genuine transport fault, a
+// malformed envelope, a tool that reported its own error — because those
+// are NOT the surface answering and must keep failing as transport
+// failures. Mistaking one for a refusal is how "the stack never came up"
+// would come to read as "the guard fired".
+//
+// The code is normalised to the SCREAMING_SNAKE form the rest of the
+// vocabulary uses (`NotFound` → `NOT_FOUND`), so a case asserts the same
+// spelling over MCP as over REST.
+func grpcStatusFromMCPError(msg string) (code, desc string, ok bool) {
+	const marker = "rpc error: code = "
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return "", "", false
+	}
+	rest := msg[i+len(marker):]
+	j := strings.Index(rest, " desc = ")
+	if j < 0 {
+		return "", "", false
+	}
+	return screamingSnake(rest[:j]), rest[j+len(" desc = "):], true
+}
+
+// screamingSnake turns gRPC's CamelCase code name into the canonical
+// spelling used everywhere else in the expectation vocabulary.
+func screamingSnake(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte('_')
+		}
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

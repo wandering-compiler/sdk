@@ -258,3 +258,45 @@ func looseFloatEq(v any, want int) bool {
 	f, ok := v.(float64)
 	return ok && f == float64(want)
 }
+
+// An MCP tool error carrying a gRPC status is the SURFACE answering, and
+// has to reach `expect_error` as a code.
+//
+// Until 2026-08-31 it did not: every MCP failure arrived as a bare error,
+// which matchCallError reports as "the call failed before the surface
+// answered". No MCP case could assert a refusal at all — and nobody found
+// out, because no example published the gateway's MCP port, so no MCP
+// scenario had ever run.
+func TestGrpcStatusFromMCPError(t *testing.T) {
+	code, desc, ok := grpcStatusFromMCPError("rpc error: code = NotFound desc = CachedSession not found")
+	if !ok {
+		t.Fatal("a proxied gRPC status was not recognised as a surface answer")
+	}
+	if code != "NOT_FOUND" {
+		t.Errorf("code = %q, want NOT_FOUND — the same spelling a REST case asserts", code)
+	}
+	if desc != "CachedSession not found" {
+		t.Errorf("desc = %q", desc)
+	}
+
+	if _, _, ok := grpcStatusFromMCPError("rpc error: code = PermissionDenied desc = nope"); !ok {
+		t.Error("PermissionDenied must unwrap too — it is the shape an ACL refusal takes")
+	}
+}
+
+// Anything that is NOT a proxied status keeps failing as a transport
+// failure. Treating a genuine fault as a refusal is how "the stack never
+// came up" would come to read as "the guard fired" — the exact confusion
+// the readiness gate exists to prevent, one layer up.
+func TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures(t *testing.T) {
+	for _, msg := range []string{
+		"tool 'get_session_with_user' not found: tool not found",
+		"connection refused",
+		"rpc error: code = NotFound", // truncated, no desc
+		"",
+	} {
+		if _, _, ok := grpcStatusFromMCPError(msg); ok {
+			t.Errorf("%q was mistaken for a surface answer", msg)
+		}
+	}
+}
