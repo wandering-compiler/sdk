@@ -32,7 +32,7 @@ const mcpProtocolVersion = "2024-11-05"
 // `structuredContent` (preferred) or a JSON text content block — and
 // is the swap point when the envelope is finalised.
 type MCPCaller struct {
-	Endpoint string // the MCP HTTP endpoint, e.g. http://localhost:8080/mcp
+	Endpoint string // the MCP HTTP endpoint, e.g. http://localhost:8081/mcp
 	Client   *http.Client
 
 	mu        sync.Mutex
@@ -106,7 +106,15 @@ func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("mcp initialize: status %d: %s", resp.StatusCode, truncate(raw, 256))
+		// The URL is IN the message on purpose. A 404 here means the
+		// endpoint is wrong, and the two ways it can be wrong — REST port
+		// instead of MCP, or the transport path missing — are
+		// indistinguishable without seeing what was dialled. deinvo hit
+		// this on 2026-09-01 and had to infer the port from elsewhere,
+		// because this line named a status and no address.
+		return "", fmt.Errorf("mcp initialize against %s: status %d: %s (the MCP transport is its own listener, "+
+			"default :8081, and serves on /mcp — a REST port or a missing path both answer 404 here)",
+			c.Endpoint, resp.StatusCode, truncate(raw, 256))
 	}
 	sid := resp.Header.Get(mcpSessionHeader)
 	if sid == "" {

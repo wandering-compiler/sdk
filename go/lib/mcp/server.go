@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -200,6 +201,23 @@ func (s *Server) filterTools(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
 		if !gated || coversAllInt32(perms, permIDs) {
 			out = append(out, t)
 		}
+	}
+	// An EMPTY answer to a non-empty registry is the one outcome a client
+	// cannot interpret. `{"tools":[]}` is what a server with nothing
+	// published returns, and it is what this server returns when the
+	// caller may see nothing — the protocol has no way to distinguish
+	// them, so the operator has to be told on this side.
+	//
+	// deinvo, 2026-09-01: their MCP surface answered `[]` to every caller,
+	// token or not, because their database had zero rows in
+	// auth_rolepermission. They read it as "nothing is published" and went
+	// looking for a registration bug that did not exist. The tool WAS
+	// registered; nobody could see it.
+	if len(out) == 0 && len(tools) > 0 {
+		log.Printf("mcp: tools/list is EMPTY for this caller — all %d registered tool(s) are permission-gated "+
+			"and the caller resolved to %d permission(s). This is a PERMISSION result, not an empty registry: "+
+			"check that roles carry the tools' permission ids and that the caller holds such a role.",
+			len(tools), len(perms))
 	}
 	return out
 }
