@@ -3,9 +3,11 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -298,5 +300,46 @@ func TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures(t *testing.
 		if _, _, ok := grpcStatusFromMCPError(msg); ok {
 			t.Errorf("%q was mistaken for a surface answer", msg)
 		}
+	}
+}
+
+// A transport refusal is asserted on what the transport SAID, and must
+// not accept the surface answering instead.
+//
+// This closes the half of every MCP gate that had no expressible form: a
+// tool the caller may not use is filtered out of tools/list (fail-closed,
+// so existence does not leak) and answers `tool not found` at the
+// JSON-RPC layer, with no gRPC status for `expect_error` to match. That
+// the permissioned caller gets through was provable; that the tool is
+// hidden from everyone else was not (deinvo, 2026-09-01).
+func TestMatchTransportError(t *testing.T) {
+	want := &ExpectTransportError{Message: map[string]any{"matcher": "regex", "pattern": "tool not found"}}
+
+	if err := matchTransportError(want,
+		fmt.Errorf("mcp x.Y.Z: tool error -32602: tool 'get_wallet' not found: tool not found"), nil); err != nil {
+		t.Errorf("a genuine transport refusal was rejected: %v", err)
+	}
+
+	// A SUCCESS is the interesting failure: the thing that should have
+	// turned the caller away did not.
+	if err := matchTransportError(want, nil, nil); err == nil {
+		t.Error("a successful call satisfied a refusal assertion")
+	}
+
+	// The surface answering with a code is a DIFFERENT mechanism. Accepting
+	// it would let the case keep passing after the refusal changed layers —
+	// the exact drift `expect_error`'s required code exists to prevent.
+	coded := &CallError{Op: "mcp x.Y.Z", Code: "PERMISSION_DENIED", Message: "nope"}
+	err := matchTransportError(want, coded, nil)
+	if err == nil {
+		t.Fatal("a coded refusal from the surface satisfied a TRANSPORT refusal assertion")
+	}
+	if !strings.Contains(err.Error(), "expect_error") {
+		t.Errorf("the failure should point at the right block, got: %v", err)
+	}
+
+	// A different transport failure — a dead stack — must not pass either.
+	if err := matchTransportError(want, fmt.Errorf("dial tcp: connection refused"), nil); err == nil {
+		t.Error("`connection refused` satisfied an assertion about a hidden tool")
 	}
 }

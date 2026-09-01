@@ -269,6 +269,22 @@ var file_w17_mcp_proto_extTypes = []protoimpl.ExtensionInfo{
 		Filename:      "w17/mcp.proto",
 	},
 	{
+		ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+		ExtensionType: (*string)(nil),
+		Field:         50109,
+		Name:          "w17.mcp_name",
+		Tag:           "bytes,50109,opt,name=mcp_name",
+		Filename:      "w17/mcp.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+		ExtensionType: (*string)(nil),
+		Field:         50110,
+		Name:          "w17.mcp_scope",
+		Tag:           "bytes,50110,opt,name=mcp_scope",
+		Filename:      "w17/mcp.proto",
+	},
+	{
 		ExtendedType:  (*descriptorpb.FileOptions)(nil),
 		ExtensionType: (*McpApi)(nil),
 		Field:         50109,
@@ -296,6 +312,27 @@ var (
 	//
 	// optional string mcp_description = 50108;
 	E_McpDescription = &file_w17_mcp_proto_extTypes[1]
+	// (w17.mcp_name) — override for the MCP tool name. Empty =
+	// snake_case of the method name. Set it when the derived
+	// name collides or when the MCP client expects a canonical
+	// name distinct from the RPC's.
+	//
+	// Authors write this through `McpTool.name_override` on a
+	// `(w17.mcp_api)` registry entry, which the compiler stamps
+	// onto the method before the gateway renders it — the two
+	// ways of publishing a method must not disagree about what
+	// it is CALLED, and the registry path used to lose the
+	// override because the gateway only ever read the method.
+	//
+	// optional string mcp_name = 50109;
+	E_McpName = &file_w17_mcp_proto_extTypes[2]
+	// (w17.mcp_scope) — session-scope hint, appended to the
+	// description as "Available in: <scope>". Empty = no scope
+	// line. Same provenance as `mcp_name`: written as
+	// `McpTool.scope`, stamped onto the method by the compiler.
+	//
+	// optional string mcp_scope = 50110;
+	E_McpScope = &file_w17_mcp_proto_extTypes[3]
 )
 
 // Extension fields to descriptorpb.FileOptions.
@@ -327,7 +364,7 @@ var (
 	// overwrite the first.
 	//
 	// optional w17.McpApi mcp_api = 50109;
-	E_McpApi = &file_w17_mcp_proto_extTypes[2]
+	E_McpApi = &file_w17_mcp_proto_extTypes[4]
 )
 
 var File_w17_mcp_proto protoreflect.FileDescriptor
@@ -347,7 +384,9 @@ const file_w17_mcp_proto_rawDesc = "" +
 	"\x14description_override\x18\x03 \x01(\tR\x13descriptionOverride\x12\x14\n" +
 	"\x05scope\x18\x04 \x01(\tR\x05scope:2\n" +
 	"\x03mcp\x12\x1e.google.protobuf.MethodOptions\x18\xbb\x87\x03 \x01(\bR\x03mcp:I\n" +
-	"\x0fmcp_description\x12\x1e.google.protobuf.MethodOptions\x18\xbc\x87\x03 \x01(\tR\x0emcpDescription:D\n" +
+	"\x0fmcp_description\x12\x1e.google.protobuf.MethodOptions\x18\xbc\x87\x03 \x01(\tR\x0emcpDescription:;\n" +
+	"\bmcp_name\x12\x1e.google.protobuf.MethodOptions\x18\xbd\x87\x03 \x01(\tR\amcpName:=\n" +
+	"\tmcp_scope\x12\x1e.google.protobuf.MethodOptions\x18\xbe\x87\x03 \x01(\tR\bmcpScope:D\n" +
 	"\amcp_api\x12\x1c.google.protobuf.FileOptions\x18\xbd\x87\x03 \x01(\v2\v.w17.McpApiR\x06mcpApiB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
 
 var (
@@ -373,12 +412,14 @@ var file_w17_mcp_proto_depIdxs = []int32{
 	1, // 0: w17.McpApi.tools:type_name -> w17.McpTool
 	2, // 1: w17.mcp:extendee -> google.protobuf.MethodOptions
 	2, // 2: w17.mcp_description:extendee -> google.protobuf.MethodOptions
-	3, // 3: w17.mcp_api:extendee -> google.protobuf.FileOptions
-	0, // 4: w17.mcp_api:type_name -> w17.McpApi
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	4, // [4:5] is the sub-list for extension type_name
-	1, // [1:4] is the sub-list for extension extendee
+	2, // 3: w17.mcp_name:extendee -> google.protobuf.MethodOptions
+	2, // 4: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
+	3, // 5: w17.mcp_api:extendee -> google.protobuf.FileOptions
+	0, // 6: w17.mcp_api:type_name -> w17.McpApi
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	6, // [6:7] is the sub-list for extension type_name
+	1, // [1:6] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
 }
 
@@ -394,7 +435,7 @@ func file_w17_mcp_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_mcp_proto_rawDesc), len(file_w17_mcp_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
-			NumExtensions: 3,
+			NumExtensions: 5,
 			NumServices:   0,
 		},
 		GoTypes:           file_w17_mcp_proto_goTypes,

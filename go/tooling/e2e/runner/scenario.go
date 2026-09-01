@@ -92,6 +92,11 @@ type Step struct {
 	// Mutually exclusive with Expect (the spec parser rejects both).
 	ExpectError *ExpectError
 
+	// ExpectTransportError, when set, asserts a refusal the SURFACE never
+	// answered — one with no canonical code. Mutually exclusive with the
+	// other two (the spec parser rejects the combination).
+	ExpectTransportError *ExpectTransportError
+
 	// AwaitEvents, when non-empty, asserts that each listed public event
 	// lands on the gateway's `/w17-events` SSE stream after this step's
 	// call. The runner subscribes to every one BEFORE the call (the stream
@@ -285,7 +290,11 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	}
 
 	resp, err := caller.Call(ctx, s.Endpoint, input, token, headers, s.Files)
-	if s.ExpectError != nil {
+	if s.ExpectTransportError != nil {
+		if err := matchTransportError(s.ExpectTransportError, err, scope); err != nil {
+			return err
+		}
+	} else if s.ExpectError != nil {
 		if err := matchCallError(s.ExpectError, err, scope); err != nil {
 			return err
 		}
@@ -385,6 +394,43 @@ func matchCallError(want *ExpectError, err error, scope *runtime.Scope) error {
 		}
 	}
 	return nil
+}
+
+// ExpectTransportError is a refusal that happened BELOW the surface.
+type ExpectTransportError struct {
+	// Message asserts what the transport reported. Required by the spec:
+	// at this layer there is no code, so the message is the only thing
+	// separating a hidden tool from a malformed request or a dead stack.
+	Message any
+}
+
+// matchTransportError asserts a refusal the surface never answered.
+//
+// Two failure modes get their own message because they are the two ways
+// this assertion goes wrong, and they mean opposite things:
+//
+//   - the call SUCCEEDED: whatever was supposed to turn it away did not.
+//     For the case this exists for — an ACL-hidden MCP tool — that is the
+//     caller reaching a tool they may not use.
+//   - the SURFACE answered with a code: the refusal is real but it came
+//     from a different layer than the step describes. Accepting it would
+//     let the case keep passing after the mechanism moved, which is the
+//     whole reason `expect_error` requires a code in the first place.
+func matchTransportError(want *ExpectTransportError, err error, scope *runtime.Scope) error {
+	if err == nil {
+		return fmt.Errorf("expected the call to be refused below the surface, but it SUCCEEDED — " +
+			"whatever should have turned it away did not")
+	}
+	var ce *CallError
+	if errors.As(err, &ce) {
+		return fmt.Errorf("expected a refusal BELOW the surface, but the surface answered %s: %s — "+
+			"that is a coded refusal, so assert it with `expect_error` (a step that accepted both "+
+			"would keep passing after the refusal changed layers)", ce.Code, ce.Message)
+	}
+	return runtime.MatchExpect(
+		map[string]any{"message": want.Message},
+		map[string]any{"message": err.Error()},
+		scope)
 }
 
 // matchOneDetail looks for ONE expected detail among the refusal's
