@@ -5773,7 +5773,24 @@ type DepVersions struct {
 	// Eventbus-flavoured storage bundles only — main.go opens a
 	// NATS dispatcher when (w17.event_emit) annotations exist
 	// on the domain's RPCs (REV-125).
-	NatsGo        string `protobuf:"bytes,11,opt,name=nats_go,json=natsGo,proto3" json:"nats_go,omitempty"` // github.com/nats-io/nats.go
+	NatsGo string `protobuf:"bytes,11,opt,name=nats_go,json=natsGo,proto3" json:"nats_go,omitempty"` // github.com/nats-io/nats.go
+	// MCP-flavoured gateway bundles only — the gateway's src/mcp
+	// package imports mcp-go directly (tool registration + the
+	// CallToolRequest type), beside the runtime glue in
+	// sdk/go/lib/mcp.
+	//
+	// It exists because the require was never emitted at all. The
+	// gateway has rendered those imports since MCP moved onto it,
+	// and every example built them anyway — inside a go.work
+	// workspace, where the module graph supplies what the bundle's
+	// own go.mod omits. A consumer building the bundle the way its
+	// header promises ("SELF-CONTAINED Go module, portable as a
+	// unit") got `imports … from implicitly required module`.
+	//
+	// Pin source is sdk/go/go.mod, not srcgo/go.mod: the generated
+	// code pairs mcp-go with sdk/go/lib/mcp, so the version that
+	// must agree is the SDK's.
+	McpGo         string `protobuf:"bytes,12,opt,name=mcp_go,json=mcpGo,proto3" json:"mcp_go,omitempty"` // github.com/mark3labs/mcp-go
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5874,6 +5891,13 @@ func (x *DepVersions) GetGoChi() string {
 func (x *DepVersions) GetNatsGo() string {
 	if x != nil {
 		return x.NatsGo
+	}
+	return ""
+}
+
+func (x *DepVersions) GetMcpGo() string {
+	if x != nil {
+		return x.McpGo
 	}
 	return ""
 }
@@ -7219,7 +7243,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x11ReplaceDirectives\x12\x1b\n" +
 	"\tparent_to\x18\x01 \x01(\tR\bparentTo\x122\n" +
 	"\x15wandering_compiler_to\x18\x02 \x01(\tR\x13wanderingCompilerTo\x12\"\n" +
-	"\rper_bundle_pb\x18\x03 \x01(\bR\vperBundlePb\"\xb2\x02\n" +
+	"\rper_bundle_pb\x18\x03 \x01(\bR\vperBundlePb\"\xc9\x02\n" +
 	"\vDepVersions\x12\x12\n" +
 	"\x04grpc\x18\x01 \x01(\tR\x04grpc\x12\x1a\n" +
 	"\bprotobuf\x18\x02 \x01(\tR\bprotobuf\x12\x15\n" +
@@ -7231,7 +7255,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x0fcoder_websocket\x18\t \x01(\tR\x0ecoderWebsocket\x12\x15\n" +
 	"\x06go_chi\x18\n" +
 	" \x01(\tR\x05goChi\x12\x17\n" +
-	"\anats_go\x18\v \x01(\tR\x06natsGoJ\x04\b\a\x10\bR\x03gox\"\xed\x06\n" +
+	"\anats_go\x18\v \x01(\tR\x06natsGo\x12\x15\n" +
+	"\x06mcp_go\x18\f \x01(\tR\x05mcpGoJ\x04\b\a\x10\bR\x03gox\"\xed\x06\n" +
 	"\rGatewayTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
