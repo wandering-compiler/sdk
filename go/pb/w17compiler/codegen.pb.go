@@ -5783,9 +5783,8 @@ type DepVersions struct {
 	// gateway has rendered those imports since MCP moved onto it,
 	// and every example built them anyway — inside a go.work
 	// workspace, where the module graph supplies what the bundle's
-	// own go.mod omits. A consumer building the bundle the way its
-	// header promises ("SELF-CONTAINED Go module, portable as a
-	// unit") got `imports … from implicitly required module`.
+	// own go.mod omits. A consumer building the bundle outside a
+	// workspace got `imports … from implicitly required module`.
 	//
 	// Pin source is sdk/go/go.mod, not srcgo/go.mod: the generated
 	// code pairs mcp-go with sdk/go/lib/mcp, so the version that
