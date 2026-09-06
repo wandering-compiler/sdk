@@ -1910,11 +1910,16 @@ func (x *RemoveCiConfigIntent) GetProvider() string {
 // required + unique across existing entries. The server validates before
 // re-signing.
 type AddClientStubIntent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Framework     string                 `protobuf:"bytes,1,opt,name=framework,proto3" json:"framework,omitempty"`
-	Language      string                 `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
-	OutputRoot    string                 `protobuf:"bytes,3,opt,name=output_root,json=outputRoot,proto3" json:"output_root,omitempty"`
-	Wire          string                 `protobuf:"bytes,4,opt,name=wire,proto3" json:"wire,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Framework  string                 `protobuf:"bytes,1,opt,name=framework,proto3" json:"framework,omitempty"`
+	Language   string                 `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
+	OutputRoot string                 `protobuf:"bytes,3,opt,name=output_root,json=outputRoot,proto3" json:"output_root,omitempty"`
+	Wire       string                 `protobuf:"bytes,4,opt,name=wire,proto3" json:"wire,omitempty"`
+	// rest_surface scopes the client to one `(w17.rest_api)` surface by its
+	// `name`. Empty keeps the whole-project shape, where every method must
+	// be REST-addressable. See ClientStub.rest_surface in the lock proto for
+	// why a project can need the narrowing.
+	RestSurface   string `protobuf:"bytes,5,opt,name=rest_surface,json=restSurface,proto3" json:"rest_surface,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1973,6 +1978,13 @@ func (x *AddClientStubIntent) GetOutputRoot() string {
 func (x *AddClientStubIntent) GetWire() string {
 	if x != nil {
 		return x.Wire
+	}
+	return ""
+}
+
+func (x *AddClientStubIntent) GetRestSurface() string {
+	if x != nil {
+		return x.RestSurface
 	}
 	return ""
 }
@@ -6964,13 +6976,14 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x11AddCiConfigIntent\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\"2\n" +
 	"\x14RemoveCiConfigIntent\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\"\x84\x01\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xa7\x01\n" +
 	"\x13AddClientStubIntent\x12\x1c\n" +
 	"\tframework\x18\x01 \x01(\tR\tframework\x12\x1a\n" +
 	"\blanguage\x18\x02 \x01(\tR\blanguage\x12\x1f\n" +
 	"\voutput_root\x18\x03 \x01(\tR\n" +
 	"outputRoot\x12\x12\n" +
-	"\x04wire\x18\x04 \x01(\tR\x04wire\"\xe7\x02\n" +
+	"\x04wire\x18\x04 \x01(\tR\x04wire\x12!\n" +
+	"\frest_surface\x18\x05 \x01(\tR\vrestSurface\"\xe7\x02\n" +
 	"\x13BootstrapLockIntent\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x18\n" +
