@@ -44,17 +44,19 @@ func TestRunAdopt_RefusesEveryConnectionBeforeRecordingAny(t *testing.T) {
 	b := mkAdoptable("ts-2", "beta", "CREATE TABLE b;")
 	dir := seedDir(t, a, b)
 
-	t.Run("a later connection's non-empty ledger", func(t *testing.T) {
+	t.Run("a later connection that is managed AND does not hold the schema", func(t *testing.T) {
 		alpha, beta := stub.New(), stub.New()
-		// beta is already under migration management, with ts-2 still
-		// pending — the refusal that used to fire after alpha had been
-		// recorded.
+		// beta is already under migration management with ts-2 still
+		// pending, and its database does not hold what ts-2 describes —
+		// a genuinely managed connection with genuinely pending work.
+		// This is the case the ledger guard exists for, and the refusal
+		// it produces must still not leave alpha recorded.
 		//
 		// The head must sort BEFORE the pending migration or Plan's own
-		// cutoff drops the connection and adopt never looks at it. That
-		// cutoff is exactly why a retry converges, and why this is a
-		// transient window rather than a wedge.
+		// cutoff drops the connection and adopt never looks at it.
 		beta.Head = "ts-0"
+		beta.FailOn = b.GetId()
+		beta.FailErr = errors.New("relation \"b\" does not exist")
 
 		err := migrate.RunAdopt(context.Background(), migrate.Config{
 			MigrationsDir: dir,
@@ -72,10 +74,13 @@ func TestRunAdopt_RefusesEveryConnectionBeforeRecordingAny(t *testing.T) {
 			},
 		})
 		if err == nil {
-			t.Fatal("adopt succeeded although beta is already managed")
+			t.Fatal("adopt succeeded although beta is managed and lacks the schema")
 		}
 		if !strings.Contains(err.Error(), "before writing anything") {
 			t.Errorf("the refusal should say nothing was written; got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "already under migration management") {
+			t.Errorf("the refusal does not tell the operator the database is managed; got: %v", err)
 		}
 		assertNothingRecorded(t, "alpha", alpha.Calls())
 	})

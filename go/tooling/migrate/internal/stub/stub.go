@@ -35,6 +35,10 @@ type Applier struct {
 	// HeadErr, when non-nil, makes AppliedHead return this error
 	// (simulates a DB query failure during plan).
 	HeadErr error
+
+	// NotPostgres makes this stub answer a non-Postgres dialect, so a test
+	// can exercise the path where the extension preflight must NOT fire.
+	NotPostgres bool
 }
 
 // New returns a fresh stub Applier. Compile-time check the impl
@@ -48,6 +52,12 @@ var _ migrate.Applier = (*Applier)(nil)
 // AppliedHead returns the configured Head + HeadErr. Tests
 // pre-populate Head to simulate the DB-side cutoff that the
 // orchestrator uses to filter pending.
+// IsPostgres satisfies migrate.PostgresDialect. The stub answers TRUE by
+// default because the tests that use it exercise the Postgres-only
+// extension preflight; a test wanting the non-PG behaviour sets NotPostgres
+// (T2-6 pass #10, D10-1).
+func (a *Applier) IsPostgres() bool { return !a.NotPostgres }
+
 func (a *Applier) AppliedHead(_ context.Context) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

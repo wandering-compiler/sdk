@@ -42,7 +42,11 @@ type MemoryBusOptions struct {
 	BlockTimeout time.Duration
 
 	// Observer receives emit / deliver / drop callbacks.
-	// Nil -> NopObserver (silent no-op). Implementations
+	// Nil -> DefaultObserver: failures and drops leave a trace, successes
+	// stay silent. Set NopObserver explicitly for the silent no-op — it
+	// stopped being the default when the promise four documents made about
+	// emit observability turned out to be unimplemented (T2-6 pass #9,
+	// D9-3). Implementations
 	// run on the hot path; keep them O(1) — see Observer
 	// godoc.
 	Observer Observer
@@ -91,7 +95,7 @@ type MemoryBus struct {
 	drops map[string]int64
 
 	// observer is the metric/log callback surface. Always
-	// non-nil — NopObserver wired by NewMemoryBusWithOptions
+	// non-nil — DefaultObserver wired by NewMemoryBusWithOptions
 	// when caller leaves Options.Observer nil.
 	observer Observer
 

@@ -188,10 +188,61 @@ func (l *Limiter) warnCollapsed() {
 		"Terminate HTTP at the proxy (so it appends one), or enable PROXY protocol.")
 }
 
-func (l *Limiter) allowKey(key string) bool {
+// AllowChargeable is [Limiter.Allow] for a CREDENTIAL endpoint: it reports
+// whether an attempt may proceed WITHOUT spending a token, and returns the
+// function that spends one when the attempt turns out to have failed.
+//
+// Rate-limiting a sign-in is about bounding guesses, not sign-ins. An
+// attacker needs thousands of WRONG attempts to be worth running, while a
+// legitimate caller — a script re-authenticating per request, an office
+// behind one NAT address, this project's own e2e harness — can make many
+// RIGHT ones in a burst and is not the thing being defended against.
+// Charging arrivals locked those callers out at the default while leaving
+// the attacker's budget untouched. Charging failures is also what makes a
+// tight default safe: the bucket then measures exactly the traffic that
+// matters.
+//
+// The admission check happens BEFORE the work, so a bucket already drained
+// by failures refuses without the credential store being touched at all.
+// `charge` is idempotent and safe to call from a defer; it is never called
+// automatically, because "which outcome counts" is the caller's decision
+// and hiding it would be the bug this shape exists to prevent.
+//
+// A nil Limiter admits and returns a no-op charge.
+//
+// Two callers can observe the last token at once and both be admitted; the
+// loser is charged a token it did not have, which the bucket carries as a
+// deficit. That is the right direction to err for a limit whose false
+// positives lock out real users.
+func (l *Limiter) AllowChargeable(ctx context.Context) (allowed bool, charge func()) {
+	if l == nil {
+		return true, func() {}
+	}
+	key, resolved := l.clientKey(ctx)
+	if !resolved {
+		l.warnCollapsed()
+	}
+	lim := l.limiterFor(key)
 	now := l.now()
+	if lim.TokensAt(now) < 1 {
+		return false, func() {}
+	}
+	var once sync.Once
+	return true, func() {
+		once.Do(func() { lim.AllowN(l.now(), 1) })
+	}
+}
 
+func (l *Limiter) allowKey(key string) bool {
+	// Outside the lock: rate.Limiter has its own.
+	return l.limiterFor(key).Allow()
+}
+
+// limiterFor returns the per-key token bucket, creating it on first use.
+func (l *Limiter) limiterFor(key string) *rate.Limiter {
+	now := l.now()
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	b, ok := l.buckets[key]
 	if !ok {
 		// A fresh bucket starts FULL, so the limit never penalises a caller's
@@ -203,11 +254,7 @@ func (l *Limiter) allowKey(key string) bool {
 		}
 	}
 	b.seen = now
-	lim := b.lim
-	l.mu.Unlock()
-
-	// Outside the lock: rate.Limiter has its own.
-	return lim.Allow()
+	return b.lim
 }
 
 // evictLocked drops idle buckets, then oldest-first if that was not enough.

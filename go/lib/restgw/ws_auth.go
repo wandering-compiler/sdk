@@ -19,6 +19,8 @@ package restgw
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -144,7 +146,30 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 		param = "ticket"
 	}
 
+	// promotedMarker is a per-instance nonce. On a successful redemption the
+	// wrapper sets it alongside the Authorization header it promotes, and
+	// recognises it on any later pass — which is what makes a stream's
+	// periodic re-auth work in TICKET-ONLY mode.
+	//
+	// Without it, the promotion helped only when `header` was also an
+	// accepted mode: with `Modes: ["ticket"]` the re-auth probe carried the
+	// credential and the wrapper walked straight past it into the ticket
+	// branch, replayed the spent one-shot ticket, and tore the stream down
+	// — the exact B9-9 outage, surviving in a documented mode
+	// (T2-6 pass #10, C10-6).
+	//
+	// A nonce rather than a fixed header name because the alternative —
+	// trusting any Authorization header in ticket-only mode — would let a
+	// caller skip the ticket the mode exists to require. The value never
+	// leaves this process, so a client cannot present it.
+	promotedMarker := randomMarker()
+
 	return func(ctx context.Context, r *http.Request) ([]byte, error) {
+		// A credential THIS wrapper promoted, on a re-auth of a stream it
+		// already authenticated. Honoured in every mode.
+		if r.Header.Get(promotedHeader) == promotedMarker && r.Header.Get("Authorization") != "" {
+			return cfg.Inner(ctx, r)
+		}
 		if acceptHeader && r.Header.Get("Authorization") != "" {
 			return cfg.Inner(ctx, r)
 		}
@@ -193,8 +218,27 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 			// what the ticket's own labels carried, and it is
 			// set only after a successful redemption.
 			r.Header.Set("Authorization", auth)
+			r.Header.Set(promotedHeader, promotedMarker)
 			return cfg.Inner(ctx, r)
 		}
 		return cfg.Inner(ctx, r)
 	}
+}
+
+// promotedHeader carries the per-instance marker described on NewWSAuth.
+// The name is fixed; the VALUE is the secret, and it is regenerated per
+// NewWSAuth call.
+const promotedHeader = "X-W17-Ticket-Promoted"
+
+// randomMarker mints the per-instance nonce. On the vanishingly unlikely
+// event that crypto/rand fails, it returns a value no request can match
+// either — the fallback must not be a constant a client could guess.
+func randomMarker() string {
+	var buf [32]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Unreachable in practice; a marker nothing matches degrades to the
+		// pre-fix behaviour rather than to a bypass.
+		return ""
+	}
+	return hex.EncodeToString(buf[:])
 }

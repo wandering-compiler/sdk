@@ -1063,9 +1063,14 @@ func loadConnectionMigrations(root, connection string) ([]*applyfetchpb.Migratio
 		if err := protojson.Unmarshal(buf, m); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		if got := ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()); got != m.GetContentSha256() {
-			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (want %s, got %s — someone hand-edited)",
-				path, m.GetContentSha256(), got)
+		// Accepts the pre-required-extensions formula too — see
+		// [ContentHashMatches]. An artifact stored before that segment
+		// existed recomputes differently under the current one, and
+		// refusing it here reads as tampering on a file nobody touched.
+		if !ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256()) {
+			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is a real edit (T2-6 pass #10, B10-3)",
+				path, m.GetContentSha256(),
+				ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()))
 		}
 		// Backfill connection_name when missing (older fetches that
 		// didn't stamp; harmless self-heal).
@@ -1103,9 +1108,10 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if m.GetConnection() == "" {
 		return fmt.Errorf("WriteMigration: empty connection_name on %s", m.GetId())
 	}
-	if got := ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()); got != m.GetContentSha256() {
-		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s)",
-			m.GetId(), m.GetContentSha256(), got)
+	if !ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256()) {
+		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s) — the artifact does not hash to its own digest under this compiler's formula or the one that predates required-extension binding. Unlike the load-side check this one reads a FRESH fetch, so re-fetching cannot help: the console and this client disagree about the artifact, which is either a console-side mutation or wire tampering",
+			m.GetId(), m.GetContentSha256(),
+			ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()))
 	}
 	dir := filepath.Join(root, m.GetConnection())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1220,13 +1226,54 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 		}
 	}
 	if len(unadoptable) > 0 {
-		return fmt.Errorf("adopt: refusing before writing anything — %d migration(s) cannot be adopted:\n  %s\n"+
-			"A migration carries no adoption preflight when it introduces nothing a check can look for. That is "+
-			"ordinary for a KV connection (a redis keyspace is created by writing a key, so the migration body is "+
-			"comments) and for an ALTER-shaped migration (a column's presence is not a question a table check can "+
-			"ask). Such a connection does not NEED adopting — its migration collides with nothing — so apply it "+
-			"normally and narrow this command with --connection to the ones that do.",
-			len(unadoptable), strings.Join(unadoptable, "\n  "))
+		// The advice has to split on WHAT ELSE is pending on the same
+		// connection, because "apply it normally" is right for one shape
+		// and harmful for the other (T2-6 pass #10, B10-5).
+		//
+		// A connection whose whole pending chain is unadoptable really does
+		// collide with nothing: a KV keyspace comes into existence when a
+		// key is written, so its migration body is comments, and applying
+		// it is a no-op that moves the ledger. Fine.
+		//
+		// A MIXED chain is the opposite. CREATE-shaped M1 is adoptable;
+		// ALTER-shaped M2 is not, because a column's presence is not a
+		// question `tablesIntroducedBy` can ask — by design, AddTable only.
+		// The hoisted check lists M2 and refuses the WHOLE connection, and
+		// following "apply it normally" then runs M1's CREATE against a
+		// database that already has the table: `relation already exists`,
+		// which is precisely the failure adopt exists to end. And a mixed
+		// chain is not a corner — it is what every mature project's history
+		// looks like the moment one ALTER lands after a CREATE.
+		var mixed []string
+		for _, conn := range order {
+			all, bad := 0, 0
+			for _, p := range byConn[conn] {
+				all++
+				if p.Migration.GetAdoptPreflightSql() == "" || p.Migration.GetAdoptSql() == "" {
+					bad++
+				}
+			}
+			if bad > 0 && bad < all {
+				mixed = append(mixed, conn)
+			}
+		}
+		advice := "A migration carries no adoption preflight when it introduces nothing a check can look for. That is " +
+			"ordinary for a KV connection (a redis keyspace is created by writing a key, so the migration body is " +
+			"comments) and for an ALTER-shaped migration (a column's presence is not a question a table check can " +
+			"ask). Such a connection does not NEED adopting — its migration collides with nothing — so apply it " +
+			"normally and narrow this command with --connection to the ones that do."
+		if len(mixed) > 0 {
+			advice = fmt.Sprintf("On %s the pending chain MIXES adoptable and unadoptable migrations — a CREATE the "+
+				"database already satisfies, followed by an ALTER no table check can ask about. Do NOT apply that "+
+				"chain normally: the CREATE runs against a database that already holds the table and fails with "+
+				"`relation already exists`, which is the failure adopt exists to end. Squash the chain to a single "+
+				"fresh baseline covering the schema this database already has, then adopt that. For the OTHER "+
+				"connections — the ones whose whole chain is unadoptable, typically KV, where the body really is "+
+				"comments — plain apply is correct; narrow this command with --connection.",
+				strings.Join(mixed, ", "))
+		}
+		return fmt.Errorf("adopt: refusing before writing anything — %d migration(s) cannot be adopted:\n  %s\n%s",
+			len(unadoptable), strings.Join(unadoptable, "\n  "), advice)
 	}
 
 	cache := newRunApplierCache(cfg.ApplierFor, out)
@@ -1267,9 +1314,33 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return fmt.Errorf("adopt %s: read applied head: %w", conn, err)
 		}
+		// A non-empty ledger USED to end the run here, unconditionally.
+		// That reading of "adopt brings an UNMANAGED database in" has a
+		// hole that only shows up after a failure: PASS 2 records
+		// migrations one at a time, so a transport error midway leaves the
+		// ledger at some ts-k with the rest of the chain still pending —
+		// and the retry, which every other refusal on this path converges
+		// under, hit this guard and stopped. The advice it gave was worse
+		// than the stall: `migrate apply` on that connection runs the real
+		// DDL of a migration the preflight had just confirmed the database
+		// already satisfies. On PG that dead-ends in-tx on `relation
+		// already exists`; on MySQL, whose DDL is not transactional, a
+		// multi-statement body can partially execute first; and a
+		// non-colliding body (seed INSERTs, IF NOT EXISTS) applies
+		// SUCCESSFULLY and re-runs its effects. Recovery from there is
+		// manual ledger surgery — the operation adopt exists to replace
+		// (T2-6 pass #10, D10-2).
+		//
+		// What actually makes recording safe is not an empty ledger; it is
+		// the preflight below proving the database already holds what each
+		// pending migration describes. So a head no longer refuses on its
+		// own — it is reported, and the preflights decide. A genuinely
+		// managed database fails them (its pending migration is pending
+		// precisely because the schema is not there yet) and gets a
+		// refusal that says so.
 		if head != "" {
-			return fmt.Errorf("adopt %s: refusing before writing anything — this database is already under migration management (its ledger is at %s). Adopt brings an UNMANAGED database in; from here on the ordinary `migrate apply` is the way forward",
-				conn, head)
+			fmt.Fprintf(out, "adopt: %s :: ledger already at %s — verifying the remaining %d migration(s) are present before recording them\n",
+				conn, head, len(byConn[conn]))
 		}
 
 		for _, p := range byConn[conn] {
@@ -1282,6 +1353,9 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 				UpSql:      preflight,
 			}
 			if err := applier.Apply(ctx, probe); err != nil {
+				if head != "" {
+					return fmt.Errorf("adopt %s/%s: refusing before writing anything — this database is already under migration management (its ledger is at %s) AND does not hold what this pending migration describes, so there is nothing to adopt: %w. A managed database moves forward with the ordinary `migrate apply`", conn, p.Migration.GetId(), head, err)
+				}
 				return fmt.Errorf("adopt %s/%s: refusing before writing anything — this database does not hold what the migration describes: %w", conn, p.Migration.GetId(), err)
 			}
 		}

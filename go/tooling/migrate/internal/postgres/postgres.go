@@ -95,6 +95,12 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 // (`YYYYMMDDTHHMMSSZ` basic ISO-8601). We format here via
 // `to_char` so the returned string round-trips against the id
 // the registry stamped on each Migration.
+// IsPostgres satisfies migrate.PostgresDialect, so the extension preflight
+// knows its `DO $$ … pg_extension` probe means something here. The manifest
+// field it reads travels on every dialect for tracking, so the probe has to
+// ask rather than assume (T2-6 pass #10, D10-1).
+func (a *Applier) IsPostgres() bool { return true }
+
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	// Q52: bootstrap the post_tx_complete column on pre-existing
 	// trackers before the filtered query, then exclude incomplete

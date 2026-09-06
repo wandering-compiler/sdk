@@ -337,3 +337,64 @@ func TestLimiter_NoWarningWhenTheClientIsResolvable(t *testing.T) {
 		t.Errorf("a resolvable client produced a collapse warning: %s", buf.String())
 	}
 }
+
+// TestAllowChargeable_ChargesOnlyFailures — T2-6 pass #10, B10-7's second
+// half.
+//
+// The login limiter charged ARRIVALS. What it defends against is guessing,
+// and guessing means wrong answers — so a legitimate caller that
+// authenticates successfully in a burst (a script re-authenticating per
+// request, an office behind one NAT address, this project's own e2e
+// harness) was locked out at the default while an attacker's budget was
+// unchanged. Charging failures only is what makes a tight default safe.
+func TestAllowChargeable_ChargesOnlyFailures(t *testing.T) {
+	lim := New(Config{PerMinute: 6, Burst: 3})
+	ctx := ctxFrom("203.0.113.9:1234")
+
+	// Far past the burst, every one SUCCEEDING: none may be charged.
+	for i := 0; i < 50; i++ {
+		ok, _ := lim.AllowChargeable(ctx)
+		if !ok {
+			t.Fatalf("a successful caller was throttled after %d sign-ins — the bucket is counting arrivals, not failures", i)
+		}
+	}
+
+	// Now the same burst FAILING: that is what a guesser does.
+	for i := 0; i < 3; i++ {
+		ok, charge := lim.AllowChargeable(ctx)
+		if !ok {
+			t.Fatalf("failure %d was refused before the burst was spent", i)
+		}
+		charge()
+	}
+	if ok, _ := lim.AllowChargeable(ctx); ok {
+		t.Error("the bucket never empties — failures are not being charged, so the limit protects nothing")
+	}
+}
+
+// TestAllowChargeable_ChargeIsIdempotentAndNilSafe — a charge called twice
+// (a defer plus an explicit call) must not spend two tokens, and a nil
+// Limiter must stay a no-op rather than panic.
+func TestAllowChargeable_ChargeIsIdempotentAndNilSafe(t *testing.T) {
+	var nilLim *Limiter
+	ok, charge := nilLim.AllowChargeable(context.Background())
+	if !ok {
+		t.Error("a nil Limiter refused")
+	}
+	charge()
+	charge()
+
+	lim := New(Config{PerMinute: 6, Burst: 2})
+	ctx := ctxFrom("203.0.113.10:1234")
+	_, c1 := lim.AllowChargeable(ctx)
+	c1()
+	c1() // the second call must not spend a second token
+	if ok, c2 := lim.AllowChargeable(ctx); !ok {
+		t.Fatal("a double charge spent both burst tokens")
+	} else {
+		c2()
+	}
+	if ok, _ := lim.AllowChargeable(ctx); ok {
+		t.Error("the bucket did not empty after its burst was spent on failures")
+	}
+}

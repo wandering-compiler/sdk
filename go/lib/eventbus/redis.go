@@ -74,7 +74,8 @@ type RedisBusOptions struct {
 	ReadBatch int64
 
 	// Observer receives emit / deliver / drop callbacks.
-	// Nil -> NopObserver (silent no-op). Drop callbacks
+	// Nil -> DefaultObserver (failures and drops traced, successes silent);
+	// NopObserver is the explicit silent opt-out. Drop callbacks
 	// fire on DLQ routing (PEL entries past MaxDeliver).
 	Observer Observer
 

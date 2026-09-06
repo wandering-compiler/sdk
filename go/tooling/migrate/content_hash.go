@@ -111,6 +111,49 @@ func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 	// the opposite direction from adopt_preflight_sql, which fails closed and
 	// is excused for exactly that reason.
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, exts)
+}
+
+// ContentHashMatches reports whether `want` is a digest this content can
+// legitimately carry — under the CURRENT formula, or under the one that
+// applied before the required-extension segment existed.
+//
+// It exists because adding that segment was not the backward-compatible
+// change it was reasoned to be. The guard was "written only when non-empty,
+// so every digest minted before the manifest travelled keeps its value" —
+// true for a migration that declares NO extensions, and false for exactly
+// the ones that do. Those were stored, months ago, hashed without the
+// segment; a client carrying the new formula recomputes them differently and
+// `WriteMigration` refuses the fetch with a message about hand-editing. The
+// commit's evidence — "verified against the production console: its one
+// stored migration carries no manifest" — was an existence check over ONE
+// deployment, not over the shape (T2-6 pass #10, B10-2, measured).
+//
+// Accepting the legacy digest is not a weakening. The segment's purpose is
+// that STRIPPING the extension list from an artifact must not license a run
+// the preflight would refuse — and a legacy digest is only accepted when the
+// content hashes to it under the legacy formula, which pins every executable
+// segment exactly as before. What it cannot detect is a strip on an artifact
+// minted before the segment existed, which is the state those artifacts were
+// already in; it does not make anything worse, and every digest minted from
+// here on is bound.
+func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, manifestJSON, want string) bool {
+	if want == "" {
+		return false
+	}
+	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
+	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, exts) == want {
+		return true
+	}
+	if len(exts) == 0 {
+		// No segment either way — one formula, and it did not match.
+		return false
+	}
+	// The pre-segment formula: identical but for the extension set.
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, nil) == want
+}
+
+func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL string, exts []string) string {
 
 	var b strings.Builder
 	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && len(exts) == 0 {

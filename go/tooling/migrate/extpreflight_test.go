@@ -17,7 +17,14 @@ type extFake struct {
 	ran      []string
 	failOn   string // substring; the probe fails when the SQL contains it
 	appliedN int
+	notPG    bool // answer a non-Postgres dialect
 }
+
+// IsPostgres satisfies PostgresDialect. The preflight's probe is Postgres
+// syntax, so it only fires against an applier that says it speaks it; these
+// tests exercise that path, and `notPG` flips it for the case that must NOT
+// be probed (T2-6 pass #10, D10-1).
+func (f *extFake) IsPostgres() bool { return !f.notPG }
 
 func (f *extFake) Apply(_ context.Context, m *applyfetchpb.Migration) error {
 	f.ran = append(f.ran, m.GetUpSql())
@@ -138,5 +145,126 @@ func TestRun_RefusesWhenAnExtensionIsMissing(t *testing.T) {
 	}
 	if fake.appliedN != 0 {
 		t.Fatalf("%d migration(s) applied — Run must write nothing when the preflight refuses", fake.appliedN)
+	}
+}
+
+// TestPreflightExtensions_DoesNotProbeANonPostgresConnection — the probe is
+// Postgres syntax; the manifest field it reads is not Postgres-only.
+//
+// T2-6 pass #10, D10-1 ≡ B10-4. `plan.go` deliberately flows
+// `(w17.pg.field).required_extensions` into non-PG buckets so the manifest
+// TRACKS what was declared — the MySQL emitter stamps its own "manifest
+// tracking only" marker saying exactly that. The preflight bucketed by
+// connection NAME alone and carried no dialect, so a MySQL or SQLite
+// connection whose manifest named an extension got a `DO $$ … pg_extension`
+// probe fired at it. It fails on syntax, and the wrapper reports "this
+// database is missing an extension the schema declares" — a healthy database
+// permanently unable to apply, told something untrue about why.
+func TestPreflightExtensions_DoesNotProbeANonPostgresConnection(t *testing.T) {
+	// An applier that would fail ANY probe: if the preflight fires at all,
+	// the run is refused.
+	fake := &extFake{failOn: "pg_extension", notPG: true}
+
+	pending := []Pending{{
+		Connection: "main",
+		Migration: &applyfetchpb.Migration{
+			Id:           "ts-1",
+			Connection:   "main",
+			UpSql:        "CREATE TABLE t (id int primary key);",
+			ManifestJson: `{"required_extensions":["pgcrypto"]}`,
+		},
+	}}
+
+	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard)
+	defer ac.closeAll()
+
+	if err := preflightExtensions(context.Background(), ac, pending); err != nil {
+		t.Fatalf("a non-Postgres connection was probed with Postgres syntax and refused: %v", err)
+	}
+	for _, sql := range fake.ran {
+		if strings.Contains(sql, "pg_extension") {
+			t.Errorf("the Postgres probe was sent to a non-Postgres connection:\n%s", sql)
+		}
+	}
+
+	// Control: the SAME manifest on a Postgres connection must still be
+	// probed and still refuse, or this fix would have disabled the check.
+	pgFake := &extFake{failOn: "pg_extension"}
+	pgAc := newRunApplierCache(func(string) (Applier, error) { return pgFake, nil }, io.Discard)
+	defer pgAc.closeAll()
+	if err := preflightExtensions(context.Background(), pgAc, pending); err == nil {
+		t.Error("a Postgres connection missing a declared extension was NOT refused — the preflight stopped working")
+	}
+}
+
+// wrappedFake is a decorator of the kind the live harness uses — and the
+// kind that a production caller writes without thinking about it. It embeds
+// the Applier INTERFACE, so only the interface's own methods are promoted.
+type wrappedFake struct {
+	Applier
+	unwrappable bool
+}
+
+func (w wrappedFake) Close() error { return nil }
+
+func (w wrappedFake) Unwrap() Applier {
+	if !w.unwrappable {
+		// Simulates a decorator written before WrappedApplier existed.
+		return nil
+	}
+	return w.Applier
+}
+
+// TestPreflightExtensions_SurvivesADecorator — T2-6 pass #10, D10-1's own
+// hole, caught by the live lane.
+//
+// The gate that stops the Postgres probe reaching a MySQL connection reads
+// an OPTIONAL interface off the applier. Embedding a `migrate.Applier`
+// interface in a decorator promotes only that interface's methods, so
+// `IsPostgres` vanishes the moment anything wraps the applier — and the
+// preflight then skips silently against a real Postgres server. A check
+// that turns itself off when a decorator appears is the same fail-open the
+// gate exists to remove, one layer out.
+//
+// No unit test over a bare applier could see this; the live dialectdiff
+// lane, whose harness wraps with a NoCloseApplier, is what caught it.
+func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
+	pending := []Pending{{
+		Connection: "main",
+		Migration: &applyfetchpb.Migration{
+			Id:           "ts-1",
+			Connection:   "main",
+			UpSql:        "CREATE TABLE t (id int primary key);",
+			ManifestJson: `{"required_extensions":["pgcrypto"]}`,
+		},
+	}}
+
+	inner := &extFake{failOn: "pg_extension"}
+	wrapped := wrappedFake{Applier: inner, unwrappable: true}
+	ac := newRunApplierCache(func(string) (Applier, error) { return wrapped, nil }, io.Discard)
+	defer ac.closeAll()
+
+	if err := preflightExtensions(context.Background(), ac, pending); err == nil {
+		t.Fatal("a WRAPPED Postgres applier was not probed — the preflight goes dark behind any decorator, against a real Postgres server")
+	}
+
+	// And the non-Postgres answer must still travel through the wrapper, or
+	// the fix would have re-opened the hole it closed.
+	innerMy := &extFake{failOn: "pg_extension", notPG: true}
+	wrappedMy := wrappedFake{Applier: innerMy, unwrappable: true}
+	myAc := newRunApplierCache(func(string) (Applier, error) { return wrappedMy, nil }, io.Discard)
+	defer myAc.closeAll()
+	if err := preflightExtensions(context.Background(), myAc, pending); err != nil {
+		t.Errorf("a wrapped non-Postgres connection was probed with Postgres syntax: %v", err)
+	}
+
+	// A decorator that does NOT expose its inner applier cannot be seen
+	// through, and must fail CLOSED on the skip side — not be treated as
+	// Postgres on a guess.
+	opaque := wrappedFake{Applier: &extFake{failOn: "pg_extension"}}
+	opAc := newRunApplierCache(func(string) (Applier, error) { return opaque, nil }, io.Discard)
+	defer opAc.closeAll()
+	if err := preflightExtensions(context.Background(), opAc, pending); err != nil {
+		t.Errorf("an opaque decorator was probed on a guess: %v", err)
 	}
 }

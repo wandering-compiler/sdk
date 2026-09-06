@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -279,15 +280,34 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// detail channel was already carrying. The constraint KIND stays on
 	// the debug event above, where an operator triaging by SQLSTATE looks;
 	// it is not something the caller can act on.
+	//
+	// The message is a MSGID, resolved here rather than shipped verbatim.
+	// Stage-1 validation (the emitted per-field checks) has resolved its
+	// messages at runtime through `i18n.T(ctx, …)` since REV-149 P1.5, and
+	// the constraint registry's strings come out of the SAME catalog
+	// (`lib/validation`.defaults) — they are extracted into the domain's
+	// `.po` files alongside them. Writing them as Go literals meant one
+	// declaration answered a Czech caller in Czech from the request-shape
+	// check and in English from the database constraint, for the same rule
+	// (T2-6 pass #10, D10-5). `i18n.T` falls back to the bare msgid, so a
+	// project with no catalog reads exactly as it did before.
+	//
+	// `docs/specs/runtime/error-envelope.md` still describes the wire as
+	// "English defaults"; that text predates P1.5 by ten days and was
+	// already half-false. It is corrected alongside this.
+	message := info.Message
+	if message != "" {
+		message = i18n.T(ctx, message, nil)
+	}
 	detail := ce.Kind + " violation"
-	if info.Field != "" && info.Message != "" {
-		detail = info.Field + " " + info.Message
+	if info.Field != "" && message != "" {
+		detail = info.Field + " " + message
 	}
 	st := status.New(codeForKind(ce.Kind), method+": "+detail)
 	with, errWith := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
 		Field:   info.Field,
 		Code:    info.Code,
-		Message: info.Message,
+		Message: message,
 	}))
 	if errWith != nil {
 		// coverage-exempt: unreachable defensive guard — WithDetails

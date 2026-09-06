@@ -240,3 +240,86 @@ func TestWatchStreamAuth_TicketStreamSurvivesTheTick(t *testing.T) {
 		t.Errorf("the probe never reached the real credential check (inner called %d times) — the watchdog must still be ASKING, not silently skipping", innerCalls.Load())
 	}
 }
+
+// TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick — B9-9's fix, in the
+// mode where it did not reach.
+//
+// T2-6 pass #10, C10-6. Pass #9 promoted the redeemed credential onto the
+// caller's request so a stream's re-auth probe would find it instead of a
+// spent ticket. It only helped when `header` was ALSO an accepted mode: with
+// `Modes: ["ticket"]` — documented, and the mode a browser-only surface
+// wants — the probe carried the credential and the wrapper walked past it
+// into the ticket branch, replayed the one-shot ticket, and tore down a
+// stream whose principal was never revoked. The original outage, surviving
+// in the fix.
+func TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick(t *testing.T) {
+	store := restgw.NewMemoryTicketStore()
+	ticket, err := store.Issue(context.Background(), map[string]string{
+		restgw.WSAuthTicketHeaderLabel: "Bearer still-valid",
+	}, time.Minute)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+
+	var innerCalls atomic.Int32
+	inner := restgw.AuthFunc(func(_ context.Context, r *http.Request) ([]byte, error) {
+		innerCalls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer still-valid" {
+			return nil, errors.New("no credential")
+		}
+		return nil, nil
+	})
+	// TICKET ONLY — no header mode.
+	authFn := restgw.NewWSAuth(restgw.WSAuthConfig{
+		Inner:       inner,
+		Modes:       []string{restgw.WSAuthModeTicket},
+		TicketStore: store,
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/public/notes/live?ticket="+ticket, nil)
+	if _, err := authFn(context.Background(), r); err != nil {
+		t.Fatalf("handshake auth: %v", err)
+	}
+
+	ctx, stop := restgw.WatchStreamAuth(context.Background(), authFn, r, 5*time.Millisecond)
+	defer stop()
+
+	if waitCancelled(ctx, 300*time.Millisecond) {
+		t.Fatal("a ticket-only stream was torn down by its own re-auth probe — the promoted credential is not recognised when `header` is not an accepted mode, so the probe replayed the spent ticket")
+	}
+	if innerCalls.Load() < 2 {
+		t.Errorf("the probe never reached the real credential check (inner called %d times)", innerCalls.Load())
+	}
+}
+
+// TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer — the other
+// direction. Recognising the credential WE promoted must not turn into
+// accepting one the caller sent: ticket-only mode exists to require a
+// ticket, and a bare bearer must still be refused.
+func TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer(t *testing.T) {
+	store := restgw.NewMemoryTicketStore()
+	defer store.Close()
+
+	inner := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) { return nil, nil })
+	authFn := restgw.NewWSAuth(restgw.WSAuthConfig{
+		Inner:       inner,
+		Modes:       []string{restgw.WSAuthModeTicket},
+		TicketStore: store,
+	})
+
+	// A caller presenting a bearer directly, with no ticket.
+	r := httptest.NewRequest(http.MethodGet, "/public/notes/live", nil)
+	r.Header.Set("Authorization", "Bearer sneaked-in")
+	if _, err := authFn(context.Background(), r); err == nil {
+		t.Error("ticket-only mode accepted a client-supplied bearer — the marker must recognise only what this wrapper itself promoted")
+	}
+
+	// And a caller guessing the marker header name gets nowhere: the VALUE
+	// is a per-instance nonce that never leaves the process.
+	r2 := httptest.NewRequest(http.MethodGet, "/public/notes/live", nil)
+	r2.Header.Set("Authorization", "Bearer sneaked-in")
+	r2.Header.Set("X-W17-Ticket-Promoted", "guessed")
+	if _, err := authFn(context.Background(), r2); err == nil {
+		t.Error("a guessed marker value was accepted — the nonce is the secret, not the header name")
+	}
+}

@@ -104,6 +104,69 @@ func extensionPreflightSQL(exts []string) string {
 // checked lazily would leave a database changed by the migrations that ran
 // before the missing extension was noticed — the same partial state the adopt
 // path splits its two passes to avoid.
+// PostgresDialect is the optional interface an [Applier] implements to say
+// which SQL dialect it speaks.
+//
+// The extension preflight needs it because its probe is Postgres syntax
+// (`DO $$ … pg_extension`) while the manifest field it reads is carried on
+// EVERY dialect. That is deliberate — `plan.go` flows
+// `(w17.pg.field).required_extensions` into non-PG buckets for manifest
+// TRACKING, and the MySQL emitter stamps its own "manifest tracking only"
+// marker saying so. The preflight bucketed by connection NAME alone, so a
+// MySQL or SQLite connection whose manifest carried the annotation got the
+// Postgres probe fired at it, failed on syntax, and was refused with "this
+// database is missing an extension the schema declares" — a healthy database
+// permanently unable to apply, told something untrue about why
+// (T2-6 pass #10, D10-1 ≡ B10-4).
+//
+// An optional interface rather than a new method on [Applier]: every
+// applier in this tree is a per-dialect package and knows the answer
+// trivially, but the interface is public and a consumer's own applier must
+// not stop compiling. An applier that does not implement it is not probed —
+// the preflight is a Postgres-specific check, and running it against
+// something that has not said it is Postgres is what caused this.
+type PostgresDialect interface {
+	// IsPostgres reports whether this applier speaks PostgreSQL.
+	IsPostgres() bool
+}
+
+// WrappedApplier is the optional interface a decorator implements to expose
+// the applier it wraps, so an OPTIONAL interface survives the wrapping.
+//
+// This is not hypothetical tidiness — it is the hole the first version of
+// this gate shipped with. Embedding a `migrate.Applier` INTERFACE in a
+// decorator promotes only that interface's methods, so `IsPostgres` becomes
+// invisible the moment anything wraps the applier, the type assertion below
+// fails, and the preflight goes silently dark against a real Postgres. A
+// check that disables itself when a decorator appears is the same fail-open
+// this gate was written to remove, one layer out. The live lane caught it
+// where a unit test over a bare applier could not (T2-6 pass #10, D10-1).
+type WrappedApplier interface {
+	// Unwrap returns the applier this one decorates.
+	Unwrap() Applier
+}
+
+// isPostgresApplier reports whether the preflight's Postgres probe is
+// meaningful against this applier, following [WrappedApplier] decorators the
+// way errors.As follows Unwrap.
+func isPostgresApplier(a Applier) bool {
+	for range 16 { // a decorator chain deeper than this is a cycle
+		if d, ok := a.(PostgresDialect); ok {
+			return d.IsPostgres()
+		}
+		w, ok := a.(WrappedApplier)
+		if !ok {
+			return false
+		}
+		inner := w.Unwrap()
+		if inner == nil || inner == a {
+			return false
+		}
+		a = inner
+	}
+	return false
+}
+
 func preflightExtensions(ctx context.Context, ac *runApplierCache, pending []Pending) error {
 	byConn := map[string]map[string]bool{}
 	for _, p := range pending {
@@ -138,6 +201,11 @@ func preflightExtensions(ctx context.Context, ac *runApplierCache, pending []Pen
 		applier, err := ac.get(ctx, conn)
 		if err != nil {
 			return err
+		}
+		if !isPostgresApplier(applier) {
+			// The manifest carries the annotation on every dialect for
+			// tracking; only Postgres can be asked the question.
+			continue
 		}
 		probe := &applyfetchpb.Migration{
 			Id:         "extension-preflight",

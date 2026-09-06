@@ -58,7 +58,8 @@ type NatsBusOptions struct {
 	DefaultAckWait time.Duration
 
 	// Observer receives emit / deliver callbacks. Nil ->
-	// NopObserver (silent no-op).
+	// DefaultObserver (failures and drops traced, successes silent);
+	// NopObserver is the explicit silent opt-out.
 	Observer Observer
 
 	// ChannelRetries overrides DefaultMaxDeliver +
