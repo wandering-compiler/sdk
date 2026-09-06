@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/grpcrollback"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
@@ -50,9 +51,15 @@ func TestInterceptor_DoesNotRollBackOnAFailedControlPlaneCall(t *testing.T) {
 	busy := status.Error(codes.FailedPrecondition, "still has a handler running")
 
 	for _, method := range []string{
-		"/w17.common.distx.W17DistributedTransaction/Commit",
-		"/w17.common.distx.W17DistributedTransaction/Begin",
-		"/w17.common.distx.W17DistributedTransaction/Rollback",
+		// From the GENERATED constants, not retyped. The interceptor keys
+		// on a hand-written prefix of the same service path, so if the
+		// service is ever renamed this test must stop agreeing with it —
+		// and duplicated literals would rename in lockstep with nothing,
+		// leaving both the filter and its pin green while the real method
+		// names moved (T3-7 pass #11, C11-5).
+		distxpb.W17DistributedTransaction_Commit_FullMethodName,
+		distxpb.W17DistributedTransaction_Begin_FullMethodName,
+		distxpb.W17DistributedTransaction_Rollback_FullMethodName,
 	} {
 		_, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
 			func(context.Context, any) (any, error) { return nil, busy })
