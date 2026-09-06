@@ -98,16 +98,50 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		if !ok || varName == "" {
 			return nil, fmt.Errorf("capture: want a non-empty variable name, got %v", v)
 		}
-		if err := rejectStrayKeys(m, "capture", "match"); err != nil {
-			return nil, err
-		}
 		cm := captureMatcher{varName: varName}
-		if inner, ok := m["match"]; ok {
-			im, err := DecodeMatcher(inner)
+		_, hasMatch := m["match"]
+		_, hasMatcher := m["matcher"]
+		switch {
+		case hasMatch && hasMatcher:
+			return nil, fmt.Errorf("capture %q: use EITHER `match:` (a nested matcher) or `matcher:` "+
+				"alongside capture, not both — they name the same slot", varName)
+
+		case hasMatcher:
+			// `{matcher: not_empty, capture: x}` — check AND bind, on one
+			// line. This used to be refused: capture claimed the whole
+			// mapping, so `matcher` came back as a stray key and the
+			// message named the two keys capture accepts. That reads as
+			// "capture cannot check", and deinvo reasonably concluded the
+			// two had to be split onto separate lines (2026-09-05) — the
+			// assertion then lands somewhere other than where it belongs,
+			// or gets dropped.
+			//
+			// Nothing about the two conflicts: capture binds what the
+			// matcher just approved. Decode the sibling keys as the
+			// matcher they describe, minus `capture` itself.
+			sub := make(map[string]any, len(m)-1)
+			for k, val := range m {
+				if k != "capture" {
+					sub[k] = val
+				}
+			}
+			im, err := DecodeMatcher(sub)
 			if err != nil {
-				return nil, fmt.Errorf("capture %q match: %w", varName, err)
+				return nil, fmt.Errorf("capture %q matcher: %w", varName, err)
 			}
 			cm.inner = im
+
+		default:
+			if err := rejectStrayKeys(m, "capture", "match"); err != nil {
+				return nil, err
+			}
+			if inner, ok := m["match"]; ok {
+				im, err := DecodeMatcher(inner)
+				if err != nil {
+					return nil, fmt.Errorf("capture %q match: %w", varName, err)
+				}
+				cm.inner = im
+			}
 		}
 		return cm, nil
 	}
@@ -235,6 +269,33 @@ func (m exactMatcher) Match(actual any, present bool, scope *Scope) error {
 		return err
 	}
 	if !present && exp != nil {
+		if isProto3Default(exp) {
+			// The assertion is RIGHT and cannot pass, so the message has
+			// to name the fix rather than the symptom.
+			//
+			// proto3 JSON omits default values, so a field holding 0, ""
+			// or false is not on the wire at all — "zero" and "nothing"
+			// arrive identically. deinvo, 2026-09-05: `imported_count: 0`
+			// was the whole point of an empty-import test and could not be
+			// written, so the case moved to a NON-zero field, which makes
+			// "is it assertable" the criterion for what a test proves.
+			//
+			// The cure is presence, not a softer matcher. Marking the
+			// field `optional` gives it explicit presence and it is then
+			// emitted even when zero (the generated JSON codec gates on
+			// the pointer, not the value) — after which this same
+			// assertion passes, and an absent field still fails because
+			// the field really is missing. A `zero` matcher that accepted
+			// absence would pass just as happily for a field somebody
+			// renamed or forgot to set, which is the discrimination the
+			// author is asking for in the first place.
+			return fmt.Errorf("expected %v, field absent — proto3 omits default values, so a zero "+
+				"field is not on the wire and \"zero\" is indistinguishable from \"missing\".\n"+
+				"  fix: mark the field `optional` in its proto; it then carries explicit presence, "+
+				"is emitted even when zero, and this assertion passes.\n"+
+				"  (No zero-or-absent matcher is offered on purpose: it would also pass for a field "+
+				"that was renamed or never set.)", exp)
+		}
 		return fmt.Errorf("expected %v, field absent", exp)
 	}
 	if !looseEqual(actual, exp) {
@@ -574,4 +635,20 @@ func (unwrittenMatcher) Match(actual any, present bool, _ *Scope) error {
 		"  fix: replace `{matcher: unwritten}` with what the response must actually contain "+
 		"(`{matcher: count, op: '==', value: N}`, `{matcher: eq, value: ...}`, …). "+
 		"To accept anything on purpose, say so: `{matcher: count, op: '>=', value: 0}`", actual, present)
+}
+
+// isProto3Default reports whether the expected value is one that proto3
+// JSON omits: numeric zero, the empty string, or false. Those are the
+// assertions that cannot pass however correct they are, and the only ones
+// worth spending a long diagnostic on.
+func isProto3Default(exp any) bool {
+	switch v := exp.(type) {
+	case string:
+		return v == ""
+	case bool:
+		return !v
+	default:
+		f, ok := toFloat(exp)
+		return ok && f == 0
+	}
 }
