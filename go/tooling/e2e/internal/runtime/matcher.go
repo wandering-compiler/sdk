@@ -191,6 +191,14 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		if !validOp(op) {
 			return nil, fmt.Errorf("count: unknown op %q (want one of == != >= <= > <)", op)
 		}
+		if why := vacuousCount(op, val); why != "" {
+			return nil, fmt.Errorf("count: `op: %q, value: %v` %s — an assertion that cannot fail is worse "+
+				"than one nobody wrote, because it looks finished. Say what you mean instead: "+
+				"`{matcher: count, op: '>= 1'}`-style if the list must contain something, or "+
+				"`{matcher: count, op: '== 0'}`-style if being EMPTY is the point (a deletion proved from the "+
+				"other side, a filter that must match nothing). Reported by deinvo 2026-09-07, who found 28 of "+
+				"these and two response fields that did not exist behind them", op, val, why)
+		}
 		return countMatcher{op: op, value: val}, nil
 	case "num":
 		op, val, err := opAndValue(m, "num")
@@ -651,4 +659,34 @@ func isProto3Default(exp any) bool {
 		f, ok := toFloat(exp)
 		return ok && f == 0
 	}
+}
+
+// vacuousCount reports why a count predicate holds for every possible
+// response, or "" when it can fail.
+//
+// A count is a length: never negative, and absent from the response means
+// zero rather than an error. So `>= 0` is not a weak assertion, it is no
+// assertion — it passes for an empty list, a full one, and a field the
+// response does not contain at all. That last case is the one that bites:
+// it makes a case green while it names something that is not there.
+//
+// This is decided at DECODE time, so the case does not run — the same
+// posture the `unwritten` placeholder takes. Running and passing is exactly
+// the outcome that hides the problem.
+func vacuousCount(op string, v float64) string {
+	switch op {
+	case ">=", "!=", ">":
+		// `>= 0` and `!= -1` and `> -1` are all "every count".
+		if (op == ">=" && v <= 0) || (op != ">=" && v < 0) {
+			return "holds for every possible count, including a field the response does not contain"
+		}
+	case "<", "<=", "==":
+		// `< 0` and `== -1` are the mirror: nothing can satisfy them. Not
+		// what this finding is about, but an assertion that can never pass
+		// is a different kind of never-tells-you-anything.
+		if (op == "<" && v <= 0) || (op != "<" && v < 0) {
+			return "cannot hold for any possible count, so the case can only ever fail"
+		}
+	}
+	return ""
 }
