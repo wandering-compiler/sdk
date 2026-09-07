@@ -163,6 +163,27 @@ function renderPreset(text: string, preset: FormatPreset, slot: FormatSlot, f: F
     case "datetime":
       return formatDateTime(text, f);
   }
+  // A preset this module has never heard of — which happens whenever the
+  // code that WROTE the spec is newer than the copy of this file rendering
+  // it, and nothing holds those two versions together.
+  //
+  // This file has two homes and the gap exists in both: the admin runtime
+  // (vendored into a project out of whichever w17ctl binary the consumer
+  // ran) and the mirror the TypeScript client emitter bakes into every
+  // generated client. Neither is resolved against the console that emitted
+  // the thing being rendered.
+  //
+  // The switch is exhaustive against FormatPreset, so TypeScript is satisfied
+  // and the declared `string` return looks safe. It is not: an unknown preset
+  // fell out of the bottom as `undefined`, and a caller interpolating it put
+  // the word "undefined" in the cell — MEASURED, not reasoned about. That
+  // reads as a bug in the data rather than as a version the runtime cannot
+  // render, which is the more expensive of the two to chase.
+  //
+  // Rendering the raw text is what this file already promises one paragraph
+  // up: "a value the formatter cannot parse passes through as its own
+  // string ... a malformed value must render as itself rather than as a lie."
+  return text;
 }
 
 /**

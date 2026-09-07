@@ -73,3 +73,40 @@ describe("slot literals", () => {
     expect(formatSlotValue("0", translatable, cs)).toBe("none left");
   });
 });
+
+describe("a preset the runtime does not know", () => {
+  // The version seam: the console emits the spec, the runtime renders it,
+  // and nothing holds their versions together — the runtime is vendored out
+  // of whichever w17ctl binary the consumer ran. So a newer console CAN name
+  // a preset this build has never compiled a case for.
+  //
+  // Asserted on the RENDERED STRING rather than on "does not throw": the
+  // failure this replaces did not throw. It returned undefined from a
+  // function declared to return string, and the cell showed "undefined".
+  it("renders the raw value, not 'undefined'", () => {
+    // Cast the whole slot, not the field: `FormatPreset` is a closed union,
+    // so a preset from a newer console is a shape the type system says
+    // cannot exist — which is the entire point of this test, and why the
+    // cast belongs here rather than in a widened production type.
+    const fromNewerConsole = {
+      preset: "currency",
+      has_places: true,
+      places: 2,
+    } as unknown as FormatSlot;
+    const out = formatSlotValue("1234.5", fromNewerConsole, {
+      locale: "en",
+      overrides: {},
+    });
+    expect(out).toBe("1234.5");
+    expect(out).not.toContain("undefined");
+  });
+
+  it("still honours default and zero, which run before the preset", () => {
+    const ctx = { locale: "en", overrides: {} };
+    const fromNewerConsole = {
+      preset: "currency",
+      default: { text: "—" },
+    } as unknown as FormatSlot;
+    expect(formatSlotValue(null, fromNewerConsole, ctx)).toBe("—");
+  });
+});
