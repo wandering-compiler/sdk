@@ -3740,7 +3740,18 @@ type GenerateBusinessRequest struct {
 	// bundle go.mod gets its co-dev sdk/go replace.
 	// The daemon's own env is empty, so without this a fresh co-dev business
 	// bundle won't build. Empty == published-module mode.
-	WcPath        string `protobuf:"bytes,8,opt,name=wc_path,json=wcPath,proto3" json:"wc_path,omitempty"`
+	WcPath string `protobuf:"bytes,8,opt,name=wc_path,json=wcPath,proto3" json:"wc_path,omitempty"`
+	// sdk_go_version is the project's declared runtime pin
+	// (`lock.sdk_version`), so the business bundle's go.mod requires the
+	// SAME sdk/go as every other module of the project.
+	//
+	// It has to be threaded rather than derived: this generator runs staged
+	// and reads its other pins off the project's go.mod ON DISK, which
+	// answers what the project currently requires — not what it should. The
+	// difference is the whole point of the field.
+	//
+	// Empty ⇒ the zero pseudo-version, unchanged from before.
+	SdkGoVersion  string `protobuf:"bytes,9,opt,name=sdk_go_version,json=sdkGoVersion,proto3" json:"sdk_go_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3827,6 +3838,13 @@ func (x *GenerateBusinessRequest) GetBundles() []*BusinessBundle {
 func (x *GenerateBusinessRequest) GetWcPath() string {
 	if x != nil {
 		return x.WcPath
+	}
+	return ""
+}
+
+func (x *GenerateBusinessRequest) GetSdkGoVersion() string {
+	if x != nil {
+		return x.SdkGoVersion
 	}
 	return ""
 }
@@ -5801,7 +5819,27 @@ type DepVersions struct {
 	// Pin source is sdk/go/go.mod, not srcgo/go.mod: the generated
 	// code pairs mcp-go with sdk/go/lib/mcp, so the version that
 	// must agree is the SDK's.
-	McpGo         string `protobuf:"bytes,12,opt,name=mcp_go,json=mcpGo,proto3" json:"mcp_go,omitempty"` // github.com/mark3labs/mcp-go
+	McpGo string `protobuf:"bytes,12,opt,name=mcp_go,json=mcpGo,proto3" json:"mcp_go,omitempty"` // github.com/mark3labs/mcp-go
+	// sdk_go — the version of the PUBLIC runtime every module of one
+	// project requires: `github.com/wandering-compiler/sdk/go`.
+	//
+	// Unlike every pin above, this one does NOT come from a manifest the
+	// compiler embeds. It comes from the project's lock (`sdk_version`),
+	// and the console cannot supply it: the consumer-visible version is a
+	// pseudo-version minted by the SDK's publish workflow into a separate
+	// public mirror repo, timestamped at the moment of publish rather than
+	// at the source commit, so a console built from a given commit has no
+	// way to know it. See scripts/publish-sdk.sh.
+	//
+	// It rides HERE rather than being threaded separately because this
+	// message is already the one carrier every go.mod emitter receives —
+	// and the whole point is that the four emit sites cannot disagree. A
+	// second channel would be a second chance to drift.
+	//
+	// Empty ⇒ the previous behaviour verbatim: the zero pseudo-version
+	// `v0.0.0-00010101000000-000000000000`, which a consumer's resolver
+	// then moves independently per module.
+	SdkGo         string `protobuf:"bytes,13,opt,name=sdk_go,json=sdkGo,proto3" json:"sdk_go,omitempty"` // github.com/wandering-compiler/sdk/go
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5909,6 +5947,13 @@ func (x *DepVersions) GetNatsGo() string {
 func (x *DepVersions) GetMcpGo() string {
 	if x != nil {
 		return x.McpGo
+	}
+	return ""
+}
+
+func (x *DepVersions) GetSdkGo() string {
+	if x != nil {
+		return x.SdkGo
 	}
 	return ""
 }
@@ -7110,7 +7155,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x05files\x18\x01 \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\x05files\x12\x1b\n" +
 	"\tgo_module\x18\x02 \x01(\tR\bgoModule\x12\x17\n" +
 	"\apb_root\x18\x03 \x01(\tR\x06pbRoot\x12;\n" +
-	"\tgen_files\x18\x04 \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\bgenFiles\"\xb9\x02\n" +
+	"\tgen_files\x18\x04 \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\bgenFiles\"\xdf\x02\n" +
 	"\x17GenerateBusinessRequest\x124\n" +
 	"\x05files\x18\x01 \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\x05files\x12\x1b\n" +
 	"\tgo_module\x18\x02 \x01(\tR\bgoModule\x12!\n" +
@@ -7120,7 +7165,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"w17StubsPb\x12\x15\n" +
 	"\x06go_mod\x18\x06 \x01(\tR\x05goMod\x12=\n" +
 	"\abundles\x18\a \x03(\v2#.w17.storage.codegen.BusinessBundleR\abundles\x12\x17\n" +
-	"\awc_path\x18\b \x01(\tR\x06wcPath\"x\n" +
+	"\awc_path\x18\b \x01(\tR\x06wcPath\x12$\n" +
+	"\x0esdk_go_version\x18\t \x01(\tR\fsdkGoVersion\"x\n" +
 	"\x0eBusinessBundle\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1a\n" +
 	"\bregister\x18\x02 \x01(\tR\bregister\x122\n" +
@@ -7255,7 +7301,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x11ReplaceDirectives\x12\x1b\n" +
 	"\tparent_to\x18\x01 \x01(\tR\bparentTo\x122\n" +
 	"\x15wandering_compiler_to\x18\x02 \x01(\tR\x13wanderingCompilerTo\x12\"\n" +
-	"\rper_bundle_pb\x18\x03 \x01(\bR\vperBundlePb\"\xc9\x02\n" +
+	"\rper_bundle_pb\x18\x03 \x01(\bR\vperBundlePb\"\xe0\x02\n" +
 	"\vDepVersions\x12\x12\n" +
 	"\x04grpc\x18\x01 \x01(\tR\x04grpc\x12\x1a\n" +
 	"\bprotobuf\x18\x02 \x01(\tR\bprotobuf\x12\x15\n" +
@@ -7268,7 +7314,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x06go_chi\x18\n" +
 	" \x01(\tR\x05goChi\x12\x17\n" +
 	"\anats_go\x18\v \x01(\tR\x06natsGo\x12\x15\n" +
-	"\x06mcp_go\x18\f \x01(\tR\x05mcpGoJ\x04\b\a\x10\bR\x03gox\"\xed\x06\n" +
+	"\x06mcp_go\x18\f \x01(\tR\x05mcpGo\x12\x15\n" +
+	"\x06sdk_go\x18\r \x01(\tR\x05sdkGoJ\x04\b\a\x10\bR\x03gox\"\xed\x06\n" +
 	"\rGatewayTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
