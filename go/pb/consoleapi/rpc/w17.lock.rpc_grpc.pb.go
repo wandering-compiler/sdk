@@ -272,6 +272,8 @@ const (
 	Codegen_DiscoverPluginSandboxes_FullMethodName = "/w17lock.console.rpc.Codegen/DiscoverPluginSandboxes"
 	Codegen_GeneratePluginPb_FullMethodName        = "/w17lock.console.rpc.Codegen/GeneratePluginPb"
 	Codegen_InspectPluginManifest_FullMethodName   = "/w17lock.console.rpc.Codegen/InspectPluginManifest"
+	Codegen_ListPluginCatalog_FullMethodName       = "/w17lock.console.rpc.Codegen/ListPluginCatalog"
+	Codegen_FetchPlugin_FullMethodName             = "/w17lock.console.rpc.Codegen/FetchPlugin"
 	Codegen_MergePo_FullMethodName                 = "/w17lock.console.rpc.Codegen/MergePo"
 	Codegen_RenderProjectScaffold_FullMethodName   = "/w17lock.console.rpc.Codegen/RenderProjectScaffold"
 	Codegen_EditLock_FullMethodName                = "/w17lock.console.rpc.Codegen/EditLock"
@@ -319,6 +321,12 @@ type CodegenClient interface {
 	DiscoverPluginSandboxes(ctx context.Context, in *w17compiler.DiscoverPluginSandboxesRequest, opts ...grpc.CallOption) (*w17compiler.PluginSandboxes, error)
 	GeneratePluginPb(ctx context.Context, in *w17compiler.GeneratePluginPbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error)
 	InspectPluginManifest(ctx context.Context, in *w17compiler.InspectPluginManifestRequest, opts ...grpc.CallOption) (*w17compiler.InspectPluginManifestResponse, error)
+	// The plugin CATALOGUE, re-hosted like the rest of the surface. The client
+	// carries no catalogue of its own any more, so these two are the ONLY way
+	// `plugin list/install/update` sees a plugin — a change to a plugin now
+	// reaches a consumer through a console DEPLOY rather than a client release.
+	ListPluginCatalog(ctx context.Context, in *w17compiler.ListPluginCatalogRequest, opts ...grpc.CallOption) (*w17compiler.PluginCatalog, error)
+	FetchPlugin(ctx context.Context, in *w17compiler.FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error)
 	// i18n .po merge + project-scaffold (compose) render.
 	MergePo(ctx context.Context, in *w17compiler.MergePoRequest, opts ...grpc.CallOption) (*w17compiler.MergePoResponse, error)
 	RenderProjectScaffold(ctx context.Context, in *w17compiler.RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error)
@@ -644,6 +652,35 @@ func (c *codegenClient) InspectPluginManifest(ctx context.Context, in *w17compil
 	return out, nil
 }
 
+func (c *codegenClient) ListPluginCatalog(ctx context.Context, in *w17compiler.ListPluginCatalogRequest, opts ...grpc.CallOption) (*w17compiler.PluginCatalog, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(w17compiler.PluginCatalog)
+	err := c.cc.Invoke(ctx, Codegen_ListPluginCatalog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codegenClient) FetchPlugin(ctx context.Context, in *w17compiler.FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[10], Codegen_FetchPlugin_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[w17compiler.FetchPluginRequest, w17compiler.GeneratedFile]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Codegen_FetchPluginClient = grpc.ServerStreamingClient[w17compiler.GeneratedFile]
+
 func (c *codegenClient) MergePo(ctx context.Context, in *w17compiler.MergePoRequest, opts ...grpc.CallOption) (*w17compiler.MergePoResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(w17compiler.MergePoResponse)
@@ -656,7 +693,7 @@ func (c *codegenClient) MergePo(ctx context.Context, in *w17compiler.MergePoRequ
 
 func (c *codegenClient) RenderProjectScaffold(ctx context.Context, in *w17compiler.RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[10], Codegen_RenderProjectScaffold_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[11], Codegen_RenderProjectScaffold_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +722,7 @@ func (c *codegenClient) EditLock(ctx context.Context, in *w17compiler.EditLockRe
 
 func (c *codegenClient) Guide(ctx context.Context, in *w17compiler.GuideRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[11], Codegen_Guide_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[12], Codegen_Guide_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -752,6 +789,12 @@ type CodegenServer interface {
 	DiscoverPluginSandboxes(context.Context, *w17compiler.DiscoverPluginSandboxesRequest) (*w17compiler.PluginSandboxes, error)
 	GeneratePluginPb(*w17compiler.GeneratePluginPbRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error
 	InspectPluginManifest(context.Context, *w17compiler.InspectPluginManifestRequest) (*w17compiler.InspectPluginManifestResponse, error)
+	// The plugin CATALOGUE, re-hosted like the rest of the surface. The client
+	// carries no catalogue of its own any more, so these two are the ONLY way
+	// `plugin list/install/update` sees a plugin — a change to a plugin now
+	// reaches a consumer through a console DEPLOY rather than a client release.
+	ListPluginCatalog(context.Context, *w17compiler.ListPluginCatalogRequest) (*w17compiler.PluginCatalog, error)
+	FetchPlugin(*w17compiler.FetchPluginRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error
 	// i18n .po merge + project-scaffold (compose) render.
 	MergePo(context.Context, *w17compiler.MergePoRequest) (*w17compiler.MergePoResponse, error)
 	RenderProjectScaffold(*w17compiler.RenderProjectScaffoldRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error
@@ -839,6 +882,12 @@ func (UnimplementedCodegenServer) GeneratePluginPb(*w17compiler.GeneratePluginPb
 }
 func (UnimplementedCodegenServer) InspectPluginManifest(context.Context, *w17compiler.InspectPluginManifestRequest) (*w17compiler.InspectPluginManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InspectPluginManifest not implemented")
+}
+func (UnimplementedCodegenServer) ListPluginCatalog(context.Context, *w17compiler.ListPluginCatalogRequest) (*w17compiler.PluginCatalog, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPluginCatalog not implemented")
+}
+func (UnimplementedCodegenServer) FetchPlugin(*w17compiler.FetchPluginRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error {
+	return status.Error(codes.Unimplemented, "method FetchPlugin not implemented")
 }
 func (UnimplementedCodegenServer) MergePo(context.Context, *w17compiler.MergePoRequest) (*w17compiler.MergePoResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MergePo not implemented")
@@ -1184,6 +1233,35 @@ func _Codegen_InspectPluginManifest_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Codegen_ListPluginCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(w17compiler.ListPluginCatalogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServer).ListPluginCatalog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Codegen_ListPluginCatalog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServer).ListPluginCatalog(ctx, req.(*w17compiler.ListPluginCatalogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Codegen_FetchPlugin_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(w17compiler.FetchPluginRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CodegenServer).FetchPlugin(m, &grpc.GenericServerStream[w17compiler.FetchPluginRequest, w17compiler.GeneratedFile]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Codegen_FetchPluginServer = grpc.ServerStreamingServer[w17compiler.GeneratedFile]
+
 func _Codegen_MergePo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(w17compiler.MergePoRequest)
 	if err := dec(in); err != nil {
@@ -1312,6 +1390,10 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Codegen_InspectPluginManifest_Handler,
 		},
 		{
+			MethodName: "ListPluginCatalog",
+			Handler:    _Codegen_ListPluginCatalog_Handler,
+		},
+		{
 			MethodName: "MergePo",
 			Handler:    _Codegen_MergePo_Handler,
 		},
@@ -1373,6 +1455,11 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "GeneratePluginPb",
 			Handler:       _Codegen_GeneratePluginPb_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "FetchPlugin",
+			Handler:       _Codegen_FetchPlugin_Handler,
 			ServerStreams: true,
 		},
 		{

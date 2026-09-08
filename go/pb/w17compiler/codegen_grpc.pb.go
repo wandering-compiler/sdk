@@ -62,6 +62,8 @@ const (
 	CodegenService_EditLock_FullMethodName                = "/w17.storage.codegen.CodegenService/EditLock"
 	CodegenService_DescribeLock_FullMethodName            = "/w17.storage.codegen.CodegenService/DescribeLock"
 	CodegenService_InspectPluginManifest_FullMethodName   = "/w17.storage.codegen.CodegenService/InspectPluginManifest"
+	CodegenService_ListPluginCatalog_FullMethodName       = "/w17.storage.codegen.CodegenService/ListPluginCatalog"
+	CodegenService_FetchPlugin_FullMethodName             = "/w17.storage.codegen.CodegenService/FetchPlugin"
 	CodegenService_Guide_FullMethodName                   = "/w17.storage.codegen.CodegenService/Guide"
 	CodegenService_AdmissionStatus_FullMethodName         = "/w17.storage.codegen.CodegenService/AdmissionStatus"
 )
@@ -286,6 +288,26 @@ type CodegenServiceClient interface {
 	// gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
 	// refusal.
 	InspectPluginManifest(ctx context.Context, in *InspectPluginManifestRequest, opts ...grpc.CallOption) (*InspectPluginManifestResponse, error)
+	// ListPluginCatalog / FetchPlugin serve the plugin CATALOGUE from the
+	// console.
+	//
+	// The catalogue used to live only inside the w17ctl binary, which made a
+	// client release the only path from a plugin change to a consumer:
+	// deploying the console delivered nothing. That is not a packaging
+	// detail — `org_invite` shipped in rc.9 with a defect and could not be
+	// corrected without cutting rc.10 and telling every consumer to
+	// reinstall.
+	//
+	// It also finishes a move already half-made. The manifest is parsed and
+	// validated server-side (InspectPluginManifest above) because "the
+	// plugin-system semantics are compiler-domain — the client holds no
+	// console/plugins". The semantics moved; the bytes stayed behind.
+	//
+	// FetchPlugin streams GeneratedFile, the same shape GeneratePluginPb
+	// already streams, so "a file tree over gRPC" is an established
+	// mechanism here rather than a new one.
+	ListPluginCatalog(ctx context.Context, in *ListPluginCatalogRequest, opts ...grpc.CallOption) (*PluginCatalog, error)
+	FetchPlugin(ctx context.Context, in *FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// Guide renders the w17 PLATFORM self-description — the w17/specs/ reference
 	// (annotation catalog + architecture primer + escape hatches) a coding agent
 	// reads to understand the technology before designing a project. It is
@@ -661,9 +683,38 @@ func (c *codegenServiceClient) InspectPluginManifest(ctx context.Context, in *In
 	return out, nil
 }
 
+func (c *codegenServiceClient) ListPluginCatalog(ctx context.Context, in *ListPluginCatalogRequest, opts ...grpc.CallOption) (*PluginCatalog, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PluginCatalog)
+	err := c.cc.Invoke(ctx, CodegenService_ListPluginCatalog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codegenServiceClient) FetchPlugin(ctx context.Context, in *FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[11], CodegenService_FetchPlugin_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[FetchPluginRequest, GeneratedFile]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CodegenService_FetchPluginClient = grpc.ServerStreamingClient[GeneratedFile]
+
 func (c *codegenServiceClient) Guide(ctx context.Context, in *GuideRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[11], CodegenService_Guide_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[12], CodegenService_Guide_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -910,6 +961,26 @@ type CodegenServiceServer interface {
 	// gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
 	// refusal.
 	InspectPluginManifest(context.Context, *InspectPluginManifestRequest) (*InspectPluginManifestResponse, error)
+	// ListPluginCatalog / FetchPlugin serve the plugin CATALOGUE from the
+	// console.
+	//
+	// The catalogue used to live only inside the w17ctl binary, which made a
+	// client release the only path from a plugin change to a consumer:
+	// deploying the console delivered nothing. That is not a packaging
+	// detail — `org_invite` shipped in rc.9 with a defect and could not be
+	// corrected without cutting rc.10 and telling every consumer to
+	// reinstall.
+	//
+	// It also finishes a move already half-made. The manifest is parsed and
+	// validated server-side (InspectPluginManifest above) because "the
+	// plugin-system semantics are compiler-domain — the client holds no
+	// console/plugins". The semantics moved; the bytes stayed behind.
+	//
+	// FetchPlugin streams GeneratedFile, the same shape GeneratePluginPb
+	// already streams, so "a file tree over gRPC" is an established
+	// mechanism here rather than a new one.
+	ListPluginCatalog(context.Context, *ListPluginCatalogRequest) (*PluginCatalog, error)
+	FetchPlugin(*FetchPluginRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// Guide renders the w17 PLATFORM self-description — the w17/specs/ reference
 	// (annotation catalog + architecture primer + escape hatches) a coding agent
 	// reads to understand the technology before designing a project. It is
@@ -1017,6 +1088,12 @@ func (UnimplementedCodegenServiceServer) DescribeLock(context.Context, *Describe
 }
 func (UnimplementedCodegenServiceServer) InspectPluginManifest(context.Context, *InspectPluginManifestRequest) (*InspectPluginManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InspectPluginManifest not implemented")
+}
+func (UnimplementedCodegenServiceServer) ListPluginCatalog(context.Context, *ListPluginCatalogRequest) (*PluginCatalog, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPluginCatalog not implemented")
+}
+func (UnimplementedCodegenServiceServer) FetchPlugin(*FetchPluginRequest, grpc.ServerStreamingServer[GeneratedFile]) error {
+	return status.Error(codes.Unimplemented, "method FetchPlugin not implemented")
 }
 func (UnimplementedCodegenServiceServer) Guide(*GuideRequest, grpc.ServerStreamingServer[GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method Guide not implemented")
@@ -1400,6 +1477,35 @@ func _CodegenService_InspectPluginManifest_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CodegenService_ListPluginCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPluginCatalogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServiceServer).ListPluginCatalog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodegenService_ListPluginCatalog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServiceServer).ListPluginCatalog(ctx, req.(*ListPluginCatalogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CodegenService_FetchPlugin_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(FetchPluginRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CodegenServiceServer).FetchPlugin(m, &grpc.GenericServerStream[FetchPluginRequest, GeneratedFile]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CodegenService_FetchPluginServer = grpc.ServerStreamingServer[GeneratedFile]
+
 func _CodegenService_Guide_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(GuideRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1489,6 +1595,10 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CodegenService_InspectPluginManifest_Handler,
 		},
 		{
+			MethodName: "ListPluginCatalog",
+			Handler:    _CodegenService_ListPluginCatalog_Handler,
+		},
+		{
 			MethodName: "AdmissionStatus",
 			Handler:    _CodegenService_AdmissionStatus_Handler,
 		},
@@ -1547,6 +1657,11 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "RenderProjectScaffold",
 			Handler:       _CodegenService_RenderProjectScaffold_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "FetchPlugin",
+			Handler:       _CodegenService_FetchPlugin_Handler,
 			ServerStreams: true,
 		},
 		{
