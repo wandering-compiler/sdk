@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
+	gopath "path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -56,6 +58,21 @@ type Config struct {
 	// protojson Migration) + <id>.up.sql + <id>.down.sql
 	// (informational copies for operator audit).
 	MigrationsDir string
+
+	// MigrationsFS supplies the same tree from somewhere that is not the
+	// local disk — in practice a `go:embed` set carried inside the binary
+	// that owns the database, so a deploy can apply its own migrations with
+	// nothing to fetch and nothing writable to fetch into.
+	//
+	// It holds the SAME layout as MigrationsDir (<connection>/<id>.json) and
+	// is read by the SAME loader; a disk root is simply wrapped in os.DirFS.
+	// One loader rather than two is the point: a second reader is a second
+	// place for "what a migration artifact looks like" to drift, and these
+	// two paths have to agree byte-for-byte or the content-hash check that
+	// guards both means nothing.
+	//
+	// Set exactly one of MigrationsDir / MigrationsFS.
+	MigrationsFS fs.FS
 
 	// ApplierFor opens a per-connection driver. Production wires
 	// per-dialect Appliers via the factory package; tests inject
@@ -117,10 +134,12 @@ type Pending struct {
 type RollbackConfig struct {
 	Targets       []ConnTarget
 	MigrationsDir string
-	ApplierFor    ApplierFor
-	Out           io.Writer
-	DryRun        bool
-	LogFormat     string // "" / "text" / "json" — see Config.LogFormat
+	// MigrationsFS mirrors Config.MigrationsFS — an embedded artifact set.
+	MigrationsFS fs.FS
+	ApplierFor   ApplierFor
+	Out          io.Writer
+	DryRun       bool
+	LogFormat    string // "" / "text" / "json" — see Config.LogFormat
 
 	// ToMigrationID is the highest id to KEEP. Every applied
 	// migration with id strictly > ToMigrationID rolls back.
@@ -152,8 +171,9 @@ type RollbackConfig struct {
 // for the actual Apply loop. Two opens per deploy is acceptable
 // (driver init is cheap).
 func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
-	if cfg.MigrationsDir == "" {
-		return nil, fmt.Errorf("migrate.Plan: MigrationsDir is empty")
+	migFS, err := cfg.migrationsFS()
+	if err != nil {
+		return nil, fmt.Errorf("migrate.Plan: %w", err)
 	}
 	if cfg.ApplierFor == nil {
 		return nil, fmt.Errorf("migrate.Plan: ApplierFor is nil")
@@ -171,7 +191,7 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			continue
 		}
 
-		diskMigs, err := loadConnectionMigrations(cfg.MigrationsDir, ct.Connection)
+		diskMigs, err := loadConnectionMigrations(migFS, ct.Connection)
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: %w", ct.Connection, err)
 		}
@@ -416,6 +436,16 @@ func Run(ctx context.Context, cfg Config) error {
 			logMigration(logger, "adopt", p.Connection, p.Migration, time.Since(started), nil)
 			continue
 		}
+		// Drift gate BEFORE the body runs: the state the migration was
+		// planned against has to be the state the database is in. See
+		// pre_fingerprint.go for why this is the check that has to exist
+		// before an unattended deploy applies anything.
+		if err := checkPreFingerprint(ctx, applier, p.Migration, out); err != nil {
+			dur := time.Since(started)
+			logMigration(logger, "apply", p.Connection, p.Migration, dur, err)
+			captureMigrationError("apply", p.Connection, p.Migration, err)
+			return err
+		}
 		if err := applyOrResume(ctx, applier, p.Migration, out); err != nil {
 			dur := time.Since(started)
 			err = fmt.Errorf("apply %s/%s: %w", p.Connection, p.Migration.GetId(), err)
@@ -592,8 +622,9 @@ func logMigration(logger *slog.Logger, action, connection string, m *applyfetchp
 // exactly the state that has to be undone, and the fix that added it is the
 // reason this sentence stopped being true.
 func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
-	if cfg.MigrationsDir == "" {
-		return nil, fmt.Errorf("migrate.PlanRollback: MigrationsDir is empty")
+	migFS, err := migrationsFSOf(cfg.MigrationsDir, cfg.MigrationsFS)
+	if err != nil {
+		return nil, fmt.Errorf("migrate.PlanRollback: %w", err)
 	}
 	if cfg.ApplierFor == nil {
 		return nil, fmt.Errorf("migrate.PlanRollback: ApplierFor is nil")
@@ -604,7 +635,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 
 	var out []Pending
 	for _, ct := range targets {
-		diskMigs, err := loadConnectionMigrations(cfg.MigrationsDir, ct.Connection)
+		diskMigs, err := loadConnectionMigrations(migFS, ct.Connection)
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: %w", ct.Connection, err)
 		}
@@ -1035,11 +1066,11 @@ func unchainedTargetRefusal(conn string, target *applyfetchpb.Migration, pending
 // Missing connection directory returns an empty list (legitimate
 // state for a fresh service that hasn't fetched yet — apply
 // produces a clear "no target pinned" message at a higher level).
-func loadConnectionMigrations(root, connection string) ([]*applyfetchpb.Migration, error) {
-	dir := filepath.Join(root, connection)
-	entries, err := os.ReadDir(dir)
+func loadConnectionMigrations(fsys fs.FS, connection string) ([]*applyfetchpb.Migration, error) {
+	dir := connection
+	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("read %s: %w", dir, err)
@@ -1054,8 +1085,8 @@ func loadConnectionMigrations(root, connection string) ([]*applyfetchpb.Migratio
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		buf, err := os.ReadFile(path)
+		path := gopath.Join(dir, name)
+		buf, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
@@ -1384,4 +1415,29 @@ func RunAdopt(ctx context.Context, cfg Config) error {
 		}
 	}
 	return nil
+}
+
+// migrationsFS resolves the artifact tree this config reads from.
+func (c Config) migrationsFS() (fs.FS, error) { return migrationsFSOf(c.MigrationsDir, c.MigrationsFS) }
+
+// migrationsFSOf turns the two mutually exclusive source fields into the one
+// thing the loader reads.
+//
+// A disk root becomes os.DirFS rather than keeping a second os-based loader
+// beside the fs.FS one. That is deliberate: the artifact layout and the
+// content-hash verification over it are the same contract whether the bytes
+// come off a workstation's disk or out of a binary's embed, and two readers
+// would be two chances for that contract to drift — with the hash check, the
+// thing that would catch tampering, sitting on only one of the paths.
+func migrationsFSOf(dir string, embedded fs.FS) (fs.FS, error) {
+	switch {
+	case dir == "" && embedded == nil:
+		return nil, fmt.Errorf("no migration source: set MigrationsDir (a path) or MigrationsFS (an embedded set)")
+	case dir != "" && embedded != nil:
+		return nil, fmt.Errorf("both MigrationsDir (%q) and MigrationsFS are set; the artifact tree has to have exactly one source", dir)
+	case embedded != nil:
+		return embedded, nil
+	default:
+		return os.DirFS(dir), nil
+	}
 }

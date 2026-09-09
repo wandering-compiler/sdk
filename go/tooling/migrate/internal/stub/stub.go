@@ -39,6 +39,17 @@ type Applier struct {
 	// NotPostgres makes this stub answer a non-Postgres dialect, so a test
 	// can exercise the path where the extension preflight must NOT fire.
 	NotPostgres bool
+
+	// Fp is what Fingerprint returns — the target database's schema state as
+	// the drift gate sees it. Empty is the contract's "no applicable schema"
+	// (a fresh database), which the gate skips; a test proving the gate
+	// REFUSES has to set it to something that disagrees with the migration's
+	// expected_pre_fingerprint header.
+	Fp string
+
+	// FpErr, when non-nil, makes Fingerprint fail — the arm where the target
+	// cannot be read at all, which must not be mistaken for agreement.
+	FpErr error
 }
 
 // New returns a fresh stub Applier. Compile-time check the impl
@@ -48,6 +59,13 @@ func New() *Applier {
 }
 
 var _ migrate.Applier = (*Applier)(nil)
+var _ migrate.FingerprintCapable = (*Applier)(nil)
+
+// Fingerprint satisfies migrate.FingerprintCapable so the drift gate can be
+// driven without a real database.
+func (a *Applier) Fingerprint(_ context.Context) (string, error) {
+	return a.Fp, a.FpErr
+}
 
 // AppliedHead returns the configured Head + HeadErr. Tests
 // pre-populate Head to simulate the DB-side cutoff that the

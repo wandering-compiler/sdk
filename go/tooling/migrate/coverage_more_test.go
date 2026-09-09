@@ -170,8 +170,8 @@ func TestPlan_CloseAfterHeadError(t *testing.T) {
 func TestRun_PlanErrorPropagates(t *testing.T) {
 	err := Run(context.Background(), Config{
 		ApplierFor: func(_ string) (Applier, error) { return &covFake{}, nil }})
-	if err == nil || !strings.Contains(err.Error(), "MigrationsDir is empty") {
-		t.Errorf("expected MigrationsDir error from Run, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no migration source") {
+		t.Errorf("expected a no-migration-source error from Run, got %v", err)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestPlanRollback_Validation(t *testing.T) {
 		cfg  RollbackConfig
 		want string
 	}{
-		{"empty-dir", RollbackConfig{ApplierFor: applierForErr(nil)}, "MigrationsDir is empty"},
+		{"empty-dir", RollbackConfig{ApplierFor: applierForErr(nil)}, "no migration source"},
 		{"nil-applierfor", RollbackConfig{MigrationsDir: "d"}, "ApplierFor is nil"},
 	}
 	for _, tc := range cases {
@@ -341,8 +341,8 @@ func TestRunRollback_NilOutDiscards(t *testing.T) {
 func TestRunRollback_PlanErrorPropagates(t *testing.T) {
 	err := RunRollback(context.Background(), RollbackConfig{
 		ApplierFor: func(_ string) (Applier, error) { return &covFake{}, nil }})
-	if err == nil || !strings.Contains(err.Error(), "MigrationsDir is empty") {
-		t.Errorf("expected MigrationsDir error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no migration source") {
+		t.Errorf("expected a no-migration-source error, got %v", err)
 	}
 }
 
@@ -448,7 +448,7 @@ func TestCaptureMigrationError_WithScope(t *testing.T) {
 // TestLoadConnectionMigrations_MissingDirIsEmpty — a connection
 // that never fetched returns (nil, nil), not an error.
 func TestLoadConnectionMigrations_MissingDirIsEmpty(t *testing.T) {
-	migs, err := loadConnectionMigrations(t.TempDir(), "never-fetched")
+	migs, err := loadConnectionMigrations(os.DirFS(t.TempDir()), "never-fetched")
 	if err != nil || migs != nil {
 		t.Errorf("missing dir should yield (nil, nil); got %v, %v", migs, err)
 	}
@@ -463,7 +463,7 @@ func TestLoadConnectionMigrations_ReadDirError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := loadConnectionMigrations(root, "main")
+	_, err := loadConnectionMigrations(os.DirFS(root), "main")
 	if err == nil || !strings.Contains(err.Error(), "read") {
 		t.Errorf("expected read error, got %v", err)
 	}
@@ -485,7 +485,7 @@ func TestLoadConnectionMigrations_SkipsNonJSONAndDirs(t *testing.T) {
 	if err := WriteMigration(root, m); err != nil {
 		t.Fatal(err)
 	}
-	migs, err := loadConnectionMigrations(root, "main")
+	migs, err := loadConnectionMigrations(os.DirFS(root), "main")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestLoadConnectionMigrations_ReadFileError(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
-	_, err := loadConnectionMigrations(root, "main")
+	_, err := loadConnectionMigrations(os.DirFS(root), "main")
 	if err == nil || !strings.Contains(err.Error(), "read") {
 		t.Errorf("expected read error, got %v", err)
 	}
@@ -528,7 +528,7 @@ func TestLoadConnectionMigrations_ParseError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cdir, "ts-1.json"), []byte("{not valid"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := loadConnectionMigrations(root, "main")
+	_, err := loadConnectionMigrations(os.DirFS(root), "main")
 	if err == nil || !strings.Contains(err.Error(), "parse") {
 		t.Errorf("expected parse error, got %v", err)
 	}
@@ -556,7 +556,7 @@ func TestLoadConnectionMigrations_HashMismatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cdir, "ts-1.json"), buf, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = loadConnectionMigrations(root, "main")
+	_, err = loadConnectionMigrations(os.DirFS(root), "main")
 	if err == nil || !strings.Contains(err.Error(), "content_sha256 mismatch") {
 		t.Errorf("expected hash mismatch, got %v", err)
 	}
@@ -586,7 +586,7 @@ func TestLoadConnectionMigrations_BackfillsConnectionName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cdir, "ts-1.json"), buf, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	migs, err := loadConnectionMigrations(root, "main")
+	migs, err := loadConnectionMigrations(os.DirFS(root), "main")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

@@ -284,8 +284,8 @@ func TestPlan_EmptyMigrationsDirErrors(t *testing.T) {
 		Targets:    tg,
 		ApplierFor: func(_ string) (migrate.Applier, error) { return stub.New(), nil },
 	})
-	if err == nil || !strings.Contains(err.Error(), "MigrationsDir is empty") {
-		t.Errorf("expected MigrationsDir error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no migration source") {
+		t.Errorf("expected a no-migration-source error, got %v", err)
 	}
 }
 
