@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/binroots"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/factory"
 )
 
@@ -62,6 +63,29 @@ func (o Options) getenv() func(string) string {
 	return os.Getenv
 }
 
+// Dispatch is the ONE branch a generated main needs. argv is os.Args[1:]; it
+// reports whether the first word was a built-in root and, if so, what running
+// it did.
+//
+// One entry point rather than a branch per root, because the alternative was
+// tried: the migrate branch was written into the thin-entry template and the
+// kv and mixed bundles — which render their own func main — shipped carrying
+// the connection list and NO branch to act on it. A root added here now
+// reaches every flavour that already calls Dispatch, instead of reaching the
+// flavours somebody remembered.
+func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
+	if len(argv) == 0 {
+		return false, nil
+	}
+	switch argv[0] {
+	case binroots.Migrate:
+		return true, Main(ctx, argv[1:], opts)
+	case binroots.Fixtures:
+		return true, Fixtures(ctx, argv[1:], opts)
+	}
+	return false, nil
+}
+
 // Main runs `migrate <subcommand>`; args are the tokens AFTER the `migrate`
 // word. Returns an error the caller reports and exits non-zero on.
 func Main(ctx context.Context, args []string, opts Options) error {
@@ -89,12 +113,61 @@ func Main(ctx context.Context, args []string, opts Options) error {
 	}
 }
 
+// Fixtures runs `fixtures <subcommand>`; args are the tokens AFTER the
+// `fixtures` word.
+//
+// A sibling of `migrate` rather than a verb under it. Seeding and migrating
+// are the same KIND of operation — a console-rendered artefact executed
+// against a database this binary owns — but they are not stages of one
+// another: a deploy migrates on every release and seeds on almost none, and
+// burying the rarer one inside the routine one invites running it by reflex.
+func Fixtures(ctx context.Context, args []string, opts Options) error {
+	out := opts.Out
+	if out == nil {
+		out = os.Stdout
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("fixtures: a subcommand is required (apply)\n\n%s", fixturesUsage)
+	}
+	switch args[0] {
+	case "-h", "--help", "help":
+		fmt.Fprint(out, fixturesUsage)
+		return nil
+	}
+	return runFixtures(ctx, args, opts, out)
+}
+
+const fixturesUsage = `usage: <binary> fixtures apply [flags]
+
+Apply the project's rendered fixtures to a database this bundle owns. The
+whole group runs as ONE transaction: fixtures reference each other across
+files, so a half-applied group is a state no fixture describes.
+
+  --lock PATH        lock file naming this bundle's connections (default w17/lock.yaml)
+  --fixtures DIR     directory of rendered seeds (default w17/fixtures)
+  --fetch            render over the wire instead of reading DIR; needs W17_CONSOLE_ADDR
+  --console ADDR     console endpoint; overrides W17_CONSOLE_ADDR
+  --group GROUP      fixture group to seed; omitted = the default group
+  --domain DOMAIN    seed just this domain; omitted = every domain
+  --connection CONN  which owned connection to seed (needed if the bundle serves several)
+  --dry-run          list what would be applied, apply nothing
+
+Groups are a CONVENTION, not a safety gate: what "dev" and "prod" mean is the
+project's to decide by naming its groups, and what a given environment applies
+is the deploy's call. Nothing here refuses to seed a production database.
+
+The DSN comes from W17_TARGET_<CONNECTION>, never a flag.
+`
+
 const usage = `usage: <binary> migrate <command> [flags]
 
   apply    apply every pending migration up to each connection's pinned target
   fetch    download artefacts from the console into --migrations, apply nothing
   rollback run the DOWN bodies of everything applied above --to, in reverse
   status   report what is applied and what is pending, and change nothing
+
+Seeding is "<binary> fixtures apply", a sibling of this command rather than a
+verb under it — see "<binary> fixtures --help".
 
 flags (apply):
   --lock PATH         lock file holding the per-connection targets (default w17/lock.yaml)
@@ -127,6 +200,9 @@ func usageErr(got string) error {
 	if got == "" {
 		return fmt.Errorf("migrate: a subcommand is required (apply, fetch, rollback, status)\n\n%s", usage)
 	}
+	if got == binroots.Fixtures {
+		return fmt.Errorf("migrate: seeding is its own command — run `fixtures apply`, not `migrate fixtures`\n\n%s", fixturesUsage)
+	}
 	return fmt.Errorf("migrate: unknown subcommand %q (want apply, fetch, rollback, status)\n\n%s", got, usage)
 }
 
@@ -135,7 +211,11 @@ func usageErr(got string) error {
 type applyFlags struct {
 	lock       string
 	migrations string
+	fixtures   string
 	console    string
+	domain     string
+	group      string
+	connection string
 	to         string
 	toSet      bool
 	fetch      bool
@@ -152,6 +232,10 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.migrations, "migrations", "w17/migrations", "directory of fetched artefacts")
 	fs.StringVar(&f.console, "console", "", "console endpoint; overrides W17_CONSOLE_ADDR")
 	fs.StringVar(&f.to, "to", "", "rollback only: highest migration id to KEEP applied")
+	fs.StringVar(&f.fixtures, "fixtures", "w17/fixtures", "fixtures only: directory of rendered seeds a render step produced")
+	fs.StringVar(&f.domain, "domain", "", "fixtures only: seed just this domain (empty = every domain)")
+	fs.StringVar(&f.group, "group", "", "fixtures only: fixture group to seed; empty = the default group")
+	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
@@ -161,6 +245,14 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	}
 	if f.logFormat != "text" && f.logFormat != "json" {
 		return f, fmt.Errorf("migrate %s: --log-format must be text or json, got %q", name, f.logFormat)
+	}
+	// "." and "./" are the natural way to write "no group" and read as such;
+	// our own published recipe used `--group .` and produced the registry key
+	// `./acl-roles`, which matched nothing (deinvo, 2026-09-04). Normalised
+	// here rather than at each reader, so the listing and the lookup agree.
+	f.group = strings.TrimSuffix(strings.TrimSpace(f.group), "/")
+	if f.group == "." {
+		f.group = ""
 	}
 	fs.Visit(func(fl *flag.Flag) {
 		if fl.Name == "to" {
@@ -380,6 +472,31 @@ func dsnSpecs(targets []migrate.ConnTarget, getenv func(string) string) ([]facto
 		)
 	}
 	return specs, nil
+}
+
+// seedSpecs resolves the DSNs a SEEDING run can use, and differs from
+// dsnSpecs in both directions because seeding is a different question.
+//
+//   - A connection with no pinned migration is INCLUDED. Nothing to apply is
+//     why the migration path skips it, but it still has a database and a
+//     fixture still belongs in it. Reusing the migration rule reported "none
+//     of this bundle's connections has a DSN" on a project that had simply
+//     never pushed a schema — the example this whole change exists to seed.
+//   - A connection with no DSN is DROPPED rather than fatal. A bundle serving
+//     a database and a KV store is handed one DSN when only the database is
+//     being seeded, and demanding the other would refuse the run over a store
+//     nobody was going to write to. What is fatal is having nothing left, and
+//     the caller says so naming everything it looked at.
+func seedSpecs(targets []migrate.ConnTarget, getenv func(string) string) (specs []factory.TargetSpec, withoutDSN []string) {
+	for _, t := range targets {
+		dsn := getenv(migrate.TargetEnvVar(t.Connection))
+		if dsn == "" {
+			withoutDSN = append(withoutDSN, t.Connection+" → "+migrate.TargetEnvVar(t.Connection))
+			continue
+		}
+		specs = append(specs, factory.TargetSpec{Connection: t.Connection, DSN: dsn})
+	}
+	return specs, withoutDSN
 }
 
 // consoleAddrOf lets --console override the environment, without giving the

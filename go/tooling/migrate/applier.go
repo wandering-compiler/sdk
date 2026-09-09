@@ -161,3 +161,36 @@ type Wiper interface {
 type FingerprintCapable interface {
 	Fingerprint(ctx context.Context) (string, error)
 }
+
+// SeedCapable is an optional Applier capability: run the parameterized
+// statements the console rendered from a fixture.
+//
+// It exists so the process that OWNS a database is also the one that seeds it.
+// Rendering a fixture into statements needs the schema and the compiler's
+// fixtures package — both console-domain — so the console renders and this
+// executes, exactly the split migrations use. What the console CANNOT do is
+// reach the database: a dev stack publishes an ephemeral port under a
+// per-run compose project, and a production store publishes none at all.
+//
+// The statements are `INSERT ... ON CONFLICT` upserts with $N placeholders and
+// their arguments alongside — never interpolated — so a value carrying a quote
+// is a value, not syntax.
+//
+// Implemented by the relational dialects whose flavour the renderer emits.
+// A store that does not implement it is not a fixture target, and the caller
+// says so by name rather than failing on the first statement.
+type SeedCapable interface {
+	// ExecSeed runs every statement in order, in ONE transaction: a fixture
+	// half-applied is a database in a state no fixture describes, and the
+	// FK ordering the renderer emits only holds if the whole set lands.
+	ExecSeed(ctx context.Context, stmts []SeedStmt) error
+}
+
+// SeedStmt is one rendered upsert — the wire shape the console returns and
+// this package executes. Declared here rather than taken from the fetch proto
+// so an Applier implementation does not have to import the API surface to
+// satisfy the interface.
+type SeedStmt struct {
+	SQL  string
+	Args []any
+}

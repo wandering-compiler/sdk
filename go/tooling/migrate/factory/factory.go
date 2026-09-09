@@ -205,3 +205,21 @@ func dialectFromDSN(dsn string) string {
 	}
 	return ""
 }
+
+// SeedCandidate reports whether a DSN's store could plausibly take a rendered
+// fixture — i.e. whether it is worth OPENING to find out.
+//
+// It is a filter, not the answer. The answer is whether the Applier this
+// factory builds implements migrate.SeedCapable, and that stays the only thing
+// a caller acts on. What this avoids is dialling a Redis or a NATS purely to
+// discover it was never a candidate: a fixture is relational rows, so a bundle
+// that owns a KV store alongside its database would otherwise fail its seeding
+// step whenever that KV store happened to be down — on a question whose answer
+// never depended on it.
+func SeedCandidate(dsn string) bool {
+	switch dialectFromDSN(dsn) {
+	case "postgres", "mysql", "sqlite":
+		return true
+	}
+	return false
+}

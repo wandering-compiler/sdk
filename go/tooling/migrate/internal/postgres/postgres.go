@@ -54,6 +54,7 @@ type Applier struct {
 var _ migrate.Applier = (*Applier)(nil)
 var _ migrate.Wiper = (*Applier)(nil)
 var _ migrate.FingerprintCapable = (*Applier)(nil)
+var _ migrate.SeedCapable = (*Applier)(nil)
 var _ migrate.ResumableApplier = (*Applier)(nil)
 
 // New opens a pgx connection to the supplied DSN. Accepts both
@@ -473,4 +474,35 @@ func (a *Applier) Fingerprint(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return schema.FingerprintHex(), nil
+}
+
+// ExecSeed runs a rendered fixture's upserts in one transaction, satisfying
+// migrate.SeedCapable.
+//
+// One transaction because a fixture is a SET: the renderer emits rows in FK
+// order (targets before referrers), and a run that stops halfway leaves a
+// database in a state no fixture describes — with referrers missing and
+// nothing saying which ones. Rolling back is the only honest partial outcome.
+//
+// The statements arrive parameterized ($1..$N with args alongside) and are
+// executed that way. Nothing here builds SQL, so a fixture value carrying a
+// quote is a value rather than syntax.
+func (a *Applier) ExecSeed(ctx context.Context, stmts []migrate.SeedStmt) error {
+	if len(stmts) == 0 {
+		return nil
+	}
+	tx, err := a.conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres seed: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for i, st := range stmts {
+		if _, err := tx.Exec(ctx, st.SQL, st.Args...); err != nil {
+			return fmt.Errorf("postgres seed: statement %d of %d: %w", i+1, len(stmts), err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres seed: commit: %w", err)
+	}
+	return nil
 }
