@@ -82,6 +82,8 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		return true, Main(ctx, argv[1:], opts)
 	case binroots.Fixtures:
 		return true, Fixtures(ctx, argv[1:], opts)
+	case binroots.Schema:
+		return true, Schema(ctx, argv[1:], opts)
 	}
 	return false, nil
 }
@@ -212,6 +214,7 @@ type applyFlags struct {
 	lock       string
 	migrations string
 	fixtures   string
+	schema     string
 	console    string
 	domain     string
 	group      string
@@ -233,6 +236,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.console, "console", "", "console endpoint; overrides W17_CONSOLE_ADDR")
 	fs.StringVar(&f.to, "to", "", "rollback only: highest migration id to KEEP applied")
 	fs.StringVar(&f.fixtures, "fixtures", "w17/fixtures", "fixtures only: directory of rendered seeds a render step produced")
+	fs.StringVar(&f.schema, "schema", "w17/schema", "schema only: directory holding the rendered dev plan")
 	fs.StringVar(&f.domain, "domain", "", "fixtures only: seed just this domain (empty = every domain)")
 	fs.StringVar(&f.group, "group", "", "fixtures only: fixture group to seed; empty = the default group")
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")

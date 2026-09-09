@@ -22,6 +22,9 @@ var Reserved = map[string]string{
 	"migrate": "a generated binary that owns a database answers `migrate` itself (apply / fetch / rollback / status), " +
 		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
 		"shadowed silently rather than refused",
+	"schema": "a generated binary that owns a database answers `schema` itself (apply), " +
+		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
+		"shadowed silently rather than refused",
 	"fixtures": "a generated binary that owns a database answers `fixtures` itself (apply), " +
 		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
 		"shadowed silently rather than refused",
@@ -32,4 +35,5 @@ var Reserved = map[string]string{
 const (
 	Migrate  = "migrate"
 	Fixtures = "fixtures"
+	Schema   = "schema"
 )

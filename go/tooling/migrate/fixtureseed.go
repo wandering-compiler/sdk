@@ -113,6 +113,13 @@ func marshalSeedStable(seed FixtureSeed) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return stableJSON(raw)
+}
+
+// stableJSON re-encodes protojson output deterministically: encoding/json
+// sorts object keys and indents the same way every run, and json.Number keeps
+// a 64-bit value off the float path on the way through.
+func stableJSON(raw []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var doc any
