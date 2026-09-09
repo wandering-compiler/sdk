@@ -452,6 +452,36 @@ const (
 	// string. Keep it off the response message if you don't want it on
 	// the wire. Spec: docs/specs/storage/password-field.md.
 	Type_PASSWORD Type = 66
+	// SECRET — an opaque secret stored EXACTLY as issued: an OAuth client
+	// secret, an API token, a webhook signing key. Not a password.
+	//
+	// The distinction PASSWORD could not express, and the reason this type
+	// exists. PASSWORD means "a hash of a credential we VERIFY against", and
+	// every rule it carries follows from that: fixtures refuse a value that is
+	// not PHC-encoded, `unique` and `max_len` are refused because a salted hash
+	// has neither a stable identity nor a known width. A secret is none of
+	// those things — it is presented, not verified, so the stored bytes ARE the
+	// value.
+	//
+	// What it takes FROM password, because the reason is the same:
+	//   - storage TEXT (PG / SQLite) / VARCHAR(N) (MySQL) — the same column
+	//   - excluded from the admin's default list columns and detail-form
+	//     fields; the detail form masks it
+	//   - `format: password` in OpenAPI, the write-only/masked-input hint
+	//
+	// What it does NOT take:
+	//   - the PHC requirement in fixtures. Seeding a secret verbatim is the
+	//     only correct thing to do with one.
+	//   - the `unique` / `max_len` refusals. A token is 64 characters wide and
+	//     is looked up by value; both are meaningful here and both are used by
+	//     the auth plugin's UserToken.
+	//
+	// Pairs with `default_auto: CRYPTO_RANDOM`, which is how a secret should
+	// come into existence in the first place.
+	//
+	// NOT hidden from REST JSON responses — same as PASSWORD. Keep it off the
+	// response message if you do not want it on the wire.
+	Type_SECRET Type = 67
 	// Numeric carriers (carrier: int32 / int64 / double — see D2 table)
 	Type_NUMBER     Type = 10
 	Type_ID         Type = 11
@@ -511,6 +541,7 @@ var (
 		64: "UPLOADED_FILE",
 		65: "UPLOADED_IMAGE",
 		66: "PASSWORD",
+		67: "SECRET",
 		10: "NUMBER",
 		11: "ID",
 		12: "COUNTER",
@@ -543,6 +574,7 @@ var (
 		"UPLOADED_FILE":  64,
 		"UPLOADED_IMAGE": 65,
 		"PASSWORD":       66,
+		"SECRET":         67,
 		"NUMBER":         10,
 		"ID":             11,
 		"COUNTER":        12,
@@ -1984,7 +2016,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x17VALIDATION_FK_VIOLATION\x103\x12\x17\n" +
 	"\x13VALIDATION_NOT_NULL\x104\x12\x1f\n" +
 	"\x1bVALIDATION_CHECK_CONSTRAINT\x105\x12\x18\n" +
-	"\x14VALIDATION_EXCLUSION\x106*\x81\x03\n" +
+	"\x14VALIDATION_EXCLUSION\x106*\x8d\x03\n" +
 	"\x04Type\x12\b\n" +
 	"\x04AUTO\x10\x00\x12\b\n" +
 	"\x04CHAR\x10\x01\x12\b\n" +
@@ -2005,6 +2037,8 @@ const file_w17_field_proto_rawDesc = "" +
 	"\rUPLOADED_FILE\x10@\x12\x12\n" +
 	"\x0eUPLOADED_IMAGE\x10A\x12\f\n" +
 	"\bPASSWORD\x10B\x12\n" +
+	"\n" +
+	"\x06SECRET\x10C\x12\n" +
 	"\n" +
 	"\x06NUMBER\x10\n" +
 	"\x12\x06\n" +
