@@ -51,9 +51,9 @@ func TestAppliedHead_EmptyAndPopulated_Live(t *testing.T) {
 		t.Errorf("empty store head = %q, want \"\"", head)
 	}
 
-	mr.HSet("wc:migrations", "20260101T000000Z", "aa")
-	mr.HSet("wc:migrations", "20260301T120000Z", "bb")
-	mr.HSet("wc:migrations", "20260201T060000Z", "cc")
+	mr.HSet("w17:migrations", "20260101T000000Z", "aa")
+	mr.HSet("w17:migrations", "20260301T120000Z", "bb")
+	mr.HSet("w17:migrations", "20260201T060000Z", "cc")
 
 	head, err = a.AppliedHead(ctx)
 	if err != nil {
@@ -74,16 +74,16 @@ func TestApply_CommandBody_Live(t *testing.T) {
 
 	err := a.Apply(ctx, &applyfetchpb.Migration{
 		Id:       "20260401T000000Z",
-		UpSql:    "# wc: bookkeeping\nHSET wc:migrations 20260401T000000Z deadbeef\n\nSET marker one",
-		UpPostTx: "HSET wc:migrations 20260401T000001Z cafef00d",
+		UpSql:    "# w17: bookkeeping\nHSET w17:migrations 20260401T000000Z deadbeef\n\nSET marker one",
+		UpPostTx: "HSET w17:migrations 20260401T000001Z cafef00d",
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if got := mr.HGet("wc:migrations", "20260401T000000Z"); got != "deadbeef" {
+	if got := mr.HGet("w17:migrations", "20260401T000000Z"); got != "deadbeef" {
 		t.Errorf("up_sql HSET = %q, want deadbeef", got)
 	}
-	if got := mr.HGet("wc:migrations", "20260401T000001Z"); got != "cafef00d" {
+	if got := mr.HGet("w17:migrations", "20260401T000001Z"); got != "cafef00d" {
 		t.Errorf("up_post_tx HSET = %q, want cafef00d", got)
 	}
 	if got, _ := mr.Get("marker"); got != "one" {
@@ -109,13 +109,13 @@ func TestApply_DoNilResultIsSuccess_Live(t *testing.T) {
 func TestRollback_CommandBody_Live(t *testing.T) {
 	a, mr := liveApplier(t)
 	ctx := liveCtx(t)
-	mr.HSet("wc:migrations", "20260401T000003Z", "feed")
+	mr.HSet("w17:migrations", "20260401T000003Z", "feed")
 	_ = mr.Set("leftover", "x")
 
 	err := a.Rollback(ctx, &applyfetchpb.Migration{
 		Id:        "20260401T000003Z",
 		DownPreTx: "DEL leftover",
-		DownSql:   "HDEL wc:migrations 20260401T000003Z",
+		DownSql:   "HDEL w17:migrations 20260401T000003Z",
 	})
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
@@ -123,7 +123,7 @@ func TestRollback_CommandBody_Live(t *testing.T) {
 	if mr.Exists("leftover") {
 		t.Error("down_pre_tx DEL did not run")
 	}
-	if mr.HGet("wc:migrations", "20260401T000003Z") != "" {
+	if mr.HGet("w17:migrations", "20260401T000003Z") != "" {
 		t.Error("down_sql HDEL did not erase bookkeeping row")
 	}
 }
@@ -135,7 +135,7 @@ func TestApply_CommandBody_ExecErrorSurfaces_Live(t *testing.T) {
 	a, _ := liveApplier(t)
 	err := a.Apply(liveCtx(t), &applyfetchpb.Migration{
 		Id:    "20260401T000004Z",
-		UpSql: "HSET wc:migrations", // missing field+value → server error
+		UpSql: "HSET w17:migrations", // missing field+value → server error
 	})
 	if err == nil || !strings.Contains(err.Error(), "up_sql") {
 		t.Errorf("expected up_sql exec error, got %v", err)
@@ -153,7 +153,7 @@ operations:
 
 // TestApply_YAMLDataMigration_Live — INVARIANT: a YAML
 // ADD_FIELD_DEFAULT body SCANs the keyspace, rewrites each JSON
-// value, records bookkeeping in wc:migrations, and leaves NO
+// value, records bookkeeping in w17:migrations, and leaves NO
 // cursor object behind on a clean end-to-end run.
 func TestApply_YAMLDataMigration_Live(t *testing.T) {
 	a, mr := liveApplier(t)
@@ -178,10 +178,10 @@ func TestApply_YAMLDataMigration_Live(t *testing.T) {
 	if got, _ := mr.Get("other:1"); strings.Contains(got, "active") {
 		t.Errorf("other:1 outside keyspace should be untouched: %q", got)
 	}
-	if mr.HGet("wc:migrations", "20260501T000000Z") == "" {
+	if mr.HGet("w17:migrations", "20260501T000000Z") == "" {
 		t.Error("bookkeeping row not written")
 	}
-	if mr.Exists("wc:data-migrations:20260501T000000Z") {
+	if mr.Exists("w17:data-migrations:20260501T000000Z") {
 		t.Error("cursor object should be cleared on clean run")
 	}
 }
@@ -251,7 +251,7 @@ operations:
     value: true
 `
 	// Mark op 0 as already complete on the cursor side-channel.
-	mr.HSet("wc:data-migrations:20260501T000002Z", "0", "complete")
+	mr.HSet("w17:data-migrations:20260501T000002Z", "0", "complete")
 
 	m := &applyfetchpb.Migration{Id: "20260501T000002Z", UpSql: body}
 	if err := a.Apply(ctx, m); err != nil {
@@ -290,7 +290,7 @@ operations:
 `
 	// Simulate a crash mid-op: op 0's start marker is on the cursor
 	// but it never recorded complete.
-	mr.HSet("wc:data-migrations:20260501T000009Z", "started:0", "started")
+	mr.HSet("w17:data-migrations:20260501T000009Z", "started:0", "started")
 
 	m := &applyfetchpb.Migration{Id: "20260501T000009Z", UpSql: body}
 	err := a.Apply(ctx, m)
@@ -388,7 +388,7 @@ func TestRollback_YAMLInverse_Live(t *testing.T) {
 	a, mr := liveApplier(t)
 	ctx := liveCtx(t)
 	_ = mr.Set("users:1", `{"name":"a","active":true}`)
-	mr.HSet("wc:migrations", "20260501T000006Z", "feed")
+	mr.HSet("w17:migrations", "20260501T000006Z", "feed")
 
 	down := `version: 1
 encoding: json
@@ -408,10 +408,10 @@ operations:
 	if got, _ := mr.Get("users:1"); strings.Contains(got, "active") {
 		t.Errorf("active field should be removed, got %q", got)
 	}
-	if mr.HGet("wc:migrations", "20260501T000006Z") != "" {
+	if mr.HGet("w17:migrations", "20260501T000006Z") != "" {
 		t.Error("bookkeeping row should be erased on rollback")
 	}
-	if mr.Exists("wc:data-rollbacks:20260501T000006Z") {
+	if mr.Exists("w17:data-rollbacks:20260501T000006Z") {
 		t.Error("rollback cursor should be cleared on clean run")
 	}
 }

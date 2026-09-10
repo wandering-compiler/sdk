@@ -66,7 +66,7 @@ func mysqlFixture(t *testing.T) *fakeMySQLDB {
 	}
 	exec(`CREATE TABLE t_tables (name TEXT)`)
 	exec(`CREATE TABLE t_columns (table_name TEXT, column_name TEXT, data_type TEXT, is_nullable TEXT, column_default TEXT)`)
-	exec(`INSERT INTO t_tables (name) VALUES ('users'), ('wc_migrations')`)
+	exec(`INSERT INTO t_tables (name) VALUES ('users'), ('w17_migrations')`)
 	exec(`INSERT INTO t_columns VALUES
 		('users','id','bigint','NO',''),
 		('users','email','varchar','NO',''),
@@ -86,8 +86,8 @@ func TestExtractMySQL_RoundTrip(t *testing.T) {
 	if !strings.Contains(f, `TABLE "users"`) {
 		t.Errorf("missing users table:\n%s", f)
 	}
-	if strings.Contains(f, "wc_migrations") {
-		t.Errorf("wc_migrations must be excluded:\n%s", f)
+	if strings.Contains(f, "w17_migrations") {
+		t.Errorf("w17_migrations must be excluded:\n%s", f)
 	}
 	if !strings.Contains(f, `COLUMN "email" "varchar" notnull`) {
 		t.Errorf("email should be notnull:\n%s", f)
@@ -211,7 +211,7 @@ func (c *fakePgConn) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 
 func pgFixture() *fakePgConn {
 	return &fakePgConn{
-		tables: []string{"users", "wc_migrations"},
+		tables: []string{"users", "w17_migrations"},
 		cols: map[string][][]string{
 			"users": {
 				{"id", "bigint", "NO", ""},
@@ -231,7 +231,7 @@ func TestExtractPostgres_RoundTrip(t *testing.T) {
 		t.Fatalf("ExtractPostgres: %v", err)
 	}
 	f := got.Format()
-	if !strings.Contains(f, `TABLE "users"`) || strings.Contains(f, "wc_migrations") {
+	if !strings.Contains(f, `TABLE "users"`) || strings.Contains(f, "w17_migrations") {
 		t.Errorf("table set wrong:\n%s", f)
 	}
 	if !strings.Contains(f, `COLUMN "email" "character varying" notnull`) {

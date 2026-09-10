@@ -117,15 +117,31 @@ func stripConcurrently(sql string) string {
 }
 
 // devApplySQL renders the SQL dev executes for one migration: the
-// transactional up_sql followed by the post-tx ops with CONCURRENTLY
-// stripped (so they run in-transaction without the wc_migrations phase
-// machinery the Applier's real post-tx path needs). Empty post-tx ⇒
-// just up_sql.
+// transactional up_sql, the post-tx ops with CONCURRENTLY stripped (so they
+// run in-transaction without the w17_migrations phase machinery the Applier's
+// real post-tx path needs), and finally the applied-ledger baseline when the
+// artefact carries one. Empty post-tx ⇒ just up_sql.
+//
+// **One string, therefore one batch, therefore one transaction** — which is
+// the whole point of appending the baseline here rather than applying it as a
+// second call. A database left with the schema built and the ledger empty is
+// not a state anything recovers from: the next run finds the store populated
+// and skips, and the deploy gate then refuses every deploy while naming a
+// remedy (`migrate apply`) that would run the series' CREATE against tables
+// that already exist. Schema and ledger row land together or neither does.
+//
+// The baseline is rendered SERVER-side and carries no envelope of its own,
+// precisely so it can be folded in here; see applied.BaselineOnly.
 func devApplySQL(m *applyplanpb.DevMigration) string {
-	sql := m.GetUpSql()
-	post := m.GetUpSqlPostTx()
-	if post == "" {
-		return sql
+	parts := make([]string, 0, 3)
+	if up := m.GetUpSql(); up != "" {
+		parts = append(parts, up)
 	}
-	return sql + "\n" + stripConcurrently(post)
+	if post := m.GetUpSqlPostTx(); post != "" {
+		parts = append(parts, stripConcurrently(post))
+	}
+	if base := m.GetBaselineSql(); base != "" {
+		parts = append(parts, base)
+	}
+	return strings.Join(parts, "\n")
 }

@@ -8,7 +8,7 @@
 //
 // **Wire shape (YAML).**
 //
-//	# wc:expected_pre_fingerprint: <hex>
+//	# w17:expected_pre_fingerprint: <hex>
 //	version: 1                 # YAML schema version
 //	encoding: json             # v1 only "json"; v2 reserves "protobuf"
 //	parallel: 8                # default workers
@@ -25,9 +25,9 @@
 //	    keyspace: events:*
 //	    from: old_name
 //	    to: new_name
-//	# wc:content_signature: <hex>
+//	# w17:content_signature: <hex>
 //
-// Header + signature lines are wc-platform comment markers
+// Header + signature lines are w17-platform comment markers
 // (the `decorate` package handles them per-dialect; for KV
 // dialects the prefix is `#`, which is also a valid YAML
 // comment prefix — header / footer survive YAML round-trips).

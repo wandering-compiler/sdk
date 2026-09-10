@@ -16,7 +16,7 @@ import (
 // lifecycle. It shells out to the stock `pg_dump` / `psql` client
 // binaries rather than reimplementing the dump format over pgx: a
 // snapshot must round-trip the *whole* database (tables, data,
-// sequences, indexes, the wc_migrations ledger), which pg_dump
+// sequences, indexes, the w17_migrations ledger), which pg_dump
 // already does correctly and is the precedent the spec names
 // (`docs/specs/storage/dev-db-lifecycle.md` S1). The binaries are a
 // reasonable dependency for a developer-machine tool (w17ctl); the

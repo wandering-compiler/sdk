@@ -1235,7 +1235,7 @@ type Field struct {
 	// upfront (they're per-project), but the IR builder can read
 	// the per-domain lock file the compiler already maintains.
 	//
-	// Lifecycle: `wc generate` refreshes the relevant lock file
+	// Lifecycle: `w17ctl generate` refreshes the relevant lock file
 	// (e.g. `proto/domains/<domain>/acl.lock.json`) before the IR
 	// build pass. IR builder then reads the lock + emits a CHECK
 	// constraint over `permissions ∪ reserved` (every string ever

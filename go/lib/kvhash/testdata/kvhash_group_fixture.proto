@@ -1,6 +1,6 @@
 syntax = "proto2";
 
-package wctest.kvhash2;
+package w17test.kvhash2;
 
 // GroupEntity carries a proto2 group field. proto3 schemas (the
 // only input kvhash sees in production) cannot express groups, so

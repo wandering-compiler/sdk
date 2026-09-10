@@ -100,7 +100,7 @@ sdk/go/
 ├── tooling/    ← build/deploy tooling: what w17ctl + the generated e2erunner
 │   │             drive. Not imported by a running service.
 │   ├── migrate/     per-connection migration-apply orchestration (the w17migrate
-│   │                binary): fetch → apply, the wc_migrations ledger, the two-
+│   │                binary): fetch → apply, the w17_migrations ledger, the two-
 │   │                phase skirt for CREATE INDEX CONCURRENTLY, and the cross-
 │   │                process run-lock (redis/s3) that stops double-apply.
 │   ├── datamigrate/ the TRANSFORM_FIELD escape hatch: ADD/REMOVE/RENAME/TRANSFORM

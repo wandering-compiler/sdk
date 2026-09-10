@@ -12,9 +12,9 @@ import (
 // fault can target exactly one side-channel object (forward cursor,
 // rollback cursor, or the bookkeeping tracker) without tripping the
 // others.
-func fwdCursorKey(id string) string { return "wc-data-migrations/" + id + ".cursor.json" }
-func rbCursorKey(id string) string  { return "wc-data-migrations/" + id + ".rollback.cursor.json" }
-func trackerKey(id string) string   { return "wc-migrations/" + id + ".json" }
+func fwdCursorKey(id string) string { return "w17-data-migrations/" + id + ".cursor.json" }
+func rbCursorKey(id string) string  { return "w17-data-migrations/" + id + ".rollback.cursor.json" }
+func trackerKey(id string) string   { return "w17-migrations/" + id + ".json" }
 
 const yamlRemoveActive = `version: 1
 encoding: json

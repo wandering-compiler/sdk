@@ -225,7 +225,7 @@ func streamToTempFile(body io.Reader, tmpDir string, maxSize uint64) (string, st
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return "", "", fmt.Errorf("restgw: mkdir tmp: %w", err)
 	}
-	tmp, err := os.CreateTemp(tmpDir, "wc-upload-*")
+	tmp, err := os.CreateTemp(tmpDir, "w17-upload-*")
 	if err != nil {
 		return "", "", fmt.Errorf("restgw: create tmp: %w", err)
 	}

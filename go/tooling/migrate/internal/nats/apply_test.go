@@ -46,7 +46,7 @@ func TestAppliedHead_ConnectError(t *testing.T) {
 func TestApply_ReachesConnectError(t *testing.T) {
 	err := deadApplier(t).Apply(boundedCtx(t), &applyfetchpb.Migration{
 		Id:    "ts-1",
-		UpSql: "nats kv add wc-migrations",
+		UpSql: "nats kv add w17-migrations",
 	})
 	if err == nil || !strings.Contains(err.Error(), "up_sql") {
 		t.Errorf("expected up_sql connect error, got %v", err)
@@ -72,7 +72,7 @@ func TestApply_ParseErrorBeforeConnect(t *testing.T) {
 func TestApply_CommentAndBareNatsAreNoOps(t *testing.T) {
 	err := deadApplier(t).Apply(boundedCtx(t), &applyfetchpb.Migration{
 		Id:    "ts-3",
-		UpSql: "# wc: a comment\n\nnats\n   ",
+		UpSql: "# w17: a comment\n\nnats\n   ",
 	})
 	if err != nil {
 		t.Errorf("comment + bare-nats body should be a no-op, got %v", err)
@@ -86,7 +86,7 @@ func TestApply_EmptyUpThenPostTxConnect(t *testing.T) {
 	err := deadApplier(t).Apply(boundedCtx(t), &applyfetchpb.Migration{
 		Id:       "ts-4",
 		UpSql:    "",
-		UpPostTx: "nats kv add wc-migrations",
+		UpPostTx: "nats kv add w17-migrations",
 	})
 	if err == nil || !strings.Contains(err.Error(), "up_post_tx") {
 		t.Errorf("expected up_post_tx connect error, got %v", err)
@@ -110,7 +110,7 @@ func TestRollback_ReachesConnectError(t *testing.T) {
 func TestRollback_DownSqlConnectError(t *testing.T) {
 	err := deadApplier(t).Rollback(boundedCtx(t), &applyfetchpb.Migration{
 		Id:      "ts-6",
-		DownSql: "nats kv del wc-migrations ts-6",
+		DownSql: "nats kv del w17-migrations ts-6",
 	})
 	if err == nil || !strings.Contains(err.Error(), "down_sql") {
 		t.Errorf("expected down_sql connect error, got %v", err)

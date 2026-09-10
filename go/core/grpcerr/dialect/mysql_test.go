@@ -8,7 +8,7 @@ import (
 )
 
 // MySQL fixtures recorded 2026-05-09 against MySQL 8.0 in
-// docker (wc-schemas-mysql80). Message strings are the
+// docker (w17-schemas-mysql80). Message strings are the
 // engine-emitted text verbatim — re-recording requires
 // running INSERTs that violate UNIQUE / FK / CHECK / NOT_NULL
 // against a real MySQL 8.0 instance and capturing the

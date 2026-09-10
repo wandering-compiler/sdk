@@ -8,9 +8,9 @@
 // (Phase C.4 + applied.S3()) emits a custom dialect-private
 // shape for bookkeeping:
 //
-//   - `S3 PUT wc-migrations/<ts>.json {json}`  → PutObject
-//   - `S3 DELETE wc-migrations/<ts>.json`     → DeleteObject
-//   - `S3 DELETE_PREFIX wc-migrations/`        → recursive delete
+//   - `S3 PUT w17-migrations/<ts>.json {json}`  → PutObject
+//   - `S3 DELETE w17-migrations/<ts>.json`     → DeleteObject
+//   - `S3 DELETE_PREFIX w17-migrations/`        → recursive delete
 //
 // User DDL (AddTable / DropTable / RenameTable) the migrator
 // emits as `aws s3 rm --recursive` / `aws s3 mv --recursive`
@@ -52,7 +52,7 @@ import (
 // AppliedHead lists this prefix; the Renderer's RecordVersion
 // / RemoveVersion / DropTracker reference it by this exact
 // string.
-const trackerPrefix = "wc-migrations/"
+const trackerPrefix = "w17-migrations/"
 
 // Applier owns one lazy *s3.Client. PutObject / DeleteObject /
 // ListObjectsV2 are concurrency-safe on a single client; calls
@@ -104,7 +104,7 @@ func New(_ context.Context, dsn string) (*Applier, error) {
 	}, nil
 }
 
-// AppliedHead lists keys under `wc-migrations/` and returns
+// AppliedHead lists keys under `w17-migrations/` and returns
 // the max-by-lex `<ts>` (with `.json` suffix stripped). Empty
 // prefix → "" (no migrations applied yet). NoSuchBucket is
 // surfaced as an error; the deploy client is responsible for
@@ -164,13 +164,13 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 
 // Rollback runs the migration's down payload. Order: down_pre_tx
 // first, then down_sql. applied.S3() injects the
-// `S3 DELETE wc-migrations/<ts>.json` bookkeeping erase into
+// `S3 DELETE w17-migrations/<ts>.json` bookkeeping erase into
 // the down body; user-side down ops (DELETE_PREFIX etc.) live
 // alongside.
 //
 // Phase E: YAML data migration bodies dispatch through
 // rollbackYAMLDataMigration. The down body is either an
-// auto-derived YAML inverse or a `# wc:irreversible:` comment
+// auto-derived YAML inverse or a `# w17:irreversible:` comment
 // block — the latter refuses without --allow-irreversible.
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if datamigrate.LooksLikeYAML([]byte(m.GetUpSql())) {

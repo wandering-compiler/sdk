@@ -147,8 +147,8 @@ func TestIsIrreversibleMarkerBody(t *testing.T) {
 	}{
 		{"", false},
 		{"   \n\t\n", false},
-		{"# wc:irreversible: REMOVE_FIELD has no inverse", true},
-		{"\n# header\n\n# wc:irreversible: x\n", true},
+		{"# w17:irreversible: REMOVE_FIELD has no inverse", true},
+		{"\n# header\n\n# w17:irreversible: x\n", true},
 		{"# just a note\n# another", false},
 		{"version: 1\noperations: []", false},
 	}

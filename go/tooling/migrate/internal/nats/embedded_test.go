@@ -78,7 +78,7 @@ func TestAppliedHead_Live(t *testing.T) {
 
 	// Create the bucket but leave it empty → ErrNoKeysFound → "".
 	js := directJS(t, url)
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "wc-migrations"})
+	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "w17-migrations"})
 	if err != nil {
 		t.Fatalf("CreateKeyValue: %v", err)
 	}
@@ -115,16 +115,16 @@ func TestApply_KvAddPutAndAppliedHead_Live(t *testing.T) {
 
 	err := a.Apply(ctx, &applyfetchpb.Migration{
 		Id: "20260401T000000Z",
-		UpSql: "# wc: marker\n" +
-			"nats kv add wc-migrations\n" +
-			"nats kv put wc-migrations 20260401T000000Z deadbeef",
+		UpSql: "# w17: marker\n" +
+			"nats kv add w17-migrations\n" +
+			"nats kv put w17-migrations 20260401T000000Z deadbeef",
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
 	js := directJS(t, url)
-	kv, err := js.KeyValue(ctx, "wc-migrations")
+	kv, err := js.KeyValue(ctx, "w17-migrations")
 	if err != nil {
 		t.Fatalf("KeyValue: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestApply_KvAddPutAndAppliedHead_Live(t *testing.T) {
 func TestApply_KvAddIdempotent_Live(t *testing.T) {
 	a, _ := liveApplier(t)
 	ctx := liveCtx(t)
-	body := "nats kv add wc-migrations"
+	body := "nats kv add w17-migrations"
 	if err := a.Apply(ctx, &applyfetchpb.Migration{Id: "a", UpSql: body}); err != nil {
 		t.Fatalf("first add: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestRollback_KvDel_Live(t *testing.T) {
 	a, url := liveApplier(t)
 	ctx := liveCtx(t)
 	js := directJS(t, url)
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "wc-migrations"})
+	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "w17-migrations"})
 	if err != nil {
 		t.Fatalf("CreateKeyValue: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestRollback_KvDel_Live(t *testing.T) {
 
 	err = a.Rollback(ctx, &applyfetchpb.Migration{
 		Id:      "20260401T000000Z",
-		DownSql: "nats kv del wc-migrations 20260401T000000Z",
+		DownSql: "nats kv del w17-migrations 20260401T000000Z",
 	})
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
@@ -217,7 +217,7 @@ func TestRollback_KvDel_Live(t *testing.T) {
 	// bucket that doesn't exist — both tolerated.
 	err = a.Rollback(ctx, &applyfetchpb.Migration{
 		Id: "x",
-		DownSql: "nats kv del wc-migrations 20260401T000000Z\n" +
+		DownSql: "nats kv del w17-migrations 20260401T000000Z\n" +
 			"nats kv del nonexistent-bucket somekey",
 	})
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 // ParseArgv tokenises one nats-CLI-style command line into argv.
 // The migrator's `emit/nats` produces shell-style command lines:
 //
-//   - `nats kv put wc-migrations 20260429T120000Z abc123`
+//   - `nats kv put w17-migrations 20260429T120000Z abc123`
 //   - `nats stream rm users`
 //   - `nats stream edit users --description "new-name"`
 //

@@ -32,7 +32,7 @@ func squashBaseline(id, conn string, adoptSQL string, supersedes ...string) *app
 // for. The database is at ts-2, which the baseline replaces — so the baseline
 // must be recorded via its adopt_sql, and its own DDL must never execute.
 func TestRun_AdoptsBaselineTheDatabaseAlreadySatisfies(t *testing.T) {
-	const adopt = "INSERT INTO wc_migrations VALUES ('ts-9', NOW(), '\\xAB');"
+	const adopt = "INSERT INTO w17_migrations VALUES ('ts-9', NOW(), '\\xAB');"
 	base := squashBaseline("ts-9", "main", adopt, "ts-1", "ts-2")
 	dir := seedDir(t, base)
 	stubA := stub.New()
@@ -72,7 +72,7 @@ func TestRun_AdoptsBaselineTheDatabaseAlreadySatisfies(t *testing.T) {
 // no schema, so it needs the baseline's DDL, not a ledger row claiming work
 // that never happened.
 func TestRun_FreshDatabaseAppliesTheBaselineForReal(t *testing.T) {
-	const adopt = "INSERT INTO wc_migrations VALUES ('ts-9', NOW(), '\\xAB');"
+	const adopt = "INSERT INTO w17_migrations VALUES ('ts-9', NOW(), '\\xAB');"
 	base := squashBaseline("ts-9", "main", adopt, "ts-1", "ts-2")
 	dir := seedDir(t, base)
 	stubA := stub.New() // Head="" — fresh database
@@ -98,7 +98,7 @@ func TestRun_FreshDatabaseAppliesTheBaselineForReal(t *testing.T) {
 // superseded set means this database's history has nothing to do with the
 // collapse, so the baseline is ordinary work.
 func TestRun_UnrelatedHeadAppliesTheBaseline(t *testing.T) {
-	const adopt = "INSERT INTO wc_migrations VALUES ('ts-9', NOW(), '\\xAB');"
+	const adopt = "INSERT INTO w17_migrations VALUES ('ts-9', NOW(), '\\xAB');"
 	base := squashBaseline("ts-9", "main", adopt, "ts-1", "ts-2")
 	dir := seedDir(t, base)
 	stubA := stub.New()
@@ -150,7 +150,7 @@ func TestRun_BaselineWithoutAdoptSQLRefuses(t *testing.T) {
 // migrations that happen to share the connection.
 func TestPlan_MarksAdoptOnlyTheSatisfiedBaseline(t *testing.T) {
 	ordinary := mkMig("ts-3", "main", "ALTER TABLE x ADD col;")
-	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');", "ts-1", "ts-2")
+	base := squashBaseline("ts-9", "main", "INSERT INTO w17_migrations VALUES ('ts-9');", "ts-1", "ts-2")
 	dir := seedDir(t, ordinary, base)
 	stubA := stub.New()
 	stubA.Head = "ts-2"
@@ -196,7 +196,7 @@ func TestPlan_MarksAdoptOnlyTheSatisfiedBaseline(t *testing.T) {
 // baseline stamps supersedes = m001…m050 and moves the pin, and the next
 // deploy adopts.
 func TestPlan_RefusesAdoptFromAMidRangeHead(t *testing.T) {
-	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');",
+	base := squashBaseline("ts-9", "main", "INSERT INTO w17_migrations VALUES ('ts-9');",
 		"ts-1", "ts-2", "ts-3")
 	dir := seedDir(t, base)
 	stubA := stub.New()
@@ -222,7 +222,7 @@ func TestPlan_RefusesAdoptFromAMidRangeHead(t *testing.T) {
 // and must still adopt. Without this the fix reads as "adopt is refused",
 // which would break every real squash deploy.
 func TestPlan_StillAdoptsFromTheLastSupersededID(t *testing.T) {
-	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');",
+	base := squashBaseline("ts-9", "main", "INSERT INTO w17_migrations VALUES ('ts-9');",
 		"ts-1", "ts-2", "ts-3")
 	dir := seedDir(t, base)
 	stubA := stub.New()
@@ -244,7 +244,7 @@ func TestPlan_StillAdoptsFromTheLastSupersededID(t *testing.T) {
 // A database that applied NONE of the collapsed set gets the real CREATE —
 // the branch the original comment describes, kept honest.
 func TestPlan_UnrelatedHeadStillDoesNotAdopt(t *testing.T) {
-	base := squashBaseline("ts-9", "main", "INSERT INTO wc_migrations VALUES ('ts-9');",
+	base := squashBaseline("ts-9", "main", "INSERT INTO w17_migrations VALUES ('ts-9');",
 		"ts-1", "ts-2")
 	dir := seedDir(t, base)
 	stubA := stub.New()

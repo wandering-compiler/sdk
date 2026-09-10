@@ -38,7 +38,7 @@ func buildTransformVMs(mig *datamigrate.Migration) (map[int]*datamigrate.Transfo
 // already completed) and DELETE'd after the bookkeeping write
 // succeeds — a successful end-to-end run leaves no cursor
 // object behind.
-const dataCursorPrefix = "wc-data-migrations/"
+const dataCursorPrefix = "w17-data-migrations/"
 
 // applyYAMLDataMigration handles migration bodies whose
 // `up_sql` is a YAML data migration (Phase E — D-iter3-15).
@@ -65,7 +65,7 @@ const dataCursorPrefix = "wc-data-migrations/"
 // ops on retry.
 //
 // Bookkeeping write at the end (`PutObject
-// wc-migrations/<id>.json` carrying the integrity envelope
+// w17-migrations/<id>.json` carrying the integrity envelope
 // applied.S3() emits) — applied.Wrap is intentionally skipped
 // at registry-side for YAML bodies.
 func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Migration) error {
@@ -118,7 +118,7 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 
 // rollbackYAMLDataMigration is the inverse path. Down body
 // either (a) auto-derived YAML inverse from emit/s3 or
-// (b) `# wc:irreversible:` comment block. Latter refuses
+// (b) `# w17:irreversible:` comment block. Latter refuses
 // without --allow-irreversible.
 //
 // Cursor key uses `.rollback.cursor.json` suffix so a partial
@@ -423,7 +423,7 @@ func (a *Applier) deleteCursor(ctx context.Context, cli *awss3.Client, key strin
 	return nil
 }
 
-// recordMigrationApplied writes the wc-migrations/<id>.json
+// recordMigrationApplied writes the w17-migrations/<id>.json
 // bookkeeping object. Mirrors what `applied.S3().RecordVersion`
 // produces for non-YAML bodies — same shape, written here
 // directly via PutObject because YAML bodies skip
@@ -457,7 +457,7 @@ func (a *Applier) recordMigrationRolledBack(ctx context.Context, cli *awss3.Clie
 }
 
 // isIrreversibleMarkerBody — same shape as apply/redis's
-// helper; pure `# wc:irreversible:` comment block produced by
+// helper; pure `# w17:irreversible:` comment block produced by
 // emit/s3 when REMOVE_FIELD is in the forward direction.
 func isIrreversibleMarkerBody(body string) bool {
 	if strings.TrimSpace(body) == "" {
@@ -471,7 +471,7 @@ func isIrreversibleMarkerBody(body string) bool {
 		if !strings.HasPrefix(ln, "#") {
 			return false
 		}
-		if strings.Contains(ln, "wc:irreversible") {
+		if strings.Contains(ln, "w17:irreversible") {
 			return true
 		}
 	}

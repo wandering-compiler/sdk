@@ -20,7 +20,7 @@ var _ migrate.RunLockCapable = (*Applier)(nil)
 // key expire, after which the next run acquires cleanly. That makes
 // TTL expiry the automatic stale-takeover, so Redis needs no manual
 // timestamp / takeover bookkeeping (unlike S3).
-const runLockKey = "wc:migrate:runlock"
+const runLockKey = "w17:migrate:runlock"
 
 // refreshScript / releaseScript are owner-checked: this process only
 // ever extends or frees a lock it STILL holds, never one a taker

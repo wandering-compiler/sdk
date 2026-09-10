@@ -4,7 +4,7 @@
 // on the deploy host.
 //
 // The migrator's `emit/nats` produces nats-CLI-style command
-// lines — one command per line, with `# wc:` comment markers
+// lines — one command per line, with `# w17:` comment markers
 // for documentation. The Applier tokenises each line via
 // `ParseArgv` and dispatches by subcommand into typed
 // JetStream / KV API calls:
@@ -58,7 +58,7 @@ import (
 // AppliedHead reads its keys; the applied.NATS() Renderer's
 // CreateTracker / RecordVersion / RemoveVersion all reference
 // it by this exact name.
-const trackerBucket = "wc-migrations"
+const trackerBucket = "w17-migrations"
 
 // Applier owns one lazy NATS connection + one JetStream context.
 // Concurrent Apply calls share the same connection (NATS
@@ -117,7 +117,7 @@ func (a *Applier) jsContext() (jetstream.JetStream, error) {
 }
 
 // AppliedHead returns the newest applied-migration timestamp
-// from the `wc-migrations` JetStream KV bucket. Empty / missing
+// from the `w17-migrations` JetStream KV bucket. Empty / missing
 // bucket → "" (= "no migrations applied yet").
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	js, err := a.jsContext()
@@ -165,7 +165,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 
 // Rollback runs the migration's down payload. Order: down_pre_tx
 // first, then down_sql. applied.NATS() injects the
-// `nats kv del wc-migrations <ts>` bookkeeping erase into the
+// `nats kv del w17-migrations <ts>` bookkeeping erase into the
 // down body; user-side down ops (stream rm / kv del / etc.)
 // live alongside and are tolerated as missing per the existing
 // run() rules.

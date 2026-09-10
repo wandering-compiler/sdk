@@ -10,12 +10,12 @@ import (
 // StampTable holds the text-ordering provenance of whoever built this
 // database's indexes.
 //
-// It sits next to `wc_migrations` because that is what it describes: the
+// It sits next to `w17_migrations` because that is what it describes: the
 // stamp belongs where the index it characterises lives, so it survives an
 // independent redeploy of either the applier or the runtime. PostgreSQL
 // solves the same problem the same way, with `pg_collation.collversion`
 // alongside the catalog.
-const StampTable = "wc_collation"
+const StampTable = "w17_collation"
 
 // EnsureStamp records this binary's collator on a database that has none,
 // and reports a mismatch on one that was built with a different collator.

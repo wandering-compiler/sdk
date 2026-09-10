@@ -45,7 +45,7 @@ type RedisBusOptions struct {
 
 	// ConsumerName — disambiguates replicas inside one
 	// consumer group. Empty -> os.Hostname() (falls back to
-	// "wc-subscriber" if hostname unavailable).
+	// "w17-subscriber" if hostname unavailable).
 	//
 	// It must be UNIQUE PER PROCESS within a GroupPrefix: it is half of the
 	// PEL identity Redis tracks pending deliveries under, and the in-flight
@@ -184,7 +184,7 @@ func NewRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	if opts.ConsumerName == "" {
 		host, err := os.Hostname()
 		if err != nil || host == "" {
-			host = "wc-subscriber"
+			host = "w17-subscriber"
 		}
 		opts.ConsumerName = host
 	}

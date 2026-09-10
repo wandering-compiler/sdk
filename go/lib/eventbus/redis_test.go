@@ -73,7 +73,7 @@ func TestNewRedisBus_DefaultsApplied(t *testing.T) {
 
 func TestNewRedisBus_ConsumerNameDefaultsToHostname(t *testing.T) {
 	// When ConsumerName is empty, NewRedisBus falls back to
-	// os.Hostname() (or "wc-subscriber" on hostname error).
+	// os.Hostname() (or "w17-subscriber" on hostname error).
 	bus, err := NewRedisBus(RedisBusOptions{
 		DSN:         "redis://localhost:6379",
 		GroupPrefix: "users",

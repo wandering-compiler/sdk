@@ -22,9 +22,9 @@ import (
 var _ migrate.RunLockCapable = (*Applier)(nil)
 
 // runLockKey is the apply run-lock object. Kept OUTSIDE trackerPrefix
-// (`wc-migrations/`) so AppliedHead's listing never mistakes the lock
+// (`w17-migrations/`) so AppliedHead's listing never mistakes the lock
 // for a recorded migration.
-const runLockKey = "wc-migrate-runlock.json"
+const runLockKey = "w17-migrate-runlock.json"
 
 // lockBody is the JSON persisted at runLockKey. heartbeat_at is the
 // staleness clock — a holder refreshes it; a reader treats a lock

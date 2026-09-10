@@ -27,14 +27,14 @@ import (
 // it's already been processed) and DEL'd after the migration's
 // final bookkeeping write succeeds — so a successful end-to-end
 // run leaves no cursor object behind.
-const dataMigrationCursorPrefix = "wc:data-migrations:"
+const dataMigrationCursorPrefix = "w17:data-migrations:"
 
 // dataRollbackCursorPrefix mirrors dataMigrationCursorPrefix for
 // the down-direction. Forward + rollback cursors are separated
 // so a partial-rollback re-runs against its own state without
 // confusing the forward cursor for an already-rolled-forward
 // migration.
-const dataRollbackCursorPrefix = "wc:data-rollbacks:"
+const dataRollbackCursorPrefix = "w17:data-rollbacks:"
 
 // applyYAMLDataMigration handles migration bodies whose `up_sql`
 // is a YAML data migration (Phase E — D-iter3-15) instead of a
@@ -48,8 +48,8 @@ const dataRollbackCursorPrefix = "wc:data-rollbacks:"
 //     GET→JSON-decode→mutate→JSON-encode→SET on a key.
 //  3. After every op succeeds: write a cursor entry so a
 //     subsequent re-apply (interrupted run) skips this op.
-//  4. After every op succeeds: write the wc:migrations hash
-//     entry for this migration's id (`HSET wc:migrations
+//  4. After every op succeeds: write the w17:migrations hash
+//     entry for this migration's id (`HSET w17:migrations
 //     <id> <hex>`). Bookkeeping is the apply tool's
 //     responsibility for YAML bodies — applied.Wrap is
 //     intentionally skipped at registry-side for YAML bodies
@@ -137,7 +137,7 @@ func buildTransformVMs(mig *datamigrate.Migration) (map[int]*datamigrate.Transfo
 //   - A YAML data migration (auto-derived inverse from
 //     emit/redis) — same execution machinery as forward; the
 //     bookkeeping write is replaced by HDEL.
-//   - A `# wc:irreversible:` comment block (REMOVE_FIELD in
+//   - A `# w17:irreversible:` comment block (REMOVE_FIELD in
 //     forward direction has no inverse). Refused: the operator
 //     must explicitly `--allow-irreversible` to skip.
 //
@@ -362,23 +362,23 @@ func (a *Applier) clearCursor(ctx context.Context, cursorKey string) error {
 	return a.client.Del(ctx, cursorKey).Err()
 }
 
-// recordMigrationApplied writes one row to the wc:migrations
+// recordMigrationApplied writes one row to the w17:migrations
 // bookkeeping hash. Mirrors what `applied.Redis().RecordVersion`
 // does for non-YAML bodies, only it lives in the apply tool
 // instead of being baked into the migration body.
 func (a *Applier) recordMigrationApplied(ctx context.Context, m *applyfetchpb.Migration) error {
 	hash := sha256.Sum256([]byte(m.GetUpSql()))
-	return a.client.HSet(ctx, "wc:migrations", m.GetId(), hex.EncodeToString(hash[:])).Err()
+	return a.client.HSet(ctx, "w17:migrations", m.GetId(), hex.EncodeToString(hash[:])).Err()
 }
 
 // recordMigrationRolledBack erases the bookkeeping row.
 // HDEL is idempotent — safe to call on already-removed entries.
 func (a *Applier) recordMigrationRolledBack(ctx context.Context, m *applyfetchpb.Migration) error {
-	return a.client.HDel(ctx, "wc:migrations", m.GetId()).Err()
+	return a.client.HDel(ctx, "w17:migrations", m.GetId()).Err()
 }
 
 // isIrreversibleMarkerBody returns true when the body is a
-// pure `# wc:irreversible:` comment block — what emit/redis
+// pure `# w17:irreversible:` comment block — what emit/redis
 // produces in the down direction when the forward direction
 // contained REMOVE_FIELD. Distinguishes "rollback refused" from
 // "rollback applies a YAML body".
@@ -395,7 +395,7 @@ func isIrreversibleMarkerBody(body string) bool {
 		if !strings.HasPrefix(ln, "#") {
 			return false
 		}
-		if strings.Contains(ln, "wc:irreversible") {
+		if strings.Contains(ln, "w17:irreversible") {
 			return true
 		}
 	}

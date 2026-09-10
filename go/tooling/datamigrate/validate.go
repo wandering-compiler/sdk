@@ -156,7 +156,7 @@ func EffectiveParallel(m *Migration, cliOverride int) int {
 // that were marked irreversible. Caller (compiler-side emit)
 // uses this to:
 //   - emit the down body when no irreversible ops present
-//   - emit a `# wc:irreversible: ...` marker + skip the down
+//   - emit a `# w17:irreversible: ...` marker + skip the down
 //     body when REMOVE_FIELD or TRANSFORM_FIELD is in the
 //     forward set
 func InverseOperations(m *Migration) (*Migration, []int) {

@@ -62,16 +62,16 @@ func New(ctx context.Context, urlDSN string) (*Applier, error) {
 }
 
 // AppliedHead returns the id of the most recently applied
-// migration on this DB by querying `wc_migrations` (D27).
+// migration on this DB by querying `w17_migrations` (D27).
 // Missing table = empty string (treated as fresh DB by the
 // orchestrator). MySQL surfaces "Error 1146 (42S02): Table
-// '<schema>.wc_migrations' doesn't exist" — we sniff the SQLState
+// '<schema>.w17_migrations' doesn't exist" — we sniff the SQLState
 // 42S02 (base table or view not found) for the missing-table
 // case.
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	var head sql.NullString
 	err := a.db.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(timestamp), '') FROM wc_migrations`,
+		`SELECT COALESCE(MAX(timestamp), '') FROM w17_migrations`,
 	).Scan(&head)
 	if err != nil {
 		// MySQL "table doesn't exist" — fresh DB.
@@ -105,7 +105,7 @@ func isMissingTable(err error) bool {
 // PhasePending recovery here — AppliedHead does not filter on a
 // `post_tx_complete` marker, and up_post_tx runs as a SEPARATE Exec
 // after up_sql has already committed. In the skirt layout the
-// wc_migrations bookkeeping row is written at the END of up_post_tx
+// w17_migrations bookkeeping row is written at the END of up_post_tx
 // (applied.Wrap's legacy-skirt path), NOT in up_sql. So a crash BETWEEN
 // the two Execs leaves up_sql's DDL committed with NO applied-state row:
 // a re-run sees the migration as un-applied (AppliedHead misses it) and
@@ -137,7 +137,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 
 // Rollback runs the migration's down payload. Order:
 // down_pre_tx first (post-tx-equivalent), then down_sql (in-tx
-// body including the wc_migrations DELETE).
+// body including the w17_migrations DELETE).
 // multiStatements=true is forced in URLToDriverDSN, so each
 // body executes in a single ExecContext call.
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
@@ -210,7 +210,7 @@ func (a *Applier) Close() error {
 
 // Fingerprint extracts the canonical MySQL schema state via
 // information_schema and returns its hex-encoded sha256
-// (Phase D — D-iter3-14). Excludes the wc_migrations
+// (Phase D — D-iter3-14). Excludes the w17_migrations
 // bookkeeping table; sorted by name + columns. Schema scope is
 // the current `DATABASE()` (= the DB embedded in the DSN).
 func (a *Applier) Fingerprint(ctx context.Context) (string, error) {

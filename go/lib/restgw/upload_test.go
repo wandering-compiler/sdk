@@ -275,8 +275,8 @@ func TestProcessFilePart_RemovesTempFileOnCopyDriver(t *testing.T) {
 		t.Errorf("driver missing key %q after copy Put", handle)
 	}
 	// The copying driver deliberately left the tmp file; the helper
-	// must have removed it. No wc-upload-* staging files may remain.
-	leftovers, err := filepath.Glob(filepath.Join(tmpDir, "wc-upload-*"))
+	// must have removed it. No w17-upload-* staging files may remain.
+	leftovers, err := filepath.Glob(filepath.Join(tmpDir, "w17-upload-*"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}

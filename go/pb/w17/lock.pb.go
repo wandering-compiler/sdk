@@ -79,7 +79,7 @@ var (
 	// the canonical content, so the signature no longer validates
 	// and the gate refuses.
 	//
-	// That holds only because `wc acl generate` ALSO verifies before
+	// That holds only because `w17ctl acl generate` ALSO verifies before
 	// it inherits ids from the committed lock. Without that second
 	// half the guarantee lasted until the next regen: the generate
 	// path reseeded from the edited file and signed the ids it

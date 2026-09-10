@@ -18,7 +18,7 @@ type PgxQuerier interface {
 // and returns the canonical Schema for fingerprinting. Scopes
 // to the `public` schema (matches the deploy-time convention —
 // w17migrate connects with no search_path override). Excludes
-// the `wc_migrations` bookkeeping table.
+// the `w17_migrations` bookkeeping table.
 //
 // Takes a `*pgx.Conn` (or a test-fitting PgxQuerier) because the
 // production PG Applier uses pgx, not database/sql.

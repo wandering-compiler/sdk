@@ -9,7 +9,7 @@ import (
 
 // TestDevApplySQL_FoldsAndStripsConcurrently — dev folds the post-tx
 // body into the transactional SQL with CONCURRENTLY stripped (so the
-// index build runs in-transaction, no wc_migrations phase machinery).
+// index build runs in-transaction, no w17_migrations phase machinery).
 // The index itself is unchanged — only its build method — preserving
 // the collapse-equivalence invariant.
 func TestDevApplySQL_FoldsAndStripsConcurrently(t *testing.T) {

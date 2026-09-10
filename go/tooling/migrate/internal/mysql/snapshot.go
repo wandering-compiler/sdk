@@ -17,7 +17,7 @@ import (
 // lifecycle. Like the PG snapshotter it shells out to the stock
 // client binaries (`mysqldump` / `mysql`) rather than reimplementing
 // the dump format over database/sql — mysqldump round-trips the whole
-// schema database (tables, data, the wc_migrations ledger) correctly.
+// schema database (tables, data, the w17_migrations ledger) correctly.
 //
 // mysqldump defaults to `--add-drop-table`, so the emitted script
 // DROPs each table before recreating it, making Restore idempotent

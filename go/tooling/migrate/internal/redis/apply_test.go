@@ -47,7 +47,7 @@ func TestAppliedHead_ConnectionRefused(t *testing.T) {
 func TestApply_CommandBodyConnectionRefused(t *testing.T) {
 	err := deadApplier(t).Apply(boundedCtx(t), &applyfetchpb.Migration{
 		Id:    "ts-1",
-		UpSql: "HSET wc:migrations ts-1 deadbeef",
+		UpSql: "HSET w17:migrations ts-1 deadbeef",
 	})
 	if err == nil || !strings.Contains(err.Error(), "up_sql") {
 		t.Errorf("expected up_sql exec error, got %v", err)
@@ -61,8 +61,8 @@ func TestApply_CommandBodyConnectionRefused(t *testing.T) {
 func TestApply_CommentOnlyUpThenPostTx(t *testing.T) {
 	err := deadApplier(t).Apply(boundedCtx(t), &applyfetchpb.Migration{
 		Id:       "ts-2",
-		UpSql:    "# wc: only a comment\n\n",
-		UpPostTx: "HSET wc:migrations ts-2 cafe",
+		UpSql:    "# w17: only a comment\n\n",
+		UpPostTx: "HSET w17:migrations ts-2 cafe",
 	})
 	if err == nil || !strings.Contains(err.Error(), "up_post_tx") {
 		t.Errorf("expected up_post_tx error, got %v", err)
@@ -74,7 +74,7 @@ func TestApply_CommentOnlyUpThenPostTx(t *testing.T) {
 func TestRollback_CommandBodyConnectionRefused(t *testing.T) {
 	err := deadApplier(t).Rollback(boundedCtx(t), &applyfetchpb.Migration{
 		Id:      "ts-3",
-		DownSql: "HDEL wc:migrations ts-3",
+		DownSql: "HDEL w17:migrations ts-3",
 	})
 	if err == nil || !strings.Contains(err.Error(), "down_sql") {
 		t.Errorf("expected down_sql error, got %v", err)
@@ -158,7 +158,7 @@ func TestRollback_YAMLIrreversibleRefused(t *testing.T) {
 	err := deadApplier(t).Rollback(boundedCtx(t), &applyfetchpb.Migration{
 		Id:      "ts-irr",
 		UpSql:   yamlAddBody,
-		DownSql: "# wc:irreversible: REMOVE_FIELD has no inverse",
+		DownSql: "# w17:irreversible: REMOVE_FIELD has no inverse",
 	})
 	if err == nil || !strings.Contains(err.Error(), "irreversible") {
 		t.Errorf("expected irreversible refusal, got %v", err)
@@ -224,8 +224,8 @@ func TestSetParallelOverride_NoPanic(t *testing.T) {
 func TestRollback_DownPreTxConnectionRefused(t *testing.T) {
 	err := deadApplier(t).Rollback(boundedCtx(t), &applyfetchpb.Migration{
 		Id:        "ts-pre",
-		DownPreTx: "HDEL wc:migrations ts-pre",
-		DownSql:   "HDEL wc:migrations ts-pre",
+		DownPreTx: "HDEL w17:migrations ts-pre",
+		DownSql:   "HDEL w17:migrations ts-pre",
 	})
 	if err == nil || !strings.Contains(err.Error(), "down_pre_tx") {
 		t.Errorf("expected down_pre_tx error, got %v", err)

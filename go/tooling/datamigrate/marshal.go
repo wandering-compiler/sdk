@@ -12,8 +12,8 @@ import (
 // single YAML document, indent=2, fields ordered per the struct
 // declaration (yaml.v3 defaults).
 //
-// Header / signature comment lines (`# wc:expected_pre_fingerprint:
-// ...` / `# wc:content_signature: ...`) are NOT added here —
+// Header / signature comment lines (`# w17:expected_pre_fingerprint:
+// ...` / `# w17:content_signature: ...`) are NOT added here —
 // they're the `decorate` package's responsibility, layered over
 // the YAML body identically to how Phase D wraps SQL bodies. A
 // raw Marshal output is the plain YAML doc; the registry-side

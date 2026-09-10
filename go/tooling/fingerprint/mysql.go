@@ -9,7 +9,7 @@ import (
 // and returns the canonical Schema for fingerprinting. Scopes to
 // the current database (from `DATABASE()`); the deploy client
 // connects with the database in the DSN, so DATABASE() returns
-// the right value at apply time. Excludes the `wc_migrations`
+// the right value at apply time. Excludes the `w17_migrations`
 // bookkeeping table.
 func ExtractMySQL(ctx context.Context, db dbQuery) (Schema, error) {
 	tables, err := mysqlListTables(ctx, db)

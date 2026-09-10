@@ -517,7 +517,7 @@ type AdminAuth struct {
 	UserLookup string `protobuf:"bytes,2,opt,name=user_lookup,json=userLookup,proto3" json:"user_lookup,omitempty"`
 	// (RETIRED — the codegen REFUSES a non-empty value.) A bootstrap
 	// YAML path the admin bundle was to apply at first start,
-	// idempotent through a `wc_admin_fixture` table. Nothing ever read
+	// idempotent through a `w17_admin_fixture` table. Nothing ever read
 	// it: it was parsed, stored on the surface and dropped, so a
 	// project declaring it looked seeded and was not. No table was ever
 	// created either.

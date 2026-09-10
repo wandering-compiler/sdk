@@ -112,13 +112,13 @@ func TestApply_YAMLGetWrongType_Live(t *testing.T) {
 }
 
 // TestApply_YAMLBookkeepingWrongType_Live pins the forward
-// recordMigrationApplied error arm: an HSET against a `wc:migrations`
+// recordMigrationApplied error arm: an HSET against a `w17:migrations`
 // key that is the wrong type (a string, not a hash) surfaces as a
 // bookkeeping error after the ops complete.
 func TestApply_YAMLBookkeepingWrongType_Live(t *testing.T) {
 	a, mr := liveApplier(t)
 	ctx := liveCtx(t)
-	_ = mr.Set("wc:migrations", "not-a-hash") // poison the bookkeeping key
+	_ = mr.Set("w17:migrations", "not-a-hash") // poison the bookkeeping key
 
 	err := a.Apply(ctx, &applyfetchpb.Migration{Id: "20260601T000002Z", UpSql: yamlAddActive})
 	if err == nil || !strings.Contains(err.Error(), "bookkeeping") {
@@ -128,11 +128,11 @@ func TestApply_YAMLBookkeepingWrongType_Live(t *testing.T) {
 
 // TestRollback_YAMLBookkeepingWrongType_Live pins the rollback
 // recordMigrationRolledBack error arm: an HDEL against a wrong-typed
-// `wc:migrations` key surfaces as a bookkeeping error.
+// `w17:migrations` key surfaces as a bookkeeping error.
 func TestRollback_YAMLBookkeepingWrongType_Live(t *testing.T) {
 	a, mr := liveApplier(t)
 	ctx := liveCtx(t)
-	_ = mr.Set("wc:migrations", "not-a-hash")
+	_ = mr.Set("w17:migrations", "not-a-hash")
 	down := `version: 1
 encoding: json
 operations:
@@ -217,8 +217,8 @@ func TestRollback_YAMLResumesFromCursor_Live(t *testing.T) {
 	ctx := liveCtx(t)
 	_ = mr.Set("users:1", `{"name":"a","active":true}`)
 	id := "20260601T000004Z"
-	mr.HSet("wc:data-rollbacks:"+id, "0", "complete") // op 0 already done
-	mr.HSet("wc:migrations", id, "feed")
+	mr.HSet("w17:data-rollbacks:"+id, "0", "complete") // op 0 already done
+	mr.HSet("w17:migrations", id, "feed")
 
 	down := `version: 1
 encoding: json

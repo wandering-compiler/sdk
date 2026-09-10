@@ -37,10 +37,10 @@ type Applier interface {
 	// target — the inverse of Apply. Order: down_pre_tx (post-tx
 	// equivalent for the down direction; e.g. DROP INDEX
 	// CONCURRENTLY) first, then down_sql (the in-tx body that
-	// includes the wc_migrations DELETE applied.Wrap injected).
+	// includes the w17_migrations DELETE applied.Wrap injected).
 	//
 	// Down bodies are produced by applied.Wrap, which places the
-	// `DELETE FROM wc_migrations WHERE timestamp = '<id>'` erase at the
+	// `DELETE FROM w17_migrations WHERE timestamp = '<id>'` erase at the
 	// position that is safe for the dialect's atomicity (C3/AAW1): at the
 	// HEAD of the in-tx down for atomic-DDL SQL (PG), but LAST — after the
 	// rollback body — for non-atomic-DDL (MySQL, whose DDL implicit-commits)
@@ -54,17 +54,17 @@ type Applier interface {
 	Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 
 	// AppliedHead returns the id of the most recently applied
-	// migration on the target (D27 `wc_migrations`). Empty string
+	// migration on the target (D27 `w17_migrations`). Empty string
 	// = nothing applied yet (fresh DB / connection). Used by the
 	// offline orchestrator (D-iter3-7) as the lower bound when
 	// computing pending = filesystem ∩ (id > head, id ≤ target).
 	//
 	// Implementations:
 	//   - SQL dialects (PG / MySQL / SQLite): query
-	//     `SELECT max(timestamp) FROM wc_migrations`. Missing
+	//     `SELECT max(timestamp) FROM w17_migrations`. Missing
 	//     table = empty string (treated as fresh DB).
 	//   - Non-SQL dialects (Redis / NATS / S3): per-dialect
-	//     state-object lookup (Redis hash `wc:migrations`, a NATS
+	//     state-object lookup (Redis hash `w17:migrations`, a NATS
 	//     KV bucket, S3 marker objects) — all implemented; a
 	//     missing store reads as a fresh DB (empty string).
 	AppliedHead(ctx context.Context) (string, error)
@@ -87,7 +87,7 @@ type ApplierFor func(connectionName string) (Applier, error)
 
 // Phase classifies how far a single migration has been applied on
 // the target — the Q52 two-phase ledger state read from
-// `wc_migrations.post_tx_complete`.
+// `w17_migrations.post_tx_complete`.
 type Phase int
 
 const (

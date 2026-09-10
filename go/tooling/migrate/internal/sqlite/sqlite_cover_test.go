@@ -83,7 +83,7 @@ func TestNew_PingFailsOnUnwritablePath(t *testing.T) {
 }
 
 // TestAppliedHead_FreshDBEmpty pins the missing-table → "" contract:
-// a brand-new DB has no wc_migrations table, which the orchestrator
+// a brand-new DB has no w17_migrations table, which the orchestrator
 // reads as a fresh DB rather than an error.
 func TestAppliedHead_FreshDBEmpty(t *testing.T) {
 	a := newTempApplier(t)
@@ -97,16 +97,16 @@ func TestAppliedHead_FreshDBEmpty(t *testing.T) {
 }
 
 // TestAppliedHead_ReturnsMaxTimestamp pins that AppliedHead returns
-// the lexically-greatest timestamp once wc_migrations is populated.
+// the lexically-greatest timestamp once w17_migrations is populated.
 func TestAppliedHead_ReturnsMaxTimestamp(t *testing.T) {
 	a := newTempApplier(t)
 	ctx := context.Background()
 	if err := a.Apply(ctx, &applyfetchpb.Migration{
 		Id: "ts-1",
 		UpSql: "BEGIN;" +
-			"CREATE TABLE wc_migrations (timestamp TEXT PRIMARY KEY);" +
-			"INSERT INTO wc_migrations VALUES ('20240101T000000Z');" +
-			"INSERT INTO wc_migrations VALUES ('20240202T000000Z');" +
+			"CREATE TABLE w17_migrations (timestamp TEXT PRIMARY KEY);" +
+			"INSERT INTO w17_migrations VALUES ('20240101T000000Z');" +
+			"INSERT INTO w17_migrations VALUES ('20240202T000000Z');" +
 			"COMMIT;",
 	}); err != nil {
 		t.Fatalf("Apply seed: %v", err)
@@ -121,14 +121,14 @@ func TestAppliedHead_ReturnsMaxTimestamp(t *testing.T) {
 }
 
 // TestAppliedHead_NonMissingTableErrorWraps pins that an error which
-// is NOT a missing-table condition (here: wc_migrations exists but
+// is NOT a missing-table condition (here: w17_migrations exists but
 // lacks the timestamp column) propagates wrapped, not swallowed.
 func TestAppliedHead_NonMissingTableErrorWraps(t *testing.T) {
 	a := newTempApplier(t)
 	ctx := context.Background()
 	if err := a.Apply(ctx, &applyfetchpb.Migration{
 		Id:    "ts-1",
-		UpSql: "CREATE TABLE wc_migrations (other TEXT);",
+		UpSql: "CREATE TABLE w17_migrations (other TEXT);",
 	}); err != nil {
 		t.Fatalf("Apply seed: %v", err)
 	}

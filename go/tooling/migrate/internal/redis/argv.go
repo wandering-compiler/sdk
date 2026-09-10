@@ -7,7 +7,7 @@ import (
 // ParseArgv tokenises one redis-cli-style command line into argv.
 // The migrator's `emit/redis` produces three token shapes:
 //
-//   - bare tokens — `HSET wc:migrations 20260429T120000Z abc123`
+//   - bare tokens — `HSET w17:migrations 20260429T120000Z abc123`
 //   - double-quoted scripts — `EVAL "local cursor='0';…" 0 'pat:*'`
 //     (Lua bodies; single quotes inside are literal Lua strings)
 //   - single-quoted args — `'users:*'` (key patterns)

@@ -295,7 +295,7 @@ func TestApply_RefusesADatabaseBuiltWithAnotherCollator(t *testing.T) {
 	defer func() { _ = side.Close() }()
 
 	var stored string
-	if err := side.QueryRow(`SELECT fingerprint FROM wc_collation WHERE id = 1`).Scan(&stored); err != nil {
+	if err := side.QueryRow(`SELECT fingerprint FROM w17_collation WHERE id = 1`).Scan(&stored); err != nil {
 		t.Fatalf("no collation stamp written: %v", err)
 	}
 	if stored != sqlitecollate.Fingerprint() {
@@ -311,7 +311,7 @@ func TestApply_RefusesADatabaseBuiltWithAnotherCollator(t *testing.T) {
 	}
 
 	// Stand in for a binary built from different Unicode tables.
-	if _, err := side.Exec(`UPDATE wc_collation SET fingerprint = ? WHERE id = 1`,
+	if _, err := side.Exec(`UPDATE w17_collation SET fingerprint = ? WHERE id = 1`,
 		"w17c1:9.0.0:9.0.0:deadbeefdeadbeef"); err != nil {
 		t.Fatalf("rewrite stamp: %v", err)
 	}

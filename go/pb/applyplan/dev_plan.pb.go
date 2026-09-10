@@ -98,7 +98,26 @@ type DevMigration struct {
 	// UpSqlPostTx is the non-transactional skirt (planpb.Migration.up_sql_post_tx).
 	// The client folds it into up_sql with CONCURRENTLY stripped so it runs
 	// inside the dev transaction; empty for the common case.
-	UpSqlPostTx   string `protobuf:"bytes,3,opt,name=up_sql_post_tx,json=upSqlPostTx,proto3" json:"up_sql_post_tx,omitempty"`
+	UpSqlPostTx string `protobuf:"bytes,3,opt,name=up_sql_post_tx,json=upSqlPostTx,proto3" json:"up_sql_post_tx,omitempty"`
+	// BaselineSql records, in the target's applied ledger, the migration this
+	// built schema corresponds to. Rendered by the SERVER (the same per-dialect
+	// renderer that writes the record into an ordinary migration's up_sql), so
+	// the thin client executes a string and learns no dialect, and the two
+	// ledger writes cannot drift into spellings that read each other's rows as
+	// absent.
+	//
+	// Why a built schema needs one at all: the dev apply path walks no series
+	// and keeps no ledger, so a database built from this plan carries the
+	// tables and an EMPTY w17_migrations. The deploy gate compares the lock's
+	// `target_migration_id` against that table, so without this row it refuses
+	// every deploy after the first — and the remedy it names, `migrate apply`,
+	// would run the series' full CREATE against tables that already exist.
+	//
+	// Empty when the caller pinned no baseline (a project that has never been
+	// pushed, so there is no migration id to record) or when the dialect keeps
+	// no applied-state. Empty is applied as "record nothing", never as an
+	// error: a dev database that nobody deploys does not need a ledger.
+	BaselineSql   string `protobuf:"bytes,4,opt,name=baseline_sql,json=baselineSql,proto3" json:"baseline_sql,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -154,6 +173,13 @@ func (x *DevMigration) GetUpSqlPostTx() string {
 	return ""
 }
 
+func (x *DevMigration) GetBaselineSql() string {
+	if x != nil {
+		return x.BaselineSql
+	}
+	return ""
+}
+
 var File_w17apply_dev_plan_proto protoreflect.FileDescriptor
 
 const file_w17apply_dev_plan_proto_rawDesc = "" +
@@ -162,13 +188,14 @@ const file_w17apply_dev_plan_proto_rawDesc = "" +
 	"\fDevApplyPlan\x127\n" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x17.w17.apply.DevMigrationR\n" +
-	"migrations\"j\n" +
+	"migrations\"\x8d\x01\n" +
 	"\fDevMigration\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
 	"connection\x12\x15\n" +
 	"\x06up_sql\x18\x02 \x01(\tR\x05upSql\x12#\n" +
-	"\x0eup_sql_post_tx\x18\x03 \x01(\tR\vupSqlPostTxB?Z=github.com/wandering-compiler/sdk/go/pb/applyplan;applyplanpbb\x06proto3"
+	"\x0eup_sql_post_tx\x18\x03 \x01(\tR\vupSqlPostTx\x12!\n" +
+	"\fbaseline_sql\x18\x04 \x01(\tR\vbaselineSqlB?Z=github.com/wandering-compiler/sdk/go/pb/applyplan;applyplanpbb\x06proto3"
 
 var (
 	file_w17apply_dev_plan_proto_rawDescOnce sync.Once

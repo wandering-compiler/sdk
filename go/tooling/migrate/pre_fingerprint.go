@@ -37,7 +37,7 @@ import (
 const fakeFingerprintPrefix = "FAKE_"
 
 // preFingerprintMarker is the header key, without the comment prefix.
-const preFingerprintMarker = "wc:expected_pre_fingerprint: "
+const preFingerprintMarker = "w17:expected_pre_fingerprint: "
 
 // ExpectedPreFingerprint reads the `expected_pre_fingerprint` header a
 // migration carries, reporting whether one was present.

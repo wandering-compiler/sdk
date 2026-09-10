@@ -77,11 +77,11 @@ func TestClose_NoOp(t *testing.T) {
 
 // TestParseArgv_KvPut — bare-token nats kv put line.
 func TestParseArgv_KvPut(t *testing.T) {
-	argv, err := nats.ParseArgv("nats kv put wc-migrations 20260429T120000Z abc123")
+	argv, err := nats.ParseArgv("nats kv put w17-migrations 20260429T120000Z abc123")
 	if err != nil {
 		t.Fatalf("ParseArgv: %v", err)
 	}
-	want := []string{"nats", "kv", "put", "wc-migrations", "20260429T120000Z", "abc123"}
+	want := []string{"nats", "kv", "put", "w17-migrations", "20260429T120000Z", "abc123"}
 	if !equalSlices(argv, want) {
 		t.Errorf("got %v, want %v", argv, want)
 	}

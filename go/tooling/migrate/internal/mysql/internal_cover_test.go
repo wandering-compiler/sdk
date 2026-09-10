@@ -18,9 +18,9 @@ func TestIsMissingTable(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"error 1146", errors.New("Error 1146 (42S02): Table 'x.wc_migrations' doesn't exist"), true},
+		{"error 1146", errors.New("Error 1146 (42S02): Table 'x.w17_migrations' doesn't exist"), true},
 		{"doesn't exist phrase", errors.New("table doesn't exist"), true},
-		{"unknown table", errors.New("Unknown table 'x.wc_migrations'"), true},
+		{"unknown table", errors.New("Unknown table 'x.w17_migrations'"), true},
 		{"wrapped 1146", fmt.Errorf("query: %w", errors.New("Error 1146: nope")), true},
 		{"unrelated", errors.New("connection refused"), false},
 		{"syntax error", errors.New("Error 1064 (42000): You have an error in your SQL syntax"), false},

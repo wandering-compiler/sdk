@@ -8,7 +8,7 @@ import (
 // ExtractSQLite queries sqlite_master + pragma_table_info for
 // the canonical Schema. SQLite has no information_schema; the
 // table-valued pragma functions are the equivalent. Excludes
-// the `wc_migrations` bookkeeping table + SQLite's internal
+// the `w17_migrations` bookkeeping table + SQLite's internal
 // `sqlite_*` tables.
 func ExtractSQLite(ctx context.Context, db dbQuery) (Schema, error) {
 	tables, err := sqliteListTables(ctx, db)

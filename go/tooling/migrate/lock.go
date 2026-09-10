@@ -27,7 +27,7 @@ var ErrLockHeld = errors.New("apply: another apply run holds the target run-lock
 // it is a read-check-write with no cross-process atomicity.
 //
 // Transactional SQL dialects (PG / MySQL / SQLite) do NOT implement
-// it: their up_sql runs in a transaction whose wc_migrations INSERT
+// it: their up_sql runs in a transaction whose w17_migrations INSERT
 // has the migration id as a primary key, so a second concurrent run
 // fails loudly on the unique violation instead of double-applying.
 //

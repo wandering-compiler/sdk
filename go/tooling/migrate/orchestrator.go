@@ -44,7 +44,7 @@ type ConnTarget struct {
 // (tests). The lock pins per-connection target_migration_id;
 // MigrationsDir holds the artifacts fetched by `w17migrate
 // fetch`; ApplierFor opens per-connection drivers; the DB-side
-// `wc_migrations` table (D27) is the source of truth for what
+// `w17_migrations` table (D27) is the source of truth for what
 // is already applied.
 type Config struct {
 	// Targets declare the deploy ceiling per connection (read from the
@@ -104,7 +104,7 @@ type Pending struct {
 	// Adopt marks a squash baseline this database has ALREADY satisfied:
 	// its applied head is one of the migrations the baseline replaces, so
 	// the schema it describes is the schema in front of us. Apply records
-	// it in wc_migrations and runs none of its DDL.
+	// it in w17_migrations and runs none of its DDL.
 	//
 	// Without this a squashed project's next deploy runs the baseline's
 	// full CREATE against tables that exist. It is a separate field rather
@@ -315,7 +315,7 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 // full set of statements the real apply would run) to cfg.Out. On real
 // apply it walks the plan in order, calls Applier.Apply for each.
 // A mid-list failure aborts loud; the consuming service's DB-side
-// `wc_migrations` table (D27, written by the migration's own
+// `w17_migrations` table (D27, written by the migration's own
 // `up_sql`) reflects the partial-success state on next deploy.
 //
 // Run does NOT update the lock — lock is read-only at apply time
@@ -484,7 +484,7 @@ func supersedes(m *applyfetchpb.Migration, id string) bool {
 // MigrationPhase first:
 //
 //   - PhasePending — a prior deploy committed the in-tx half (the
-//     pending wc_migrations row exists) but crashed before the post-tx
+//     pending w17_migrations row exists) but crashed before the post-tx
 //     skirt completed. Run ONLY the post-tx half; re-running the
 //     committed in-tx DDL would wedge ("relation already exists").
 //   - PhaseFresh / PhaseComplete — full Apply. (A pending-from-Plan
@@ -514,7 +514,7 @@ func applyOrResume(ctx context.Context, applier Applier, m *applyfetchpb.Migrati
 // implement RunLockCapable), acquires a run-lock on first open so a
 // non-idempotent TRANSFORM_FIELD data migration can't double-apply across
 // concurrent runs. Transactional SQL dialects don't implement RunLockCapable
-// (their wc_migrations PK serialises) and take the plain cached-applier path.
+// (their w17_migrations PK serialises) and take the plain cached-applier path.
 type runApplierCache struct {
 	applierFor ApplierFor
 	out        io.Writer
@@ -822,7 +822,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 // correctly said "No client-side signature verify". The belief that a tampered
 // artifact cannot execute here is the exact belief B11-1 lived under.
 //
-// Mid-list failure aborts loud; the DB-side `wc_migrations`
+// Mid-list failure aborts loud; the DB-side `w17_migrations`
 // reflects the partial-rollback state on next deploy. Lock is
 // read-only at rollback time (matches Apply posture).
 func RunRollback(ctx context.Context, cfg RollbackConfig) error {

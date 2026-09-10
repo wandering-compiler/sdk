@@ -9,7 +9,7 @@ import (
 )
 
 // PG fixtures recorded 2026-05-09 against PostgreSQL 18 in
-// docker (wc-schemas-pg18). See db-error-classification-
+// docker (w17-schemas-pg18). See db-error-classification-
 // portability.md "Empirical evidence" for the SQL that
 // generated each row. Constructing pgconn.PgError directly
 // here matches what the driver produces over the wire.

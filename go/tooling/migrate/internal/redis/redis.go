@@ -16,7 +16,7 @@
 // handles every nuance — userinfo, query params, db index — so
 // we don't roll our own parsing.
 //
-// Comment filtering: emit drops `# wc:` markers as no-op
+// Comment filtering: emit drops `# w17:` markers as no-op
 // audit-trail entries. Redis would reject them as commands; we
 // strip via FilterComments before tokenising.
 package redis
@@ -78,21 +78,21 @@ func New(_ context.Context, dsn string) (*Applier, error) {
 }
 
 // AppliedHead returns the newest applied-migration timestamp by
-// reading `HKEYS wc:migrations` and picking the max-by-lex
+// reading `HKEYS w17:migrations` and picking the max-by-lex
 // member. The bookkeeping hash is populated by
 // `applied.Redis()` (Phase C.2): every successful migration
-// HSETs `wc:migrations <ts> <hex(sha256)>`. Empty / missing
+// HSETs `w17:migrations <ts> <hex(sha256)>`. Empty / missing
 // hash → empty string (= "no migrations applied yet"), which
 // the orchestrator interprets as "run every pending
 // migration". w17's YYYYMMDDTHHMMSSZ id format is lex-sortable
 // == chrono-sortable, so max-lex == newest.
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
-	keys, err := a.client.HKeys(ctx, "wc:migrations").Result()
+	keys, err := a.client.HKeys(ctx, "w17:migrations").Result()
 	if err != nil {
 		// HKeys against a missing key yields an empty slice, not
 		// an error — anything coming through here is a real
 		// connection / auth problem worth surfacing.
-		return "", fmt.Errorf("redis HKEYS wc:migrations: %w", err)
+		return "", fmt.Errorf("redis HKEYS w17:migrations: %w", err)
 	}
 	var head string
 	for _, k := range keys {
@@ -136,7 +136,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // Phase E: YAML data migration bodies (forward up_sql is YAML)
 // dispatch through rollbackYAMLDataMigration. The down body is
 // either an auto-derived YAML inverse (RENAME swap, ADD
-// reverses to REMOVE) or a `# wc:irreversible:` comment block
+// reverses to REMOVE) or a `# w17:irreversible:` comment block
 // — the latter refuses without --allow-irreversible.
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if datamigrate.LooksLikeYAML([]byte(m.GetUpSql())) {
@@ -230,7 +230,7 @@ func (a *Applier) do(ctx context.Context, argv []string) error {
 	return nil
 }
 
-// FilterComments strips `# wc:` no-op marker lines + blank
+// FilterComments strips `# w17:` no-op marker lines + blank
 // lines from a script. Exposed for tests + for any callers
 // that want the same hygiene.
 func FilterComments(script string) string {

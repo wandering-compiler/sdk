@@ -17,7 +17,7 @@ import (
 // hdr builds a forward body carrying the expected_pre_fingerprint header the
 // console stamps, in the position it stamps it: the first line.
 func hdr(pre, body string) string {
-	return "-- wc:expected_pre_fingerprint: " + pre + "\n" + body
+	return "-- w17:expected_pre_fingerprint: " + pre + "\n" + body
 }
 
 // runOne drives a single-migration apply through the orchestrator against a
@@ -148,7 +148,7 @@ func TestExpectedPreFingerprint_ReadsPostTxSegment(t *testing.T) {
 func TestExpectedPreFingerprint_AcceptsHashPrefix(t *testing.T) {
 	m := &applyfetchpb.Migration{
 		Id:    "ts-1",
-		UpSql: "# wc:expected_pre_fingerprint: dddd4444\nkind: TRANSFORM_FIELD\n",
+		UpSql: "# w17:expected_pre_fingerprint: dddd4444\nkind: TRANSFORM_FIELD\n",
 	}
 	got, ok := migrate.ExpectedPreFingerprint(m)
 	if !ok || got != "dddd4444" {

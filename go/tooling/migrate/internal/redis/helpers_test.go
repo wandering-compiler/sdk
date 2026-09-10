@@ -127,8 +127,8 @@ func TestIsIrreversibleMarkerBody(t *testing.T) {
 	}{
 		{"empty", "", false},
 		{"whitespace-only", "   \n\t\n", false},
-		{"pure marker", "# wc:irreversible: REMOVE_FIELD has no inverse", true},
-		{"marker among blank+comment lines", "\n# header\n\n# wc:irreversible: x\n", true},
+		{"pure marker", "# w17:irreversible: REMOVE_FIELD has no inverse", true},
+		{"marker among blank+comment lines", "\n# header\n\n# w17:irreversible: x\n", true},
 		{"comment without marker", "# just a note\n# another", false},
 		{"real yaml body is not a marker", "version: 1\noperations: []", false},
 		{"comment then real line", "# note\nversion: 1", false},

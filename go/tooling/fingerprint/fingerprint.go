@@ -18,7 +18,7 @@
 // compare across compile-time and apply-time produced
 // fingerprints byte-for-byte.
 //
-// **What's covered.** Tables (excluding the wc_migrations
+// **What's covered.** Tables (excluding the w17_migrations
 // bookkeeping table itself) + their columns: name, data type,
 // nullable, default. Indexes + foreign-key constraints are
 // out of MVP scope — they're high-signal but require more
@@ -129,9 +129,9 @@ func (s Schema) FingerprintHex() string {
 // fingerprinting must skip — they're an artifact of the
 // migrator itself, not the user's schema, and re-applying a
 // migration changes their content (the per-version row in
-// wc_migrations) without representing a real schema drift.
+// w17_migrations) without representing a real schema drift.
 var excludedTables = map[string]struct{}{
-	"wc_migrations": {},
+	"w17_migrations": {},
 }
 
 // shouldExclude reports whether `table` is on the bookkeeping

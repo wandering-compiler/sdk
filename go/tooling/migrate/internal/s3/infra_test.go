@@ -286,9 +286,9 @@ func TestAppliedHead_Empty(t *testing.T) {
 // prefix + .json suffix stripped.
 func TestAppliedHead_MaxLex(t *testing.T) {
 	f := newFakeS3()
-	f.objects["wc-migrations/20260101T000000Z.json"] = []byte("{}")
-	f.objects["wc-migrations/20260301T000000Z.json"] = []byte("{}")
-	f.objects["wc-migrations/20260201T000000Z.json"] = []byte("{}")
+	f.objects["w17-migrations/20260101T000000Z.json"] = []byte("{}")
+	f.objects["w17-migrations/20260301T000000Z.json"] = []byte("{}")
+	f.objects["w17-migrations/20260201T000000Z.json"] = []byte("{}")
 	a := newApplier(t, f)
 	head, err := a.AppliedHead(ctx(t))
 	if err != nil {
@@ -316,25 +316,25 @@ func TestAppliedHead_ListError(t *testing.T) {
 func TestApply_CommandPutAndDelete(t *testing.T) {
 	f := newFakeS3()
 	a := newApplier(t, f)
-	body := "# wc: audit marker\n" +
+	body := "# w17: audit marker\n" +
 		"aws s3 rm --recursive s3://x (user-DDL marker, ignored)\n" +
-		"S3 PUT wc-migrations/ts-1.json {\"v\":1}\n"
+		"S3 PUT w17-migrations/ts-1.json {\"v\":1}\n"
 	if err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-1", UpSql: body}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if string(f.objects["wc-migrations/ts-1.json"]) != `{"v":1}` {
-		t.Errorf("object not written: %q", f.objects["wc-migrations/ts-1.json"])
+	if string(f.objects["w17-migrations/ts-1.json"]) != `{"v":1}` {
+		t.Errorf("object not written: %q", f.objects["w17-migrations/ts-1.json"])
 	}
 
 	// up_post_tx is honoured too.
 	if err := a.Apply(ctx(t), &applyfetchpb.Migration{
 		Id:       "ts-1b",
 		UpSql:    "S3 PUT k/a x",
-		UpPostTx: "S3 DELETE wc-migrations/ts-1.json",
+		UpPostTx: "S3 DELETE w17-migrations/ts-1.json",
 	}); err != nil {
 		t.Fatalf("Apply post_tx: %v", err)
 	}
-	if _, ok := f.objects["wc-migrations/ts-1.json"]; ok {
+	if _, ok := f.objects["w17-migrations/ts-1.json"]; ok {
 		t.Error("DELETE in up_post_tx did not remove object")
 	}
 }
@@ -491,17 +491,17 @@ func TestApply_PutServerError(t *testing.T) {
 // then down_sql, with DELETE tolerating a missing key.
 func TestRollback_CommandPath(t *testing.T) {
 	f := newFakeS3()
-	f.objects["wc-migrations/ts-r.json"] = []byte("{}")
+	f.objects["w17-migrations/ts-r.json"] = []byte("{}")
 	a := newApplier(t, f)
 	err := a.Rollback(ctx(t), &applyfetchpb.Migration{
 		Id:        "ts-r",
 		DownPreTx: "# pre marker",
-		DownSql:   "S3 DELETE wc-migrations/ts-r.json\nS3 DELETE wc-migrations/already-gone.json",
+		DownSql:   "S3 DELETE w17-migrations/ts-r.json\nS3 DELETE w17-migrations/already-gone.json",
 	})
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
-	if _, ok := f.objects["wc-migrations/ts-r.json"]; ok {
+	if _, ok := f.objects["w17-migrations/ts-r.json"]; ok {
 		t.Error("object should have been deleted")
 	}
 }
@@ -534,11 +534,11 @@ func TestApply_YAMLDataMigration(t *testing.T) {
 		}
 	}
 	// Bookkeeping object written, cursor cleared (no residue).
-	if _, ok := f.objects["wc-migrations/ts-yaml.json"]; !ok {
+	if _, ok := f.objects["w17-migrations/ts-yaml.json"]; !ok {
 		t.Error("bookkeeping object not written")
 	}
 	for k := range f.objects {
-		if strings.HasPrefix(k, "wc-data-migrations/") {
+		if strings.HasPrefix(k, "w17-data-migrations/") {
 			t.Errorf("cursor object %s should have been deleted", k)
 		}
 	}
@@ -576,7 +576,7 @@ func TestApply_YAMLPreservesObjectMetadata(t *testing.T) {
 func TestApply_YAMLResumesFromCursor(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"id":1}`)
-	f.objects["wc-data-migrations/ts-resume.cursor.json"] = []byte(`{"completed_ops":[0]}`)
+	f.objects["w17-data-migrations/ts-resume.cursor.json"] = []byte(`{"completed_ops":[0]}`)
 	a := newApplier(t, f)
 
 	if err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-resume", UpSql: yamlAdd}); err != nil {
@@ -585,7 +585,7 @@ func TestApply_YAMLResumesFromCursor(t *testing.T) {
 	if strings.Contains(string(f.objects["users/1"]), "active") {
 		t.Error("op 0 should have been skipped (cursor marked complete)")
 	}
-	if _, ok := f.objects["wc-migrations/ts-resume.json"]; !ok {
+	if _, ok := f.objects["w17-migrations/ts-resume.json"]; !ok {
 		t.Error("bookkeeping object not written")
 	}
 }
@@ -594,7 +594,7 @@ func TestApply_YAMLResumesFromCursor(t *testing.T) {
 // object surfaces as a cursor-read error.
 func TestApply_YAMLCursorDecodeError(t *testing.T) {
 	f := newFakeS3()
-	f.objects["wc-data-migrations/ts-badcur.cursor.json"] = []byte(`{not json`)
+	f.objects["w17-data-migrations/ts-badcur.cursor.json"] = []byte(`{not json`)
 	a := newApplier(t, f)
 	err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-badcur", UpSql: yamlAdd})
 	if err == nil || !strings.Contains(err.Error(), "cursor read") {
@@ -632,7 +632,7 @@ func TestApply_YAMLParseError(t *testing.T) {
 func TestRollback_YAMLDataMigration(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"id":1,"active":true}`)
-	f.objects["wc-migrations/ts-rb.json"] = []byte("{}")
+	f.objects["w17-migrations/ts-rb.json"] = []byte("{}")
 	a := newApplier(t, f)
 	down := `version: 1
 encoding: json
@@ -648,7 +648,7 @@ operations:
 	if strings.Contains(string(f.objects["users/1"]), "active") {
 		t.Errorf("active should have been removed: %s", f.objects["users/1"])
 	}
-	if _, ok := f.objects["wc-migrations/ts-rb.json"]; ok {
+	if _, ok := f.objects["w17-migrations/ts-rb.json"]; ok {
 		t.Error("bookkeeping object should have been erased")
 	}
 }
@@ -660,7 +660,7 @@ func TestRollback_YAMLIrreversibleRefused(t *testing.T) {
 	err := a.Rollback(ctx(t), &applyfetchpb.Migration{
 		Id:      "ts-irr",
 		UpSql:   yamlAdd,
-		DownSql: "# wc:irreversible: REMOVE_FIELD has no inverse",
+		DownSql: "# w17:irreversible: REMOVE_FIELD has no inverse",
 	})
 	if err == nil || !strings.Contains(err.Error(), "irreversible") {
 		t.Errorf("expected irreversible refusal, got %v", err)
@@ -704,7 +704,7 @@ func TestApply_YAMLTransformResumeRefused(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"n":1}`)
 	// Simulate a crash mid-op: op 0 is marked started but never completed.
-	f.objects["wc-data-migrations/ts-tfresume.cursor.json"] = []byte(`{"completed_ops":[],"started_ops":[0]}`)
+	f.objects["w17-data-migrations/ts-tfresume.cursor.json"] = []byte(`{"completed_ops":[],"started_ops":[0]}`)
 	a := newApplier(t, f)
 	body := `version: 1
 encoding: json
@@ -765,7 +765,7 @@ func TestApply_YAMLPutObjectError(t *testing.T) {
 func TestApply_YAMLEmptyCursorObject(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"id":1}`)
-	f.objects["wc-data-migrations/ts-empty.cursor.json"] = []byte("")
+	f.objects["w17-data-migrations/ts-empty.cursor.json"] = []byte("")
 	a := newApplier(t, f)
 	if err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-empty", UpSql: yamlAdd}); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -780,7 +780,7 @@ func TestApply_YAMLEmptyCursorObject(t *testing.T) {
 func TestApply_YAMLSaveCursorError(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"id":1}`)
-	f.failPut["wc-data-migrations/ts-sce.cursor.json"] = http.StatusInternalServerError
+	f.failPut["w17-data-migrations/ts-sce.cursor.json"] = http.StatusInternalServerError
 	a := newApplier(t, f)
 	err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-sce", UpSql: yamlAdd})
 	if err == nil || !strings.Contains(err.Error(), "cursor write") {
@@ -793,7 +793,7 @@ func TestApply_YAMLSaveCursorError(t *testing.T) {
 func TestApply_YAMLDeleteCursorError(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"id":1}`)
-	f.failDelete["wc-data-migrations/ts-dce.cursor.json"] = http.StatusInternalServerError
+	f.failDelete["w17-data-migrations/ts-dce.cursor.json"] = http.StatusInternalServerError
 	a := newApplier(t, f)
 	err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-dce", UpSql: yamlAdd})
 	if err == nil || !strings.Contains(err.Error(), "cursor delete") {
@@ -806,7 +806,7 @@ func TestApply_YAMLDeleteCursorError(t *testing.T) {
 func TestApply_YAMLBookkeepingError(t *testing.T) {
 	f := newFakeS3()
 	f.objects["users/1"] = []byte(`{"id":1}`)
-	f.failPut["wc-migrations/ts-bk.json"] = http.StatusInternalServerError
+	f.failPut["w17-migrations/ts-bk.json"] = http.StatusInternalServerError
 	a := newApplier(t, f)
 	err := a.Apply(ctx(t), &applyfetchpb.Migration{Id: "ts-bk", UpSql: yamlAdd})
 	if err == nil || !strings.Contains(err.Error(), "bookkeeping") {

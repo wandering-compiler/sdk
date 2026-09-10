@@ -148,7 +148,7 @@ func ApplyMySQLDSNParams(dsn string) string {
 //     prefix over a schema per module), so bare names resolve through
 //     search_path. Its default is `"$user", public`, which means an
 //     applier running as a role that owns a same-named schema creates
-//     `wc_migrations` and the tables somewhere the runtime does not look.
+//     `w17_migrations` and the tables somewhere the runtime does not look.
 //     Pinning it turns the decision's premise into a fact.
 //
 // A parameter the operator named themselves is left alone, same rule as

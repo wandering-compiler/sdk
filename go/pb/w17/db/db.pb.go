@@ -1329,7 +1329,7 @@ type Table struct {
 	Name    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Indexes []*Index               `protobuf:"bytes,2,rep,name=indexes,proto3" json:"indexes,omitempty"`
 	// Escape hatches for DB shapes the curated vocabulary can't spell.
-	// Both emit dialect-specific SQL verbatim; wc validates identifier
+	// Both emit dialect-specific SQL verbatim; w17gen validates identifier
 	// names (length, reserved words, collisions) but treats the SQL body
 	// as opaque — author is responsible for syntax and apply-time
 	// correctness, same contract as (w17.pg.field).custom_type.
@@ -1429,7 +1429,7 @@ type Table struct {
 	//     materially).
 	//   - Static only — no runtime hook to re-read live row counts.
 	//     Future iter (per docs/architecture.md "Local schema
-	//     validator") may add a `wc analyze` command to refresh
+	//     validator") may add a `w17gen analyze` command to refresh
 	//     hints from the live DB.
 	EstimatedRowCount uint64 `protobuf:"varint,10,opt,name=estimated_row_count,json=estimatedRowCount,proto3" json:"estimated_row_count,omitempty"`
 	// Bucket discriminator column for HASH_BUCKETED Redis tables
@@ -1765,7 +1765,7 @@ type Index struct {
 	// Storage parameters — free-form key/value map rendered as
 	// `WITH (key1=value1, key2=value2)` after the column list. Common
 	// knobs: `fillfactor`, `fastupdate`, `pages_per_range`,
-	// `autosummarize`. wc passes through verbatim; PG validates at
+	// `autosummarize`. w17gen passes through verbatim; PG validates at
 	// apply time. Graduation path: if pilots repeat the same options,
 	// typed per-method submessages can replace the map (parallel to
 	// D9's custom_type → curated-flags graduation).
@@ -1991,7 +1991,7 @@ func (x *Index) GetPluginFeatureUnless() string {
 type IndexField struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Proto-field name on the owning message. FK semantics: the field
-	// must exist on the message; wc validates at IR time. Mutually
+	// must exist on the message; w17gen validates at IR time. Mutually
 	// exclusive with `expr` — one IndexField entry indexes either a
 	// declared column OR a computed expression, never both.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -2104,7 +2104,7 @@ func (x *IndexField) GetExpr() string {
 
 // RawCheck is the escape hatch for CHECK constraints the per-field
 // vocabulary can't spell. Author supplies the SQL expression that goes
-// inside `CHECK (…)`; wc wraps with `CONSTRAINT <name> CHECK (<expr>)`
+// inside `CHECK (…)`; w17gen wraps with `CONSTRAINT <name> CHECK (<expr>)`
 // and validates <name> for length / reserved-keyword / collision with
 // derived constraint names. The expression itself is opaque — dialect
 // portability is the author's problem (same contract as custom_type).
@@ -2241,7 +2241,7 @@ func (x *TableCheck) GetPredicate() string {
 // RawIndex is the escape hatch for indexes the structured (fields +
 // INCLUDE + unique) vocabulary can't spell. Author supplies the body
 // AFTER `ON <table>` — i.e. `USING <method> (<cols_or_exprs>) [INCLUDE …]
-// [WHERE <cond>]`. wc wraps with `CREATE [UNIQUE] INDEX <name> ON <table>
+// [WHERE <cond>]`. w17gen wraps with `CREATE [UNIQUE] INDEX <name> ON <table>
 // <body>` and validates <name> like any other index.
 //
 // Common uses:
@@ -2362,7 +2362,7 @@ type Column struct {
 	DbType DbType `protobuf:"varint,5,opt,name=db_type,json=dbType,proto3,enum=w17.db.DbType" json:"db_type,omitempty"`
 	// Generated-column expression — when set, the column is emitted as
 	// `GENERATED ALWAYS AS (<expr>) STORED`. Body is opaque SQL (same
-	// contract as raw_checks / raw_indexes): wc validates nothing inside
+	// contract as raw_checks / raw_indexes): w17gen validates nothing inside
 	// the parentheses, the author is responsible for referenced columns
 	// existing and the expression being deterministic.
 	//

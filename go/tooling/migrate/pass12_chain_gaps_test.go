@@ -150,7 +150,7 @@ func TestRun_TamperedAdoptSqlAloneIsRefused(t *testing.T) {
 	const sentinel = "GRANT ALL ON ALL TABLES IN SCHEMA public TO attacker;"
 	baseline := mkMig("ts-9", "main", "CREATE TABLE everything (id BIGINT PRIMARY KEY);")
 	baseline.Supersedes = []string{"ts-1", "ts-2"}
-	baseline.AdoptSql = "INSERT INTO wc_migrations VALUES ('ts-9');"
+	baseline.AdoptSql = "INSERT INTO w17_migrations VALUES ('ts-9');"
 	dir := seedDir(t, baseline)
 
 	mutateOnDisk(t, dir, "main", "ts-9", func(m *applyfetchpb.Migration) { m.AdoptSql = sentinel })

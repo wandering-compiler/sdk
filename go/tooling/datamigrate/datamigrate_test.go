@@ -220,14 +220,14 @@ func TestValidate_RejectsMisshapenOps(t *testing.T) {
 func TestLooksLikeYAML_Classifier(t *testing.T) {
 	yes := []string{
 		"version: 1\nencoding: json\n",
-		"# wc:expected_pre_fingerprint: abc\nversion: 1\n",
-		"# wc:risk: ...\n\n# more comments\nversion: 1\n",
+		"# w17:expected_pre_fingerprint: abc\nversion: 1\n",
+		"# w17:risk: ...\n\n# more comments\nversion: 1\n",
 	}
 	no := []string{
 		"BEGIN;\nCREATE TABLE x;\nCOMMIT;",
-		"HSET wc:migrations ts hex",
-		"nats kv put wc-migrations ts hex",
-		"S3 PUT wc-migrations/ts.json {json}",
+		"HSET w17:migrations ts hex",
+		"nats kv put w17-migrations ts hex",
+		"S3 PUT w17-migrations/ts.json {json}",
 		"",
 		"# only comments\n# nothing else",
 	}

@@ -21,7 +21,7 @@ func TestExtractSQLite_RoundTrip(t *testing.T) {
 		email TEXT NOT NULL,
 		full_name TEXT
 	)`)
-	mustExec(t, db, `CREATE TABLE wc_migrations (
+	mustExec(t, db, `CREATE TABLE w17_migrations (
 		timestamp TEXT PRIMARY KEY,
 		applied_at TEXT,
 		content_sha256 BLOB
@@ -36,8 +36,8 @@ func TestExtractSQLite_RoundTrip(t *testing.T) {
 	if !strings.Contains(formatted, `TABLE "users"`) {
 		t.Errorf("formatted output missing users; got:\n%s", formatted)
 	}
-	if strings.Contains(formatted, "wc_migrations") {
-		t.Errorf("wc_migrations should be excluded; got:\n%s", formatted)
+	if strings.Contains(formatted, "w17_migrations") {
+		t.Errorf("w17_migrations should be excluded; got:\n%s", formatted)
 	}
 	if !strings.Contains(formatted, `COLUMN "email"`) {
 		t.Errorf("missing email column; got:\n%s", formatted)

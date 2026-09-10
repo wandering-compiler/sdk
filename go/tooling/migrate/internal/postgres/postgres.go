@@ -76,7 +76,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 	// migration bodies have none, so their literals were parsed under
 	// whatever the session happened to carry. search_path matters for the
 	// same reason in the other direction: bare identifiers (including
-	// `wc_migrations`) resolve through it, so an applier running as a role
+	// `w17_migrations`) resolve through it, so an applier running as a role
 	// that owns a same-named schema creates the tables somewhere the
 	// runtime never looks.
 	conn, err := pgx.Connect(ctx, dbsession.ApplyPGDSNParams(dsn))
@@ -87,11 +87,11 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 }
 
 // AppliedHead returns the id of the most recently applied
-// migration on this DB by querying `wc_migrations` (D27).
+// migration on this DB by querying `w17_migrations` (D27).
 // Missing table = empty string (treated as fresh DB by the
 // orchestrator).
 //
-// `wc_migrations.timestamp` is TIMESTAMPTZ; the orchestrator's
+// `w17_migrations.timestamp` is TIMESTAMPTZ; the orchestrator's
 // pending filter compares against `naming.Name` strings
 // (`YYYYMMDDTHHMMSSZ` basic ISO-8601). We format here via
 // `to_char` so the returned string round-trips against the id
@@ -114,12 +114,12 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	}
 	var head string
 	err := a.conn.QueryRow(ctx,
-		`SELECT COALESCE(to_char(MAX(timestamp) AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"'), '') FROM wc_migrations WHERE post_tx_complete`,
+		`SELECT COALESCE(to_char(MAX(timestamp) AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"'), '') FROM w17_migrations WHERE post_tx_complete`,
 	).Scan(&head)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		// 42P01 = undefined_table — fresh DB; the next applied
-		// migration's up_sql will CREATE wc_migrations (D27).
+		// migration's up_sql will CREATE w17_migrations (D27).
 		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
 			return "", nil
 		}
@@ -129,9 +129,9 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 }
 
 // ensurePhaseColumn idempotently adds the Q52 `post_tx_complete`
-// column to a pre-existing wc_migrations table (one created before
+// column to a pre-existing w17_migrations table (one created before
 // this feature shipped). Brand-new DBs get the column from the first
-// migration's CREATE TABLE (RenderWcMigrationsCreate), so the ALTER is
+// migration's CREATE TABLE (RenderW17MigrationsCreate), so the ALTER is
 // a no-op there; a fresh DB has no table yet (42P01) which is also a
 // no-op. Runs at most once per connection — cached via
 // phaseColEnsured. The DEFAULT true backfills existing rows as
@@ -142,7 +142,7 @@ func (a *Applier) ensurePhaseColumn(ctx context.Context) error {
 		return nil
 	}
 	_, err := a.conn.Exec(ctx,
-		`ALTER TABLE wc_migrations ADD COLUMN IF NOT EXISTS post_tx_complete BOOLEAN NOT NULL DEFAULT true`,
+		`ALTER TABLE w17_migrations ADD COLUMN IF NOT EXISTS post_tx_complete BOOLEAN NOT NULL DEFAULT true`,
 		pgx.QueryExecModeSimpleProtocol)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -171,7 +171,7 @@ func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase,
 	// string exactly as AppliedHead does, so equality matches the id
 	// the registry stamped (avoids tz/precision round-trip ambiguity).
 	err := a.conn.QueryRow(ctx,
-		`SELECT post_tx_complete FROM wc_migrations
+		`SELECT post_tx_complete FROM w17_migrations
 		   WHERE to_char(timestamp AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"') = $1`,
 		id).Scan(&complete)
 	if err != nil {
@@ -202,7 +202,7 @@ func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase,
 // in an implicit transaction (per the protocol spec), which would
 // re-trap `CREATE INDEX CONCURRENTLY` exactly the way bake-into-
 // up_sql did. Per-statement Exec keeps each post-tx op + the
-// trailing wc_migrations INSERT in their own auto-commit.
+// trailing w17_migrations INSERT in their own auto-commit.
 //
 // pgx defaults to extended protocol; we pin
 // `QueryExecModeSimpleProtocol` so the body is sent verbatim
@@ -218,7 +218,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // ApplyPostTx runs ONLY the migration's post-tx half — the Q52 resume
 // path (migrate.ResumableApplier). The orchestrator calls this for a
 // PhasePending migration whose up_sql already committed (its pending
-// wc_migrations row exists); re-running up_sql would wedge on the
+// w17_migrations row exists); re-running up_sql would wedge on the
 // already-created in-tx objects. The post-tx body's leading
 // `DROP INDEX CONCURRENTLY IF EXISTS` clears any INVALID index a prior
 // crashed CONCURRENTLY left behind, then rebuilds; the trailing UPDATE
@@ -238,7 +238,7 @@ const postTxAdvisoryLockKey int64 = 0x77313770737474 // "w17ptt"
 // stays outside the implicit multi-statement transaction.
 //
 // Q65-engine-1: the skirt runs OUTSIDE any transaction (CONCURRENTLY
-// can't be wrapped), so the wc_migrations PK that serialises the in-tx
+// can't be wrapped), so the w17_migrations PK that serialises the in-tx
 // half does NOT protect it — two migrators both resuming the same
 // PhasePending migration would each run `DROP INDEX CONCURRENTLY IF
 // EXISTS` + `CREATE INDEX CONCURRENTLY` and collide (dropping each
@@ -264,13 +264,13 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 
 	// Re-check under the lock: a migrator we just waited behind may have
 	// already run + completed this skirt. Skip ONLY when the migration is
-	// already COMPLETE (a wc_migrations row with post_tx_complete=true) — a
+	// already COMPLETE (a w17_migrations row with post_tx_complete=true) — a
 	// concurrent migrator finished it, so re-running would collide.
 	//
-	// PhaseFresh (no wc_migrations row yet) is a RUN case, not a skip: a
+	// PhaseFresh (no w17_migrations row yet) is a RUN case, not a skip: a
 	// PURE post-tx migration (no in-tx DDL — e.g. add-unique / concurrent
 	// index synthesised entirely as a CONCURRENTLY skirt) carries its own
-	// wc_migrations INSERT in the skirt, so its in-tx half wrote no pending
+	// w17_migrations INSERT in the skirt, so its in-tx half wrote no pending
 	// marker. Gating on `== PhasePending` would have skipped it on a fresh
 	// apply, silently dropping the index + the bookkeeping row (→ never
 	// idempotent). The leading `DROP INDEX CONCURRENTLY IF EXISTS` keeps the
@@ -295,7 +295,7 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 // Rollback runs the migration's down payload — the inverse of
 // Apply. Order: down_pre_tx first (post-tx-equivalent skirt;
 // e.g. `DROP INDEX CONCURRENTLY`), then down_sql (in-tx body
-// including the wc_migrations DELETE applied.Wrap injected).
+// including the w17_migrations DELETE applied.Wrap injected).
 //
 // down_pre_tx runs statement-by-statement under
 // SimpleProtocol — same per-statement / no-prepare contract
@@ -436,7 +436,7 @@ func hasPrefixAt(b []byte, i int, s string) bool {
 
 // Wipe drops every object in the public schema and recreates it empty
 // (migrate.Wiper) — the dev fresh-build primitive. `DROP SCHEMA public
-// CASCADE` removes all tables (incl. wc_migrations), types, indexes,
+// CASCADE` removes all tables (incl. w17_migrations), types, indexes,
 // etc.; `CREATE SCHEMA public` restores the empty default schema. Only
 // the connected database is touched.
 func (a *Applier) Wipe(ctx context.Context) error {
@@ -462,7 +462,7 @@ func (a *Applier) Close() error {
 
 // Fingerprint extracts the canonical PG schema state via
 // information_schema and returns its hex-encoded sha256
-// (Phase D — D-iter3-14). Excludes the wc_migrations
+// (Phase D — D-iter3-14). Excludes the w17_migrations
 // bookkeeping table; sorted by name + columns. The
 // orchestrator's Phase D drift check calls this before each
 // pending migration; for now the comparison is stubbed to

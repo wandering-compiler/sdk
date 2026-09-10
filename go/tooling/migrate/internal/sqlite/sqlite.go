@@ -68,15 +68,15 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 }
 
 // AppliedHead returns the id of the most recently applied
-// migration on this DB by querying `wc_migrations` (D27).
+// migration on this DB by querying `w17_migrations` (D27).
 // Missing table = empty string (treated as fresh DB by the
-// orchestrator). SQLite returns "no such table: wc_migrations"
+// orchestrator). SQLite returns "no such table: w17_migrations"
 // on absence, sniffed via substring match on the error message
 // (modernc.org/sqlite does not expose typed error codes).
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	var head sql.NullString
 	err := a.db.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(timestamp), '') FROM wc_migrations`,
+		`SELECT COALESCE(MAX(timestamp), '') FROM w17_migrations`,
 	).Scan(&head)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
@@ -99,7 +99,7 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 // PhasePending recovery here — AppliedHead does not filter on a
 // `post_tx_complete` marker, and up_post_tx runs as a SEPARATE Exec
 // after up_sql has already committed. In the skirt layout the
-// wc_migrations bookkeeping row is written at the END of up_post_tx
+// w17_migrations bookkeeping row is written at the END of up_post_tx
 // (applied.Wrap's legacy-skirt path), NOT in up_sql. So a crash BETWEEN
 // the two Execs leaves up_sql's DDL committed with NO applied-state row:
 // a re-run sees the migration as un-applied and re-executes up_sql, which
@@ -180,7 +180,7 @@ func assertNoForeignKeyViolations(ctx context.Context, conn *sql.Conn, upSQL, mi
 
 // Rollback runs the migration's down payload. Order:
 // down_pre_tx first, then down_sql (in-tx body including the
-// wc_migrations DELETE applied.Wrap injected).
+// w17_migrations DELETE applied.Wrap injected).
 // PRAGMA foreign_keys=OFF/ON wraps the body the same way Apply
 // does — the rebuild recipe uses identical drop/recreate/copy
 // dance for down direction (the migrator's structured ALTER
@@ -274,7 +274,7 @@ func (a *Applier) Close() error {
 
 // Fingerprint extracts the canonical SQLite schema state via
 // sqlite_master + pragma_table_info and returns its hex-encoded
-// sha256 (Phase D — D-iter3-14). Excludes the wc_migrations
+// sha256 (Phase D — D-iter3-14). Excludes the w17_migrations
 // bookkeeping table + SQLite's internal sqlite_* tables; sorted
 // by name + columns.
 func (a *Applier) Fingerprint(ctx context.Context) (string, error) {

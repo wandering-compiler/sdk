@@ -96,20 +96,20 @@ func TestParseDSN_MalformedURL(t *testing.T) {
 }
 
 func TestFilterComments_Strips(t *testing.T) {
-	in := `# wc: this is a comment
+	in := `# w17: this is a comment
 SET foo bar
 # another comment
 
-ZADD wc:migrations 1 ts-1`
+ZADD w17:migrations 1 ts-1`
 	want := `SET foo bar
-ZADD wc:migrations 1 ts-1`
+ZADD w17:migrations 1 ts-1`
 	if got := redis.FilterComments(in); got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
 }
 
 func TestFilterComments_AllComments(t *testing.T) {
-	in := "# wc: only-comment\n# another\n\n"
+	in := "# w17: only-comment\n# another\n\n"
 	if got := redis.FilterComments(in); got != "" {
 		t.Errorf("all-comment script should yield empty, got %q", got)
 	}
@@ -125,11 +125,11 @@ func TestFilterComments_PreservesIndentation(t *testing.T) {
 
 // TestParseArgv_Bare — bare tokens split on whitespace.
 func TestParseArgv_Bare(t *testing.T) {
-	argv, err := redis.ParseArgv("HSET wc:migrations 20260429T120000Z abc123")
+	argv, err := redis.ParseArgv("HSET w17:migrations 20260429T120000Z abc123")
 	if err != nil {
 		t.Fatalf("ParseArgv: %v", err)
 	}
-	want := []string{"HSET", "wc:migrations", "20260429T120000Z", "abc123"}
+	want := []string{"HSET", "w17:migrations", "20260429T120000Z", "abc123"}
 	if !equalSlices(argv, want) {
 		t.Errorf("got %v, want %v", argv, want)
 	}
