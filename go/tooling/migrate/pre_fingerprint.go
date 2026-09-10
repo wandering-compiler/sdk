@@ -127,8 +127,9 @@ func checkPreFingerprint(ctx context.Context, applier Applier, m *applyfetchpb.M
 			"       database changed outside this migration history — a hand-applied DDL, a restore from another\n"+
 			"       environment, or a different project's database behind this connection.\n"+
 			"  fix: reconcile the database with its history before applying. `migrate status` shows what this\n"+
-			"       connection believes is applied; `migrate adopt` is how a database that already holds the\n"+
-			"       schema is brought under management.",
+			"       connection believes is applied. If the two genuinely describe the same schema, the\n"+
+			"       divergence is in the LEDGER, and fixing it is a deliberate act on that database — there\n"+
+			"       is no command that records a migration as applied without running it.",
 		m.GetId(), want, got,
 	)
 }

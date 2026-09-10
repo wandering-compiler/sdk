@@ -36,7 +36,7 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 			"(T2-5 pass #14, C14-13: the excuse used to claim the loader rewrites it unconditionally)",
 		"adopt_preflight_sql": "fail-CLOSED, so stripping it cannot widen what an attacker can do. " +
 			"It is the check `migrate adopt` must pass before recording a migration it will not run, " +
-			"and an EMPTY value means REFUSE rather than \"nothing to check\" (RunAdopt), so tampering " +
+			"and an EMPTY value means REFUSE rather than \"nothing to check\", so tampering " +
 			"with it can only prevent an adoption, never license one. Hashing it would change every " +
 			"stored digest and every lock pin in existence to close a hole that is already shut in the " +
 			"one direction that matters. The statements it carries are also never applied as a " +
