@@ -2,9 +2,14 @@
 // generated REST gateway binary. Hosts JSON ↔ proto helpers,
 // gRPC error → HTTP status mapping, and (future iteration)
 // the compiled custom JSON parser the user roadmap calls
-// out for performance optimisation. Adapted from
-// `github.com/mrs1lentcz/protobridge/runtime` per user
-// direction 2026-05-03 ("zkopirovat … rozsirovat").
+// out for performance optimisation.
+//
+// Its shape was ADAPTED from an external library in 2026-05
+// ("zkopirovat … rozsirovat"), which is why the two once
+// looked alike. Nothing external is imported: that library
+// is not a dependency of this package, of the compiler, or
+// of anything the compiler emits — see the warning in
+// docs/conventions-global/go.md.
 //
 // The generator emits Go that imports this package directly;
 // every cross-cutting runtime concern shared by every
