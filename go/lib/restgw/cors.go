@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // CORSConfig drives the [CORSMiddleware] wrapper. The
@@ -114,7 +116,18 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	}
 	headers := cfg.AllowedHeaders
 	if len(headers) == 0 {
-		headers = []string{"Content-Type", "Authorization"}
+		// principal.OrgScopeHeader is in the DEFAULT, not left to the
+		// operator, because it is not a domain-specific header — it is how
+		// this platform scopes a request to an organization, so every
+		// deployment with org membership needs it and none of them chose it.
+		//
+		// Omitting it does not produce an error anybody can act on: the
+		// preflight still answers 204, the browser silently refuses to send
+		// the request, and the caller sees "Failed to fetch" with no status
+		// and no server-side log line (w17.app, 2026-09-11 — the members and
+		// invites screens were unreachable while /auth/orgs, which needs no
+		// org header, worked).
+		headers = []string{"Content-Type", "Authorization", principal.OrgScopeHeader}
 	}
 	methodsHdr := strings.Join(methods, ", ")
 	headersHdr := strings.Join(headers, ", ")
