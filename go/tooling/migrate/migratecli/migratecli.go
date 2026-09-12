@@ -223,6 +223,7 @@ type applyFlags struct {
 	toSet      bool
 	fetch      bool
 	dryRun     bool
+	allowNoDSN bool
 	logFormat  string
 	parallel   int
 }
@@ -242,6 +243,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
+	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
 	if err := fs.Parse(args); err != nil {
@@ -501,6 +503,39 @@ func seedSpecs(targets []migrate.ConnTarget, getenv func(string) string) (specs 
 		specs = append(specs, factory.TargetSpec{Connection: t.Connection, DSN: dsn})
 	}
 	return specs, withoutDSN
+}
+
+// requireSomeDSN refuses a run in which NOT ONE of the bundle's connections
+// has a DSN.
+//
+// Without it the command prints a note and exits 0, and a step that cannot
+// fail looks more finished than a step nobody wrote. That is not theoretical:
+// wired into a compose chain behind `condition:
+// service_completed_successfully`, the dependent service starts over a
+// database with no schema and no rows, and the run is green. deinvo took an
+// early "success" here as proof the new path worked; the database was still
+// being built by the old initdb and both new steps were no-ops (2026-09-12).
+//
+// SOME, not every: a project with several connections may legitimately point
+// one run at one database, and failing on the others' absent DSNs would break
+// that. Nothing set at all is different in kind — it is the shape of a
+// variable nobody exported, and the command cannot even tell whether there
+// was work to do.
+//
+// --allow-no-dsn opts back in to doing nothing, because "run this step only
+// where it applies" is a real need; it just has to be SAID rather than
+// inferred from silence.
+func requireSomeDSN(cmd string, specs []factory.TargetSpec, withoutDSN []string, allow bool) error {
+	if allow || len(specs) > 0 || len(withoutDSN) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: this bundle owns %d connection(s) and NONE of them has a DSN\n"+
+			"  missing: %s\n"+
+			"  why: with no DSN there is nothing to connect to, so this step would do nothing and still succeed —\n"+
+			"       behind `condition: service_completed_successfully` that starts the next service over an empty database\n"+
+			"  fix: export the variable(s) above, or pass --allow-no-dsn to say that doing nothing is intended",
+		cmd, len(withoutDSN), join(withoutDSN))
 }
 
 // consoleAddrOf lets --console override the environment, without giving the

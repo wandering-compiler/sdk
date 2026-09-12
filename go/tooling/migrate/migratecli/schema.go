@@ -115,6 +115,24 @@ func runSchema(ctx context.Context, args []string, opts Options, out io.Writer) 
 	// a name it has no DSN for: another bundle's database is not this
 	// binary's to change, which is the same rule migrate apply follows.
 	specs, withoutDSN := seedSpecs(targets, opts.getenv())
+	// Does the plan carry work for a connection this bundle OWNS — by name,
+	// before the DSN filter narrows anything? The answer separates "nothing
+	// to do" from "nowhere to do it", which the old code could not tell apart
+	// and reported as the friendlier of the two.
+	hasWork := false
+	for _, t := range targets {
+		for _, m := range plan.GetMigrations() {
+			if m.GetConnection() == t.Connection {
+				hasWork = true
+				break
+			}
+		}
+	}
+	if hasWork {
+		if err := requireSomeDSN("schema", specs, withoutDSN, f.allowNoDSN); err != nil {
+			return err
+		}
+	}
 	owned := map[string]bool{}
 	for _, s := range specs {
 		owned[s.Connection] = true

@@ -60,8 +60,35 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 		return err
 	}
 	if len(seeds) == 0 {
-		fmt.Fprintf(out, "fixtures: nothing to seed in group %s\n", groupLabel(f.group))
+		// Say WHERE it looked. "Nothing to seed" is a success, and a success
+		// that names no source cannot be told apart from a run pointed at the
+		// wrong directory or filtered by a group nobody rendered — which is
+		// exactly how it read to deinvo, who took it as proof the step had run
+		// (2026-09-12). The three inputs that decide this answer are the
+		// directory, the domain filter and the group, so all three are named.
+		where := f.fixtures
+		if f.fetch {
+			where = "the console (--fetch)"
+		}
+		domain := f.domain
+		if domain == "" {
+			domain = "(every domain)"
+		}
+		fmt.Fprintf(out, "fixtures: nothing to seed in group %s\n  looked in: %s\n  domain:    %s\n"+
+			"  note: this is a SUCCESS — no fixture matched. If you expected rows, check that a render step wrote them there.\n",
+			groupLabel(f.group), where, domain)
 		return nil
+	}
+	// There ARE rows to seed, so a run with no DSN anywhere cannot do its job.
+	//
+	// openSeedTarget below also refuses this case, but it refuses it as a
+	// STORE-TYPE problem ("no connection a fixture can be seeded into", with a
+	// why about KV stores having nothing to insert rows as) — true of a bundle
+	// serving only Redis, and misleading for the far commoner cause of a
+	// variable nobody exported. Two causes, one refusal, and the message
+	// named the rarer one.
+	if err := requireSomeDSN("fixtures", specs, withoutDSN, f.allowNoDSN); err != nil {
+		return err
 	}
 
 	// The whole group is ONE unit of work. Fixtures reference each other
