@@ -969,7 +969,59 @@ type Field struct {
 	Immutable bool `protobuf:"varint,4,opt,name=immutable,proto3" json:"immutable,omitempty"`
 	// Opt-out of NOT NULL. When true the column is nullable AND the generated
 	// internal proto emits the field as proto3 `optional`.
+	//
+	// `required` below is the positive spelling of `null: false`, and the one
+	// to prefer: it says the same thing about a COLUMN and additionally covers
+	// a case this flag cannot reach at all.
 	Null bool `protobuf:"varint,5,opt,name=null,proto3" json:"null,omitempty"`
+	// required — this value must be PROVIDED.
+	//
+	// The positive spelling of `null: false` on a column, and the only spelling
+	// that works on a request parameter with no column behind it.
+	//
+	// Why the second half is not reachable through `null`: that flag governs a
+	// COLUMN, and a lookup parameter has none. A mutation that takes
+	// `customer_id` to find a customer's name through a subquery writes no
+	// `customer_id` column, so there is nothing for `null: false` to describe —
+	// and yet omitting it must be refused. Today it is refused far downstream,
+	// by a NOT NULL violation on whatever the subquery failed to produce, and
+	// the message names that other column instead of the parameter the caller
+	// left out.
+	//
+	// Enforcement follows what the field can carry, and the difference is in
+	// the ERROR, never in the guarantee:
+	//
+	//   - a column field   → exactly `null: false`. The wire shape does not
+	//     change. Validation refuses an absent value by
+	//     name, before the write, instead of letting the
+	//     database refuse it by constraint.
+	//   - a presence-bearing parameter → an omitted value is refused, naming
+	//     the parameter. This is the case `null` cannot
+	//     express.
+	//
+	// A field with no presence and no column cannot report absence at all: a
+	// proto3 scalar's zero value is indistinguishable from an omitted one. The
+	// annotation is accepted there and means what `null: false` means; it does
+	// not invent a distinction the wire does not carry.
+	//
+	// `null` and `required` are two AXES, not two spellings. `null` is about
+	// STORAGE (may the column hold NULL); `required` is about INPUT (must the
+	// caller supply a value). Django draws the same line between a model's
+	// `null` and a form's `blank`, and for the same reason — all four
+	// combinations mean something:
+	//
+	//	null:false             → NOT NULL column, input required (derived)
+	//	null:true              → nullable column, input optional (derived)
+	//	null:true  required:t  → nullable column, but THIS call must supply it
+	//	null:false required:f  → NOT NULL column the SERVER fills (a default,
+	//	                         an auto value, a stamped scope) — the caller
+	//	                         must not be asked for it
+	//
+	// `optional` so the derived default can be told from an explicit override:
+	// unset means "derive from null and from whether the server supplies the
+	// value", exactly as `min_len` and `gt` above are optional to tell 0 from
+	// unset.
+	Required *bool `protobuf:"varint,33,opt,name=required,proto3,oneof" json:"required,omitempty"`
 	// String-only. When true allows empty string (default CHECK col <> ”).
 	// Orthogonal to null.
 	Blank bool `protobuf:"varint,6,opt,name=blank,proto3" json:"blank,omitempty"`
@@ -1341,6 +1393,13 @@ func (x *Field) GetImmutable() bool {
 func (x *Field) GetNull() bool {
 	if x != nil {
 		return x.Null
+	}
+	return false
+}
+
+func (x *Field) GetRequired() bool {
+	if x != nil && x.Required != nil {
+		return *x.Required
 	}
 	return false
 }
@@ -1911,25 +1970,26 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\xa5\b\n" +
+	" \x01(\tR\amessage\"\xd3\b\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
 	"\x02pk\x18\x02 \x01(\bR\x02pk\x12\x1c\n" +
 	"\timmutable\x18\x04 \x01(\bR\timmutable\x12\x12\n" +
-	"\x04null\x18\x05 \x01(\bR\x04null\x12\x14\n" +
+	"\x04null\x18\x05 \x01(\bR\x04null\x12\x1f\n" +
+	"\brequired\x18! \x01(\bH\x01R\brequired\x88\x01\x01\x12\x14\n" +
 	"\x05blank\x18\x06 \x01(\bR\x05blank\x12\x16\n" +
 	"\x06unique\x18\a \x01(\bR\x06unique\x12\x17\n" +
 	"\amax_len\x18\b \x01(\x05R\x06maxLen\x12\x1c\n" +
-	"\amin_len\x18\t \x01(\x05H\x01R\x06minLen\x88\x01\x01\x12\x13\n" +
+	"\amin_len\x18\t \x01(\x05H\x02R\x06minLen\x88\x01\x01\x12\x13\n" +
 	"\x02gt\x18\n" +
-	" \x01(\x01H\x02R\x02gt\x88\x01\x01\x12\x15\n" +
-	"\x03gte\x18\v \x01(\x01H\x03R\x03gte\x88\x01\x01\x12\x13\n" +
-	"\x02lt\x18\f \x01(\x01H\x04R\x02lt\x88\x01\x01\x12\x15\n" +
-	"\x03lte\x18\r \x01(\x01H\x05R\x03lte\x88\x01\x01\x12\x18\n" +
+	" \x01(\x01H\x03R\x02gt\x88\x01\x01\x12\x15\n" +
+	"\x03gte\x18\v \x01(\x01H\x04R\x03gte\x88\x01\x01\x12\x13\n" +
+	"\x02lt\x18\f \x01(\x01H\x05R\x02lt\x88\x01\x01\x12\x15\n" +
+	"\x03lte\x18\r \x01(\x01H\x06R\x03lte\x88\x01\x01\x12\x18\n" +
 	"\apattern\x18\x0e \x01(\tR\apattern\x12\x18\n" +
 	"\achoices\x18\x10 \x01(\tR\achoices\x12\x1c\n" +
 	"\tprecision\x18\x11 \x01(\x05R\tprecision\x12\x19\n" +
-	"\x05scale\x18\x12 \x01(\x05H\x06R\x05scale\x88\x01\x01\x12'\n" +
+	"\x05scale\x18\x12 \x01(\x05H\aR\x05scale\x88\x01\x01\x12'\n" +
 	"\x0edefault_string\x18\x14 \x01(\tH\x00R\rdefaultString\x12!\n" +
 	"\vdefault_int\x18\x15 \x01(\x03H\x00R\n" +
 	"defaultInt\x12'\n" +
@@ -1948,7 +2008,8 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x04json\x18\x1e \x01(\bR\x04json\x123\n" +
 	"\fauto_choices\x18\x1f \x01(\x0e2\x10.w17.AutoChoicesR\vautoChoices\x12\x16\n" +
 	"\x06format\x18  \x01(\tR\x06formatB\t\n" +
-	"\adefaultB\n" +
+	"\adefaultB\v\n" +
+	"\t_requiredB\n" +
 	"\n" +
 	"\b_min_lenB\x05\n" +
 	"\x03_gtB\x06\n" +

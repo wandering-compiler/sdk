@@ -81,11 +81,40 @@ func (r *Run) NewScope() *Scope {
 type Scope struct {
 	run      *Run
 	captures map[string]any
+	// onced holds `${once:<name>}` values for this scope: minted on first
+	// reference, returned unchanged afterwards. Separate from `captures`
+	// because a capture is bound by a STEP asserting a response, and these
+	// are minted by whoever reads them first — mixing the two would let a
+	// typo'd capture name silently become a generated value.
+	onced map[string]int
 }
 
 // Capture binds a value to a name for later `${name}` resolution.
 // Dotted names (`auth.token`, `project.id`) are stored as flat keys;
 // resolution tries the flat key first, then nested traversal.
+// once returns this scope's value for `name`, minting one on first use.
+//
+// It draws from the same process-global counter as `seq`, so a value minted
+// here is unique against every other generated value in the binary — the
+// sharing is within the scope, the uniqueness is across the run.
+func (s *Scope) once(name string) int {
+	if s.onced == nil {
+		s.onced = map[string]int{}
+	}
+	if v, ok := s.onced[name]; ok {
+		return v
+	}
+	// The SHARED counter, not one per name. Keyed per name, every identity
+	// started at 1, so `user${once:a}` and `user${once:b}` both rendered
+	// `user1` — two identities, one value, colliding on whatever unique index
+	// they landed in. Sharing the counter is what makes each minted value
+	// unique across the run; the map above is what makes it stable within a
+	// scope.
+	v := s.run.nextSeq("")
+	s.onced[name] = v
+	return v
+}
+
 func (s *Scope) Capture(name string, value any) {
 	s.captures[name] = value
 }

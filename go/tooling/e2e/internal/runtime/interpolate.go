@@ -97,6 +97,24 @@ func (s *Scope) resolve(expr string) (any, error) {
 		return s.run.nextSeq(""), nil
 	case strings.HasPrefix(expr, "seq:"):
 		return s.run.nextSeq(strings.TrimPrefix(expr, "seq:")), nil
+	case strings.HasPrefix(expr, "once:"):
+		// Mint on first use, then REUSE within this scope.
+		//
+		// `seq` and `seq:<name>` both climb on every resolution — naming one
+		// partitions the counter, it does not share the value. So a generated
+		// e-mail built in one step and looked up in another never matched:
+		// `worker${seq}@…` produced 163 where the search produced 164, and the
+		// failure reads as "no such user" rather than as two different values.
+		//
+		// The workaround is a hard-coded value, which is safe exactly once —
+		// the second run of the same chain collides on a unique index. `once`
+		// is the missing middle: still generated, still unique per scope, and
+		// the SAME on both sides.
+		//
+		// Scope, deliberately, not the run: two top-level tests must not share
+		// a generated identity, or one test's rows answer another's lookups
+		// and the suite passes for the wrong reason.
+		return s.once(strings.TrimPrefix(expr, "once:")), nil
 	default:
 		v, ok := s.lookup(expr)
 		if !ok {
