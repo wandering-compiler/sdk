@@ -369,12 +369,48 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	logger := newLogger(out, cfg.LogFormat)
+
+	// The head each connection was at ONCE ITS RUN LOCK WAS HELD.
+	//
+	// `Plan` read the head before any lock existed and then closed the
+	// applier, so the window between "what is applied" and "nobody else may
+	// apply" was wide open — which is the window the lock exists to close.
+	// B plans while A holds the lock mid-apply; A finishes and releases; B
+	// acquires and re-applies what A just did. The lock does its job
+	// perfectly and the double-apply happens anyway, because the decision it
+	// protects was taken against a stale answer (T3-7 pass #14, D14-2).
+	//
+	// Postgres's in-tx path survives this on its ledger primary key, and its
+	// skirt already does exactly this re-check under its own advisory lock.
+	// The KV appliers — the ones that HAVE a run lock — omitted it.
+	//
+	// Read once per connection, on first use, which is the same moment
+	// `ac.get` takes the lock.
+	headUnderLock := map[string]string{}
+
 	for _, p := range pending {
 		fmt.Fprintf(out, "apply: %s :: %s\n", p.Connection, p.Migration.GetId())
 
 		applier, err := ac.get(ctx, p.Connection)
 		if err != nil {
 			return err
+		}
+
+		head, seen := headUnderLock[p.Connection]
+		if !seen {
+			h, hErr := applier.AppliedHead(ctx)
+			if hErr != nil {
+				return fmt.Errorf("connection %s: re-read applied head under the run lock: %w", p.Connection, hErr)
+			}
+			headUnderLock[p.Connection] = h
+			head = h
+		}
+		// Ids are `naming.Name` timestamps, so ordering is lexical. An id at
+		// or below the head was applied by whoever held the lock before us.
+		if head != "" && p.Migration.GetId() <= head {
+			fmt.Fprintf(out, "apply: %s :: %s already applied by a concurrent run (head %s) — skipping\n",
+				p.Connection, p.Migration.GetId(), head)
+			continue
 		}
 
 		// No client-side signature verify: migrations are fetched
@@ -515,6 +551,8 @@ func applyOrResume(ctx context.Context, applier Applier, m *applyfetchpb.Migrati
 // non-idempotent TRANSFORM_FIELD data migration can't double-apply across
 // concurrent runs. Transactional SQL dialects don't implement RunLockCapable
 // (their w17_migrations PK serialises) and take the plain cached-applier path.
+// MySQL is NOT among them despite being transactional — DDL implicit-commits
+// mid-body, so it implements RunLockCapable; see lock.go (T3-7 pass #14).
 type runApplierCache struct {
 	applierFor ApplierFor
 	out        io.Writer
@@ -863,12 +901,37 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 	defer ac.closeAll()
 
 	logger := newLogger(out, cfg.LogFormat)
+
+	// The same post-lock re-read the apply path does, and for the same
+	// reason — `PlanRollback` chose what to undo from a head read before any
+	// lock existed. This is D14-2's second member, which the finder missed
+	// and the verifier named (T3-7 pass #14).
+	//
+	// REFUSING rather than skipping, which is the difference between the two
+	// directions. An apply whose migration somebody else already applied is
+	// done; a rollback whose head has MOVED is being asked to undo something
+	// other than what it planned against, and guessing which is worse than
+	// stopping.
+	headUnderLock := map[string]string{}
+
 	for _, p := range pending {
 		fmt.Fprintf(out, "rollback: %s :: %s\n", p.Connection, p.Migration.GetId())
 
 		applier, err := ac.get(ctx, p.Connection)
 		if err != nil {
 			return err
+		}
+
+		if _, seen := headUnderLock[p.Connection]; !seen {
+			h, hErr := applier.AppliedHead(ctx)
+			if hErr != nil {
+				return fmt.Errorf("connection %s: re-read applied head under the run lock: %w", p.Connection, hErr)
+			}
+			headUnderLock[p.Connection] = h
+			if h != "" && h != p.Migration.GetId() {
+				return fmt.Errorf("connection %s: refusing to roll back %s — the head moved to %s while this run waited for the lock, so another run applied or rolled back in between and this plan no longer describes the database; re-plan and try again",
+					p.Connection, p.Migration.GetId(), h)
+			}
 		}
 
 		// No client-side signature verify: the fetched migrations were

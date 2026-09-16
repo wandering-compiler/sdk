@@ -107,6 +107,30 @@ func checkPreFingerprint(ctx context.Context, applier Applier, m *applyfetchpb.M
 	if !ok || strings.HasPrefix(want, fakeFingerprintPrefix) {
 		return nil
 	}
+	// A migration that has ALREADY STARTED is not a question this check can
+	// answer. Its in-tx half is committed — that is what PhasePending means
+	// — so the database sits at the post-in-tx state by construction and the
+	// pre-state can never match again.
+	//
+	// Asking anyway is not a stricter check, it is the wrong question, and
+	// the answer it produces is actively misleading: the refusal blames a
+	// hand-applied DDL or a restore from another environment. The process
+	// was killed mid-skirt, which is precisely the case the resume machinery
+	// exists for, and every redeploy repeats the refusal. A permanent wedge
+	// wearing somebody else's name (T3-7 pass #14, D14-3).
+	//
+	// The pre-state WAS verified — when this migration began. Re-verifying
+	// it on resume asks whether the past is still the present.
+	if ra, ok := applier.(ResumableApplier); ok {
+		phase, err := ra.MigrationPhase(ctx, m.GetId())
+		if err != nil {
+			return fmt.Errorf("drift check for %s: read the migration phase: %w", m.GetId(), err)
+		}
+		if phase == PhasePending {
+			return nil
+		}
+	}
+
 	fp, ok := applier.(FingerprintCapable)
 	if !ok {
 		return nil

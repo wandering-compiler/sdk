@@ -140,8 +140,38 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	if post := m.GetUpSqlPostTx(); post != "" {
 		parts = append(parts, stripConcurrently(post))
 	}
-	if base := m.GetBaselineSql(); base != "" {
-		parts = append(parts, base)
+	body := strings.Join(parts, "\n")
+
+	base := m.GetBaselineSql()
+	if base == "" {
+		return body
 	}
-	return strings.Join(parts, "\n")
+
+	// INSIDE the schema's own transaction when there is one.
+	//
+	// The schema and its applied-ledger baseline have to land together: a
+	// built schema with an empty ledger is not a state a retry recovers
+	// from, because `storeHasSchema` reads any non-empty fingerprint as
+	// "already done" and green-skips that database forever. The crash
+	// window between them is permanent and silent.
+	//
+	// Appending was safe in the shape the guarding test fed it — a body
+	// with no envelope — and unsafe in the shape production emits. The
+	// emitter's `wrapTransaction` writes `BEGIN; … COMMIT;`, so an appended
+	// baseline ran AFTER an explicit COMMIT, in its own autocommit. Measured
+	// live on pg18: the table survives a batch that errored on its
+	// post-COMMIT tail (T3-7 pass #14, D14-4).
+	//
+	// A body with NO envelope keeps the appended shape. A dialect without
+	// transactional DDL has nothing to be inside of, and inventing a BEGIN
+	// for it would be a worse answer than the window.
+	if i := strings.LastIndex(body, "COMMIT;"); i >= 0 {
+		return body[:i] + base + "\n\n" + body[i:]
+	}
+	if body == "" {
+		// Baseline-only: an adopt of a database that already holds its
+		// schema. Nothing to be inside of and nothing to separate from.
+		return base
+	}
+	return body + "\n" + base
 }

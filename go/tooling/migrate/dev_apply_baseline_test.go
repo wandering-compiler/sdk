@@ -29,11 +29,22 @@ func TestDevApplySQLAppendsBaselineLast(t *testing.T) {
 	if strings.Contains(got, "CONCURRENTLY") {
 		t.Fatalf("post-tx was folded in without stripping CONCURRENTLY:\n%s", got)
 	}
-	// One string, so one batch, so one transaction. A caller that split these
-	// could leave the schema built and the ledger empty — a state nothing
-	// recovers from, because the next run finds the store populated and skips.
-	if strings.Count(got, "BEGIN;") > 0 {
-		t.Fatalf("dev body opened its own transaction; it is executed as one implicit batch:\n%s", got)
+	// ⚠️ This assertion used to read "one string, so one batch, so one
+	// transaction" and refuse any `BEGIN;` — and it passed because the
+	// FIXTURE above carries no envelope. Production bodies do: the emitter's
+	// `wrapTransaction` writes `BEGIN; … COMMIT;`, so the real batch always
+	// contained one and the baseline was appended AFTER the COMMIT, in its
+	// own autocommit. The test asserted a property of its own input rather
+	// than of the code (T3-7 pass #14, D14-4).
+	//
+	// What the atomicity claim actually requires is checked in
+	// `pass14_baseline_atomicity_test.go`, against the emitter's byte shape:
+	// the baseline goes INSIDE the envelope when there is one.
+	//
+	// Here, with an envelope-free body, the only thing left to say is that
+	// nothing invents one.
+	if strings.Contains(got, "BEGIN;") {
+		t.Fatalf("invented a transaction for a body that carries none:\n%s", got)
 	}
 }
 

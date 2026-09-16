@@ -26,10 +26,24 @@ var ErrLockHeld = errors.New("apply: another apply run holds the target run-lock
 // resume cursor only guards a single process resuming after a crash;
 // it is a read-check-write with no cross-process atomicity.
 //
-// Transactional SQL dialects (PG / MySQL / SQLite) do NOT implement
-// it: their up_sql runs in a transaction whose w17_migrations INSERT
-// has the migration id as a primary key, so a second concurrent run
-// fails loudly on the unique violation instead of double-applying.
+// Postgres and SQLite do NOT implement it: their up_sql runs in a
+// transaction whose w17_migrations INSERT has the migration id as a
+// primary key, so a second concurrent run fails loudly on the unique
+// violation instead of double-applying.
+//
+// ⚠️ MySQL was in that sentence and should never have been. It
+// implicit-commits on DDL, which ENDS the body's transaction partway
+// through and drops the rest into autocommit — so two racing runs both
+// apply the tail DURABLY, and only then does the loser's ledger INSERT
+// fail. Loud, and too late. Measured on mysql80 and mysql84 through the
+// real applier, with a no-DDL control that rolled back and a Postgres
+// control that held (T3-7 pass #14, D14-1). MySQL implements
+// RunLockCapable now, via GET_LOCK.
+//
+// The lesson is about the sentence rather than the engine: it named a
+// CLASS ("transactional SQL dialects") and reasoned from the label, when
+// the property it needed — the body is one atomic unit — is not something
+// the label guarantees.
 //
 // The orchestrator type-asserts each applier; one that doesn't
 // implement RunLockCapable applies without a lock (the transactional
