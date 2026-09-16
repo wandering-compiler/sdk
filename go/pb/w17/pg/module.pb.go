@@ -227,8 +227,13 @@ type CustomFunction struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Postgres extensions that must exist before this function /
 	// operator is callable. Aggregates into Manifest.RequiredExtensions
-	// when any DQL query references this function. Same shape as
-	// CustomType.required_extensions.
+	// for every connection in the project — registration is project-wide
+	// and the planner works from a schema, not from queries, so "which
+	// query calls it" is not a question it can answer. An extension
+	// nobody calls is created and unused; a missing one boots a database
+	// that fails on first call, so the aggregation errs wide on purpose.
+	// Same shape as CustomType.required_extensions, which instead reaches
+	// the manifest through the columns that name the type.
 	RequiredExtensions []string `protobuf:"bytes,2,rep,name=required_extensions,json=requiredExtensions,proto3" json:"required_extensions,omitempty"`
 	// Free-text description for manifest / docs / review UI.
 	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
