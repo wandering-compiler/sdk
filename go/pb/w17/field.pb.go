@@ -1334,7 +1334,28 @@ type Field struct {
 	// parser rejects an unknown filter at codegen time. Currency is
 	// out of scope (no symbol, no per-currency decimals) — MONEY is a
 	// 2-decimal number. Spec: docs/specs/i18n/formatting.md.
-	Format        string `protobuf:"bytes,32,opt,name=format,proto3" json:"format,omitempty"`
+	Format string `protobuf:"bytes,32,opt,name=format,proto3" json:"format,omitempty"`
+	// --- GEOMETRY / GEOGRAPHY parameters (db_type GEOMETRY / GEOGRAPHY only) ---
+	//
+	// Same shape as `precision`/`scale` on DECIMAL: the db_type names the
+	// storage, the parameters live here, and the IR builder refuses them on a
+	// column that is not geometric.
+	//
+	// geometry_type is the SHAPE the column accepts — `Point`, `LineString`,
+	// `Polygon`, `MultiPolygon`, `GeometryCollection`, … Required, and required
+	// for a reason a reader should not have to discover: an unconstrained
+	// `geometry` column accepts any shape, so a table meant to hold building
+	// footprints will happily take a point, and the query that assumed
+	// otherwise returns a wrong answer rather than an error. PostGIS enforces
+	// the constraint in the column type; w17 makes you say which one.
+	GeometryType string `protobuf:"bytes,71,opt,name=geometry_type,json=geometryType,proto3" json:"geometry_type,omitempty"`
+	// srid is the spatial reference the coordinates are in. Defaults to 4326
+	// (WGS 84 lon/lat) when omitted, because that is what almost every source
+	// of geographic data hands over and a silent mismatch between two SRIDs is
+	// the geospatial equivalent of adding metres to feet — PostGIS refuses to
+	// compare them, which is the good case; the bad case is two columns that
+	// agree by accident.
+	Srid          int32 `protobuf:"varint,72,opt,name=srid,proto3" json:"srid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1599,6 +1620,20 @@ func (x *Field) GetFormat() string {
 		return x.Format
 	}
 	return ""
+}
+
+func (x *Field) GetGeometryType() string {
+	if x != nil {
+		return x.GeometryType
+	}
+	return ""
+}
+
+func (x *Field) GetSrid() int32 {
+	if x != nil {
+		return x.Srid
+	}
+	return 0
 }
 
 type isField_Default interface {
@@ -1970,7 +2005,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\xd3\b\n" +
+	" \x01(\tR\amessage\"\x8c\t\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
 	"\x02pk\x18\x02 \x01(\bR\x02pk\x12\x1c\n" +
@@ -2007,7 +2042,9 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x13validation_messages\x18\x1d \x03(\v2\x16.w17.ValidationMessageR\x12validationMessages\x12\x12\n" +
 	"\x04json\x18\x1e \x01(\bR\x04json\x123\n" +
 	"\fauto_choices\x18\x1f \x01(\x0e2\x10.w17.AutoChoicesR\vautoChoices\x12\x16\n" +
-	"\x06format\x18  \x01(\tR\x06formatB\t\n" +
+	"\x06format\x18  \x01(\tR\x06format\x12#\n" +
+	"\rgeometry_type\x18G \x01(\tR\fgeometryType\x12\x12\n" +
+	"\x04srid\x18H \x01(\x05R\x04sridB\t\n" +
 	"\adefaultB\v\n" +
 	"\t_requiredB\n" +
 	"\n" +

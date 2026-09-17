@@ -450,37 +450,57 @@ const (
 	DbType_BLOB  DbType = 81 // MySQL / SQLite; PG emitter maps to BYTEA
 	// --- Boolean ---
 	DbType_BOOLEAN DbType = 90
+	// --- Geospatial (PG-native, requires the postgis extension) ---
+	//
+	// Parameters come from (w17.field): `geometry_type` names the shape and is
+	// REQUIRED, `srid` defaults to 4326. Same division as NUMERIC, where the
+	// db_type names the storage and the field carries precision/scale.
+	//
+	// Carrier is `string`, and what travels in it is worth stating because the
+	// two directions differ: on the way IN, EWKT (`SRID=4326;POINT(14.4 50.1)`)
+	// — PostGIS parses the text form of its own type, so a plain string
+	// parameter works. On the way OUT, PostGIS answers in its canonical hex
+	// EWKB. A caller who wants text back asks for it, with the ST_AsText /
+	// ST_AsGeoJSON they registered through (w17.pg.module).custom_functions.
+	//
+	// POSTGRES ONLY. MySQL has spatial types with different semantics and
+	// SQLite needs SpatiaLite; both emitters REFUSE this by name rather than
+	// substituting something that stores the bytes and cannot index them.
+	DbType_GEOMETRY  DbType = 100
+	DbType_GEOGRAPHY DbType = 101
 )
 
 // Enum value maps for DbType.
 var (
 	DbType_name = map[int32]string{
-		0:  "AUTO",
-		1:  "TEXT",
-		2:  "VARCHAR",
-		3:  "CITEXT",
-		10: "JSON",
-		11: "JSONB",
-		20: "HSTORE",
-		30: "INET",
-		31: "CIDR",
-		32: "MACADDR",
-		40: "TSVECTOR",
-		50: "UUID",
-		60: "SMALLINT",
-		61: "INTEGER",
-		62: "BIGINT",
-		63: "REAL",
-		64: "DOUBLE_PRECISION",
-		65: "NUMERIC",
-		70: "DATE",
-		71: "TIME",
-		72: "TIMESTAMP",
-		73: "TIMESTAMPTZ",
-		74: "INTERVAL",
-		80: "BYTEA",
-		81: "BLOB",
-		90: "BOOLEAN",
+		0:   "AUTO",
+		1:   "TEXT",
+		2:   "VARCHAR",
+		3:   "CITEXT",
+		10:  "JSON",
+		11:  "JSONB",
+		20:  "HSTORE",
+		30:  "INET",
+		31:  "CIDR",
+		32:  "MACADDR",
+		40:  "TSVECTOR",
+		50:  "UUID",
+		60:  "SMALLINT",
+		61:  "INTEGER",
+		62:  "BIGINT",
+		63:  "REAL",
+		64:  "DOUBLE_PRECISION",
+		65:  "NUMERIC",
+		70:  "DATE",
+		71:  "TIME",
+		72:  "TIMESTAMP",
+		73:  "TIMESTAMPTZ",
+		74:  "INTERVAL",
+		80:  "BYTEA",
+		81:  "BLOB",
+		90:  "BOOLEAN",
+		100: "GEOMETRY",
+		101: "GEOGRAPHY",
 	}
 	DbType_value = map[string]int32{
 		"AUTO":             0,
@@ -509,6 +529,8 @@ var (
 		"BYTEA":            80,
 		"BLOB":             81,
 		"BOOLEAN":          90,
+		"GEOMETRY":         100,
+		"GEOGRAPHY":        101,
 	}
 )
 
@@ -2836,7 +2858,7 @@ const file_w17_db_proto_rawDesc = "" +
 	"\x17NULLS_ORDER_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vNULLS_FIRST\x10\x01\x12\x0e\n" +
 	"\n" +
-	"NULLS_LAST\x10\x02*\xc7\x02\n" +
+	"NULLS_LAST\x10\x02*\xe4\x02\n" +
 	"\x06DbType\x12\b\n" +
 	"\x04AUTO\x10\x00\x12\b\n" +
 	"\x04TEXT\x10\x01\x12\v\n" +
@@ -2867,7 +2889,9 @@ const file_w17_db_proto_rawDesc = "" +
 	"\bINTERVAL\x10J\x12\t\n" +
 	"\x05BYTEA\x10P\x12\b\n" +
 	"\x04BLOB\x10Q\x12\v\n" +
-	"\aBOOLEAN\x10Z*\\\n" +
+	"\aBOOLEAN\x10Z\x12\f\n" +
+	"\bGEOMETRY\x10d\x12\r\n" +
+	"\tGEOGRAPHY\x10e*\\\n" +
 	"\fDeletionRule\x12\x1d\n" +
 	"\x19DELETION_RULE_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aCASCADE\x10\x01\x12\n" +
