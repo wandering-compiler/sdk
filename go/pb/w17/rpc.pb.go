@@ -162,7 +162,35 @@ type RpcGroup struct {
 	// services, so a method-by-message definition is not
 	// deterministic about which backend service it wraps. A ref is
 	// unambiguous.
-	Refs          []string `protobuf:"bytes,3,rep,name=refs,proto3" json:"refs,omitempty"`
+	Refs []string `protobuf:"bytes,3,rep,name=refs,proto3" json:"refs,omitempty"`
+	// (optional) An ADDITIONAL fully-qualified gRPC service name to
+	// serve this same group under — `"w17.apply.MigrationFetch"`.
+	//
+	// For a surface that re-hosts a contract published elsewhere.
+	// `name` is the service in the emitted lock proto, so the wire
+	// name is `<lock package>.<name>` — and a caller built against
+	// the PUBLISHED proto dials the published FQN, which no lock
+	// package can ever equal. The console re-hosted the deploy
+	// registry this way and served
+	// `w17lock.console.rpc.MigrationFetch`, while every generated
+	// binary called `w17.apply.MigrationFetch` and got
+	// `Unimplemented` — the documented production migration path,
+	// dead end to end, for as long as it existed. w17ctl worked
+	// because it dials the re-hosted client directly; a generated
+	// binary has only the public SDK.
+	//
+	// One implementation, two names: grpc-go registers a copy of
+	// the generated ServiceDesc with the name replaced. The method
+	// set is whatever `refs` produced — the alias renames, it does
+	// not reshape — so the published contract and this group must
+	// agree on method names and types, exactly as the
+	// re-declaration already had to.
+	//
+	// Must be a dotted FQN (`pkg.sub.Service`, at least one dot),
+	// each segment an identifier; the parser refuses anything else
+	// rather than emitting a registration gRPC will never match.
+	// Empty = served under the lock name only.
+	PublicFqn     string `protobuf:"bytes,4,opt,name=public_fqn,json=publicFqn,proto3" json:"public_fqn,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -216,6 +244,13 @@ func (x *RpcGroup) GetRefs() []string {
 		return x.Refs
 	}
 	return nil
+}
+
+func (x *RpcGroup) GetPublicFqn() string {
+	if x != nil {
+		return x.PublicFqn
+	}
+	return ""
 }
 
 var file_w17_rpc_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -302,11 +337,13 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
 	"reflection\x18\x04 \x01(\bR\n" +
 	"reflection\x12%\n" +
-	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groupsJ\x04\b\x05\x10\x06R\fauth_methods\"T\n" +
+	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groupsJ\x04\b\x05\x10\x06R\fauth_methods\"s\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
-	"\x04refs\x18\x03 \x03(\tR\x04refs:2\n" +
+	"\x04refs\x18\x03 \x03(\tR\x04refs\x12\x1d\n" +
+	"\n" +
+	"public_fqn\x18\x04 \x01(\tR\tpublicFqn:2\n" +
 	"\x03rpc\x12\x1e.google.protobuf.MethodOptions\x18\xbf\x87\x03 \x01(\bR\x03rpc:A\n" +
 	"\vrpc_service\x12\x1e.google.protobuf.MethodOptions\x18\xc0\x87\x03 \x01(\tR\n" +
 	"rpcService:D\n" +
