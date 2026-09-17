@@ -506,3 +506,11 @@ func (a *Applier) ExecSeed(ctx context.Context, stmts []migrate.SeedStmt) error 
 	}
 	return nil
 }
+
+// Observe reports this database's live schema as structure — see
+// migrate.ObserveCapable. Same extraction the fingerprint uses, in the shape
+// that keeps namespaces, so a table a module put in its own schema is reported
+// rather than silently missing.
+func (a *Applier) Observe(ctx context.Context) (fingerprint.Observed, error) {
+	return fingerprint.ObservePostgres(ctx, a.conn)
+}

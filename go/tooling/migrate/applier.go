@@ -18,6 +18,8 @@ import (
 	"context"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
+
+	"github.com/wandering-compiler/sdk/go/tooling/fingerprint"
 )
 
 // Applier is the per-connection execution surface. One impl per
@@ -193,4 +195,21 @@ type SeedCapable interface {
 type SeedStmt struct {
 	SQL  string
 	Args []any
+}
+
+// ObserveCapable is an optional Applier capability: report the target's live
+// schema as STRUCTURE — every table it holds, in every namespace, with its
+// columns as the database spells them.
+//
+// Distinct from FingerprintCapable on purpose. A fingerprint answers "has this
+// changed since I hashed it"; an observation answers "what is in there", which
+// is the question a planner needs before it trusts a checkpoint. The
+// fingerprint is also scoped to one namespace, which is right for a hash and
+// wrong for a comparison.
+//
+// Relational dialects implement it. Schemaless ones do not, and a caller that
+// gets nothing must treat that as "I could not look" rather than "nothing is
+// there" — the two lead to opposite decisions, and only one of them is safe.
+type ObserveCapable interface {
+	Observe(ctx context.Context) (fingerprint.Observed, error)
 }
