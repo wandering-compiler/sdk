@@ -14,11 +14,24 @@ type PgxQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// ExtractPostgres queries information_schema on a PG connection
-// and returns the canonical Schema for fingerprinting. Scopes
-// to the `public` schema (matches the deploy-time convention —
-// w17migrate connects with no search_path override). Excludes
-// the `w17_migrations` bookkeeping table.
+// ExtractPostgres queries the catalog on a PG connection and returns the
+// canonical Schema for fingerprinting. Scopes to the `public` schema
+// (matches the deploy-time convention — w17migrate connects with no
+// search_path override). Excludes the `w17_migrations` bookkeeping table,
+// and excludes what an EXTENSION owns.
+//
+// The extension exclusion is what lets "empty" stay a usable word. PostGIS
+// installs `spatial_ref_sys` into `public`, so a database that has the
+// extension and nothing else hashes as POPULATED — and the one caller that
+// asks (`schema apply`, which builds from empty) then declines to build,
+// leaving a database with no tables and a seed step that fails on the first
+// INSERT. Measured, not reasoned: that is what the pg-native stack did the
+// moment its postgres image became a postgis one.
+//
+// It does not change any fingerprint computed before it. The exclusion can
+// only drop extension-owned tables, no w17 database had any until geometric
+// columns existed, and the tables it drops were never the schema this hash
+// is about: DROP EXTENSION takes them away and no migration mentions one.
 //
 // Takes a `*pgx.Conn` (or a test-fitting PgxQuerier) because the
 // production PG Applier uses pgx, not database/sql.
@@ -40,10 +53,15 @@ func ExtractPostgres(ctx context.Context, conn PgxQuerier) (Schema, error) {
 
 func pgListTables(ctx context.Context, conn PgxQuerier) ([]string, error) {
 	rows, err := conn.Query(ctx, `
-		SELECT table_name
-		FROM information_schema.tables
-		WHERE table_schema = 'public'
-		  AND table_type = 'BASE TABLE'`)
+		SELECT c.relname
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public'
+		  AND c.relkind IN ('r', 'p')
+		  AND NOT EXISTS (
+		        SELECT 1 FROM pg_depend d
+		        WHERE d.classid = 'pg_class'::regclass
+		          AND d.objid = c.oid AND d.deptype = 'e')`)
 	if err != nil {
 		return nil, fmt.Errorf("postgres list tables: %w", err)
 	}

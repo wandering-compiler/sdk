@@ -192,7 +192,11 @@ func (c *fakePgConn) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 	if c.queryErr != nil {
 		return nil, c.queryErr
 	}
-	if strings.Contains(sql, "information_schema.tables") {
+	// The table listing, whichever catalog it reads. It moved off
+	// information_schema onto pg_class + pg_depend so an extension's own
+	// tables can be told apart from the schema's; matching on the FROM
+	// clause alone would have made this mock answer the columns query too.
+	if strings.Contains(sql, "information_schema.tables") || strings.Contains(sql, "pg_class") {
 		if c.tablesRows != nil {
 			return c.tablesRows, nil
 		}
