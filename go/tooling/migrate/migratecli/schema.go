@@ -9,7 +9,6 @@ import (
 	"time"
 
 	applyplanpb "github.com/wandering-compiler/sdk/go/pb/applyplan"
-	"github.com/wandering-compiler/sdk/go/tooling/fingerprint"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
@@ -207,30 +206,18 @@ func runSchema(ctx context.Context, args []string, opts Options, out io.Writer) 
 	return nil
 }
 
-// emptyFingerprint is what FingerprintCapable reports for a store holding no
-// tables — computed rather than pinned, so it tracks the format it compares
-// against.
-var emptyFingerprint = fingerprint.Schema{}.FingerprintHex()
-
 // storeHasSchema reports whether a connection's store already holds tables.
 //
 // A store that cannot answer reports FALSE, and the apply goes ahead. That is
-// the right way round: a KV store has no fingerprint and is genuinely
+// the right way round HERE: a KV store has no fingerprint and is genuinely
 // re-appliable (its plan is keyspace declarations), while refusing on "I
-// cannot tell" would block the case this command exists for.
+// cannot tell" would block the case this command exists for. The dev
+// diff-apply reads the same state and decides the opposite way on EMPTY,
+// which is why the reader itself is shared and only this collapse is local.
 func storeHasSchema(ctx context.Context, applierFor migrate.ApplierFor, conn string) (bool, error) {
-	ap, err := applierFor(conn)
+	state, err := migrate.StoreSchemaStateOf(ctx, applierFor, conn)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = ap.Close() }()
-	fp, ok := ap.(migrate.FingerprintCapable)
-	if !ok {
-		return false, nil
-	}
-	got, err := fp.Fingerprint(ctx)
-	if err != nil {
-		return false, fmt.Errorf("read the store's schema state: %w", err)
-	}
-	return got != "" && got != emptyFingerprint, nil
+	return state == migrate.StoreSchemaPopulated, nil
 }
