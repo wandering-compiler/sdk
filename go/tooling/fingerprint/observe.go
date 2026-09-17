@@ -32,18 +32,43 @@ type ObservedTable struct {
 }
 
 // ObservePostgres reads every table a connection can see, in every namespace
-// except the server's own.
+// except the server's own and except the ones an EXTENSION owns.
 //
 // Deliberately dumb: names and columns as the database spells them, no
 // mapping to w17 types. The client reporting this must not have to understand
 // a schema, and the console — which owns every rule about what a difference
 // means — already does.
+//
+// Extension-owned tables are not dumb-read, and that is the one rule here.
+// `CREATE EXTENSION postgis` on the postgis/postgis image brings 36 tables
+// with it — `spatial_ref_sys`, all of `tiger.*`, `topology.*` — none of which
+// any checkpoint created or could have created. Reported, they read as a
+// drifted database and a dev build REFUSES to plan against the very image a
+// geospatial project would obviously use. They are also not the client's to
+// report in the first place: the extension owns them, `DROP EXTENSION` takes
+// them away, and no migration will ever mention one.
+//
+// So the read moves off information_schema, which cannot express ownership,
+// onto pg_class + pg_depend, which can. Both directions are excluded: a table
+// that is itself an extension member, and any table sitting inside a schema
+// the extension created (tiger's own staging tables are the case — created by
+// the extension's scripts, in the extension's schema, members of nothing).
 func ObservePostgres(ctx context.Context, conn PgxQuerier) (Observed, error) {
 	rows, err := conn.Query(ctx, `
-		SELECT table_schema, table_name
-		FROM information_schema.tables
-		WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-		  AND table_type = 'BASE TABLE'`)
+		SELECT n.nspname, c.relname
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind IN ('r', 'p')
+		  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+		  AND n.nspname NOT LIKE 'pg\_%'
+		  AND NOT EXISTS (
+		        SELECT 1 FROM pg_depend d
+		        WHERE d.classid = 'pg_class'::regclass
+		          AND d.objid = c.oid AND d.deptype = 'e')
+		  AND NOT EXISTS (
+		        SELECT 1 FROM pg_depend d
+		        WHERE d.classid = 'pg_namespace'::regclass
+		          AND d.objid = n.oid AND d.deptype = 'e')`)
 	if err != nil {
 		return Observed{}, fmt.Errorf("postgres observe tables: %w", err)
 	}
