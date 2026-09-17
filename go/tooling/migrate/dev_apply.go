@@ -133,7 +133,27 @@ func stripConcurrently(sql string) string {
 // The baseline is rendered SERVER-side and carries no envelope of its own,
 // precisely so it can be folded in here; see applied.BaselineOnly.
 func devApplySQL(m *applyplanpb.DevMigration) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
+	// Prerequisites FIRST, in the same statement set as the schema that needs
+	// them — `CREATE EXTENSION IF NOT EXISTS`, so a database that already has
+	// one is untouched.
+	//
+	// They used to live only in `db/init/<domain>/00_extensions.sql`, which
+	// docker mounts into initdb — and initdb runs on a FRESH VOLUME and never
+	// again. A project that declared an extension after its local database
+	// existed got that file rewritten and nothing applied it; the failure then
+	// arrived at runtime, naming a function nobody had created. A dev database
+	// that has been worked in for a week is the normal case, not the exception.
+	//
+	// Migration BODIES still carry none of this: on a real target, creating an
+	// extension is a pre-apply step the deploying platform owns and may need
+	// superuser for. This path is the dev one, where the binary applying the
+	// schema is the thing holding the connection.
+	for _, ext := range m.GetRequiredExtensions() {
+		if ext = strings.TrimSpace(ext); ext != "" {
+			parts = append(parts, `CREATE EXTENSION IF NOT EXISTS "`+ext+`";`)
+		}
+	}
 	if up := m.GetUpSql(); up != "" {
 		parts = append(parts, up)
 	}

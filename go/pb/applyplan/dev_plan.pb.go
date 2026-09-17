@@ -95,6 +95,22 @@ type DevMigration struct {
 	Connection string `protobuf:"bytes,1,opt,name=connection,proto3" json:"connection,omitempty"`
 	// UpSql is the transactional apply body (planpb.Migration.up_sql).
 	UpSql string `protobuf:"bytes,2,opt,name=up_sql,json=upSql,proto3" json:"up_sql,omitempty"`
+	// RequiredExtensions are the Postgres extensions this connection's schema
+	// needs before its DDL can run — the manifest's aggregated set.
+	//
+	// They are carried HERE, in the artefact the generated binary applies,
+	// because the dev bootstrap that used to create them only ever ran once:
+	// `db/init/<domain>/00_extensions.sql` is mounted into initdb, and initdb
+	// runs on a FRESH VOLUME and never again. So a project that declared a new
+	// extension after its local database existed got the file rewritten and
+	// nothing applied — the query then failed at runtime naming a function
+	// nobody had created.
+	//
+	// Migration BODIES still carry no `CREATE EXTENSION`: provisioning one on a
+	// real target is a pre-apply step the deploying platform owns, and it may
+	// need superuser. This is the DEV path, where the same binary that applies
+	// the schema is the thing holding the connection.
+	RequiredExtensions []string `protobuf:"bytes,5,rep,name=required_extensions,json=requiredExtensions,proto3" json:"required_extensions,omitempty"`
 	// UpSqlPostTx is the non-transactional skirt (planpb.Migration.up_sql_post_tx).
 	// The client folds it into up_sql with CONCURRENTLY stripped so it runs
 	// inside the dev transaction; empty for the common case.
@@ -166,6 +182,13 @@ func (x *DevMigration) GetUpSql() string {
 	return ""
 }
 
+func (x *DevMigration) GetRequiredExtensions() []string {
+	if x != nil {
+		return x.RequiredExtensions
+	}
+	return nil
+}
+
 func (x *DevMigration) GetUpSqlPostTx() string {
 	if x != nil {
 		return x.UpSqlPostTx
@@ -188,12 +211,13 @@ const file_w17apply_dev_plan_proto_rawDesc = "" +
 	"\fDevApplyPlan\x127\n" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x17.w17.apply.DevMigrationR\n" +
-	"migrations\"\x8d\x01\n" +
+	"migrations\"\xbe\x01\n" +
 	"\fDevMigration\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
 	"connection\x12\x15\n" +
-	"\x06up_sql\x18\x02 \x01(\tR\x05upSql\x12#\n" +
+	"\x06up_sql\x18\x02 \x01(\tR\x05upSql\x12/\n" +
+	"\x13required_extensions\x18\x05 \x03(\tR\x12requiredExtensions\x12#\n" +
 	"\x0eup_sql_post_tx\x18\x03 \x01(\tR\vupSqlPostTx\x12!\n" +
 	"\fbaseline_sql\x18\x04 \x01(\tR\vbaselineSqlB?Z=github.com/wandering-compiler/sdk/go/pb/applyplan;applyplanpbb\x06proto3"
 

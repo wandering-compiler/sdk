@@ -133,7 +133,7 @@ func TestWriteDevPlan_BytesArePinned(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteDevPlan: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(root, "dev-plan.json"))
+	got, err := os.ReadFile(filepath.Join(root, "schema-snapshot.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

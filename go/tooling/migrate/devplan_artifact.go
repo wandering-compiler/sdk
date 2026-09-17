@@ -34,9 +34,21 @@ import (
 // the running database had never been given.
 
 // devPlanFile is the artefact's name under the schema directory.
-const devPlanFile = "dev-plan.json"
+// devPlanFile is the artefact's name, and it says SNAPSHOT rather than plan.
+//
+// It was `dev-plan.json`, whose top-level key is `migrations` because the
+// engine's type is Migration — so a reader opening it saw a migration history
+// and asked, reasonably, why one was being kept in a schema directory. There
+// is none: the file holds one full create-from-empty per connection, which is
+// the snapshot in the shape the binary can execute. The .ddl beside it is the
+// same content for a human.
+const devPlanFile = "schema-snapshot.json"
 
-// WriteDevPlan writes the rendered plan to `<root>/dev-plan.json`.
+// legacyDevPlanFile is the name this artefact had before 2026-09-17. Read, not
+// written: a checkout rendered by an older client must keep starting.
+const legacyDevPlanFile = "dev-plan.json"
+
+// WriteDevPlan writes the rendered snapshot to `<root>/schema-snapshot.json`.
 func WriteDevPlan(root string, plan *applyplanpb.DevApplyPlan) error {
 	if plan == nil {
 		return fmt.Errorf("WriteDevPlan: nil plan")
@@ -55,7 +67,16 @@ func WriteDevPlan(root string, plan *applyplanpb.DevApplyPlan) error {
 	if err != nil {
 		return fmt.Errorf("marshal dev plan: %w", err)
 	}
-	return os.WriteFile(filepath.Join(root, devPlanFile), append(buf, '\n'), 0o644)
+	if err := os.WriteFile(filepath.Join(root, devPlanFile), append(buf, '\n'), 0o644); err != nil {
+		return err
+	}
+	// The rename finishes itself. Leaving the old artefact beside the new one
+	// means two files claiming to be the schema, one of them stale from the
+	// moment it was superseded — and the reader accepts both, so a project
+	// could sit on the old one indefinitely without noticing. Removing it is
+	// safe precisely because it was just rewritten under the new name.
+	_ = os.Remove(filepath.Join(root, legacyDevPlanFile))
+	return nil
 }
 
 // WriteDevPlanDDL writes each connection's schema body beside the plan as
@@ -92,7 +113,7 @@ func WriteDevPlanDDL(root string, plan *applyplanpb.DevApplyPlan) error {
 			"-- READING: it is what a reviewer reads in a diff and what the corpus gates\n" +
 			"-- assert the compiler's emitted DDL against.\n" +
 			"--\n" +
-			"-- The executable copy is dev-plan.json beside it, applied by\n" +
+			"-- The executable copy is schema-snapshot.json beside it, applied by\n" +
 			"-- `<binary> schema apply`. Running THIS file by hand puts a schema into a\n" +
 			"-- database by a second path, which is the thing that made a bootstrap\n" +
 			"-- nobody recorded possible in the first place.\n\n" +
@@ -116,7 +137,16 @@ func WriteDevPlanDDL(root string, plan *applyplanpb.DevApplyPlan) error {
 func LoadDevPlan(fsys fs.FS) (*applyplanpb.DevApplyPlan, error) {
 	body, err := fs.ReadFile(fsys, devPlanFile)
 	if err != nil {
-		return nil, err
+		// Every project rendered before the rename has the OLD name committed,
+		// and a binary that only knew the new one would fail to start on a
+		// checkout nobody had re-rendered — a rename turning into an outage
+		// for every existing consumer. Accepted here, never written: the next
+		// render replaces it.
+		legacy, legacyErr := fs.ReadFile(fsys, legacyDevPlanFile)
+		if legacyErr != nil {
+			return nil, err
+		}
+		body = legacy
 	}
 	var plan applyplanpb.DevApplyPlan
 	if err := protojson.Unmarshal(body, &plan); err != nil {
