@@ -2557,7 +2557,15 @@ type LockView struct {
 	// plugin-activated project can `migrate generate` (the full `codegen` path
 	// derives stub_targets itself; the IR-compile path has only the lock view).
 	// Lock-derived (no go.mod needed); the client supplies go_module separately.
-	PluginPbRoot  string `protobuf:"bytes,17,opt,name=plugin_pb_root,json=pluginPbRoot,proto3" json:"plugin_pb_root,omitempty"`
+	PluginPbRoot string `protobuf:"bytes,17,opt,name=plugin_pb_root,json=pluginPbRoot,proto3" json:"plugin_pb_root,omitempty"`
+	// gen_dir is the project's Go module root for hand-written code — the FIRST
+	// SEGMENT of the effective stubs root (`w17src` for `stubs: w17src/gen`,
+	// `srcgo` by default). The client needs it to NAME the path a domain's
+	// hand-written facade belongs at; it cannot read the lock itself, and the
+	// default is only right for a project that took the default. A consumer
+	// whose tree is `w17src/` was told by `domain add` to write into `srcgo/`,
+	// a directory their project does not have.
+	GenDir        string `protobuf:"bytes,19,opt,name=gen_dir,json=genDir,proto3" json:"gen_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2707,6 +2715,13 @@ func (x *LockView) GetCleanPaths() []string {
 func (x *LockView) GetPluginPbRoot() string {
 	if x != nil {
 		return x.PluginPbRoot
+	}
+	return ""
+}
+
+func (x *LockView) GetGenDir() string {
+	if x != nil {
+		return x.GenDir
 	}
 	return ""
 }
@@ -7837,7 +7852,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x10EditLockResponse\x12\x12\n" +
 	"\x04lock\x18\x01 \x01(\fR\x04lock\")\n" +
 	"\x13DescribeLockRequest\x12\x12\n" +
-	"\x04lock\x18\x01 \x01(\fR\x04lock\"\xbe\x06\n" +
+	"\x04lock\x18\x01 \x01(\fR\x04lock\"\xd7\x06\n" +
 	"\bLockView\x12E\n" +
 	"\vconnections\x18\x01 \x03(\v2#.w17.storage.codegen.LockConnectionR\vconnections\x12-\n" +
 	"\x12default_connection\x18\x02 \x01(\tR\x11defaultConnection\x12\x1b\n" +
@@ -7857,7 +7872,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\bautosync\x18\x0f \x01(\tR\bautosync\x12\x1f\n" +
 	"\vclean_paths\x18\x10 \x03(\tR\n" +
 	"cleanPaths\x12$\n" +
-	"\x0eplugin_pb_root\x18\x11 \x01(\tR\fpluginPbRootJ\x04\b\x12\x10\x13\"=\n" +
+	"\x0eplugin_pb_root\x18\x11 \x01(\tR\fpluginPbRoot\x12\x17\n" +
+	"\agen_dir\x18\x13 \x01(\tR\x06genDirJ\x04\b\x12\x10\x13\"=\n" +
 	"\vLockReplica\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\"M\n" +
