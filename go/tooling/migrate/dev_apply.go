@@ -149,6 +149,19 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	// extension is a pre-apply step the deploying platform owns and may need
 	// superuser for. This path is the dev one, where the binary applying the
 	// schema is the thing holding the connection.
+	// Namespaces BEFORE extensions and before the body: a qualified
+	// `CREATE TABLE "billing"."accounts"` fails on a database that has no
+	// `billing` schema, and nothing in the body creates one.
+	//
+	// These used to arrive only through `db/init/<domain>/00_extensions.sql`,
+	// mounted into one compose container's initdb — so a database built any
+	// other way got the qualified DDL and no schema to put it in. The file is
+	// gone; the prerequisite travels with the plan that needs it.
+	for _, ns := range m.GetRequiredSchemas() {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			parts = append(parts, `CREATE SCHEMA IF NOT EXISTS "`+ns+`";`)
+		}
+	}
 	for _, ext := range m.GetRequiredExtensions() {
 		if ext = strings.TrimSpace(ext); ext != "" {
 			parts = append(parts, `CREATE EXTENSION IF NOT EXISTS "`+ext+`";`)
