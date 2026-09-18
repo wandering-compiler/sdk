@@ -84,8 +84,35 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		return true, Fixtures(ctx, argv[1:], opts)
 	case binroots.Schema:
 		return true, Schema(ctx, argv[1:], opts)
+	case "-h", "--help", "help":
+		// A binary asked for help must not answer by binding a port. A
+		// consumer ran `<binary> --help` inside a container, read "starting
+		// on :50051", and concluded the binary ignored its arguments
+		// entirely — which sent them looking for a way to apply a schema
+		// that this binary does have.
+		//
+		// Anything else still falls through to the server: an unknown word
+		// is not this package's to interpret, and the generated main has its
+		// own flags.
+		fmt.Fprint(out(opts),
+			"usage: <binary> [command]\n\n"+
+				"  migrate    apply / fetch / roll back / report this bundle's migrations\n"+
+				"  fixtures   apply the rendered seed data\n"+
+				"  schema     build this bundle's schema into an EMPTY database\n\n"+
+				"Run a command with --help for its flags. With no command the bundle\n"+
+				"starts its server, which is what a container image does by default.\n")
+		return true, nil
 	}
 	return false, nil
+}
+
+// out resolves the writer the roots print to, so --help lands where every
+// other line from this package does.
+func out(opts Options) io.Writer {
+	if opts.Out != nil {
+		return opts.Out
+	}
+	return os.Stdout
 }
 
 // Main runs `migrate <subcommand>`; args are the tokens AFTER the `migrate`
