@@ -253,6 +253,7 @@ type applyFlags struct {
 	allowNoDSN bool
 	logFormat  string
 	parallel   int
+	fake       bool
 }
 
 func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
@@ -270,6 +271,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
+	fs.BoolVar(&f.fake, "fake", false, "apply only: RECORD each pending migration without running it — for a database that already holds what they describe. Each is checked against the database first and refused if it does not match")
 	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
@@ -306,6 +308,14 @@ func runApply(ctx context.Context, args []string, opts Options, out io.Writer) e
 	}
 	cfg.DryRun = f.dryRun
 	cfg.LogFormat = f.logFormat
+	cfg.Fake = f.fake
+	if f.fake && f.dryRun {
+		// Both mean "do not run the body", and they disagree about the
+		// ledger: one writes the row, the other writes nothing. Silently
+		// picking either would make a rehearsal indistinguishable from the
+		// real thing.
+		return fmt.Errorf("migrate apply: --fake and --dry-run are different questions — --dry-run prints what WOULD happen, --fake records it. Pick one")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	return migrate.Run(ctx, cfg)

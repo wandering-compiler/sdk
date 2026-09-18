@@ -87,6 +87,26 @@ type Config struct {
 	// NOT call Applier.Apply.
 	DryRun bool
 
+	// Fake = true: RECORD each pending migration without running its body,
+	// each one guarded by the preflight the console rendered for it.
+	//
+	// It is how a database that already exists comes under management — a
+	// schema built by another tool, or by hand, that the w17 models were
+	// written to match. The ordinary apply meets `CREATE TABLE` against
+	// tables that are already there and dies; the only way through used to be
+	// a hand-written ledger INSERT whose one correctness condition — that the
+	// migration describes the database in front of it — nothing checked.
+	//
+	// The guard is not the operator's word. `adopt_preflight_sql` fails
+	// unless the objects, columns, nullability and primary key the migration
+	// describes are already in place, and it commits in the SAME transaction
+	// as the ledger row: a check that passed and a record that did not commit
+	// with it would leave the two disagreeing, which is the failure this
+	// exists to prevent. A migration whose preflight is EMPTY is refused —
+	// empty means the dialect cannot ask the question, not that there is
+	// nothing to ask.
+	Fake bool
+
 	// LogFormat selects the per-migration log shape:
 	//   ""     / "text" — human-readable (default)
 	//   "json"          — one JSON line per migration via slog
@@ -419,6 +439,16 @@ func Run(ctx context.Context, cfg Config) error {
 		// keyless content_sha256 integrity check.
 
 		started := time.Now()
+		if cfg.Fake {
+			// An operator asserting "this database is already at that
+			// migration". The assertion is CHECKED — the preflight and the
+			// ledger write go in as one body, so they share one transaction
+			// and the record cannot outlive a failed check.
+			if err := applyFake(ctx, applier, p, out, logger, started); err != nil {
+				return err
+			}
+			continue
+		}
 		if p.Adopt {
 			// This database already sits at a migration the baseline
 			// replaces, so the schema it describes is the schema in front
@@ -480,6 +510,53 @@ func Run(ctx context.Context, cfg Config) error {
 		logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), nil)
 	}
 	fmt.Fprintf(out, "apply: %d migration(s) applied\n", len(pending))
+	return nil
+}
+
+// applyFake records one pending migration without running its body, guarded by
+// the preflight the console rendered for it.
+//
+// Both halves are handed to the applier as ONE body so they share the
+// transaction envelope the applier already gives every migration: the
+// preflight raises, the transaction rolls back, and no ledger row survives.
+// Running them as two calls would leave a window where the schema can change
+// between the check and the record — and, worse, a failure mode where the
+// record commits after a check that passed against a database that has since
+// moved.
+func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, logger *slog.Logger, started time.Time) error {
+	preflight := p.Migration.GetAdoptPreflightSql()
+	adoptSQL := p.Migration.GetAdoptSql()
+	if preflight == "" || adoptSQL == "" {
+		// EMPTY MEANS REFUSE. A dialect that cannot ask "are you already at
+		// this schema" gets no fake apply, because the alternative is
+		// recording the claim on the operator's word alone — which is the
+		// hand-written ledger INSERT this command replaces.
+		err := fmt.Errorf("fake apply %s/%s: this migration carries no adopt preflight, so there is nothing to check the claim against\n"+
+			"  why: --fake records a migration without running it, and the licence for that is the database ALREADY holding what the migration describes\n"+
+			"  fix: fetch the migration again from a console that renders one (relational dialects only), or apply it for real",
+			p.Connection, p.Migration.GetId())
+		logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), err)
+		return err
+	}
+	body := &applyfetchpb.Migration{
+		Id:            p.Migration.GetId(),
+		Connection:    p.Migration.GetConnection(),
+		UpSql:         preflight + "\n" + adoptSQL,
+		ContentSha256: p.Migration.GetContentSha256(),
+	}
+	if err := applier.Apply(ctx, body); err != nil {
+		dur := time.Since(started)
+		err = fmt.Errorf("fake apply %s/%s: %w\n"+
+			"  why: --fake asserts this database already holds what the migration describes; the preflight says it does not\n"+
+			"  fix: the message above names the object that disagrees — align the database, or drop --fake and apply for real",
+			p.Connection, p.Migration.GetId(), err)
+		logMigration(logger, "fake", p.Connection, p.Migration, dur, err)
+		captureMigrationError("fake", p.Connection, p.Migration, err)
+		return err
+	}
+	fmt.Fprintf(out, "apply: %s :: %s recorded WITHOUT running its body (--fake; the database already held what it describes)\n",
+		p.Connection, p.Migration.GetId())
+	logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), nil)
 	return nil
 }
 
