@@ -27,15 +27,24 @@
 // information_schema views per dialect). Adding them later is
 // a per-dialect extension to the same Format.
 //
-// **MVP gap.** This package is the apply-side fingerprinting
-// half of Phase D. The compile-side half — generating the same
-// fingerprint shape from console's IR or shadow DBs — is the
-// SCAFFOLDED-but-NOT-IMPLEMENTED part: console emits
-// `FAKE_<hex>` placeholders today (see decorate package), so
-// the fingerprint comparison in w17migrate is intentionally
-// stubbed to always-pass. Drift detection becomes operational
-// when console grows shadow DB integration. See iteration-3.md
-// D-iter3-14 for the swap point.
+// **Partial coverage, not a stub.** This package is the
+// apply-side fingerprinting half of Phase D. The comparison in
+// w17migrate is LIVE: `checkPreFingerprint` extracts the real
+// schema and REFUSES the migration on a mismatch. What is still
+// missing is the compile-side half — console emitting a real
+// `expected_pre_fingerprint` from its IR or shadow DBs. Until it
+// does, console writes `FAKE_<hex>` placeholders (see the
+// decorate package) and the check skips those, so drift is
+// caught for every migration that carries a real expectation and
+// for no other.
+//
+// ⚠️ This comment used to say the comparison was "intentionally
+// stubbed to always-pass". That stopped being true when the
+// enforcement landed, and the stale version is the dangerous
+// direction: a reader who believes it treats a genuine drift
+// refusal as scaffolding and reaches for the check instead of
+// the drift (T3-7 pass #15, C15-3). See iteration-3.md
+// D-iter3-14.
 package fingerprint
 
 import (

@@ -465,9 +465,12 @@ func (a *Applier) Close() error {
 // (Phase D — D-iter3-14). Excludes the w17_migrations
 // bookkeeping table; sorted by name + columns. The
 // orchestrator's Phase D drift check calls this before each
-// pending migration; for now the comparison is stubbed to
-// always-pass (real fingerprints land when console grows
-// shadow-DB integration).
+// pending migration and REFUSES on a mismatch. The comparison is
+// skipped only when the migration carries no
+// `expected_pre_fingerprint` or a `FAKE_` placeholder, which is
+// what console still emits until it grows shadow-DB integration
+// — so the gap is in what console PROMISES, not in whether this
+// is checked (T3-7 pass #15, C15-3).
 func (a *Applier) Fingerprint(ctx context.Context) (string, error) {
 	schema, err := fingerprint.ExtractPostgres(ctx, a.conn)
 	if err != nil {

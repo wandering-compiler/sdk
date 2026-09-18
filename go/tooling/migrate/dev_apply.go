@@ -133,7 +133,6 @@ func stripConcurrently(sql string) string {
 // The baseline is rendered SERVER-side and carries no envelope of its own,
 // precisely so it can be folded in here; see applied.BaselineOnly.
 func devApplySQL(m *applyplanpb.DevMigration) string {
-	parts := make([]string, 0, 4)
 	// Prerequisites FIRST, in the same statement set as the schema that needs
 	// them — `CREATE EXTENSION IF NOT EXISTS`, so a database that already has
 	// one is untouched.
@@ -149,9 +148,17 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	// extension is a pre-apply step the deploying platform owns and may need
 	// superuser for. This path is the dev one, where the binary applying the
 	// schema is the thing holding the connection.
+	//
+	// OUTSIDE the transaction envelope below, deliberately: a prerequisite is
+	// a precondition of the schema rather than part of it, `IF NOT EXISTS`
+	// makes re-running it free, and some deployments restrict CREATE
+	// EXTENSION inside a transaction.
+	var prereq []string
+
 	// Namespaces BEFORE extensions and before the body: a qualified
 	// `CREATE TABLE "billing"."accounts"` fails on a database that has no
-	// `billing` schema, and nothing in the body creates one.
+	// `billing` schema, and nothing in the body creates one. Extensions come
+	// after because an extension can be installed INTO a schema.
 	//
 	// These used to arrive only through `db/init/<domain>/00_extensions.sql`,
 	// mounted into one compose container's initdb — so a database built any
@@ -159,52 +166,123 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	// gone; the prerequisite travels with the plan that needs it.
 	for _, ns := range m.GetRequiredSchemas() {
 		if ns = strings.TrimSpace(ns); ns != "" {
-			parts = append(parts, `CREATE SCHEMA IF NOT EXISTS "`+ns+`";`)
+			prereq = append(prereq, `CREATE SCHEMA IF NOT EXISTS "`+ns+`";`)
 		}
 	}
 	for _, ext := range m.GetRequiredExtensions() {
 		if ext = strings.TrimSpace(ext); ext != "" {
-			parts = append(parts, `CREATE EXTENSION IF NOT EXISTS "`+ext+`";`)
+			prereq = append(prereq, `CREATE EXTENSION IF NOT EXISTS "`+ext+`";`)
 		}
 	}
-	if up := m.GetUpSql(); up != "" {
-		parts = append(parts, up)
-	}
-	if post := m.GetUpSqlPostTx(); post != "" {
-		parts = append(parts, stripConcurrently(post))
-	}
-	body := strings.Join(parts, "\n")
 
+	up := m.GetUpSql()
+	post := m.GetUpSqlPostTx()
+	if post != "" {
+		// Safe to run inside a transaction here, which is the whole reason
+		// this path can be atomic at all: the CONCURRENTLY that would forbid
+		// it has just been stripped.
+		post = stripConcurrently(post)
+	}
 	base := m.GetBaselineSql()
-	if base == "" {
-		return body
+
+	head := strings.Join(prereq, "\n")
+
+	tail := joinNonEmpty("\n", post, base)
+	if tail == "" {
+		return joinNonEmpty("\n", head, up)
+	}
+	if up == "" {
+		// Baseline-only, or post-tx-only: adopting a database that already
+		// holds its schema. Nothing to be inside of.
+		return joinNonEmpty("\n", head, tail)
 	}
 
-	// INSIDE the schema's own transaction when there is one.
+	// EVERYTHING inside the schema's own transaction when there is one.
 	//
-	// The schema and its applied-ledger baseline have to land together: a
-	// built schema with an empty ledger is not a state a retry recovers
-	// from, because `storeHasSchema` reads any non-empty fingerprint as
-	// "already done" and green-skips that database forever. The crash
-	// window between them is permanent and silent.
+	// The schema, its post-tx statements and its applied-ledger baseline
+	// have to land together: a built schema with an empty ledger is not a
+	// state a retry recovers from, because `storeHasSchema` reads any
+	// non-empty fingerprint as "already done" and green-skips that database
+	// forever. The crash window is permanent and silent.
 	//
-	// Appending was safe in the shape the guarding test fed it — a body
-	// with no envelope — and unsafe in the shape production emits. The
-	// emitter's `wrapTransaction` writes `BEGIN; … COMMIT;`, so an appended
-	// baseline ran AFTER an explicit COMMIT, in its own autocommit. Measured
-	// live on pg18: the table survives a batch that errored on its
-	// post-COMMIT tail (T3-7 pass #14, D14-4).
+	// ⚠️ Two earlier versions each got half of this. Appending everything
+	// left the baseline after an explicit COMMIT (D14-4). Splicing ONLY the
+	// baseline in left the post-tx statements outside while the ledger row
+	// went inside — the same tear pointing the other way, produced by the
+	// fix for it (T3-7 pass #15, C15-9).
 	//
-	// A body with NO envelope keeps the appended shape. A dialect without
+	// A body with NO envelope keeps the appended shape: a dialect without
 	// transactional DDL has nothing to be inside of, and inventing a BEGIN
 	// for it would be a worse answer than the window.
-	if i := strings.LastIndex(body, "COMMIT;"); i >= 0 {
-		return body[:i] + base + "\n\n" + body[i:]
+	if i := lastTopLevelCommit(up); i >= 0 {
+		return joinNonEmpty("\n", head, up[:i]+tail+"\n\n"+up[i:])
 	}
-	if body == "" {
-		// Baseline-only: an adopt of a database that already holds its
-		// schema. Nothing to be inside of and nothing to separate from.
-		return base
+	return joinNonEmpty("\n", head, up+"\n"+tail)
+}
+
+// joinNonEmpty joins the non-empty parts with sep.
+func joinNonEmpty(sep string, parts ...string) string {
+	kept := parts[:0:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
 	}
-	return body + "\n" + base
+	return strings.Join(kept, sep)
+}
+
+// lastTopLevelCommit returns the index of the final `COMMIT;` that is real
+// SQL — not one sitting inside a comment or a quoted string. Returns -1 when
+// the body carries no transaction envelope.
+//
+// ⚠️ A substring search is not good enough and that is measured, not
+// theoretical: a post-tx statement containing `'after COMMIT; rebuild
+// stats'` had the baseline spliced into the middle of the author's string
+// literal (T3-7 pass #15, C15-9). The correct scanner already existed in
+// this file — `stripConcurrently` walks comments and quoted strings — and
+// simply was not used. Reusing its traversal rather than writing a second
+// one is the point: two scanners over the same grammar drift, and the one
+// that drifts is the one nobody reads.
+func lastTopLevelCommit(sql string) int {
+	const needle = "COMMIT;"
+	last := -1
+	for i := 0; i < len(sql); {
+		switch {
+		case strings.HasPrefix(sql[i:], "--"):
+			end := strings.IndexByte(sql[i:], '\n')
+			if end < 0 {
+				return last
+			}
+			i += end
+		case strings.HasPrefix(sql[i:], "/*"):
+			end := strings.Index(sql[i+2:], "*/")
+			if end < 0 {
+				return last
+			}
+			i += 2 + end + 2
+		case sql[i] == '\'' || sql[i] == '"':
+			q := sql[i]
+			j := i + 1
+			for j < len(sql) {
+				if sql[j] == q {
+					if j+1 < len(sql) && sql[j+1] == q {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			i = j
+		default:
+			if strings.HasPrefix(sql[i:], needle) {
+				last = i
+				i += len(needle)
+				continue
+			}
+			i++
+		}
+	}
+	return last
 }

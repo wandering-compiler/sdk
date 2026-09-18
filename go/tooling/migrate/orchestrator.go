@@ -132,6 +132,19 @@ type Pending struct {
 	// that skipped the baseline silently would offer it again on every
 	// subsequent deploy, forever.
 	Adopt bool
+
+	// PlannedHead is the applied head this entry was planned against —
+	// read BEFORE any run lock existed, because planning happens first.
+	//
+	// It exists so a run that later takes the lock can ask the one question
+	// that matters: is the database still where the plan thought it was.
+	// Comparing the head against the first PLANNED ID instead is wrong on
+	// the rollback path and was measured wrong: `AppliedHead` deliberately
+	// EXCLUDES a PhasePending migration, and `PlanRollback` adds the pending
+	// ones above the head and rolls them back FIRST — so the head never
+	// equals the first id and the refusal fired forever, blaming a
+	// concurrent run that did not exist (T3-7 pass #15, B15-4).
+	PlannedHead string
 }
 
 // RollbackConfig pins everything RunRollback needs to drive the
@@ -321,9 +334,10 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 				adopt = true
 			}
 			out = append(out, Pending{
-				Connection: ct.Connection,
-				Migration:  m,
-				Adopt:      adopt,
+				Connection:  ct.Connection,
+				Migration:   m,
+				Adopt:       adopt,
+				PlannedHead: head,
 			})
 		}
 	}
@@ -421,6 +435,26 @@ func Run(ctx context.Context, cfg Config) error {
 			h, hErr := applier.AppliedHead(ctx)
 			if hErr != nil {
 				return fmt.Errorf("connection %s: re-read applied head under the run lock: %w", p.Connection, hErr)
+			}
+			// A head that moved BACKWARD means another run rolled back while
+			// this one queued, and nothing the plan decided still holds.
+			//
+			// The forward case is a skip — somebody applied what we were
+			// going to. The backward case cannot be skipped past, and the
+			// sharp member is a squash baseline: `Pending.Adopt` was decided
+			// at plan time from the pre-lock head ("this database already
+			// sits at a migration the baseline replaces, so record it and
+			// run no DDL"), the adopt branch skips the drift gate as well,
+			// and `adopt_sql` then writes "everything up to here is applied"
+			// onto a database that no longer holds it. Silent, permanent,
+			// and the run reports success.
+			//
+			// One refusal closes that and the ordinary case together
+			// (T3-7 pass #15, A15-1 — proven against `Run` with a fake
+			// before it was fixed).
+			if h < p.PlannedHead {
+				return fmt.Errorf("connection %s: refusing to apply %s — the applied head was %q when this run was planned and is %q now, so another run rolled back while this one waited for the lock and nothing the plan decided still describes the database; re-plan and try again",
+					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
 			}
 			headUnderLock[p.Connection] = h
 			head = h
@@ -913,7 +947,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 			toRollback[i], toRollback[j] = toRollback[j], toRollback[i]
 		}
 		for _, m := range toRollback {
-			out = append(out, Pending{Connection: ct.Connection, Migration: m})
+			out = append(out, Pending{Connection: ct.Connection, Migration: m, PlannedHead: head})
 		}
 	}
 	return out, nil
@@ -1005,9 +1039,16 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 				return fmt.Errorf("connection %s: re-read applied head under the run lock: %w", p.Connection, hErr)
 			}
 			headUnderLock[p.Connection] = h
-			if h != "" && h != p.Migration.GetId() {
-				return fmt.Errorf("connection %s: refusing to roll back %s — the head moved to %s while this run waited for the lock, so another run applied or rolled back in between and this plan no longer describes the database; re-plan and try again",
-					p.Connection, p.Migration.GetId(), h)
+			// Against the head the PLANNER saw, not against the first id it
+			// chose. Those differ by design whenever a PhasePending
+			// migration sits above the head — `AppliedHead` excludes it and
+			// the planner rolls it back first — so comparing to the id
+			// refused every such cleanup permanently, with a message
+			// blaming a concurrent run that never happened (T3-7 pass #15,
+			// B15-4).
+			if h != p.PlannedHead {
+				return fmt.Errorf("connection %s: refusing to roll back %s — the applied head was %q when this rollback was planned and is %q now, so another run applied or rolled back while this one waited for the lock and the plan no longer describes the database; re-plan and try again",
+					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
 			}
 		}
 
