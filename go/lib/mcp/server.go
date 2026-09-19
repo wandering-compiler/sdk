@@ -474,7 +474,7 @@ func (s *Server) CallUnary(
 	}
 
 	// UseEnumNumbers mirrors restgw: enum values are INTEGERS on every w17
-	// JSON surface (docs/decisions/json-dialect.md §2a, which names MCP
+	// JSON surface (docs/specs/gateway/json-dialect.md §2a, which names MCP
 	// explicitly). This site emitted NAMES while the comment below claimed
 	// the result matches "the tool's registered schema … and every other
 	// JSON surface" — and the registered schema advertises integers, so a

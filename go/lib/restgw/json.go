@@ -64,7 +64,7 @@ var (
 // were ("flip the var at process startup"). Two things make that
 // false. The settings ARE the w17 JSON dialect — snake_case names,
 // enum values as integers, 64-bit ints as strings
-// (docs/decisions/json-dialect.md §2a) — so changing them means
+// (docs/specs/gateway/json-dialect.md §2a) — so changing them means
 // leaving the dialect every client, every published schema and every
 // sibling surface was generated against. And a flip would only
 // half-apply anyway: [MarshalProtoAppend] consults the generated
