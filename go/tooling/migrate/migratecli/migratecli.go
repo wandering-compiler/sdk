@@ -82,8 +82,6 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		return true, Main(ctx, argv[1:], opts)
 	case binroots.Fixtures:
 		return true, Fixtures(ctx, argv[1:], opts)
-	case binroots.Schema:
-		return true, Schema(ctx, argv[1:], opts)
 	case "-h", "--help", "help":
 		// A binary asked for help must not answer by binding a port. A
 		// consumer ran `<binary> --help` inside a container, read "starting
@@ -97,8 +95,7 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		fmt.Fprint(out(opts),
 			"usage: <binary> [command]\n\n"+
 				"  migrate    apply / fetch / roll back / report this bundle's migrations\n"+
-				"  fixtures   apply the rendered seed data\n"+
-				"  schema     build this bundle's schema into an EMPTY database\n\n"+
+				"  fixtures   apply the rendered seed data\n\n"+
 				"Run a command with --help for its flags. With no command the bundle\n"+
 				"starts its server, which is what a container image does by default.\n")
 		return true, nil
@@ -574,6 +571,10 @@ func requireSomeDSN(cmd string, specs []factory.TargetSpec, withoutDSN []string,
 			"  fix: export the variable(s) above, or pass --allow-no-dsn to say that doing nothing is intended",
 		cmd, len(withoutDSN), join(withoutDSN))
 }
+
+// join renders a connection list for a message. Lived beside the schema
+// command until that command was removed with the artefact it read.
+func join(names []string) string { return strings.Join(names, ", ") }
 
 // consoleAddrOf lets --console override the environment, without giving the
 // TOKEN a flag too.

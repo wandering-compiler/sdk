@@ -12,8 +12,8 @@ import (
 //
 // A consumer ran `<binary> --help` inside a container and read "starting on
 // :50051". They concluded the binary ignored its arguments, went looking for
-// another way to apply a schema, and lost an afternoon to it — the binary has
-// a `schema` command, and its help was the one place that would have said so.
+// another way to apply a schema, and lost an afternoon to it — the help was
+// the one place that would have told them what this binary can do.
 func TestDispatch_HelpDoesNotStartAServer(t *testing.T) {
 	for _, word := range []string{"-h", "--help", "help"} {
 		var buf bytes.Buffer
@@ -25,7 +25,7 @@ func TestDispatch_HelpDoesNotStartAServer(t *testing.T) {
 			t.Errorf("%s: fell through to the server — which is how it printed a listen address instead of help", word)
 			continue
 		}
-		for _, want := range []string{"migrate", "fixtures", "schema"} {
+		for _, want := range []string{"migrate", "fixtures"} {
 			if !strings.Contains(buf.String(), want) {
 				t.Errorf("%s: help does not name the %q command:\n%s", word, want, buf.String())
 			}
