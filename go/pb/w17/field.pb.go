@@ -1045,6 +1045,23 @@ type Field struct {
 	// Replaces the default regex implied by `type` (e.g. SLUG's `^[a-z0-9-]+$`).
 	// Empty string = no override.
 	Pattern string `protobuf:"bytes,14,opt,name=pattern,proto3" json:"pattern,omitempty"`
+	// zero_is_value says the enum's 0 is a REAL classification, not the
+	// proto3 sentinel — so the column admits it and it may be a default.
+	//
+	// By default w17 strips the 0 value: proto3 convention makes it
+	// `*_UNSPECIFIED`, the generated `CHECK IN (…)` excludes it, and
+	// `default_int: 0` is refused because the DEFAULT would fail that CHECK.
+	// That is right for the usual case and stays the default.
+	//
+	// ⚠️ It is wrong for a domain that decided otherwise and cannot renumber.
+	// A consumer's `ACCOUNT_TYPE_UNKNOWN = 0` is a legitimate answer in a
+	// published contract; without this they stored "unknown" as NULL — which
+	// round-trips to the proto zero and works, and needs a comment defending
+	// it every time somebody reads the model (marb #27).
+	//
+	// Only meaningful on an enum-typed field. It does not rename the value or
+	// change the wire: it says the column's admitted set includes 0.
+	ZeroIsValue bool `protobuf:"varint,34,opt,name=zero_is_value,json=zeroIsValue,proto3" json:"zero_is_value,omitempty"`
 	// --- Enumerated choices (string carriers) ---
 	// FQN of a proto enum reachable from this file. The IR builder resolves
 	// the path, reads the enum's value names, and emits
@@ -1486,6 +1503,13 @@ func (x *Field) GetPattern() string {
 		return x.Pattern
 	}
 	return ""
+}
+
+func (x *Field) GetZeroIsValue() bool {
+	if x != nil {
+		return x.ZeroIsValue
+	}
+	return false
 }
 
 func (x *Field) GetChoices() string {
@@ -2005,7 +2029,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\x8c\t\n" +
+	" \x01(\tR\amessage\"\xb0\t\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
 	"\x02pk\x18\x02 \x01(\bR\x02pk\x12\x1c\n" +
@@ -2021,7 +2045,8 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x03gte\x18\v \x01(\x01H\x04R\x03gte\x88\x01\x01\x12\x13\n" +
 	"\x02lt\x18\f \x01(\x01H\x05R\x02lt\x88\x01\x01\x12\x15\n" +
 	"\x03lte\x18\r \x01(\x01H\x06R\x03lte\x88\x01\x01\x12\x18\n" +
-	"\apattern\x18\x0e \x01(\tR\apattern\x12\x18\n" +
+	"\apattern\x18\x0e \x01(\tR\apattern\x12\"\n" +
+	"\rzero_is_value\x18\" \x01(\bR\vzeroIsValue\x12\x18\n" +
 	"\achoices\x18\x10 \x01(\tR\achoices\x12\x1c\n" +
 	"\tprecision\x18\x11 \x01(\x05R\tprecision\x12\x19\n" +
 	"\x05scale\x18\x12 \x01(\x05H\aR\x05scale\x88\x01\x01\x12'\n" +
