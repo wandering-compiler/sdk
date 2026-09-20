@@ -279,6 +279,7 @@ const (
 	Codegen_EditLock_FullMethodName                = "/w17lock.console.rpc.Codegen/EditLock"
 	Codegen_Guide_FullMethodName                   = "/w17lock.console.rpc.Codegen/Guide"
 	Codegen_AdmissionStatus_FullMethodName         = "/w17lock.console.rpc.Codegen/AdmissionStatus"
+	Codegen_DumpFixtures_FullMethodName            = "/w17lock.console.rpc.Codegen/DumpFixtures"
 )
 
 // CodegenClient is the client API for Codegen service.
@@ -342,6 +343,14 @@ type CodegenClient interface {
 	// counters are PROCESS-LOCAL, so the answer is only meaningful from the
 	// process doing the work.
 	AdmissionStatus(ctx context.Context, in *w17compiler.AdmissionStatusRequest, opts ...grpc.CallOption) (*w17compiler.AdmissionStatusResponse, error)
+	// DumpFixtures — the statements that read a live store back into an
+	// authorable fixture. Re-hosted for the same reason as the rest: the
+	// table-to-model mapping and the per-carrier conversions are compiler
+	// knowledge, so they are composed here and the client only runs what
+	// comes back. It returns STATEMENTS, not rows — the console has no
+	// route to a consumer's database, and the client that does needs no
+	// schema knowledge to execute them.
+	DumpFixtures(ctx context.Context, in *w17compiler.DumpFixturesRequest, opts ...grpc.CallOption) (*w17compiler.DumpFixturesResponse, error)
 }
 
 type codegenClient struct {
@@ -749,6 +758,16 @@ func (c *codegenClient) AdmissionStatus(ctx context.Context, in *w17compiler.Adm
 	return out, nil
 }
 
+func (c *codegenClient) DumpFixtures(ctx context.Context, in *w17compiler.DumpFixturesRequest, opts ...grpc.CallOption) (*w17compiler.DumpFixturesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(w17compiler.DumpFixturesResponse)
+	err := c.cc.Invoke(ctx, Codegen_DumpFixtures_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CodegenServer is the server API for Codegen service.
 // All implementations must embed UnimplementedCodegenServer
 // for forward compatibility.
@@ -810,6 +829,14 @@ type CodegenServer interface {
 	// counters are PROCESS-LOCAL, so the answer is only meaningful from the
 	// process doing the work.
 	AdmissionStatus(context.Context, *w17compiler.AdmissionStatusRequest) (*w17compiler.AdmissionStatusResponse, error)
+	// DumpFixtures — the statements that read a live store back into an
+	// authorable fixture. Re-hosted for the same reason as the rest: the
+	// table-to-model mapping and the per-carrier conversions are compiler
+	// knowledge, so they are composed here and the client only runs what
+	// comes back. It returns STATEMENTS, not rows — the console has no
+	// route to a consumer's database, and the client that does needs no
+	// schema knowledge to execute them.
+	DumpFixtures(context.Context, *w17compiler.DumpFixturesRequest) (*w17compiler.DumpFixturesResponse, error)
 	mustEmbedUnimplementedCodegenServer()
 }
 
@@ -903,6 +930,9 @@ func (UnimplementedCodegenServer) Guide(*w17compiler.GuideRequest, grpc.ServerSt
 }
 func (UnimplementedCodegenServer) AdmissionStatus(context.Context, *w17compiler.AdmissionStatusRequest) (*w17compiler.AdmissionStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdmissionStatus not implemented")
+}
+func (UnimplementedCodegenServer) DumpFixtures(context.Context, *w17compiler.DumpFixturesRequest) (*w17compiler.DumpFixturesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DumpFixtures not implemented")
 }
 func (UnimplementedCodegenServer) mustEmbedUnimplementedCodegenServer() {}
 func (UnimplementedCodegenServer) testEmbeddedByValue()                 {}
@@ -1338,6 +1368,24 @@ func _Codegen_AdmissionStatus_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Codegen_DumpFixtures_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(w17compiler.DumpFixturesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServer).DumpFixtures(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Codegen_DumpFixtures_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServer).DumpFixtures(ctx, req.(*w17compiler.DumpFixturesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Codegen_ServiceDesc is the grpc.ServiceDesc for Codegen service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1404,6 +1452,10 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdmissionStatus",
 			Handler:    _Codegen_AdmissionStatus_Handler,
+		},
+		{
+			MethodName: "DumpFixtures",
+			Handler:    _Codegen_DumpFixtures_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

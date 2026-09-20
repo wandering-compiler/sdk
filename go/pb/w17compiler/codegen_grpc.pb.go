@@ -54,6 +54,7 @@ const (
 	CodegenService_VerifyLock_FullMethodName              = "/w17.storage.codegen.CodegenService/VerifyLock"
 	CodegenService_Classify_FullMethodName                = "/w17.storage.codegen.CodegenService/Classify"
 	CodegenService_Plan_FullMethodName                    = "/w17.storage.codegen.CodegenService/Plan"
+	CodegenService_DumpFixtures_FullMethodName            = "/w17.storage.codegen.CodegenService/DumpFixtures"
 	CodegenService_GenerateClient_FullMethodName          = "/w17.storage.codegen.CodegenService/GenerateClient"
 	CodegenService_DiscoverPluginSandboxes_FullMethodName = "/w17.storage.codegen.CodegenService/DiscoverPluginSandboxes"
 	CodegenService_GeneratePluginPb_FullMethodName        = "/w17.storage.codegen.CodegenService/GeneratePluginPb"
@@ -228,6 +229,19 @@ type CodegenServiceClient interface {
 	// — so this PUBLIC contract pulls in no compiler-internal typed proto.
 	// Empty base = initial migration (full create); empty head = teardown.
 	Plan(ctx context.Context, in *PlanIRRequest, opts ...grpc.CallOption) (*PlanIRResponse, error)
+	// DumpFixtures renders, per model, a NATIVE query whose rows are already in
+	// the fixture's on-disk shape. The client runs them against its own store
+	// and writes the bytes.
+	//
+	// The shaping is here rather than in the client on purpose. Reading rows
+	// back as fixtures needs the table→model mapping AND the per-carrier value
+	// conversions, and both are compiler knowledge — a public client carrying
+	// them means a conversion fix ships as a client release every consumer has
+	// to take, which is the reason the plugin catalogue moved server-side after
+	// `org_invite` shipped a defect that could not be corrected without cutting
+	// rc.10. So the console emits the statement and the client executes it,
+	// exactly as it already does for `migrate apply` and the dev plan.
+	DumpFixtures(ctx context.Context, in *DumpFixturesRequest, opts ...grpc.CallOption) (*DumpFixturesResponse, error)
 	// GenerateClient renders the FE client tree(s) (TS/JS/React/Vue)
 	// declared in the lock's generated_code.clients[] (seam-D, thin-client
 	// refactor Step 3a — the last generator off the in-process toolchain).
@@ -576,6 +590,16 @@ func (c *codegenServiceClient) Plan(ctx context.Context, in *PlanIRRequest, opts
 	return out, nil
 }
 
+func (c *codegenServiceClient) DumpFixtures(ctx context.Context, in *DumpFixturesRequest, opts ...grpc.CallOption) (*DumpFixturesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DumpFixturesResponse)
+	err := c.cc.Invoke(ctx, CodegenService_DumpFixtures_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codegenServiceClient) GenerateClient(ctx context.Context, in *GenerateClientRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[8], CodegenService_GenerateClient_FullMethodName, cOpts...)
@@ -901,6 +925,19 @@ type CodegenServiceServer interface {
 	// — so this PUBLIC contract pulls in no compiler-internal typed proto.
 	// Empty base = initial migration (full create); empty head = teardown.
 	Plan(context.Context, *PlanIRRequest) (*PlanIRResponse, error)
+	// DumpFixtures renders, per model, a NATIVE query whose rows are already in
+	// the fixture's on-disk shape. The client runs them against its own store
+	// and writes the bytes.
+	//
+	// The shaping is here rather than in the client on purpose. Reading rows
+	// back as fixtures needs the table→model mapping AND the per-carrier value
+	// conversions, and both are compiler knowledge — a public client carrying
+	// them means a conversion fix ships as a client release every consumer has
+	// to take, which is the reason the plugin catalogue moved server-side after
+	// `org_invite` shipped a defect that could not be corrected without cutting
+	// rc.10. So the console emits the statement and the client executes it,
+	// exactly as it already does for `migrate apply` and the dev plan.
+	DumpFixtures(context.Context, *DumpFixturesRequest) (*DumpFixturesResponse, error)
 	// GenerateClient renders the FE client tree(s) (TS/JS/React/Vue)
 	// declared in the lock's generated_code.clients[] (seam-D, thin-client
 	// refactor Step 3a — the last generator off the in-process toolchain).
@@ -1064,6 +1101,9 @@ func (UnimplementedCodegenServiceServer) Classify(context.Context, *ClassifyIRRe
 }
 func (UnimplementedCodegenServiceServer) Plan(context.Context, *PlanIRRequest) (*PlanIRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Plan not implemented")
+}
+func (UnimplementedCodegenServiceServer) DumpFixtures(context.Context, *DumpFixturesRequest) (*DumpFixturesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DumpFixtures not implemented")
 }
 func (UnimplementedCodegenServiceServer) GenerateClient(*GenerateClientRequest, grpc.ServerStreamingServer[GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method GenerateClient not implemented")
@@ -1354,6 +1394,24 @@ func _CodegenService_Plan_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CodegenService_DumpFixtures_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DumpFixturesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServiceServer).DumpFixtures(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodegenService_DumpFixtures_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServiceServer).DumpFixtures(ctx, req.(*DumpFixturesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CodegenService_GenerateClient_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(GenerateClientRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1573,6 +1631,10 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Plan",
 			Handler:    _CodegenService_Plan_Handler,
+		},
+		{
+			MethodName: "DumpFixtures",
+			Handler:    _CodegenService_DumpFixtures_Handler,
 		},
 		{
 			MethodName: "DiscoverPluginSandboxes",
