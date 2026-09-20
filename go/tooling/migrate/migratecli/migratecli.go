@@ -201,7 +201,7 @@ flags (apply):
   --console ADDR      console endpoint; overrides W17_CONSOLE_ADDR
   --fetch             pull the set from the console and apply it WITHOUT writing
                       to disk; ignores --migrations. Needs W17_CONSOLE_ADDR +
-                      W17_CONSOLE_TOKEN
+                      W17_TOKEN
   --dry-run           print what would apply, apply nothing
   --log-format text|json
   --parallel N        worker count for KV data migrations; 0 = the migration's own

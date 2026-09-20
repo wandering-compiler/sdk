@@ -11,6 +11,7 @@ package fingerprint
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Observed is one database's live schema, namespaces included.
@@ -42,6 +43,21 @@ type ObservedTable struct {
 	ForeignKeys []ObservedForeignKey
 	// Checks are the table's CHECK constraints, by name.
 	Checks []string
+	// CheckMembers is the MEMBER SET of every membership check, by constraint
+	// name — the numbers or strings a `CHECK col IN (…)` admits.
+	//
+	// Names alone cannot see this one change. A membership check derived from
+	// a growing catalogue (`auto_choices: ACL_PERMISSION_IDS`) keeps its name
+	// for life and rewrites its BODY every time the catalogue gains a member,
+	// so a sync comparing names reports "unchanged" for a database whose
+	// CHECK still admits the set it was created with. Everything added since
+	// is then refused at INSERT, by a constraint the schema step just said
+	// was current.
+	//
+	// Only membership checks are captured, not check bodies in general: the
+	// member set survives Postgres rewriting the expression, which is exactly
+	// why comparing whole expressions was rejected.
+	CheckMembers map[string][]string
 }
 
 // ObservedForeignKey is one FK constraint: the column it constrains and what
@@ -138,13 +154,13 @@ func ObservePostgres(ctx context.Context, conn PgxQuerier) (Observed, error) {
 		if err != nil {
 			return Observed{}, err
 		}
-		fks, checks, err := pgObserveConstraints(ctx, conn, r.schema, r.name)
+		fks, checks, members, err := pgObserveConstraints(ctx, conn, r.schema, r.name)
 		if err != nil {
 			return Observed{}, err
 		}
 		out.Tables = append(out.Tables, ObservedTable{
 			Schema: r.schema, Name: r.name, Columns: cols, Indexes: idx, PrimaryKey: pk,
-			ForeignKeys: fks, Checks: checks,
+			ForeignKeys: fks, Checks: checks, CheckMembers: members,
 		})
 	}
 	return out, nil
@@ -285,10 +301,11 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 //
 // NOT VALID constraints are reported like any other: they exist, and a sync
 // that planned to re-add one would fail on the duplicate name.
-func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedForeignKey, []string, error) {
+func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedForeignKey, []string, map[string][]string, error) {
 	rows, err := conn.Query(ctx, `
 		SELECT c.conname,
 		       c.contype,
+		       COALESCE(pg_get_constraintdef(c.oid), ''),
 		       COALESCE((SELECT array_agg(a.attname ORDER BY k.ord)
 		                   FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
 		                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '{}'),
@@ -303,24 +320,86 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		 ORDER BY c.conname`,
 		schema, table)
 	if err != nil {
-		return nil, nil, fmt.Errorf("postgres observe constraints %s.%s: %w", schema, table, err)
+		return nil, nil, nil, fmt.Errorf("postgres observe constraints %s.%s: %w", schema, table, err)
 	}
 	defer rows.Close()
 	var fks []ObservedForeignKey
 	var checks []string
+	members := map[string][]string{}
 	for rows.Next() {
-		var name, target, targetCol string
+		var name, def, target, targetCol string
 		var cols []string
 		var kind byte
-		if err := rows.Scan(&name, &kind, &cols, &target, &targetCol); err != nil {
-			return nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
+		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetCol); err != nil {
+			return nil, nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
 		}
 		switch kind {
 		case 'f':
 			fks = append(fks, ObservedForeignKey{Name: name, Columns: cols, TargetTable: target, TargetColumn: targetCol})
 		case 'c':
 			checks = append(checks, name)
+			if m, ok := CheckMembersFromDef(def); ok {
+				members[name] = m
+			}
 		}
 	}
-	return fks, checks, rows.Err()
+	return fks, checks, members, rows.Err()
+}
+
+// CheckMembersFromDef extracts the member set of a MEMBERSHIP check from the
+// definition Postgres reports, and says whether it found one.
+//
+// Both spellings are handled because Postgres does not preserve the one it
+// was given: `CHECK (c IN (1,2))` comes back as `CHECK ((c = ANY (ARRAY[1,
+// 2])))`, while a single-member set stays `= 'x'::text`. Members are returned
+// as STRINGS so one helper serves the numeric and the string carrier; the
+// caller compares them as a set, never by the text of the expression.
+//
+// Returns false for any check that is not a membership test — a length bound,
+// a range, a NOT NULL emulation — because those genuinely cannot be compared
+// without comparing expressions, which is what this file refuses to do.
+func CheckMembersFromDef(def string) ([]string, bool) {
+	open := strings.Index(def, "ARRAY[")
+	if open >= 0 {
+		rest := def[open+len("ARRAY["):]
+		end := strings.Index(rest, "]")
+		if end < 0 {
+			return nil, false
+		}
+		return splitCheckMembers(rest[:end]), true
+	}
+	// `IN (…)` survives when the expression was not rewritten (other engines,
+	// and Postgres for some shapes).
+	up := strings.ToUpper(def)
+	in := strings.Index(up, " IN (")
+	if in < 0 {
+		return nil, false
+	}
+	rest := def[in+len(" IN ("):]
+	// The FIRST close paren: the member list ends there, and the trailing
+	// ones belong to the CHECK wrapper Postgres adds.
+	end := strings.Index(rest, ")")
+	if end < 0 {
+		return nil, false
+	}
+	return splitCheckMembers(rest[:end]), true
+}
+
+// splitCheckMembers turns a comma-separated member list into normalised
+// members: quotes and per-member casts dropped, whitespace trimmed. A cast is
+// stripped because Postgres adds one (`'draft'::text`) that the declaration
+// never wrote.
+func splitCheckMembers(list string) []string {
+	var out []string
+	for _, raw := range strings.Split(list, ",") {
+		m := strings.TrimSpace(raw)
+		if cast := strings.Index(m, "::"); cast >= 0 {
+			m = strings.TrimSpace(m[:cast])
+		}
+		m = strings.Trim(m, "'\"")
+		if m != "" {
+			out = append(out, m)
+		}
+	}
+	return out
 }

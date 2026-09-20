@@ -175,6 +175,38 @@ func Scope(ctx context.Context, name string) (string, bool) {
 	return vals[0], true
 }
 
+// Label reads one BROADCAST label off the verified principal —
+// `w17-label-<name>`, stamped by the gateway from the auth response.
+//
+// Same fail-closed shape as [Scope], and for a stronger reason. A label
+// answers "what KIND of caller is this", so a rule built on one reads
+// `refuse unless the label says X`. Absence must therefore deny: if the
+// decorator that stamps it stops running, or the value is dropped on a hop,
+// the answer becomes "not X" and the guarded path refuses — rather than
+// admitting everyone because a string went missing.
+//
+//	kind, _ := principal.Label(ctx, "account_kind")
+//	if kind != "bot" {
+//	    return nil, status.Error(codes.PermissionDenied, "machines only")
+//	}
+func Label(ctx context.Context, name string) (string, bool) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", false
+	}
+	vals := md.Get(LabelKey(name))
+	if len(vals) == 0 || vals[0] == "" {
+		return "", false
+	}
+	return vals[0], true
+}
+
+// LabelKey returns the canonical gRPC metadata key for a label name
+// (`account_kind` → `w17-label-account_kind`). Prefer [Label].
+func LabelKey(name string) string {
+	return LabelKeyPrefix + name
+}
+
 // ScopeKey returns the canonical gRPC metadata key for a scope name
 // (`org_id` → `x-w17-scope-org_id`). Rarely needed directly — prefer
 // [Scope]. Exposed so a caller reading metadata by hand spells the key

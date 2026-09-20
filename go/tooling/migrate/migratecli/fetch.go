@@ -29,7 +29,7 @@ import (
 // database password today would hold a console token too. That is a real
 // widening and it is why `apply --migrations <dir>` stays: an operator who
 // would rather fetch on a workstation and ship artefacts can still do exactly
-// that, and never set W17_CONSOLE_TOKEN at all.
+// that, and never set W17_TOKEN at all.
 //
 // The token is an API token (the auth plugin issues them: CreateApiToken /
 // ListApiTokens / RevokeApiToken), not a login session — a deployment should
@@ -39,8 +39,13 @@ import (
 const (
 	// envConsoleAddr is the console this binary fetches from.
 	envConsoleAddr = "W17_CONSOLE_ADDR"
-	// envConsoleToken is the bearer presented to it.
-	envConsoleToken = "W17_CONSOLE_TOKEN" // #nosec G101 -- the NAME of the env var a token is read FROM, not a token
+	// envToken is the bearer presented to it.
+	//
+	// No CONSOLE_ prefix, and that is the rule the rest of this family
+	// follows: CONSOLE_ says WHERE to connect (ADDR, ORG, CA,
+	// TLS_SKIP_VERIFY); a credential says WHO you are, and the one that came
+	// first — W17_PASSWORD — carries no prefix either.
+	envToken = "W17_TOKEN" // #nosec G101 -- the NAME of the env var a token is read FROM, not a token
 	// envConsoleOrg is the active organisation, when the account is in more
 	// than one. A single-org account can leave it unset — the console infers.
 	envConsoleOrg = "W17_CONSOLE_ORG"
@@ -100,7 +105,7 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 					"  why: a deploy needs a credential of its own rather than a person's login\n"+
 					"       session, so it can be revoked without logging anybody out\n"+
 					"  raw: %v",
-				addr, envConsoleToken, err,
+				addr, envToken, err,
 			)
 		}
 		return nil, fmt.Errorf("migrate: fetch from %s: %w", addr, err)
@@ -197,7 +202,7 @@ type bearerCreds struct{ getenv func(string) string }
 // server's own refusal is the answer, and fetchMigrations turns that into the
 // sentence naming the variable to set.
 func (b bearerCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	token := b.getenv(envConsoleToken)
+	token := b.getenv(envToken)
 	if token == "" {
 		return nil, nil
 	}
