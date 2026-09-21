@@ -1,6 +1,18 @@
-// Login screen — branded, centered card. Username + password;
-// SSO / 2FA parked. The color-scheme toggle is available here too
-// so the OS-default theme can be overridden before signing in.
+// Login screen — branded, centered card.
+//
+// Two ways in, and a deployment picks which it offers:
+//
+//   - the username + password form, on unless
+//     `auth.password_sign_in` is false;
+//   - one button per `auth.sign_in_options`, each a link that starts a
+//     federated flow somewhere else and comes back with the session in
+//     the URL fragment (consumed in auth.ts::consumeRedirectToken).
+//
+// Both, either, in any number. The default — no options, password on —
+// is the screen this was before federated sign-in existed.
+//
+// The color-scheme toggle is available here too so the OS-default theme
+// can be overridden before signing in.
 
 import { useState } from "react";
 import {
@@ -20,6 +32,7 @@ import {
 import { apiPost } from "./api";
 import { setToken } from "./auth";
 import { Brand, ThemeToggle } from "./components";
+import { Divider } from "@mantine/core";
 import { IconAlertTriangle } from "./icons";
 import type { AdminSpec } from "./types";
 import { useT } from "./i18n";
@@ -38,6 +51,11 @@ export function Login({ spec, onLogin }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const options = spec.auth.sign_in_options ?? [];
+  // Absent means TRUE. A spec written before this field existed
+  // describes a password admin, and reading the missing value as false
+  // would blank its login page on the next regeneration.
+  const passwordSignIn = spec.auth.password_sign_in !== false;
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -75,41 +93,64 @@ export function Login({ spec, onLogin }: LoginProps) {
               <Stack gap={2}>
                 <Title order={3}>{t("Sign in")}</Title>
                 <Text c="dimmed" fz="sm">
-                  {t("Enter your credentials to continue.")}
+                  {passwordSignIn
+                    ? t("Enter your credentials to continue.")
+                    : t("Continue with your organization account.")}
                 </Text>
               </Stack>
-              <form onSubmit={handleSubmit}>
-                <Stack>
-                  <TextInput
-                    label={t("Username")}
-                    autoFocus
-                    required
-                    size="md"
-                    value={username}
-                    onChange={(e) => setUsername(e.currentTarget.value)}
-                  />
-                  <PasswordInput
-                    label={t("Password")}
-                    required
-                    size="md"
-                    value={password}
-                    onChange={(e) => setPassword(e.currentTarget.value)}
-                  />
-                  {error && (
-                    <Alert
-                      color="red"
-                      variant="light"
-                      icon={<IconAlertTriangle size={18} />}
-                      title={t("Sign-in failed")}
+              {options.length > 0 && (
+                <Stack gap="sm">
+                  {options.map((o) => (
+                    <Button
+                      key={o.label}
+                      component="a"
+                      href={o.start_url}
+                      variant="default"
+                      fullWidth
+                      size="md"
                     >
-                      {error}
-                    </Alert>
-                  )}
-                  <Button type="submit" loading={submitting} fullWidth size="md" mt="xs">
-                    {t("Sign in")}
-                  </Button>
+                      {o.label}
+                    </Button>
+                  ))}
                 </Stack>
-              </form>
+              )}
+              {options.length > 0 && passwordSignIn && (
+                <Divider label={t("or")} labelPosition="center" />
+              )}
+              {passwordSignIn && (
+                <form onSubmit={handleSubmit}>
+                  <Stack>
+                    <TextInput
+                      label={t("Username")}
+                      autoFocus
+                      required
+                      size="md"
+                      value={username}
+                      onChange={(e) => setUsername(e.currentTarget.value)}
+                    />
+                    <PasswordInput
+                      label={t("Password")}
+                      required
+                      size="md"
+                      value={password}
+                      onChange={(e) => setPassword(e.currentTarget.value)}
+                    />
+                    {error && (
+                      <Alert
+                        color="red"
+                        variant="light"
+                        icon={<IconAlertTriangle size={18} />}
+                        title={t("Sign-in failed")}
+                      >
+                        {error}
+                      </Alert>
+                    )}
+                    <Button type="submit" loading={submitting} fullWidth size="md" mt="xs">
+                      {t("Sign in")}
+                    </Button>
+                  </Stack>
+                </form>
+              )}
             </Stack>
           </Paper>
         </Stack>

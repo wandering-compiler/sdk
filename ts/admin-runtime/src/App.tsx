@@ -38,7 +38,7 @@ import { Brand, NavMonogram, ThemeToggle } from "./components";
 import { IconChevronRight, IconDashboard, IconLogout } from "./icons";
 import { pageLabel } from "./format";
 import { apiGet } from "./api";
-import { getToken, clearToken, pageVisibleTo } from "./auth";
+import { getToken, clearToken, consumeRedirectToken, pageVisibleTo } from "./auth";
 import { overviewIsAvailable } from "./overviewTiles";
 import { globalNavItemSlotKey } from "./types";
 import { TranslateProvider, translatorFor, useT } from "./i18n";
@@ -59,6 +59,12 @@ export function App({ spec, slots }: AppProps) {
   // One translator for the whole tree, derived the way every surface derives
   // it — see i18n.ts::translatorFor.
   const t = translatorFor(spec);
+  // FIRST, before anything reads the hash: a federated sign-in comes
+  // back with the session in the fragment, and the fragment is also this
+  // SPA's router. The lazy initialiser runs once, ahead of the `hash`
+  // state below, so the router never sees `#token=…` — and the
+  // credential is out of the address bar before the first paint.
+  useState(() => consumeRedirectToken());
   const [authState, setAuthState] = useState<"unknown" | "anon" | "authed">("unknown");
   const [whoami, setWhoami] = useState<WhoAmIResp | null>(null);
   // Bumped by Login. The whoami fetch below is keyed on it because a

@@ -547,9 +547,30 @@ type AdminAuth struct {
 	// something an author may write.
 	//
 	// Deprecated: Marked as deprecated in w17/admin.proto.
-	Fixture       string `protobuf:"bytes,3,opt,name=fixture,proto3" json:"fixture,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Fixture string `protobuf:"bytes,3,opt,name=fixture,proto3" json:"fixture,omitempty"`
+	// SignInOptions are the FEDERATED ways in, rendered by the admin's
+	// login page as one button each beside (or instead of) the password
+	// form.
+	//
+	// Empty — the default — is today's admin exactly: a username and a
+	// password, nothing else. Adding entries is additive; a deployment
+	// that wants both offers both, and the operator picks per sign-in.
+	SignInOptions []*AdminSignInOption `protobuf:"bytes,4,rep,name=sign_in_options,json=signInOptions,proto3" json:"sign_in_options,omitempty"`
+	// PasswordSignInDisabled hides the username + password form, leaving
+	// only `sign_in_options`.
+	//
+	// Named in the NEGATIVE deliberately. A proto3 bool defaults to
+	// false, so a positively-named `password_sign_in` would default to
+	// "off" and silently lock every existing admin out on the next
+	// regeneration. The default has to be today's behaviour, and this is
+	// the spelling where it is.
+	//
+	// Refused together with an empty `sign_in_options`: that pair leaves
+	// a login page with no way to log in, and the author finds out by
+	// being locked out of their own admin.
+	PasswordSignInDisabled bool `protobuf:"varint,5,opt,name=password_sign_in_disabled,json=passwordSignInDisabled,proto3" json:"password_sign_in_disabled,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AdminAuth) Reset() {
@@ -604,6 +625,99 @@ func (x *AdminAuth) GetFixture() string {
 	return ""
 }
 
+func (x *AdminAuth) GetSignInOptions() []*AdminSignInOption {
+	if x != nil {
+		return x.SignInOptions
+	}
+	return nil
+}
+
+func (x *AdminAuth) GetPasswordSignInDisabled() bool {
+	if x != nil {
+		return x.PasswordSignInDisabled
+	}
+	return false
+}
+
+// AdminSignInOption is one federated entry point on the admin's login
+// page — "Sign in with <your identity provider>".
+//
+// It is a LINK, not a protocol: the page sends the browser to
+// `start_url` and the flow takes over from there. What comes back is a
+// session in the URL fragment, which the SPA consumes and stores. That
+// is why nothing here describes OAuth — the admin does not implement
+// it, it points at something that does.
+//
+// With the `auth` plugin's `oauth` feature on, the thing to point at is
+// its own authorize endpoint:
+//
+//	sign_in_options: [{
+//	  label: "Sign in with Marb",
+//	  start_url: "/api/v1/auth/oauth/marb/authorize?redirect_after=/admin"
+//	}]
+//
+// The provider slug is runtime data — an `OAuthProvider` row an
+// administrator wrote — so it is named here rather than discovered:
+// the login page is a declaration, and a button for a provider nobody
+// configured is a button that 404s.
+type AdminSignInOption struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Button text. Required — an unlabelled button says nothing about
+	// where it sends you, and this one leaves the application.
+	Label string `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	// Where the button sends the browser. Site-relative, or an absolute
+	// http(s) URL when the gateway serving the flow is on another origin.
+	// A `javascript:` / `data:` target is refused: it would run script in
+	// the admin's place, which no sign-in needs.
+	StartUrl      string `protobuf:"bytes,2,opt,name=start_url,json=startUrl,proto3" json:"start_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminSignInOption) Reset() {
+	*x = AdminSignInOption{}
+	mi := &file_w17_admin_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminSignInOption) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminSignInOption) ProtoMessage() {}
+
+func (x *AdminSignInOption) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_admin_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminSignInOption.ProtoReflect.Descriptor instead.
+func (*AdminSignInOption) Descriptor() ([]byte, []int) {
+	return file_w17_admin_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *AdminSignInOption) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *AdminSignInOption) GetStartUrl() string {
+	if x != nil {
+		return x.StartUrl
+	}
+	return ""
+}
+
 // AdminPage declares one administrative page over one model:
 // a list view + a detail view + optional bulk actions +
 // optional nested inlines.
@@ -652,7 +766,7 @@ type AdminPage struct {
 
 func (x *AdminPage) Reset() {
 	*x = AdminPage{}
-	mi := &file_w17_admin_proto_msgTypes[2]
+	mi := &file_w17_admin_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -664,7 +778,7 @@ func (x *AdminPage) String() string {
 func (*AdminPage) ProtoMessage() {}
 
 func (x *AdminPage) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[2]
+	mi := &file_w17_admin_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -677,7 +791,7 @@ func (x *AdminPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminPage.ProtoReflect.Descriptor instead.
 func (*AdminPage) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{2}
+	return file_w17_admin_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AdminPage) GetName() string {
@@ -782,7 +896,7 @@ type AdminList struct {
 
 func (x *AdminList) Reset() {
 	*x = AdminList{}
-	mi := &file_w17_admin_proto_msgTypes[3]
+	mi := &file_w17_admin_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +908,7 @@ func (x *AdminList) String() string {
 func (*AdminList) ProtoMessage() {}
 
 func (x *AdminList) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[3]
+	mi := &file_w17_admin_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -807,7 +921,7 @@ func (x *AdminList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminList.ProtoReflect.Descriptor instead.
 func (*AdminList) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{3}
+	return file_w17_admin_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AdminList) GetSource() string {
@@ -919,7 +1033,7 @@ type AdminColumn struct {
 
 func (x *AdminColumn) Reset() {
 	*x = AdminColumn{}
-	mi := &file_w17_admin_proto_msgTypes[4]
+	mi := &file_w17_admin_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -931,7 +1045,7 @@ func (x *AdminColumn) String() string {
 func (*AdminColumn) ProtoMessage() {}
 
 func (x *AdminColumn) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[4]
+	mi := &file_w17_admin_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -944,7 +1058,7 @@ func (x *AdminColumn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminColumn.ProtoReflect.Descriptor instead.
 func (*AdminColumn) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{4}
+	return file_w17_admin_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AdminColumn) GetName() string {
@@ -1029,7 +1143,7 @@ type AdminColumnRef struct {
 
 func (x *AdminColumnRef) Reset() {
 	*x = AdminColumnRef{}
-	mi := &file_w17_admin_proto_msgTypes[5]
+	mi := &file_w17_admin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +1155,7 @@ func (x *AdminColumnRef) String() string {
 func (*AdminColumnRef) ProtoMessage() {}
 
 func (x *AdminColumnRef) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[5]
+	mi := &file_w17_admin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +1168,7 @@ func (x *AdminColumnRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminColumnRef.ProtoReflect.Descriptor instead.
 func (*AdminColumnRef) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{5}
+	return file_w17_admin_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AdminColumnRef) GetTitle() string {
@@ -1139,7 +1253,7 @@ type AdminDetail struct {
 
 func (x *AdminDetail) Reset() {
 	*x = AdminDetail{}
-	mi := &file_w17_admin_proto_msgTypes[6]
+	mi := &file_w17_admin_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1151,7 +1265,7 @@ func (x *AdminDetail) String() string {
 func (*AdminDetail) ProtoMessage() {}
 
 func (x *AdminDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[6]
+	mi := &file_w17_admin_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1164,7 +1278,7 @@ func (x *AdminDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminDetail.ProtoReflect.Descriptor instead.
 func (*AdminDetail) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{6}
+	return file_w17_admin_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AdminDetail) GetRead() string {
@@ -1233,7 +1347,7 @@ type AdminFieldset struct {
 
 func (x *AdminFieldset) Reset() {
 	*x = AdminFieldset{}
-	mi := &file_w17_admin_proto_msgTypes[7]
+	mi := &file_w17_admin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1245,7 +1359,7 @@ func (x *AdminFieldset) String() string {
 func (*AdminFieldset) ProtoMessage() {}
 
 func (x *AdminFieldset) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[7]
+	mi := &file_w17_admin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1258,7 +1372,7 @@ func (x *AdminFieldset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminFieldset.ProtoReflect.Descriptor instead.
 func (*AdminFieldset) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{7}
+	return file_w17_admin_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AdminFieldset) GetTitle() string {
@@ -1328,7 +1442,7 @@ type AdminAction struct {
 
 func (x *AdminAction) Reset() {
 	*x = AdminAction{}
-	mi := &file_w17_admin_proto_msgTypes[8]
+	mi := &file_w17_admin_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1454,7 @@ func (x *AdminAction) String() string {
 func (*AdminAction) ProtoMessage() {}
 
 func (x *AdminAction) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[8]
+	mi := &file_w17_admin_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +1467,7 @@ func (x *AdminAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminAction.ProtoReflect.Descriptor instead.
 func (*AdminAction) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{8}
+	return file_w17_admin_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AdminAction) GetName() string {
@@ -1429,7 +1543,7 @@ type AdminInline struct {
 
 func (x *AdminInline) Reset() {
 	*x = AdminInline{}
-	mi := &file_w17_admin_proto_msgTypes[9]
+	mi := &file_w17_admin_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1441,7 +1555,7 @@ func (x *AdminInline) String() string {
 func (*AdminInline) ProtoMessage() {}
 
 func (x *AdminInline) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[9]
+	mi := &file_w17_admin_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1454,7 +1568,7 @@ func (x *AdminInline) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminInline.ProtoReflect.Descriptor instead.
 func (*AdminInline) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{9}
+	return file_w17_admin_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AdminInline) GetPage() string {
@@ -1522,7 +1636,7 @@ type AdminNavGroup struct {
 
 func (x *AdminNavGroup) Reset() {
 	*x = AdminNavGroup{}
-	mi := &file_w17_admin_proto_msgTypes[10]
+	mi := &file_w17_admin_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1534,7 +1648,7 @@ func (x *AdminNavGroup) String() string {
 func (*AdminNavGroup) ProtoMessage() {}
 
 func (x *AdminNavGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[10]
+	mi := &file_w17_admin_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1547,7 +1661,7 @@ func (x *AdminNavGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminNavGroup.ProtoReflect.Descriptor instead.
 func (*AdminNavGroup) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{10}
+	return file_w17_admin_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *AdminNavGroup) GetTitle() string {
@@ -1581,7 +1695,7 @@ type AdminOverview struct {
 
 func (x *AdminOverview) Reset() {
 	*x = AdminOverview{}
-	mi := &file_w17_admin_proto_msgTypes[11]
+	mi := &file_w17_admin_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1593,7 +1707,7 @@ func (x *AdminOverview) String() string {
 func (*AdminOverview) ProtoMessage() {}
 
 func (x *AdminOverview) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[11]
+	mi := &file_w17_admin_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1606,7 +1720,7 @@ func (x *AdminOverview) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminOverview.ProtoReflect.Descriptor instead.
 func (*AdminOverview) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{11}
+	return file_w17_admin_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *AdminOverview) GetWidgets() []*AdminWidget {
@@ -1671,7 +1785,7 @@ type AdminWidget struct {
 
 func (x *AdminWidget) Reset() {
 	*x = AdminWidget{}
-	mi := &file_w17_admin_proto_msgTypes[12]
+	mi := &file_w17_admin_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1683,7 +1797,7 @@ func (x *AdminWidget) String() string {
 func (*AdminWidget) ProtoMessage() {}
 
 func (x *AdminWidget) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[12]
+	mi := &file_w17_admin_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1696,7 +1810,7 @@ func (x *AdminWidget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminWidget.ProtoReflect.Descriptor instead.
 func (*AdminWidget) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{12}
+	return file_w17_admin_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AdminWidget) GetSlot() string {
@@ -1778,7 +1892,7 @@ type AdminWidgetValue struct {
 
 func (x *AdminWidgetValue) Reset() {
 	*x = AdminWidgetValue{}
-	mi := &file_w17_admin_proto_msgTypes[13]
+	mi := &file_w17_admin_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1790,7 +1904,7 @@ func (x *AdminWidgetValue) String() string {
 func (*AdminWidgetValue) ProtoMessage() {}
 
 func (x *AdminWidgetValue) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_admin_proto_msgTypes[13]
+	mi := &file_w17_admin_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1803,7 +1917,7 @@ func (x *AdminWidgetValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminWidgetValue.ProtoReflect.Descriptor instead.
 func (*AdminWidgetValue) Descriptor() ([]byte, []int) {
-	return file_w17_admin_proto_rawDescGZIP(), []int{13}
+	return file_w17_admin_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AdminWidgetValue) GetField() string {
@@ -1970,12 +2084,17 @@ const file_w17_admin_proto_rawDesc = "" +
 	"\x05pages\x18\n" +
 	" \x03(\v2\x0e.w17.AdminPageR\x05pages\x12$\n" +
 	"\x03nav\x18\v \x03(\v2\x12.w17.AdminNavGroupR\x03nav\x12.\n" +
-	"\boverview\x18\f \x01(\v2\x12.w17.AdminOverviewR\boverview\"m\n" +
+	"\boverview\x18\f \x01(\v2\x12.w17.AdminOverviewR\boverview\"\xe8\x01\n" +
 	"\tAdminAuth\x12!\n" +
 	"\flogin_method\x18\x01 \x01(\tR\vloginMethod\x12\x1f\n" +
 	"\vuser_lookup\x18\x02 \x01(\tR\n" +
 	"userLookup\x12\x1c\n" +
-	"\afixture\x18\x03 \x01(\tB\x02\x18\x01R\afixture\"\xf1\x01\n" +
+	"\afixture\x18\x03 \x01(\tB\x02\x18\x01R\afixture\x12>\n" +
+	"\x0fsign_in_options\x18\x04 \x03(\v2\x16.w17.AdminSignInOptionR\rsignInOptions\x129\n" +
+	"\x19password_sign_in_disabled\x18\x05 \x01(\bR\x16passwordSignInDisabled\"F\n" +
+	"\x11AdminSignInOption\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12\x1b\n" +
+	"\tstart_url\x18\x02 \x01(\tR\bstartUrl\"\xf1\x01\n" +
 	"\tAdminPage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x14\n" +
@@ -2094,7 +2213,7 @@ func file_w17_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_w17_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_w17_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_w17_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_w17_admin_proto_goTypes = []any{
 	(AdminActionTarget)(0),              // 0: w17.AdminActionTarget
 	(AdminInlineLayout)(0),              // 1: w17.AdminInlineLayout
@@ -2103,55 +2222,57 @@ var file_w17_admin_proto_goTypes = []any{
 	(AdminWidgetSize)(0),                // 4: w17.AdminWidgetSize
 	(*AdminApi)(nil),                    // 5: w17.AdminApi
 	(*AdminAuth)(nil),                   // 6: w17.AdminAuth
-	(*AdminPage)(nil),                   // 7: w17.AdminPage
-	(*AdminList)(nil),                   // 8: w17.AdminList
-	(*AdminColumn)(nil),                 // 9: w17.AdminColumn
-	(*AdminColumnRef)(nil),              // 10: w17.AdminColumnRef
-	(*AdminDetail)(nil),                 // 11: w17.AdminDetail
-	(*AdminFieldset)(nil),               // 12: w17.AdminFieldset
-	(*AdminAction)(nil),                 // 13: w17.AdminAction
-	(*AdminInline)(nil),                 // 14: w17.AdminInline
-	(*AdminNavGroup)(nil),               // 15: w17.AdminNavGroup
-	(*AdminOverview)(nil),               // 16: w17.AdminOverview
-	(*AdminWidget)(nil),                 // 17: w17.AdminWidget
-	(*AdminWidgetValue)(nil),            // 18: w17.AdminWidgetValue
-	(*descriptorpb.FileOptions)(nil),    // 19: google.protobuf.FileOptions
-	(*descriptorpb.MessageOptions)(nil), // 20: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 21: google.protobuf.FieldOptions
-	(*descriptorpb.MethodOptions)(nil),  // 22: google.protobuf.MethodOptions
+	(*AdminSignInOption)(nil),           // 7: w17.AdminSignInOption
+	(*AdminPage)(nil),                   // 8: w17.AdminPage
+	(*AdminList)(nil),                   // 9: w17.AdminList
+	(*AdminColumn)(nil),                 // 10: w17.AdminColumn
+	(*AdminColumnRef)(nil),              // 11: w17.AdminColumnRef
+	(*AdminDetail)(nil),                 // 12: w17.AdminDetail
+	(*AdminFieldset)(nil),               // 13: w17.AdminFieldset
+	(*AdminAction)(nil),                 // 14: w17.AdminAction
+	(*AdminInline)(nil),                 // 15: w17.AdminInline
+	(*AdminNavGroup)(nil),               // 16: w17.AdminNavGroup
+	(*AdminOverview)(nil),               // 17: w17.AdminOverview
+	(*AdminWidget)(nil),                 // 18: w17.AdminWidget
+	(*AdminWidgetValue)(nil),            // 19: w17.AdminWidgetValue
+	(*descriptorpb.FileOptions)(nil),    // 20: google.protobuf.FileOptions
+	(*descriptorpb.MessageOptions)(nil), // 21: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 22: google.protobuf.FieldOptions
+	(*descriptorpb.MethodOptions)(nil),  // 23: google.protobuf.MethodOptions
 }
 var file_w17_admin_proto_depIdxs = []int32{
 	6,  // 0: w17.AdminApi.auth:type_name -> w17.AdminAuth
-	7,  // 1: w17.AdminApi.pages:type_name -> w17.AdminPage
-	15, // 2: w17.AdminApi.nav:type_name -> w17.AdminNavGroup
-	16, // 3: w17.AdminApi.overview:type_name -> w17.AdminOverview
-	8,  // 4: w17.AdminPage.list:type_name -> w17.AdminList
-	11, // 5: w17.AdminPage.detail:type_name -> w17.AdminDetail
-	13, // 6: w17.AdminPage.actions:type_name -> w17.AdminAction
-	14, // 7: w17.AdminPage.inlines:type_name -> w17.AdminInline
-	9,  // 8: w17.AdminList.columns:type_name -> w17.AdminColumn
-	10, // 9: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
-	12, // 10: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
-	0,  // 11: w17.AdminAction.target:type_name -> w17.AdminActionTarget
-	1,  // 12: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
-	17, // 13: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
-	4,  // 14: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
-	2,  // 15: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
-	18, // 16: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
-	3,  // 17: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
-	18, // 18: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
-	19, // 19: w17.admin_api:extendee -> google.protobuf.FileOptions
-	20, // 20: w17.admin_title:extendee -> google.protobuf.MessageOptions
-	21, // 21: w17.admin_filter:extendee -> google.protobuf.FieldOptions
-	21, // 22: w17.admin_search:extendee -> google.protobuf.FieldOptions
-	21, // 23: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
-	22, // 24: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
-	5,  // 25: w17.admin_api:type_name -> w17.AdminApi
-	26, // [26:26] is the sub-list for method output_type
-	26, // [26:26] is the sub-list for method input_type
-	25, // [25:26] is the sub-list for extension type_name
-	19, // [19:25] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	8,  // 1: w17.AdminApi.pages:type_name -> w17.AdminPage
+	16, // 2: w17.AdminApi.nav:type_name -> w17.AdminNavGroup
+	17, // 3: w17.AdminApi.overview:type_name -> w17.AdminOverview
+	7,  // 4: w17.AdminAuth.sign_in_options:type_name -> w17.AdminSignInOption
+	9,  // 5: w17.AdminPage.list:type_name -> w17.AdminList
+	12, // 6: w17.AdminPage.detail:type_name -> w17.AdminDetail
+	14, // 7: w17.AdminPage.actions:type_name -> w17.AdminAction
+	15, // 8: w17.AdminPage.inlines:type_name -> w17.AdminInline
+	10, // 9: w17.AdminList.columns:type_name -> w17.AdminColumn
+	11, // 10: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
+	13, // 11: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
+	0,  // 12: w17.AdminAction.target:type_name -> w17.AdminActionTarget
+	1,  // 13: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
+	18, // 14: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
+	4,  // 15: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
+	2,  // 16: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
+	19, // 17: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
+	3,  // 18: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
+	19, // 19: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
+	20, // 20: w17.admin_api:extendee -> google.protobuf.FileOptions
+	21, // 21: w17.admin_title:extendee -> google.protobuf.MessageOptions
+	22, // 22: w17.admin_filter:extendee -> google.protobuf.FieldOptions
+	22, // 23: w17.admin_search:extendee -> google.protobuf.FieldOptions
+	22, // 24: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
+	23, // 25: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
+	5,  // 26: w17.admin_api:type_name -> w17.AdminApi
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	26, // [26:27] is the sub-list for extension type_name
+	20, // [20:26] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_w17_admin_proto_init() }
@@ -2159,14 +2280,14 @@ func file_w17_admin_proto_init() {
 	if File_w17_admin_proto != nil {
 		return
 	}
-	file_w17_admin_proto_msgTypes[4].OneofWrappers = []any{}
+	file_w17_admin_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_admin_proto_rawDesc), len(file_w17_admin_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 6,
 			NumServices:   0,
 		},

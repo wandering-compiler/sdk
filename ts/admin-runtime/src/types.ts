@@ -236,6 +236,24 @@ export interface AdminNavGroup {
 export interface AdminAuthSpec {
   login_endpoint: string;
   whoami_endpoint: string;
+  /**
+   * Federated ways in, rendered as one button each. Absent on an admin
+   * that declares none, which is every admin that predates the field.
+   */
+  sign_in_options?: AdminSignInOption[];
+  /**
+   * Whether to draw the username + password form. Absent is treated as
+   * TRUE: a spec written before this field existed describes an admin
+   * that signs in with a password, and reading the missing value as
+   * false would blank its login page.
+   */
+  password_sign_in?: boolean;
+}
+
+/** One federated entry point on the login page. */
+export interface AdminSignInOption {
+  label: string;
+  start_url: string;
 }
 
 export interface AdminPageSpec {

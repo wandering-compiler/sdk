@@ -10,6 +10,7 @@
     "Clear",
     "Close",
     "Continue",
+    "Continue with your organization account.",
     "Create",
     "Dark theme",
     "Delete",
@@ -45,6 +46,7 @@
     "This page has no list configured.",
     "Unavailable",
     "Username",
-    "You cannot create records on this page."
+    "You cannot create records on this page.",
+    "or"
   ]
 }
