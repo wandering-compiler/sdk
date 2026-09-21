@@ -128,7 +128,13 @@ type CodegenServiceClient interface {
 	//
 	// INVALID_ARGUMENT for malformed/empty input or a build error;
 	// INTERNAL for unexpected staging failures.
-	CompileIR(ctx context.Context, in *CompileIRRequest, opts ...grpc.CallOption) (*CompileIRResponse, error)
+	// ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+	// A receiver's default cap is 4 MiB and a project's protos reach it around
+	// 95k lines, where the call is refused outright rather than slowing down.
+	// First message carries the header, the rest carry files; a later message
+	// changing a header field is refused rather than ignored. See
+	// GenerateProject for the measurement this comes from.
+	CompileIR(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CompileIRRequest, CompileIRResponse], error)
 	// GenerateCi renders the opt-in CI configs for the requested providers
 	// from the project's lock data (providers + connection names) — the
 	// first of the seam-D generator family moved off w17ctl's in-process
@@ -194,7 +200,30 @@ type CodegenServiceClient interface {
 	// DELETE ops carry a path the server determined is superseded (the
 	// bundle-sweep / clean-paths logic moved server-side too), so the client
 	// does no derivation — just overwrite / write-if-missing / remove.
-	GenerateProject(ctx context.Context, in *GenerateProjectRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedOp], error)
+	// ⚠️ The REQUEST streams too, and that is a ceiling rather than an
+	// optimisation.
+	//
+	// A unary request carries the whole proto tree in ONE gRPC message, and a
+	// receiver's default cap is 4 MiB. Measured: at ~101k lines of proto the
+	// tree is 4.16 MB and the call is refused outright with ResourceExhausted
+	// — no degradation, no warning, one line further and codegen simply stops
+	// working. Every real project's protos run ~43 bytes a line, so that
+	// ceiling lands near 95k lines whoever writes them.
+	//
+	// Lifting the cap was the other option and it only MOVES the ceiling: the
+	// message still assembles whole on both sides. Streaming removes it.
+	//
+	// What it does NOT do is save memory worth counting. The server still
+	// needs every file before it can start — imports resolve across the whole
+	// set — so the tree is held either way. At 50k lines the source is 2 MB
+	// against a 935 MB peak: 0.2%. The ceiling is the whole reason.
+	//
+	// Protocol: the FIRST message carries the header fields; every message may
+	// carry `files` / `gen_files`, which the server appends in arrival order.
+	// A later message repeating a header field with a DIFFERENT value is
+	// refused rather than ignored — a silently dropped go_module would pick
+	// the wrong module path and show up as a compile error in generated code.
+	GenerateProject(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateProjectRequest, GeneratedOp], error)
 	// VerifyAcl / VerifyEventbus recompute the committed lock from the
 	// uploaded proto set (which includes the committed lock) and report
 	// whether it still matches — the CI drift hook (`w17ctl verify`),
@@ -248,7 +277,13 @@ type CodegenServiceClient interface {
 	// The server runs the FE client generator against the staged proto set
 	// + lock; the client writes the returned trees under each client's
 	// output_root.
-	GenerateClient(ctx context.Context, in *GenerateClientRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
+	// ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+	// A receiver's default cap is 4 MiB and a project's protos reach it around
+	// 95k lines, where the call is refused outright rather than slowing down.
+	// First message carries the header, the rest carry files; a later message
+	// changing a header field is refused rather than ignored. See
+	// GenerateProject for the measurement this comes from.
+	GenerateClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateClientRequest, GeneratedFile], error)
 	// DiscoverPluginSandboxes returns each activated plugin's dev-only
 	// sandbox declarations (image services the project's compose tree
 	// wires in) — discovering activations needs the proto loader, so a
@@ -262,7 +297,13 @@ type CodegenServiceClient interface {
 	// the manifest, expands the author-side placeholders, runs buf, and
 	// returns the pb.go files. The client only reads the inputs + writes
 	// the results — no buf/loader/manifest logic client-side.
-	GeneratePluginPb(ctx context.Context, in *GeneratePluginPbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
+	// ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+	// A receiver's default cap is 4 MiB and a project's protos reach it around
+	// 95k lines, where the call is refused outright rather than slowing down.
+	// First message carries the header, the rest carry files; a later message
+	// changing a header field is refused rather than ignored. See
+	// GenerateProject for the measurement this comes from.
+	GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GeneratePluginPbRequest, GeneratedFile], error)
 	// MergePo merges the freshly-scaffolded .po catalog INTO the existing
 	// on-disk one (msgmerge-style: existing translator msgstrs survive, new
 	// scaffold msgids land with empty msgstr). The .po merge is i18n logic,
@@ -368,15 +409,18 @@ func (c *codegenServiceClient) Generate(ctx context.Context, in *GenerateRequest
 	return out, nil
 }
 
-func (c *codegenServiceClient) CompileIR(ctx context.Context, in *CompileIRRequest, opts ...grpc.CallOption) (*CompileIRResponse, error) {
+func (c *codegenServiceClient) CompileIR(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CompileIRRequest, CompileIRResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CompileIRResponse)
-	err := c.cc.Invoke(ctx, CodegenService_CompileIR_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[0], CodegenService_CompileIR_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[CompileIRRequest, CompileIRResponse]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CodegenService_CompileIRClient = grpc.ClientStreamingClient[CompileIRRequest, CompileIRResponse]
 
 func (c *codegenServiceClient) GenerateCi(ctx context.Context, in *GenerateCiRequest, opts ...grpc.CallOption) (*GenerateCiResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -390,7 +434,7 @@ func (c *codegenServiceClient) GenerateCi(ctx context.Context, in *GenerateCiReq
 
 func (c *codegenServiceClient) GenerateEventbus(ctx context.Context, in *GenerateEventbusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[0], CodegenService_GenerateEventbus_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[1], CodegenService_GenerateEventbus_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +453,7 @@ type CodegenService_GenerateEventbusClient = grpc.ServerStreamingClient[Generate
 
 func (c *codegenServiceClient) GenerateGrpcClients(ctx context.Context, in *GenerateGrpcClientsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[1], CodegenService_GenerateGrpcClients_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[2], CodegenService_GenerateGrpcClients_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +472,7 @@ type CodegenService_GenerateGrpcClientsClient = grpc.ServerStreamingClient[Gener
 
 func (c *codegenServiceClient) GenerateMcp(ctx context.Context, in *GenerateMcpRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[2], CodegenService_GenerateMcp_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[3], CodegenService_GenerateMcp_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +491,7 @@ type CodegenService_GenerateMcpClient = grpc.ServerStreamingClient[GeneratedFile
 
 func (c *codegenServiceClient) GenerateAcl(ctx context.Context, in *GenerateAclRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[3], CodegenService_GenerateAcl_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[4], CodegenService_GenerateAcl_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +510,7 @@ type CodegenService_GenerateAclClient = grpc.ServerStreamingClient[GeneratedFile
 
 func (c *codegenServiceClient) GenerateBusiness(ctx context.Context, in *GenerateBusinessRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[4], CodegenService_GenerateBusiness_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[5], CodegenService_GenerateBusiness_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +529,7 @@ type CodegenService_GenerateBusinessClient = grpc.ServerStreamingClient[Generate
 
 func (c *codegenServiceClient) GenerateProjectMap(ctx context.Context, in *GenerateProjectMapRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[5], CodegenService_GenerateProjectMap_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[6], CodegenService_GenerateProjectMap_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +548,7 @@ type CodegenService_GenerateProjectMapClient = grpc.ServerStreamingClient[Genera
 
 func (c *codegenServiceClient) GenerateE2E(ctx context.Context, in *GenerateE2ERequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[6], CodegenService_GenerateE2E_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[7], CodegenService_GenerateE2E_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -521,24 +565,18 @@ func (c *codegenServiceClient) GenerateE2E(ctx context.Context, in *GenerateE2ER
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CodegenService_GenerateE2EClient = grpc.ServerStreamingClient[GeneratedFile]
 
-func (c *codegenServiceClient) GenerateProject(ctx context.Context, in *GenerateProjectRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedOp], error) {
+func (c *codegenServiceClient) GenerateProject(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateProjectRequest, GeneratedOp], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[7], CodegenService_GenerateProject_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[8], CodegenService_GenerateProject_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[GenerateProjectRequest, GeneratedOp]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CodegenService_GenerateProjectClient = grpc.ServerStreamingClient[GeneratedOp]
+type CodegenService_GenerateProjectClient = grpc.BidiStreamingClient[GenerateProjectRequest, GeneratedOp]
 
 func (c *codegenServiceClient) VerifyAcl(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -600,24 +638,18 @@ func (c *codegenServiceClient) DumpFixtures(ctx context.Context, in *DumpFixture
 	return out, nil
 }
 
-func (c *codegenServiceClient) GenerateClient(ctx context.Context, in *GenerateClientRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
+func (c *codegenServiceClient) GenerateClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateClientRequest, GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[8], CodegenService_GenerateClient_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[9], CodegenService_GenerateClient_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[GenerateClientRequest, GeneratedFile]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CodegenService_GenerateClientClient = grpc.ServerStreamingClient[GeneratedFile]
+type CodegenService_GenerateClientClient = grpc.BidiStreamingClient[GenerateClientRequest, GeneratedFile]
 
 func (c *codegenServiceClient) DiscoverPluginSandboxes(ctx context.Context, in *DiscoverPluginSandboxesRequest, opts ...grpc.CallOption) (*PluginSandboxes, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -629,24 +661,18 @@ func (c *codegenServiceClient) DiscoverPluginSandboxes(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *codegenServiceClient) GeneratePluginPb(ctx context.Context, in *GeneratePluginPbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
+func (c *codegenServiceClient) GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GeneratePluginPbRequest, GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[9], CodegenService_GeneratePluginPb_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[10], CodegenService_GeneratePluginPb_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[GeneratePluginPbRequest, GeneratedFile]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CodegenService_GeneratePluginPbClient = grpc.ServerStreamingClient[GeneratedFile]
+type CodegenService_GeneratePluginPbClient = grpc.BidiStreamingClient[GeneratePluginPbRequest, GeneratedFile]
 
 func (c *codegenServiceClient) MergePo(ctx context.Context, in *MergePoRequest, opts ...grpc.CallOption) (*MergePoResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -660,7 +686,7 @@ func (c *codegenServiceClient) MergePo(ctx context.Context, in *MergePoRequest, 
 
 func (c *codegenServiceClient) RenderProjectScaffold(ctx context.Context, in *RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[10], CodegenService_RenderProjectScaffold_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[11], CodegenService_RenderProjectScaffold_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -719,7 +745,7 @@ func (c *codegenServiceClient) ListPluginCatalog(ctx context.Context, in *ListPl
 
 func (c *codegenServiceClient) FetchPlugin(ctx context.Context, in *FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[11], CodegenService_FetchPlugin_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[12], CodegenService_FetchPlugin_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -738,7 +764,7 @@ type CodegenService_FetchPluginClient = grpc.ServerStreamingClient[GeneratedFile
 
 func (c *codegenServiceClient) Guide(ctx context.Context, in *GuideRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[12], CodegenService_Guide_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[13], CodegenService_Guide_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -824,7 +850,13 @@ type CodegenServiceServer interface {
 	//
 	// INVALID_ARGUMENT for malformed/empty input or a build error;
 	// INTERNAL for unexpected staging failures.
-	CompileIR(context.Context, *CompileIRRequest) (*CompileIRResponse, error)
+	// ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+	// A receiver's default cap is 4 MiB and a project's protos reach it around
+	// 95k lines, where the call is refused outright rather than slowing down.
+	// First message carries the header, the rest carry files; a later message
+	// changing a header field is refused rather than ignored. See
+	// GenerateProject for the measurement this comes from.
+	CompileIR(grpc.ClientStreamingServer[CompileIRRequest, CompileIRResponse]) error
 	// GenerateCi renders the opt-in CI configs for the requested providers
 	// from the project's lock data (providers + connection names) — the
 	// first of the seam-D generator family moved off w17ctl's in-process
@@ -890,7 +922,30 @@ type CodegenServiceServer interface {
 	// DELETE ops carry a path the server determined is superseded (the
 	// bundle-sweep / clean-paths logic moved server-side too), so the client
 	// does no derivation — just overwrite / write-if-missing / remove.
-	GenerateProject(*GenerateProjectRequest, grpc.ServerStreamingServer[GeneratedOp]) error
+	// ⚠️ The REQUEST streams too, and that is a ceiling rather than an
+	// optimisation.
+	//
+	// A unary request carries the whole proto tree in ONE gRPC message, and a
+	// receiver's default cap is 4 MiB. Measured: at ~101k lines of proto the
+	// tree is 4.16 MB and the call is refused outright with ResourceExhausted
+	// — no degradation, no warning, one line further and codegen simply stops
+	// working. Every real project's protos run ~43 bytes a line, so that
+	// ceiling lands near 95k lines whoever writes them.
+	//
+	// Lifting the cap was the other option and it only MOVES the ceiling: the
+	// message still assembles whole on both sides. Streaming removes it.
+	//
+	// What it does NOT do is save memory worth counting. The server still
+	// needs every file before it can start — imports resolve across the whole
+	// set — so the tree is held either way. At 50k lines the source is 2 MB
+	// against a 935 MB peak: 0.2%. The ceiling is the whole reason.
+	//
+	// Protocol: the FIRST message carries the header fields; every message may
+	// carry `files` / `gen_files`, which the server appends in arrival order.
+	// A later message repeating a header field with a DIFFERENT value is
+	// refused rather than ignored — a silently dropped go_module would pick
+	// the wrong module path and show up as a compile error in generated code.
+	GenerateProject(grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]) error
 	// VerifyAcl / VerifyEventbus recompute the committed lock from the
 	// uploaded proto set (which includes the committed lock) and report
 	// whether it still matches — the CI drift hook (`w17ctl verify`),
@@ -944,7 +999,13 @@ type CodegenServiceServer interface {
 	// The server runs the FE client generator against the staged proto set
 	// + lock; the client writes the returned trees under each client's
 	// output_root.
-	GenerateClient(*GenerateClientRequest, grpc.ServerStreamingServer[GeneratedFile]) error
+	// ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+	// A receiver's default cap is 4 MiB and a project's protos reach it around
+	// 95k lines, where the call is refused outright rather than slowing down.
+	// First message carries the header, the rest carry files; a later message
+	// changing a header field is refused rather than ignored. See
+	// GenerateProject for the measurement this comes from.
+	GenerateClient(grpc.BidiStreamingServer[GenerateClientRequest, GeneratedFile]) error
 	// DiscoverPluginSandboxes returns each activated plugin's dev-only
 	// sandbox declarations (image services the project's compose tree
 	// wires in) — discovering activations needs the proto loader, so a
@@ -958,7 +1019,13 @@ type CodegenServiceServer interface {
 	// the manifest, expands the author-side placeholders, runs buf, and
 	// returns the pb.go files. The client only reads the inputs + writes
 	// the results — no buf/loader/manifest logic client-side.
-	GeneratePluginPb(*GeneratePluginPbRequest, grpc.ServerStreamingServer[GeneratedFile]) error
+	// ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+	// A receiver's default cap is 4 MiB and a project's protos reach it around
+	// 95k lines, where the call is refused outright rather than slowing down.
+	// First message carries the header, the rest carry files; a later message
+	// changing a header field is refused rather than ignored. See
+	// GenerateProject for the measurement this comes from.
+	GeneratePluginPb(grpc.BidiStreamingServer[GeneratePluginPbRequest, GeneratedFile]) error
 	// MergePo merges the freshly-scaffolded .po catalog INTO the existing
 	// on-disk one (msgmerge-style: existing translator msgstrs survive, new
 	// scaffold msgids land with empty msgstr). The .po merge is i18n logic,
@@ -1057,8 +1124,8 @@ type UnimplementedCodegenServiceServer struct{}
 func (UnimplementedCodegenServiceServer) Generate(context.Context, *GenerateRequest) (*GenerateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Generate not implemented")
 }
-func (UnimplementedCodegenServiceServer) CompileIR(context.Context, *CompileIRRequest) (*CompileIRResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CompileIR not implemented")
+func (UnimplementedCodegenServiceServer) CompileIR(grpc.ClientStreamingServer[CompileIRRequest, CompileIRResponse]) error {
+	return status.Error(codes.Unimplemented, "method CompileIR not implemented")
 }
 func (UnimplementedCodegenServiceServer) GenerateCi(context.Context, *GenerateCiRequest) (*GenerateCiResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GenerateCi not implemented")
@@ -1084,7 +1151,7 @@ func (UnimplementedCodegenServiceServer) GenerateProjectMap(*GenerateProjectMapR
 func (UnimplementedCodegenServiceServer) GenerateE2E(*GenerateE2ERequest, grpc.ServerStreamingServer[GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method GenerateE2E not implemented")
 }
-func (UnimplementedCodegenServiceServer) GenerateProject(*GenerateProjectRequest, grpc.ServerStreamingServer[GeneratedOp]) error {
+func (UnimplementedCodegenServiceServer) GenerateProject(grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]) error {
 	return status.Error(codes.Unimplemented, "method GenerateProject not implemented")
 }
 func (UnimplementedCodegenServiceServer) VerifyAcl(context.Context, *VerifyRequest) (*VerifyResult, error) {
@@ -1105,13 +1172,13 @@ func (UnimplementedCodegenServiceServer) Plan(context.Context, *PlanIRRequest) (
 func (UnimplementedCodegenServiceServer) DumpFixtures(context.Context, *DumpFixturesRequest) (*DumpFixturesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DumpFixtures not implemented")
 }
-func (UnimplementedCodegenServiceServer) GenerateClient(*GenerateClientRequest, grpc.ServerStreamingServer[GeneratedFile]) error {
+func (UnimplementedCodegenServiceServer) GenerateClient(grpc.BidiStreamingServer[GenerateClientRequest, GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method GenerateClient not implemented")
 }
 func (UnimplementedCodegenServiceServer) DiscoverPluginSandboxes(context.Context, *DiscoverPluginSandboxesRequest) (*PluginSandboxes, error) {
 	return nil, status.Error(codes.Unimplemented, "method DiscoverPluginSandboxes not implemented")
 }
-func (UnimplementedCodegenServiceServer) GeneratePluginPb(*GeneratePluginPbRequest, grpc.ServerStreamingServer[GeneratedFile]) error {
+func (UnimplementedCodegenServiceServer) GeneratePluginPb(grpc.BidiStreamingServer[GeneratePluginPbRequest, GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method GeneratePluginPb not implemented")
 }
 func (UnimplementedCodegenServiceServer) MergePo(context.Context, *MergePoRequest) (*MergePoResponse, error) {
@@ -1180,23 +1247,12 @@ func _CodegenService_Generate_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _CodegenService_CompileIR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CompileIRRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CodegenServiceServer).CompileIR(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: CodegenService_CompileIR_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CodegenServiceServer).CompileIR(ctx, req.(*CompileIRRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _CodegenService_CompileIR_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CodegenServiceServer).CompileIR(&grpc.GenericServerStream[CompileIRRequest, CompileIRResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CodegenService_CompileIRServer = grpc.ClientStreamingServer[CompileIRRequest, CompileIRResponse]
 
 func _CodegenService_GenerateCi_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GenerateCiRequest)
@@ -1294,15 +1350,11 @@ func _CodegenService_GenerateE2E_Handler(srv interface{}, stream grpc.ServerStre
 type CodegenService_GenerateE2EServer = grpc.ServerStreamingServer[GeneratedFile]
 
 func _CodegenService_GenerateProject_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(GenerateProjectRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(CodegenServiceServer).GenerateProject(m, &grpc.GenericServerStream[GenerateProjectRequest, GeneratedOp]{ServerStream: stream})
+	return srv.(CodegenServiceServer).GenerateProject(&grpc.GenericServerStream[GenerateProjectRequest, GeneratedOp]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CodegenService_GenerateProjectServer = grpc.ServerStreamingServer[GeneratedOp]
+type CodegenService_GenerateProjectServer = grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]
 
 func _CodegenService_VerifyAcl_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(VerifyRequest)
@@ -1413,15 +1465,11 @@ func _CodegenService_DumpFixtures_Handler(srv interface{}, ctx context.Context, 
 }
 
 func _CodegenService_GenerateClient_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(GenerateClientRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(CodegenServiceServer).GenerateClient(m, &grpc.GenericServerStream[GenerateClientRequest, GeneratedFile]{ServerStream: stream})
+	return srv.(CodegenServiceServer).GenerateClient(&grpc.GenericServerStream[GenerateClientRequest, GeneratedFile]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CodegenService_GenerateClientServer = grpc.ServerStreamingServer[GeneratedFile]
+type CodegenService_GenerateClientServer = grpc.BidiStreamingServer[GenerateClientRequest, GeneratedFile]
 
 func _CodegenService_DiscoverPluginSandboxes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DiscoverPluginSandboxesRequest)
@@ -1442,15 +1490,11 @@ func _CodegenService_DiscoverPluginSandboxes_Handler(srv interface{}, ctx contex
 }
 
 func _CodegenService_GeneratePluginPb_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(GeneratePluginPbRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(CodegenServiceServer).GeneratePluginPb(m, &grpc.GenericServerStream[GeneratePluginPbRequest, GeneratedFile]{ServerStream: stream})
+	return srv.(CodegenServiceServer).GeneratePluginPb(&grpc.GenericServerStream[GeneratePluginPbRequest, GeneratedFile]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CodegenService_GeneratePluginPbServer = grpc.ServerStreamingServer[GeneratedFile]
+type CodegenService_GeneratePluginPbServer = grpc.BidiStreamingServer[GeneratePluginPbRequest, GeneratedFile]
 
 func _CodegenService_MergePo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MergePoRequest)
@@ -1605,10 +1649,6 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CodegenService_Generate_Handler,
 		},
 		{
-			MethodName: "CompileIR",
-			Handler:    _CodegenService_CompileIR_Handler,
-		},
-		{
 			MethodName: "GenerateCi",
 			Handler:    _CodegenService_GenerateCi_Handler,
 		},
@@ -1667,6 +1707,11 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Streams: []grpc.StreamDesc{
 		{
+			StreamName:    "CompileIR",
+			Handler:       _CodegenService_CompileIR_Handler,
+			ClientStreams: true,
+		},
+		{
 			StreamName:    "GenerateEventbus",
 			Handler:       _CodegenService_GenerateEventbus_Handler,
 			ServerStreams: true,
@@ -1705,16 +1750,19 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "GenerateProject",
 			Handler:       _CodegenService_GenerateProject_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "GenerateClient",
 			Handler:       _CodegenService_GenerateClient_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "GeneratePluginPb",
 			Handler:       _CodegenService_GeneratePluginPb_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "RenderProjectScaffold",

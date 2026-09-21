@@ -288,16 +288,25 @@ const (
 type CodegenClient interface {
 	Generate(ctx context.Context, in *w17compiler.GenerateRequest, opts ...grpc.CallOption) (*w17compiler.GenerateResponse, error)
 	// GenerateProject — the full server-side codegen orchestration w17ctl drives
-	// (the thin-client GenerateProject path). Server-streaming the write-ops back.
-	// Re-hosting it here (+ DescribeLock below) is what lets the console run the
-	// compiler so `w17ctl codegen` targets console-app instead of the legacy
-	// cmd/console daemon (G-selfhost-codegen).
-	GenerateProject(ctx context.Context, in *w17compiler.GenerateProjectRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedOp], error)
+	// (the thin-client GenerateProject path). Re-hosting it here (+ DescribeLock
+	// below) is what lets the console run the compiler so `w17ctl codegen`
+	// targets console-app instead of the legacy cmd/console daemon
+	// (G-selfhost-codegen).
+	//
+	// BIDI: the request streams as well as the reply. The signature must match
+	// the compiler's exactly — w17ctl treats this client as a
+	// codegenpb.CodegenServiceClient by TYPE IDENTITY, so a re-declaration that
+	// drifts does not degrade, it stops compiling (dial.go's assertion).
+	GenerateProject(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp], error)
 	// DescribeLock — the lock projection w17ctl's codegen path reads first
 	// (languages dir, plugin pb root, …). Unary.
 	DescribeLock(ctx context.Context, in *w17compiler.DescribeLockRequest, opts ...grpc.CallOption) (*w17compiler.LockView, error)
 	// CompileIR — relational IR build over the API (schema push path).
-	CompileIR(ctx context.Context, in *w17compiler.CompileIRRequest, opts ...grpc.CallOption) (*w17compiler.CompileIRResponse, error)
+	// ⚠️ The REQUEST streams. Signature must match the compiler's EXACTLY:
+	// w17ctl treats this client as a codegenpb.CodegenServiceClient by type
+	// identity, so a re-declaration that drifts stops compiling rather than
+	// degrading (dial.go's assertion).
+	CompileIR(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse], error)
 	// The seam-D generator family (acl / eventbus / mcp / grpc-clients /
 	// business / project-map / e2e / ci) — the standalone generator RPCs the
 	// thin client drives (codegen + verify surfaces).
@@ -317,10 +326,18 @@ type CodegenClient interface {
 	Classify(ctx context.Context, in *w17compiler.ClassifyIRRequest, opts ...grpc.CallOption) (*w17compiler.ClassifyIRResponse, error)
 	Plan(ctx context.Context, in *w17compiler.PlanIRRequest, opts ...grpc.CallOption) (*w17compiler.PlanIRResponse, error)
 	// FE client tree generation.
-	GenerateClient(ctx context.Context, in *w17compiler.GenerateClientRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error)
+	// ⚠️ The REQUEST streams. Signature must match the compiler's EXACTLY:
+	// w17ctl treats this client as a codegenpb.CodegenServiceClient by type
+	// identity, so a re-declaration that drifts stops compiling rather than
+	// degrading (dial.go's assertion).
+	GenerateClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile], error)
 	// Plugin author/dev surfaces + plugin-sandbox discovery.
 	DiscoverPluginSandboxes(ctx context.Context, in *w17compiler.DiscoverPluginSandboxesRequest, opts ...grpc.CallOption) (*w17compiler.PluginSandboxes, error)
-	GeneratePluginPb(ctx context.Context, in *w17compiler.GeneratePluginPbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error)
+	// ⚠️ The REQUEST streams. Signature must match the compiler's EXACTLY:
+	// w17ctl treats this client as a codegenpb.CodegenServiceClient by type
+	// identity, so a re-declaration that drifts stops compiling rather than
+	// degrading (dial.go's assertion).
+	GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile], error)
 	InspectPluginManifest(ctx context.Context, in *w17compiler.InspectPluginManifestRequest, opts ...grpc.CallOption) (*w17compiler.InspectPluginManifestResponse, error)
 	// The plugin CATALOGUE, re-hosted like the rest of the surface. The client
 	// carries no catalogue of its own any more, so these two are the ONLY way
@@ -371,24 +388,18 @@ func (c *codegenClient) Generate(ctx context.Context, in *w17compiler.GenerateRe
 	return out, nil
 }
 
-func (c *codegenClient) GenerateProject(ctx context.Context, in *w17compiler.GenerateProjectRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedOp], error) {
+func (c *codegenClient) GenerateProject(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[0], Codegen_GenerateProject_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Codegen_GenerateProjectClient = grpc.ServerStreamingClient[w17compiler.GeneratedOp]
+type Codegen_GenerateProjectClient = grpc.BidiStreamingClient[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]
 
 func (c *codegenClient) DescribeLock(ctx context.Context, in *w17compiler.DescribeLockRequest, opts ...grpc.CallOption) (*w17compiler.LockView, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -400,15 +411,18 @@ func (c *codegenClient) DescribeLock(ctx context.Context, in *w17compiler.Descri
 	return out, nil
 }
 
-func (c *codegenClient) CompileIR(ctx context.Context, in *w17compiler.CompileIRRequest, opts ...grpc.CallOption) (*w17compiler.CompileIRResponse, error) {
+func (c *codegenClient) CompileIR(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(w17compiler.CompileIRResponse)
-	err := c.cc.Invoke(ctx, Codegen_CompileIR_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[1], Codegen_CompileIR_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Codegen_CompileIRClient = grpc.ClientStreamingClient[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse]
 
 func (c *codegenClient) GenerateCi(ctx context.Context, in *w17compiler.GenerateCiRequest, opts ...grpc.CallOption) (*w17compiler.GenerateCiResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -422,7 +436,7 @@ func (c *codegenClient) GenerateCi(ctx context.Context, in *w17compiler.Generate
 
 func (c *codegenClient) GenerateEventbus(ctx context.Context, in *w17compiler.GenerateEventbusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[1], Codegen_GenerateEventbus_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[2], Codegen_GenerateEventbus_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +455,7 @@ type Codegen_GenerateEventbusClient = grpc.ServerStreamingClient[w17compiler.Gen
 
 func (c *codegenClient) GenerateGrpcClients(ctx context.Context, in *w17compiler.GenerateGrpcClientsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[2], Codegen_GenerateGrpcClients_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[3], Codegen_GenerateGrpcClients_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -460,7 +474,7 @@ type Codegen_GenerateGrpcClientsClient = grpc.ServerStreamingClient[w17compiler.
 
 func (c *codegenClient) GenerateMcp(ctx context.Context, in *w17compiler.GenerateMcpRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[3], Codegen_GenerateMcp_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[4], Codegen_GenerateMcp_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +493,7 @@ type Codegen_GenerateMcpClient = grpc.ServerStreamingClient[w17compiler.Generate
 
 func (c *codegenClient) GenerateAcl(ctx context.Context, in *w17compiler.GenerateAclRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[4], Codegen_GenerateAcl_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[5], Codegen_GenerateAcl_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +512,7 @@ type Codegen_GenerateAclClient = grpc.ServerStreamingClient[w17compiler.Generate
 
 func (c *codegenClient) GenerateBusiness(ctx context.Context, in *w17compiler.GenerateBusinessRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[5], Codegen_GenerateBusiness_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[6], Codegen_GenerateBusiness_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +531,7 @@ type Codegen_GenerateBusinessClient = grpc.ServerStreamingClient[w17compiler.Gen
 
 func (c *codegenClient) GenerateProjectMap(ctx context.Context, in *w17compiler.GenerateProjectMapRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[6], Codegen_GenerateProjectMap_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[7], Codegen_GenerateProjectMap_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +550,7 @@ type Codegen_GenerateProjectMapClient = grpc.ServerStreamingClient[w17compiler.G
 
 func (c *codegenClient) GenerateE2E(ctx context.Context, in *w17compiler.GenerateE2ERequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[7], Codegen_GenerateE2E_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[8], Codegen_GenerateE2E_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -603,24 +617,18 @@ func (c *codegenClient) Plan(ctx context.Context, in *w17compiler.PlanIRRequest,
 	return out, nil
 }
 
-func (c *codegenClient) GenerateClient(ctx context.Context, in *w17compiler.GenerateClientRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
+func (c *codegenClient) GenerateClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[8], Codegen_GenerateClient_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[9], Codegen_GenerateClient_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Codegen_GenerateClientClient = grpc.ServerStreamingClient[w17compiler.GeneratedFile]
+type Codegen_GenerateClientClient = grpc.BidiStreamingClient[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]
 
 func (c *codegenClient) DiscoverPluginSandboxes(ctx context.Context, in *w17compiler.DiscoverPluginSandboxesRequest, opts ...grpc.CallOption) (*w17compiler.PluginSandboxes, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -632,24 +640,18 @@ func (c *codegenClient) DiscoverPluginSandboxes(ctx context.Context, in *w17comp
 	return out, nil
 }
 
-func (c *codegenClient) GeneratePluginPb(ctx context.Context, in *w17compiler.GeneratePluginPbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
+func (c *codegenClient) GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[9], Codegen_GeneratePluginPb_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[10], Codegen_GeneratePluginPb_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Codegen_GeneratePluginPbClient = grpc.ServerStreamingClient[w17compiler.GeneratedFile]
+type Codegen_GeneratePluginPbClient = grpc.BidiStreamingClient[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]
 
 func (c *codegenClient) InspectPluginManifest(ctx context.Context, in *w17compiler.InspectPluginManifestRequest, opts ...grpc.CallOption) (*w17compiler.InspectPluginManifestResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -673,7 +675,7 @@ func (c *codegenClient) ListPluginCatalog(ctx context.Context, in *w17compiler.L
 
 func (c *codegenClient) FetchPlugin(ctx context.Context, in *w17compiler.FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[10], Codegen_FetchPlugin_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[11], Codegen_FetchPlugin_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -702,7 +704,7 @@ func (c *codegenClient) MergePo(ctx context.Context, in *w17compiler.MergePoRequ
 
 func (c *codegenClient) RenderProjectScaffold(ctx context.Context, in *w17compiler.RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[11], Codegen_RenderProjectScaffold_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[12], Codegen_RenderProjectScaffold_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -731,7 +733,7 @@ func (c *codegenClient) EditLock(ctx context.Context, in *w17compiler.EditLockRe
 
 func (c *codegenClient) Guide(ctx context.Context, in *w17compiler.GuideRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[12], Codegen_Guide_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[13], Codegen_Guide_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -774,16 +776,25 @@ func (c *codegenClient) DumpFixtures(ctx context.Context, in *w17compiler.DumpFi
 type CodegenServer interface {
 	Generate(context.Context, *w17compiler.GenerateRequest) (*w17compiler.GenerateResponse, error)
 	// GenerateProject — the full server-side codegen orchestration w17ctl drives
-	// (the thin-client GenerateProject path). Server-streaming the write-ops back.
-	// Re-hosting it here (+ DescribeLock below) is what lets the console run the
-	// compiler so `w17ctl codegen` targets console-app instead of the legacy
-	// cmd/console daemon (G-selfhost-codegen).
-	GenerateProject(*w17compiler.GenerateProjectRequest, grpc.ServerStreamingServer[w17compiler.GeneratedOp]) error
+	// (the thin-client GenerateProject path). Re-hosting it here (+ DescribeLock
+	// below) is what lets the console run the compiler so `w17ctl codegen`
+	// targets console-app instead of the legacy cmd/console daemon
+	// (G-selfhost-codegen).
+	//
+	// BIDI: the request streams as well as the reply. The signature must match
+	// the compiler's exactly — w17ctl treats this client as a
+	// codegenpb.CodegenServiceClient by TYPE IDENTITY, so a re-declaration that
+	// drifts does not degrade, it stops compiling (dial.go's assertion).
+	GenerateProject(grpc.BidiStreamingServer[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]) error
 	// DescribeLock — the lock projection w17ctl's codegen path reads first
 	// (languages dir, plugin pb root, …). Unary.
 	DescribeLock(context.Context, *w17compiler.DescribeLockRequest) (*w17compiler.LockView, error)
 	// CompileIR — relational IR build over the API (schema push path).
-	CompileIR(context.Context, *w17compiler.CompileIRRequest) (*w17compiler.CompileIRResponse, error)
+	// ⚠️ The REQUEST streams. Signature must match the compiler's EXACTLY:
+	// w17ctl treats this client as a codegenpb.CodegenServiceClient by type
+	// identity, so a re-declaration that drifts stops compiling rather than
+	// degrading (dial.go's assertion).
+	CompileIR(grpc.ClientStreamingServer[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse]) error
 	// The seam-D generator family (acl / eventbus / mcp / grpc-clients /
 	// business / project-map / e2e / ci) — the standalone generator RPCs the
 	// thin client drives (codegen + verify surfaces).
@@ -803,10 +814,18 @@ type CodegenServer interface {
 	Classify(context.Context, *w17compiler.ClassifyIRRequest) (*w17compiler.ClassifyIRResponse, error)
 	Plan(context.Context, *w17compiler.PlanIRRequest) (*w17compiler.PlanIRResponse, error)
 	// FE client tree generation.
-	GenerateClient(*w17compiler.GenerateClientRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error
+	// ⚠️ The REQUEST streams. Signature must match the compiler's EXACTLY:
+	// w17ctl treats this client as a codegenpb.CodegenServiceClient by type
+	// identity, so a re-declaration that drifts stops compiling rather than
+	// degrading (dial.go's assertion).
+	GenerateClient(grpc.BidiStreamingServer[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]) error
 	// Plugin author/dev surfaces + plugin-sandbox discovery.
 	DiscoverPluginSandboxes(context.Context, *w17compiler.DiscoverPluginSandboxesRequest) (*w17compiler.PluginSandboxes, error)
-	GeneratePluginPb(*w17compiler.GeneratePluginPbRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error
+	// ⚠️ The REQUEST streams. Signature must match the compiler's EXACTLY:
+	// w17ctl treats this client as a codegenpb.CodegenServiceClient by type
+	// identity, so a re-declaration that drifts stops compiling rather than
+	// degrading (dial.go's assertion).
+	GeneratePluginPb(grpc.BidiStreamingServer[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]) error
 	InspectPluginManifest(context.Context, *w17compiler.InspectPluginManifestRequest) (*w17compiler.InspectPluginManifestResponse, error)
 	// The plugin CATALOGUE, re-hosted like the rest of the surface. The client
 	// carries no catalogue of its own any more, so these two are the ONLY way
@@ -850,14 +869,14 @@ type UnimplementedCodegenServer struct{}
 func (UnimplementedCodegenServer) Generate(context.Context, *w17compiler.GenerateRequest) (*w17compiler.GenerateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Generate not implemented")
 }
-func (UnimplementedCodegenServer) GenerateProject(*w17compiler.GenerateProjectRequest, grpc.ServerStreamingServer[w17compiler.GeneratedOp]) error {
+func (UnimplementedCodegenServer) GenerateProject(grpc.BidiStreamingServer[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]) error {
 	return status.Error(codes.Unimplemented, "method GenerateProject not implemented")
 }
 func (UnimplementedCodegenServer) DescribeLock(context.Context, *w17compiler.DescribeLockRequest) (*w17compiler.LockView, error) {
 	return nil, status.Error(codes.Unimplemented, "method DescribeLock not implemented")
 }
-func (UnimplementedCodegenServer) CompileIR(context.Context, *w17compiler.CompileIRRequest) (*w17compiler.CompileIRResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CompileIR not implemented")
+func (UnimplementedCodegenServer) CompileIR(grpc.ClientStreamingServer[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse]) error {
+	return status.Error(codes.Unimplemented, "method CompileIR not implemented")
 }
 func (UnimplementedCodegenServer) GenerateCi(context.Context, *w17compiler.GenerateCiRequest) (*w17compiler.GenerateCiResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GenerateCi not implemented")
@@ -898,13 +917,13 @@ func (UnimplementedCodegenServer) Classify(context.Context, *w17compiler.Classif
 func (UnimplementedCodegenServer) Plan(context.Context, *w17compiler.PlanIRRequest) (*w17compiler.PlanIRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Plan not implemented")
 }
-func (UnimplementedCodegenServer) GenerateClient(*w17compiler.GenerateClientRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error {
+func (UnimplementedCodegenServer) GenerateClient(grpc.BidiStreamingServer[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method GenerateClient not implemented")
 }
 func (UnimplementedCodegenServer) DiscoverPluginSandboxes(context.Context, *w17compiler.DiscoverPluginSandboxesRequest) (*w17compiler.PluginSandboxes, error) {
 	return nil, status.Error(codes.Unimplemented, "method DiscoverPluginSandboxes not implemented")
 }
-func (UnimplementedCodegenServer) GeneratePluginPb(*w17compiler.GeneratePluginPbRequest, grpc.ServerStreamingServer[w17compiler.GeneratedFile]) error {
+func (UnimplementedCodegenServer) GeneratePluginPb(grpc.BidiStreamingServer[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]) error {
 	return status.Error(codes.Unimplemented, "method GeneratePluginPb not implemented")
 }
 func (UnimplementedCodegenServer) InspectPluginManifest(context.Context, *w17compiler.InspectPluginManifestRequest) (*w17compiler.InspectPluginManifestResponse, error) {
@@ -974,15 +993,11 @@ func _Codegen_Generate_Handler(srv interface{}, ctx context.Context, dec func(in
 }
 
 func _Codegen_GenerateProject_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(w17compiler.GenerateProjectRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(CodegenServer).GenerateProject(m, &grpc.GenericServerStream[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]{ServerStream: stream})
+	return srv.(CodegenServer).GenerateProject(&grpc.GenericServerStream[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Codegen_GenerateProjectServer = grpc.ServerStreamingServer[w17compiler.GeneratedOp]
+type Codegen_GenerateProjectServer = grpc.BidiStreamingServer[w17compiler.GenerateProjectRequest, w17compiler.GeneratedOp]
 
 func _Codegen_DescribeLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(w17compiler.DescribeLockRequest)
@@ -1002,23 +1017,12 @@ func _Codegen_DescribeLock_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Codegen_CompileIR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(w17compiler.CompileIRRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CodegenServer).CompileIR(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Codegen_CompileIR_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CodegenServer).CompileIR(ctx, req.(*w17compiler.CompileIRRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _Codegen_CompileIR_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CodegenServer).CompileIR(&grpc.GenericServerStream[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Codegen_CompileIRServer = grpc.ClientStreamingServer[w17compiler.CompileIRRequest, w17compiler.CompileIRResponse]
 
 func _Codegen_GenerateCi_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(w17compiler.GenerateCiRequest)
@@ -1206,15 +1210,11 @@ func _Codegen_Plan_Handler(srv interface{}, ctx context.Context, dec func(interf
 }
 
 func _Codegen_GenerateClient_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(w17compiler.GenerateClientRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(CodegenServer).GenerateClient(m, &grpc.GenericServerStream[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]{ServerStream: stream})
+	return srv.(CodegenServer).GenerateClient(&grpc.GenericServerStream[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Codegen_GenerateClientServer = grpc.ServerStreamingServer[w17compiler.GeneratedFile]
+type Codegen_GenerateClientServer = grpc.BidiStreamingServer[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile]
 
 func _Codegen_DiscoverPluginSandboxes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(w17compiler.DiscoverPluginSandboxesRequest)
@@ -1235,15 +1235,11 @@ func _Codegen_DiscoverPluginSandboxes_Handler(srv interface{}, ctx context.Conte
 }
 
 func _Codegen_GeneratePluginPb_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(w17compiler.GeneratePluginPbRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(CodegenServer).GeneratePluginPb(m, &grpc.GenericServerStream[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]{ServerStream: stream})
+	return srv.(CodegenServer).GeneratePluginPb(&grpc.GenericServerStream[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Codegen_GeneratePluginPbServer = grpc.ServerStreamingServer[w17compiler.GeneratedFile]
+type Codegen_GeneratePluginPbServer = grpc.BidiStreamingServer[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]
 
 func _Codegen_InspectPluginManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(w17compiler.InspectPluginManifestRequest)
@@ -1402,10 +1398,6 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Codegen_DescribeLock_Handler,
 		},
 		{
-			MethodName: "CompileIR",
-			Handler:    _Codegen_CompileIR_Handler,
-		},
-		{
 			MethodName: "GenerateCi",
 			Handler:    _Codegen_GenerateCi_Handler,
 		},
@@ -1463,6 +1455,12 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "GenerateProject",
 			Handler:       _Codegen_GenerateProject_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "CompileIR",
+			Handler:       _Codegen_CompileIR_Handler,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "GenerateEventbus",
@@ -1503,11 +1501,13 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "GenerateClient",
 			Handler:       _Codegen_GenerateClient_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "GeneratePluginPb",
 			Handler:       _Codegen_GeneratePluginPb_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "FetchPlugin",

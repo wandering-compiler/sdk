@@ -4806,9 +4806,12 @@ func (x *GenerateEventbusRequest) GetW17Path() string {
 // (read from the local go.mod), and the co-dev path env. Everything else —
 // which generators to run, every derived target/param, the composition, the
 // supersede-sweep — the server derives from these inputs.
+// ⚠️ STREAMED: see the rpc. The first message carries the header fields
+// below; `files` / `gen_files` may be spread across any number of messages
+// and are appended in arrival order.
 type GenerateProjectRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
-	Files       []*ProtoFile           `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`                                // the project's full proto tree (proto-root-relative)
+	Files       []*ProtoFile           `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`                                // the project's proto tree, in chunks (proto-root-relative)
 	Lock        []byte                 `protobuf:"bytes,2,opt,name=lock,proto3" json:"lock,omitempty"`                                  // proto-marshalled w17.console.lock.Lock
 	GoModule    string                 `protobuf:"bytes,3,opt,name=go_module,json=goModule,proto3" json:"go_module,omitempty"`          // the project's go.mod module path
 	GenDir      string                 `protobuf:"bytes,4,opt,name=gen_dir,json=genDir,proto3" json:"gen_dir,omitempty"`                // empty == "srcgo"
@@ -8970,10 +8973,10 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\n" +
 	"STAGE_EMIT\x10\x06\x12\x15\n" +
 	"\x11STAGE_UNSUPPORTED\x10\a\x12\x12\n" +
-	"\x0eSTAGE_INTERNAL\x10\b2\xb3\x16\n" +
+	"\x0eSTAGE_INTERNAL\x10\b2\xbb\x16\n" +
 	"\x0eCodegenService\x12W\n" +
-	"\bGenerate\x12$.w17.storage.codegen.GenerateRequest\x1a%.w17.storage.codegen.GenerateResponse\x12`\n" +
-	"\tCompileIR\x12%.w17.storage.codegen.CompileIRRequest\x1a&.w17.storage.codegen.CompileIRResponse\"\x04\xf8\xbb\x18\x01\x12]\n" +
+	"\bGenerate\x12$.w17.storage.codegen.GenerateRequest\x1a%.w17.storage.codegen.GenerateResponse\x12b\n" +
+	"\tCompileIR\x12%.w17.storage.codegen.CompileIRRequest\x1a&.w17.storage.codegen.CompileIRResponse\"\x04\xf8\xbb\x18\x01(\x01\x12]\n" +
 	"\n" +
 	"GenerateCi\x12&.w17.storage.codegen.GenerateCiRequest\x1a'.w17.storage.codegen.GenerateCiResponse\x12f\n" +
 	"\x10GenerateEventbus\x12,.w17.storage.codegen.GenerateEventbusRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12l\n" +
@@ -8982,18 +8985,18 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\vGenerateAcl\x12'.w17.storage.codegen.GenerateAclRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12f\n" +
 	"\x10GenerateBusiness\x12,.w17.storage.codegen.GenerateBusinessRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12j\n" +
 	"\x12GenerateProjectMap\x12..w17.storage.codegen.GenerateProjectMapRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12\\\n" +
-	"\vGenerateE2e\x12'.w17.storage.codegen.GenerateE2eRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12h\n" +
-	"\x0fGenerateProject\x12+.w17.storage.codegen.GenerateProjectRequest\x1a .w17.storage.codegen.GeneratedOp\"\x04\xf8\xbb\x18\x010\x01\x12R\n" +
+	"\vGenerateE2e\x12'.w17.storage.codegen.GenerateE2eRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12j\n" +
+	"\x0fGenerateProject\x12+.w17.storage.codegen.GenerateProjectRequest\x1a .w17.storage.codegen.GeneratedOp\"\x04\xf8\xbb\x18\x01(\x010\x01\x12R\n" +
 	"\tVerifyAcl\x12\".w17.storage.codegen.VerifyRequest\x1a!.w17.storage.codegen.VerifyResult\x12W\n" +
 	"\x0eVerifyEventbus\x12\".w17.storage.codegen.VerifyRequest\x1a!.w17.storage.codegen.VerifyResult\x12W\n" +
 	"\n" +
 	"VerifyLock\x12&.w17.storage.codegen.VerifyLockRequest\x1a!.w17.storage.codegen.VerifyResult\x12[\n" +
 	"\bClassify\x12&.w17.storage.codegen.ClassifyIRRequest\x1a'.w17.storage.codegen.ClassifyIRResponse\x12O\n" +
 	"\x04Plan\x12\".w17.storage.codegen.PlanIRRequest\x1a#.w17.storage.codegen.PlanIRResponse\x12c\n" +
-	"\fDumpFixtures\x12(.w17.storage.codegen.DumpFixturesRequest\x1a).w17.storage.codegen.DumpFixturesResponse\x12b\n" +
-	"\x0eGenerateClient\x12*.w17.storage.codegen.GenerateClientRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12t\n" +
-	"\x17DiscoverPluginSandboxes\x123.w17.storage.codegen.DiscoverPluginSandboxesRequest\x1a$.w17.storage.codegen.PluginSandboxes\x12f\n" +
-	"\x10GeneratePluginPb\x12,.w17.storage.codegen.GeneratePluginPbRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12T\n" +
+	"\fDumpFixtures\x12(.w17.storage.codegen.DumpFixturesRequest\x1a).w17.storage.codegen.DumpFixturesResponse\x12d\n" +
+	"\x0eGenerateClient\x12*.w17.storage.codegen.GenerateClientRequest\x1a\".w17.storage.codegen.GeneratedFile(\x010\x01\x12t\n" +
+	"\x17DiscoverPluginSandboxes\x123.w17.storage.codegen.DiscoverPluginSandboxesRequest\x1a$.w17.storage.codegen.PluginSandboxes\x12h\n" +
+	"\x10GeneratePluginPb\x12,.w17.storage.codegen.GeneratePluginPbRequest\x1a\".w17.storage.codegen.GeneratedFile(\x010\x01\x12T\n" +
 	"\aMergePo\x12#.w17.storage.codegen.MergePoRequest\x1a$.w17.storage.codegen.MergePoResponse\x12p\n" +
 	"\x15RenderProjectScaffold\x121.w17.storage.codegen.RenderProjectScaffoldRequest\x1a\".w17.storage.codegen.GeneratedFile0\x01\x12W\n" +
 	"\bEditLock\x12$.w17.storage.codegen.EditLockRequest\x1a%.w17.storage.codegen.EditLockResponse\x12W\n" +
