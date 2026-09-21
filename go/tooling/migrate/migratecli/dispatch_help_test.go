@@ -33,11 +33,17 @@ func TestDispatch_HelpDoesNotStartAServer(t *testing.T) {
 	}
 }
 
-// TestDispatch_UnknownWordStillFallsThrough — the server half keeps every word
-// this package does not own, flags included. Without this the help arm would
-// be free to swallow a bundle's own flags.
-func TestDispatch_UnknownWordStillFallsThrough(t *testing.T) {
-	for _, word := range []string{"--listen=:9000", "serve", "-v"} {
+// TestDispatch_FlagsStillFallThrough — the server half keeps every FLAG this
+// package does not own. Without this the help arm would be free to swallow a
+// bundle's own flags.
+//
+// It used to cover bare words too ("serve"), which is the behaviour a
+// consumer's compose step hung on: an unknown verb started the server instead
+// of failing, so a step gating on completion waited forever. Every image runs
+// `ENTRYPOINT ["/server"]` with no verb, so nothing passes one on purpose —
+// see TestDispatch_UnknownVerbIsRefused.
+func TestDispatch_FlagsStillFallThroughFromHelpArm(t *testing.T) {
+	for _, word := range []string{"--listen=:9000", "-v"} {
 		handled, err := Dispatch(context.Background(), []string{word}, Options{Out: &bytes.Buffer{}})
 		if err != nil {
 			t.Fatalf("%s: %v", word, err)

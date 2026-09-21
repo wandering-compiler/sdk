@@ -89,9 +89,8 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		// entirely — which sent them looking for a way to apply a schema
 		// that this binary does have.
 		//
-		// Anything else still falls through to the server: an unknown word
-		// is not this package's to interpret, and the generated main has its
-		// own flags.
+		// A FLAG still falls through: the generated main has its own, and
+		// this package must not interpret them.
 		fmt.Fprint(out(opts),
 			"usage: <binary> [command]\n\n"+
 				"  migrate    apply / fetch / roll back / report this bundle's migrations\n"+
@@ -99,6 +98,30 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 				"Run a command with --help for its flags. With no command the bundle\n"+
 				"starts its server, which is what a container image does by default.\n")
 		return true, nil
+	}
+	// A VERB this package does not know is an error, not a server start.
+	//
+	// It used to fall through, and the cost was not a confusing message — it
+	// was a stack that never came up and never said why. A consumer's compose
+	// step ran `<binary> schema apply …` after that verb was removed; the
+	// binary bound :50051 and sat there, and the step it gated on
+	// `service_completed_successfully` waited forever (deinvo, 2026-09-21).
+	// Without the right env var the same call printed a DSN error instead,
+	// which sent them looking at configuration.
+	//
+	// The test is the leading dash, and it is exact: flags belong to the
+	// generated main and keep falling through, while a bare word is a command
+	// and this package owns the command table. "Start the server" is what NO
+	// argument means, not what any argument means.
+	if !strings.HasPrefix(argv[0], "-") {
+		return true, fmt.Errorf(
+			"unknown command %q\n\n"+
+				"  migrate    apply / fetch / roll back / report this bundle's migrations\n"+
+				"  fixtures   apply the rendered seed data\n\n"+
+				"With NO command the bundle starts its server, which is what a container\n"+
+				"image does by default. There is no `schema` command: a generated binary\n"+
+				"carries its migrations, so there is no schema for it to read.",
+			argv[0])
 	}
 	return false, nil
 }

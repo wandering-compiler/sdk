@@ -282,8 +282,14 @@ func TestDispatch_AnswersForEveryReservedRoot(t *testing.T) {
 			t.Errorf("Dispatch did not claim %q", root)
 		}
 	}
-	if handled, _ := Dispatch(context.Background(), []string{"serve"}, Options{}); handled {
-		t.Error("Dispatch claimed a word that is not reserved")
+	// An unreserved WORD is now claimed — and refused. It used to fall
+	// through and start the server, which is how a consumer's compose step
+	// hung instead of failing. A flag is the thing that still falls through.
+	if handled, err := Dispatch(context.Background(), []string{"serve"}, Options{}); !handled || err == nil {
+		t.Errorf("an unreserved word was not refused (handled=%v err=%v)", handled, err)
+	}
+	if handled, _ := Dispatch(context.Background(), []string{"--listen=:9000"}, Options{}); handled {
+		t.Error("Dispatch claimed a FLAG — those belong to the generated main")
 	}
 	if handled, _ := Dispatch(context.Background(), nil, Options{}); handled {
 		t.Error("Dispatch claimed an empty argv")
