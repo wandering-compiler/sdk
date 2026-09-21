@@ -5100,9 +5100,18 @@ type GenerateCiRequest struct {
 	// Empty renders that job commented out rather than pointing it at a
 	// guess: a workflow that pushes a schema to the wrong console is worse
 	// than one the consumer has to finish by hand.
-	ConsoleAddr   string `protobuf:"bytes,3,opt,name=console_addr,json=consoleAddr,proto3" json:"console_addr,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ConsoleAddr string `protobuf:"bytes,3,opt,name=console_addr,json=consoleAddr,proto3" json:"console_addr,omitempty"`
+	// GeneratedPaths are the project-relative roots `w17ctl codegen`
+	// writes into — `w17/` plus the stub root the lock records.
+	//
+	// The generated pipeline uploads them as a build ARTEFACT. With the
+	// compiler's output gitignored (the shape w17 steers projects to),
+	// the repo holds the authored code and nothing else, so a CI run that
+	// produced a tree and kept no copy leaves the project with its
+	// generated code nowhere at all. The artefact is where it lives.
+	GeneratedPaths []string `protobuf:"bytes,4,rep,name=generated_paths,json=generatedPaths,proto3" json:"generated_paths,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GenerateCiRequest) Reset() {
@@ -5154,6 +5163,13 @@ func (x *GenerateCiRequest) GetConsoleAddr() string {
 		return x.ConsoleAddr
 	}
 	return ""
+}
+
+func (x *GenerateCiRequest) GetGeneratedPaths() []string {
+	if x != nil {
+		return x.GeneratedPaths
+	}
+	return nil
 }
 
 // GenerateCiResponse returns the rendered CI files (reusing GeneratedFile:
@@ -8712,11 +8728,12 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x05write\x18\x01 \x01(\v2\".w17.storage.codegen.GeneratedFileH\x00R\x05write\x12\x18\n" +
 	"\x06delete\x18\x02 \x01(\tH\x00R\x06delete\x12\x1a\n" +
 	"\awarning\x18\x03 \x01(\tH\x00R\awarningB\x04\n" +
-	"\x02op\"v\n" +
+	"\x02op\"\x9f\x01\n" +
 	"\x11GenerateCiRequest\x12\x1c\n" +
 	"\tproviders\x18\x01 \x03(\tR\tproviders\x12 \n" +
 	"\vconnections\x18\x02 \x03(\tR\vconnections\x12!\n" +
-	"\fconsole_addr\x18\x03 \x01(\tR\vconsoleAddr\"N\n" +
+	"\fconsole_addr\x18\x03 \x01(\tR\vconsoleAddr\x12'\n" +
+	"\x0fgenerated_paths\x18\x04 \x03(\tR\x0egeneratedPaths\"N\n" +
 	"\x12GenerateCiResponse\x128\n" +
 	"\x05files\x18\x01 \x03(\v2\".w17.storage.codegen.GeneratedFileR\x05files\"\x8f\x03\n" +
 	"\x10CompileIRRequest\x124\n" +
