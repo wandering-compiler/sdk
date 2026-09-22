@@ -241,6 +241,43 @@ func (s *sseSub) Await(ctx context.Context, topic string, timeout time.Duration)
 	}
 }
 
+// Next returns the next frame off the stream in ARRIVAL ORDER, whatever its
+// topic — the read half an endpoint stream needs, where [sseSub.Await] is the
+// broadcast-bus half that skips to a topic.
+//
+// The two must not be confused. `await_events` asks "did this topic show up
+// among whatever the bus is carrying", and skipping siblings is correct
+// there. An endpoint's own stream has no siblings: the frames ARE the
+// response, so their order is part of the contract and a reader that skipped
+// would turn "wrong order" into "passes".
+//
+// A closed stream is reported as [ErrStreamClosed] so the caller can tell
+// "the server finished" from "the server went quiet", which is the whole
+// difference between a stream that ended and one that hung.
+func (s *sseSub) Next(ctx context.Context, timeout time.Duration) (Event, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	select {
+	case <-ctx.Done():
+		return Event{}, ctx.Err()
+	case <-deadline.C:
+		return Event{}, fmt.Errorf("timeout after %s waiting for the next frame", timeout)
+	case ev, ok := <-s.frames:
+		if !ok {
+			if s.readErr != nil {
+				// BOTH wrapped: a caller matching ErrStreamClosed must
+				// still be able to reach the read error underneath it.
+				return Event{}, fmt.Errorf("%w: %w", ErrStreamClosed, s.readErr)
+			}
+			return Event{}, ErrStreamClosed
+		}
+		if ev.Topic == "error" {
+			return Event{}, fmt.Errorf("stream error frame: %v", ev.Data)
+		}
+		return ev, nil
+	}
+}
+
 // Close cancels the request and unblocks the reader. Idempotent.
 func (s *sseSub) Close() error {
 	s.closeOnce.Do(func() {

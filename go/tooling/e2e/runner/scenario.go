@@ -17,7 +17,8 @@ import (
 // caller wires it once (via RunOption) rather than baking it into every
 // literal.
 type runCfg struct {
-	events EventSubscriber
+	events  EventSubscriber
+	streams StreamCaller
 }
 
 // RunOption configures a run. Options are variadic on RunScenario/RunSteps
@@ -29,6 +30,15 @@ type RunOption func(*runCfg)
 // event fails with a clear "no event subscriber configured" error.
 func WithEventSubscriber(s EventSubscriber) RunOption {
 	return func(c *runCfg) { c.events = s }
+}
+
+// WithStreamCaller supplies the caller a step's ExpectStream uses to open a
+// streaming ENDPOINT. Without it, a step that declares `expect_stream` fails
+// with a clear error rather than skipping the assertion — a stream case that
+// quietly did nothing would be worse than no case at all, which is the state
+// this feature replaced.
+func WithStreamCaller(sc StreamCaller) RunOption {
+	return func(c *runCfg) { c.streams = sc }
 }
 
 // format selects per-step output: "text" (the default ✓/✗ checklist) or
@@ -96,6 +106,13 @@ type Step struct {
 	// answered — one with no canonical code. Mutually exclusive with the
 	// other two (the spec parser rejects the combination).
 	ExpectTransportError *ExpectTransportError
+
+	// ExpectStream, when set, makes this step OPEN the endpoint's own
+	// stream and assert the sequence of frames it sends, rather than issue
+	// a unary call. Mutually exclusive with Expect (the spec parser rejects
+	// both); it pairs with ExpectError, which then asserts a refused
+	// connect.
+	ExpectStream *ExpectStream
 
 	// AwaitEvents, when non-empty, asserts that each listed public event
 	// lands on the gateway's `/w17-events` SSE stream after this step's
@@ -287,6 +304,28 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 			}
 			subs = append(subs, sub)
 		}
+	}
+
+	// A streaming endpoint is OPENED, not called: its response is the frame
+	// sequence, and there is no single body to match. The refusal path stays
+	// shared — a refused connect answers the same REST envelope a refused
+	// call does, so `expect_error:` means one thing on both.
+	if s.ExpectStream != nil || (s.ExpectError != nil && s.Endpoint.Stream) {
+		if cfg.streams == nil {
+			return fmt.Errorf("step opens the stream %s but no stream caller configured (pass runner.WithStreamCaller)", s.Endpoint.Ref)
+		}
+		conn, err := cfg.streams.OpenStream(ctx, s.Endpoint, input, token, headers)
+		if s.ExpectError != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return matchCallError(s.ExpectError, err, scope)
+		}
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close() }()
+		return matchStream(ctx, s.ExpectStream, conn, scope)
 	}
 
 	resp, err := caller.Call(ctx, s.Endpoint, input, token, headers, s.Files)

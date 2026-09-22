@@ -42,6 +42,16 @@ type Endpoint struct {
 	// field.
 	CredentialInURL bool
 
+	// Stream marks an endpoint whose REST route is a server-stream served
+	// over SSE. The step OPENS it and reads frames instead of issuing a
+	// unary call.
+	//
+	// Client- and bidi-streaming methods are NOT marked: they route to a
+	// WebSocket, which this runner does not speak. They are still skipped
+	// at scaffolding, and the codegen driver still logs them, so the gap
+	// stays visible rather than becoming a silent pass.
+	Stream bool
+
 	// --- REST routing (Transport == "rest") ---
 
 	// HTTPMethod is the verb (GET/POST/PUT/PATCH/DELETE).
