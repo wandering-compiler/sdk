@@ -59,6 +59,7 @@ type Applier struct {
 }
 
 var _ migrate.Applier = (*Applier)(nil)
+var _ migrate.Schemaless = (*Applier)(nil)
 var _ migrate.Wiper = (*Applier)(nil)
 
 // New parses the DSN into go-redis options + builds the client.
@@ -245,3 +246,8 @@ func FilterComments(script string) string {
 	}
 	return strings.TrimRight(out.String(), "\n")
 }
+
+// SchemalessStore marks this dialect's store as holding no SQL schema —
+// see migrate.Schemaless. A live-base sync may skip it in silence; there
+// is nothing to observe and nothing an unobserved plan could freeze.
+func (a *Applier) SchemalessStore() {}

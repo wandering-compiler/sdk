@@ -74,6 +74,7 @@ type Applier struct {
 }
 
 var _ migrate.Applier = (*Applier)(nil)
+var _ migrate.Schemaless = (*Applier)(nil)
 
 // New parses the DSN + builds a lazy-connect Applier. Returns
 // an error only on DSN-shape problems; connection errors are
@@ -463,3 +464,8 @@ func flagValue(argv []string, flag string) (string, bool) {
 	}
 	return "", false
 }
+
+// SchemalessStore marks this dialect's store as holding no SQL schema —
+// see migrate.Schemaless. A live-base sync may skip it in silence; there
+// is nothing to observe and nothing an unobserved plan could freeze.
+func (a *Applier) SchemalessStore() {}

@@ -35,6 +35,78 @@ func TestCheckMembersFromDef(t *testing.T) {
 		name: "a length bound is not a membership check",
 		def:  "CHECK ((length(title) <= 200))",
 		ok:   false,
+	}, {
+		// A48-12 / F8b — Postgres renders a ONE-member set as a bare
+		// equality, not as ARRAY or IN. Measured on postgres:16:
+		// `CHECK (status IN ('draft'))` comes back as this.
+		name: "single-member string set",
+		def:  "CHECK ((status = 'draft'::text))",
+		want: []string{"draft"},
+		ok:   true,
+	}, {
+		// Same, numeric carrier: `CHECK (n IN (1))` → `CHECK ((n = 1))`.
+		name: "single-member numeric set",
+		def:  "CHECK ((n = 1))",
+		want: []string{"1"},
+		ok:   true,
+	}, {
+		// A quoted member may itself contain a quote, doubled by PG.
+		name: "single member with an escaped quote",
+		def:  "CHECK ((s = 'it''s'::text))",
+		want: []string{"it's"},
+		ok:   true,
+	}, {
+		// A48-14 / F16 — a comma INSIDE a quoted member is part of the
+		// member, not a separator. Measured on postgres:16:
+		// `CHECK (status IN ('a,b','c'))` renders as this; a comma-blind
+		// split reports three phantom members for two real ones and a
+		// spurious `choices_values_remove` on a converged database.
+		name: "member containing a comma",
+		def:  "CHECK ((status = ANY (ARRAY['a,b'::text, 'c'::text])))",
+		want: []string{"a,b", "c"},
+		ok:   true,
+	}, {
+		// A `]` inside a quoted member must not end the ARRAY scan.
+		name: "member containing a bracket",
+		def:  "CHECK ((s = ANY (ARRAY['a]b'::text, 'c'::text])))",
+		want: []string{"a]b", "c"},
+		ok:   true,
+	}, {
+		// A `)` inside a quoted member must not end the IN scan.
+		name: "unrewritten IN with a paren in a member",
+		def:  "CHECK (s IN ('a)b', 'c'))",
+		want: []string{"a)b", "c"},
+		ok:   true,
+	}, {
+		// A member containing `::` keeps it — only the cast PG APPENDS
+		// (outside the quotes) is stripped.
+		name: "member containing a double colon",
+		def:  "CHECK ((s = ANY (ARRAY['a::b'::text, 'c'::text])))",
+		want: []string{"a::b", "c"},
+		ok:   true,
+	}, {
+		// The single-member arm must not swallow every equality: a range
+		// bound, a column-to-expression equality and a multi-branch OR are
+		// not membership tests.
+		name: "a range bound is not a single-member set",
+		def:  "CHECK ((n >= 1))",
+		ok:   false,
+	}, {
+		name: "an expression equality is not a membership check",
+		def:  "CHECK ((price = round(price)))",
+		ok:   false,
+	}, {
+		name: "a function-call left side is not a membership check",
+		def:  "CHECK ((length(title) = 5))",
+		ok:   false,
+	}, {
+		name: "a column equality is not a membership check",
+		def:  "CHECK ((a = b))",
+		ok:   false,
+	}, {
+		name: "an OR of equalities is not a membership check",
+		def:  "CHECK (((a = 'x'::text) OR (b = 'y'::text)))",
+		ok:   false,
 	}}
 
 	for _, c := range cases {

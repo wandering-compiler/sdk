@@ -73,11 +73,25 @@ type Table struct {
 
 // Column carries the per-column attributes that go into the
 // fingerprint.
+//
+// Generated and Identity ride only the OBSERVATION (pass #48 F35): a
+// GENERATED column stores its generation expression where a DEFAULT would sit
+// (pg_attrdef), and an IDENTITY column is a property with no default row at
+// all — read without these flags, the one is a phantom default and the other
+// is invisible. Format() deliberately does NOT serialise them: stored
+// fingerprints were computed without, and a different input silently
+// invalidates every one of them.
 type Column struct {
 	Name     string
 	DataType string
 	Nullable bool
-	Default  string // empty when no default
+	Default  string // empty when no default; a GENERATED column's generation expression
+	// Generated reports `attgenerated <> ''` — Default then holds the
+	// GENERATION expression, not a default.
+	Generated bool
+	// Identity reports `attidentity <> ''` — the column self-generates and
+	// carries no pg_attrdef row.
+	Identity bool
 }
 
 // Format produces the canonical text representation of the

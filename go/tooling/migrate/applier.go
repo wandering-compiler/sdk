@@ -213,3 +213,19 @@ type SeedStmt struct {
 type ObserveCapable interface {
 	Observe(ctx context.Context) (fingerprint.Observed, error)
 }
+
+// Schemaless marks an Applier whose store holds no SQL schema — a KV, queue
+// or object store. There is nothing to observe and nothing a live-base sync
+// could freeze, so a caller reading stores may skip one of these in silence.
+//
+// The marker exists for the stores that are NOT schemaless: a schema-ful
+// dialect without Observe must be refused LOUDLY, because the live base
+// plans a store from what it reports and an unreported schema-ful store is
+// silently treated as already converged — it never receives its schema while
+// the sync prints success. Marking the schemaless side (rather than the
+// schema-ful one) makes the failure mode of a future dialect that implements
+// neither interface a loud refusal instead of a silent freeze.
+type Schemaless interface {
+	// SchemalessStore is a marker; it does nothing.
+	SchemalessStore()
+}

@@ -58,6 +58,13 @@ type ObservedTable struct {
 	// member set survives Postgres rewriting the expression, which is exactly
 	// why comparing whole expressions was rejected.
 	CheckMembers map[string][]string
+	// CheckDefs is every CHECK constraint's full definition, by name, exactly
+	// as `pg_get_constraintdef` renders it. Nothing COMPARES this text —
+	// names and member sets stay the comparison keys, for the reason Checks
+	// documents — it is carried so a constraint the schema does not declare
+	// can be planned for a DROP under its real identity, with a DOWN that
+	// can actually re-create it.
+	CheckDefs map[string]string
 }
 
 // ObservedForeignKey is one FK constraint: the column it constrains and what
@@ -71,6 +78,13 @@ type ObservedForeignKey struct {
 	Columns      []string
 	TargetTable  string
 	TargetColumn string
+	// OnDelete is the key's deletion rule in its SQL spelling — "NO ACTION",
+	// "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT". Carried because a
+	// rule flip is otherwise invisible end to end: a stale CASCADE keeps
+	// deleting data through a relationship the author turned off. Empty
+	// means the rule was NOT read (an older reader), which a consumer must
+	// treat as "do not compare", never as "NO ACTION".
+	OnDelete string
 }
 
 // ObservedIndex is one index as the database defines it.
@@ -154,13 +168,13 @@ func ObservePostgres(ctx context.Context, conn PgxQuerier) (Observed, error) {
 		if err != nil {
 			return Observed{}, err
 		}
-		fks, checks, members, err := pgObserveConstraints(ctx, conn, r.schema, r.name)
+		fks, checks, members, defs, err := pgObserveConstraints(ctx, conn, r.schema, r.name)
 		if err != nil {
 			return Observed{}, err
 		}
 		out.Tables = append(out.Tables, ObservedTable{
 			Schema: r.schema, Name: r.name, Columns: cols, Indexes: idx, PrimaryKey: pk,
-			ForeignKeys: fks, Checks: checks, CheckMembers: members,
+			ForeignKeys: fks, Checks: checks, CheckMembers: members, CheckDefs: defs,
 		})
 	}
 	return out, nil
@@ -261,11 +275,18 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 	// varying(64)`, `numeric(12,2)`, `text[]`, `geography(Point,4326)` — which
 	// is the same thing the emitter renders, so the two can simply be
 	// compared.
+	// attgenerated / attidentity travel too (pass #48 F35): a GENERATED
+	// column stores its generation expression in pg_attrdef — the same slot
+	// a DEFAULT lives in — and an IDENTITY column has no pg_attrdef row at
+	// all. Without the two flags the one reads as a phantom default and the
+	// other as "no default", and the reconstruction plans against a lie.
 	rows, err := conn.Query(ctx, `
 		SELECT a.attname,
 		       format_type(a.atttypid, a.atttypmod),
 		       NOT a.attnotnull,
-		       COALESCE(pg_get_expr(d.adbin, d.adrelid), '')
+		       COALESCE(pg_get_expr(d.adbin, d.adrelid), ''),
+		       a.attgenerated <> '',
+		       a.attidentity <> ''
 		  FROM pg_attribute a
 		  JOIN pg_class c ON c.oid = a.attrelid
 		  JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -281,11 +302,12 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 	var out []Column
 	for rows.Next() {
 		var name, dtype, def string
-		var nullable bool
-		if err := rows.Scan(&name, &dtype, &nullable, &def); err != nil {
+		var nullable, generated, identity bool
+		if err := rows.Scan(&name, &dtype, &nullable, &def, &generated, &identity); err != nil {
 			return nil, fmt.Errorf("postgres observe scan column %s.%s: %w", schema, table, err)
 		}
-		out = append(out, Column{Name: name, DataType: dtype, Nullable: nullable, Default: def})
+		out = append(out, Column{Name: name, DataType: dtype, Nullable: nullable, Default: def,
+			Generated: generated, Identity: identity})
 	}
 	return out, rows.Err()
 }
@@ -301,7 +323,13 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 //
 // NOT VALID constraints are reported like any other: they exist, and a sync
 // that planned to re-add one would fail on the duplicate name.
-func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedForeignKey, []string, map[string][]string, error) {
+//
+// INHERITED constraints are not: a constraint a partition or an INHERITS
+// child receives from its parent (`conparentid` set, or `conislocal` false)
+// cannot be dropped on the child, so reported it would read as a leftover
+// and be planned for a DROP that Postgres refuses. It is the parent's row —
+// which IS local there — that represents it.
+func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedForeignKey, []string, map[string][]string, map[string]string, error) {
 	rows, err := conn.Query(ctx, `
 		SELECT c.conname,
 		       c.contype,
@@ -311,88 +339,255 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '{}'),
 		       COALESCE(ft.relname, ''),
 		       COALESCE((SELECT a.attname FROM pg_attribute a
-		                  WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]), '')
+		                  WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]), ''),
+		       c.confdeltype
 		  FROM pg_constraint c
 		  JOIN pg_class tc ON tc.oid = c.conrelid
 		  JOIN pg_namespace n ON n.oid = tc.relnamespace
 		  LEFT JOIN pg_class ft ON ft.oid = c.confrelid
 		 WHERE n.nspname = $1 AND tc.relname = $2 AND c.contype IN ('f', 'c')
+		   AND c.conislocal AND c.conparentid = 0
 		 ORDER BY c.conname`,
 		schema, table)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("postgres observe constraints %s.%s: %w", schema, table, err)
+		return nil, nil, nil, nil, fmt.Errorf("postgres observe constraints %s.%s: %w", schema, table, err)
 	}
 	defer rows.Close()
 	var fks []ObservedForeignKey
 	var checks []string
 	members := map[string][]string{}
+	defs := map[string]string{}
 	for rows.Next() {
 		var name, def, target, targetCol string
 		var cols []string
-		var kind byte
-		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetCol); err != nil {
-			return nil, nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
+		var kind, delType byte
+		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetCol, &delType); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
 		}
 		switch kind {
 		case 'f':
-			fks = append(fks, ObservedForeignKey{Name: name, Columns: cols, TargetTable: target, TargetColumn: targetCol})
+			fks = append(fks, ObservedForeignKey{
+				Name: name, Columns: cols, TargetTable: target, TargetColumn: targetCol,
+				OnDelete: fkRuleSQL(delType),
+			})
 		case 'c':
 			checks = append(checks, name)
+			defs[name] = def
 			if m, ok := CheckMembersFromDef(def); ok {
 				members[name] = m
 			}
 		}
 	}
-	return fks, checks, members, rows.Err()
+	return fks, checks, members, defs, rows.Err()
+}
+
+// fkRuleSQL spells pg_constraint.confdeltype the way SQL does. An unknown
+// code answers "" — "could not read", which consumers must not compare.
+func fkRuleSQL(code byte) string {
+	switch code {
+	case 'a':
+		return "NO ACTION"
+	case 'r':
+		return "RESTRICT"
+	case 'c':
+		return "CASCADE"
+	case 'n':
+		return "SET NULL"
+	case 'd':
+		return "SET DEFAULT"
+	}
+	return ""
 }
 
 // CheckMembersFromDef extracts the member set of a MEMBERSHIP check from the
 // definition Postgres reports, and says whether it found one.
 //
-// Both spellings are handled because Postgres does not preserve the one it
-// was given: `CHECK (c IN (1,2))` comes back as `CHECK ((c = ANY (ARRAY[1,
-// 2])))`, while a single-member set stays `= 'x'::text`. Members are returned
-// as STRINGS so one helper serves the numeric and the string carrier; the
-// caller compares them as a set, never by the text of the expression.
+// All three spellings are handled because Postgres does not preserve the one
+// it was given: `CHECK (c IN (1,2))` comes back as `CHECK ((c = ANY (ARRAY[1,
+// 2])))`, an unrewritten `IN (…)` survives on other engines and for some
+// shapes, and a ONE-member set is rendered as a bare equality —
+// `CHECK ((status = 'draft'::text))`, `CHECK ((n = 1))` — with no ARRAY and
+// no IN at all (measured on postgres:16; a parser without that arm reads a
+// one-member catalogue as "not a membership check" and the drift stays
+// invisible). Members are returned as STRINGS so one helper serves the
+// numeric and the string carrier; the caller compares them as a set, never by
+// the text of the expression.
+//
+// Every scan is quote-aware: a comma, bracket or paren INSIDE a quoted
+// member ('a,b') is part of the member, not syntax — a blind split invented
+// phantom members and a spurious `choices_values_remove` on a converged
+// database.
 //
 // Returns false for any check that is not a membership test — a length bound,
 // a range, a NOT NULL emulation — because those genuinely cannot be compared
 // without comparing expressions, which is what this file refuses to do.
 func CheckMembersFromDef(def string) ([]string, bool) {
-	open := strings.Index(def, "ARRAY[")
-	if open >= 0 {
+	if open := indexOutsideQuotes(def, "ARRAY["); open >= 0 {
 		rest := def[open+len("ARRAY["):]
-		end := strings.Index(rest, "]")
+		end := indexOutsideQuotes(rest, "]")
 		if end < 0 {
 			return nil, false
 		}
 		return splitCheckMembers(rest[:end]), true
 	}
 	// `IN (…)` survives when the expression was not rewritten (other engines,
-	// and Postgres for some shapes).
-	up := strings.ToUpper(def)
-	in := strings.Index(up, " IN (")
-	if in < 0 {
+	// and Postgres for some shapes). Uppercased copy for the match only —
+	// quoting positions are byte-identical.
+	if in := indexOutsideQuotes(strings.ToUpper(def), " IN ("); in >= 0 {
+		rest := def[in+len(" IN ("):]
+		// The first UNQUOTED close paren: the member list ends there, and
+		// the trailing ones belong to the CHECK wrapper Postgres adds.
+		end := indexOutsideQuotes(rest, ")")
+		if end < 0 {
+			return nil, false
+		}
+		return splitCheckMembers(rest[:end]), true
+	}
+	return singleCheckMember(def)
+}
+
+// singleCheckMember reads the bare-equality form Postgres renders for a
+// one-member set: `CHECK ((col = 'x'::text))` / `CHECK ((col = 1))`.
+//
+// Deliberately strict, because ` = ` appears in checks that are NOT
+// membership tests: the LEFT side must be a bare column (an identifier and
+// nothing else — `length(title) = 5` is not a membership check), the RIGHT
+// side must be a single literal (a quoted string or a number — `price =
+// round(price)` and `a = b` are not), and after the literal and the cast
+// Postgres appends only the CHECK wrapper's closing parens may remain (an OR
+// of equalities is not).
+func singleCheckMember(def string) ([]string, bool) {
+	eq := indexOutsideQuotes(def, " = ")
+	if eq < 0 {
 		return nil, false
 	}
-	rest := def[in+len(" IN ("):]
-	// The FIRST close paren: the member list ends there, and the trailing
-	// ones belong to the CHECK wrapper Postgres adds.
-	end := strings.Index(rest, ")")
-	if end < 0 {
+	lhs := strings.TrimPrefix(def[:eq], "CHECK")
+	lhs = strings.TrimLeft(lhs, " (")
+	lhs = strings.TrimSuffix(strings.TrimPrefix(lhs, `"`), `"`)
+	if !isBareIdentifier(lhs) {
 		return nil, false
 	}
-	return splitCheckMembers(rest[:end]), true
+	member, rest, ok := literalAndTail(def[eq+len(" = "):])
+	if !ok {
+		return nil, false
+	}
+	rest = trimTrailingCast(rest)
+	if strings.Trim(rest, ") ") != "" {
+		return nil, false
+	}
+	return []string{member}, true
+}
+
+// literalAndTail consumes one leading SQL literal — a single-quoted string
+// (” escaping a quote) or a bare number — returning its value and what
+// follows it.
+func literalAndTail(s string) (string, string, bool) {
+	if strings.HasPrefix(s, "'") {
+		var val strings.Builder
+		for i := 1; i < len(s); i++ {
+			if s[i] != '\'' {
+				val.WriteByte(s[i])
+				continue
+			}
+			if i+1 < len(s) && s[i+1] == '\'' {
+				val.WriteByte('\'')
+				i++
+				continue
+			}
+			return val.String(), s[i+1:], true
+		}
+		return "", "", false // unterminated
+	}
+	end := 0
+	for end < len(s) && (s[end] == '-' || s[end] == '+' || s[end] == '.' || (s[end] >= '0' && s[end] <= '9')) {
+		end++
+	}
+	if end == 0 {
+		return "", "", false
+	}
+	return s[:end], s[end:], true
+}
+
+// trimTrailingCast drops the `::type` Postgres appends to a literal —
+// including a parameterised one (`::character varying(3)`) — from the front
+// of the tail.
+func trimTrailingCast(rest string) string {
+	if !strings.HasPrefix(rest, "::") {
+		return rest
+	}
+	i := 2
+	for i < len(rest) && (rest[i] == ' ' || rest[i] == '_' ||
+		(rest[i] >= 'a' && rest[i] <= 'z') || (rest[i] >= 'A' && rest[i] <= 'Z') ||
+		(rest[i] >= '0' && rest[i] <= '9')) {
+		i++
+	}
+	if i < len(rest) && rest[i] == '(' {
+		if close := strings.IndexByte(rest[i:], ')'); close >= 0 {
+			i += close + 1
+		}
+	}
+	return rest[i:]
+}
+
+// isBareIdentifier reports whether s is a plain SQL identifier — the only
+// left-hand side a membership equality can have.
+func isBareIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_', c == '$':
+		case c >= '0' && c <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// indexOutsideQuotes is strings.Index restricted to positions outside
+// single-quoted SQL literals (” escapes a quote inside one).
+func indexOutsideQuotes(s, sub string) int {
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\'' {
+			if inQuote && i+1 < len(s) && s[i+1] == '\'' {
+				i++
+				continue
+			}
+			inQuote = !inQuote
+			continue
+		}
+		if !inQuote && strings.HasPrefix(s[i:], sub) {
+			return i
+		}
+	}
+	return -1
 }
 
 // splitCheckMembers turns a comma-separated member list into normalised
 // members: quotes and per-member casts dropped, whitespace trimmed. A cast is
 // stripped because Postgres adds one (`'draft'::text`) that the declaration
-// never wrote.
+// never wrote — and it is stripped AFTER the quoted value is read, so a
+// member whose value itself contains `::` (or a comma, or a bracket) comes
+// through intact.
 func splitCheckMembers(list string) []string {
 	var out []string
-	for _, raw := range strings.Split(list, ",") {
+	for _, raw := range splitOutsideQuotes(list) {
 		m := strings.TrimSpace(raw)
+		if strings.HasPrefix(m, "'") {
+			if val, _, ok := literalAndTail(m); ok {
+				if val != "" {
+					out = append(out, val)
+				}
+				continue
+			}
+		}
 		if cast := strings.Index(m, "::"); cast >= 0 {
 			m = strings.TrimSpace(m[:cast])
 		}
@@ -402,4 +597,26 @@ func splitCheckMembers(list string) []string {
 		}
 	}
 	return out
+}
+
+// splitOutsideQuotes splits on commas that are not inside a single-quoted
+// SQL literal.
+func splitOutsideQuotes(s string) []string {
+	var out []string
+	start := 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '\'':
+			if inQuote && i+1 < len(s) && s[i+1] == '\'' {
+				i++
+				continue
+			}
+			inQuote = !inQuote
+		case s[i] == ',' && !inQuote:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
 }
