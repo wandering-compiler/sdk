@@ -403,6 +403,33 @@ var (
 	// domain alongside the ACL cascade switches, NOT in the plugin
 	// activation.
 	//
+	// AT RUNTIME THE CATALOGUE IS ROWS, not only a compile-time
+	// artefact — there is no "list the roles" API because none is
+	// needed. Each declared role becomes one `Role` row (plus
+	// `RolePermission` rows for its resolved permissions) under the
+	// ACTIVATION's tables: `<registered_as>.Role`, so `auth.Role` for
+	// an activation registered as `auth`. They arrive through the
+	// ordinary fixtures pipeline as `fixtures/<domain>/acl-roles.json`,
+	// applied in dev AND in production — roles are authorization
+	// policy, not dev sample data. Query them like any other table.
+	//
+	// Row pks are DETERMINISTIC: UUIDv8 derived from the role's `key`
+	// (not its `name`, so a rename keeps the row). The same key
+	// therefore has the same id in every environment and after every
+	// regeneration — which is what makes it safe to reference a role id
+	// before anything has used it, e.g. to pre-assign a role to a user
+	// who has not signed in yet.
+	//
+	// ⚠️ A role with `all_permissions` gets a `Role` row and NO
+	// `RolePermission` rows at all. Its grant is a runtime expansion
+	// over the deployed lock, so it follows every permission the lock
+	// declares instead of freezing a snapshot. Anything that enumerates
+	// `RolePermission` to learn what a role carries will therefore
+	// report an admin role as granting NOTHING. Read the flag, not the
+	// rows.
+	//
+	// Like the permission ids above, this catalogue is per DOMAIN.
+	//
 	// Spec: docs/specs/plugins/auth-tokens-and-roles.md §5.
 	//
 	// repeated w17.AclRole acl_roles = 50155;
