@@ -108,7 +108,14 @@ type AclRole struct {
 	// the catalogue.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// key — the role's STABLE IDENTITY. Required, unique within the
-	// catalogue, and never shown to an end user.
+	// catalogue, a SLUG, and never shown to an end user.
+	//
+	// Slug because it becomes `Role.preset_key`, a SLUG column: lowercase
+	// letters, digits, and single hyphens between them. An underscore is the
+	// obvious way to write a two-word key and it is refused — by codegen now,
+	// and before that only by the database at apply time, which meant in CI or
+	// in production. This line says so because it did not, while the line above
+	// said it about `name` (marb, 2026-09-23).
 	//
 	// The seeded Role row's primary key is derived from this, not from
 	// `name`. That distinction is the whole reason it exists: with the PK
