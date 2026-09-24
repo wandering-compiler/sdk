@@ -626,3 +626,48 @@ describe("cycleSortStatus", () => {
     expect(click(desc, "created_at").columnAccessor).toBe("");
   });
 });
+
+// A PAGE action is the page's own operation — "check upstream", "rebuild the
+// index" — not something done to a selection. Every assertion here is a way
+// the selection model would leak into it and make the button useless.
+describe("ListPage PAGE-target actions", () => {
+  const withAction = (target: string) =>
+    ({
+      ...page(),
+      actions: {
+        sync: {
+          endpoint: "/admin/api/action/Notes/sync",
+          fields: [],
+          label: "Check upstream",
+          target,
+        },
+      },
+    }) as unknown as AdminPageSpec;
+
+  beforeEach(() => {
+    vi.mocked(apiGet).mockResolvedValue({ notes: [{ id: "1", title: "a" }] });
+  });
+  afterEach(cleanup);
+
+  it("is enabled with nothing selected", async () => {
+    renderList({ page: withAction("PAGE") });
+    const btn = await screen.findByRole("button", { name: /check upstream/i });
+    // The selection guard on a LIST action would disable this forever: there
+    // is no selection to make, so a disabled button is a dead one.
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("does not turn on the row checkboxes", async () => {
+    renderList({ page: withAction("PAGE") });
+    await screen.findByRole("button", { name: /check upstream/i });
+    // Offering checkboxes here would promise a bulk operation the page does
+    // not have — the action ignores whatever is ticked.
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("still gates a LIST action on a selection", async () => {
+    renderList({ page: withAction("LIST") });
+    const btn = await screen.findByRole("button", { name: /check upstream/i });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+});

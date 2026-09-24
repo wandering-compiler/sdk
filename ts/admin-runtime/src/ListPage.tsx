@@ -264,6 +264,16 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
       hasAllPermissions(whoami?.permission_ids, a.required_permissions),
   );
 
+  // PAGE-target actions render beside them but are NOT selection actions:
+  // they are never disabled by an empty selection, and — the part that would
+  // be a bug if missed — they must not be what turns the checkbox column on.
+  // A page whose only action is PAGE has nothing to select, and offering
+  // checkboxes there would promise an operation that does not exist.
+  const pageActions: [string, AdminActionSpec][] = Object.entries(page.actions || {}).filter(
+    ([, a]) =>
+      a.target === "PAGE" && hasAllPermissions(whoami?.permission_ids, a.required_permissions),
+  );
+
   // "Add" is gated on three things: the page declaring a create
   // endpoint, the host wiring a route to it, and the user holding
   // the create perms. Backend still enforces — this only hides a
@@ -446,8 +456,13 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
         title={pageLabel(page, t)}
         subtitle={subtitle}
         actions={
-          canAdd || listActions.length > 0 ? (
+          canAdd || listActions.length > 0 || pageActions.length > 0 ? (
             <>
+              {pageActions.map(([name, action]) => (
+                <Button key={name} variant="default" onClick={() => setOpenAction(name)}>
+                  {action.label ? t(action.label) : humanizeLabel(name)}
+                </Button>
+              ))}
               {listActions.map(([name, action]) => (
                 <Button
                   key={name}
@@ -466,7 +481,7 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
           ) : undefined
         }
       />
-      {listActions.map(([name, action]) => (
+      {[...pageActions, ...listActions].map(([name, action]) => (
         <ActionModal
           key={name}
           action={action}

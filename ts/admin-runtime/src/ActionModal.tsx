@@ -65,11 +65,19 @@ export function ActionModal({
     onClose();
   };
 
+  // Declared before handleSubmit reads it: a PAGE action is a different
+  // request shape, not a variation on an empty selection.
+  const isPageAction = action.target === "PAGE";
+
   const handleSubmit = async () => {
     setError(null);
     setSubmitting(true);
     try {
-      const body: Record<string, unknown> = { ids: selectedIds };
+      // A PAGE action operates on no rows, so it sends no `ids`. Sending an
+      // empty array instead would be worse than sending nothing: the field
+      // would exist, and a request shaped like a selection that is empty is
+      // the exact thing the backend refuses.
+      const body: Record<string, unknown> = isPageAction ? {} : { ids: selectedIds };
       for (const f of fields) {
         if (f in extras) body[f] = extras[f];
       }
@@ -87,10 +95,15 @@ export function ActionModal({
   const label = action.label ? t(action.label) : humanizeLabel(actionName);
   // No selection = nothing to act on. Say so and gate the modal, rather
   // than posting an empty ids[] the backend now (correctly) rejects.
-  const hasSelection = selectedIds.length > 0;
-  const targetText = hasSelection
-    ? `${selectedIds.length} selected row${selectedIds.length === 1 ? "" : "s"}`
-    : "no rows";
+  //
+  // …unless this is a PAGE action, which never had a selection to be missing.
+  // Gating it on one would make the button permanently dead.
+  const hasSelection = isPageAction || selectedIds.length > 0;
+  const targetText = isPageAction
+    ? "this page"
+    : selectedIds.length > 0
+      ? `${selectedIds.length} selected row${selectedIds.length === 1 ? "" : "s"}`
+      : "no rows";
 
   return (
     <Modal opened={open} onClose={handleClose} title={label} centered>

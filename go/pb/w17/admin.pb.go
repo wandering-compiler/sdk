@@ -34,6 +34,19 @@ const (
 	AdminActionTarget_ADMIN_ACTION_TARGET_DETAIL AdminActionTarget = 2
 	// BOTH — renders in both places.
 	AdminActionTarget_ADMIN_ACTION_TARGET_BOTH AdminActionTarget = 3
+	// PAGE — a button in the page toolbar that operates on NO ROWS.
+	//
+	// For the operations a page offers that are not about a selection:
+	// "check the upstream for new records", "run the reconciliation",
+	// "rebuild the index". Every other target answers "do this to the rows
+	// I picked"; this one answers "do the thing this page is a view of".
+	//
+	// It is the one target whose source request must NOT have `ids`, and
+	// the parser enforces both halves. A row-shaped method bound as PAGE
+	// would be called with an empty selection and match nothing — a 200
+	// for an action that touched no row, which is exactly the failure the
+	// empty-selection refusal was written for.
+	AdminActionTarget_ADMIN_ACTION_TARGET_PAGE AdminActionTarget = 4
 )
 
 // Enum value maps for AdminActionTarget.
@@ -43,12 +56,14 @@ var (
 		1: "ADMIN_ACTION_TARGET_LIST",
 		2: "ADMIN_ACTION_TARGET_DETAIL",
 		3: "ADMIN_ACTION_TARGET_BOTH",
+		4: "ADMIN_ACTION_TARGET_PAGE",
 	}
 	AdminActionTarget_value = map[string]int32{
 		"ADMIN_ACTION_TARGET_UNSPECIFIED": 0,
 		"ADMIN_ACTION_TARGET_LIST":        1,
 		"ADMIN_ACTION_TARGET_DETAIL":      2,
 		"ADMIN_ACTION_TARGET_BOTH":        3,
+		"ADMIN_ACTION_TARGET_PAGE":        4,
 	}
 )
 
@@ -1396,11 +1411,12 @@ func (x *AdminFieldset) GetCollapsed() bool {
 	return false
 }
 
-// AdminAction declares a bulk action over an admin list /
-// detail row.
+// AdminAction declares an action on an admin page — over a selection
+// of rows, or over no rows at all (`target: PAGE`).
 //
-// Wire contract: the bound source method's request must have a
-// `repeated ids` field, matched BY NAME. Additional fields beyond
+// Wire contract: unless the target is PAGE, the bound source method's
+// request must have a `repeated ids` field, matched BY NAME. A PAGE
+// action is the inverse: its request must NOT have one. Additional fields beyond
 // `ids` are bulk extras and must be enumerated in `fields[]`.
 //
 // The element type must ADDRESS THE PAGE MODEL'S PK — `repeated
@@ -1418,9 +1434,11 @@ type AdminAction struct {
 	// Action identifier. snake_case. URL fragment + slot key
 	// root.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Storage method ref. Request must have `repeated string
-	// ids`; response is empty / status only (action result is
-	// not displayed in v1, only success / failure).
+	// Storage method ref. Request must have `repeated string ids`
+	// — except under `target: PAGE`, which operates on no rows and
+	// whose request must not have one. Response is empty / status
+	// only (action result is not displayed in v1, only success /
+	// failure).
 	Source string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
 	// Subset of action-request extras (everything beyond
 	// `ids`) to render in the bulk modal. Required (no
@@ -2166,12 +2184,13 @@ const file_w17_admin_proto_rawDesc = "" +
 	"\x06series\x18\t \x03(\v2\x15.w17.AdminWidgetValueR\x06series\">\n" +
 	"\x10AdminWidgetValue\x12\x14\n" +
 	"\x05field\x18\x01 \x01(\tR\x05field\x12\x14\n" +
-	"\x05label\x18\x02 \x01(\tR\x05label*\x94\x01\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label*\xb2\x01\n" +
 	"\x11AdminActionTarget\x12#\n" +
 	"\x1fADMIN_ACTION_TARGET_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18ADMIN_ACTION_TARGET_LIST\x10\x01\x12\x1e\n" +
 	"\x1aADMIN_ACTION_TARGET_DETAIL\x10\x02\x12\x1c\n" +
-	"\x18ADMIN_ACTION_TARGET_BOTH\x10\x03*z\n" +
+	"\x18ADMIN_ACTION_TARGET_BOTH\x10\x03\x12\x1c\n" +
+	"\x18ADMIN_ACTION_TARGET_PAGE\x10\x04*z\n" +
 	"\x11AdminInlineLayout\x12#\n" +
 	"\x1fADMIN_INLINE_LAYOUT_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bADMIN_INLINE_LAYOUT_TABULAR\x10\x01\x12\x1f\n" +

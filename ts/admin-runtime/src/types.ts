@@ -287,7 +287,10 @@ export interface AdminActionSpec {
   fields: string[];
   label?: string;
   confirm?: string;
-  target: "LIST" | "DETAIL" | "BOTH";
+  // PAGE operates on no rows — a toolbar button for what the page
+  // itself does ("check upstream", "rebuild the index") rather than
+  // for what is selected in it.
+  target: "LIST" | "DETAIL" | "BOTH" | "PAGE";
   // Cascade-stamped permission IDs required to invoke this
   // action. SPA hides the action button when whoami's
   // permission_ids don't include all of these. UX-only —
