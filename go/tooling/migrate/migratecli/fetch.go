@@ -31,10 +31,21 @@ import (
 // would rather fetch on a workstation and ship artefacts can still do exactly
 // that, and never set W17_TOKEN at all.
 //
-// The token is an API token (the auth plugin issues them: CreateApiToken /
-// ListApiTokens / RevokeApiToken), not a login session — a deployment should
-// carry a credential someone can revoke on its own without logging anybody
-// out.
+// The token is an API token minted for a MACHINE account — console →
+// Organizations → your org → Machine accounts — not a login session, and not a
+// person's own token either: a deployment should carry a credential someone can
+// revoke on its own without logging anybody out.
+//
+// ⚠️ This used to name the RPCs (`CreateApiToken / ListApiTokens /
+// RevokeApiToken`), and the refusal below repeated it. Two things were wrong
+// with that, and a consumer walked into both (deinvo, 2026-09-24): an RPC name
+// is not something a reader can run — no w17ctl command issues a token, so the
+// advice named an act the tool printing it cannot perform — and
+// `CreateApiToken` mints for the CALLER, which is a person, while a deploy
+// wants a machine account's. Every other place that explains W17_TOKEN
+// (`w17ctl/README.md`, the guide, `authdiag.go`, all six CI templates) already
+// said "machine account, console → Organizations → …". This file was the only
+// one that did not.
 
 const (
 	// envConsoleAddr is the console this binary fetches from.
@@ -101,7 +112,9 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 		if status.Code(err) == codes.Unauthenticated {
 			return nil, fmt.Errorf(
 				"migrate: %s refused the fetch: not authenticated\n"+
-					"  fix: set %s to an API token (the console issues them: CreateApiToken)\n"+
+					"  fix: set %s to an API token minted for a MACHINE account —\n"+
+					"       in the console: Organizations → your org → Machine accounts.\n"+
+					"       There is no w17ctl command for this; it is a console act.\n"+
 					"  why: a deploy needs a credential of its own rather than a person's login\n"+
 					"       session, so it can be revoked without logging anybody out\n"+
 					"  raw: %v",

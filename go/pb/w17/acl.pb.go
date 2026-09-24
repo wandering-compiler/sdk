@@ -377,15 +377,32 @@ var (
 	// Lives in `w17.proto` sentinel files at the domain or module
 	// root (mirrors the cascade shape `(w17.module)` uses);
 	// declaring it on a regular type / service file is allowed but
-	// unusual.
+	// unusual — and note it still cascades over that file's whole
+	// DIRECTORY, not just the file it is written in.
 	//
 	// optional bool acl_models = 50150;
 	E_AclModels = &file_w17_acl_proto_extTypes[0]
 	// (w17.acl_endpoints) — turn on the ENDPOINT axis for every RPC
-	// within this file's scope: permissions of the shape
+	// the cascade reaches: permissions of the shape
 	// `<module>.<Service>.<Method>`, one per method, derived from
 	// nothing but the method's identity. Same cascade shape as
 	// `acl_models`.
+	//
+	// ⚠️ "The cascade reaches" is NOT "this file". Resolution walks the
+	// nearest ancestor DIRECTORY (module → domain), so declaring this
+	// on one regular service file turns the axis on for every sibling
+	// file in that directory too. That is the designed shape — it is
+	// what makes the `w17.proto` sentinel cascade work — but this
+	// sentence used to read "within this file's scope", and a consumer
+	// put the option on one file to close three invite endpoints and
+	// closed their whole sign-in flow with it: `SessionService.Authorize`
+	// and `Logout` live in a SIBLING file of the same directory, and
+	// both started refusing with no role able to open them (marb #71).
+	//
+	// So: put it on the sentinel when you mean the module or domain, and
+	// when you mean a narrower set, reach for `(w17.acl_service)` or the
+	// per-method `(w17.acl_endpoint)` — those are the file- and
+	// element-scoped knobs, and this one never was.
 	//
 	// Independent axis: a domain can have one on and the other off.
 	// This is the axis a REST / RPC / MCP surface gates on — and the

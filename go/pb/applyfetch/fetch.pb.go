@@ -543,7 +543,28 @@ type FetchFixtureSeedResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// statements run in order (FK targets before referrers), each in the same
 	// transaction client-side.
-	Statements    []*SeedStmt `protobuf:"bytes,1,rep,name=statements,proto3" json:"statements,omitempty"`
+	Statements []*SeedStmt `protobuf:"bytes,1,rep,name=statements,proto3" json:"statements,omitempty"`
+	// connection names the store these statements belong to — the `name` of the
+	// (w17.module).connection the rendered domain is scoped to.
+	//
+	// Sent because the client CANNOT work it out. It uploads the IR as opaque
+	// bytes and never decodes it, so which store a domain lives on is knowable
+	// only here, where the schema is already filtered to that domain
+	// (ir.Schema.connection.name).
+	//
+	// Without it the dev seed applied EVERY domain's fixtures over one
+	// connection — `firstPostgresDSN`, which is whichever postgres target came
+	// first. A project with two postgres stores therefore seeded the second
+	// domain's rows into the first domain's database, failing with
+	// `relation "auth_role" does not exist` when the table happened not to be
+	// there, and silently writing into the wrong store when a same-named table
+	// was (marb #67, marbai-04 §3 — it blocked their CI on an older release).
+	//
+	// Empty from a console that predates this field, and from a fixture whose
+	// domain resolves to no connection. The client treats empty as "unknown"
+	// and says so rather than guessing — an old console keeps today's behaviour
+	// with a warning, instead of changing what it does under the operator.
+	Connection    string `protobuf:"bytes,2,opt,name=connection,proto3" json:"connection,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -583,6 +604,13 @@ func (x *FetchFixtureSeedResponse) GetStatements() []*SeedStmt {
 		return x.Statements
 	}
 	return nil
+}
+
+func (x *FetchFixtureSeedResponse) GetConnection() string {
+	if x != nil {
+		return x.Connection
+	}
+	return ""
 }
 
 // SeedStmt is one parameterized upsert: a SQL string with $1..$N placeholders
@@ -853,11 +881,14 @@ const file_w17apply_fetch_proto_rawDesc = "" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"O\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"o\n" +
 	"\x18FetchFixtureSeedResponse\x123\n" +
 	"\n" +
 	"statements\x18\x01 \x03(\v2\x13.w17.apply.SeedStmtR\n" +
-	"statements\"H\n" +
+	"statements\x12\x1e\n" +
+	"\n" +
+	"connection\x18\x02 \x01(\tR\n" +
+	"connection\"H\n" +
 	"\bSeedStmt\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12*\n" +
 	"\x04args\x18\x02 \x03(\v2\x16.google.protobuf.ValueR\x04args\"Q\n" +
