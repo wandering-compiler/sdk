@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
@@ -39,7 +40,10 @@ type Snapshotter struct {
 }
 
 // Compile-time check the impl satisfies the snapshot contract.
-var _ migrate.Snapshotter = (*Snapshotter)(nil)
+var (
+	_ migrate.Snapshotter   = (*Snapshotter)(nil)
+	_ migrate.ObjectCounter = (*Snapshotter)(nil)
+)
 
 // NewSnapshotter builds a PG Snapshotter for a connection DSN.
 // Unlike the Applier it opens no connection — pg_dump / psql dial the
@@ -121,4 +125,40 @@ func (s *Snapshotter) Restore(ctx context.Context, r io.Reader) error {
 		return fmt.Errorf("postgres Restore (%s): %w: %s", s.restoreBin, err, stderr.String())
 	}
 	return nil
+}
+
+// StoreObjects implements migrate.ObjectCounter through the same psql binary
+// Restore uses.
+//
+// Only reached on the route where the host HAS the client, because that is the
+// only route this Snapshotter is chosen for — where it is missing, the
+// containerdump Snapshotter answers instead.
+func (s *Snapshotter) StoreObjects(ctx context.Context) ([]string, error) {
+	dbname, env := s.conn()
+	var out, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, s.restoreBin,
+		"--quiet", "--no-psqlrc",
+		"-v", "ON_ERROR_STOP=1",
+		"-tA", "-c", migrate.ObjectCountSQLPostgres,
+		"--dbname="+dbname,
+	)
+	cmd.Env = env
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("postgres StoreObjects (%s): %w: %s", s.restoreBin, err, stderr.String())
+	}
+	return ParseObjectLines(out.String()), nil
+}
+
+// ParseObjectLines turns psql's `-tA` rows into names, dropping blanks. Shared
+// with the in-container route for the same reason the SQL is.
+func ParseObjectLines(raw string) []string {
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		if v := strings.TrimSpace(line); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

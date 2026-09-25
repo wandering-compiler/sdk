@@ -206,7 +206,7 @@ func MergePO(existing []byte, lang string, msgids []string) ([]byte, error) {
 			if t == nil || t.ID == "" {
 				continue
 			}
-			priorMsgstr[t.ID] = t.Get()
+			priorMsgstr[t.ID] = rawMsgstr(t)
 		}
 	}
 	entries := make([]POEntry, 0, len(msgids))
@@ -254,9 +254,28 @@ func EntriesFromPO(body []byte) []POEntry {
 		if t == nil || t.ID == "" {
 			continue
 		}
-		out = append(out, POEntry{Msgid: t.ID, Msgstr: t.Get()})
+		out = append(out, POEntry{Msgid: t.ID, Msgstr: rawMsgstr(t)})
 	}
 	return out
+}
+
+// rawMsgstr reads a parsed translation's msgstr WITHOUT gotext's
+// untranslated fallback.
+//
+// `Translation.Get()` returns the msgid when the msgstr is empty
+// — right for a runtime lookup, wrong for anything that writes a
+// catalog back out. Through Get, every UNTRANSLATED entry came
+// back "translated" to its own English source, so each merge
+// silently marked the whole catalog done: a translator lost the
+// one signal that says what is left, and the drift was invisible
+// because the rendered text is identical either way.
+func rawMsgstr(t *gotext.Translation) string {
+	if t == nil {
+		return ""
+	}
+	// Index 0 is the singular form; gotext stores plurals at 1..n and
+	// nothing here reads them (POEntry carries one msgstr).
+	return t.Trs[0]
 }
 
 // DomainCatalogFile is one `.po` ready for the codegen

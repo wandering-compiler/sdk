@@ -184,20 +184,37 @@ func WriteGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
 // sent something invalid — and belongs on the non-exception channel, where it
 // is still retrievable when triaging without marking a span failed or paging
 // anyone.
+//
+// ⚠️ That second half used to go to observx.ReportEvent, which is SILENT unless
+// W17_OBSERVX_DEBUG is set. The sentence above was therefore not true of a
+// default deployment: "retrievable when triaging" was "gone". It mattered the
+// moment refusals stopped telling the CALLER why — the operator's copy would
+// have had nowhere left to land, and the fix for a leak would have been to
+// delete the information. observx.ReportRefusal is the channel that claim
+// describes.
 func reportByCode(ctx context.Context, c codes.Code, err error) {
 	switch c {
 	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable:
 		observx.ReportError(ctx, err)
 	default:
-		observx.ReportEvent(ctx, err)
+		observx.ReportRefusal(ctx, err)
 	}
 }
 
 // clientFacing picks the code and sentence a person should see.
 //
-// Preference order, and each step is a deliberate demotion:
+// The CODE is always the canonical gRPC name. That is the envelope's documented
+// contract — json.go: "`code` is the canonical gRPC code name … so clients can
+// branch on it without parsing prose" — and it briefly was not: a request-level
+// detail's own code was promoted into its place, so a UNIQUE violation answered
+// `"code": "UNIQUE_VIOLATION"` where every client (and the e2e runner's
+// expect_error) branches on `INVALID_ARGUMENT`. Nothing is lost by keeping it
+// canonical: the detail travels in `details[]` with its finer code intact, which
+// is where a client looks for that distinction.
 //
-//  1. A REQUEST-LEVEL detail — one with a code and no field. That is the
+// The SENTENCE is demoted in two steps:
+//
+//  1. A REQUEST-LEVEL detail — one with a message and no field. That is the
 //     backend saying "here is this failure, phrased for your user", and it is
 //     already translated.
 //  2. The gRPC code's own generic sentence. A handler that attached nothing
@@ -206,16 +223,17 @@ func reportByCode(ctx context.Context, c codes.Code, err error) {
 //
 // `status.Message()` is never a candidate. It belongs to the operator.
 func clientFacing(ctx context.Context, st *status.Status, details []FieldError) (string, string) {
+	code := GRPCCodeName(st.Code())
 	for _, d := range details {
 		if d.Field == "" && d.Code != "" && d.Message != "" {
-			return d.Code, d.Message
+			return code, d.Message
 		}
 	}
 	// ONE table, in grpcerr, shared with the side that builds details. Two
 	// copies of one sentence drift, and here the drift would be silent in a
 	// particular way: only one copy is harvested into the catalogs, so the
 	// other renders English in every declared language with nothing to say so.
-	return GRPCCodeName(st.Code()), i18n.T(ctx, grpcerr.UserMsgid(st.Code()), nil)
+	return code, i18n.T(ctx, grpcerr.UserMsgid(st.Code()), nil)
 }
 
 // The transport scrub that used to live here is GONE, not relocated.

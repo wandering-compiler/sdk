@@ -115,6 +115,15 @@ func TestWriteGRPCError_StatusMessageNeverReachesTheClient(t *testing.T) {
 
 // A handler that DOES author for a person gets its words through, untouched —
 // which is the capability the superseded test was really defending.
+//
+// Its CODE travels in `details`, not in place of the envelope's. This test used
+// to require the opposite, and that requirement was not only about ForUser: the
+// constraint registry emits the same shape (a detail with no field) for a
+// MULTI-COLUMN unique index, where there is no single field to blame — so a
+// UNIQUE violation answered `"code": "UNIQUE_VIOLATION"` where json.go promises
+// the canonical gRPC name and every client, the e2e runner included, branches on
+// `INVALID_ARGUMENT`. Nothing is lost by keeping the top level canonical; the
+// finer code is one level down, which is where a client looks for it.
 func TestWriteGRPCError_UserFacingDetailIsWhatTheClientSees(t *testing.T) {
 	err := grpcerr.ForUser(context.Background(), codes.FailedPrecondition,
 		"BillingService.Charge", "subscription is not active",
@@ -124,11 +133,16 @@ func TestWriteGRPCError_UserFacingDetailIsWhatTheClientSees(t *testing.T) {
 	restgw.WriteGRPCError(rec, err)
 
 	body := bodyOf(t, rec)
-	if got := body["code"]; got != "SUBSCRIPTION_INACTIVE" {
-		t.Errorf("code = %v, want the handler's own", got)
+	if got := body["code"]; got != "FAILED_PRECONDITION" {
+		t.Errorf("code = %v, want the canonical gRPC name", got)
 	}
 	if got := body["message"]; got != "This subscription is not active." {
 		t.Errorf("message = %v, want the sentence the handler wrote for a person", got)
+	}
+	// The handler's own code has to be REACHABLE, or moving it out of the
+	// envelope's `code` would be a loss rather than a relocation.
+	if !strings.Contains(rec.Body.String(), "SUBSCRIPTION_INACTIVE") {
+		t.Errorf("the handler's code is nowhere in the body: %s", rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "BillingService") {
 		t.Errorf("the operator's copy rode along: %s", rec.Body)

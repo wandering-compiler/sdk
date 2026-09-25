@@ -157,25 +157,25 @@ func ClassifyAuthScheme(r *http.Request) string {
 // passes authentication but the caller's permission_ids
 // doesn't include the required permission ID.
 //
-// Optional `reason` argument lets callers attach the missing
-// permission string for debug visibility:
+// Optional `reason` argument is the missing permission string:
 //
 //	restgw.WriteForbidden(w, "tasks.TasksService.GetTask")
 //
-// Note that this string lands in the public response envelope.
-// Production deployments that don't want to leak the permission
-// catalog to attackers can wrap this helper (or call
-// `WriteError(w, 403, "PERMISSION_DENIED", "forbidden")`
-// directly) to keep the message generic.
+// It reaches the OPERATOR. It used to be the response message,
+// with this comment telling deployments to wrap the helper if
+// they did not want the permission catalog in public — a knob
+// nobody could turn, since the caller is generated code. See
+// WriteForbiddenCtx for what the two audiences now get.
 //
-// Empty reason / no argument keeps the legacy "forbidden"
-// message for back-compat with code written before REV-146.x.
+// Prefer WriteForbiddenCtx wherever a request is in scope: the
+// client's sentence is then translated, and the operator's copy
+// is attributed to the request's trace.
 func WriteForbidden(w http.ResponseWriter, reason ...string) {
-	msg := "forbidden"
-	if len(reason) > 0 && reason[0] != "" {
-		msg = "forbidden: missing permission " + reason[0]
+	perm := ""
+	if len(reason) > 0 {
+		perm = reason[0]
 	}
-	WriteError(w, http.StatusForbidden, "PERMISSION_DENIED", msg)
+	WriteForbiddenCtx(context.Background(), w, perm)
 }
 
 // WriteUnauthorized writes the canonical 401 UNAUTHENTICATED
@@ -184,15 +184,15 @@ func WriteForbidden(w http.ResponseWriter, reason ...string) {
 // request is rejected before any backend is invoked.
 //
 // Optional `scheme` argument (the classified Authorization
-// scheme — "BEARER" / "BASIC" / etc.) lets the response
-// pinpoint which credential shape the surface refuses. Empty
-// scheme / no argument keeps the legacy generic message.
+// scheme — "BEARER" / "BASIC" / etc.) says which credential
+// shape the surface refuses. It reaches the OPERATOR; see
+// WriteUnauthorizedCtx.
 func WriteUnauthorized(w http.ResponseWriter, scheme ...string) {
-	msg := "no auth method handles this credential scheme"
-	if len(scheme) > 0 && scheme[0] != "" {
-		msg = "no auth method handles credential scheme " + scheme[0]
+	s := ""
+	if len(scheme) > 0 {
+		s = scheme[0]
 	}
-	WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", msg)
+	WriteUnauthorizedCtx(context.Background(), w, s)
 }
 
 // userMetadataKey is the outgoing gRPC metadata key carrying

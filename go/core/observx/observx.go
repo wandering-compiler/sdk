@@ -548,6 +548,58 @@ func ReportEvent(ctx context.Context, err error) {
 	})
 }
 
+// ReportRefusal records a request the surface REFUSED — a caller without the
+// permission, an input that would not parse, a scope that did not match.
+//
+// It sits between the other two on purpose. [ReportError] is for faults
+// somebody has to look at: it marks the span failed and raises a Sentry issue,
+// which a caller sending a malformed id should never do. [ReportEvent] is for
+// context worth carrying if something later goes wrong, and it is SILENT unless
+// W17_OBSERVX_DEBUG is on.
+//
+// A refusal fits neither. It is the expected outcome of a request, so it is not
+// an exception — and it is the only record of WHY the caller was turned away,
+// so it must not be silent. The reason a gateway used to put "missing
+// permission tasks.TaskQuery.ListTasksPaged" in the response body is that the
+// body was the only place it went; routing it to a channel that is off by
+// default would move that leak rather than close it, and would leave an
+// operator with a 403 and no reason on either side.
+//
+// So: span EVENT (never SetStatus(Error)), Sentry breadcrumb (never
+// CaptureException), and a log line — always, with no knob in front of it.
+//
+// nil err is a no-op; safe to defer-call.
+func ReportRefusal(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+
+	span := trace.SpanFromContext(ctx)
+	if span.IsRecording() {
+		span.AddEvent("observx.refusal", trace.WithAttributes(
+			attribute.String("event.message", err.Error()),
+		))
+	}
+
+	mu.Lock()
+	sentryOn := sentryEnabled
+	mu.Unlock()
+
+	if sentryOn {
+		sentry.AddBreadcrumb(&sentry.Breadcrumb{
+			Category:  "observx.refusal",
+			Message:   err.Error(),
+			Level:     sentry.LevelInfo,
+			Timestamp: time.Now(),
+		})
+	}
+
+	// Logged whether or not an exporter is configured: with Sentry on, a
+	// breadcrumb alone is retrievable only if a LATER exception happens on
+	// the same hub, and a refusal usually has no later exception.
+	log.Printf("refused: %s", scrubLog(err.Error()))
+}
+
 // Tracer returns the configured tracer for the service.
 // Generated handlers + business code call this when adding
 // custom sub-spans — `ctx, span := observx.Tracer().Start(ctx,

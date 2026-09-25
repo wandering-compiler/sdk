@@ -32,7 +32,10 @@ type Snapshotter struct {
 	restoreBin string
 }
 
-var _ migrate.Snapshotter = (*Snapshotter)(nil)
+var (
+	_ migrate.Snapshotter   = (*Snapshotter)(nil)
+	_ migrate.ObjectCounter = (*Snapshotter)(nil)
+)
 
 // NewSnapshotter parses the URL-shaped DSN into the connection
 // components mysqldump / mysql consume as flags. The password is
@@ -124,4 +127,27 @@ func (s *Snapshotter) Restore(ctx context.Context, r io.Reader) error {
 		return fmt.Errorf("mysql Restore (%s): %w: %s", s.restoreBin, err, stderr.String())
 	}
 	return nil
+}
+
+// StoreObjects implements migrate.ObjectCounter through the `mysql` client
+// Restore already uses. See migrate.ObjectCounter for why the caller needs the
+// names and not a count.
+func (s *Snapshotter) StoreObjects(ctx context.Context) ([]string, error) {
+	args := append(s.connFlags(), "--batch", "--skip-column-names",
+		"--execute="+migrate.ObjectCountSQLMySQL, s.db)
+	var out, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, s.restoreBin, args...)
+	cmd.Env = s.childEnv()
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("mysql StoreObjects (%s): %w: %s", s.restoreBin, err, stderr.String())
+	}
+	var names []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if v := strings.TrimSpace(line); v != "" {
+			names = append(names, v)
+		}
+	}
+	return names, nil
 }

@@ -1,8 +1,10 @@
 package restgw_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,13 +58,14 @@ func TestClassifyAuthScheme(t *testing.T) {
 	}
 }
 
-// REV-146: WriteForbidden writes 403 PERMISSION_DENIED with
-// the canonical error envelope. Pin the envelope shape so
-// generated handlers can rely on it.
+// WriteForbidden writes 403 PERMISSION_DENIED with the canonical envelope and
+// WITHOUT the permission the caller lacked.
 //
-// Without `reason` → generic "forbidden" message (back-compat
-// with pre-REV-146.x callers). With `reason` → message
-// includes the missing permission string for debug visibility.
+// This test asserted the opposite until the leak was closed: it required
+// `tasks.Task#delete` to appear in the body, so the defect a consumer reported
+// — service and method names in a browser — was pinned here as the contract.
+// The permission now goes to the operator (observx.ReportRefusal); what a
+// caller gets is the code plus the catalog's sentence for it.
 func TestWriteForbidden(t *testing.T) {
 	t.Run("no reason", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -74,22 +77,39 @@ func TestWriteForbidden(t *testing.T) {
 		if !strings.Contains(body, "PERMISSION_DENIED") {
 			t.Errorf("body = %q, want PERMISSION_DENIED", body)
 		}
-		if !strings.Contains(body, "forbidden") {
-			t.Errorf("body = %q, want generic 'forbidden' message", body)
+		if !strings.Contains(body, "You do not have access to this.") {
+			t.Errorf("body = %q, want the catalog sentence for the code", body)
 		}
 	})
-	t.Run("with perm string", func(t *testing.T) {
+	t.Run("the permission never reaches the caller", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		restgw.WriteForbidden(rec, "tasks.Task#delete")
 		body := rec.Body.String()
-		if !strings.Contains(body, "tasks.Task#delete") {
-			t.Errorf("body = %q, want missing-perm detail", body)
+		for _, leaked := range []string{"tasks.Task#delete", "missing permission"} {
+			if strings.Contains(body, leaked) {
+				t.Errorf("body carries the operator's copy %q: %s", leaked, body)
+			}
+		}
+		// The envelope must not merely be quiet — it has to say the two
+		// things a client acts on, or "no leak" would also be satisfied by
+		// an empty body.
+		if !strings.Contains(body, "PERMISSION_DENIED") || !strings.Contains(body, "You do not have access to this.") {
+			t.Errorf("body = %q, want the code and the catalog sentence", body)
+		}
+	})
+	t.Run("the permission reaches the operator", func(t *testing.T) {
+		logged := captureLog(t, func() {
+			restgw.WriteForbiddenCtx(context.Background(), httptest.NewRecorder(), "tasks.Task#delete")
+		})
+		if !strings.Contains(logged, "tasks.Task#delete") {
+			t.Errorf("the operator was told nothing about the refusal: %q", logged)
 		}
 	})
 }
 
-// REV-146: WriteUnauthorized writes 401 UNAUTHENTICATED.
-// Optional scheme arg surfaces in the message for debug.
+// WriteUnauthorized writes 401 UNAUTHENTICATED without naming the credential
+// scheme it refused. Same split, same reason as WriteForbidden — and the same
+// inverted assertion before it: this test used to require "BEARER" in the body.
 func TestWriteUnauthorized(t *testing.T) {
 	t.Run("no scheme", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -101,13 +121,23 @@ func TestWriteUnauthorized(t *testing.T) {
 		if !strings.Contains(body, "UNAUTHENTICATED") {
 			t.Errorf("body = %q, want UNAUTHENTICATED", body)
 		}
+		if !strings.Contains(body, "You are not signed in.") {
+			t.Errorf("body = %q, want the catalog sentence for the code", body)
+		}
 	})
-	t.Run("with scheme", func(t *testing.T) {
+	t.Run("the scheme never reaches the caller", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		restgw.WriteUnauthorized(rec, "BEARER")
-		body := rec.Body.String()
-		if !strings.Contains(body, "BEARER") {
-			t.Errorf("body = %q, want scheme detail", body)
+		if body := rec.Body.String(); strings.Contains(body, "BEARER") {
+			t.Errorf("body names the refused scheme: %s", body)
+		}
+	})
+	t.Run("the scheme reaches the operator", func(t *testing.T) {
+		logged := captureLog(t, func() {
+			restgw.WriteUnauthorizedCtx(context.Background(), httptest.NewRecorder(), "BEARER")
+		})
+		if !strings.Contains(logged, "BEARER") {
+			t.Errorf("the operator was told nothing about the refusal: %q", logged)
 		}
 	})
 }
@@ -606,4 +636,17 @@ func TestAuth_CachedAuthFunc_HitsDoNotShareABackingArray(t *testing.T) {
 	if string(hit2) != "principal-a" {
 		t.Fatalf("one consumer's write reached another request's identity: got %q", hit2)
 	}
+}
+
+// captureLog collects what `fn` wrote to the standard logger. In a test binary
+// no OTel or Sentry exporter is configured, so that logger IS the operator's
+// channel — the same fallback observx documents for dev.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+	fn()
+	return buf.String()
 }
