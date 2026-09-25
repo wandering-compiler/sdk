@@ -1,6 +1,7 @@
 package restgw_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
@@ -71,9 +73,21 @@ func TestWriteGRPCError_DeadlineCarryingBalancerErrorIsScrubbed(t *testing.T) {
 	}
 }
 
-// Our own handlers' messages come from grpcerr.Wrap and are deliberately
-// authored — scrubbing must not touch them, or forms lose their prose.
-func TestWriteGRPCError_HandlerAuthoredMessagesSurvive(t *testing.T) {
+// SUPERSEDES TestWriteGRPCError_HandlerAuthoredMessagesSurvive.
+//
+// That test asserted a status message reached the client verbatim, on the
+// grounds that our handlers author their prose and "forms lose their prose" if
+// the scrub touches it. The concern was right and the channel was wrong: prose
+// a FORM binds to travels in `details`, which this still carries, and the
+// top-level message was never a safe place for it — the same authored strings
+// it protected carry `<Service>.<Method>` prefixes, which is exactly the
+// technical text a consumer reported seeing.
+//
+// The contract is now: `status.Message()` belongs to the operator, a person
+// sees what a detail says, and a handler that attached nothing gets the
+// generic sentence for its code. `grpcerr.ForUser` is the one-call path for a
+// handler that wants to say something better.
+func TestWriteGRPCError_StatusMessageNeverReachesTheClient(t *testing.T) {
 	cases := []struct {
 		code codes.Code
 		msg  string
@@ -85,9 +99,39 @@ func TestWriteGRPCError_HandlerAuthoredMessagesSurvive(t *testing.T) {
 	for _, tc := range cases {
 		rec := httptest.NewRecorder()
 		restgw.WriteGRPCError(rec, status.Error(tc.code, tc.msg))
-		if got := bodyOf(t, rec)["message"]; got != tc.msg {
-			t.Errorf("%v: message = %v, want %q (authored prose must survive)", tc.code, got, tc.msg)
+		body := rec.Body.String()
+		// The service name is the thing a user must never be shown, and it is
+		// the marker that the developer's copy escaped.
+		for _, leak := range []string{"TaskQuery", "TaskMutation", "BillingService", ": not found"} {
+			if strings.Contains(body, leak) {
+				t.Errorf("%v: the developer's message reached the client (%q): %s", tc.code, leak, body)
+			}
 		}
+		if got := bodyOf(t, rec)["message"]; got == tc.msg {
+			t.Errorf("%v: message is the status message verbatim: %v", tc.code, got)
+		}
+	}
+}
+
+// A handler that DOES author for a person gets its words through, untouched —
+// which is the capability the superseded test was really defending.
+func TestWriteGRPCError_UserFacingDetailIsWhatTheClientSees(t *testing.T) {
+	err := grpcerr.ForUser(context.Background(), codes.FailedPrecondition,
+		"BillingService.Charge", "subscription is not active",
+		"SUBSCRIPTION_INACTIVE", "This subscription is not active.")
+
+	rec := httptest.NewRecorder()
+	restgw.WriteGRPCError(rec, err)
+
+	body := bodyOf(t, rec)
+	if got := body["code"]; got != "SUBSCRIPTION_INACTIVE" {
+		t.Errorf("code = %v, want the handler's own", got)
+	}
+	if got := body["message"]; got != "This subscription is not active." {
+		t.Errorf("message = %v, want the sentence the handler wrote for a person", got)
+	}
+	if strings.Contains(rec.Body.String(), "BillingService") {
+		t.Errorf("the operator's copy rode along: %s", rec.Body)
 	}
 }
 

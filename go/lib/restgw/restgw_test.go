@@ -279,8 +279,15 @@ func TestWriteGRPCError_Status(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"NOT_FOUND"`) {
 		t.Errorf("body should carry code; got %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "user 42 not found") {
-		t.Errorf("body should carry message; got %s", rec.Body.String())
+	// The status message does NOT reach the client — and this case shows why
+	// the rule is worth having rather than merely tidy: "user 42" is an
+	// internal identifier, and nothing about the old contract stopped it.
+	// A client gets the code to dispatch on and a sentence for a person.
+	if strings.Contains(rec.Body.String(), "user 42") {
+		t.Errorf("body leaks the developer's message; got %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "does not exist") {
+		t.Errorf("body should carry a sentence for a person; got %s", rec.Body.String())
 	}
 }
 
@@ -407,7 +414,13 @@ func TestWriteSSEGRPCError_Status(t *testing.T) {
 	if !strings.Contains(body, `"NOT_FOUND"`) {
 		t.Errorf("expected NOT_FOUND code; got %q", body)
 	}
-	if !strings.Contains(body, "missing") {
-		t.Errorf("expected message; got %q", body)
+	// The SSE writer follows the same rule as the unary one — a client
+	// reading a stream is the same person reading a body, and this path used
+	// to be the different door the developer's message left by.
+	if strings.Contains(body, "missing") {
+		t.Errorf("the developer's message rode out on the stream; got %q", body)
+	}
+	if !strings.Contains(body, "does not exist") {
+		t.Errorf("expected a sentence for a person; got %q", body)
 	}
 }

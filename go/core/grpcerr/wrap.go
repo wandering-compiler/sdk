@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -156,12 +157,133 @@ const (
 // failing-method context. Cases 1-3 keep the message
 // terse — the structured detail carries the field-level
 // information.
+// ─── User-facing codes for the branches that are not constraint hits ───
+//
+// Vocabulary in the same spirit as validation's `defaultCodes`: each names the
+// problem FROM THE CALLER'S SIDE, not the mechanism that produced it. A client
+// dispatches on these; the catalog translates the sentence beside them.
+//
+// They exist because six of this function's branches used to return a bare
+// string and nothing else — so there was nothing for a client to branch on and
+// nothing for the catalog to translate, only a developer's sentence that the
+// gateway then showed to a person.
+const (
+	CodeNotFound        = "NOT_FOUND"
+	CodeConflictRetry   = "CONFLICT_RETRY"
+	CodeCanceled        = "REQUEST_CANCELED"
+	CodeTimeout         = "TIMEOUT"
+	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
+	CodeInternal        = "INTERNAL"
+)
+
+// UserMsgid is the sentence a PERSON gets for a gRPC code when nobody wrote
+// them a better one.
+//
+// Deliberately vague: this is the fallback, and a vague sentence beside an
+// exact `code` is more useful than a precise one about the wrong thing. The
+// code is what a client dispatches on; this is what someone reads while an
+// operator checks the logs.
+//
+// One table, used by both sides — this package when it builds a detail, and
+// the gateway when a status carries none. It was briefly written twice, which
+// is the shape that put the same certificate-pin gap in three places earlier
+// this week: two copies of one rule drift, and the drift is silent.
+func UserMsgid(c codes.Code) string {
+	switch c {
+	case codes.NotFound:
+		return "The item you asked for does not exist."
+	case codes.InvalidArgument, codes.OutOfRange, codes.FailedPrecondition:
+		return "The request could not be accepted as sent."
+	case codes.PermissionDenied:
+		return "You do not have access to this."
+	case codes.Unauthenticated:
+		return "You are not signed in."
+	case codes.AlreadyExists, codes.Aborted:
+		return "Another change reached this first. Please try again."
+	case codes.ResourceExhausted:
+		return "Too many requests. Please wait and try again."
+	case codes.DeadlineExceeded:
+		return "The request took too long and was stopped."
+	case codes.Canceled:
+		return "The request was cancelled before it finished."
+	case codes.Unavailable:
+		return "The service is temporarily unavailable."
+	case codes.Unimplemented:
+		return "This is not available."
+	}
+	return "Something went wrong on our side."
+}
+
+// Vocabulary is every msgid this package can put in front of a person.
+//
+// Harvested into each project's `.po` alongside the validation defaults, so
+// these sentences are translatable rather than permanently English. A msgid
+// with no catalog entry falls back to itself, so a project that never
+// translates reads exactly as it does today.
+func Vocabulary() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range []codes.Code{
+		codes.NotFound, codes.InvalidArgument, codes.PermissionDenied,
+		codes.Unauthenticated, codes.Aborted, codes.ResourceExhausted,
+		codes.DeadlineExceeded, codes.Canceled, codes.Unavailable,
+		codes.Unimplemented, codes.Internal,
+	} {
+		if m := UserMsgid(c); !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ForUser builds an error that says one thing to an operator and another to a
+// person — the shape every hand-written handler should reach for.
+//
+//	return grpcerr.ForUser(ctx, codes.FailedPrecondition,
+//	    "BillingService.Charge", "subscription is not active",
+//	    "SUBSCRIPTION_INACTIVE", "This subscription is not active.")
+//
+// A handler that returns a bare `status.Error` still works; its prose simply
+// stays with the operator, and the caller gets the generic sentence for the
+// gRPC code. That is the intended demotion — a message nobody marked as
+// user-facing is treated as though nobody wrote it for a user, because nobody
+// did.
+func ForUser(ctx context.Context, c codes.Code, method, dev, code, userMsgid string) error {
+	return forCaller(ctx, c, method, dev, code, userMsgid)
+}
+
+// forCaller builds the two-audience error this package owes both of its
+// readers.
+//
+// `dev` becomes the status message and keeps the method prefix — that is the
+// string an operator reads in Sentry, and stripping it would leave `not found`
+// with no origin. `userMsgid` becomes an ErrorDetail the GATEWAY renders for a
+// person, translated through the same catalog the validation path uses.
+//
+// One string cannot serve both. That is the whole defect this replaces: the
+// gateway was showing the operator's copy because it was the only copy.
+func forCaller(ctx context.Context, c codes.Code, method, dev, code, userMsgid string) error {
+	st := status.New(c, method+": "+dev)
+	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
+		Code:    code,
+		Message: i18n.T(ctx, userMsgid, nil),
+	}))
+	if err != nil {
+		// coverage-exempt: WithDetails only fails if the detail cannot
+		// marshal, and ErrorDetail is a static well-typed proto.
+		return st.Err()
+	}
+	return with.Err()
+}
+
 func Wrap(ctx context.Context, method string, err error, registry *ConstraintRegistry, d Dialect) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return status.Error(codes.NotFound, method+": not found")
+		return forCaller(ctx, codes.NotFound, method, "not found", CodeNotFound, UserMsgid(codes.NotFound))
 	}
 	// Transient classes BEFORE constraint parsing — a serialization
 	// failure or deadlock (40001 / 40P01) is not a constraint
@@ -192,7 +314,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// restart its unit of work, and callers of a method that
 	// declares `tx_isolation: SERIALIZABLE` should expect to.
 	if isRetryable(err, d) {
-		return status.Errorf(codes.Aborted, "%s: retryable failure", method)
+		return forCaller(ctx, codes.Aborted, method, "retryable failure", CodeConflictRetry, UserMsgid(codes.Aborted))
 	}
 	// Context cancellation / deadline BEFORE constraint parsing —
 	// a DB call aborted by a cancelled or timed-out context is not
@@ -201,10 +323,10 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// client disconnect / slow query). Surface the canonical gRPC
 	// codes the caller already expects for these conditions.
 	if errors.Is(err, context.Canceled) {
-		return status.Errorf(codes.Canceled, "%s: canceled", method)
+		return forCaller(ctx, codes.Canceled, method, "canceled", CodeCanceled, UserMsgid(codes.Canceled))
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return status.Errorf(codes.DeadlineExceeded, "%s: deadline exceeded", method)
+		return forCaller(ctx, codes.DeadlineExceeded, method, "deadline exceeded", CodeTimeout, UserMsgid(codes.DeadlineExceeded))
 	}
 	// SQL "data exception" class — a value the CALLER supplied that the
 	// column cannot hold. It is not a constraint violation (no constraint
@@ -220,7 +342,8 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// generated validation answers first — which is why this is the
 	// FALLBACK and not the intended path.
 	if isDataException(err, d) {
-		return status.Errorf(codes.InvalidArgument, "%s: a value does not fit the column it was written to", method)
+		return forCaller(ctx, codes.InvalidArgument, method,
+			"a value does not fit the column it was written to", CodeValueOutOfRange, UserMsgid(codes.InvalidArgument))
 	}
 	ce, ok := parseByDialect(err, d)
 	if !ok {
@@ -231,7 +354,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		// fallback when neither exporter is configured) —
 		// REV-031 Phase C-6.
 		observx.ReportError(ctx, fmt.Errorf("%s: %w", method, err))
-		return status.Errorf(codes.Internal, "%s: internal error", method)
+		return forCaller(ctx, codes.Internal, method, "internal error", CodeInternal, UserMsgid(codes.Internal))
 	}
 	info, found := lookupRegistry(registry, ce)
 	if !found {
@@ -250,8 +373,14 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		} else if ce.Table != "" && len(ce.Columns) > 0 {
 			detail = ce.Kind + " on " + ce.Table + "(" + strings.Join(ce.Columns, ",") + ")"
 		}
-		return status.Errorf(codes.FailedPrecondition,
-			"%s: unmapped %s", method, detail)
+		// A detail here too. This branch was missed when the other seven
+		// got one, and it is the one that most needs it: its developer
+		// message names the CONSTRAINT, the TABLE and the COLUMNS, so any
+		// writer that still reflects status.Message() hands a caller the
+		// database's own vocabulary. With a detail attached, every writer
+		// has something to render instead.
+		return forCaller(ctx, codes.FailedPrecondition, method,
+			"unmapped "+detail, CodeInternal, UserMsgid(codes.FailedPrecondition))
 	}
 	// Successfully-mapped constraint violation — a routine,
 	// user-correctable failure (dup email, CHECK, NOT NULL), NOT a

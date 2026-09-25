@@ -168,7 +168,14 @@ func WriteSSEGRPCError(w http.ResponseWriter, flusher http.Flusher, err error) {
 		return
 	}
 	if st, ok := status.FromError(err); ok {
-		WriteSSEError(w, flusher, GRPCCodeName(st.Code()), scrubTransportMessage(st, err))
+		// Same rule as the unary writer, and it has to BE the same rule:
+		// a client reading an SSE stream is the same person reading a
+		// response body, and leaving this path on the old behaviour meant
+		// the developer's message — service prefix included — simply left
+		// by a different door.
+		reportByCode(context.Background(), st.Code(), err)
+		code, message := clientFacing(context.Background(), st, fieldErrorsFromStatus(st))
+		WriteSSEError(w, flusher, code, message)
 		return
 	}
 	// Non-status (transport / unexpected): its text carries internal
@@ -546,10 +553,14 @@ func WSWriteGRPCError(ctx context.Context, conn *websocket.Conn, err error) {
 		// B25-restgw-1: forward the backend's field-violation details (parity
 		// with the unary WriteGRPCError path).
 		if details := fieldErrorsFromStatus(st); len(details) > 0 {
-			WSWriteErrorWithDetails(ctx, conn, GRPCCodeName(st.Code()), st.Message(), details)
+			reportByCode(ctx, st.Code(), err)
+			code, message := clientFacing(ctx, st, details)
+			WSWriteErrorWithDetails(ctx, conn, code, message, details)
 			return
 		}
-		WSWriteError(ctx, conn, GRPCCodeName(st.Code()), scrubTransportMessage(st, err))
+		reportByCode(ctx, st.Code(), err)
+		code, message := clientFacing(ctx, st, nil)
+		WSWriteError(ctx, conn, code, message)
 		return
 	}
 	// Non-status (transport / unexpected): logged + genericised, matching

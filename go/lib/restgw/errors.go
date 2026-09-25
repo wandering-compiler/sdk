@@ -3,12 +3,13 @@ package restgw
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -111,12 +112,37 @@ func GRPCCodeName(c codes.Code) string {
 	return "INTERNAL"
 }
 
-// WriteGRPCError translates a gRPC error returned by the
-// backend dial into an HTTP response. Non-status errors
-// (network blip, marshaling, …) fall through to 500
-// `INTERNAL`. Status errors map their code to the canonical
-// HTTP status + emit the error message verbatim.
+// WriteGRPCError translates a gRPC error returned by the backend dial into an
+// HTTP response.
+//
+// # Two audiences, two strings
+//
+// `status.Message()` is a DEVELOPER-facing field — gRPC's own convention, and
+// what `grpcerr.Wrap` writes for: it carries the `<Service>.<Method>` prefix an
+// operator needs to place a failure. It is therefore NEVER the string this
+// sends to a client. It goes to observability, every time.
+//
+// What the client gets is the `w17.ErrorDetail` the backend attached: a stable
+// `code` to dispatch on and a message already translated through the project's
+// catalog. Handlers that attach nothing get a generic sentence for their gRPC
+// code rather than the developer's.
+//
+// That inverts the old failure mode. This used to emit the message verbatim
+// and genericise only what pattern-matched as transport, so an unrecognised
+// technical string was SHOWN — fail-open, and every new message shape was a
+// new way to leak one. Now nothing reaches a reader unless somebody wrote it
+// for a reader.
 func WriteGRPCError(w http.ResponseWriter, err error) {
+	// No context, so no language: the fallback sentence stays in the source
+	// locale. A detail is unaffected — grpcerr translated it with the
+	// REQUEST's context, which is where the language actually is. Prefer
+	// WriteGRPCErrorCtx wherever a request is in scope.
+	WriteGRPCErrorCtx(context.Background(), w, err)
+}
+
+// WriteGRPCErrorCtx is WriteGRPCError with the request's context, so the
+// fallback sentence is translated too.
+func WriteGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
 	if err == nil {
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", "nil error")
 		return
@@ -131,76 +157,78 @@ func WriteGRPCError(w http.ResponseWriter, err error) {
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
+
+	// The operator's copy, always and regardless of outcome. It is the only
+	// place the method prefix and any backend prose is allowed to land.
+	observx.ReportError(context.Background(), err)
+
+	httpStatus := HTTPStatusFromGRPCCode(st.Code())
 	// B25-restgw-1: carry the backend's *w17.ErrorDetail field violations into
 	// the envelope. grpcerr.Wrap attaches them for DB constraint violations a
 	// gateway pre-flight can't catch (e.g. a UNIQUE email); dropping them leaves
 	// the client unable to map the failure to a form field.
-	if details := fieldErrorsFromStatus(st); len(details) > 0 {
-		WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(st.Code()), GRPCCodeName(st.Code()), st.Message(), details)
+	details := fieldErrorsFromStatus(st)
+
+	code, message := clientFacing(ctx, st, details)
+	if len(details) > 0 {
+		WriteErrorWithDetails(w, httpStatus, code, message, details)
 		return
 	}
-	WriteError(w, HTTPStatusFromGRPCCode(st.Code()), GRPCCodeName(st.Code()), scrubTransportMessage(st, err))
+	WriteError(w, httpStatus, code, message)
 }
 
-// transportMessageMarkers are fragments grpc-go puts in the messages it
-// synthesises for connection failures. They are not phrases our own
-// handlers produce (grpcerr.Wrap authors every message it emits), so a
-// match means the text came from the transport and carries the dial
-// target.
-var transportMessageMarkers = []string{
-	"connection error:",
-	"transport:",
-	"dial tcp",
-	"dial unix",
-	"latest balancer error",
-	"lookup ",
-}
-
-// scrubTransportMessage returns the message safe to reflect to the client.
+// reportByCode sends a failure down the channel that matches what it IS.
 //
-// restgw-sec-3 guards the non-status branch above on the grounds that a
-// transport error's text carries internal topology. The guard missed the
-// case it was written for: grpc-go reports a failed dial as a STATUS
-// error — picker_wrapper wraps the balancer's last error in
-// status.Error(codes.Unavailable, err.Error()) — so the real transport
-// failures arrived as statuses and went out verbatim, backend host and
-// port included. A client would read
-// `dial tcp app-storage:9090: connect: connection refused` off a 503.
-//
-// The scrub is deliberately narrow, because most status messages ARE
-// worth showing: grpcerr.Wrap authors them ("…: not found", constraint
-// prose), and B25-restgw-1 carries field violations a form binds to.
-// Genericising everything would gut that. Two rules instead:
-//
-//   - Unavailable is always genericised. Our handlers never raise it with
-//     prose a caller acts on — the code is the actionable part — and a
-//     transport-raised one is indistinguishable from a handler-raised one.
-//   - Any code whose message bears a transport marker is genericised, so
-//     the balancer error that rides out on DeadlineExceeded during an
-//     outage is covered too.
-//
-// The full text always reaches observability; only the client's copy is
-// reduced.
-func scrubTransportMessage(st *status.Status, err error) string {
-	msg := st.Message()
-	if st.Code() != codes.Unavailable && !hasTransportMarker(msg) {
-		return msg
+// Server faults are exceptions: somebody has to look. Everything else is an
+// expected outcome of a request — the caller asked for something missing, or
+// sent something invalid — and belongs on the non-exception channel, where it
+// is still retrievable when triaging without marking a span failed or paging
+// anyone.
+func reportByCode(ctx context.Context, c codes.Code, err error) {
+	switch c {
+	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable:
+		observx.ReportError(ctx, err)
+	default:
+		observx.ReportEvent(ctx, err)
 	}
-	observx.ReportError(context.Background(), err)
-	if st.Code() == codes.Unavailable {
-		return "upstream unavailable"
-	}
-	return "upstream request failed"
 }
 
-func hasTransportMarker(msg string) bool {
-	for _, m := range transportMessageMarkers {
-		if strings.Contains(msg, m) {
-			return true
+// clientFacing picks the code and sentence a person should see.
+//
+// Preference order, and each step is a deliberate demotion:
+//
+//  1. A REQUEST-LEVEL detail — one with a code and no field. That is the
+//     backend saying "here is this failure, phrased for your user", and it is
+//     already translated.
+//  2. The gRPC code's own generic sentence. A handler that attached nothing
+//     has said nothing fit to show, so the envelope says only as much as the
+//     code does.
+//
+// `status.Message()` is never a candidate. It belongs to the operator.
+func clientFacing(ctx context.Context, st *status.Status, details []FieldError) (string, string) {
+	for _, d := range details {
+		if d.Field == "" && d.Code != "" && d.Message != "" {
+			return d.Code, d.Message
 		}
 	}
-	return false
+	// ONE table, in grpcerr, shared with the side that builds details. Two
+	// copies of one sentence drift, and here the drift would be silent in a
+	// particular way: only one copy is harvested into the catalogs, so the
+	// other renders English in every declared language with nothing to say so.
+	return GRPCCodeName(st.Code()), i18n.T(ctx, grpcerr.UserMsgid(st.Code()), nil)
 }
+
+// The transport scrub that used to live here is GONE, not relocated.
+//
+// It genericised `Unavailable` and anything whose text matched a transport
+// marker (`dial tcp`, `connection refused`, …) and passed everything else
+// through. That is fail-OPEN: an unrecognised technical string was SHOWN, and
+// every new message shape was a new way to leak one. It also could not answer
+// the question that actually mattered — a service name reveals no topology and
+// sailed through every check it made.
+//
+// Nothing now reaches a reader unless somebody wrote it for a reader, so there
+// is nothing left to pattern-match and no list to keep up to date.
 
 // fieldErrorsFromStatus extracts the *w17.ErrorDetail entries a status carries
 // (attached by grpcerr.Wrap via status.WithDetails) as REST FieldErrors. Empty
