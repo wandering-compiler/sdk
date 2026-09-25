@@ -482,6 +482,105 @@ const (
 	// NOT hidden from REST JSON responses — same as PASSWORD. Keep it off the
 	// response message if you do not want it on the wire.
 	Type_SECRET Type = 67
+	// CRYPTED_SECRET — a secret the DATABASE never sees in the clear.
+	//
+	// Same contract as SECRET from the application's side: you write a value,
+	// you read that value back. The difference is entirely below it — the
+	// column holds ciphertext, and the generated storage layer encrypts on the
+	// way in and decrypts on the way out. Nothing a handler writes changes.
+	//
+	// # What it is for, and what it is not
+	//
+	// It buys ONE thing: an attacker who takes the database and not the key
+	// gets nothing. That covers how breaches actually happen — a dump, a
+	// forgotten snapshot, a detached replica, an injection — all of which hand
+	// over the database and not the environment.
+	//
+	// It does NOT defend against a compromised application server, which holds
+	// the key and the data both. That is not a reason to skip it; it is a
+	// reason not to claim it.
+	//
+	// # Why it is a new type and not a flag on SECRET
+	//
+	// SECRET is unchanged and stays the right choice for a secret that must be
+	// looked up by value. Moving it would have rewritten the column width of
+	// every deployed project's `UserToken.token`. This type is additive: it is
+	// used by nothing until somebody chooses it.
+	//
+	// # The cipher mode follows `unique`, and that is the whole knob
+	//
+	//	no unique (the DEFAULT) — RANDOMISED. A fresh nonce per write, so the
+	//	  same secret stores differently every time and the database leaks not
+	//	  even which two rows hold the same value.
+	//
+	//	unique: true — DETERMINISTIC. The same secret always encrypts to the
+	//	  same ciphertext, which is what lets an index enforce anything and a
+	//	  `WHERE col = :x` find anything.
+	//
+	// Deterministic mode leaks EQUALITY, and that is a real cost on a
+	// low-entropy column: a hundred rows of ciphertext where one value repeats
+	// in 40% of them is a frequency table, not a secret. On a high-entropy
+	// secret — a generated key, a token — no two plaintexts are equal, so the
+	// leak is nil. Opting in is how you say which of those you have.
+	//
+	// The default is the strong one on purpose: you get the weaker mode only by
+	// typing `unique: true`.
+	//
+	// ⚠️ CHANGING THE MODE ON A LIVE COLUMN IS REFUSED. Adding or removing
+	// `unique` changes how every future value is encrypted while every existing
+	// row keeps the old mode. Nothing fails: old rows still DECRYPT (the mode
+	// travels in the value), the index builds successfully, and it enforces
+	// nothing about the plaintext — a guarantee that is silently not there,
+	// which is worse than a loud loss.
+	//
+	// The migrator cannot repair it either: re-encryption needs the key, and it
+	// has none by design. So the flip is refused at plan time and the supported
+	// path is DROP the column and ADD it back — the same destructive operation,
+	// written down, carrying the drop warning it deserves.
+	//
+	// # pk is REFUSED in both modes
+	//
+	// Not for lack of a stable identity — deterministic ciphertext has one.
+	// Because KEY ROTATION REWRITES EVERY VALUE, and a primary key that changes
+	// when you rotate a key takes every foreign key referencing it along.
+	//
+	// # max_len is REFUSED on a model column
+	//
+	// The column is always TEXT. The stored width is a function of cipher,
+	// nonce, key version and encoding — none of which the author controls, so
+	// the author must not pin it. PASSWORD already renders TEXT for the same
+	// stated reason: a future algorithm emitting longer output must not become
+	// a destructive ALTER.
+	//
+	// ⚠️ This paragraph used to say max_len was VALIDATION, checked before
+	// encryption. It is not, and the compiler refuses it — a contract that
+	// described a behaviour nobody implemented (caught in review on PR #16).
+	//
+	// It is refused rather than repurposed because the two readings both fail.
+	// As a column fact it is the WIDTH the migrator diffs, so a declared number
+	// against a TEXT column plans a change on every migration forever. As a
+	// check it would run against what is STORED, so "at most 32 characters"
+	// would reject the encryption of a 20-character secret.
+	//
+	// Bound the plaintext on the REQUEST field the caller fills, where PASSWORD
+	// already puts its bounds and where the value is still plain.
+	//
+	// A `db_type` override is refused. The author cannot pick the column type
+	// directly, but the pg-native escape hatch can — and a hand-picked narrow
+	// type would truncate ciphertext with no symptom until someone reads a
+	// secret back.
+	//
+	// # The key
+	//
+	// Supplied to the service as configuration, versioned, and NOT derived from
+	// the service's TLS certificate: certificates rotate, and data encrypted
+	// under one becomes unreadable the day it does. Every stored value carries
+	// its key version, so rotation needs no flag day. A service with a
+	// CRYPTED_SECRET column and no key REFUSES TO BOOT rather than starting and
+	// failing on the first read.
+	//
+	// Spec: docs/specs/storage/crypted-secret-field.md.
+	Type_CRYPTED_SECRET Type = 68
 	// Numeric carriers (carrier: int32 / int64 / double — see D2 table)
 	Type_NUMBER     Type = 10
 	Type_ID         Type = 11
@@ -542,6 +641,7 @@ var (
 		65: "UPLOADED_IMAGE",
 		66: "PASSWORD",
 		67: "SECRET",
+		68: "CRYPTED_SECRET",
 		10: "NUMBER",
 		11: "ID",
 		12: "COUNTER",
@@ -575,6 +675,7 @@ var (
 		"UPLOADED_IMAGE": 65,
 		"PASSWORD":       66,
 		"SECRET":         67,
+		"CRYPTED_SECRET": 68,
 		"NUMBER":         10,
 		"ID":             11,
 		"COUNTER":        12,
@@ -2139,7 +2240,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x17VALIDATION_FK_VIOLATION\x103\x12\x17\n" +
 	"\x13VALIDATION_NOT_NULL\x104\x12\x1f\n" +
 	"\x1bVALIDATION_CHECK_CONSTRAINT\x105\x12\x18\n" +
-	"\x14VALIDATION_EXCLUSION\x106*\x8d\x03\n" +
+	"\x14VALIDATION_EXCLUSION\x106*\xa1\x03\n" +
 	"\x04Type\x12\b\n" +
 	"\x04AUTO\x10\x00\x12\b\n" +
 	"\x04CHAR\x10\x01\x12\b\n" +
@@ -2161,7 +2262,8 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eUPLOADED_IMAGE\x10A\x12\f\n" +
 	"\bPASSWORD\x10B\x12\n" +
 	"\n" +
-	"\x06SECRET\x10C\x12\n" +
+	"\x06SECRET\x10C\x12\x12\n" +
+	"\x0eCRYPTED_SECRET\x10D\x12\n" +
 	"\n" +
 	"\x06NUMBER\x10\n" +
 	"\x12\x06\n" +
