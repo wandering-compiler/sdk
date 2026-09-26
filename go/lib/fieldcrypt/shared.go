@@ -93,3 +93,23 @@ func EncryptSharedDeterministic(plain string) (string, error) {
 	}
 	return kr.EncryptDeterministic(plain)
 }
+
+// EncryptColumnError wraps a write-side encryption failure with the context the
+// generated body cannot add for itself.
+//
+// It lives here, rather than as a `fmt.Errorf` in the emitted preamble, because
+// a generated method body gets its imports from a TEXT SCAN over the rendered
+// body: a body that says `fmt.Errorf` needs `fmt` added to that list, and a body
+// that merely mentions the word in a string or a comment would then import it
+// unused and fail to compile. One helper, in the package such a body already
+// imports, cannot drift either way.
+//
+// The first cut emitted `fmt.Errorf` directly and no import was added, so every
+// bundle writing to an encrypted column failed to build — found by the live
+// round trip, not by anything that reads the generator's output.
+func EncryptColumnError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("encrypt value for a CRYPTED_SECRET column: %w", err)
+}
