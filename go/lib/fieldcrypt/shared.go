@@ -17,9 +17,13 @@ import (
 // query hours later, on a machine nobody is watching, instead of as a service
 // that refused to start.
 var (
-	sharedMu  sync.RWMutex
-	sharedKR  *Keyring
-	sharedErr = errNotInitialised
+	sharedMu sync.RWMutex
+	sharedKR *Keyring
+	// errShared is the keyring's current error STATE, not a sentinel — Init
+	// overwrites it. Compare against errNotInitialised, never against this.
+	// Named errXxx because it holds an error and the linter reads the type, not
+	// the role (errname).
+	errShared = errNotInitialised
 )
 
 var errNotInitialised = fmt.Errorf(
@@ -37,10 +41,10 @@ func Init() error {
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 	if err != nil {
-		sharedKR, sharedErr = nil, err
+		sharedKR, errShared = nil, err
 		return err
 	}
-	sharedKR, sharedErr = kr, nil
+	sharedKR, errShared = kr, nil
 	return nil
 }
 
@@ -50,16 +54,16 @@ func SetShared(kr *Keyring) {
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 	if kr == nil {
-		sharedKR, sharedErr = nil, errNotInitialised
+		sharedKR, errShared = nil, errNotInitialised
 		return
 	}
-	sharedKR, sharedErr = kr, nil
+	sharedKR, errShared = kr, nil
 }
 
 func shared() (*Keyring, error) {
 	sharedMu.RLock()
 	defer sharedMu.RUnlock()
-	return sharedKR, sharedErr
+	return sharedKR, errShared
 }
 
 // DecryptShared reads a stored value back through the process keyring.
