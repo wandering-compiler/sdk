@@ -18,7 +18,7 @@ type stepFakeCaller struct {
 	calls int
 }
 
-func (f *stepFakeCaller) Call(_ context.Context, _ Endpoint, _ map[string]any, _ string, _ map[string]string, _ []FilePart) (map[string]any, error) {
+func (f *stepFakeCaller) Call(_ context.Context, _ Endpoint, _ map[string]any, _ string, _ map[string]string, _ string, _ []FilePart) (map[string]any, error) {
 	f.calls++
 	return f.resp, f.err
 }
@@ -106,7 +106,7 @@ func TestRESTCaller_Call_BuildRequestError(t *testing.T) {
 	// fails http.NewRequestWithContext's method-token validation.
 	c := NewRESTCaller("http://127.0.0.1:1", nil)
 	ep := Endpoint{Ref: "x.Svc.M", Transport: "rest", HTTPMethod: "BAD METHOD", PathTemplate: "/m"}
-	if _, err := c.Call(context.Background(), ep, map[string]any{"a": 1}, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), ep, map[string]any{"a": 1}, "", nil, "", nil); err == nil {
 		t.Error("invalid method should fail request build")
 	}
 }

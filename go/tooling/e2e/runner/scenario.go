@@ -91,6 +91,11 @@ type Step struct {
 	// like Input (`${seq}` / `${name}`). Empty = none.
 	Headers map[string]string
 
+	// Credential, when set, is the whole `Authorization` header value for
+	// this step and SUPPRESSES the reserved-token injection. See
+	// e2espec.Doc.Credential for why `Headers` cannot carry it.
+	Credential string
+
 	// Repeat runs this step N times sequentially (the `${seq}`
 	// generator advances each iteration). Zero/one = once.
 	Repeat int
@@ -203,6 +208,21 @@ func expandHeaders(h map[string]string, scope *runtime.Scope) (map[string]string
 	return out, nil
 }
 
+// expandOne interpolates a single value through the scope, the same way
+// expandHeaders does each of its own. Separate rather than reusing that
+// helper through a one-entry map: the two carry different meanings and a
+// map is not the shape a single credential has.
+func expandOne(v string, scope *runtime.Scope) (string, error) {
+	if v == "" {
+		return "", nil
+	}
+	ev, err := runtime.Expand(v, scope)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprint(ev), nil
+}
+
 // emitStep reports one step's outcome to stdout, in the selected format.
 // text → the ✓/✗ checklist line (a passing run reads as a clean
 // checklist of every call the scenario made, pre/post chain included, in
@@ -254,7 +274,12 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	// make, and it would fail outright in any scenario that never
 	// signed anyone in — which is the only honest way to write this
 	// case in the first place.
-	if s.Endpoint.AuthRequired && !s.Endpoint.CredentialInURL {
+	// A step naming its own credential does not take the reserved token:
+	// presenting two is a request no caller makes, and leaving the bearer
+	// on would let the scenario's session answer for the credential under
+	// test — which is how a first version of this passed while proving
+	// nothing.
+	if s.Endpoint.AuthRequired && !s.Endpoint.CredentialInURL && s.Credential == "" {
 		v, ok := scope.Get("auth.token")
 		if !ok {
 			return fmt.Errorf("auth-required endpoint but no auth.token captured upstream in this scenario")
@@ -264,6 +289,10 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	headers, err := expandHeaders(s.Headers, scope)
 	if err != nil {
 		return fmt.Errorf("expand headers: %w", err)
+	}
+	credential, err := expandOne(s.Credential, scope)
+	if err != nil {
+		return fmt.Errorf("expand credential: %w", err)
 	}
 
 	// Open every event subscription BEFORE the call so an async event the
@@ -328,7 +357,7 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		return matchStream(ctx, s.ExpectStream, conn, scope)
 	}
 
-	resp, err := caller.Call(ctx, s.Endpoint, input, token, headers, s.Files)
+	resp, err := caller.Call(ctx, s.Endpoint, input, token, headers, credential, s.Files)
 	if s.ExpectTransportError != nil {
 		if err := matchTransportError(s.ExpectTransportError, err, scope); err != nil {
 			return err

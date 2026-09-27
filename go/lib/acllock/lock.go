@@ -11,16 +11,26 @@
 // the gateway emit bakes the int literal into per-handler check
 // sites from this lock.
 //
-// Lock file lives in source control at
-// `proto/domains/<domain>/acl.lock.json` (parallel to
-// events.lock.json). Generators supply the path; this package
-// doesn't hardcode it.
+// The lock's artefact in source control is
+// `proto/domains/<domain>/w17.lock.acl.proto` — a proto3
+// `AclPermission` enum, parallel to the eventbus lock's own proto.
+// There is NO `acl.lock.json`: this doc named one until 2026-09-26
+// and sent a reader to a path that exists nowhere in the tree. The
+// JSON shape below is this package's in-memory model plus its wire
+// form for callers that choose to serialize it; it is not a file the
+// compiler writes.
+//
+// Nothing reads a file at runtime either. Storage codegen emits
+// `acllock_embed.go`, a generated Go literal of this struct, and the
+// bundle resolves it through sdk.Deps — so a service holds the
+// snapshot of the codegen run that built it. That is deliberate: a
+// binary and its ACL check sites must not be able to disagree.
 //
 // Placeholder note: this is the Go-only helper. A future
 // per-language w17 toolkit will likely lift these helpers into
-// a multi-vendored shape (TS / Python / etc.); until then the
-// auth backend reads the JSON directly via embed +
-// ReadBytes.
+// a multi-vendored shape (TS / Python / etc.). A consumer outside Go
+// compiles the lock proto instead — its value names are the keys, its
+// numbers the ids.
 package acllock
 
 // CurrentVersion is the schema version this package reads and
@@ -29,7 +39,8 @@ package acllock
 // downgrades don't silently produce a corrupted lock.
 const CurrentVersion = 1
 
-// Lock is the on-disk acl.lock.json schema:
+// Lock is this package's model of a domain's allocation table, and the
+// JSON encoding callers get if they serialize it:
 //
 //	{
 //	  "version": 1,

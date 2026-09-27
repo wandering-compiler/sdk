@@ -138,7 +138,13 @@ func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
 // headers is accepted to satisfy the Caller interface; the MCP transport
 // has no per-call header surface today (the streamable-HTTP session owns
 // its headers), so static step headers are a no-op here.
-func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, _ map[string]string, files []FilePart) (map[string]any, error) {
+// The credential parameter is accepted and ignored: MCP carries its
+// bearer in the JSON-RPC envelope's own auth, so a step-level
+// Authorization value has nothing to replace here. Ignored EXPLICITLY
+// rather than silently — a case that sets one on an MCP endpoint is
+// making a claim this transport cannot honour, and the codegen gate
+// refuses it there instead (e2e generate).
+func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, _ map[string]string, _ string, files []FilePart) (map[string]any, error) {
 	// MCP has no multipart. Refusing out loud beats dropping the files
 	// and letting the step assert against an upload that never left.
 	if len(files) > 0 {

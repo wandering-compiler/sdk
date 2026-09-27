@@ -80,7 +80,7 @@ func mcpEndpoint() Endpoint {
 func TestMCPCall_StructuredContent(t *testing.T) {
 	s := &mcpStub{sessionHeader: "sess-1", callBody: `{"result":{"structuredContent":{"id":"7","ok":true}}}`}
 	c, _ := newMCPStub(t, s)
-	out, err := c.Call(context.Background(), mcpEndpoint(), map[string]any{"a": 1}, "", nil, nil)
+	out, err := c.Call(context.Background(), mcpEndpoint(), map[string]any{"a": 1}, "", nil, "", nil)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestMCPCall_StructuredContent(t *testing.T) {
 		t.Errorf("structuredContent unwrap = %v", out)
 	}
 	// session reused: a second call must not re-initialize
-	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, nil); err != nil {
+	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if s.initCount != 1 {
@@ -102,7 +102,7 @@ func TestMCPCall_StructuredContent(t *testing.T) {
 func TestMCPCall_TextContent(t *testing.T) {
 	s := &mcpStub{sessionHeader: "sess-1", callBody: `{"result":{"content":[{"type":"text","text":"{\"v\":42}"}]}}`}
 	c, _ := newMCPStub(t, s)
-	out, err := c.Call(context.Background(), mcpEndpoint(), nil, "tok", nil, nil)
+	out, err := c.Call(context.Background(), mcpEndpoint(), nil, "tok", nil, "", nil)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestMCPCall_SSEFraming(t *testing.T) {
 	// streamable-HTTP SSE frame instead of a bare JSON body
 	s := &mcpStub{sessionHeader: "sess-1", callBody: "event: message\ndata: {\"result\":{\"structuredContent\":{\"ok\":true}}}\n\n"}
 	c, _ := newMCPStub(t, s)
-	out, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, nil)
+	out, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, "", nil)
 	if err != nil {
 		t.Fatalf("Call SSE: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestMCPCall_ErrorsFromServer(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			caller, _ := newMCPStub(t, c.stub)
-			if _, err := caller.Call(context.Background(), mcpEndpoint(), nil, "", nil, nil); err == nil {
+			if _, err := caller.Call(context.Background(), mcpEndpoint(), nil, "", nil, "", nil); err == nil {
 				t.Errorf("%s: want error", c.name)
 			}
 		})
@@ -153,7 +153,7 @@ func TestMCPCall_TransportError(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 	c := NewMCPCaller(url, nil)
-	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, "", nil); err == nil {
 		t.Error("transport error should propagate")
 	}
 }
@@ -163,7 +163,7 @@ func TestMCPCall_MarshalArgumentsError(t *testing.T) {
 	// because an argument value (a channel) is not JSON-serialisable.
 	c, _ := newMCPStub(t, &mcpStub{sessionHeader: "s", callBody: "{}"})
 	bad := map[string]any{"ch": make(chan int)}
-	if _, err := c.Call(context.Background(), mcpEndpoint(), bad, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), mcpEndpoint(), bad, "", nil, "", nil); err == nil {
 		t.Error("unmarshalable arguments should fail")
 	}
 }
@@ -200,7 +200,7 @@ func TestMCPCall_ToolsCallTransportError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	c := NewMCPCaller(srv.URL, nil)
-	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, "", nil); err == nil {
 		t.Error("tools/call transport error should propagate")
 	}
 	mu.Lock()
@@ -214,7 +214,7 @@ func TestMCPCall_BuildRequestError(t *testing.T) {
 	// an un-parseable endpoint fails http.NewRequestWithContext inside
 	// ensureSession (surfaced through Call).
 	c := NewMCPCaller("http://%zz", nil)
-	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), mcpEndpoint(), nil, "", nil, "", nil); err == nil {
 		t.Error("bad endpoint URL should fail request build")
 	}
 }

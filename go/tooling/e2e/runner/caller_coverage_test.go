@@ -94,7 +94,7 @@ func TestRESTCaller_Call_HappyWithAuthAndHeaders(t *testing.T) {
 	c := NewRESTCaller(srv.URL, srv.Client())
 	ep := Endpoint{Ref: "m.S.Create", HTTPMethod: "POST", PathTemplate: "/x"}
 	out, err := c.Call(context.Background(), ep, map[string]any{"name": "n"}, "tok",
-		map[string]string{"X-Device-Id": "dev1", "Authorization": "Bearer hijack"}, nil)
+		map[string]string{"X-Device-Id": "dev1", "Authorization": "Bearer hijack"}, "", nil)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestRESTCaller_Call_ErrorStatus(t *testing.T) {
 	defer srv.Close()
 	c := NewRESTCaller(srv.URL, srv.Client())
 	ep := Endpoint{Ref: "m.S.Get", HTTPMethod: "GET", PathTemplate: "/x"}
-	if _, err := c.Call(context.Background(), ep, map[string]any{}, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), ep, map[string]any{}, "", nil, "", nil); err == nil {
 		t.Fatal("want error for a 4xx status")
 	} else if !strings.Contains(err.Error(), "status 400") {
 		t.Errorf("error should carry the status: %v", err)
@@ -126,7 +126,7 @@ func TestRESTCaller_Call_ErrorStatus(t *testing.T) {
 func TestRESTCaller_Call_ResolveError(t *testing.T) {
 	c := NewRESTCaller("http://h", nil)
 	ep := Endpoint{Ref: "m.S.M", HTTPMethod: "GET", PathTemplate: "/x/{id}", PathParams: []string{"id"}}
-	if _, err := c.Call(context.Background(), ep, map[string]any{}, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), ep, map[string]any{}, "", nil, "", nil); err == nil {
 		t.Fatal("want error when routing can't resolve")
 	}
 }
@@ -135,7 +135,7 @@ func TestRESTCaller_Call_DoError(t *testing.T) {
 	// No server listening at this address → Client.Do fails.
 	c := NewRESTCaller("http://127.0.0.1:1", &http.Client{})
 	ep := Endpoint{Ref: "m.S.Get", HTTPMethod: "GET", PathTemplate: "/x"}
-	if _, err := c.Call(context.Background(), ep, map[string]any{}, "", nil, nil); err == nil {
+	if _, err := c.Call(context.Background(), ep, map[string]any{}, "", nil, "", nil); err == nil {
 		t.Fatal("want transport error against a dead address")
 	}
 }

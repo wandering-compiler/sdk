@@ -24,7 +24,9 @@ type Caller interface {
 	// side-channel so every transport has to answer for it — MCP has
 	// no multipart, and saying so out loud beats silently dropping the
 	// files and asserting against an upload that never happened.
-	Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, files []FilePart) (map[string]any, error)
+	// credential, when non-empty, is the whole `Authorization` value and
+	// replaces the bearer token. See e2espec.Doc.Credential.
+	Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, credential string, files []FilePart) (map[string]any, error)
 }
 
 // RESTCaller drives the REST transport over HTTP. It reconstructs the
@@ -148,7 +150,7 @@ func ResolveREST(baseURL string, ep Endpoint, input map[string]any) (method, tar
 	return method, target, body, nil
 }
 
-func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, files []FilePart) (map[string]any, error) {
+func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, credential string, files []FilePart) (map[string]any, error) {
 	method, target, body, err := ResolveREST(c.BaseURL, ep, input)
 	if err != nil {
 		return nil, err
@@ -179,11 +181,20 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if token != "" {
+	// An explicit credential wins over the reserved token, and the two are
+	// never both present: the scenario runner clears the token when a step
+	// names a credential. Checked here too, because a caller reached by
+	// any other path must not be able to send two.
+	switch {
+	case credential != "":
+		req.Header.Set("Authorization", credential)
+	case token != "":
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	// Static per-step headers (e.g. X-Device-Id). Set after the
-	// built-ins so a scenario can't silently override Authorization.
+	// built-ins so a scenario can't silently override Authorization —
+	// a step that means to replace it says so with `credential:`, which
+	// is the difference between an override and an accident.
 	for k, v := range headers {
 		if strings.EqualFold(k, "Authorization") {
 			continue
