@@ -109,7 +109,7 @@ func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
 		// The URL is IN the message on purpose. A 404 here means the
 		// endpoint is wrong, and the two ways it can be wrong — REST port
 		// instead of MCP, or the transport path missing — are
-		// indistinguishable without seeing what was dialled. deinvo hit
+		// indistinguishable without seeing what was dialled. a consumer hit
 		// this on 2026-09-01 and had to infer the port from elsewhere,
 		// because this line named a status and no address.
 		return "", fmt.Errorf("mcp initialize against %s: status %d: %s (the MCP transport is its own listener, "+

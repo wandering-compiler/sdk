@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package w17.pg;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/pg;pgpb";
+
+// (w17.pg.field) — Postgres-specific per-field options. Lives in its own
+// proto namespace so the core (w17.field) stays dialect-agnostic. The PG
+// emitter reads this extension; emitters for other dialects ignore it (or
+// error if non-empty flags are set — per-emitter call). See
+// docs/archive/iteration-1.md D9 for the dialect-extension pattern.
+//
+// As of D13 (2026-04-21) the curated jsonb / inet / tsvector flags were
+// lifted to core Type values (`type: JSON`, `type: IP`, `type: TSEARCH`)
+// because each one has a coherent cross-dialect semantic. hstore stays
+// here (PG-only; mapped to HSTORE via AUTO on map<string,string> in
+// iter-1.6) alongside the custom_type escape hatch and the extension
+// prerequisites list.
+//
+// Usage — `custom_type` names a REGISTERED ALIAS, not raw SQL. Register
+// the type once in (w17.pg.project) (project-wide) or (w17.pg.module)
+// (this domain only), then reference the alias per column:
+//
+//   // project.proto
+//   option (w17.pg.project) = {
+//     custom_types: [
+//       { alias: "embedding_1536", sql_type: "vector(1536)",
+//         required_extensions: ["vector"] }
+//     ]
+//   };
+//
+//   // …/types/models.proto
+//   string embedding = 6 [
+//     (w17.field)    = { type: TEXT },
+//     (w17.pg.field) = { custom_type: "embedding_1536" }
+//   ];
+//
+// An unregistered alias is a compile error naming the registry to add it
+// to. Worked end to end in examples/pg-native.
+extend google.protobuf.FieldOptions {
+  PgField field = 51003;
+}
+
+message PgField {
+  // --- Escape hatch: a REGISTERED custom type, by alias ---
+  // The alias of a CustomType declared in (w17.pg.project).custom_types or
+  // (w17.pg.module).custom_types. Its `sql_type` becomes this column's SQL
+  // type and the emitter SKIPS the (w17.field).type dispatch. Use for
+  // dialect extensions the vocabulary doesn't cover (pgvector, PostGIS
+  // geometry, custom DOMAINs, contrib types like HSTORE / LTREE). All other
+  // (w17.field) semantics — `null`, `unique`, bounds, CHECK constraints,
+  // defaults — still apply, and the proto carrier stays `string`.
+  //
+  // NOT raw SQL. D36 replaced the raw-string form with the registry
+  // precisely because a bare type name carries no extension prerequisite
+  // and no conversion template, so a later type change had nothing to
+  // render an ALTER … USING clause from. An unregistered alias is a
+  // compile error that names the registry to add it to.
+  //
+  // Contract: string carrier + `type: TEXT` only, and none of
+  // min_len / max_len / pattern / choices / blank (they synthesise
+  // text-only CHECKs that don't type-check against the overridden column).
+  // For types the cross-dialect enum DOES name — TEXT, JSONB, CITEXT,
+  // INET, … — use (w17.db.column).db_type instead; setting both is a
+  // compile error.
+  //
+  // Mandatory rule: no dialect is allowed to infer column type from
+  // another dialect's `custom_type`. Every dialect namespace ships its own
+  // escape hatch, and at most one may be set per field.
+  string custom_type = 10;
+
+  // --- Extension prerequisites ---
+  // Postgres extensions this COLUMN needs on top of whatever its registered
+  // CustomType already lists — a per-column fact (an index method, say)
+  // that doesn't belong in the shared registry entry. The two lists are
+  // MERGED (deduped + sorted), not replaced.
+  //
+  // They aggregate into the plan's `Manifest.RequiredExtensions`. Migration
+  // BODIES deliberately carry no `CREATE EXTENSION`: installing extensions
+  // on a real target is a pre-apply step the deploying platform owns (it
+  // may need superuser). The turnkey DEV bootstrap is the exception —
+  // codegen writes the union to `db/init/<domain>/00_extensions.sql`, which
+  // sorts ahead of the schema in docker-entrypoint-initdb.d's file order,
+  // because nothing else runs before a fresh database's init.
+  repeated string required_extensions = 11;
+
+  // Field numbers 1 (jsonb), 2 (inet), 3 (tsvector), 4 (hstore) were curated
+  // flags that D13 migrated into core Types (JSON / IP / TSEARCH) and the
+  // iter-1.6 map-carrier AUTO dispatch (hstore). Reserved to prevent
+  // accidental reuse with a different semantic.
+  reserved 1, 2, 3, 4;
+  reserved "jsonb", "inet", "tsvector", "hstore";
+}

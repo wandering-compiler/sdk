@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-017 (2026-05-07) — MCP exposure annotations split from
+// the now-removed `proto/w17/http.proto`.
+//
+// REV-018 (2026-05-29) — domain-level `(w17.mcp_api)` registry
+// added below, mirroring `(w17.rest_api)`. The per-method
+// `(w17.mcp)` flag stays as a sibling path: small services with
+// a few MCP tools can still mark methods inline, while large
+// services with many tools prefer the registry pattern so the
+// entire MCP surface lives in one sentinel file.
+
+extend google.protobuf.MethodOptions {
+  // (w17.mcp) — expose this RPC as an MCP tool in the
+  // generated MCP proxy (G3i3-GW-MCP). Tool name defaults to
+  // snake_case of the method name; description from the
+  // proto leading comment (or `mcp_description` override).
+  // Streaming RPCs are rejected at parse time — MCP doesn't
+  // have a native streaming primitive in the spec yet.
+  bool mcp = 50107;
+
+  // (w17.mcp_description) — override for the MCP tool
+  // description. Use only when the proto leading comment is
+  // unsuitable (different prose for human readers vs. an
+  // LLM). Empty = leading comment via SourceCodeInfo.
+  string mcp_description = 50108;
+
+  // (w17.mcp_name) — override for the MCP tool name. Empty =
+  // snake_case of the method name. Set it when the derived
+  // name collides or when the MCP client expects a canonical
+  // name distinct from the RPC's.
+  //
+  // Authors write this through `McpTool.name_override` on a
+  // `(w17.mcp_api)` registry entry, which the compiler stamps
+  // onto the method before the gateway renders it — the two
+  // ways of publishing a method must not disagree about what
+  // it is CALLED, and the registry path used to lose the
+  // override because the gateway only ever read the method.
+  string mcp_name = 50109;
+
+  // (w17.mcp_scope) — session-scope hint, appended to the
+  // description as "Available in: <scope>". Empty = no scope
+  // line. Same provenance as `mcp_name`: written as
+  // `McpTool.scope`, stamped onto the method by the compiler.
+  string mcp_scope = 50110;
+}
+
+extend google.protobuf.FileOptions {
+  // (w17.mcp_api) — file-level option declaring this file as
+  // a domain MCP surface registry. The author wires which
+  // gRPC methods become MCP tools by referencing them via
+  // string `ref` paths. The file declares ZERO messages —
+  // it's a sentinel similar to `(w17.rest_api)` (REV-017) and
+  // `(w17.event_subscribers)` (eventbus redesign).
+  //
+  // Driven by the compiler's MCP parser: every loaded
+  // `.proto` carrying `option (w17.mcp_api) = { ... }`
+  // produces one MCP proxy binary at codegen time.
+  //
+  // Discovery is by THIS OPTION, anywhere under
+  // `proto/domains/<domain>/` — the module subdirectory a
+  // surface naturally lives in counts, not just the domain
+  // root. The `mcp.proto` / `mcp_<surface>.proto` filename is
+  // a convention that also matches; the option is the
+  // contract. Until 2026-08-31 discovery read only each
+  // domain's immediate files, so a surface one level down was
+  // silently absent — codegen exited 0 with no bundle and no
+  // complaint about the refs it never read.
+  //
+  // Still one surface per DOMAIN: two sentinels under the same
+  // domain would render to the same bundle directory, and that
+  // is refused at codegen rather than letting the second
+  // overwrite the first.
+  McpApi mcp_api = 50109;
+}
+
+// ⚠ PERMISSION GATING DIFFERS BY HOW A TOOL IS PUBLISHED, and the
+// difference is not cosmetic:
+//
+//   include: [ "<plugin>" ]  and  (w17.mcp) on a method
+//       → served by the GATEWAY, gated per tool. Codegen emits
+//         `SetToolPerms(name, endpointPerm[, modelPerm])` and a
+//         resolver that reads the caller's permission ids, and it
+//         hard-errors rather than emit a tool whose perm resolves to 0.
+//
+//   tools: [ { ref: ... } ]
+//       → served by the STANDALONE `<domain>-mcp-server` bundle, which
+//         is emitted with NO permission gate at all: any authenticated
+//         session may call those tools regardless of ACL. Codegen warns
+//         on every such bundle.
+//
+// Wiring the standalone gate needs an auth-realm decision that has not
+// been made. Until it is, publish anything ACL-sensitive via `include[]`
+// or `(w17.mcp)`, and treat a `tools[]` bundle as trusted-callers-only.
+//
+// McpApi declares one MCP proxy — the in-container tool surface
+// the LLM reaches into during a session. One McpApi → one
+// generated proxy bundle at `<out>/<domain>-mcp-server/`.
+//
+// Multiple `mcp_*.proto` sentinels in the same domain produce
+// multiple proxies. Common pattern: a worker-tools surface and
+// a chat-only surface that don't share the same tool set.
+message McpApi {
+  // Logical name of the surface — "default" / "worker" /
+  // "chat". Surfaces in tooling (catalog) and in error
+  // diagnostics. Must be a snake_case identifier.
+  string name = 1;
+
+  // Version of this surface — "v1" / "0.0.0". Free-form
+  // string; becomes the generated MCP server's advertised
+  // version, which a client reads on initialize.
+  //
+  // It does NOT surface in a static `mcp-tools.json` or an
+  // OpenRPC document: this comment promised both for a long
+  // time and neither is emitted. The tool list an MCP client
+  // consumes is served by the generated bundle over the
+  // protocol itself (`tools/list`), so there was never a file
+  // to read (a consumer went looking for one, 2026-08-31).
+  string version = 2;
+
+  // Human-readable description of the MCP surface. Surfaces
+  // verbatim in the generated bundle, which serves it to a
+  // client over the protocol — not in a static manifest file;
+  // see the note on `version`. Empty = no description block.
+  string description = 3;
+
+  // Tools exposed via this MCP surface. Each entry references
+  // one gRPC RPC by `<module>.<Service>.<Method>` (same ref
+  // shape as REST + subscribers). Streaming RPCs are a
+  // parse-time error (MCP has no streaming primitive yet).
+  repeated McpTool tools = 4;
+
+  // Plugin MCP presets opted into this surface. A plugin's
+  // `presets.mcp.tools` are OFF by default: activating a plugin
+  // never auto-publishes MCP tools (nor drags their transitive
+  // deps, e.g. mcp-go) into a project that never referenced them.
+  // List the plugin's ACTIVATION name (its `registered_as`, e.g.
+  // "auth") here to opt its tools in. MCP has no path to remount,
+  // so — unlike REST — this is a bare name, not a PluginInclude.
+  // Empty = no plugin tools (the default).
+  //
+  // An included plugin's tools are published on the GATEWAY-embedded
+  // MCP (the codegen stamps the methods). To serve them from a
+  // STANDALONE `<domain>-mcp-server` bundle instead, list them
+  // explicitly in `tools` by ref; an include-only surface generates
+  // no standalone bundle.
+  //
+  // Spec: docs/decisions/plugin-surfaces-opt-in.md.
+  repeated string include = 5;
+}
+
+// McpTool exposes one gRPC method as an MCP tool. Defaults
+// derive from the referenced RPC's leading comment + name; the
+// `*_override` fields are the escape hatch when the proto
+// comment is unsuitable for an LLM client (humans and LLMs
+// often want different prose).
+message McpTool {
+  // Reference to the gRPC method, "<module>.<Service>.<Method>".
+  // Resolution rule mirrors REST: domain-scoped, cross-domain
+  // refs are a parse-time error.
+  string ref = 1;
+
+  // Tool name override. Defaults to snake_case of the method
+  // name (e.g. ListOpenTasks → list_open_tasks). Set this
+  // when the auto-derived name collides with another tool or
+  // when the MCP client expects a canonical name distinct
+  // from the RPC name.
+  string name_override = 2;
+
+  // Tool description override. Defaults to the RPC's leading
+  // proto comment. Set this when the comment is human-facing
+  // prose unsuitable for an LLM (e.g. "Internal use only" →
+  // an explicit usage hint the LLM can actually act on).
+  string description_override = 3;
+
+  // Scope hint. Appended to the description as
+  // "Available in: <scope>" so the LLM knows which session
+  // types may invoke the tool. Example: "any session" /
+  // "chat sessions only" / "background worker sessions only".
+  // Empty = no scope line.
+  string scope = 4;
+}

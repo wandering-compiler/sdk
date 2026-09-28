@@ -45,7 +45,7 @@ type Snapshotter interface {
 // It exists to separate two states a dump cannot tell apart. An object-less SQL
 // dump means either "this store is empty" or "the dump reached a different
 // database than the one this store names" — and the second is how a branch
-// switch came to restore a 722-byte file over a live database (marb #68). The
+// switch came to restore a 722-byte file over a live database (a consumer). The
 // caller used to infer the second from the first and refuse both, which made a
 // brand-new empty store unswitchable except through the flag that WIPES.
 //

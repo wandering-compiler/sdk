@@ -1,0 +1,328 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-146 (2026-05-17) — ACL annotation surface.
+//
+// Django-shaped authorization cascade. The author flips ACL on
+// at the broadest convenient scope (a single boolean at the
+// domain `w17.proto` is the most common shape); the gateway
+// then derives a permission string per model and per endpoint
+// from the schema position, the auth method returns a flat
+// `AuthResp.permissions` list, and the generated gateway
+// emits a per-request `restgw.HasPermission(...)` check in
+// front of the gRPC dispatch.
+//
+// Two independent axes:
+//
+//   ACL-models    — gate auto-generated CRUD handlers that map to
+//                   declared messages, via permission strings of
+//                   shape `<module>.<Model>#add` / `#change` /
+//                   `#delete` / `#view`.
+//   ACL-endpoints — gate every RPC reachable on the REST surface
+//                   with `<module>.<Service>.<Method>`.
+//
+// One option per scope (proto extension names must be unique
+// within a package, so each scope gets its own field name):
+//
+//   file    : (w17.acl_models)     bool    — models cascade
+//             (w17.acl_endpoints)  bool    — endpoints cascade
+//   service : (w17.acl_service)    bool    — endpoint axis at
+//                                            service granularity
+//   message : (w17.acl_model)      bool    — single model override
+//   method  : (w17.acl_endpoint)   bool    — single endpoint override
+//
+// Resolution per model: message `acl_model` (if set) wins;
+// otherwise the nearest file `acl_models` (module → domain)
+// wins; otherwise off.
+//
+// Resolution per endpoint: method `acl_endpoint` (if set) wins;
+// otherwise the enclosing service's `acl_service` (if set) wins;
+// otherwise the nearest file `acl_endpoints` (module → domain)
+// wins; otherwise off.
+//
+// All five fields are `optional bool` so the parser can
+// distinguish "explicit false" (force off, breaks an inherited
+// cascade) from "absent" (inherit). Default behaviour when
+// nothing is set anywhere is OFF — pre-launch projects can
+// ship endpoints without wiring an auth backend first.
+//
+// Permission IDs are allocated PER DOMAIN, not per project.
+// Each domain that turns the cascade on gets its own
+// `w17.lock.acl.proto`, numbered from its own sequence — so the
+// same permission string in two domains is two different
+// numbers, and an id is meaningless without the domain that
+// minted it. A project with several domains therefore has
+// several catalogues, never one shared one. Anything that
+// STORES an id (a grant, a fixture, a role's permission set) is
+// domain-local; moving one across domains does not fail, it
+// silently means something else.
+//
+// Spec: docs/specs/gateway/acl-permissions.md.
+
+extend google.protobuf.FileOptions {
+  // (w17.acl_models) — turn on the MODEL axis for every message
+  // declared under this file's scope: permissions of the shape
+  // `<module>.<Model>#<action>` (Django's add / change / delete /
+  // view, plus `action:<name>` for a declared admin action).
+  //
+  // ADMIN-ONLY. The model axis is produced solely by the admin
+  // surface, because only there are both halves DECLARED: a page
+  // states its `model:`, and each slot states its action
+  // (detail.read is a view, detail.delete is a delete). REST, RPC
+  // and MCP get the endpoint axis only — a method there is just a
+  // method, it may touch four models in one call, and attributing
+  // it to one is a guess. It used to be guessed, from the method
+  // name's prefix and suffix; a mutation named off-convention
+  // (`RevokeUserToken`) then silently got NO permission at all,
+  // which is how an ungated admin endpoint once shipped.
+  //
+  // Turning this on in a domain with no admin surface therefore
+  // allocates nothing. The parser warns rather than failing, since
+  // the domain may be fully gated by the endpoint axis.
+  //
+  // Lives in `w17.proto` sentinel files at the domain or module
+  // root (mirrors the cascade shape `(w17.module)` uses);
+  // declaring it on a regular type / service file is allowed but
+  // unusual — and note it still cascades over that file's whole
+  // DIRECTORY, not just the file it is written in.
+  optional bool acl_models = 50150;
+
+  // (w17.acl_endpoints) — turn on the ENDPOINT axis for every RPC
+  // the cascade reaches: permissions of the shape
+  // `<module>.<Service>.<Method>`, one per method, derived from
+  // nothing but the method's identity. Same cascade shape as
+  // `acl_models`.
+  //
+  // ⚠️ "The cascade reaches" is NOT "this file". Resolution walks the
+  // nearest ancestor DIRECTORY (module → domain), so declaring this
+  // on one regular service file turns the axis on for every sibling
+  // file in that directory too. That is the designed shape — it is
+  // what makes the `w17.proto` sentinel cascade work — but this
+  // sentence used to read "within this file's scope", and a consumer
+  // put the option on one file to close three invite endpoints and
+  // closed their whole sign-in flow with it: `SessionService.Authorize`
+  // and `Logout` live in a SIBLING file of the same directory, and
+  // both started refusing with no role able to open them (a consumer).
+  //
+  // So: put it on the sentinel when you mean the module or domain, and
+  // when you mean a narrower set, reach for `(w17.acl_service)` or the
+  // per-method `(w17.acl_endpoint)` — those are the file- and
+  // element-scoped knobs, and this one never was.
+  //
+  // Independent axis: a domain can have one on and the other off.
+  // This is the axis a REST / RPC / MCP surface gates on — and the
+  // only one those surfaces have.
+  optional bool acl_endpoints = 50151;
+
+  // (w17.acl_roles) — declarative role catalogue for this domain.
+  // Each entry names a role + the permission subset it carries
+  // (include/exclude globs over the domain's AclPermission
+  // catalogue) + optional signup-assignment flags. A consuming
+  // auth plugin reads these to seed the role / role-permission
+  // rows and to assign roles at signup. Roles + ACL are a w17
+  // concept (the plugin only consumes them), so they live on the
+  // domain alongside the ACL cascade switches, NOT in the plugin
+  // activation.
+  //
+  // AT RUNTIME THE CATALOGUE IS ROWS, not only a compile-time
+  // artefact — there is no "list the roles" API because none is
+  // needed. Each declared role becomes one `Role` row (plus
+  // `RolePermission` rows for its resolved permissions) under the
+  // ACTIVATION's tables: `<registered_as>.Role`, so `auth.Role` for
+  // an activation registered as `auth`. They arrive through the
+  // ordinary fixtures pipeline as `fixtures/<domain>/acl-roles.json`,
+  // applied in dev AND in production — roles are authorization
+  // policy, not dev sample data. Query them like any other table.
+  //
+  // Row pks are DETERMINISTIC: UUIDv8 derived from the role's `key`
+  // (not its `name`, so a rename keeps the row). The same key
+  // therefore has the same id in every environment and after every
+  // regeneration — which is what makes it safe to reference a role id
+  // before anything has used it, e.g. to pre-assign a role to a user
+  // who has not signed in yet.
+  //
+  // ⚠️ A role with `all_permissions` gets a `Role` row and NO
+  // `RolePermission` rows at all. Its grant is a runtime expansion
+  // over the deployed lock, so it follows every permission the lock
+  // declares instead of freezing a snapshot. Anything that enumerates
+  // `RolePermission` to learn what a role carries will therefore
+  // report an admin role as granting NOTHING. Read the flag, not the
+  // rows.
+  //
+  // Like the permission ids above, this catalogue is per DOMAIN.
+  //
+  // Spec: docs/specs/plugins/auth-tokens-and-roles.md §5.
+  repeated AclRole acl_roles = 50155;
+}
+
+// AclRole declares one role in a domain's role catalogue
+// (`(w17.acl_roles)`). The permission membership is expressed as
+// include/exclude globs over the domain's `AclPermission`
+// catalogue (the same glob shape as DownloadEndpoint selectors);
+// no include + no exclude = ALL permissions. Signup-assignment
+// flags let a turnkey auth plugin grant roles automatically.
+message AclRole {
+  // Role name — becomes a Role row (SLUG). Required, unique within
+  // the catalogue.
+  string name = 1;
+
+  // key — the role's STABLE IDENTITY. Required, unique within the
+  // catalogue, a SLUG, and never shown to an end user.
+  //
+  // Slug because it becomes `Role.preset_key`, a SLUG column: lowercase
+  // letters, digits, and single hyphens between them. An underscore is the
+  // obvious way to write a two-word key and it is refused — by codegen now,
+  // and before that only by the database at apply time, which meant in CI or
+  // in production. This line says so because it did not, while the line above
+  // said it about `name` (a consumer, 2026-09-23).
+  //
+  // The seeded Role row's primary key is derived from this, not from
+  // `name`. That distinction is the whole reason it exists: with the PK
+  // derived from the name, renaming a declared role minted a NEW row,
+  // left the old one in place (a fixture seed never deletes), and every
+  // `UserRole` kept pointing at the old id — so the rename silently kept
+  // granting the old permission set while the new role sat unheld by
+  // anyone. Nothing reported it; the rename looked like it worked.
+  //
+  // It also separates the supplier's identity from the customer's label.
+  // A project may let its customers rename a shipped preset (`Role.name`
+  // is theirs to change); the key is what pairs the renamed row back to
+  // this declaration on the next codegen.
+  //
+  // Required rather than defaulting to the name: a key that falls back
+  // leaves the defect in place for everyone who does not opt in, and the
+  // day it matters is the day someone renames a role — which is exactly
+  // when nobody is thinking about seed identity.
+  string key = 9;
+
+  // scope — WHERE this role's grants apply. Consumed by a plugin whose
+  // activation has per-organization membership; ignored otherwise.
+  AclRoleScope scope = 10;
+
+  // realm — opaque credential-class hint consumed by the auth
+  // plugin: "session" → bearer-session roles, "api" / "mcp" → API
+  // / MCP-token roles. Empty defaults to "session". w17 itself
+  // doesn't interpret it (keeps acl.proto free of any plugin's
+  // TokenType enum).
+  string realm = 2;
+
+  // include / exclude — globs over the domain's AclPermission
+  // catalogue (`<module>.<Service>.<Method>` /
+  // `<module>.<Model>#<action>`). No include + no exclude = every
+  // permission; include = only those; exclude subtracts. Resolved
+  // against acl.lock.json at codegen — a glob matching zero
+  // permissions is a codegen error (typo guard).
+  repeated string include = 3;
+  repeated string exclude = 4;
+
+  // first_user — assign this role to the FIRST registered user
+  // (atomic COUNT==0 guard). The bootstrap-admin pattern. At most
+  // one role per realm may set it.
+  bool first_user = 5;
+
+  // default — assign this role to every signup AFTER the first.
+  // At most one role per realm may set it.
+  bool default = 6;
+
+  // all_permissions — runtime WILDCARD grant. A holder of this
+  // role passes EVERY ACL permission check, regardless of what
+  // is stored in the DB and INCLUDING permissions added by
+  // later codegen runs (the auth plugin resolves it via
+  // `acllock.GrantAll(lock)` at Authenticate time, reading the
+  // deployed lock — never a `RolePermission` seed snapshot).
+  // This is the superuser / superadmin knob; it is realm-scoped
+  // like any other role and is NOT admin-specific (a normal API
+  // realm can carry a full-access role too). Mutually exclusive
+  // with include/exclude (a wildcard that also filters is a
+  // contradiction — the parser rejects it). Contrast with the
+  // "no include + no exclude" shape above, which materialises
+  // the CURRENT catalogue as seed rows (a snapshot that does
+  // not follow future permissions); prefer all_permissions for
+  // a durable full-access role.
+  bool all_permissions = 7;
+
+  // activation — which plugin activation's RBAC tables this role is
+  // seeded into, by `registered_as` (e.g. "admin_auth"). A domain may
+  // activate the auth plugin more than once — an app-user realm plus a
+  // tenant-less admin realm is the ordinary shape — and each activation
+  // owns its OWN Role / RolePermission tables. The role catalogue is
+  // domain-level, so nothing in the declaration says which of them a
+  // role belongs to.
+  //
+  // Optional. When the domain has exactly ONE rbac-providing
+  // activation, leave it empty: there is nothing to disambiguate and
+  // the seed goes there. When it has SEVERAL, this field is REQUIRED —
+  // codegen refuses rather than picking one, because both readings are
+  // plausible and the wrong one is silent. It used to pick whichever
+  // activation was declared first in `(w17.domain).plugins[]`, so
+  // reordering two activations moved an entire role catalogue —
+  // including a `first_user` + `all_permissions` bootstrap admin — from
+  // the admin realm onto the realm with public signup, with no
+  // diagnostic. Naming the target is what makes that intent checkable.
+  //
+  // Per role, not per catalogue: one domain may seed a bootstrap admin
+  // into the admin realm and a default member role into the app realm.
+  string activation = 8;
+}
+
+// AclRoleScope says WHERE a role's grants apply once a project has more
+// than one tenant to apply them in.
+//
+// It exists because a role assignment with no organization on it means
+// "in EVERY organization". That is the right reading for staff and
+// admin roles, and the wrong one for anything a customer's own people
+// hold — a declared `default: true` role would otherwise hand every
+// signup its permissions inside every company they ever join, a
+// cross-tenant grant introduced by the very feature that adds tenant
+// isolation. Making the choice explicit is what turns that into a
+// question the author answers instead of a default they inherit.
+enum AclRoleScope {
+  // Unspecified = REALM. Every role that predates this field keeps
+  // behaving exactly as it did.
+  ACL_ROLE_SCOPE_UNSPECIFIED = 0;
+
+  // REALM — the grant applies everywhere, in every organization. Staff
+  // and support roles; the operator's own access.
+  ACL_ROLE_SCOPE_REALM = 1;
+
+  // ORG — the grant applies only inside the organization it was
+  // assigned in. The ordinary shape for a customer-facing role.
+  //
+  // Mutually exclusive with `first_user` / `default`: both are
+  // SIGNUP-time hooks, and joining an organization is not signing up.
+  // Creating memberships is deliberately left to the project (see
+  // docs/specs/plugins/auth-cli-login-and-orgs.md), so the project
+  // assigns the joining member's role from its own handler. Codegen
+  // refuses the combination rather than assigning nothing and letting
+  // the author discover it from an empty permission set.
+  ACL_ROLE_SCOPE_ORG = 2;
+}
+
+extend google.protobuf.ServiceOptions {
+  // (w17.acl_service) — service-level slot of the endpoint
+  // cascade. Lives directly on a `service` block to opt the
+  // whole service in/out without touching individual RPCs.
+  // Wins over file-level `acl_endpoints`; per-method
+  // `(w17.acl_endpoint)` still overrides.
+  optional bool acl_service = 50153;
+}
+
+extend google.protobuf.MessageOptions {
+  // (w17.acl_model) — message-level override of the model-ACL
+  // cascade. True forces the model into ACL even when no
+  // ancestor file declared `acl_models`; false forces it out
+  // even when the domain declared `acl_models = true`. Absent
+  // = inherit the file-level cascade.
+  optional bool acl_model = 50152;
+}
+
+extend google.protobuf.MethodOptions {
+  // (w17.acl_endpoint) — method-level override of the endpoint-
+  // ACL cascade. Same presence-aware semantics as `acl_model`.
+  optional bool acl_endpoint = 50154;
+}

@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// Client-generator vocabulary — annotations the FE client
+// codegen reads to drive entity-tagged cache invalidation
+// (REV-140 / C4). All annotations are opt-in: a project with
+// none of them gets the C1 dumb-drop-on-mutation behaviour;
+// declaring entity tags upgrades to smart-drop-by-type.
+//
+// **The three annotations form one cooperative shape:**
+//
+//   (w17.returns_entities) on query RPCs declares which
+//   entity TYPES the response payload carries. The FE stamps
+//   cache entries with `(group, message, id)` tags resolved
+//   via the response's `(w17.entity_id)`-marked field. Cache
+//   reads check by URL+payload-hash; cache invalidations
+//   work by tag.
+//
+//   (w17.touches_entities) on mutation RPCs declares which
+//   entity TYPES the mutation modifies. On success the FE
+//   drops every cache entry tagged with a matching type
+//   (instead of dumb-drop-all from C1). The same names also
+//   feed the `w17.invalidate` cross-tab signal emitted on the
+//   reserved eventbus topic — every connected client's
+//   PageClient subscribes to the w17-events SSE channel and
+//   drops the same entries cross-tab.
+//
+//   (w17.entity_id) on message fields marks WHICH field
+//   carries the entity's primary identifier the cache reads.
+//   Exactly one per message that any `(w17.returns_entities)`
+//   refers to — the parser refuses zero (no tag-stamp possible)
+//   or multiple (ambiguous identity).
+//
+// **Type names** resolve as unqualified message names in the
+// same proto package as the RPC.
+//
+// A name that DOES resolve is validated: the referenced message
+// must carry exactly one `(w17.entity_id)`, and the client
+// generator refuses zero or several with steering.
+//
+// A name that resolves to nothing is deliberately NOT refused —
+// it is the legacy hand-shaped-response escape hatch, an entity
+// tagged off a response's top-level `id` with no message behind
+// it to introspect. This once claimed the parser "refuses
+// unknowns with steering"; enforcing that literally would have
+// closed the hatch the emitter documents keeping open, so the
+// sentence was the wrong half of the pair to keep.
+//
+// **Independent of (w17.field).pk** — DB primary key and cache
+// identity can diverge. A message returned by a JOIN query
+// might not be a DB table at all but still have a stable
+// identity for cache purposes. Keep the two annotations
+// separate; if they happen to point at the same field, that
+// matches the common case.
+
+// (w17.returns_entities) — query method annotation declaring
+// the entity TYPES this RPC's response is keyed by.
+//
+// Usage:
+//   rpc GetAccount(GetReq) returns (Account) {
+//     option (w17.returns_entities) = "Account";
+//   }
+//
+// Multi-entity response (e.g. JOIN-shaped):
+//   rpc GetAccountWithOwner(GetReq) returns (Joined) {
+//     option (w17.returns_entities) = "Account";
+//     option (w17.returns_entities) = "User";
+//   }
+extend google.protobuf.MethodOptions {
+  repeated string returns_entities = 50140;
+}
+
+// (w17.touches_entities) — mutation method annotation
+// declaring the entity TYPES this RPC modifies. Drives both
+// page-local cache invalidation (immediate, on success) and
+// cross-tab invalidation via the reserved `w17.invalidate`
+// eventbus topic (when the BE emits it — auto-emit codegen
+// is C4.3+).
+//
+// Usage:
+//   rpc UpdateAccount(UpdateReq) returns (Account) {
+//     option (w17.touches_entities) = "Account";
+//   }
+extend google.protobuf.MethodOptions {
+  repeated string touches_entities = 50141;
+}
+
+// (w17.entity_id) — field annotation declaring this proto
+// field is the entity's primary identifier. The FE client
+// reads it to compute the `(group, message, id)` cache tag
+// per response payload.
+//
+// Exactly one per message that any `(w17.returns_entities)`
+// references — the parser refuses zero (no tag-stamp
+// possible) or multiple (ambiguous identity).
+//
+// Usage:
+//   message Account {
+//     string id = 1 [(w17.entity_id) = true];
+//     string name = 2;
+//   }
+extend google.protobuf.FieldOptions {
+  bool entity_id = 50142;
+}
+
+// InvalidateEvent is the wire payload of the reserved
+// `w17.invalidate` eventbus topic (C4.4). Storage mutation
+// handlers with `(w17.touches_entities)` emit one per success;
+// the gateway's `/w17-events` SSE route forwards it as a JSON
+// frame; every connected PageClient auto-subscribes (per
+// C4.3) and drops cache entries tagged with the matching
+// `(group, message)` family.
+//
+// Wire flow:
+//   bus.Dispatch(ctx, channel, "w17.invalidate", &InvalidateEvent{
+//       Group: "accounts", Message: "Account", Ids: []string{"acc-1"}})
+//   → gateway forwards as: event: w17.invalidate
+//                          data: {"group":"accounts","message":"Account","ids":["acc-1"]}
+//   → client cache.invalidateByEntityType([{group, message}])
+//
+// **ids** is informational — the FE client today drops by
+// (group, message) family without consulting it. Future
+// polish may narrow drops to specific ids when populated.
+message InvalidateEvent {
+  string group = 1;
+  string message = 2;
+  repeated string ids = 3;
+
+  // labels is the event's BROADCAST key — the same
+  // `w17-label-<name>` map every other event carries in its
+  // envelope, taken from the mutating request's context by
+  // `eventbus.EmitInvalidate`.
+  //
+  // The reserved topic bypasses the per-domain envelope (it is
+  // dispatched as this message directly, not wrapped), so it had
+  // no label channel at all, and the SSE hub withholds an
+  // unlabelled event from every principal on a surface that
+  // partitions by label: cache invalidation reached NOBODY in a
+  // multi-tenant project, while the emitted transcode's comment
+  // claimed it broadcast to everyone. `entitled`'s own contract
+  // names the requirement — "cross-tenant cache invalidation must
+  // label its events per tenant" — and this is the channel that
+  // implements it.
+  //
+  // Consumed by the gateway hub, not by the browser: the SSE
+  // frame body is marshaled without it (a client is never told
+  // the label it was filtered by).
+  map<string, string> labels = 4;
+}

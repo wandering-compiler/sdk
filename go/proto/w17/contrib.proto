@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+// Plugin extension vocab (Phase G of the plugin-system
+// implementation plan — `docs/specs/plugins/`).
+//
+// Lets a consuming project add fields to a plugin's exposed
+// message without forking the plugin. The extension is a
+// separate proto message in the consuming project's proto
+// tree that points at the plugin's message via fully-qualified
+// proto name. At IR build time the migrator merges the
+// extension's fields into the target's IR record so the
+// emitted SQL table carries both halves.
+//
+// Example — a project whose `app` domain activates the auth
+// plugin as `auth`:
+//
+//   // In the consuming project, NOT in the plugin tree.
+//   message AuthUserExt {
+//     option (w17.contrib.extends) = {
+//       target: "myproj.app.auth.User"
+//     };
+//     string nickname = 100 [(w17.field) = { type: CHAR, max_len: 64 }];
+//   }
+//
+// `target` is the STAGED message name, not the plugin author's
+// wire package. Staging rewrites every plugin proto's `package`
+// to `<activating domain's package>.<registered_as>`, and the
+// merger looks the target up by that post-staging identity — so
+// the plugin's own `w17.contrib.auth.User` resolves to nothing.
+//
+// The distinction is not pedantic: one plugin can be activated
+// SEVERAL times in the same project (a customer realm plus a
+// staff realm, say), each with its own tables. `target` picks
+// exactly one of them, which is the only way an extension can
+// mean "the identity my users have" rather than "every identity
+// table this plugin ever produced".
+//
+// Field-number collisions across plugin + extension are
+// refused at IR-merge time (see `mergeExtensionColumns` in
+// the migrator IR build). Convention is for plugin fields to
+// use low numbers (1-99) and extensions to start at 100, but
+// the rule is plugin-author hygiene rather than manifest-
+// enforced — the reserved-range manifest field was dropped
+// in the 2026-05-22 redesign because the collision check
+// alone is sufficient.
+
+// Package `w17.contrib` (not `w17`) so the option syntax
+// reads `(w17.contrib.extends)` — package `w17.contrib` plus
+// field name `extends`. Matches the spec's authoring surface
+// in docs/specs/plugins/manifest.md without needing snake-
+// case workarounds.
+package w17.contrib;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+extend google.protobuf.MessageOptions {
+  Extends extends = 51022;
+  // (w17.contrib.plugin_feature) on `message` — opt a message
+  // into a plugin feature tag. Staging-time filter drops the
+  // message block from the staged .proto when the activation's
+  // `features:` set doesn't include this tag. Cross-file refs
+  // to dropped messages surface as standard protocompile
+  // "no such type" errors. See Phase G2 of the auth+acl plugin
+  // track + docs/specs/plugins/feature-tags.md.
+  //
+  // Proto3 namespaces extension field names per containing
+  // package; the three plugin_feature_* variants below carry
+  // identical semantics for service / method targets — the
+  // suffix is a syntactic disambiguator, not a semantic split.
+  // Same tag string across all three variants is one logical
+  // feature (one entry in plugin.yaml `features:` catalog).
+  string plugin_feature = 51023;
+}
+
+extend google.protobuf.ServiceOptions {
+  // (w17.contrib.plugin_feature_svc) on `service` — opt the
+  // whole service into a plugin feature tag. Methods inherit
+  // the service-level tag unless they declare their own
+  // method-level override.
+  string plugin_feature_svc = 51024;
+}
+
+extend google.protobuf.MethodOptions {
+  // (w17.contrib.plugin_feature_rpc) on an `rpc` — method-level
+  // tag. Overrides the enclosing service's tag (if any). A
+  // method without its own tag inherits the service's tag; a
+  // method without ANY tag in scope (no method, no service) is
+  // always emitted (untagged baseline).
+  string plugin_feature_rpc = 51025;
+
+  // ⛔ 51027 IS BURNED — DO NOT REUSE IT.
+  //
+  // It was `plugin_feature_rpc_unless`, the INVERSE gate: emit this rpc
+  // only when the named feature is NOT active. Retired 2026-08-26 (Jiri).
+  //
+  // The burn is a COMMENT and cannot be anything else: proto3 has no
+  // `reserved` inside an `extend` block, and the number lives in
+  // google.protobuf.MethodOptions, which is not ours to reserve in. So
+  // this paragraph is the whole guard. Reusing 51027 would make an old
+  // .proto compiled against a new vocabulary read one option as another,
+  // silently.
+  //
+  // It existed for one shape: a baseline rpc a feature had to REPLACE
+  // rather than extend. The auth plugin's `CreateUser` forced it —
+  // `tenant_scope` adds a NOT NULL `User.tenant_id`, the fixed INSERT
+  // could not write it, so the feature gated the baseline OUT and a twin
+  // `CreateUserWithTenant` took over.
+  //
+  // Feature-gated DQL fragments removed the need: `?feature(tenant_scope)`
+  // splices the column into the one INSERT, so a single rpc serves both
+  // activations. That is not merely a tidier spelling — the twin cost an
+  // EVENT. An event has exactly one emit site, the baseline owned it, and
+  // the baseline was the one being filtered away, so with `tenant_scope`
+  // on, `UserCreated` had no emitter and every subscriber to
+  // auth.user.created silently never fired.
+  // See docs/decisions/dql-feature-gated-fragments.md.
+  //
+  // It could still express a baseline a feature wholly replaces with
+  // DIFFERENT SEMANTICS rather than an extra column. Nothing has ever
+  // needed that, and a vocabulary entry no example can exercise is one
+  // whose behaviour nothing checks — which is what this repo's coverage
+  // ratchet exists to say out loud.
+}
+
+extend google.protobuf.FieldOptions {
+  // (w17.contrib.plugin_feature_field) on a single field inside
+  // a message that ITSELF survives the filter — opt one column
+  // into a plugin feature tag. Staging-time filter splices the
+  // field declaration (number, type, all its `[...]` options)
+  // out of the staged .proto when the activation's `features:`
+  // set doesn't include this tag; the enclosing message stays.
+  //
+  // The point is conditional *field existence*: the field's FK,
+  // `required`/NOT NULL, and every other `(w17.field)` constraint
+  // ride along with the declaration, so a feature-off activation
+  // gets no column AND no half-applied constraint — there is no
+  // fragile "field present but unconstrained" middle state. Tag a
+  // field and the message it references (e.g. a FK target) with
+  // the SAME feature so they drop atomically and no surviving
+  // declaration dangles a reference to a dropped type.
+  string plugin_feature_field = 51026;
+}
+
+// Extends marks a message as a plugin extension. The IR
+// merger uses `target` to locate the plugin message being
+// extended (by fully-qualified proto package + message name)
+// and copies the extension's fields into the target's
+// generated table.
+message Extends {
+  // Fully-qualified proto name of the message being extended,
+  // AFTER STAGING — i.e.
+  // `<activating domain's proto package>.<registered_as>.<Message>`,
+  // e.g. `myproj.app.auth.User`. NOT the plugin author's own
+  // package (`w17.contrib.auth.User`), which staging rewrites
+  // away and which therefore resolves to nothing.
+  //
+  // The IR merger errors if the target isn't among the loaded
+  // messages — typically because the plugin isn't activated in
+  // any domain whose protos are part of this compile, or because
+  // the FQN was written against the plugin's wire package instead
+  // of the activation's.
+  string target = 1;
+}

@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// w17/lock.proto — annotations carried by the codegen-emitted
+// lock files (acl.lock.proto + events.lock.proto) under each
+// domain's proto root. These files used to ship as
+// hand-readable JSON (acl.lock.json / events.lock.json) with a
+// `checksum` field inside the JSON body; moving to proto puts
+// the same integrity guarantee on a file-level option so the
+// proto descriptor IS the lock, and protoc / the project's
+// proto loader IS the reader. No bespoke JSON path.
+//
+// The annotation surface is intentionally minimal — checksum is
+// the only piece of metadata the JSON locks carried beyond the
+// data itself (permissions map / events map). Reserved IDs
+// (perm IDs that were once allocated and must never be reused)
+// ride along as proto-native `reserved <n>;` declarations on
+// the enum / message body — no separate option for them.
+
+extend google.protobuf.FileOptions {
+  // (w17.lock.checksum) — sha256 digest of the lock's
+  // canonical content (`sha256:<hex>`). Recomputed on every
+  // write; verified on every read by the project's proto
+  // loader. Mismatch → refuse with a diagnostic naming the
+  // file + declared vs computed digest. Same anti-tampering
+  // contract the legacy JSON locks had.
+  //
+  // Canonical content for an ACL lock = sorted enum value
+  // names + their numeric values + the `reserved` list, in a
+  // deterministic textual encoding. For an events lock =
+  // sorted oneof case names + numeric values + reserved.
+  // The exact encoding is documented in the generator that
+  // emits the file (sole authority on what gets hashed); the
+  // reader recomputes from the in-memory FileDescriptor.
+  optional string lock_checksum = 50170;
+
+  // (w17.lock_signature) — an ed25519 signature over the lock's
+  // canonical content, produced SERVER-SIDE by the console at
+  // generate time (the console holds the signing key;
+  // W17_CONSOLE_PRIVATE_KEY_PATH in production, the embedded dev
+  // key otherwise). Format: `<alg>:<hex>` with alg `ed25519/v1`.
+  //
+  // Unlike lock_checksum — a bare sha256 anyone who can edit the
+  // file can recompute — this is the tamper control the release
+  // gate verifies: a hand-reassignment of permission IDs changes
+  // the canonical content, so the signature no longer validates
+  // and the gate refuses.
+  //
+  // That holds only because `w17ctl acl generate` ALSO verifies before
+  // it inherits ids from the committed lock. Without that second
+  // half the guarantee lasted until the next regen: the generate
+  // path reseeded from the edited file and signed the ids it
+  // declared, so a permutation the gate had just refused came back
+  // validly signed. Read the lock to inspect it however you like;
+  // read it to seed an allocation only through the verifying path.
+  //
+  // Parity with w17/lock.yaml: a REAL
+  // boundary in production (the private key is not in the repo);
+  // in dev the embedded dev key signs + verifies and is NOT a
+  // security boundary (same accepted threat model as lock.yaml).
+  //
+  // Signed payload = the SAME canonical content lock_checksum
+  // hashes (sorted enum value names + numeric IDs + reserved),
+  // so the signature binds exactly the ID allocation the gate
+  // must trust.
+  optional string lock_signature = 50171;
+
+  // (w17.lock_derivation) — which version of the compiler's
+  // permission-DERIVATION RULE minted the ids in this lock.
+  //
+  // Ids survive a regen by NAME: Allocate keeps an existing
+  // name's id so grants stored against it stay valid. That is
+  // the right behaviour while the rule mapping a name to a
+  // meaning holds still. When the RULE changes, the name
+  // survives and its meaning does not, and nothing notices —
+  // retirement cannot help, because nothing was retired.
+  //
+  // That happened once already. Before the model axis became
+  // admin-only, `core.Note#view` was derived from a REST
+  // method; afterwards the same name is derived from an admin
+  // page. A lock minted under the old rule carried id 1 for
+  // "read core.Note over REST"; the identical lock read by the
+  // new compiler gates admin pages with it, while the REST
+  // endpoint it used to protect emits no check at all. Every
+  // principal holding id 1 silently changed what it can do.
+  // No drift signal fired: the name was unchanged, so
+  // sameLockContent saw no difference, and compat has no ACL
+  // axis at all.
+  //
+  // This marker makes the NEXT such change loud. It is
+  // deliberately OUTSIDE the signed payload: it defends against
+  // an honest upgrade silently redefining stored grants, not
+  // against an adversary — an actor who can edit this option can
+  // edit the ids themselves, and the signature is what covers
+  // that. Keeping it unsigned means adding it did not invalidate
+  // every existing signature.
+  //
+  // Absent = minted before the marker existed. Those locks are
+  // adopted as current, because no property of them can say
+  // which rule wrote them; the guarantee starts from here.
+  optional uint32 lock_derivation = 50172;
+}

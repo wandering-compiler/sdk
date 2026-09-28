@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package w17.sqlite;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/sqlite;sqlitepb";
+
+// (w17.sqlite.field) — SQLite-specific per-field options. Mirrors the
+// (w17.pg.field) / (w17.mysql.field) shape; non-SQLite emitters ignore
+// it (or error if non-empty flags are set).
+//
+// SQLite has no extension / DOMAIN concept and a deliberately
+// permissive type system (column types are storage-class hints, not
+// strict). The escape hatch is still useful for: declaring a NUMERIC
+// column with a specific affinity, opting into a custom virtual-table
+// column-type keyword (FTS5 contentless tables, R*Tree column types),
+// or pinning a non-standard storage-class string the application
+// reads back at runtime. As with MySQL, no per-dialect
+// `required_extensions` and no registry — `custom_type` is opaque
+// per-column SQL.
+//
+// Usage:
+//   // SQLite R*Tree virtual-table column:
+//   double minx = 6 [
+//     (w17.sqlite.field) = { custom_type: "REAL NOT NULL" }
+//   ];
+extend google.protobuf.FieldOptions {
+  SqliteField field = 51005;
+}
+
+message SqliteField {
+  // --- Escape hatch: raw SQL column type ---
+  // When non-empty, this string is used verbatim as the SQL column type
+  // and the SQLite emitter SKIPS the (w17.field).type dispatch for
+  // this column. Use for SQLite-specific column declarations the
+  // cross-dialect vocabulary doesn't cover. All other (w17.field)
+  // semantics — `null`, `unique`, bounds, CHECK constraints,
+  // defaults — still apply.
+  //
+  // EXCEPT the string-only rules: `min_len` / `max_len` / `pattern` /
+  // `choices` / `blank` synthesise CHECKs that assume text storage
+  // (char_length, `<> ''`, a regex, an IN list) against a column type the
+  // author overrode, so the emitter cannot honour them. Declaring one
+  // alongside `custom_type` is a compile error — the same refusal
+  // (w17.pg.field) has always made. It used to be ACCEPTED here and
+  // silently produce nothing, which states a rule that is not in force.
+  //
+  // Mandatory rule (mirrors pg.field / mysql.field): no dialect is
+  // allowed to infer column type from another dialect's `custom_type`.
+  // PG / MySQL emitters refuse if this field is set on a column they're
+  // emitting.
+  //
+  // Field number 10 matches PgField.custom_type / MysqlField.custom_type
+  // for symmetry.
+  string custom_type = 10;
+
+  reserved 1, 2, 3, 4;
+}

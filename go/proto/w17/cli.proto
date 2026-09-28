@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-153 (2026-06-10) — CLI ("cli") exposure annotations. The
+// fourth gateway transport, sibling to REST (`rest.proto`), MCP
+// (`mcp.proto`) and rpc (`rpc.proto`): a generated command-line
+// surface with w17ctl-style namespace nesting.
+//
+// Two binaries are emitted from the SAME `(w17.cli)` picks; they
+// differ ONLY in where they connect:
+//
+//   - `<domain>-cli` — IN-BUNDLE. Generated inside the gateway /
+//     server bundle. Dials the BACKEND services directly, tier-
+//     routed exactly like the REST handlers (storage / business
+//     conns). Sees any backend method. A privileged operator /
+//     service CLI that ships with the bundle.
+//   - `<domain>-ctl` — STANDALONE. Its own published Go module +
+//     Docker image, free of private internals. Connects ONLY over
+//     the public grpc gateway (the `grpcapi` surface emitted by
+//     `rpc.proto`). A cli-command lands in `-ctl` only when its
+//     method is ALSO `(w17.rpc)`-exposed — i.e. there is a public
+//     contract to call through. The distributable remote-control
+//     client, exactly the shape of today's w17ctl.
+//
+// Both binaries are hand-rolled stdlib `flag` dispatch (no CLI
+// library) and can run local actions (mkdir / rm / glob / walk /
+// subprocess) cross-OS with the Go standard library (os/exec,
+// path/filepath), mixed with the remote call in the per-command
+// body file (regenerated only when missing, so hand-written local
+// logic survives codegen).
+//
+// Shape vs REST / MCP / rpc — per-METHOD opt-in (like inline
+// `(w17.mcp)` / `(w17.rpc)`), NOT a whole-service re-export. Unlike
+// the bare-bool `(w17.mcp)` / `(w17.rpc)` picks, `(w17.cli)` is a
+// message option because a CLI pick carries a command PATH (the
+// namespace nesting + action + positional bindings), not just a
+// yes/no flag.
+//
+// Driven by `srcgo/domains/gateway/parser`: every loaded `.proto`
+// carrying `option (w17.cli_api) = { ... }` declares the CLI
+// surface; methods carrying `(w17.cli) = { command: "..." }` are
+// the picks. The gateway generator emits `src/cli/*.go` (dispatch
+// + flag adapters + per-command bodies) + a `cmd/<domain>-cli`
+// entry; the orchestrator emits the standalone `<domain>-ctl`
+// bundle for the rpc-exposed subset.
+
+extend google.protobuf.MethodOptions {
+  // (w17.cli) — expose this RPC as a CLI command. The `command`
+  // path declares where the command lands in the namespace tree
+  // and which request fields bind as positional arguments; the
+  // remaining request fields become `--flags`. Sibling-message
+  // shape (vs the bare-bool `(w17.mcp)` / `(w17.rpc)` picks)
+  // because the pick must carry the command path.
+  Cli cli = 50114;
+}
+
+extend google.protobuf.FileOptions {
+  // (w17.cli_api) — file-level option declaring this file as the
+  // CLI surface registry. A sentinel carrying the surface's
+  // identity + binary metadata; the per-method `(w17.cli)` picks
+  // do the wiring. The file declares ZERO messages, like
+  // `(w17.rest_api)` (REV-017), `(w17.mcp_api)` (REV-018) and
+  // `(w17.rpc_api)` (REV-152).
+  //
+  // One CLI surface per parse; two files carrying `(w17.cli_api)`
+  // is a hard error.
+  CliApi cli_api = 50115;
+}
+
+// Cli declares one CLI command derived from a gRPC method. The
+// request / response message types are reused verbatim: request
+// fields are bound to positional args + flags, the response is
+// printed (JSON by default).
+message Cli {
+  // command — the command PATH: whitespace-separated namespace
+  // segments, then the action, then optional `<field>`
+  // placeholders binding request fields as POSITIONAL arguments.
+  //
+  // Example: `command: "task project create <name>"` produces
+  //   <domain>-cli task project create <name> [--other-field ...]
+  // where `name` is taken positionally and every other request
+  // field becomes a `--flag`. Repeated positionals (only the last
+  // placeholder may bind a `repeated` field) are variadic.
+  //
+  // Rules (enforced at parse time):
+  //   - At least one non-placeholder segment (the action).
+  //   - Segments are kebab-or-snake identifiers; placeholders are
+  //     `<field>` naming an existing request field.
+  //   - Only the last placeholder may bind a `repeated` field.
+  //   - The full command path must be unique across the surface;
+  //     a token that is a namespace for one command and a leaf
+  //     action for another is a collision (hard error).
+  // Empty = derive the action from the method name (snake_case)
+  // with no namespace and no positional bindings.
+  string command = 1;
+}
+
+// CliApi declares the CLI surface — the binary-level metadata for
+// the generated command-line tools. The picked commands are marked
+// inline via `(w17.cli)`; this message carries only surface-level
+// identity + knobs.
+message CliApi {
+  // Logical name of the surface — "default" / "admin". Surfaces in
+  // tooling + diagnostics. Must be a snake_case identifier.
+  string name = 1;
+
+  // Version of this surface — "v1" / "0.0.0". Free-form string;
+  // surfaces in the generated `--version` output. Empty = "v1".
+  string version = 2;
+
+  // Human-readable description of the CLI surface. Surfaces in the
+  // root `--help` text of both generated binaries. Empty = no
+  // description.
+  string description = 3;
+}

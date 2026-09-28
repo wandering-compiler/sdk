@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package w17.pg;
+
+import "google/protobuf/descriptor.proto";
+import "w17/pg/module.proto";  // CustomType + Conversion
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/pg;pgpb";
+
+// (w17.pg.project) — project-level Postgres options. Sibling of
+// (w17.pg.module) but applies to the whole project (cross-domain),
+// not a single domain. Holds the project-wide custom_types registry
+// shared across every domain inside the same proto root.
+//
+// Convention: live in a single file at the proto root, typically
+// named `project.proto`. The compiler discovers it by annotation —
+// any file with (w17.pg.project) set is the project file. At most
+// one file per BuildMany call may carry this annotation; multiple =
+// compile error.
+//
+// Project options exist as the typed alternative to compiler-shipped
+// stdlib registries. The author is the source of truth for what types
+// the project uses; nothing is "magic" or hidden.
+//
+// Future extensibility: PgProject is the long-term home for project-
+// wide PG concerns beyond custom_types — naming conventions, default
+// extensions to preinstall, code-gen knobs, approval policies. Add
+// fields to PgProject as those concerns surface; the file pattern
+// stays unchanged.
+extend google.protobuf.FileOptions {
+  PgProject project = 51200;
+}
+
+message PgProject {
+  // Project-wide custom_types registry — entries are visible to every
+  // domain in the project. Domain-level (w17.pg.module).custom_types
+  // EXTENDS this set; aliases must not collide between project and
+  // domain registries (collision = compile error, no shadowing).
+  //
+  // Typical entries: common PG types every domain references (HSTORE,
+  // CITEXT, MACADDR), shared vocabularies like embedding dimension
+  // aliases (embedding_384, embedding_1536), shared geometry SRIDs.
+  //
+  // Domain-specific types (only one domain uses them) belong in the
+  // domain's (w17.pg.module).custom_types instead — keeps project file
+  // focused on cross-cutting concerns.
+  repeated CustomType custom_types = 1;
+
+  // REV-024 (F1, 2026-05-09) — project-wide custom_functions
+  // registry. Same shape + collision rules as
+  // PgModule.custom_functions, but visible to every domain.
+  // Typical entries: ST_* (postgis), pgvector helpers, shared
+  // text-processing UDFs.
+  //
+  // Domain-specific functions (only one domain uses them) belong
+  // in the domain's (w17.pg.module).custom_functions instead.
+  repeated CustomFunction custom_functions = 2;
+}

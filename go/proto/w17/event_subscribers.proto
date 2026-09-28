@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+import "w17/event.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-089 (2026-05-14) — subscriber-registry sentinel surface.
+//
+// Mirrors `(w17.rest_api)` shape (REV-017): a file-level option
+// that turns a `.proto` file into a registry, with zero message
+// declarations of its own. Each domain may carry one or more
+// `subscribers*.proto` sentinel files; the loader recognises the
+// pattern and reads only the option, skipping normal symbol
+// emission.
+//
+// ONE sentinel PER DOMAIN, producing one subscriber bundle at
+// codegen time (`cmd/<domain>-subscribers/main.go`) — the same
+// one-surface-per-domain rule the mcp / gateway / admin
+// surfaces follow. A second `subscribers*.proto` under the same
+// domain is a parse-time error: it has no separate bundle to
+// emit and would clobber the first's generated files.
+//
+// (This doc claimed the opposite until 2026-07-31 — "multiple
+// sentinels produce multiple binaries, the path to per-channel
+// isolation" — while the compiler had always refused the second
+// one. Nothing noticed because no project had ever written a
+// second sentinel. The refusal is the behaviour kept; multiple
+// bundles per domain is a feature, not a bug fix.)
+//
+// Cross-domain subscription is forbidden: subscriptions under
+// `proto/domains/<X>/` may only reference events declared in
+// `<X>`'s event index. The enforcing diag steers authors toward
+// gRPC calls for cross-domain reactions.
+//
+// Driven by `srcgo/domains/eventbus/parser`: subscriber sentinel
+// files participate in the same parser pass as the emit-side
+// scan; resolved subscriptions feed the subscriber-binary
+// codegen.
+//
+// Design: docs/decisions/eventbus-redesign.md +
+// docs/specs/eventbus/subscribers-registry.md.
+
+extend google.protobuf.FileOptions {
+  // (w17.event_subscribers) — file-level option declaring this
+  // file as a subscriber registry. The compiler reads the
+  // subscription list, validates each entry against the
+  // enclosing domain's event index + gRPC service catalogue,
+  // and generates a standalone subscriber binary for the
+  // surface. Other contents of the file are ignored (registry
+  // is a pure sentinel, no messages of its own).
+  EventSubscribers event_subscribers = 50132;
+}
+
+// EventSubscribers — the file-level registry body.
+//
+// One sentinel file = one logical subscriber surface, and one
+// per domain (see the file header). By default it generates a
+// standalone binary at `cmd/<domain>-subscribers/`. The
+// `colocated: true` alternative — a `Register<...>` helper
+// hooked onto a bus in the emitter's own process — is REFUSED
+// at parse time; see the field's own doc for why.
+//
+// (The per-surface filename suffix this doc used to describe —
+// `subscribers_audit.proto` → `-audit` — went with the
+// multiple-sentinels claim it depended on.)
+//
+// Empty `subscriptions` list = parser warning (a surface with
+// no subscriptions ships a binary / Register that immediately
+// returns; usually authoring oversight).
+message EventSubscribers {
+  // The subscriptions this surface ships. Order is irrelevant
+  // at runtime (the dispatcher keys on envelope oneof tag, not
+  // list order) but preserved in generated source for
+  // diffability.
+  repeated Subscription subscriptions = 1;
+
+  // Co-located surface — the generated subscriber dispatch
+  // runs in-process inside the emit binary rather than as a
+  // standalone `cmd/<domain>-subscribers/` binary. The
+  // generator emits a `Register<Domain>Subscribers(ctx,
+  // factory, invoker) error` helper that wires every channel
+  // onto the caller-supplied SubscriberFactory.
+  //
+  // ⚠️ **REFUSED at parse time — not implemented end to end.**
+  // The design has main() in the emit binary calling Register
+  // at boot, and no generated project has a main that can:
+  // every `w17/services/**` binary is generated + DO NOT EDIT,
+  // hand-written code lives in the project's own srcgo and
+  // cannot BE a main, and no generator emits the call. The
+  // library rendered with zero callers, so the surface's
+  // events were published and consumed by nobody — silently,
+  // including on a durable channel. Rather than accept a
+  // declaration it cannot honour, the compiler refuses it.
+  //
+  // What is missing is exactly one thing: the emit binary's
+  // generated main constructing the invoker + factory and
+  // calling Register. The dispatch package, the channels
+  // config and the Register helper all render today.
+  //
+  // The knock-on: MEMORY-channel SUBSCRIPTIONS are therefore
+  // unreachable (a standalone surface is a separate process
+  // with no shared bus, and this was the other shape). A
+  // MEMORY channel can still be emitted on; it just cannot be
+  // consumed yet.
+  //
+  // Default false (standalone) — the shape that works.
+  bool colocated = 2;
+}
+
+// Subscription — one (event, channel, topic_filter, handler)
+// tuple. Resolution rules:
+//
+//   - event         — ref into the enclosing domain's event index
+//                     (`<module>.<file>.<message>` or bare-name if
+//                     unambiguous). Cross-domain = diag.
+//   - channel       — direct match against `(w17.module).channels[].name`
+//                     in the enclosing domain. Unknown channel = diag.
+//   - topic_filter  — glob with `*` (single segment) and `**`
+//                     (multi-segment). Default `**` = match every
+//                     topic on the channel. Matches against the
+//                     emitted event's `topic` at delivery time;
+//                     NATS / REDIS_STREAMS push the filter down
+//                     to the transport when supported.
+//   - handler       — `<module>.<Service>.<Method>` ref into the
+//                     domain's gRPC service catalogue. Handler's
+//                     request type must match the event message
+//                     type (or a supertype the runtime can decode
+//                     into).
+message Subscription {
+  // Event ref — see resolution rules above.
+  string event = 1;
+
+  // Channel name — see resolution rules above.
+  string channel = 2;
+
+  // Topic glob — default `**` if empty.
+  string topic_filter = 3;
+
+  // Handler ref — see resolution rules above. Subscriber binary
+  // invokes this RPC over loopback gRPC for each matched
+  // delivery; the same handler may receive calls from non-bus
+  // clients too (it's just a normal gRPC method).
+  string handler = 4;
+
+  // Optional subscriber-side retry override. When set, applies
+  // ON TOP OF the channel + per-event retry cascade for this
+  // specific subscription — useful when one subscriber needs
+  // a more aggressive retry tail than its peers consuming the
+  // same channel.
+  //
+  // ONE DIRECTION ONLY. The broker consumer is provisioned per
+  // CHANNEL, so every declaration on a channel — per-channel,
+  // per-event, per-subscription — rolls up through max(). A
+  // figure BELOW the channel's rolled-up value is accepted and
+  // then has no effect: it cannot give one subscriber a shorter
+  // redelivery tail than its peers. Codegen names each such
+  // figure in a build NOTE at the top of the generated
+  // `channels/channels.go` rather than leaving it to look like
+  // configuration. To genuinely give one subscriber a shorter
+  // tail, put it on its OWN channel.
+  //
+  // Presence-aware merge: unset fields fall through to the
+  // channel/event/domain cascade (see `Event.retry`).
+  RetryPolicy retry = 5;
+}

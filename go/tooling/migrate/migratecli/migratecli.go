@@ -105,7 +105,7 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 	// was a stack that never came up and never said why. A consumer's compose
 	// step ran `<binary> schema apply …` after that verb was removed; the
 	// binary bound :50051 and sat there, and the step it gated on
-	// `service_completed_successfully` waited forever (deinvo, 2026-09-21).
+	// `service_completed_successfully` waited forever (a consumer, 2026-09-21).
 	// Without the right env var the same call printed a DSN error instead,
 	// which sent them looking at configuration.
 	//
@@ -303,7 +303,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	}
 	// "." and "./" are the natural way to write "no group" and read as such;
 	// our own published recipe used `--group .` and produced the registry key
-	// `./acl-roles`, which matched nothing (deinvo, 2026-09-04). Normalised
+	// `./acl-roles`, which matched nothing (a consumer, 2026-09-04). Normalised
 	// here rather than at each reader, so the listing and the lookup agree.
 	f.group = strings.TrimSuffix(strings.TrimSpace(f.group), "/")
 	if f.group == "." {
@@ -569,7 +569,7 @@ func seedSpecs(targets []migrate.ConnTarget, getenv func(string) string) (specs 
 // fail looks more finished than a step nobody wrote. That is not theoretical:
 // wired into a compose chain behind `condition:
 // service_completed_successfully`, the dependent service starts over a
-// database with no schema and no rows, and the run is green. deinvo took an
+// database with no schema and no rows, and the run is green. a consumer took an
 // early "success" here as proof the new path worked; the database was still
 // being built by the old initdb and both new steps were no-ops (2026-09-12).
 //

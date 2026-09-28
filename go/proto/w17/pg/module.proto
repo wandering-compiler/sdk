@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package w17.pg;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/pg;pgpb";
+
+// (w17.pg.module) — Postgres-specific module-level options. Lives next
+// to (w17.module) (dialect-agnostic) but holds PG-only state. Per
+// D32 each dialect has its own per-module proto extension; this is PG's.
+//
+// Today it carries the domain-level custom_types registry (D36): the
+// list of custom PG types this domain registers + their conversion paths
+// + extension prerequisites. Field-level (w17.pg.field).custom_type
+// references entries here (or in (w17.pg.project), the project-wide
+// equivalent) by alias.
+//
+// Per-file FileOptions extension. Multiple files in the same domain
+// MAY each declare (w17.pg.module).custom_types — entries are merged at
+// IR build time and aliases must be unique across the merge.
+extend google.protobuf.FileOptions {
+  PgModule module = 51100;
+}
+
+message PgModule {
+  // Domain-level custom_types registry. Author registers PG types
+  // specific to this domain (e.g. road_segment for routing domain,
+  // customer_address_format for billing). Project-wide types live in
+  // (w17.pg.project) instead.
+  //
+  // Aliases must be unique within the domain (collision = compile
+  // error). Domain alias must not collide with a project-level alias
+  // (that's also a compile error — no shadowing).
+  repeated CustomType custom_types = 1;
+
+  // REV-024 (F1, 2026-05-09) — domain-level custom_functions
+  // registry. Author registers PG functions / operators that DQL
+  // queries reference (pgvector `<->`, postgis `ST_*`, custom
+  // plpgsql functions). DQL typecheck consults this set after
+  // builtins; unknown name = "function not found" diag.
+  //
+  // Names must be unique within domain; cannot collide with
+  // builtin function names or with project-level entries
+  // (compile error, no shadowing).
+  repeated CustomFunction custom_functions = 2;
+}
+
+// CustomType — one registered custom PG type. Author writes it once at
+// module or project level; field-level (w17.pg.field).custom_type
+// references it by `alias` only.
+//
+// The IR / engine treat this as the single source of truth for:
+//   - the SQL type keyword to emit (`sql_type`)
+//   - extensions required by this type (`required_extensions` —
+//     manifest-aggregated)
+//   - conversion paths to / from other types (`convertible_to /
+//     convertible_from`) used by D33 engine USING-clause rendering
+message CustomType {
+  // Alias the field-level (w17.pg.field).custom_type references. Must
+  // be a valid identifier, unique within the resolved registry (project
+  // + domain merge), and must not collide with native PG type keywords
+  // (text / integer / jsonb / …) or with reserved D14 sem names.
+  string alias = 1;
+
+  // The raw PG SQL type expression — appears verbatim in CREATE TABLE
+  // column clause and in ALTER TABLE … TYPE statements.
+  // Examples: "HSTORE", "vector(1536)", "geometry(LineString,4326)",
+  // "my_custom_domain".
+  string sql_type = 2;
+
+  // Postgres extensions that must exist before this type is usable.
+  // Manifest aggregates extensions from every CustomType actually
+  // referenced by the migration. The platform / deploy client takes
+  // care of `CREATE EXTENSION IF NOT EXISTS` pre-apply — compiler does
+  // not emit those statements into migration bodies.
+  repeated string required_extensions = 3;
+
+  // Outbound conversions: types this CustomType can be CAST TO using
+  // the supplied template. Each entry's `type` is either another
+  // registered alias or a native PG type keyword.
+  repeated Conversion convertible_to = 4;
+
+  // Inbound conversions: types that can be CAST INTO this CustomType
+  // using the supplied template. Symmetric helper to convertible_to —
+  // engine looks up either side at migration time.
+  repeated Conversion convertible_from = 5;
+
+  // Free-text description for manifest / docs / review UI.
+  string description = 6;
+}
+
+// CustomFunction — one registered PG function / operator that DQL
+// queries reference. Author registers at project or domain level;
+// DQL typecheck merges all registries and consults them after the
+// builtin set. REV-024 (F1, 2026-05-09).
+//
+// MVP scope: name + extensions only. Typecheck accepts ANY arg shape
+// for registered names (permissive — runtime PG surfaces signature
+// mismatches). Future iteration may add typed signature info
+// (min_args / max_args / arg_categories / returns / is_aggregate)
+// alongside, when fixtures demand static checks.
+message CustomFunction {
+  // Function name as referenced from DQL — case-insensitive lookup
+  // matches the builtin convention. Examples: "ST_GeomFromText",
+  // "vector_to_array", "<->" (operator-as-function — invalid as
+  // function name today; reserved for future operator registration).
+  //
+  // Must be unique within the resolved registry (project + domain
+  // merge), and must not collide with a builtin function name.
+  string name = 1;
+
+  // Postgres extensions that must exist before this function /
+  // operator is callable. Aggregates into Manifest.RequiredExtensions
+  // for every connection in the project — registration is project-wide
+  // and the planner works from a schema, not from queries, so "which
+  // query calls it" is not a question it can answer. An extension
+  // nobody calls is created and unused; a missing one boots a database
+  // that fails on first call, so the aggregation errs wide on purpose.
+  // Same shape as CustomType.required_extensions, which instead reaches
+  // the manifest through the columns that name the type.
+  repeated string required_extensions = 2;
+
+  // Free-text description for manifest / docs / review UI.
+  string description = 3;
+
+  // Whether this custom function is an AGGREGATE (e.g. string_agg,
+  // array_agg, bool_and). The DQL typechecker treats custom functions
+  // permissively (runtime PG enforces the signature), but a few rules need
+  // to know aggregate-ness — notably the (w17.db.lock) shape guard, since
+  // PostgreSQL rejects FOR UPDATE combined with an aggregate (F16-1-2).
+  bool is_aggregate = 4;
+}
+
+// Conversion — one cast / transformation entry inside CustomType's
+// `convertible_to` or `convertible_from` lists.
+//
+// The `cast` template is a Go text/template (matches D33 `using:`
+// templates) with these placeholders:
+//   {{.Col}}   — column name (post-rename)
+//   {{.Table}} — table name (no namespace qualifier)
+//
+// Examples:
+//   "{{.Col}}::vector(3072)"                    — simple :: cast
+//   "to_tsvector('simple', {{.Col}})"           — function-based
+//   "ST_GeomFromText({{.Col}})"                 — extension function
+//   "({{.Col}}::real[] || array_fill(0::real, ARRAY[1536]))::vector(3072)"
+//                                               — chained transformation
+message Conversion {
+  // Target / source type. Either:
+  //   - another CustomType alias ("road_vector" / "default_vector")
+  //   - a native PG type keyword ("jsonb" / "text" / "integer")
+  // Native types bypass registry lookup (no alias matching).
+  string type = 1;
+
+  // USING-clause template (Go text/template syntax). Required when
+  // engine generates an ALTER COLUMN TYPE statement; rendered with
+  // {{.Col}} + {{.Table}} context.
+  string cast = 2;
+
+  // Human-readable rationale shown in D35 risk analysis when this
+  // conversion is used (e.g. "PG implicit cast preserves all values"
+  // or "Pads with zeros to new dimension; lossy if author meant
+  // re-inference").
+  string rationale = 3;
+}

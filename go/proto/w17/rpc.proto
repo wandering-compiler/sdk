@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-152 (2026-06-10) — gRPC gateway ("rpc") exposure
+// annotations. The third gateway transport, sibling to REST
+// (`rest.proto`) and MCP (`mcp.proto`): a public gRPC surface
+// for technical (non-browser) clients over HTTP/2.
+//
+// Why a gateway in front of services that already speak gRPC:
+//   - The gateway layer is NOT a dumb proxy. It runs the same
+//     gateway-tier concerns the REST / MCP transports run —
+//     `(w17.event_emit_gateway)` intent events, auth /
+//     principal resolution from request metadata — between the
+//     public call and the backend dispatch.
+//   - In a composed `<domain>-server` the storage / business
+//     tiers are NOT independently network-exposed; the rpc
+//     gateway is the single network gRPC surface that fronts
+//     them in-process.
+//   - It exposes a curated public contract: pick the methods
+//     that go out, regroup them under public service names,
+//     hide everything internal.
+//
+// The transport is named "rpc" (not "grpc") to avoid colliding
+// with the literal `grpc` identifiers / package names in
+// generated Go.
+//
+// Shape vs REST / MCP — per-METHOD opt-in (like inline
+// `(w17.mcp)`), NOT a whole-service re-export:
+//   - A picked method is RE-DECLARED in a brand-new
+//     `grpcapi.proto` the gateway generator emits (own services,
+//     own — possibly renamed — service names), REUSING the
+//     backend message types verbatim (imported, never
+//     duplicated). The forward handler is typed end-to-end: the
+//     public request/response Go types ARE the backend's.
+//   - Because methods are picked individually, the original
+//     internal SERVICES are not exposed; only the message TYPES
+//     are shared. There is no `Unimplemented` half-service —
+//     the new service declares exactly the picked methods.
+//
+// Driven by `srcgo/domains/gateway/parser`: every loaded
+// `.proto` carrying `option (w17.rpc_api) = { ... }` declares
+// one rpc surface; methods carrying `(w17.rpc) = true` are the
+// picks. The generator emits `schema/grpcapi.proto` (public
+// contract) + `src/rpc/*.go` (forward handlers + serve), and
+// the orchestrator runs protoc for the server bindings under
+// `w17/stubs/pb/grpcapi/<domain>-grpcapi` (no stub-module
+// clients — w17 doesn't consume this surface internally).
+
+extend google.protobuf.MethodOptions {
+  // (w17.rpc) — expose this RPC over the generated gRPC gateway.
+  // The method is re-declared in the emitted `grpcapi.proto`
+  // under a public service (its original service name by
+  // default, or `(w17.rpc_service)` when set), reusing the
+  // backend request/response message types. Streaming
+  // qualifiers (server / client / bidi) carry over verbatim and
+  // are forwarded natively. Sibling-scalar shape mirrors
+  // `(w17.mcp)` (REV-018): a bare bool pick + a separate string
+  // override, rather than a message option.
+  bool rpc = 50111;
+
+  // (w17.rpc_service) — override the PUBLIC service name this
+  // method lands under in the emitted `grpcapi.proto`. Empty =
+  // inherit the method's original gRPC service name. Use to
+  // regroup methods drawn from several backend services under
+  // one public service, or to give a backend service a cleaner
+  // public name. The method name itself is always carried 1:1
+  // (no rename). Must be an IDENTIFIER — it is emitted verbatim as
+  // `service <Name> {` in the generated rpc lock proto, so a space,
+  // dash or leading digit yields a proto that does not compile; the
+  // parser refuses those. PascalCase is convention and is steered,
+  // not enforced. The parser appends/strips no suffix.
+  string rpc_service = 50112;
+}
+
+extend google.protobuf.FileOptions {
+  // (w17.rpc_api) — file-level option declaring this file as an
+  // rpc (gRPC gateway) surface registry. A sentinel carrying the
+  // surface's identity + knobs; the per-method `(w17.rpc)` flags
+  // do the picking. The file declares ZERO messages, like
+  // `(w17.rest_api)` (REV-017) and `(w17.mcp_api)` (REV-018).
+  //
+  // One rpc surface per parse (one generated `grpcapi.proto`);
+  // two files carrying `(w17.rpc_api)` is a hard error.
+  RpcApi rpc_api = 50113;
+}
+
+// RpcApi declares one gRPC gateway surface — the public set of
+// re-declared services the gateway exposes over HTTP/2. The
+// picked methods themselves are marked inline via `(w17.rpc)`;
+// this message carries only the surface-level metadata + knobs.
+message RpcApi {
+  // Logical name of the surface — "public" / "partner" /
+  // "internal". Surfaces in tooling + diagnostics. Must be a
+  // snake_case identifier.
+  string name = 1;
+
+  // Version of this surface — "v1" / "v2". Free-form string;
+  // also the default version segment of the generated public
+  // proto package (`<domain>.gateway.<version>`) when non-empty.
+  // Empty = "v1".
+  string version = 2;
+
+  // Human-readable description of the gRPC surface. Surfaces in
+  // tooling. Empty = no description.
+  string description = 3;
+
+  // Enable gRPC server reflection on the emitted gateway server.
+  // Default false — a technical public API typically wants
+  // reflection on so clients (grpcurl, generated stubs) can
+  // discover the surface, but it stays an explicit opt-in so an
+  // internal-only surface can keep its shape unadvertised.
+  bool reflection = 4;
+
+  // Field 5 reserved for `repeated AuthMethod auth_methods` — the
+  // bearer/basic surface auth declaration, mirroring
+  // `RestApi.auth_methods` (REV-146). Wired by the separate auth
+  // task; kept off the number space so it lands without a renumber.
+  reserved 5;
+  reserved "auth_methods";
+
+  // Logical groupings of the public surface — mirrors
+  // `RestApi.groups` (REV-017). Each group's `name` is a public
+  // gRPC service in the emitted `w17.lock.rpc.proto`; its `refs`
+  // name the backend methods that service wraps. The picked
+  // methods carry the gateway-tier concerns (event emit, auth,
+  // ACL cascade) verbatim. Empty `groups` + no inline `(w17.rpc)`
+  // marks = empty surface (the gateway emit produces nothing).
+  //
+  // Inline `(w17.rpc)` / `(w17.rpc_service)` marks still work and
+  // desugar into a synthesized group named after the method's
+  // (override-or-original) backend service — both paths converge
+  // on the same internal model.
+  repeated RpcGroup groups = 6;
+}
+
+// RpcGroup buckets backend methods under one public gRPC service
+// — the gRPC sibling of `RestGroup` (REV-017). Where REST groups
+// surface as a URL sub-prefix + OpenAPI tag, an rpc group's
+// `name` IS the public `service` name emitted into
+// `w17.lock.rpc.proto`. Methods drawn from several backend
+// services may be regrouped under one public service name.
+message RpcGroup {
+  // Public gRPC service name this group emits into
+  // `w17.lock.rpc.proto`. Must be a PascalCase identifier; carried
+  // verbatim (no suffix added/stripped). gRPC requires method
+  // names unique per service — two refs resolving to the same
+  // method name under one group is a parse-time error.
+  string name = 1;
+
+  // Human-readable description — surfaces as the leading comment
+  // on the emitted public service. Empty = no comment.
+  string description = 2;
+
+  // Backend methods this public service wraps, by `ref`. A ref is
+  // either a whole service (all its methods) or a single method:
+  //
+  //   "console.initiatives.InitiativeQuery"               — whole service
+  //   "console.initiatives.SnapshotMutation.PushSnapshot" — one method
+  //
+  // `<module>` is the proto module (last package segment), matching
+  // the FK / REST `ref` shape (REV-015 / REV-017). Resolution is
+  // domain-scoped; a cross-domain ref is a parse-time error. The
+  // request/response message types are reused verbatim from the
+  // backend (imported into the lock, never redefined).
+  //
+  // Refs (not inline `service X { rpc … }` definitions) because a
+  // message can be the input/output of several RPCs across
+  // services, so a method-by-message definition is not
+  // deterministic about which backend service it wraps. A ref is
+  // unambiguous.
+  repeated string refs = 3;
+
+  // (optional) An ADDITIONAL fully-qualified gRPC service name to
+  // serve this same group under — `"w17.apply.MigrationFetch"`.
+  //
+  // For a surface that re-hosts a contract published elsewhere.
+  // `name` is the service in the emitted lock proto, so the wire
+  // name is `<lock package>.<name>` — and a caller built against
+  // the PUBLISHED proto dials the published FQN, which no lock
+  // package can ever equal. The console re-hosted the deploy
+  // registry this way and served
+  // `w17lock.console.rpc.MigrationFetch`, while every generated
+  // binary called `w17.apply.MigrationFetch` and got
+  // `Unimplemented` — the documented production migration path,
+  // dead end to end, for as long as it existed. w17ctl worked
+  // because it dials the re-hosted client directly; a generated
+  // binary has only the public SDK.
+  //
+  // One implementation, two names: grpc-go registers a copy of
+  // the generated ServiceDesc with the name replaced. The method
+  // set is whatever `refs` produced — the alias renames, it does
+  // not reshape — so the published contract and this group must
+  // agree on method names and types, exactly as the
+  // re-declaration already had to.
+  //
+  // Must be a dotted FQN (`pkg.sub.Service`, at least one dot),
+  // each segment an identifier; the parser refuses anything else
+  // rather than emitting a registration gRPC will never match.
+  // Empty = served under the lock name only.
+  string public_fqn = 4;
+}

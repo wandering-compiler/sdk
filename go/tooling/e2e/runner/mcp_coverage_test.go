@@ -311,7 +311,7 @@ func TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures(t *testing.
 // so existence does not leak) and answers `tool not found` at the
 // JSON-RPC layer, with no gRPC status for `expect_error` to match. That
 // the permissioned caller gets through was provable; that the tool is
-// hidden from everyone else was not (deinvo, 2026-09-01).
+// hidden from everyone else was not (a consumer, 2026-09-01).
 func TestMatchTransportError(t *testing.T) {
 	want := &ExpectTransportError{Message: map[string]any{"matcher": "regex", "pattern": "tool not found"}}
 

@@ -111,7 +111,7 @@ func DecodeMatcher(spec any) (Matcher, error) {
 			// line. This used to be refused: capture claimed the whole
 			// mapping, so `matcher` came back as a stray key and the
 			// message named the two keys capture accepts. That reads as
-			// "capture cannot check", and deinvo reasonably concluded the
+			// "capture cannot check", and a consumer reasonably concluded the
 			// two had to be split onto separate lines (2026-09-05) — the
 			// assertion then lands somewhere other than where it belongs,
 			// or gets dropped.
@@ -196,7 +196,7 @@ func DecodeMatcher(spec any) (Matcher, error) {
 				"than one nobody wrote, because it looks finished. Say what you mean instead: "+
 				"`{matcher: count, op: '>= 1'}`-style if the list must contain something, or "+
 				"`{matcher: count, op: '== 0'}`-style if being EMPTY is the point (a deletion proved from the "+
-				"other side, a filter that must match nothing). Reported by deinvo 2026-09-07, who found 28 of "+
+				"other side, a filter that must match nothing). Reported by a consumer 2026-09-07, who found 28 of "+
 				"these and two response fields that did not exist behind them", op, val, why)
 		}
 		return countMatcher{op: op, value: val}, nil
@@ -283,7 +283,7 @@ func (m exactMatcher) Match(actual any, present bool, scope *Scope) error {
 			//
 			// proto3 JSON omits default values, so a field holding 0, ""
 			// or false is not on the wire at all — "zero" and "nothing"
-			// arrive identically. deinvo, 2026-09-05: `imported_count: 0`
+			// arrive identically. a consumer, 2026-09-05: `imported_count: 0`
 			// was the whole point of an empty-import test and could not be
 			// written, so the case moved to a NON-zero field, which makes
 			// "is it assertable" the criterion for what a test proves.

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestCountMatcher_RefusesAPredicateEveryCountSatisfies — reported by deinvo,
+// TestCountMatcher_RefusesAPredicateEveryCountSatisfies — reported by a consumer,
 // 2026-09-07.
 //
 // A count is never negative, so `{matcher: count, op: '>=', value: 0}` holds
@@ -18,7 +18,7 @@ import (
 // the SCAFFOLD writes — but a skeleton is generate-if-missing, so every file
 // created before that keeps it, and nothing stops an author typing it today.
 //
-// deinvo found 28 in their own suite. Tightening them to `>= 1` turned two
+// a consumer found 28 in their own suite. Tightening them to `>= 1` turned two
 // green cases red, and both were asserting on a field the response does not
 // have: an admin page had been repointed at a projection whose list is
 // `items`, while the case still named `memberships`. Neither could ever have
@@ -54,7 +54,7 @@ func TestCountMatcher_RefusesAPredicateEveryCountSatisfies(t *testing.T) {
 
 // TestCountMatcher_KeepsEveryPredicateThatCanFail — the other direction, and
 // the one that matters most: `== 0` is a real assertion (this list must be
-// empty) and is exactly what several of deinvo's cases became once the
+// empty) and is exactly what several of a consumer's cases became once the
 // vacuous ones were tightened. A refusal that swept those up would have
 // taken the useful half with the useless one.
 func TestCountMatcher_KeepsEveryPredicateThatCanFail(t *testing.T) {

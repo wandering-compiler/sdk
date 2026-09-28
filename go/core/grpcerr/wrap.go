@@ -192,8 +192,16 @@ func UserMsgid(c codes.Code) string {
 	switch c {
 	case codes.NotFound:
 		return "The item you asked for does not exist."
-	case codes.InvalidArgument, codes.OutOfRange, codes.FailedPrecondition:
+	case codes.InvalidArgument, codes.OutOfRange:
 		return "The request could not be accepted as sent."
+	// FailedPrecondition is NOT about the request. It shared the sentence
+	// above until a consumer read what the caller actually got: their handler
+	// refused because a payment had too little left to allocate, and the
+	// caller was told the request was wrong "as sent" — so they were sent to
+	// fix something that was not broken. A wrong sentence is worse than a
+	// generic one: it moves the reader away from the cause.
+	case codes.FailedPrecondition:
+		return "This cannot be done in the current state."
 	case codes.PermissionDenied:
 		return "You do not have access to this."
 	case codes.Unauthenticated:
@@ -220,11 +228,18 @@ func UserMsgid(c codes.Code) string {
 // these sentences are translatable rather than permanently English. A msgid
 // with no catalog entry falls back to itself, so a project that never
 // translates reads exactly as it does today.
+//
+// ⚠️ The list is CODES, and several codes share one sentence — so it has been
+// complete by coincidence rather than by construction: splitting a shared arm
+// in UserMsgid adds a sentence this list does not yet reach, and the new one
+// would then render English in every declared language with nothing saying so.
+// TestVocabularyCoversEveryUserMsgid holds the invariant instead of a comment.
 func Vocabulary() []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, c := range []codes.Code{
-		codes.NotFound, codes.InvalidArgument, codes.PermissionDenied,
+		codes.NotFound, codes.InvalidArgument, codes.FailedPrecondition,
+		codes.PermissionDenied,
 		codes.Unauthenticated, codes.Aborted, codes.ResourceExhausted,
 		codes.DeadlineExceeded, codes.Canceled, codes.Unavailable,
 		codes.Unimplemented, codes.Internal,
@@ -400,7 +415,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// missing: `info` carries exactly this, and it was already attached as
 	// an ErrorDetail — but a caller reading the status message (which is
 	// what a REST gateway surfaces, and what a human reads first) got none
-	// of it. deinvo reported this on 2026-08-30 after a `customer_id` they
+	// of it. a consumer reported this on 2026-08-30 after a `customer_id` they
 	// omitted came back as `DocumentMutation.CreateDocument: not_null
 	// violation`.
 	//

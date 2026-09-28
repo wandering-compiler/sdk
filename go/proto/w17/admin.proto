@@ -1,0 +1,859 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-150 (2026-05-20) — admin registry annotation surface.
+//
+// Django-shaped administrative UI. The author writes one
+// `admin.proto` file per domain carrying `option (w17.admin_api)`;
+// each file declares ONE admin bundle's surface (auth wiring +
+// pages + overview + nav). The gateway parser walks the file,
+// resolves every storage method reference against the same
+// service index it builds for `rest.proto`, and produces an
+// admin bundle (third bundle flavour alongside storage +
+// gateway).
+//
+// The admin bundle is a Go binary that serves:
+//   - a minified React SPA (admin runtime + project's REV-141
+//     client + Mantine v7), and
+//   - a small REST surface (WhoAmI / Authenticate + per-method
+//     REST shim) that mirrors gateway semantics.
+//
+// Spec: docs/specs/admin/architecture.md + admin/pages.md.
+// ADR:  docs/decisions/admin-architecture.md.
+
+extend google.protobuf.FileOptions {
+  // (w17.admin_api) — file-level admin registry. Carries the
+  // complete admin surface declaration (auth + pages + nav +
+  // overview). A parse with two files carrying `admin_api` is
+  // a hard error — one admin surface per domain.
+  AdminApi admin_api = 50160;
+}
+
+extend google.protobuf.MessageOptions {
+  // (w17.admin_title) — model-level title format string. Curly-
+  // brace field references; e.g. "{first_name} {last_name}
+  // ({email})". Field references must match the message's own
+  // fields. No expressions, no functions.
+  //
+  // Harvested into the admin `.po` only when the template carries
+  // text of its own OUTSIDE the placeholders — the same rule
+  // `(w17.field).format` follows. "{first_name} {last_name}" is
+  // three field references and a space, so there is nothing in it
+  // to translate and it is left out; "Order #{id} for {customer}"
+  // has prose and is offered. The distinction matters because a
+  // pure-placeholder template put in front of a translator can
+  // only be broken: the words inside the braces are field names
+  // resolved against the model, not language.
+  //
+  // Per-page override sits inside `AdminPage.title` and applies
+  // only to that page's own chrome (breadcrumb + heading); FK
+  // pickers and inline labels referencing the same model
+  // continue to use this annotation.
+  optional string admin_title = 50161;
+}
+
+extend google.protobuf.FieldOptions {
+  // (w17.admin_filter) — storage request field eligible for
+  // filter UI on admin lists. The admin SPA renders the filter
+  // input shape from the field's proto type (enum → select,
+  // string → text, timestamp → range, bool → checkbox, …).
+  // Field is forwarded into the bound list method's request.
+  optional bool admin_filter = 50162;
+
+  // (w17.admin_search) — storage request field eligible for
+  // search UI on admin lists. Renders as a single search
+  // textbox above the list (debounced); multiple fields tagged
+  // search land as the same textbox value (storage method
+  // owns the OR semantics).
+  optional bool admin_search = 50163;
+
+  // (w17.admin_sortable) — DEPRECATED / no longer consulted.
+  // Sortability is now derived from the list method's DQL SELECT
+  // projection (a plain-column projection on a NOT NULL column is
+  // auto-sortable), with a per-column `AdminColumn.sortable` /
+  // `sort_key` override. The tag is retained only so existing
+  // descriptors that still carry it keep parsing; the codegen ignores
+  // its value. Do not add new uses.
+  optional bool admin_sortable = 50164 [deprecated = true];
+}
+
+extend google.protobuf.MethodOptions {
+  // (w17.admin_bypass_acl) — admin endpoint opts out of the
+  // ACL gate (REV-146). Equivalent to declaring the method
+  // exempt from permission checks; the gateway still threads
+  // scopes (REV-147) unless those are also bypassed via
+  // `(w17.db.bypass_scope)` on the storage side.
+  //
+  // Use sparingly — admin endpoints that need bypass typically
+  // also need scope bypass (super-admin "see everything"
+  // shape). The default for admin is fail-closed.
+  optional bool admin_bypass_acl = 50165;
+}
+
+// AdminApi declares one admin surface — one logical admin
+// exposed at one URL prefix, with its own auth wiring + page
+// tree + optional nav grouping + optional overview page.
+message AdminApi {
+  // Logical name of the surface. snake_case identifier;
+  // typically "admin". Surfaces in tooling + error
+  // diagnostics. Required.
+  string name = 1;
+
+  // URL prefix the admin SPA + REST surface mount under.
+  // Convention: "/admin". Empty = "/admin" default.
+  string prefix = 2;
+
+  // Authentication wiring. ALWAYS required — an admin surface is
+  // the privileged CRUD plane over the project's data and must not
+  // ship unauthenticated (a network perimeter is not authentication;
+  // authenticate + authorize, fail-closed). The gateway parser
+  // rejects an admin surface with no auth at parse time. Usually you
+  // write nothing here: activating the auth plugin auto-wires
+  // login_method + user_lookup via its admin preset (presetinject).
+  // Set an explicit block only to point at non-plugin methods.
+  // (Authorization — per-endpoint ACL, REV-146 — is layered on top;
+  // a superadmin/wildcard role grants the whole catalogue.)
+  AdminAuth auth = 3;
+
+  // Path (relative to the project root) to a developer-owned
+  // directory of SPA slot code. Empty = no custom JS.
+  //
+  // The contract is one module: `<custom_js>/slots`, exporting a
+  // `SlotRegistry` named `slots`. The generated SPA entry imports it
+  // and spreads it over the (empty) generated registry, so a key
+  // declared there wins. Slot keys come from the runtime's helpers —
+  // `listColumnSlotKey("UserAdmin", "status")`, `overviewWidgetSlotKey`,
+  // `detailFieldSlotKey`, `detailTabSlotKey`, `listRowActionSlotKey`,
+  // `globalNavItemSlotKey`.
+  //
+  // This directory is the ONLY place project slot code survives a
+  // regen: the bundle tree is rewritten wholesale, so a slot map
+  // edited into the generated `spa/src/main.tsx` is lost on the next
+  // one. The admin Dockerfile copies this path into the SPA build
+  // context at the same project-relative location it has on disk, so
+  // one emitted import resolves both there and for a developer
+  // running vite on the host.
+  //
+  // Only the path SHAPE is checked at codegen (project-relative, no
+  // ".."). The earlier claim here — that slot keys are validated
+  // against the spec at codegen — was never implemented and is not
+  // planned: it would mean parsing the developer's TypeScript in Go,
+  // which this compiler deliberately does not do (see the note on
+  // vocab.json in gateway/admin/catalog.go). A wrong key is inert at
+  // runtime; a missing module is a build error naming the path.
+  string custom_js = 4;
+
+  // i18n default locale. Empty = "en".
+  //
+  // Must be in the lock's `admin_languages` — the admin is its
+  // own translation space with its own list, because the two
+  // surfaces are translated by different people for different
+  // audiences. This used to name `languages`, the REST list,
+  // which is not a harmless slip: implemented literally it would
+  // refuse the corpus, where the admin ships `cs` and the REST
+  // surface only `en`.
+  //
+  // Enforced at CODEGEN rather than by the parser — the parser is
+  // handed descriptors and never sees the lock, so the
+  // "(parser-enforced)" this once claimed named a place the
+  // information does not reach.
+  string default_language = 5;
+
+  // Admin pages. Order = declaration order; renders flat in
+  // nav when `nav[]` is empty, otherwise nav grouping
+  // controls display order. At least one page expected
+  // (parser warns on empty admin).
+  repeated AdminPage pages = 10;
+
+  // Optional nav grouping. When empty, pages render flat in
+  // declaration order. When non-empty, every page must be
+  // referenced by exactly one group (parser-enforced).
+  repeated AdminNavGroup nav = 11;
+
+  // Overview page — landing screen. v1 renders a grid of
+  // custom JS slot widgets; generic pre-built widgets
+  // (counter / chart / mini-table) parked v2.
+  AdminOverview overview = 12;
+}
+
+// AdminAuth declares the thin shim over hand-written storage
+// authentication. Admin doesn't generate password hashing or
+// JWT issuance — both stay in storage where they belong.
+//
+// At admin bundle runtime:
+//   POST /admin/api/authenticate
+//     → delegates to `login_method` (storage owns hashing + JWT)
+//   GET  /admin/api/whoami
+//     → delegates to `user_lookup` (returns identity + perms + scopes)
+//   every other admin endpoint
+//     → middleware calls `user_lookup`, threads perms + scopes into
+//       gRPC metadata, REV-146 / REV-147 enforce as usual
+message AdminAuth {
+  // Reference to the gRPC method that authenticates a caller.
+  // "<module>.<Service>.<Method>" — same resolution rules as
+  // `RestApi.auth_methods[*].ref`. The method must:
+  //   - take a request with username + password (or arbitrary
+  //     credential — the admin's login form only collects
+  //     username + password, but the storage method can map
+  //     them onto a richer credential shape internally),
+  //   - return a response carrying a JWT-shaped token the SPA
+  //     stores in localStorage.
+  // Required.
+  string login_method = 1;
+
+  // Reference to the gRPC method that resolves a token back to
+  // the caller's identity + permissions + scopes. Called by
+  // the admin middleware on every request (cached for the
+  // request's lifetime). Response must carry
+  // `repeated string permissions` (REV-146) and `map<string,
+  // string> scopes` (REV-147) when those features are active.
+  // Required.
+  string user_lookup = 2;
+
+  // (RETIRED — the codegen REFUSES a non-empty value.) A bootstrap
+  // YAML path the admin bundle was to apply at first start,
+  // idempotent through a `w17_admin_fixture` table. Nothing ever read
+  // it: it was parsed, stored on the surface and dropped, so a
+  // project declaring it looked seeded and was not. No table was ever
+  // created either.
+  //
+  // Retired rather than implemented, because the project already
+  // solves this and solves it better. Fixtures are authored as
+  // `fixtures/<domain>/<name>.json`, the CONSOLE renders them to SQL,
+  // and `w17ctl fixtures apply` runs that seed against dev or
+  // production — the product's standing split, know-how on the
+  // backend and the client applying a finished artefact. A second
+  // bootstrap path inside the admin bundle would duplicate it, and
+  // would have to reach for the private compiler core generated
+  // bundles may not import.
+  //
+  // To seed the first administrator: author the rows as a fixture and
+  // apply them (`w17ctl fixtures apply --domain <d> --name <n>`, or
+  // `--group` for a set).
+  //
+  // 🔴 Kept as a DEPRECATED field rather than `reserved` on purpose.
+  // protoc silently DROPS a reserved field name set in an option
+  // literal — that is what `reserved` is for, so removing a field
+  // does not break existing files — which would have re-created the
+  // exact defect being retired: declaration accepted, silently
+  // ignored, author none the wiser. Keeping the field is what makes
+  // the refusal reachable. `deprecated` also takes it out of the
+  // authoring-vocabulary measure on both sides, since it is no longer
+  // something an author may write.
+  string fixture = 3 [deprecated = true];
+
+  // SignInOptions are the FEDERATED ways in, rendered by the admin's
+  // login page as one button each beside (or instead of) the password
+  // form.
+  //
+  // Empty — the default — is today's admin exactly: a username and a
+  // password, nothing else. Adding entries is additive; a deployment
+  // that wants both offers both, and the operator picks per sign-in.
+  repeated AdminSignInOption sign_in_options = 4;
+
+  // PasswordSignInDisabled hides the username + password form, leaving
+  // only `sign_in_options`.
+  //
+  // Named in the NEGATIVE deliberately. A proto3 bool defaults to
+  // false, so a positively-named `password_sign_in` would default to
+  // "off" and silently lock every existing admin out on the next
+  // regeneration. The default has to be today's behaviour, and this is
+  // the spelling where it is.
+  //
+  // Refused together with an empty `sign_in_options`: that pair leaves
+  // a login page with no way to log in, and the author finds out by
+  // being locked out of their own admin.
+  bool password_sign_in_disabled = 5;
+}
+
+// AdminSignInOption is one federated entry point on the admin's login
+// page — "Sign in with <your identity provider>".
+//
+// It is a LINK, not a protocol: the page sends the browser to
+// `start_url` and the flow takes over from there. What comes back is a
+// session in the URL fragment, which the SPA consumes and stores. That
+// is why nothing here describes OAuth — the admin does not implement
+// it, it points at something that does.
+//
+// With the `auth` plugin's `oauth` feature on, the thing to point at is
+// its own authorize endpoint:
+//
+//	sign_in_options: [{
+//	  label: "Sign in with Acme",
+//	  start_url: "/api/v1/auth/oauth/acme/authorize?redirect_after=/admin"
+//	}]
+//
+// The provider slug is runtime data — an `OAuthProvider` row an
+// administrator wrote — so it is named here rather than discovered:
+// the login page is a declaration, and a button for a provider nobody
+// configured is a button that 404s.
+message AdminSignInOption {
+  // Button text. Required — an unlabelled button says nothing about
+  // where it sends you, and this one leaves the application.
+  string label = 1;
+
+  // Where the button sends the browser. Site-relative, or an absolute
+  // http(s) URL when the gateway serving the flow is on another origin.
+  // A `javascript:` / `data:` target is refused: it would run script in
+  // the admin's place, which no sign-in needs.
+  string start_url = 2;
+}
+
+// AdminPage declares one administrative page over one model:
+// a list view + a detail view + optional bulk actions +
+// optional nested inlines.
+message AdminPage {
+  // Page identity. CamelCase identifier; surfaces as the URL
+  // segment (`/admin/<Name>`) and the spec key. Required.
+  string name = 1;
+
+  // Model reference, "<module>.<Type>". Resolves to any
+  // top-level message; it is the page's NAMING / TITLE anchor
+  // and the source of the PK field-name for `{id}` URL stamping
+  // (`id` or `<modelSnake>_id`). It need NOT be a `(w17.db.table)`
+  // and need NOT equal the list/detail method item types — list
+  // columns come from `list.source`'s response item, detail form
+  // fields from the detail method messages (see AdminList.source).
+  // Drives the title fallback + FK-picker/inline label rendering.
+  // Required.
+  string model = 2;
+
+  // Per-page title format string override. Empty = inherit
+  // model-level `(w17.admin_title)`. Applies only to THIS
+  // page's chrome (breadcrumb + list row heading + detail
+  // heading); FK pickers + inline labels referencing this
+  // page's model continue to use the model-level annotation.
+  string title = 3;
+
+  // List view. Optional — pages without a list render the
+  // detail directly (useful for singleton resources like
+  // "site settings").
+  AdminList list = 10;
+
+  // Detail view. Required (at minimum a read method) —
+  // pages without a detail are filter-only and don't justify
+  // the admin tooling overhead.
+  AdminDetail detail = 11;
+
+  // Bulk actions exposed above the list / on the detail
+  // view. v1 supports ids-only and ids+bulk-extras shapes;
+  // per-row-input shape parked v2.
+  repeated AdminAction actions = 12;
+
+  // Nested inlines — child rows belonging to the current
+  // detail row. Layout = embedded table (default) or stacked
+  // cards. Read-only by default; write requires explicit
+  // create/update/delete method references with parent-id
+  // binding owned by the storage method's DQL.
+  repeated AdminInline inlines = 13;
+}
+
+// AdminList declares the list view of one admin page.
+message AdminList {
+  // Storage method ref, "<module>.<Service>.<Method>". Must
+  // return `repeated <item>` (or a paged carrier per REV-148),
+  // where `<item>` is the list's RESPONSE-ITEM message. `<item>`
+  // is validated for shape only — it is NEVER compared to
+  // `AdminPage.model`, so it may be a read-only PROJECTION message
+  // distinct from the page model (and need not be a
+  // `(w17.db.table)`). `columns` and `refs` are sourced from
+  // `<item>`'s fields, so joined / computed display values — a DQL
+  // `LEFT JOIN ... o.name AS organization_name`, a `CONCAT`/`CASE`
+  // projection — belong on `<item>` as plain fields: no table
+  // column, no `exclude`. (Only when `<item>` IS a `(w17.db.table)`
+  // model does a display-only field need `(w17.db.column) = {
+  // exclude: true }`; a dedicated projection item avoids that.)
+  // The method's request signature determines the filter / search UI
+  // (via `(w17.admin_filter)` / `(w17.admin_search)` tags). Column
+  // SORT is not tag-driven: it is auto-derived from this method's DQL
+  // SELECT projection (plain-column projections on NOT NULL columns
+  // are sortable), overridable per column via `AdminColumn.sortable` /
+  // `sort_key`. Required.
+  string source = 1;
+
+  // Columns to render, in declared order — one AdminColumn per
+  // column. Each column names a response-item field and optionally
+  // carries a header `label` override and/or a foreign-key `ref`.
+  // Default (when empty) = all scalar fields of the response item,
+  // in proto declaration order (Django `list_display` default). A
+  // bare `{ name: "field" }` behaves exactly like the old plain
+  // column: humanized header, raw scalar cell.
+  repeated AdminColumn columns = 2;
+
+  // Which column carries the click-through link to the
+  // detail page. Must match a column `name` (or a default
+  // column when `columns` is empty). Empty = first column.
+  string detail_link_column = 3;
+
+  // Column the list opens sorted by. Must be one of the page's
+  // SORTABLE COLUMNS — derived from the list method's DQL
+  // projection, with the per-column `sortable` / `sort_key`
+  // overrides applied. Empty = the storage method's own ORDER BY.
+  //
+  // Not "a sortable field of the source request", as this once
+  // said: that described the retired `(w17.admin_sortable)` tag
+  // era, and the check it implied was deferred to an iteration
+  // that never came — so a misspelled default silently produced
+  // the empty case, a list opening in the method's own order with
+  // no error and plausible-looking rows. It is enforced now.
+  string default_sort = 4;
+
+  reserved 5, 6;  // was `repeated AdminColumnRef refs` / `column_labels`
+  reserved "refs", "column_labels";
+}
+
+// AdminColumn declares one list column: the response-item field to
+// render, plus optional presentation. It unifies what used to be the
+// plain `columns` string, the per-column `column_labels` header
+// override, and the `refs` foreign-key annotation into a single
+// declaration — so everything about a column lives in one place.
+//
+//   { name: "created_at" }                                  // plain
+//   { name: "owner", label: "Account owner" }               // header override
+//   { name: "org_id", label: "Organization",                // FK link
+//     ref: { title: "org_name", page: "Organizations" } }
+message AdminColumn {
+  // Response-item field this column renders. Carries the raw scalar
+  // (or, with `ref`, the foreign-key id). Must exist on the list
+  // method's response item type; unique within `columns`. Required.
+  string name = 1;
+
+  // Header text rendered verbatim (no humanization). Django
+  // `verbose_name` analog — use it when the projected field is named
+  // for the query (`owner`, `org_id`) but the human header wants
+  // different words ("Account owner", "Organization"). Must be
+  // non-empty when set. Empty (default) = header humanized from
+  // `name` (`org_id` → "Org ID").
+  string label = 2;
+
+  // Foreign-key reference — promotes this column to a human-readable,
+  // click-through link to another admin page. When set, the cell
+  // renders the referenced row's human title (read ROW-LOCALLY via
+  // `ref.title`) instead of the raw id, and links to `ref.page`'s
+  // detail view. Absent (default) = the column renders its raw
+  // scalar. See AdminColumnRef.
+  AdminColumnRef ref = 3;
+
+  // Column sortability override. DQL is the single source of truth:
+  // the admin codegen auto-derives sortability from the list method's
+  // SELECT projection — a column that maps to a PLAIN column reference
+  // (no expression / CASE / concat / function) on a NOT NULL column is
+  // auto-sortable; a computed / nullable projection is not. This
+  // tri-state field overrides that default:
+  //   - unset (default) → auto-derive from the DQL projection.
+  //   - false           → force NOT sortable (e.g. an unindexed big
+  //                        string on a huge table where a sort scan is
+  //                        undesirable even though it's a plain column).
+  //   - true            → force sortable; REQUIRES `sort_key` to name
+  //                        the underlying ORDER BY column (the codegen
+  //                        cannot infer a fragment for a projection it
+  //                        did not classify as a plain column).
+  // The (w17.admin_sortable) field tag is superseded by this DQL-driven
+  // derivation and is no longer consulted.
+  optional bool sortable = 4;
+
+  // Explicit ORDER BY column fragment for this column, in
+  // `<alias>.<column>` form (e.g. "u.created_at"). Normally derived
+  // automatically from the DQL projection; set it only to (a) satisfy
+  // `sortable: true` on a column the codegen could not classify, or
+  // (b) redirect a display column to sort by a different underlying
+  // column — the canonical case is an FK column whose cell shows a
+  // joined display alias (`organization_name`) but should sort by the
+  // real joined column (`o.name`). Empty (default) = use the derived
+  // fragment. Ignored when the column resolves to not-sortable.
+  string sort_key = 5;
+
+  // Locale-aware display format for this column's cells, overriding
+  // the `(w17.field).format` of the field it renders. Same template
+  // surface, same one-slot rule — see (w17.field).format.
+  //
+  //   { name: "created_at", format: "{value|short_date}" }
+  //
+  // The override exists because the default belongs once, next to
+  // the model, but a dense list occasionally wants it shorter than
+  // the detail page does. Empty (default) = inherit the field's
+  // format, or the preset implied by its semantic type.
+  //
+  // REFUSED alongside `ref` — an FK cell renders the referenced
+  // row's title, which is text, so there is no value left for a
+  // number or date format to act on. Refused rather than ignored:
+  // a format that silently does nothing is a bug the author cannot
+  // see. Spec: docs/specs/i18n/formatting.md.
+  string format = 6;
+}
+
+// AdminColumnRef promotes the column carrying it to a foreign-key
+// link: the cell renders the referenced row's human title (in place
+// of the raw id held by the column's `name` field) and links to the
+// target page's detail view.
+//
+// Resolution is ROW-LOCAL: the title is read from a field the SAME
+// list method already returns (a denormalized projection — e.g. a
+// DQL JOIN yielding `organization_name` next to `org_id`). The
+// runtime does not fetch the referenced row — there is no id→row
+// resolver and no cross-page N+1. When `title` is empty the cell
+// shows the raw id value; the link (when `page` is set) still works.
+message AdminColumnRef {
+  // Field (or dotted path) on the SAME list item carrying the
+  // referenced row's human title — e.g. "organization_name" or
+  // "organization.name". Resolved row-locally against the list
+  // response (curly braces optional; a bare path is treated as
+  // "{path}"). The list method must project it. Empty = render
+  // the raw id value of the column's `name` field. Optional.
+  string title = 1;
+
+  // Target admin page to link the cell to (its detail view,
+  // `/<page>/<id>` where id is the value of the column's `name`
+  // field). Must match an AdminPage.name in the same admin_api.
+  // Empty = no link (title / id renders as plain text). Optional.
+  //
+  // Explicit by design: the referenced page is NOT inferred
+  // from DQL foreign-key metadata. FK annotations live on
+  // `(w17.db.column).fk` at the storage-model layer as
+  // `<table>.<column>`, and admin list responses are commonly
+  // denormalized projections (DTOs) that carry no
+  // `(w17.db.column)` at all — so there is frequently nothing
+  // to infer from. Naming the page directly is also unambiguous
+  // when two pages render the same model.
+  string page = 2;
+}
+
+// AdminDetail declares the detail view of one admin page.
+message AdminDetail {
+  // Storage method ref — read one row. Returns a single
+  // <model> instance. Required.
+  string read = 1;
+
+  // Storage method ref — update. Optional; absent = detail
+  // is read-only (no edit form, no save button).
+  string update = 2;
+
+  // Storage method ref — delete. Optional; absent = no
+  // delete button on the detail view.
+  string delete = 3;
+
+  // Subset of update-request fields rendered as editable
+  // form fields. Default (when both `fields` and `fieldsets`
+  // are empty) = all fields of the update request in proto
+  // declaration order (Django ModelForm default). Authors
+  // prune by listing `fields` once they decide what's
+  // relevant.
+  repeated string fields = 4;
+
+  // Fields rendered as disabled inputs, sourced from the
+  // `read` response. NOT sent in update requests. A field
+  // listed here does not need to be in the update request
+  // message — it only needs to be in the read response.
+  // A field both in `fields` and `readonly_fields` is a
+  // parse error.
+  repeated string readonly_fields = 5;
+
+  // Grouped fieldsets. When non-empty, replaces flat
+  // `fields` rendering with sections (title + collapsible).
+  // `readonly_fields` continues to apply orthogonally.
+  // Every field in fieldsets must exist in the update
+  // request message.
+  repeated AdminFieldset fieldsets = 6;
+
+  // Storage method ref — create a new root row. Optional;
+  // absent = no "Add" button on the list view and no create
+  // form (the Django "add permission absent" shape).
+  //
+  // Form shape (v1): the create form renders every
+  // client-settable field of the CREATE request, in proto
+  // declaration order. `fields` / `fieldsets` /
+  // `readonly_fields` describe the UPDATE form and do NOT
+  // narrow create — they are validated against the update
+  // request and the read response, which are different
+  // messages (a create request has no `id`, and may require
+  // fields the update path never touches).
+  //
+  // That is deliberate rather than incidental: narrowing a
+  // create form to a subset while the mutation still
+  // persists the omitted fields is exactly the
+  // mass-assignment shape Q46-admin-1 / Q65-admin-1 refuse
+  // for update. Rendering the full create request keeps the
+  // form and the mutation in agreement by construction. A
+  // separate `create_fields` can narrow it later, with the
+  // matching guard.
+  //
+  // ACL: gated like any other admin write. Both axes are
+  // DECLARED — the method's own name is never consulted.
+  // Sitting in this slot IS the declaration of the `add`
+  // action, and the page's `model:` is the other half, so a
+  // `<Model>#add` permission is allocated whenever that
+  // model carries `(w17.acl_model)`. Name the method
+  // whatever reads best.
+  string create = 7;
+}
+
+// AdminFieldset is one grouped section of fields in an
+// AdminDetail.
+message AdminFieldset {
+  // Section title (rendered as a section heading). Empty =
+  // unnamed section (renders fields with no heading).
+  string title = 1;
+
+  // Fields in this section, in declared order.
+  repeated string fields = 2;
+
+  // Render collapsed by default. Default false.
+  bool collapsed = 3;
+}
+
+// AdminAction declares an action on an admin page — over a selection
+// of rows, or over no rows at all (`target: PAGE`).
+//
+// Wire contract: unless the target is PAGE, the bound source method's
+// request must have a `repeated ids` field, matched BY NAME. A PAGE
+// action is the inverse: its request must NOT have one. Additional fields beyond
+// `ids` are bulk extras and must be enumerated in `fields[]`.
+//
+// The element type must ADDRESS THE PAGE MODEL'S PK — `repeated
+// int64 ids` for an int64 key, `repeated string ids` for a UUID or
+// text one. This used to read "must have a `repeated string ids`
+// field", which is the shape that breaks on every numeric key: the
+// bulk bind is emitted as `<pk> = ANY($n)` over
+// `pq.Array(req.GetIds())`, so a text array meets a bigint column and
+// the database refuses the comparison at execution. The emitted SQL
+// text is identical for both element types — only the Go type handed
+// to pq.Array differs — so the mistake is invisible in the generated
+// source. The parser refuses the mismatch.
+message AdminAction {
+  // Action identifier. snake_case. URL fragment + slot key
+  // root.
+  string name = 1;
+
+  // Storage method ref. Request must have `repeated string ids`
+  // — except under `target: PAGE`, which operates on no rows and
+  // whose request must not have one. Response is empty / status
+  // only (action result is not displayed in v1, only success /
+  // failure).
+  string source = 2;
+
+  // Subset of action-request extras (everything beyond
+  // `ids`) to render in the bulk modal. Required (no
+  // default) — defaulting to "all" would surface internal
+  // fields in bulk modals. Empty list = action takes only
+  // `ids[]`.
+  repeated string fields = 3;
+
+  // Button label. Empty = humanized `name` (e.g. "mark_paid"
+  // → "Mark paid").
+  string label = 4;
+
+  // Confirmation modal message. Empty = no confirmation
+  // (button submits directly).
+  string confirm = 5;
+
+  // Where the action appears in the UI. Default LIST.
+  AdminActionTarget target = 6;
+}
+
+enum AdminActionTarget {
+  ADMIN_ACTION_TARGET_UNSPECIFIED = 0;
+  // LIST — bulk action button above the list. Applies to
+  // selected rows OR all filtered rows.
+  ADMIN_ACTION_TARGET_LIST = 1;
+  // DETAIL — action button on the detail view. Applies to
+  // the current row only.
+  ADMIN_ACTION_TARGET_DETAIL = 2;
+  // BOTH — renders in both places.
+  ADMIN_ACTION_TARGET_BOTH = 3;
+  // PAGE — a button in the page toolbar that operates on NO ROWS.
+  //
+  // For the operations a page offers that are not about a selection:
+  // "check the upstream for new records", "run the reconciliation",
+  // "rebuild the index". Every other target answers "do this to the rows
+  // I picked"; this one answers "do the thing this page is a view of".
+  //
+  // It is the one target whose source request must NOT have `ids`, and
+  // the parser enforces both halves. A row-shaped method bound as PAGE
+  // would be called with an empty selection and match nothing — a 200
+  // for an action that touched no row, which is exactly the failure the
+  // empty-selection refusal was written for.
+  ADMIN_ACTION_TARGET_PAGE = 4;
+}
+
+// AdminInline declares a nested list of related rows under
+// the parent detail view.
+message AdminInline {
+  // Reference to another AdminPage by `name`. Must exist in
+  // the same admin_api.
+  string page = 1;
+
+  // Storage method ref — lists child rows for the current
+  // parent row. Accepts the parent's id (or a richer DQL
+  // relation embedded in the storage method) and returns
+  // child rows of the referenced page's model.
+  string link = 2;
+
+  // Render layout. Default TABULAR.
+  AdminInlineLayout layout = 3;
+
+  // Section label above the inline. Empty = inherit child
+  // page's plural title.
+  string label = 4;
+
+  // Storage method ref — create a child row. Request must
+  // accept the parent's id. Optional; absent = inline does
+  // not support row creation.
+  string create = 10;
+
+  // Storage method ref — update one inline row. Optional.
+  string update = 11;
+
+  // Storage method ref — delete one inline row. Optional.
+  string delete_ = 12;
+}
+
+enum AdminInlineLayout {
+  ADMIN_INLINE_LAYOUT_UNSPECIFIED = 0;
+  // TABULAR — embedded table with columns inherited from
+  // the inline page's `list.columns`. Default.
+  ADMIN_INLINE_LAYOUT_TABULAR = 1;
+  // STACKED — each child row as a card with detail fields.
+  // Useful for one-to-few relationships with rich child
+  // detail.
+  ADMIN_INLINE_LAYOUT_STACKED = 2;
+}
+
+// AdminNavGroup buckets pages under a labeled section in
+// the left nav.
+message AdminNavGroup {
+  // Group title (UI label). Required.
+  string title = 1;
+
+  // Page names referenced from this group. Each must match
+  // an AdminPage.name in the same admin_api. Order =
+  // display order within the group.
+  repeated string pages = 2;
+}
+
+// AdminOverview declares the overview / landing page of
+// the admin. Widgets render as a grid, in declared order.
+// When NO overview is declared the runtime still shows a
+// default landing: a tile per nav group listing its pages
+// (with a row count for paged lists). Declaring >=1 widget
+// replaces those default tiles with the widget grid.
+message AdminOverview {
+  // Widgets rendered on the overview, in declared order.
+  // Empty = the default group tiles render instead.
+  repeated AdminWidget widgets = 1;
+}
+
+// AdminWidget is one overview card. Its `kind` selects the
+// behavior:
+//   - CUSTOM (default): a custom JS slot the runtime calls
+//     at `overview:widget:<slot>`; the project supplies the
+//     implementation. Missing slot at runtime = the card is
+//     dropped (warns in dev).
+//   - STAT: a declarative aggregated-values panel — the
+//     runtime fetches the `source` query method and renders
+//     each `values` entry as a stat cell. Zero project JS.
+//   - CHART: a declarative chart — the runtime fetches the
+//     `source` query method, reads its repeated rows and
+//     plots `series` (Y) against `x_field` (X). Zero project
+//     JS.
+message AdminWidget {
+  // Slot id — the widget's unique identifier on the overview
+  // (snake_case). For CUSTOM it is the JS slot key; for STAT
+  // it names the generated data route `/api/widget/<slot>`.
+  string slot = 1;
+
+  // Layout size hint.
+  AdminWidgetSize size = 2;
+
+  // Widget kind. Unspecified = CUSTOM (back-compat: a widget
+  // declared with only slot+size stays a custom JS slot).
+  AdminWidgetKind kind = 3;
+
+  // Card title shown above the widget (STAT/CHART). Ignored
+  // for CUSTOM, whose component owns its own chrome.
+  string title = 4;
+
+  // Backing query method ref `<module>.<Service>.<Method>`
+  // for a declarative widget (STAT/CHART) — resolved like a
+  // page's `list.source`. The generated data route calls it
+  // and returns its response as JSON. Empty for CUSTOM.
+  string source = 5;
+
+  // STAT: the scalar values to show, in order. Each names a
+  // field on the `source` response; the runtime reads it and
+  // renders one stat cell (label + value). Empty for other
+  // kinds.
+  repeated AdminWidgetValue values = 6;
+
+  // CHART: the chart form. Required for CHART, ignored
+  // otherwise.
+  AdminChartKind chart_kind = 7;
+
+  // CHART: the row field plotted on the category / time axis
+  // (X). Names a field on the ROW message — the one
+  // `repeated <Msg>` field of the `source` response.
+  string x_field = 8;
+
+  // CHART: the numeric row fields plotted as series (Y), in
+  // order. Each names a field on the same ROW message. A
+  // DONUT takes exactly one series (the slice value, sliced
+  // by `x_field`).
+  repeated AdminWidgetValue series = 9;
+}
+
+// AdminWidgetKind selects an AdminWidget's rendering.
+enum AdminWidgetKind {
+  // Unspecified = CUSTOM (a widget with only slot+size).
+  ADMIN_WIDGET_KIND_UNSPECIFIED = 0;
+  // CUSTOM — a custom JS slot at `overview:widget:<slot>`.
+  ADMIN_WIDGET_KIND_CUSTOM = 1;
+  // STAT — a declarative aggregated-values panel backed by
+  // the `source` query method.
+  ADMIN_WIDGET_KIND_STAT = 2;
+  // CHART — a declarative chart backed by the `source` query
+  // method's repeated rows.
+  ADMIN_WIDGET_KIND_CHART = 3;
+}
+
+// AdminChartKind selects the form a CHART widget draws.
+// Trend over an ordered X (time) reads best as LINE / AREA;
+// magnitude across categories as BAR; a part-of-whole split
+// as DONUT.
+enum AdminChartKind {
+  // Unspecified — refused on a CHART widget (pick a form
+  // deliberately; there is no sensible default).
+  ADMIN_CHART_KIND_UNSPECIFIED = 0;
+  // LINE — one line per series over the X axis.
+  ADMIN_CHART_KIND_LINE = 1;
+  // BAR — one bar group per X value.
+  ADMIN_CHART_KIND_BAR = 2;
+  // AREA — LINE with the area below it filled.
+  ADMIN_CHART_KIND_AREA = 3;
+  // DONUT — one slice per row; exactly one series.
+  ADMIN_CHART_KIND_DONUT = 4;
+}
+
+// AdminWidgetValue is one named field projection: a field read
+// off the widget's data (a scalar on the STAT response, a
+// column on a CHART row) plus an optional display label
+// (humanized from the field name when empty).
+message AdminWidgetValue {
+  // Field name on the source response message.
+  string field = 1;
+  // Display label. Empty = humanized from `field`.
+  string label = 2;
+}
+
+enum AdminWidgetSize {
+  ADMIN_WIDGET_SIZE_UNSPECIFIED = 0;
+  // SMALL — one grid cell (1/3 row width on desktop).
+  ADMIN_WIDGET_SIZE_SMALL = 1;
+  // MEDIUM — two grid cells (2/3 row width).
+  ADMIN_WIDGET_SIZE_MEDIUM = 2;
+  // LARGE — full row width.
+  ADMIN_WIDGET_SIZE_LARGE = 3;
+}

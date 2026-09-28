@@ -667,8 +667,8 @@ func (x *AdminAuth) GetPasswordSignInDisabled() bool {
 // its own authorize endpoint:
 //
 //	sign_in_options: [{
-//	  label: "Sign in with Marb",
-//	  start_url: "/api/v1/auth/oauth/marb/authorize?redirect_after=/admin"
+//	  label: "Sign in with Acme",
+//	  start_url: "/api/v1/auth/oauth/acme/authorize?redirect_after=/admin"
 //	}]
 //
 // The provider slug is runtime data — an `OAuthProvider` row an

@@ -1,0 +1,209 @@
+syntax = "proto3";
+
+// Domain-level configuration option (Phase D of the plugin-system
+// implementation plan — `docs/specs/plugins/implementation-plan.md`).
+//
+// `(w17.domain)` is the cascade sentinel for DOMAIN-scoped settings
+// — operations that apply uniformly across every module in a
+// domain. Today's surface: plugin activations.
+//
+// Distinction from `(w17.module)` (in module.proto):
+//
+//   - `(w17.module)` carries module/domain config that cascades
+//     through the standard domain → module → file precedence
+//     chain (schema, table_prefix, connection, channels,
+//     event_defaults). Loader rejects it outside w17.proto.
+//   - `(w17.domain)` carries DOMAIN-ONLY settings that have no
+//     module-level analog. Plugin activations are deliberately
+//     domain-scoped (per-domain activation lets the same plugin
+//     materialize as independent slots in multiple domains —
+//     see docs/specs/plugins/activation.md). Loader rejects it
+//     anywhere outside `proto/domains/<domain>/w17.proto`.
+//
+// Why a separate option (rather than rolling into `Module`):
+// activation is a domain primitive (a domain ACTIVATES a plugin),
+// not a module primitive. Keeping it on a separate option makes
+// the "where does this belong?" question answer itself + leaves
+// `Module` focused on cascading config.
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// (w17.domain) — domain-level configuration option. Lives in
+// `proto/domains/<domain>/w17.proto` only; loader rejects it
+// at module or file scope.
+extend google.protobuf.FileOptions {
+  Domain domain = 51021;
+}
+
+// Domain carries every domain-scoped setting. Today: plugin
+// activations. Future fields (cross-domain re-exports, domain-
+// level observability hooks, …) land here.
+message Domain {
+  // Plugins activated for this domain. Each entry materializes
+  // the plugin's tables, services, and pb stubs as a synthetic
+  // module in this domain. Same plugin may be activated under
+  // different domains with different `registered_as` values —
+  // each activation is independent.
+  //
+  // Spec: docs/specs/plugins/activation.md.
+  repeated PluginActivation plugins = 1;
+}
+
+// PluginActivation is one row of (w17.domain).plugins.
+// Identifies WHICH plugin to materialize + WHAT NAME to give
+// its module slot in the activating domain.
+message PluginActivation {
+  // Source plugin name — must match an installed plugin in
+  // `<proto_dir>/plugins/<source_name>/` (recorded in
+  // `lock.plugins[]` by `w17ctl plugin install`). Required.
+  string source_name = 1;
+  // Local rename of the plugin slot. Defaults to `source_name`
+  // when empty. Drives table prefix, Go package alias, pb
+  // output dir, and the synthetic module's name in the IR.
+  //
+  // Does NOT rename the plugin's proto package — the wire
+  // identity (derived from `plugin.yaml.name` as
+  // `w17.contrib.<name>`) is stable across activations.
+  // `registered_as` is the PLACEMENT-layer rename only (see
+  // docs/specs/plugins/activation.md §"Naming + paths").
+  string registered_as = 2;
+
+  // Connection alias → project connection name. Every alias
+  // declared in `plugin.yaml.connections` MUST appear as a key
+  // here; every value MUST name a connection declared in
+  // `lock.connections[]`. Staging substitutes
+  // `(w17.module).connection = "<alias>"` in the plugin's
+  // staged proto with the mapped value before IR build.
+  //
+  // Empty when the plugin's `connections:` list is empty
+  // (plugin binds tables to the project's default connection).
+  // Spec: docs/specs/plugins/activation.md §"Connection
+  // binding via aliases".
+  map<string, string> connections = 3;
+
+  // Channel alias → project channel name. Every alias declared
+  // in `plugin.yaml.channels` MUST appear as a key here; every
+  // value MUST name a channel declared in this domain's
+  // `(w17.module).channels[]` catalogue. Staging substitutes
+  // `(w17.event).channel = "<alias>"` in the plugin's staged
+  // event proto with the mapped value before IR build.
+  //
+  // Empty when the plugin's `channels:` list is empty (plugin
+  // emits no events). Spec: docs/specs/plugins/activation.md
+  // §"Channel binding via aliases".
+  map<string, string> channels = 4;
+
+  // Optional configuration for plugins shipping a turnkey
+  // AuthService.Authenticate RPC. The plugin codegen reads
+  // `auth_input.header_name` + `auth_input.scheme` to emit the
+  // bearer-token extraction body that drives the auth lookup.
+  // Plugins that don't ship an AuthService ignore the field;
+  // the orchestrator applies defaults (Authorization / Bearer)
+  // when the activation omits it.
+  //
+  // Spec: docs/specs/plugins/activation.md §"Turnkey auth
+  // configuration"; Phase F2 of the auth+acl track.
+  AuthInput auth_input = 5;
+
+  // Feature-tag set this activation enables (Phase G2). Wrapper
+  // semantics distinguish three states proto3's bare repeated
+  // can't:
+  //
+  //   - field absent: use the plugin's `default: true`
+  //     catalogue entries (implicit defaults flow);
+  //   - field present, names empty: explicit "nothing tagged"
+  //     — emit only untagged baseline;
+  //   - field present, names listed: emit exactly these tags.
+  //
+  // Every listed name MUST appear in the plugin's `plugin.yaml`
+  // `features:` catalogue (typo guard at staging time). The
+  // staging-time filter drops proto entities (services /
+  // methods / messages) whose `(w17.contrib.plugin_feature*)`
+  // tag isn't in the resolved set — untagged entities always
+  // emit.
+  //
+  // Spec: docs/specs/plugins/feature-tags.md.
+  PluginFeatureSet features = 6;
+
+  // Per-surface controls for the plugin's ADMIN preset. The admin
+  // surface (overview widgets, contributed pages, auth auto-wire) is
+  // injected by default when the plugin is active — the admin is an
+  // internal, auth-required surface, so it stays turnkey. Declare
+  // `admin.enabled = false` to opt out and wire the plugin's admin
+  // slots by hand.
+  //
+  // REST and MCP are NOT controlled here: a plugin's `presets.rest` /
+  // `presets.mcp` are OFF by default and opted in from the CONSUMING
+  // surface's own registry (`(w17.rest_api).include` /
+  // `(w17.mcp_api).include`), so the registry stays the single source
+  // of truth for what is exposed. See
+  // docs/decisions/plugin-surfaces-opt-in.md.
+  //
+  // Spec: docs/specs/plugins/presets.md.
+  PresetControls presets = 7;
+}
+
+// PresetControls is the per-surface control for a plugin activation's
+// presets. Only the admin surface is controlled here (default-on,
+// opt-out); REST/MCP publication is opt-in from the consuming
+// registry — see PluginActivation.presets. Spec:
+// docs/specs/plugins/presets.md.
+message PresetControls {
+  reserved 1, 2;                // was: rest, mcp (now opt-in via registry include)
+  reserved "rest", "mcp";
+  PresetSurface admin = 3;
+}
+
+// PresetSurface controls one generated surface's preset injection
+// for a plugin activation. Used only for admin today.
+message PresetSurface {
+  // Whether this surface's preset is injected. Uses field presence
+  // (proto3 optional):
+  //   - surface message absent  → enabled (default-on);
+  //   - present, enabled unset  → enabled;
+  //   - present, enabled = false → disabled (opt out + wire by hand).
+  optional bool enabled = 1;
+
+  // Reserved: was a URL remount for rest/mcp presets. REST remount now
+  // lives on `(w17.rest_api).include[].mount`; admin slots carry no URL.
+  reserved 2;
+  reserved "mount";
+}
+
+// PluginFeatureSet wraps the activation's feature-tag selection
+// so callers can distinguish "use defaults" (absent message)
+// from "explicit empty" (message present, names empty).
+message PluginFeatureSet {
+  // Names — feature tags to enable. The plugin author's
+  // `plugin.yaml` `features:` catalogue lists every legal
+  // value; staging rejects names absent from the catalogue.
+  repeated string names = 1;
+}
+
+// AuthInput configures the bearer-token extraction the plugin's
+// generated Authenticate handler performs against the request
+// headers map. The two knobs cover the two parts of an HTTP
+// `Authorization` header: the header NAME (defaults
+// "Authorization") and the credential SCHEME stripped off the
+// value (defaults "Bearer"). Both have safe defaults so the
+// activation can omit the field entirely for the standard
+// `Authorization: Bearer <token>` shape.
+message AuthInput {
+  // HTTP header name carrying the credentials. Case-insensitive
+  // at runtime (the generated handler lowercases on lookup —
+  // gateway convention is lower-case keys in the headers map).
+  // Empty defaults to "Authorization".
+  string header_name = 1;
+  // Credential scheme stripped off the header value before the
+  // bearer-token resolution runs. Empty defaults to "Bearer".
+  // The space separator between scheme and token is implicit:
+  // the handler trims `<scheme> ` (with a single space) off the
+  // header value's prefix. Set to a literal empty value via
+  // explicit `scheme: ""` to disable scheme-stripping (the raw
+  // header value becomes the token).
+  string scheme = 2;
+}

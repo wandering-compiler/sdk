@@ -12,7 +12,7 @@ import (
 func redirectResult(t *testing.T, target, fallback, param, token string) *http.Response {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/marb/callback?code=abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/acme/callback?code=abc", nil)
 	restgw.WriteBrowserRedirect(rec, req, target, fallback, param, token)
 	return rec.Result()
 }
@@ -121,7 +121,7 @@ func TestIsSiteRelativeRedirect(t *testing.T) {
 func externalResult(t *testing.T, target, fallback string) *http.Response {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/marb/authorize", nil)
+	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/acme/authorize", nil)
 	restgw.WriteBrowserRedirectExternal(rec, req, target, fallback)
 	return rec.Result()
 }

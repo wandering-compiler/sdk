@@ -208,7 +208,7 @@ func (s *Server) filterTools(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
 	// caller may see nothing — the protocol has no way to distinguish
 	// them, so the operator has to be told on this side.
 	//
-	// deinvo, 2026-09-01: their MCP surface answered `[]` to every caller,
+	// a consumer, 2026-09-01: their MCP surface answered `[]` to every caller,
 	// token or not, because their database had zero rows in
 	// auth_rolepermission. They read it as "nothing is published" and went
 	// looking for a registration bug that did not exist. The tool WAS

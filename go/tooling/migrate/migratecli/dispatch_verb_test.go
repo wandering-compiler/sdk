@@ -12,7 +12,7 @@ import (
 // that never came up and never said why. A consumer's compose step ran
 // `<binary> schema apply …` after that verb was removed; the binary bound its
 // port and sat there, and the step gating on `service_completed_successfully`
-// waited forever (deinvo, 2026-09-21).
+// waited forever (a consumer, 2026-09-21).
 func TestDispatch_UnknownVerbIsRefused(t *testing.T) {
 	for _, verb := range []string{"schema", "zcelanesmysl", "render"} {
 		handled, err := Dispatch(context.Background(), []string{verb, "apply"}, Options{})

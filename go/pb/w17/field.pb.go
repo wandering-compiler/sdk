@@ -1158,7 +1158,7 @@ type Field struct {
 	// A consumer's `ACCOUNT_TYPE_UNKNOWN = 0` is a legitimate answer in a
 	// published contract; without this they stored "unknown" as NULL — which
 	// round-trips to the proto zero and works, and needs a comment defending
-	// it every time somebody reads the model (marb #27).
+	// it every time somebody reads the model (a consumer).
 	//
 	// Only meaningful on an enum-typed field. It does not rename the value or
 	// change the wire: it says the column's admitted set includes 0.

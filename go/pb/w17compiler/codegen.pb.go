@@ -2424,7 +2424,7 @@ func (x *SetPbStubIntent) GetPackage() string {
 
 // SetDirLayoutIntent re-points the project's DIRECTORY fields after init.
 //
-// Asked for by marb, and the shape of the ask is migration: you want a
+// Asked for by a consumer, and the shape of the ask is migration: you want a
 // provisional `w17proto/` while an existing tree is still being converted, then
 // the real directory once the conversion lands. Today that answer is given once,
 // in the wizard, and never again — so the first week of adopting w17 on an

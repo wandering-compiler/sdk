@@ -142,7 +142,7 @@ func TestWrap_PgConstraint_RegistryHit_ByName(t *testing.T) {
 // INVARIANT: a mapped violation's status MESSAGE names the field and says
 // what is wrong with it — it does not merely classify the failure.
 //
-// deinvo, 2026-08-30: omitting `customer_id` answered
+// a consumer, 2026-08-30: omitting `customer_id` answered
 // `DocumentMutation.CreateDocument: not_null violation`. That sentence
 // names no column, no request field, and spends its only noun on a
 // database concept the caller cannot see — callers address fields. The

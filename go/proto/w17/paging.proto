@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-148 (2026-05-19) — cursor-paged REST endpoints.
+//
+// The frontend-visible shape (Paging) and the wire-opaque
+// state shape (PageCursor) for cursor-style pagination on
+// REST endpoints. Generated REST handlers populate `Paging`
+// in the response message; `PageCursor` is the base64-url-
+// safe value carried in the `?cursor=…` query parameter.
+//
+// Spec: docs/specs/gateway/cursor-paging.md
+// ADR:  docs/decisions/cursor-paging.md
+
+// Paging is the frontend-visible response envelope for a
+// cursor-paged endpoint. The author declares a `w17.Paging
+// paging = N;` field on the response message of any RPC
+// referenced by a `RestEndpoint` with `paged.enabled = true`;
+// the generated handler populates it after the storage call.
+//
+// Field names + JSON encoding are a forever-consumer
+// commitment: every generated client (TS / React / Vue) +
+// every frontend consumer reads these names verbatim.
+message Paging {
+  // Total row count matching the original filter. Computed
+  // exactly once at the first page (when the request has no
+  // cursor), cached inside the cursor on subsequent pages.
+  // May be stale if rows are inserted / deleted during a
+  // pagination session.
+  uint64 total = 1;
+
+  // Page size used by the server. Echoed back so the client
+  // sees the effective limit (the server caps the requested
+  // limit at `PagedConfig.max_limit`).
+  uint32 limit = 2;
+
+  // Opaque base64-url-safe token to fetch the next page.
+  // Empty when the current page returned fewer than `limit`
+  // rows (i.e. no further page exists).
+  string next_cursor = 3;
+
+  // Opaque base64-url-safe token to fetch the previous page.
+  // Empty when the current page is the first page (caller
+  // arrived without a cursor) or when the prior page was
+  // the first page.
+  string previous_cursor = 4;
+}
+
+// PageCursor is the structured state encoded inside the
+// opaque `?cursor=…` token. The token wire format is
+// `base64url(PageCursor.SerializeToString())`. The proto is
+// internal to the gateway runtime — clients treat the token
+// as opaque bytes; the server is free to evolve PageCursor
+// across builds (the `schema_version` field gates breaking
+// evolutions).
+message PageCursor {
+  // Serialized original request proto, opaque to this layer.
+  // On resume the gateway deserializes these bytes back into
+  // the storage method's request message and re-stamps scope
+  // fields (REV-147) before calling storage. This is how
+  // filters stay invariant across a pagination session: the
+  // client cannot accidentally diverge mid-pagination.
+  bytes request = 1;
+
+  // Keyset boundary values captured from the first / last
+  // row of the page that produced this cursor. Index in this
+  // list matches the index of the corresponding ORDER BY
+  // column in the storage method's DQL ORDER BY clause.
+  // Length always equals the number of ORDER BY columns.
+  repeated KeysetValue boundaries = 2;
+
+  // Total row count cached after the first-page COUNT(*).
+  // Carried through every subsequent page so the COUNT(*)
+  // never runs again within a pagination session.
+  uint64 total = 3;
+
+  // Direction this cursor represents: a forward cursor
+  // resumes the page AFTER the boundary values; a backward
+  // cursor resumes the page BEFORE them (with the keyset
+  // comparison and ORDER BY directions flipped, then the
+  // returned items reversed before emission so the FE always
+  // sees the same row ordering).
+  Direction direction = 4;
+
+  // Hash of the storage method's request-message descriptor
+  // at codegen time. On resume the server compares this to
+  // its current build's hash; mismatch (a deploy bumped the
+  // request shape) → InvalidArgument: cursor_expired. The
+  // client must drop the cursor and refetch from page one.
+  uint32 schema_version = 5;
+
+  // Active admin auto-sort selector (item 2 / INC-2). Encodes
+  // BOTH the sorted column and its direction in one small
+  // integer — 0 = the list's declared default order, 2*i+1 =
+  // sortable column i ASCending, 2*i+2 = column i DESCending
+  // (the identical encoding the storage `__sort_by` bind and
+  // sdk/go/lib/listsort use, so no second scheme exists).
+  //
+  // A paged + sortable list emits ONE keyset query variant per
+  // selector value, each with its own ORDER BY — and therefore
+  // its own `boundaries` arity and meaning. Carrying the
+  // selector in the cursor is what makes a Next / Prev hop
+  // resume the SAME variant the boundaries were captured
+  // under; without it page 2 would seek positional boundaries
+  // against a different ORDER BY and silently return the wrong
+  // rows. `schema_version` deliberately does NOT fold the
+  // selector in: boundaries stay positional WITHIN the chosen
+  // variant, so a cursor from another variant is not stale, it
+  // is simply read back under its own variant.
+  uint32 sort_by = 6;
+}
+
+// Direction encodes which way a cursor walks the ordered
+// sequence. Forward cursors are emitted from the LAST row
+// of the current page (next_cursor); backward cursors from
+// the FIRST row (previous_cursor).
+enum Direction {
+  DIRECTION_FORWARD = 0;
+  DIRECTION_BACKWARD = 1;
+}
+
+// KeysetValue is a tagged-union of the scalar types that
+// may appear in an ORDER BY column of a paged endpoint.
+// The set tracks what the SQL emitter can produce from a
+// proto-typed column read out of the response message.
+//
+// Iter-2 lifts may extend this oneof; the schema_version
+// gate on PageCursor invalidates outstanding cursors on
+// any breaking shape change here.
+message KeysetValue {
+  oneof value {
+    // int64 covers proto int32 / int64 / uint32. A proto
+    // uint64 sort key uses the dedicated `uint_v` arm below
+    // (added REV — OF-3) so values above int64 max are not
+    // wrapped negative in the keyset SQL comparison.
+    int64 int_v = 1;
+
+    string string_v = 2;
+
+    bytes bytes_v = 3;
+
+    bool bool_v = 4;
+
+    // double covers proto float / double; note that sorting
+    // on floating-point columns is generally a smell (NaN,
+    // precision), but is supported for completeness.
+    double double_v = 5;
+
+    google.protobuf.Timestamp time_v = 6;
+
+    // uint64 sort key. Kept distinct from int_v so a value
+    // above int64 max survives the round-trip unwrapped and
+    // the keyset SQL comparison binds the true unsigned value
+    // (OF-3).
+    uint64 uint_v = 7;
+  }
+}

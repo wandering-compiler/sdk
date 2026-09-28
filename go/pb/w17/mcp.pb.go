@@ -63,7 +63,7 @@ type McpApi struct {
 	// time and neither is emitted. The tool list an MCP client
 	// consumes is served by the generated bundle over the
 	// protocol itself (`tools/list`), so there was never a file
-	// to read (deinvo went looking for one, 2026-08-31).
+	// to read (a consumer went looking for one, 2026-08-31).
 	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
 	// Human-readable description of the MCP surface. Surfaces
 	// verbatim in the generated bundle, which serves it to a

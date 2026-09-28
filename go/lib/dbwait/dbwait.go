@@ -8,7 +8,7 @@
 // starts. Anything that discovered the port before the restart then dials a
 // port nothing is listening on.
 //
-// deinvo traced their "flaky discover host port" — open since 2026-07-28,
+// a consumer traced their "flaky discover host port" — open since 2026-07-28,
 // blamed in turn on IPv6 and on a race between listeners, both wrong — to
 // exactly that chain. A 358-statement role seed made initdb slow enough
 // that the server lost the race every run, exited, restarted, and

@@ -558,7 +558,7 @@ type FetchFixtureSeedResponse struct {
 	// domain's rows into the first domain's database, failing with
 	// `relation "auth_role" does not exist` when the table happened not to be
 	// there, and silently writing into the wrong store when a same-named table
-	// was (marb #67, marbai-04 §3 — it blocked their CI on an older release).
+	// was (a consumer, reported twice — it blocked their CI on an older release).
 	//
 	// Empty from a console that predates this field, and from a fixture whose
 	// domain resolves to no connection. The client treats empty as "unknown"

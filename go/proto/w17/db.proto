@@ -1,0 +1,1538 @@
+syntax = "proto3";
+
+package w17.db;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/db;dbpb";
+
+// (w17.db.table) — message-level DB configuration.
+//
+// Usage:
+//   message Product {
+//     option (w17.db.table) = {
+//       name: "products",
+//       indexes: [
+//         { fields: ["category_id", "is_active"] }
+//       ]
+//     };
+//     ...
+//   }
+extend google.protobuf.MessageOptions {
+  Table table = 51000;
+}
+
+// (w17.db.column) — field-level STORAGE overrides. Data semantics
+// (type, constraints, uniqueness, defaults) live on (w17.field).
+// (w17.db.column) is reserved for choices that don't affect the data
+// contract: storage indexes, column-name overrides for legacy adoption,
+// future tablespace / storage parameters.
+//
+// Usage:
+//   string email = 3 [
+//     (w17.field)     = { type: EMAIL, unique: true },
+//     (w17.db.column) = { index: true, name: "email_address" }
+//   ];
+extend google.protobuf.FieldOptions {
+  Column column = 51002;
+}
+
+// (w17.db.method) — gRPC-method-level DB operations. Every gRPC
+// method that touches storage declares its DQL surface here: a
+// single ordered `ops` list of named operations, executed in source
+// order (each op's kind — read vs write — is derived from its DQL).
+// Multi-operation methods (read-then-write, read-then-read, write-
+// then-read-back, etc.) chain via `:<name>.<col>` aliases that
+// reference the result of an earlier-named operation in the method.
+//
+// Single-query usage:
+//
+//   rpc GetUser(GetUserReq) returns (GetUserResp) {
+//     option (w17.db.method) = {
+//       ops: {
+//         name: "main",
+//         dql: "SELECT u FROM User u WHERE u.id = :user_id"
+//       }
+//     };
+//   }
+//
+// Single-mutation usage (RETURNING populates the response):
+//
+//   rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
+//     option (w17.db.method) = {
+//       ops: {
+//         name: "insert",
+//         dql: "INSERT INTO User SET :user RETURNING id, created_at"
+//       }
+//     };
+//   }
+//
+// Multi-operation usage (load-then-save with cross-op alias):
+//
+//   rpc IncrementCounter(IncReq) returns (IncResp) {
+//     option (w17.db.method) = {
+//       ops: {
+//         name: "load",
+//         dql: "SELECT c.value FROM Counter c WHERE c.id = :id"
+//       },
+//       ops: {
+//         name: "save",
+//         dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id"
+//       }
+//     };
+//   }
+//
+// Locks (`(w17.db.lock)`) are a sibling method-level annotation
+// (declared below); `execution_plan` (below) overrides the default
+// source order — required for multi-connection methods.
+extend google.protobuf.MethodOptions {
+  Method method = 51006;
+}
+
+// (w17.db.lock) — per-method row-lock declaration with explicit
+// resource targets. Each entry names a model and the lock kind
+// to apply; codegen emits the matching `FOR UPDATE / FOR SHARE /
+// NOWAIT / SKIP LOCKED` suffix only on the SELECTs that touch
+// the named resource. SELECTs in the same method that don't
+// reference any named resource emit no suffix — this is the
+// per-statement filtering rule (D-e2e-4, 2026-05-03), introduced
+// to stop the deadlock storm caused by the previous blanket-on-
+// every-SELECT semantic on multi-relation methods.
+//
+// Query-only methods MAY declare a lock (REV-046). The codegen
+// emits a tx-aware preamble that applies the suffix only when the
+// caller has adopted a transaction, and silently skips it on a
+// naked-pool call — a lock outside a transaction would be released
+// at statement end anyway. Shape constraints on that path
+// (single-row + list-shaped only; streaming / JOIN bodies /
+// multi-op / multi-conn refused) are enforced in the codegen.
+//
+// Usage:
+//
+//   rpc IncrementCounter(IncReq) returns (IncResp) {
+//     option (w17.db.method) = {
+//       ops:    { name: "load", dql: "SELECT c.value FROM Counter c WHERE c.id = :id" }
+//       ops: { name: "save", dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id" }
+//     };
+//     option (w17.db.lock) = {
+//       locks: [
+//         { resource: "Counter", kind: SELECT_FOR_UPDATE }
+//       ]
+//     };
+//   }
+//
+// KV / QUEUE connections ignore the lock (no transactional row
+// locking primitive). SQLite skips the suffix too — its locking
+// is implicit via the underlying journal mode (no row-level FOR
+// UPDATE in SQL syntax).
+//
+// Backward compat: the previous bare-enum form
+// (`option (w17.db.lock) = SELECT_FOR_UPDATE`) is gone — codegen
+// rejects any annotation whose `locks` list is empty with a
+// fix-up suggestion. Clean break, no consumers in the wild.
+extend google.protobuf.MethodOptions {
+  Lock lock = 51007;
+}
+
+// (w17.db.enum_value) — enum-value-level annotation. Per-value
+// metadata that survives into the schema-driven codegen
+// surface. Today only carries `sort_sql` for D-iter2-dql-9
+// (ORDER BY-by-enum); future enum-value uses (CHECK-list
+// values, KV index keys) extend this message.
+//
+// Usage:
+//
+//   enum UserSortField {
+//     USER_SORT_UNSPECIFIED = 0;
+//     USER_SORT_NAME    = 1 [(w17.db.enum_value) = { sort_sql: "name DESC" }];
+//     USER_SORT_CREATED = 2 [(w17.db.enum_value) = { sort_sql: "created_at DESC" }];
+//   }
+//
+// Codegen reads each value's annotation when an `ORDER BY
+// :<path>` clause resolves to a field of this enum type and
+// renders a static `CASE :<path> WHEN <num> THEN <sort_sql>
+// ... END` expression. UNSPECIFIED with no annotation is the
+// "no sort" value (CASE returns NULL → SQL falls back to the
+// trailing ORDER BY items). Per D-iter2-dql-9 every non-zero
+// enum value used as a sort key MUST carry the annotation —
+// codegen rejects values missing `sort_sql`.
+//
+// The fragment is OPAQUE raw SQL and only its PRESENCE is checked
+// (TC-24) — the author owns what is inside it, which is what the
+// escape hatch means. One consequence is worth spelling out because
+// it is not obvious from "raw SQL": a fragment is spliced into
+// whichever query resolves this enum, so a BARE column (`name DESC`)
+// travels safely while an ALIAS-QUALIFIED one (`u.name DESC`) binds
+// the fragment to one query's FROM alias. Share such an enum across
+// two methods and the second one fails at runtime, positionless, and
+// only on the calls that send that value. Prefer bare columns on an
+// enum more than one method sorts by.
+//
+// (T1-4 pass #14, A-4 — ACCEPTED by the owner 2026-08-13: the
+// alias coupling IS the author's responsibility this annotation
+// documents, and the failure is loud. Recorded rather than gated.)
+extend google.protobuf.EnumValueOptions {
+  EnumValueColumn enum_value = 51008;
+}
+
+// (w17.db.scope) — REV-147 — per-model data-scope declaration.
+// One entry per scope axis: each `name` becomes the
+// `AuthResp.scopes` map key + the `x-w17-scope-<name>`
+// metadata key suffix; each `path` is the dotted DQL access
+// that resolves to the scope-bearing column.
+//
+// Path syntax: `<column>` — a DIRECT column on the scoped table.
+// That is the whole supported surface today. A dotted path
+// (`task.tenant_id` — scoping a model by a column reached through
+// a relation) is REFUSED at storage codegen with a pointer at this
+// limitation; the alias-path resolution slice is parked (B6.x).
+// So a model that needs isolating must carry its own scope column.
+//
+// The scope layer does not auto-JOIN, and nothing here makes it
+// JOIN: scoping a JOINED model by ITS OWN column is supported and
+// puts the predicate on that JOIN's ON clause.
+//
+// Multi-entry = multi-axis isolation; effective filter is
+// AND of every scope's WHERE.
+//
+// Usage:
+//
+//   message Task {
+//     option (w17.db.table) = { name: "tasks" };
+//     option (w17.db.scope) = {
+//       entries: [{ name: "tenant_id", path: "tenant_id" }]
+//     };
+//
+//     int64  id        = 1 [(w17.field) = { pk: true }];
+//     string tenant_id = 2 [(w17.field) = { type: UUID }];
+//     ...
+//   }
+//
+//   message Comment {
+//     option (w17.db.table) = { name: "comments" };
+//     option (w17.db.scope) = {
+//       entries: [{ name: "tenant_id", path: "tenant_id" }]
+//     };
+//
+//     // Denormalised: a child of Task carries its own tenant_id
+//     // rather than reaching the parent's. Until the dotted-path
+//     // slice lands this is the way to scope a child — the
+//     // alternative is `(w17.db.bypass_scope)` plus a hand-written
+//     // WHERE in the query's DQL.
+//     string tenant_id = 3 [(w17.field) = { type: UUID }];
+//   }
+//
+// Auth backend returns the caller's scope values in
+// AuthResp.scopes (a `map<string,string>` field, parser-
+// enforced when any scoped model exists on the surface).
+// Gateway threads per-scope values via `x-w17-scope-<name>`
+// gRPC metadata. Storage codegen auto-appends WHERE filters
+// on SELECT/UPDATE/DELETE and auto-stamps INSERT SET from
+// metadata. Missing scope metadata → 403 PERMISSION_DENIED.
+//
+// Full spec: docs/specs/storage/data-scopes.md.
+extend google.protobuf.MessageOptions {
+  Scope scope = 51009;
+}
+
+// Scope (body of (w17.db.scope)) — proto can't use `map` as
+// an extension field type, so the per-axis declarations land
+// as a repeated holder. Authoring convention is to pass
+// `entries: [{name, path}, ...]` even for single-scope models
+// (one-element list reads cleanly enough).
+message Scope {
+  repeated ScopeEntry entries = 1;
+}
+
+// ScopeEntry — one (name, path) tuple. `name` is the scope
+// identifier threading through everything (AuthResp.scopes
+// key, `x-w17-scope-<name>` metadata key suffix, bypass list
+// member). `path` is the dotted DQL access (see Scope doc).
+message ScopeEntry {
+  // Snake_case identifier. Must match `[a-z][a-z0-9_]*`.
+  // Preserved verbatim into the gRPC metadata key.
+  string name = 1;
+
+  // A DIRECT column on the scoped table — `tenant_id`, not
+  // `task.tenant_id`. Dotted alias paths parse but are refused at
+  // storage codegen ("only direct-column scope paths are supported
+  // in this slice"); resolving a scope through a relation is the
+  // parked B6.x slice. See the Scope doc above for the workaround.
+  //
+  // Field kept as a free-form string (not a column-name enum) so
+  // the dotted grammar lands without a wire change when it ships.
+  string path = 2;
+}
+
+// (w17.db.bypass_scope) — REV-147 — opt-out from one or more
+// data scopes on a method or service. Admin endpoints +
+// migration jobs that legitimately need to read/write across
+// scopes declare the bypass here so the codegen skips the
+// auto-WHERE / INSERT auto-stamp / fail-closed metadata
+// guard for the listed scope names.
+//
+// Forms:
+//   ["*"]                       — bypass every scope on every
+//                                  scoped model the method/service
+//                                  touches.
+//   ["tenant_id"]               — bypass listed scopes only;
+//                                  other scopes (multi-scope
+//                                  models) still apply.
+//
+// The two layers UNION — they do not override one another.
+// A method-level list ADDS to the service-level one (and either
+// side's `"*"` makes the whole thing a wildcard), so a method
+// cannot narrow a bypass its service declared: once a service
+// says `bypass_scope_service = "*"`, no method under it can put
+// a scope back. Declare the service-level slot only for a
+// service whose EVERY method is meant to be unscoped.
+//
+// Default (no annotation) = no bypass; every touched scoped
+// model gets its full auto-WHERE + fail-closed guard.
+//
+// Both are `repeated string`: name one scope per `option`
+// statement (there is no `= [...]` list form for an option).
+// Service-level uses the `bypass_scope_service` slot below —
+// `bypass_scope` extends MethodOptions and will not compile
+// inside a `service` body.
+//
+// Usage:
+//
+//   service AdminService {
+//     option (w17.db.bypass_scope_service) = "*";
+//     rpc PurgeStaleTasks(...) returns (...);
+//   }
+//
+//   service TaskMutation {
+//     rpc ReassignTenant(...) returns (...) {
+//       option (w17.db.bypass_scope) = "tenant_id";
+//       option (w17.db.bypass_scope) = "org_id";  // repeat to add
+//     }
+//   }
+extend google.protobuf.MethodOptions {
+  repeated string bypass_scope = 51010;
+}
+
+extend google.protobuf.ServiceOptions {
+  // Service-level slot. Distinct name + number from the
+  // method-level `bypass_scope` because protoc requires
+  // extension names to be unique within a package even
+  // across different extension targets (same constraint
+  // that drove REV-146's `acl_endpoint` vs `acl_service`
+  // split). Method-level wins when both apply.
+  repeated string bypass_scope_service = 51011;
+}
+
+// Lock — body of `(w17.db.lock)`. A list of (resource, kind)
+// entries; codegen emits `kind`'s SQL suffix on a SELECT whose
+// **FROM entity** is `resource`. Per-statement filtering (D-e2e-4):
+// SELECTs whose FROM isn't a listed resource emit no suffix.
+// Methods that touch only one resource still use the list shape —
+// the future graduation from bare-kind to per-resource is the whole
+// reason for this message.
+//
+// FROM, not "any participating relation": `FOR UPDATE` without
+// `OF <alias>` targets the FROM relation, and per-JOIN targeting is
+// a future graduation. A resource reachable only through a JOIN
+// would therefore emit NO lock, so the matching rule and the
+// validation rule below agree on FROM.
+//
+// Validation rules (typecheck):
+//   - locks must not be empty (the empty-list state is rejected
+//     with a fix-up suggesting either a non-empty list or
+//     dropping the annotation).
+//   - resource must name a known model — a proto message in
+//     scope carrying (w17.db.table). Unknown name = compile
+//     error pointing at the typo.
+//   - every entry's kind must be set (UNSPECIFIED is rejected).
+//   - resource entries must be unique — same model declared
+//     twice (even with the same kind) is rejected.
+//   - every resource must be the FROM entity of some SELECT in
+//     the method (Q49-lock-1). Listing a model that only ever
+//     appears in a JOIN is rejected rather than silently emitting
+//     no lock and leaving the author believing one is held.
+//   - a locked SELECT whose shape can't carry the suffix is
+//     rejected: set-ops / CTE-rooted FROM on every dialect (the
+//     lock would silently hold nothing), and aggregate / GROUP BY
+//     / DISTINCT / HAVING / window / outer-join shapes on
+//     PostgreSQL (which rejects FOR UPDATE at prepare).
+//
+// Repeated kinds across resources are fine (lock User and Token
+// both with SELECT_FOR_UPDATE — different SELECTs, same suffix).
+message Lock {
+  repeated LockEntry locks = 1;
+}
+
+// LockEntry — one (resource, kind) pair. Resource is the proto
+// message simple name (e.g. `User`), matching by the trailing
+// segment of `(w17.db.table).message_fqn`.
+message LockEntry {
+  string resource = 1;
+  LockKind kind = 2;
+}
+
+// LockKind — SQL row-lock variant. The four variants map to
+// standard PG / MySQL clauses; the dialect emitter renders them
+// per dialect.
+//
+// SQLITE CARVE-OUT — read this before relying on any variant
+// below. SQLite has no row-lock clause: its locking is
+// whole-database and implicit in the transaction. The emitter
+// therefore renders NO suffix at all on SQLite, and the
+// annotation is silently ignored rather than refused (a
+// deliberate stance — the transaction still serialises, so the
+// lock kind is unnecessary for correctness against concurrent
+// writers on that engine).
+//
+// The consequence is NOT symmetric across the variants. The
+// blocking semantics of SELECT_FOR_UPDATE / SELECT_FOR_SHARE are
+// approximated by SQLite's own transaction serialisation. But
+// the two variants below that shape the RESULT SET —
+// SKIP_LOCKED (fewer rows) and NOWAIT (an error instead of a
+// wait) — have no SQLite equivalent: the query returns the full
+// matching row set and waits, so a method whose logic depends on
+// that filtering behaves DIFFERENTLY on SQLite. Do not build a
+// work-queue hand-off on SKIP_LOCKED against a SQLite
+// connection.
+enum LockKind {
+  LOCK_KIND_UNSPECIFIED = 0;
+
+  // Exclusive row lock — blocks concurrent SELECT FOR UPDATE /
+  // FOR SHARE / writes on the same row until the surrounding
+  // transaction commits or rolls back. The default and
+  // most-common choice for read-then-write mutations.
+  // (PG / MySQL. On SQLite no clause is emitted; the enclosing
+  // transaction provides the serialisation instead.)
+  SELECT_FOR_UPDATE = 1;
+
+  // Shared row lock — blocks concurrent writes but allows other
+  // SELECT FOR SHARE callers to read the same row. Use when the
+  // mutation depends on the row's current value but tolerates
+  // other reads of it.
+  // (PG / MySQL. On SQLite no clause is emitted — the read is
+  // not distinguished from an unannotated one.)
+  SELECT_FOR_SHARE = 2;
+
+  // Exclusive row lock + fail-fast on contention. The SELECT
+  // returns an error immediately when another transaction holds
+  // a conflicting lock; caller decides whether to retry. Use
+  // for short-deadline mutations.
+  // (PG / MySQL ONLY. On SQLite no clause is emitted, so the
+  // fail-fast never happens — the statement waits on the
+  // engine's own busy handling instead of erroring.)
+  SELECT_FOR_UPDATE_NOWAIT = 3;
+
+  // Exclusive row lock + skip already-locked rows. Subsequent
+  // queries see only the rows this caller managed to lock.
+  // Idiom for queue-shaped mutations (worker pulling next
+  // unlocked row).
+  // (PG / MySQL ONLY. On SQLite no clause is emitted, so NO rows
+  // are skipped — every worker sees every matching row and the
+  // queue hand-off does not hold.)
+  SELECT_FOR_UPDATE_SKIP_LOCKED = 4;
+}
+
+// Method is the body of `(w17.db.method)`. Operations are listed in
+// the single ordered `ops` field and **execute in source order** —
+// the order they are written. Each op's kind (read vs write) is
+// DERIVED from its DQL (a SELECT is a query; INSERT/UPDATE/DELETE/
+// UPSERT is a mutation), so there is no query/mutation label to keep
+// in sync. If any op is a mutation the whole method runs in one
+// transaction ON A RELATIONAL CONNECTION; the LAST-written op is the
+// response producer (it may be a SELECT — e.g. a final read-back that
+// composes a nested response). See `docs/specs/dql/multi-op-methods.md`
+// + `docs/decisions/dql-multiop-source-order.md`.
+//
+// KV connections are the carve-out and the sentence above predates
+// them: multi-op KV is SEQUENTIAL, so a method with two writes can
+// leave the store in the state of its last successful op. `kv_atomic`
+// (below) buys MULTI/EXEC for the shapes that can have it, and is
+// REFUSED — loudly, at generation time — for the ones that cannot
+// (anything reading a value it then acts on). Nothing silently drops
+// a guarantee here; the guarantee is simply not available for every
+// KV shape, which is why the flag is opt-in and its refusal explains
+// itself.
+//
+// Names within a method must be unique; cross-operation aliases
+// (`:<name>.<col>` in a later op's DQL) reference the result of
+// an earlier op by that name. Typecheck enforces uniqueness +
+// resolves the references against the schema IR + the prior op's
+// projection.
+message Method {
+  // Fields 1-2 were the pre-source-order `query` / `mutation` pair.
+  reserved 1, 2;
+  reserved "query", "mutation";
+
+  // ops — the operations, in execution (= source) order.
+  repeated Operation ops = 8;
+
+  // execution_plan — explicit op execution order for multi-
+  // connection methods. Each entry is the 1-based index into
+  // `ops` (source order). Per `docs/archive/iteration-2-multidb.md`
+  // §M2-C, a method whose ops touch tables on multiple
+  // connections must provide execution_plan; without it,
+  // typecheck rejects the method.
+  //
+  // Single-connection methods leave this empty — execution
+  // order is the source order of `ops`.
+  //
+  // Cross-connection auto-order (relational LAST when paired
+  // with KV / QUEUE) is parked until those non-relational
+  // emitters land; today multi-connection methods always
+  // require explicit execution_plan.
+  repeated int32 execution_plan = 3;
+
+  // timeout_ms — per-method execution deadline in milliseconds
+  // (slice 6Q-F). When > 0, codegen wraps the method body with
+  // `context.WithTimeout(ctx, timeout); defer cancel()` so all
+  // statements + (for OWNED tx) the tx itself auto-roll back
+  // on deadline. 0 (default) leaves the caller's ctx
+  // untouched.
+  //
+  // Two-tier model (docs/archive/iteration-2-multidb.md §M2-F):
+  //   - timeout_ms = per-method deadline. Bounds the method's
+  //     own statement work + (for OWNED tx) tx lifetime.
+  //   - tx-wide threshold (separate, propagated from the
+  //     facade via distx Begin payload — out of M2 scope) =
+  //     long-running distributed-tx deadline. Bounds the tx
+  //     entity across multiple method calls.
+  //
+  // For ADOPTED tx (single-conn distributed) the WithTimeout
+  // here cancels statements only; the tx outlives the
+  // method (its lifetime is the distx server's Begin ctx,
+  // separately bounded). For OWNED tx (multi-conn always;
+  // single-conn fresh) the cancellation also kills the tx
+  // via deferred Rollback.
+  //
+  // Negative values are a typecheck error. A future
+  // projectconfig.default_method_timeout_ms can supply the
+  // implicit default for unset fields; today unset == 0 ==
+  // pass-through.
+  int32 timeout_ms = 4;
+
+  // tx_isolation — per-method SQL transaction isolation
+  // level (G3-D-DT-02). When set, the storage handler's
+  // `BeginTx` is called with `&sql.TxOptions{Isolation: ...}`
+  // matching the requested level instead of the driver
+  // default. UNSPECIFIED / unset leaves the driver default.
+  //
+  // ADOPTED transactions — the method was called with a
+  // `w17-tx-id` header, so the caller's `distx.Begin` opened
+  // the transaction — are ENFORCED, not ignored. No engine
+  // lets a running transaction change level, so a declared
+  // level has to be chosen by whoever began it: the caller
+  // passes it as `BeginRequest.isolation`, and a method whose
+  // declaration the open transaction cannot satisfy REFUSES
+  // to adopt (`txregistry.ErrIsolationTooWeak` →
+  // `INVALID_ARGUMENT`) rather than running weaker.
+  //
+  // This paragraph used to say adopted transactions "ignore
+  // this — the isolation level was pinned at the Begin call".
+  // Neither half held: distx never populated the tx options,
+  // so nothing was pinned anywhere, and the same method
+  // therefore ran SERIALIZABLE standalone and READ COMMITTED
+  // inside a distributed transaction with nothing said — a
+  // declaration accepted and then dropped (T3-7 pass #9
+  // D-F7).
+  //
+  // A method that declares an isolation level should expect
+  // `codes.Aborted` (serialization failure / deadlock) on the
+  // level it asked for, and its CALLER owns the retry: the
+  // unit that has to be replayed is the transaction, and only
+  // its owner knows where that begins. The channel-level gRPC
+  // retry policy deliberately does not retry Aborted — see
+  // `grpcerr.Wrap`.
+  //
+  // Per-dialect mapping:
+  //   - SQLite has only one isolation level (SERIALIZABLE
+  //     in deferred-mode tx); the driver accepts the option
+  //     but the engine ignores it. Codegen emits
+  //     verbatim — no warning, the runtime is consistent
+  //     enough.
+  //   - PG accepts all four standard levels.
+  //   - MySQL accepts all four standard levels.
+  TxIsolation tx_isolation = 5;
+
+  // kv_atomic — wrap multi-op KV methods in a single
+  // MULTI/EXEC transaction so partial failure becomes
+  // impossible (REV-066 / G3-KV-06 slice 3). Pre-REV-066 the
+  // sequential semantics let the KV land in the state of the
+  // last successful op; with `kv_atomic: true` the codegen
+  // emits a `client.TxPipelined(ctx, fn)` wrap and queues
+  // every op via the `pipe.X(...)` shape — server commits
+  // every op atomically or none of them.
+  //
+  // Constraints (refused at codegen time when violated):
+  //
+  //   - **KV connection only.** A method whose ops ALL run on
+  //     relational connections is refused — a SQL multi-op method
+  //     already runs in one transaction, so the flag would be
+  //     redundant, and the relational emitters never read it, so
+  //     ignoring it silently would let the author believe they
+  //     bought a guarantee they didn't. A multi-connection method
+  //     that touches any KV connection keeps the flag (the KV ops
+  //     honour it).
+  //   - **Single-op methods.** No-op (a single op is already
+  //     atomic at the dialect level).
+  //   - **MVP supports SET / DEL only.** GET / MGET / EXPIRE
+  //     / PERSIST refuse with a steering hint pointing at
+  //     "split into separate methods, or wait for the Lua-
+  //     script atomic emit (parked)". MULTI/EXEC can't read
+  //     within the transaction (every command's `.Result()`
+  //     returns the placeholder OK until EXEC), so cross-op
+  //     reads need WATCH + retry or Lua — both deferred.
+  //   - **No cross-op refs.** Methods with `:opName.col` cross-
+  //     op references refuse for the same reason — TxPipelined
+  //     can't satisfy intermediate reads. Lua slice will lift
+  //     this when it ships.
+  //   - **JSON layout only.** A table on
+  //     `redis_layout: REDIS_LAYOUT_HASH` (or HASH_BUCKETED)
+  //     refuses: the atomic emit has SET / DEL pipe templates
+  //     and no HSET / HDEL ones. This is a property of the
+  //     TABLE, not of the method, so a method can satisfy every
+  //     rule above and still be refused because of how one of
+  //     its tables is stored — convert the table to the JSON
+  //     default, or keep the method sequential.
+  //
+  // When unset (default `false`), multi-op KV stays sequential
+  // — back-compat with existing methods. Authors opt in
+  // explicitly when they want the all-or-nothing guarantee.
+  bool kv_atomic = 6;
+
+  // materialize — bounds + tunes the optimizer's app-side
+  // materialization for a fan-out JOIN this method decomposes
+  // (LateMaterialize / Pipeline). Pure override surface over the
+  // budget/dialect-derived defaults; unset = defaults. See
+  // docs/specs/storage/bounded-materialization.md.
+  Materialize materialize = 7;
+}
+
+// Materialize — override knobs for the bounded-materialization
+// paths (docs/specs/storage/bounded-materialization.md). Every
+// field has a safe default, so existing methods that omit the
+// annotation keep the optimizer's automatic behaviour.
+message Materialize {
+  // Max IDs per fetch batch on the app-side LateMaterialize path.
+  // Caps the `= ANY` / `IN` payload and the per-iteration app
+  // memory. 0 → per-dialect default (PG 4096 / MySQL 1024 /
+  // SQLite 512). Ignored by the fused Subselect path (nothing is
+  // batched there — the IDs never reach the app).
+  uint32 batch_size = 1;
+
+  // Hard fail-closed ceiling on the total intermediate row count
+  // the LateMaterialize narrow step may materialize. Crossing it
+  // aborts the method with RESOURCE_EXHAUSTED instead of growing
+  // the ID slice without bound. 0 → derive from
+  // `query_memory_budget_bytes / <child PK width>` (the budget the
+  // author already declared, now enforced at runtime). Ignored by
+  // the fused Subselect path.
+  uint64 max_intermediate_rows = 2;
+
+  // Max concurrent fetch batches (B′). 0 / 1 → the sequential
+  // inline loop. Above that the batched fetch runs through
+  // `materialize.FetchBatches` with this many windows in flight,
+  // capped at runtime by connection-pool headroom. Only meaningful
+  // together with `batch_size` — there are no batches to overlap
+  // without it.
+  uint32 max_parallel = 3;
+
+  // force — pin the execution strategy instead of letting the
+  // optimizer pick. AUTO (default) keeps the automatic decision
+  // (PG fuses to SUBSELECT; MySQL / SQLite take BATCHED). Use
+  // SUBSELECT / BATCHED to override per method when the author
+  // knows the planner / workload better than the cost model.
+  Strategy force = 4;
+
+  // Strategy enumerates the materialization shapes the `force`
+  // knob can pin. Zero value is AUTO (the optimizer decides) —
+  // the same DSL-ergonomics exception db.proto already makes for
+  // DbType.AUTO, since this is a build-time annotation never
+  // consumed by third parties.
+  enum Strategy {
+    // AUTO — optimizer picks per dialect + cost model (default).
+    STRATEGY_AUTO = 0;
+
+    // SUBSELECT — force the server-side semi-join fusion
+    // (`WHERE pk IN (<narrow>)`). Emittable on every relational
+    // dialect; the planner-quality reasons that keep it PG-only
+    // by default don't block an explicit opt-in.
+    STRATEGY_SUBSELECT = 1;
+
+    // BATCHED — force the app-side guarded + batched
+    // LateMaterialize path even on a dialect (PG) that would
+    // otherwise fuse.
+    STRATEGY_BATCHED = 2;
+
+    // TEMP_TABLE — force COPY-the-IDs-into-a-TEMP-TABLE + JOIN.
+    // Parked: the emit isn't built yet; codegen rejects this
+    // value with a pointer at the spec until it lands.
+    STRATEGY_TEMP_TABLE = 3;
+  }
+}
+
+// TxIsolation enumerates the SQL standard transaction
+// isolation levels (G3-DT-02). Mapped at codegen time to
+// `database/sql.IsolationLevel` constants:
+//
+//   READ_UNCOMMITTED → sql.LevelReadUncommitted
+//   READ_COMMITTED   → sql.LevelReadCommitted
+//   REPEATABLE_READ  → sql.LevelRepeatableRead
+//   SERIALIZABLE     → sql.LevelSerializable
+enum TxIsolation {
+  TX_ISOLATION_UNSPECIFIED = 0;
+  READ_UNCOMMITTED = 1;
+  READ_COMMITTED = 2;
+  REPEATABLE_READ = 3;
+  SERIALIZABLE = 4;
+}
+
+// Operation is one named DQL statement in a method (the `ops` field).
+// Its kind — read (SELECT) or write (INSERT/UPDATE/DELETE/UPSERT) —
+// is derived by parsing `dql`; there is no separate label. Later ops
+// reference an earlier op's projected columns via `:<name>.<col>`.
+// `dql` is the field name (not `sql`) so a future sibling `native`
+// escape hatch (raw backend statements — e.g. Redis commands, not
+// SQL) can join the same ordered op list.
+message Operation {
+  string name = 1;
+  string dql = 2;
+}
+
+// Module + Connection + Dialect + Capability + StorageEncoding
+// moved to `proto/w17/module.proto` (REV-006, 2026-05-06). The
+// general module/domain config option is now `(w17.module)`,
+// not under the `w17.db.*` namespace — it carries DB
+// connection today, but is intended to grow non-DB defaults too
+// (auth, observability, etc.).
+
+message Table {
+  string name = 1;
+  repeated Index indexes = 2;
+
+  // Escape hatches for DB shapes the curated vocabulary can't spell.
+  // Both emit dialect-specific SQL verbatim; w17gen validates identifier
+  // names (length, reserved words, collisions) but treats the SQL body
+  // as opaque — author is responsible for syntax and apply-time
+  // correctness, same contract as (w17.pg.field).custom_type.
+  //
+  // Use when:
+  //  - the built-in CHECK variants (Length / Blank / Range / Regex /
+  //    Choices) can't express the constraint AND structured
+  //    `checks:` (REV-136 DQL-based predicate) can't either —
+  //    typically because the body needs a PG-specific operator the
+  //    DQL grammar doesn't accept yet
+  //  - the built-in index shape (btree, fields, INCLUDE, WHERE/expr
+  //    via REV-134/135) can't express the index — GIN / GIST / BRIN /
+  //    HASH, operator classes (gin_trgm_ops)
+  repeated RawCheck raw_checks = 3;
+  repeated RawIndex raw_indexes = 4;
+
+  // SQL-visible table comment (D22). Emits
+  // `COMMENT ON TABLE <table> IS '<text>';`. Defaults to the proto
+  // message's leading comment when unset; authoring this field
+  // overrides the default (e.g. when the proto comment is
+  // developer-oriented but the DB-facing documentation should be
+  // different). Empty value = no COMMENT emitted, even if a leading
+  // comment exists.
+  string comment = 5;
+
+  // Per-table connection override (D26). Names a connection declared
+  // in some (w17.module).connection option in the same domain.
+  // Empty = this table runs on its module's own connection. Use
+  // cases: a domain's main proto declares `(postgres, 18)` but a
+  // specific config-holding message lives in a side `(sqlite, 3)`
+  // registered by another module in the same domain.
+  string connection = 6;
+
+  // Redis storage layout (G3-KV-04). Only meaningful when the
+  // table's effective connection has REDIS dialect + KV
+  // capability. Unset = JSON (the default — entity is protojson-
+  // marshaled into one Redis STRING under one key, the iter-2 MVP
+  // shape). HASH = entity is split per-field into a Redis HASH
+  // (HSET / HGETALL / HDEL); each scalar field lands in its own
+  // hash field, encoded protojson-equivalent (string as-is, ints
+  // decimal, bool "true"/"false", bytes base64, timestamp RFC3339,
+  // enum label string). Nested-message fields are rejected with
+  // a typecheck error — HASH layout supports flat schemas only.
+  // Per-field encoding overrides (e.g. timestamp as Unix epoch
+  // for ZRANGEBYSCORE) are intentionally absent in v1; add when
+  // a fixture demands them. Ignored on non-Redis connections.
+  RedisLayout redis_layout = 7;
+
+  // Whether the module prefix prepends onto THIS table's
+  // derived name. Same shape as (w17.module).prefix:
+  //
+  //   unset       — inherit from module; prefix applies
+  //   prefix:true — explicit; prefix applies (same as unset
+  //                 unless the module opted out — then this
+  //                 forces it back on for this one table)
+  //   prefix:false — opt out for this table specifically
+  //
+  // Has no effect when `name` is set explicitly (an explicit
+  // name owns the whole identifier, prefix never applies).
+  optional bool prefix = 8;
+
+  // REV-031 (Phase C, 2026-05-09) — author overrides for
+  // multi-column constraint failures. Each entry binds a
+  // constraint name to a user-facing message. Without an entry,
+  // the constraint failure stays internal-class (REV-026 PgError
+  // → Internal + Sentry).
+  //
+  // Single-column constraint overrides live on
+  // `(w17.field).validation_messages` instead — this slot covers
+  // composite uniques, multi-column CHECK, exclusion constraints,
+  // and other cases where the constraint maps to no single field.
+  //
+  // `constraint` matches PG's pg_constraint.conname (or whatever
+  // dialect-equivalent name the emitter assigns). Authors pin
+  // constraint names via raw_indexes/raw_checks `name` field or
+  // accept the auto-derived name.
+  repeated TableValidationMessage validation_messages = 9;
+
+  // Estimated row count — author-supplied size hint for the
+  // optimizer's cost model (REV-055 Fáze 1a). Pure metadata, no
+  // SQL emit.
+  //
+  // The optimizer multiplies this by Σ(field.estimated_avg_bytes)
+  // to estimate per-table memory footprint when deciding JOIN /
+  // PREFETCH / pipeline decomposition. Without it, the optimizer
+  // falls back to the per-row-shape heuristic (variable-size
+  // fields → "heavy" → prefer PREFETCH; all-fixed-size → "small
+  // lookup" → prefer JOIN).
+  //
+  // Authoring guidance:
+  //
+  //   - Order-of-magnitude estimates are sufficient. The decision
+  //     boundary is "rows × bytes vs. connection.query_memory_
+  //     budget_bytes" — being off by 2x changes the pick rarely.
+  //   - 0 (default / unset) = no information. The optimizer keeps
+  //     the row-shape heuristic. Set explicitly when you have a
+  //     real cardinality estimate.
+  //   - Stable surface — values can change in DB without
+  //     redeploying. The annotation captures the design intent
+  //     (this is a "lookup table" vs. "fact table"); long-term
+  //     drift between the hint and reality is the author's
+  //     responsibility (revisit when the table grows
+  //     materially).
+  //   - Static only — no runtime hook to re-read live row counts.
+  //     Future iter (per docs/architecture.md "Local schema
+  //     validator") may add a `w17gen analyze` command to refresh
+  //     hints from the live DB.
+  uint64 estimated_row_count = 10;
+
+  // Bucket discriminator column for HASH_BUCKETED Redis tables
+  // (REV-087). Names the table column whose VALUE drives the
+  // Redis HASH key (`<table>:<bucket_value>`) — typically the
+  // FK column pointing at the parent entity. The entity's PK
+  // becomes the HASH field name within that bucket; each HASH
+  // value is one protojson-encoded entity instance.
+  //
+  // Example for `UserSession` (bucketed by user_id):
+  //   - Redis key:   `user_sessions:<user_id>`
+  //   - HASH field:  `<session_id>`
+  //   - HASH value:  protojson.Marshal(UserSession{...})
+  //
+  // Constraints (enforced by IR build / typecheck):
+  //   - Required IFF redis_layout == REDIS_LAYOUT_HASH_BUCKETED.
+  //     Setting on non-bucketed layouts is rejected with a
+  //     clear pointer; omitting on bucketed layouts rejects
+  //     with a pointer at the bucket-column requirement.
+  //   - References an existing column on this table by proto
+  //     name.
+  //   - Must NOT name the PK column — bucket discriminator and
+  //     PK are distinct dimensions.
+  //
+  // Consumers:
+  //   - REV-082 forward cross-cap dispatch (today's path)
+  //     keeps inferring the bucket key from the JOIN ON's
+  //     child column; the explicit annotation lets future
+  //     dispatch slices (e.g. KV-only single-child HGET on
+  //     bucketed tables) read the bucket column without
+  //     parsing the JOIN.
+  //   - REV-087+ KV-only mutation slices: INSERT routes to
+  //     HSET <table>:<value_of_redis_bucket_by> field=<pk_value>;
+  //     DELETE routes to HDEL similarly.
+  string redis_bucket_by = 11;
+
+  // Structured cross-column CHECK constraints (REV-136). DQL predicate
+  // body, validated at IR build time (syntax, no `:param` refs, no
+  // qualified column refs — a table CHECK sees only its own table);
+  // emit renders `CONSTRAINT <name> CHECK (<predicate>)` as a table-
+  // level constraint. Universal across PG / SQLite / MySQL — CHECK is
+  // SQL-standard everywhere.
+  //
+  // When to author here vs raw_checks vs per-column (w17.field).check:
+  //   - Per-column shapes (length / blank / range / regex / choices)
+  //     stay on (w17.field) — typed surface with semantic CHECK
+  //     derivation.
+  //   - This `checks:` slot is for CROSS-COLUMN structured predicates
+  //     authored in DQL — composes the structured name + identifier
+  //     contract (length / collision validation) with the DQL syntax
+  //     check.
+  //   - `raw_checks:` stays for opaque per-dialect SQL bodies that
+  //     DQL grammar can't spell (e.g. PG-specific operators).
+  //
+  // Authoring:
+  //   checks: [
+  //     { name: "orders_dates_ordered",
+  //       predicate: "start_date <= end_date" },
+  //     { name: "users_name_or_email",
+  //       predicate: "name IS NOT NULL OR email IS NOT NULL" }
+  //   ]
+  //
+  // The predicate is COMPILED, not passed through: it is parsed,
+  // checked, and rendered back to the SQL that goes into the schema.
+  // Two consequences worth knowing:
+  //   - Enum-name literals lower like they do in a query. An
+  //     int-carrier enum column stores the NUMBER, so
+  //     `predicate: "type <> 'DOCUMENT_TYPE_UNSPECIFIED'"` is
+  //     emitted as `CHECK (type <> 0)`. Write the name, not the
+  //     number — the number is what it compiles to today and means
+  //     something else after a renumbering.
+  //   - Constructs a constraint cannot carry are refused at build
+  //     time rather than emitted: subqueries, EXISTS, window
+  //     functions, aggregate FILTER, `:param` bindings, qualified
+  //     column refs, and proto-canonical CAST targets (`INT64` and
+  //     friends resolve per dialect, and a schema has no dialect
+  //     left to resolve against — write the engine's own type).
+  // A body that needs none of that round-trips exactly as written.
+  //
+  // Lands in the same RawCheck IR entry as raw_checks (same differ
+  // shape, same emit path); the distinction is at authoring time —
+  // and in whether anything between the annotation and the database
+  // ever reads the body. Names share the same collision namespace as
+  // raw_checks / raw_indexes / derived constraint names, and that
+  // namespace is checked across the whole schema, not just per
+  // table: the generated constraint→error-code registry is keyed by
+  // name and flat, so two tables claiming one name is refused.
+  repeated TableCheck checks = 12;
+}
+
+// TableValidationMessage — table-level validation override (REV-031,
+// Phase C, 2026-05-09). See (w17.db.table).validation_messages
+// docstring.
+message TableValidationMessage {
+  // PG constraint name (or dialect equivalent). Required;
+  // matches pg_constraint.conname when the rule fires at apply
+  // time.
+  string constraint = 1;
+
+  // User-facing message. Same `{placeholder}` substitution rules
+  // as field-level ValidationMessage; placeholders are limited
+  // since composite constraints don't carry per-field bounds.
+  // Useful: `{constraint}` (the constraint name) and
+  // `{table}` (the SQL table name).
+  string message = 2;
+}
+
+// RedisLayout — how a Redis-backed table's entity values are
+// stored. JSON is the default (one STRING value per key holding
+// the protojson-marshaled entity, iter-2 MVP); HASH splits each
+// scalar field into a hash entry under one key (G3-KV-04);
+// HASH_BUCKETED groups N children of a parent under ONE Redis
+// HASH (REV-082) — the bucket-shaped layout that enables native
+// fan-out via HGETALL (no secondary indexes, no pattern scans).
+//
+// HASH_BUCKETED specifics:
+//   - Redis key:   `<table>:<parent_pk_value>` (the JOIN ON's
+//                  child-side column drives which parent
+//                  column's value goes into the key).
+//   - HASH field:  `<child_pk_value>` (stringified).
+//   - HASH value:  `protojson.Marshal(<child_entity>)` — JSON
+//                  per child, parity with REDIS_LAYOUT_JSON for
+//                  individual-entity reads.
+//
+// Today only the cross-capability fan-out path (slice D-γ)
+// consumes bucketed layout; KV-only ops on a bucketed table
+// (single-child GET / SET / DEL) require composite-key
+// requests (parent_pk + child_pk) and graduate when a fixture
+// demands.
+//
+// The wire contract — what each value looks like — is fixed
+// per-layout at protojson-equivalent for parity across
+// reader languages and is a forever consumer commitment.
+enum RedisLayout {
+  REDIS_LAYOUT_UNSPECIFIED = 0;   // JSON (default — backward compat)
+  REDIS_LAYOUT_JSON = 1;           // explicit JSON — same as unset
+  REDIS_LAYOUT_HASH = 2;           // HSET / HGETALL / HDEL per-field
+  REDIS_LAYOUT_HASH_BUCKETED = 3;  // one HASH per parent, fields = child PK, values = JSON child entities
+}
+
+// Index — structured index definition. Single authoring path; opaque
+// SQL bodies live on (w17.db.table).raw_indexes. D23.
+//
+// Authoring (simple):
+//   { fields: [{ name: "category_id" }, { name: "is_active" }] }
+//
+// Authoring (detailed):
+//   { method: GIN,
+//     fields: [{ name: "tags", opclass: "gin_trgm_ops" }],
+//     storage: { "fastupdate": "on" },
+//     name: "posts_tags_gin" }
+//
+// Partial indexes ship via the `where` field (REV-134; DQL predicate
+// body, validated at IR build time, refused on MySQL — no native
+// partial-index support there). Expression indexes ship via the
+// `IndexField.expr` slot (REV-135; all three dialects render
+// `(<expr>)` in the column list, XOR with `name`). Cross-column
+// CHECK predicates have their own structured slot — see
+// (w17.db.table).checks (REV-136); raw_checks is now only for
+// bodies the DQL grammar cannot spell.
+message Index {
+  // Proto-field list with per-field sort / nulls / opclass metadata.
+  // Each entry is at minimum `{ name: "<proto_field>" }`; desc / nulls
+  // / opclass default to the dialect's own defaults when unset.
+  repeated IndexField fields = 1;
+
+  bool unique = 2;
+
+  // Optional name override. Default: auto-derived from table + fields
+  // (`<table>_<col>…_idx` / `_uidx`).
+  //
+  // The module PREFIX namespace is applied to this name — what you write
+  // here is the BARE half. In a `contacts` module,
+  // `name: "contacts_org_ico_uidx"` lands in SQL as
+  // `contacts_contacts_org_ico_uidx`; write `org_ico_uidx` instead. Same
+  // rule for RawIndex.name, RawCheck.name, and TableCheck.name.
+  //
+  // It is the prefix that makes an authored name unique across modules —
+  // index and constraint names share ONE namespace per schema, so two
+  // modules both writing `name: "by_owner"` would otherwise collide.
+  // Derived names get that uniqueness from the table name instead, which
+  // is why they need no prefix of their own.
+  //
+  // Consequently the prefix here does NOT follow the table's:
+  // `(w17.db.table).prefix` / `(w17.module).table_prefix` govern a
+  // DERIVED TABLE NAME (note the field's name), and an explicit
+  // `(w17.db.table).name` owns only its own identifier. A table can
+  // therefore be `products` while its authored index is
+  // `catalog_by_category` — that is the namespace working, not a leak
+  // from the module name.
+  string name = 3;
+
+  // Postgres INCLUDE — covering-index columns. Bare proto-field names
+  // (no per-field options — INCLUDE columns are stored, not indexed,
+  // so sort / opclass don't apply). Emitters that don't support INCLUDE
+  // error if non-empty.
+  repeated string include = 4;
+
+  // Access method — BTREE when unspecified. Methods impose restrictions
+  // (GIN / BRIN reject UNIQUE; HASH rejects per-field sort + opclass;
+  // etc.) validated at IR time. Adding a method here requires a
+  // matching capability in emit/capabilities.go + the dialect catalog.
+  IndexMethod method = 5;
+
+  // Storage parameters — free-form key/value map rendered as
+  // `WITH (key1=value1, key2=value2)` after the column list. Common
+  // knobs: `fillfactor`, `fastupdate`, `pages_per_range`,
+  // `autosummarize`. w17gen passes through verbatim; PG validates at
+  // apply time. Graduation path: if pilots repeat the same options,
+  // typed per-method submessages can replace the map (parallel to
+  // D9's custom_type → curated-flags graduation).
+  map<string, string> storage = 6;
+
+  // D-record A3b — build / drop the index outside the migration
+  // transaction. Renders `CREATE INDEX CONCURRENTLY` on PG (DROP
+  // mirrors). Scales-with: row_count; risk header surfaces the
+  // op as `index_create_nontx` MEDIUM (INVALID-index recovery
+  // path on partial failure). Validated against dialect cap
+  // CAP_INDEX_CONCURRENTLY at IR time — setting true on a
+  // dialect that doesn't support concurrent index builds is a
+  // build-time error, not a silent fallback.
+  //
+  // Three states (proto3 optional):
+  //   unset → dialect-driven default (PG → true, others → false)
+  //   true  → force concurrent build
+  //   false → force in-transaction build (escape hatch when the
+  //           author wants the BEGIN/COMMIT atomicity for an
+  //           index they know is on a small / quiet table)
+  //
+  // Default-true on PG is the production-safe posture: every
+  // index gets the SHARE_UPDATE_EXCLUSIVE-only lock instead of
+  // the ACCESS_EXCLUSIVE lock the in-transaction CREATE INDEX
+  // would take.
+  optional bool concurrent = 7;
+
+  // Partial-index predicate body (REV-134). DQL expression syntax —
+  // bare column refs, literals, comparisons, AND/OR/NOT, IS NULL,
+  // IN with literal list, function calls (LOWER / COALESCE / …).
+  //
+  // Compiled at IR build time: the body is parsed with
+  // `lib/dql.Parse`, checked, and rendered back to the SQL that
+  // goes into the schema. Refusals carry file:line:col + WithWhy /
+  // WithFix:
+  //   - `:param` bindings — an index has no runtime call site.
+  //   - qualified column refs (`alias.col`) — CREATE INDEX has no
+  //     FROM clause for the qualifier to resolve against.
+  //   - constructs that read another row (subquery, EXISTS, window
+  //     function, aggregate FILTER) or resolve per dialect (a
+  //     proto-canonical CAST target such as `INT64`) — an index is
+  //     compiled once, into a schema with no dialect left to
+  //     resolve against.
+  //
+  // Enum-name literals lower the way they do in a query: an
+  // int-carrier enum column stores the NUMBER, so
+  // `where: "status = 'STATUS_DRAFT'"` is emitted as
+  // `WHERE (status = 1)`. Writing the number yourself works too and
+  // is what the name compiles to — but it silently means something
+  // else the day the enum is renumbered.
+  //
+  // Anything else round-trips exactly as written. NOT validated:
+  // column existence, types, and dialect-divergent constructs
+  // (ILIKE, INTERVAL, …) — the DB stays the authority on those, so
+  // a portability mistake surfaces at apply time. Deliberate for
+  // the MVP; the validator graduates to a full
+  // `lib/dql/typecheck` pass when real portability pain shows up.
+  //
+  // Authoring:
+  //   indexes: [{
+  //     fields: [{ name: "email" }],
+  //     unique: true,
+  //     where:  "deleted_at IS NULL"
+  //   }]
+  //
+  // Per-dialect support:
+  //   - PG     — emits `WHERE <body>` after the column list.
+  //   - SQLite — emits `WHERE <body>` after the column list.
+  //   - MySQL  — refuses at emit time (no native partial-index
+  //              grammar). Authors who need MySQL coverage either
+  //              drop `where` and accept the full index, or move
+  //              the predicate into application-side filtering.
+  //
+  // Default empty → non-partial (full) index — unchanged behaviour
+  // for indexes that don't author the field.
+  string where = 8;
+
+  // plugin_feature / plugin_feature_unless — STAGING-TIME gate for a
+  // single index entry, evaluated against a plugin activation's
+  // enabled feature set (the `(w17.contrib.plugin_feature*)` family,
+  // applied by `featurefilter` before the file is compiled).
+  //
+  //   plugin_feature        — keep this entry only when the feature IS
+  //                           enabled.
+  //   plugin_feature_unless — keep it only when the feature is NOT.
+  //
+  // Both on one entry is a contradiction with no reading and is
+  // refused, exactly like the rpc-level pair.
+  //
+  // WHY an index needs its own gate. `(w17.contrib.plugin_feature_field)`
+  // drops a COLUMN when its feature is off, but an index entry naming
+  // that column lives inside this option — not in a field declaration —
+  // so it used to survive into a build where the column no longer
+  // exists. That made a feature-gated column unable to participate in
+  // any composite constraint.
+  //
+  // Dropping the entry along with the column would not be enough on its
+  // own: the feature-off build usually needs a DIFFERENT constraint, not
+  // none. `auth.UserRole` is the motivating case — `(user_id, role_id)`
+  // is unique without `org_membership`, while with it the pair is unique
+  // only among realm-wide rows and the triple `(user_id, role_id,
+  // org_id)` is unique among org-scoped ones (two partial indexes,
+  // because PostgreSQL treats NULLs as DISTINCT in a unique index, so a
+  // plain three-column UNIQUE would silently stop constraining the
+  // realm-wide rows). Expressing "this index, but only in that build"
+  // needs both polarities — which is why the INDEX pair keeps its
+  // `plugin_feature_unless` even though the rpc-level inverse gate was
+  // retired (contrib.proto reserves its number). An index has no
+  // equivalent of a feature-gated DQL fragment to fold the two
+  // polarities into one entry, so here both are still load-bearing.
+  //
+  // Empty (both) = ungated — the entry is emitted in every build, which
+  // is what every index that doesn't author these fields does.
+  //
+  // Staging-time metadata only: the fields carry no SQL and the IR
+  // ignores them. An entry that survives the filter still carries its
+  // tag, so the staged proto keeps documenting why it is there.
+  string plugin_feature = 9;
+  string plugin_feature_unless = 10;
+}
+
+message IndexField {
+  // Proto-field name on the owning message. FK semantics: the field
+  // must exist on the message; w17gen validates at IR time. Mutually
+  // exclusive with `expr` — one IndexField entry indexes either a
+  // declared column OR a computed expression, never both.
+  string name = 1;
+
+  // Sort direction. Default ASC.
+  bool desc = 2;
+
+  // NULLS FIRST / LAST. Unspecified = dialect default
+  // (PG: NULLS LAST for ASC, NULLS FIRST for DESC).
+  NullsOrder nulls = 3;
+
+  // Operator class for specialised comparators. Opaque string passed
+  // through verbatim (PG examples: `text_pattern_ops`, `gin_trgm_ops`,
+  // `jsonb_path_ops`). Type-correctness against the column is PG's
+  // concern at apply time. Empty = default comparator for the column
+  // type. HASH method rejects opclass (HASH uses the type's default
+  // hash function exclusively).
+  string opclass = 4;
+
+  // Expression-index body (REV-135). DQL expression, compiled to SQL
+  // at IR build time. Mutually exclusive with `name` — exactly one
+  // of (`name`, `expr`) must be set per IndexField entry. Same
+  // compile path as `Index.where`: syntax via lib/dql.Parse, the
+  // same refusals (`:param`, qualified column refs, row-reading and
+  // dialect-resolved constructs), the same enum-name lowering, and
+  // everything else rendered as written. Emit puts `(<body>)` in the
+  // column list as one entry.
+  //
+  // Authoring:
+  //   indexes: [{
+  //     fields: [{ expr: "lower(email)" }],
+  //     unique: true
+  //   }]
+  //
+  // Per-dialect support:
+  //   - PG / SQLite / MySQL — all three render `(<body>)` as one
+  //     entry inside the column list. DESC / NULLS modifiers still
+  //     apply (per-dialect rules unchanged).
+  //   - HASH method on MySQL: rejects expression entries (HASH uses
+  //     the column's type's default hash function exclusively —
+  //     same restriction as opclass). PG has no such restriction:
+  //     `USING hash ((lower(email)))` is a real PG index, so only
+  //     the MySQL emitter refuses.
+  string expr = 5;
+}
+
+// IndexMethod — access method for the index. UNSPECIFIED maps to
+// BTREE (PG's own default), rendered without an explicit `USING`
+// clause. Non-BTREE methods emit `USING <method>` after the table
+// name.
+enum IndexMethod {
+  INDEX_METHOD_UNSPECIFIED = 0;   // BTREE, no USING clause in SQL
+  BTREE  = 1;                     // explicit BTREE — emits USING btree
+  GIN    = 2;                     // Generalized Inverted Index
+  GIST   = 3;                     // Generalized Search Tree
+  BRIN   = 4;                     // Block Range Index
+  HASH   = 5;                     // Hash-based equality lookups
+  SPGIST = 6;                     // Space-Partitioned GiST
+  // REV-065 — MySQL-specific structured methods. Both emit the
+  // dedicated `CREATE FULLTEXT INDEX` / `CREATE SPATIAL INDEX`
+  // form (NOT a USING-method modifier). PG / SQLite refuse with
+  // a steering diagnostic — full-text + geo on those dialects
+  // route through different mechanisms (PG: GIN over tsvector
+  // / PostGIS GIST; SQLite: FTS5 virtual tables / R-Tree
+  // module — outside the structured Index surface).
+  FULLTEXT = 7;
+  SPATIAL  = 8;
+}
+
+// NullsOrder — NULL-position directive for ordered index fields.
+enum NullsOrder {
+  NULLS_ORDER_UNSPECIFIED = 0;    // dialect default (PG: LAST/FIRST per desc)
+  NULLS_FIRST = 1;
+  NULLS_LAST  = 2;
+}
+
+// RawCheck is the escape hatch for CHECK constraints the per-field
+// vocabulary can't spell. Author supplies the SQL expression that goes
+// inside `CHECK (…)`; w17gen wraps with `CONSTRAINT <name> CHECK (<expr>)`
+// and validates <name> for length / reserved-keyword / collision with
+// derived constraint names. The expression itself is opaque — dialect
+// portability is the author's problem (same contract as custom_type).
+//
+// Common uses:
+//   { name: "orders_dates_ordered", expr: "start_date <= end_date" }
+//   { name: "users_name_or_email",  expr: "name IS NOT NULL OR email IS NOT NULL" }
+message RawCheck {
+  string name = 1;
+  string expr = 2;
+}
+
+// TableCheck — structured table-level CHECK predicate (REV-136).
+// Cross-column predicate authored in DQL grammar (parsed +
+// validated at IR build time), rendered identically across PG /
+// SQLite / MySQL as `CONSTRAINT <name> CHECK (<predicate>)`.
+//
+// Distinction from RawCheck:
+//   - RawCheck.expr is opaque SQL (per-dialect portability is
+//     author's problem; same contract as custom_type).
+//   - TableCheck.predicate is DQL expression syntax (parsed upstream;
+//     `:param` and qualified column refs refused).
+//
+// At IR build time TableCheck entries lower into RawCheck entries
+// (identical SQL output, identical differ shape). The structured
+// authoring surface composes the same identifier-validation
+// contract (length / reserved word / collision) with the upfront
+// DQL syntax check.
+//
+// Common uses:
+//   { name: "orders_dates_ordered", predicate: "start_date <= end_date" }
+//   { name: "users_name_or_email",  predicate: "name IS NOT NULL OR email IS NOT NULL" }
+message TableCheck {
+  string name = 1;
+  string predicate = 2;
+}
+
+// RawIndex is the escape hatch for indexes the structured (fields +
+// INCLUDE + unique) vocabulary can't spell. Author supplies the body
+// AFTER `ON <table>` — i.e. `USING <method> (<cols_or_exprs>) [INCLUDE …]
+// [WHERE <cond>]`. w17gen wraps with `CREATE [UNIQUE] INDEX <name> ON <table>
+// <body>` and validates <name> like any other index.
+//
+// Common uses:
+//   { name: "posts_search_gin", body: "USING gin (search_tsv)" }
+//   { name: "users_active_email_uidx", unique: true,
+//     body: "(email) WHERE deleted_at IS NULL" }
+//   { name: "users_lower_email_uidx", unique: true,
+//     body: "(lower(email))" }
+//   { name: "tags_name_trgm", body: "USING gin (name gin_trgm_ops)" }
+//
+// Down-migration drops use DROP INDEX IF EXISTS <name>, same as derived
+// indexes. Required PG extensions (pg_trgm, btree_gin, …) are the
+// author's / operator's responsibility — surface them on
+// (w17.pg.field).required_extensions for the hosted platform to
+// propagate.
+message RawIndex {
+  string name = 1;
+  bool   unique = 2;
+  string body = 3;
+}
+
+message Column {
+  // Single-field non-unique storage index. Sugar for a single-col entry in
+  // (w17.db.table).indexes. Does NOT imply UNIQUE — use (w17.field).unique
+  // for uniqueness (data semantic, always represented as a UNIQUE INDEX).
+  bool index = 1;
+
+  // SQL column name override. Default = proto field name 1:1. Rare — mostly
+  // for adopting existing schemas with non-proto naming conventions.
+  string name = 2;
+
+  // Foreign key. Moved here from (w17.field) in D8 rev 2026-04-21: FKs
+  // are a DB-level rule (like indexes and CHECK constraints), not a
+  // general field semantic.
+  //
+  // Two forms (REV-015): the preferred MODEL form `<module>.<Model>`
+  // (auto-pk) or `<module>.<Model>.<field>`, and the legacy raw
+  // `<table>.<column>`. Targets resolve across the whole compiled
+  // batch, not just the declaring file — `fk: "users.User"` from a
+  // model in the `tasks` module is the ordinary case. A target the
+  // batch doesn't carry is a build error.
+  //
+  // Cross-CONNECTION targets are accepted and kept in the IR (they
+  // drive cross-connection PREFETCH); the DB-level FK constraint is
+  // dropped at the migrator's connection-bucketing seam, since no
+  // engine can enforce a reference into another database.
+  string fk = 3;
+
+  // Deletion rule — what happens to rows carrying this FK when the
+  // referenced parent row is deleted. Applies only when `fk` is set.
+  // Unspecified infers from (w17.field).null:
+  //   null: true  → ORPHAN (child survives, FK becomes NULL)
+  //   null: false → CASCADE (child is deleted with parent)
+  // Explicit value wins over inference. See D12.
+  DeletionRule deletion_rule = 4;
+
+  // Storage type override — orthogonal to (w17.field).type. When unset
+  // the field.type preset picks storage per dialect (D13 defaults); when
+  // set, the enumerated DbType drives the SQL column type directly,
+  // while field.type keeps driving CHECKs / validation. Lets the author
+  // split data semantic from storage: e.g. `type: CHAR, max_len: 6000`
+  // + `db_type: TEXT` keeps the char_length <= 6000 CHECK but stores as
+  // TEXT instead of VARCHAR(6000). See D14.
+  DbType db_type = 5;
+
+  // Generated-column expression — when set, the column is emitted as
+  // `GENERATED ALWAYS AS (<expr>) STORED`. Body is opaque SQL (same
+  // contract as raw_checks / raw_indexes): w17gen validates nothing inside
+  // the parentheses, the author is responsible for referenced columns
+  // existing and the expression being deterministic.
+  //
+  // Usage:
+  //   string full_name = 3 [
+  //     (w17.field)     = { type: CHAR, max_len: 200 },
+  //     (w17.db.column) = {
+  //       generated_expr: "first_name || ' ' || last_name"
+  //     }
+  //   ];
+  //
+  // Incompatible with (w17.field).default_* (the computed value IS the
+  // value), `pk: true` (PG rejects generated columns as primary keys),
+  // and `fk:` on the same column (generated columns can't be FK
+  // sources in PG). `unique:` and `null:` remain allowed. See D18.
+  string generated_expr = 6;
+
+  // SQL-visible column comment (D22). Emits
+  // `COMMENT ON COLUMN <table>.<col> IS '<text>';`. Same
+  // precedence as (w17.db.table).comment — defaults to the proto
+  // field's leading comment, override here if the DB-facing text
+  // should differ from the developer comment.
+  string comment = 7;
+
+  // Exclude this proto field from the table's column set
+  // (REV-014, 2026-05-07). Default behaviour: every proto field
+  // on a `(w17.db.table)`-marked message IS a DB column. Author
+  // opts an individual field out via `exclude: true` — useful
+  // for RPC-only / computed / temporary fields that need to live
+  // on the message (returned in responses, accepted in requests)
+  // but never get persisted.
+  //
+  // Validation rules:
+  //   - `(w17.db.column)` is meaningless on a field of a non-
+  //     `(w17.db.table)` message (no DB column to configure) →
+  //     IR build emits a hard diag error.
+  //   - `exclude: true` cannot combine with other column knobs
+  //     on the same `(w17.db.column)` body (fk / index / db_type
+  //     / generated_expr / comment / name / deletion_rule) — the
+  //     opt-out makes those configurations unreachable, so the
+  //     combination is a proactive lint failure.
+  bool exclude = 8;
+
+  // fk_cross_scope opts THIS reference out of the scope-preserving composite
+  // foreign key (A-F5).
+  //
+  // When a model and its `fk:` target are scoped by the SAME
+  // `(w17.db.scope)` axis, the compiler constrains the reference to stay
+  // inside that scope — `FOREIGN KEY (tenant_id, note_id) REFERENCES notes
+  // (tenant_id, id)` — so one tenant's row can never point at another's.
+  // That is right for the overwhelming majority of references between two
+  // scoped models, which is why it is inferred rather than declared.
+  //
+  // It is not right for all of them. A tenant-scoped row may legitimately
+  // reference a row belonging to a DIFFERENT scope — a template another
+  // tenant published, a shared catalogue entry that happens to live in the
+  // same scoped table, a row being migrated between tenants. Setting this
+  // emits the ordinary single-column FK instead: the parent must still
+  // EXIST, it just need not be yours.
+  //
+  // ⚠️ It removes a tenancy guarantee, so it is refused when it would do
+  // nothing: declaring it where the two ends share no scope axis is a hard
+  // error, not a no-op. An opt-out that silently opts out of nothing is the
+  // shape that hides a typo'd scope name — the author believes they have
+  // relaxed a constraint that was never there, and the day the axes DO line
+  // up the annotation starts having an effect nobody reviewed.
+  bool fk_cross_scope = 9;
+}
+
+// EnumValueColumn is the body of `(w17.db.enum_value)` (D-iter2-
+// dql-9). Each non-zero value of an enum used as an ORDER BY
+// sort-key carries one — `sort_sql` is the SQL fragment the
+// codegen splices into the generated CASE expression. The
+// fragment is opaque (raw SQL): the author is responsible for
+// the column existing and the direction (`ASC`/`DESC`) being
+// what they want. Multi-key sort fragments are legal:
+// `"tier ASC, id DESC"`. UNSPECIFIED (numeric 0) deliberately
+// has no fragment — its codegen path is the no-sort fallback.
+message EnumValueColumn {
+  // SQL fragment placed inside `CASE <param> WHEN <num> THEN
+  // <fragment> ... END` for ORDER BY-by-enum (D-iter2-dql-9).
+  // Required for every non-zero enum value used by a `:<path>`
+  // ORDER BY clause; codegen rejects missing fragments at emit
+  // time.
+  string sort_sql = 1;
+}
+
+// DbType — enumerated SQL column types, covering the common cross-dialect
+// set + PG-native types. Emitters map each value to the dialect-native
+// storage. For types not enumerated here (pgvector, PostGIS geometry,
+// custom DOMAINs), use (w17.pg.field).custom_type — that remains the
+// opaque escape hatch.
+//
+// Convention exception (REV-014, 2026-05-06): zero value is `AUTO`,
+// not `*_UNSPECIFIED` per proto3 norm — same rationale as Type.AUTO
+// above (DSL ergonomics outweigh the wire-format convention; this is
+// a build-time annotation never consumed by third parties).
+enum DbType {
+  // AUTO — pick the dialect-native storage from the column's
+  // semantic Type (set on (w17.field).type or inferred from the
+  // proto kind). The mapping lives in the per-dialect emitter
+  // (PG: SemType_SEM_TEXT → TEXT, SEM_DATETIME → TIMESTAMPTZ, etc.);
+  // override here only when the dialect-default differs from what
+  // the table needs.
+  AUTO = 0;
+
+  // --- Text-shaped ---
+  TEXT     = 1;    // PG/MySQL/SQLite TEXT
+  VARCHAR  = 2;    // requires (w17.field).max_len; PG/MySQL VARCHAR(N); SQLite TEXT
+  CITEXT   = 3;    // PG CITEXT (requires citext extension); others → TEXT
+
+  // --- JSON family ---
+  JSON     = 10;   // PG JSON (text-stored); MySQL JSON; SQLite TEXT
+  JSONB    = 11;   // PG JSONB (binary, indexed); others → JSON / TEXT
+
+  // --- Key-value (PG-native) ---
+  HSTORE   = 20;   // PG HSTORE (requires hstore extension); others → JSON
+
+  // --- Network ---
+  INET     = 30;   // PG INET; others → VARCHAR(45)
+  CIDR     = 31;   // PG CIDR; others → VARCHAR(45)
+  MACADDR  = 32;   // PG MACADDR; others → VARCHAR(17)
+
+  // --- Text-search (PG-native) ---
+  TSVECTOR = 40;   // PG TSVECTOR; others deferred
+
+  // --- UUID ---
+  UUID     = 50;   // PG UUID; MySQL CHAR(36); SQLite TEXT
+
+  // --- Numeric ---
+  SMALLINT         = 60;
+  INTEGER          = 61;
+  BIGINT           = 62;
+  REAL             = 63;
+  DOUBLE_PRECISION = 64;
+  NUMERIC          = 65;   // requires (w17.field).precision + optional scale
+
+  // --- Temporal ---
+  DATE        = 70;
+  TIME        = 71;
+  TIMESTAMP   = 72;   // without tz
+  TIMESTAMPTZ = 73;   // with tz (default for the Timestamp carrier)
+  INTERVAL    = 74;
+
+  // --- Binary ---
+  BYTEA = 80;   // PG; others → BLOB
+  BLOB  = 81;   // MySQL / SQLite; PG emitter maps to BYTEA
+
+  // --- Boolean ---
+  BOOLEAN = 90;
+  // --- Geospatial (PG-native, requires the postgis extension) ---
+  //
+  // Parameters come from (w17.field): `geometry_type` names the shape and is
+  // REQUIRED, `srid` defaults to 4326. Same division as NUMERIC, where the
+  // db_type names the storage and the field carries precision/scale.
+  //
+  // Carrier is `string`, and what travels in it is worth stating because the
+  // two directions differ: on the way IN, EWKT (`SRID=4326;POINT(14.4 50.1)`)
+  // — PostGIS parses the text form of its own type, so a plain string
+  // parameter works. On the way OUT, PostGIS answers in its canonical hex
+  // EWKB. A caller who wants text back asks for it, with the ST_AsText /
+  // ST_AsGeoJSON they registered through (w17.pg.module).custom_functions.
+  //
+  // POSTGRES ONLY. MySQL has spatial types with different semantics and
+  // SQLite needs SpatiaLite; both emitters REFUSE this by name rather than
+  // substituting something that stores the bytes and cannot index them.
+  GEOMETRY  = 100;
+  GEOGRAPHY = 101;
+}
+
+// DeletionRule expresses the post-parent-deletion behaviour as a rule of
+// the relationship, not a handler. Named deliberately without `on_*` to
+// avoid hook-shaped framing (same discipline as `orphanable` was).
+enum DeletionRule {
+  DELETION_RULE_UNSPECIFIED = 0;
+
+  // Child row is deleted along with the parent. The default when the FK
+  // column is NOT NULL and no rule is explicit.
+  CASCADE = 1;
+
+  // Child row survives; its FK column is set to NULL. Requires
+  // (w17.field).null: true on the FK column — can't null a NOT NULL
+  // column. Replaces the previous `orphanable: true` boolean.
+  ORPHAN = 2;
+
+  // Parent delete is prevented while any child references it — PG emits
+  // ON DELETE RESTRICT. Client sees a constraint violation and must
+  // remove or re-point children first. Replaces Django's PROTECT /
+  // RESTRICT at the DB layer (app-level ProtectedError is a layer the
+  // hosted platform owns).
+  BLOCK = 3;
+
+  // Child's FK column is set to its declared default at parent-delete
+  // time — PG emits ON DELETE SET DEFAULT. Requires a default_* value
+  // on the FK column, otherwise the reset would leave the FK null-ish
+  // on a NOT NULL column.
+  RESET = 4;
+}

@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package w17.mysql;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/mysql;mysqlpb";
+
+// (w17.mysql.field) — MySQL-specific per-field options. Mirrors the
+// (w17.pg.field) shape for symmetry; non-MySQL emitters ignore it
+// (or error if non-empty flags are set, per PG-side's convention —
+// see `proto/w17/pg/field.proto` for the dialect-extension pattern).
+//
+// MySQL has no extension / DOMAIN concept, so there's no per-dialect
+// `required_extensions` field and no domain-level custom_types
+// registry mirror — `custom_type` is a per-column opaque SQL string
+// only. Authors needing the same type on many columns just repeat
+// the string; if a real fixture surfaces a need for a registry,
+// the shape graduates then.
+//
+// Usage:
+//   // Escape hatch — MySQL GEOMETRY column:
+//   string location = 6 [
+//     (w17.mysql.field) = { custom_type: "GEOMETRY SRID 4326" }
+//   ];
+extend google.protobuf.FieldOptions {
+  MysqlField field = 51004;
+}
+
+message MysqlField {
+  // --- Escape hatch: raw SQL column type ---
+  // When non-empty, this string is used verbatim as the SQL column type
+  // and the MySQL emitter SKIPS the (w17.field).type dispatch for this
+  // column. Use for MySQL-specific types the cross-dialect vocabulary
+  // doesn't cover (GEOMETRY / GEOMETRYCOLLECTION / POINT, SET, ENUM with
+  // custom value lists, JSON with PATH index hints, VARCHAR with a
+  // specific CHARACTER SET / COLLATE, …). All other (w17.field)
+  // semantics — `null`, `unique`, bounds, CHECK constraints,
+  // defaults — still apply.
+  //
+  // EXCEPT the string-only rules: `min_len` / `max_len` / `pattern` /
+  // `choices` / `blank` synthesise CHECKs that assume text storage
+  // (char_length, `<> ''`, a regex, an IN list) against a column type the
+  // author overrode, so the emitter cannot honour them. Declaring one
+  // alongside `custom_type` is a compile error — the same refusal
+  // (w17.pg.field) has always made. It used to be ACCEPTED here and
+  // silently produce nothing, which states a rule that is not in force.
+  //
+  // Mandatory rule (mirrors pg.field): no dialect is allowed to infer
+  // column type from another dialect's `custom_type`. PG / SQLite
+  // emitters refuse if this field is set on a column they're emitting.
+  //
+  // Field number 10 matches PgField.custom_type for symmetry — the
+  // 1-4 range stays reserved for future curated cross-dialect-ish
+  // flags following PG's D13 graduation pattern.
+  string custom_type = 10;
+
+  reserved 1, 2, 3, 4;
+}

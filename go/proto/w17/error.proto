@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+// w17.ErrorDetail — REV-031 (Phase C, 2026-05-09) — the canonical
+// structured payload every wandering-compiler-generated handler
+// attaches to gRPC `status.WithDetails(...)` for failed RPCs.
+//
+// Shape (DRF-inspired + optional `code`):
+//
+//   gRPC top-level: standard gRPC code (InvalidArgument /
+//                   AlreadyExists / NotFound / Internal / etc.).
+//   detail items:   `details: [ErrorDetail, ErrorDetail, ...]`
+//                   — one per discrete failure (validation
+//                   violations accumulate; non-validation
+//                   errors typically carry one detail).
+//
+// JSON-over-REST shape (the gateway translates):
+//
+//   {
+//     "code": "InvalidArgument",
+//     "message": "validation failed",
+//     "details": [
+//       {"field": "title", "message": "is required",
+//        "code": "REQUIRED_VIOLATION"},
+//       {"field": "email", "message": "must be a valid email
+//        address", "code": "INVALID_EMAIL"}
+//     ]
+//   }
+//
+// FE / mobile clients map per-violation codes to their own UX
+// (highlight field, show inline message, gate retry). The `code`
+// is optional so authors may add their own application-level codes
+// in custom handlers; codegen-emitted validations always populate
+// it from the rule type.
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// ErrorDetail — one structured failure descriptor. Intended use:
+//
+//   st := status.New(codes.InvalidArgument, "validation failed")
+//   sd, _ := st.WithDetails(
+//       &w17pb.ErrorDetail{Field: "title", Message: "is required",
+//                          Code: "REQUIRED_VIOLATION"},
+//       &w17pb.ErrorDetail{Field: "email", Message: "must be a
+//                          valid email address",
+//                          Code: "INVALID_EMAIL"},
+//   )
+//   return nil, sd.Err()
+message ErrorDetail {
+  // Human-readable description of the failure. Required.
+  // Localised at gateway / UI layer (later iteration); the wire
+  // value is the resolved English (or author-overridden)
+  // string from the defaults catalog +
+  // (w17.field).validation_messages override.
+  string message = 1;
+
+  // Machine-readable code identifying the failure kind. Optional
+  // (intentionally — clients that just want the message can
+  // ignore it). Codegen-emitted validations always populate from
+  // the ValidationType:
+  //
+  //   Format / shape failures: INVALID_<TYPE>
+  //     (INVALID_EMAIL, INVALID_URL, INVALID_UUID, INVALID_IP,
+  //      INVALID_MAC_ADDRESS, INVALID_ENUM, INVALID_CHOICE,
+  //      INVALID_PATH_EXTENSION)
+  //
+  //   Rule violations: <RULE>_VIOLATION
+  //     (REQUIRED_VIOLATION, BLANK_VIOLATION, MAX_LEN_VIOLATION,
+  //      MIN_LEN_VIOLATION, REGEX_VIOLATION, GT_VIOLATION,
+  //      GTE_VIOLATION, LT_VIOLATION, LTE_VIOLATION,
+  //      PERCENTAGE_RANGE_VIOLATION, RATIO_RANGE_VIOLATION,
+  //      DECIMAL_PRECISION_VIOLATION, UNIQUE_VIOLATION,
+  //      FK_VIOLATION, NOT_NULL_VIOLATION,
+  //      CHECK_CONSTRAINT_VIOLATION, EXCLUSION_VIOLATION)
+  //
+  // Authors writing custom handlers may use their own codes
+  // (no W17_ prefix required) to differentiate domain-specific
+  // failures.
+  string code = 2;
+
+  // Optional proto-field path the failure pertains to (validation
+  // errors). Empty for non-field-specific errors (DB-level
+  // failures with no obvious field association, business-logic
+  // errors, etc.).
+  string field = 3;
+}

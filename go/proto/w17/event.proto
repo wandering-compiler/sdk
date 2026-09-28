@@ -1,0 +1,441 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// REV-089 (2026-05-14) — event-bus annotation vocabulary.
+//
+// This file owns the proto surface for the eventbus domain's
+// emit side: how a message becomes an event, how an RPC declares
+// "emit on return", how the per-event delivery policy is carried.
+// Subscribers register through `(w17.event_subscribers)` in
+// event_subscribers.proto; channel transports + cascade defaults
+// live on `(w17.module).channels` in module.proto.
+//
+// Four annotations, two roles:
+//
+//   (w17.event)       — message-level. Registers the message as
+//                       an event + binds it to a channel + topic +
+//                       optional per-event retry override.
+//   (w17.event_emit)  — RPC-level, server tier. Compiler
+//                       synthesizes an interceptor that, on the
+//                       RPC's successful return, builds the named
+//                       event from the declared `payload` mapping
+//                       and dispatches it to the event's channel.
+//                       Fires server-side, on every code path that
+//                       reaches the handler (external request,
+//                       business→business call, subscriber loop-
+//                       back) — it is bound to the state change, a
+//                       "fact" event.
+//   (w17.event_emit_gateway)
+//                     — RPC-level, gateway tier. Same `EmitConfig`
+//                       body, but the emit is generated in the
+//                       REST / MCP (and future CLI) gateway, right
+//                       after the business gRPC client call returns
+//                       success. Fires ONLY for requests that enter
+//                       through a gateway — a nested business call
+//                       or a subscriber loopback does not reach a
+//                       gateway, so it does not re-emit. It is
+//                       bound to the external intent, an "intent"
+//                       event (typically frontend-facing). See
+//                       docs/specs/eventbus/emit-gateway.md.
+//
+// An event may be wired to at most ONE emit annotation across the
+// domain (server OR gateway, one site). The parser refuses a
+// second emit of the same event — multi-source emission is
+// modelled by funnelling every trigger through the single method
+// that owns the state change. See emit-gateway.md §uniqueness.
+//
+// Dotted-form `(w17.event.emit)` in the ADR is rendered here as
+// the snake_case field name `event_emit` for parity with the
+// existing `(w17.rest_api)` / `(w17.event_subscribers)` pattern;
+// the semantics are identical to the ADR's intent.
+//
+// Driven by `srcgo/domains/eventbus/parser`: every loaded
+// `.proto` is scanned for `(w17.event)`-tagged messages, the
+// resulting EventRegistry resolves `(w17.event_emit).event`
+// refs, and the codegen pipeline emits per-RPC emit interceptors
+// + the domain's `<Domain>EventEnvelope`.
+//
+// Design: docs/decisions/eventbus-redesign.md +
+// docs/specs/eventbus/emit.md + .../channels-config.md.
+
+extend google.protobuf.MessageOptions {
+  // (w17.event) — registers the annotated message as an event
+  // in the enclosing domain's event index. Required fields:
+  // `channel` (must exist in the domain's `(w17.module).channels[]`)
+  // and `topic` (filter key — subscribers glob-match against it).
+  // Per-event retry override is optional; resolves through the
+  // four-tier cascade documented in channels-config.md.
+  Event event = 50130;
+}
+
+extend google.protobuf.MethodOptions {
+  // (w17.event_emit) — declares server-tier emit-on-successful-
+  // return for the annotated RPC. The named event ref resolves
+  // against the enclosing domain's EventRegistry (cross-domain
+  // refs are a parse-time diag). Payload mapping uses the same
+  // `$request.*` / `$response.*` / literal-string syntax as
+  // REV-020's `(w17.rest_api).fields[]`.
+  //
+  // Emit is generated as a server-side interceptor + in-process
+  // wrapper, so it fires on every path that reaches the handler.
+  // Use for "fact" events (state changed, regardless of caller).
+  EmitConfig event_emit = 50131;
+
+  // (w17.event_emit_gateway) — declares gateway-tier emit for the
+  // annotated RPC. Identical `EmitConfig` body + same payload-
+  // mapping engine as `event_emit`, but the emit is generated in
+  // the REST / MCP gateway, fired after the business gRPC client
+  // call returns success. It does NOT fire for nested business→
+  // business calls or subscriber loopbacks (those never traverse a
+  // gateway). Use for "intent" events — typically frontend-facing,
+  // bound to an external request rather than a state change.
+  //
+  // The same event MUST NOT also carry `event_emit` (or a second
+  // `event_emit_gateway`): an event has exactly one emit site.
+  // See docs/specs/eventbus/emit-gateway.md.
+  EmitConfig event_emit_gateway = 50133;
+}
+
+// Event — the per-message annotation body.
+//
+// Channel + topic are the two-axis routing surface: channel is
+// the physical transport addressing (direct compare against
+// declared channels), topic is the logical filter key
+// (glob-matched by subscribers). The split keeps operational
+// partitioning (which queue / which retention) orthogonal to
+// logical routing (which subscribers care about this event).
+message Event {
+  // Name of the channel this event ships on. Direct match
+  // against `(w17.module).channels[].name` for the enclosing
+  // domain. Required; parser refuses unknown channel names with
+  // a list of valid choices.
+  string channel = 1;
+
+  // Logical topic identifier. Free-form string, dotted by
+  // convention ("user.created", "billing.payment.received").
+  // Subscribers in `(w17.event_subscribers).subscriptions[]`
+  // declare a `topic_filter` glob and the runtime matches
+  // each emitted event's topic against the filter.
+  string topic = 2;
+
+  // Optional per-event retry policy. When set, overrides the
+  // channel's default + the domain `event_defaults.retry` for
+  // this specific event. Presence-aware merge: a field unset
+  // here falls through to the next cascade tier.
+  //
+  // Resolution order (most-specific wins):
+  //   1. This field — `(w17.event).retry`
+  //   2. Channel default — `(w17.module).channels[].retry`
+  //   3. Domain default — `(w17.module).event_defaults.retry`
+  //   4. Framework hard default — max_deliver=3, ack_wait=30s,
+  //                                backoff=EXPONENTIAL.
+  RetryPolicy retry = 3;
+
+  // Public marks the event as reaching the gateway's
+  // auto-mounted `/w17-events` SSE broadcast — a shipped path,
+  // not a reserved flag: the gateway codegen emits one transcode
+  // case per public event, the JS/TS client subscribes, and
+  // an e2e step asserts a delivery with `await_events:` (only
+  // public events are awaitable — an internal one never lands
+  // there to be seen).
+  //
+  // Original devlog's `protobridge.event.visibility: PUBLIC`
+  // maps directly to this. Internal events (lifecycle
+  // triggers, orchestrator pipeline messages) stay
+  // `public: false` so they're never wired to a public
+  // frontend stream — only the backend durable consumers
+  // pick them up.
+  //
+  // Public is about the STREAM, not about the audience. On a
+  // surface whose auth response declares the `labels` map, the
+  // hub partitions delivery: a public event reaches only the
+  // principals holding its labels, and an UNLABELLED event on
+  // such a surface reaches nobody (fail-closed — it cannot be
+  // scoped to a tenant). A surface with no labels field is
+  // single-tenant, and there every public event reaches every
+  // authenticated client.
+  //
+  // Orthogonal to channel transport: a PUBLIC event can ride
+  // on a durable NATS channel (has an internal consumer too)
+  // or on an in-memory channel (broadcast-only). The
+  // public/internal distinction only governs stream surfacing.
+  bool public = 4;
+
+  // REV-090 — optional FE delivery-reliability policy. When set,
+  // the generated FE client polls `delivery.fallback.query`,
+  // diffs the result across polls, and synthesizes THIS event on
+  // the browser pub/sub surface (`client.events.X.subscribe`) in
+  // addition to the realtime SSE push — so a dropped connection
+  // (case a) or an event the BE never produced (case b) is still
+  // delivered. Push and poll dedup by `delivery.dedup_key`. Absent
+  // → the event stays best-effort (push-only).
+  //
+  // FE-only: BE / MCP durable consumers already get at-least-once
+  // from the bus. See docs/specs/eventbus/delivery-fallback.md.
+  EventDelivery delivery = 5;
+}
+
+// EventDelivery — the per-event FE delivery-reliability body.
+// Three timing thresholds (measured from the last real event,
+// push or poll) plus the query-diff fallback that reproduces the
+// event and the idempotency key that converges push + poll.
+message EventDelivery {
+  // "obvyklá doba" — expected delivery horizon. Used ONLY once the
+  // client has detected the realtime transport is down: poll when
+  // silence exceeds this with the transport unhealthy. Catches
+  // case (a), a ws/sse outage. Cascade-resolved (per-event ->
+  // domain event_defaults.delivery -> framework default 15s).
+  int32 expected_seconds = 1;
+
+  // "max doba" — hard ceiling applied REGARDLESS of transport
+  // health: poll when silence exceeds this even if heartbeats are
+  // still arriving. Catches case (b), the BE never produced the
+  // event. The poll reads persistent state, so it is 100%
+  // reliable. Cascade default 60s. Constraint: max >= expected.
+  int32 max_seconds = 2;
+
+  // "give-up" — stop polling once silence exceeds this, to spare
+  // the BE during a long quiet window. Same since-last-activity
+  // clock as the two thresholds above, so polling is active only
+  // in [expected, give_up) (transport down) and [max, give_up)
+  // (any health). Setting give_up == max collapses the case-(b)
+  // window to zero → only ws/sse outages trigger a poll (the
+  // right stance when long-silence UX is already poor). Cascade
+  // default 300s. Constraint: give_up >= max.
+  int32 give_up_seconds = 3;
+
+  // How to reproduce the event by polling. Absent → the timing
+  // thresholds are inert (nothing to poll); event stays
+  // best-effort even if `delivery` is otherwise set.
+  EventFallback fallback = 4;
+
+  // Payload field names forming the idempotency key. Push and poll
+  // both compute the key from these fields, so a real SSE event
+  // and its synthesized twin dedup to one subscriber callback.
+  // Empty → defaults to the fallback entity's (w17.entity_id)
+  // field plus a per-DiffKind discriminator (resolved in codegen).
+  repeated string dedup_key = 5;
+}
+
+// EventFallback — how the generated client reconstructs the event
+// by polling a domain-local query and diffing its result. Reuses
+// PayloadMapping + the emit payload-mapping engine, adding the
+// `$entity.*` (the diffed row) and `$principal.*` (the caller)
+// roots. See docs/specs/eventbus/delivery-fallback.md.
+message EventFallback {
+  // Domain-local RPC whose response lists the entities to diff.
+  // "<Service>.<Method>" — resolved against the enclosing domain
+  // only; a cross-domain query is a parse-time diag (mirrors emit
+  // refs).
+  string query = 1;
+
+  // Fixed request arguments for the poll. Sources are
+  // `$principal.*` or literal only — there is no triggering RPC at
+  // poll time, so `$request` / `$response` are not available here.
+  PayloadMapping request = 2;
+
+  // Path to the repeated entity field in the query response, e.g.
+  // "$response.tasks". The element message must carry exactly one
+  // (w17.entity_id) field — the diff engine keys rows by it.
+  string entity = 3;
+
+  // Diff strategy — how a transition in the snapshot becomes an
+  // event.
+  DiffKind diff = 4;
+
+  // For DIFF_TRANSITION / DIFF_CHANGED: the entity field to watch.
+  string watch_field = 5;
+
+  // Optional DIFF_TRANSITION guards: only fire when watch_field
+  // moves from `from` to `to`. Either may be empty (= any value on
+  // that side).
+  string from = 6;
+  string to   = 7;
+
+  // Diffed entity → event payload. Sources are `$entity.*`,
+  // `$principal.*`, or literal. Typechecked against the event
+  // message exactly like emit payloads.
+  PayloadMapping payload = 8;
+
+  // ESCAPE HATCH. When set, names a hand-written TS function
+  // `(prev, curr) => EventPayload[]` the generated client imports
+  // and calls instead of the built-in diff — for reconstructions
+  // the DSL can't express (aggregates, cross-row computation).
+  // `diff` / `watch_field` / `from` / `to` / `payload` are then
+  // ignored.
+  string reconstruct_fn = 9;
+}
+
+// DiffKind — how the poller turns a prev/curr snapshot diff
+// (keyed by entity id) into events. Values carry a `DIFF_` prefix
+// per proto3's flat enum-value scope (every value lives at package
+// level), matching the Backoff convention in this file.
+enum DiffKind {
+  DIFF_UNSPECIFIED = 0;
+  DIFF_APPEARED    = 1;  // id present in curr, absent in prev
+  DIFF_DISAPPEARED = 2;  // id present in prev, absent in curr
+  DIFF_TRANSITION  = 3;  // watch_field changed (optionally from->to) on a surviving id
+  DIFF_CHANGED     = 4;  // any tracked field of a surviving id differs
+}
+
+// EmitConfig — the per-RPC annotation body. Declares which
+// event the RPC emits on successful return and how its payload
+// is built from the (request, response) tuple.
+//
+// Emit timing is fixed: AFTER the handler returns without error.
+// The interceptor builds the event from the mapping, wraps it
+// in the domain's envelope, and dispatches to the event's
+// channel. Dispatch errors are logged + counted; they do NOT
+// fail the RPC (the response has already been sent).
+message EmitConfig {
+  // Event ref — `<file>.<MessageName>` or
+  // `<module>.<file>.<MessageName>`, matching the REV-015 ref
+  // shape used by REST registry method refs. Plain
+  // `<MessageName>` is accepted iff unambiguous within the
+  // enclosing domain's event index.
+  //
+  // Cross-domain refs are a parse-time diag — domain-internal
+  // events only.
+  string event = 1;
+
+  // Mapping from event-message fields to source expressions.
+  // Each entry pulls a value from the RPC's request, response,
+  // or a literal string and lands it in the named event field.
+  // Unmapped event fields take their proto3 zero value.
+  PayloadMapping payload = 2;
+}
+
+// PayloadMapping — declarative field-to-source mapping for the
+// emit interceptor's payload construction.
+//
+// Source-expression syntax mirrors REV-020's
+// `(w17.rest_api).fields[].ref` engine:
+//
+//   "$request.<field>"        — top-level scalar from the RPC
+//                               request message.
+//   "$request.<msg>.<field>"  — nested field via dotted path.
+//   "$response.<field>"       — top-level scalar from the RPC
+//                               response message.
+//   "$response.<msg>.<field>" — nested field via dotted path.
+//   "<literal>"               — bare string without `$` prefix
+//                               → literal value at emit time.
+//
+// Typecheck runs at parse time: each entry's source-expression
+// type must match the named event field's type. Mismatches
+// (e.g. mapping an int64 source into a string event slot) are
+// parse-time diagnostics.
+//
+// Wrapper-message shape (not a bare `map<string, string>` on
+// EmitConfig) leaves room for per-mapping metadata as future
+// non-breaking additions.
+message PayloadMapping {
+  // Each entry maps one event-message field to a source
+  // expression per the syntax above.
+  //
+  // This is a `repeated PayloadField`, not a `map<string,
+  // string>`, and the change is invisible to authors: proto text
+  // format writes the two identically (`fields: [{ key: "x",
+  // value: "$response.x" }]`), and a map entry is encoded on the
+  // wire as exactly this message, so field 1 keeps its meaning.
+  //
+  // The reason is [PayloadField.plugin_feature]: a map entry has
+  // nowhere to hang a feature tag, so a payload entry could not be
+  // gated, so an event could not carry a feature-gated field. Same
+  // problem, same solution as `(w17.db.table).indexes` entries,
+  // which gate on plain fields of `w17.db.Index` for the same
+  // "a value inside an option has no options of its own" reason.
+  repeated PayloadField fields = 1;
+}
+
+// PayloadField is one entry of a [PayloadMapping] — the event field
+// to populate, where its value comes from, and optionally the plugin
+// feature the entry depends on.
+message PayloadField {
+  // Event-message field name (a proto name — snake_case as
+  // declared in the event's .proto).
+  string key = 1;
+  // Source expression per the PayloadMapping syntax above.
+  string value = 2;
+
+  // plugin_feature gates this ENTRY on a plugin feature, in step with
+  // the event field it populates.
+  //
+  // An event field added by a feature is itself
+  // `plugin_feature_field`-gated, so with the feature off the field
+  // does not exist — and an entry naming a field that is not there
+  // is a hard parse-time error ("payload entry has no field by that
+  // name on event"). Without a gate here the two halves cannot drop
+  // together, which means a feature-gated event field is not
+  // expressible at all.
+  //
+  // NO inverse sibling here, deliberately. `w17.db.Index` carries both
+  // polarities because a feature-off build sometimes needs a DIFFERENT
+  // index rather than none; no payload entry has asked for the same, and
+  // contrib.proto's rule for the rpc-level tags applies here too — the
+  // sibling lands when a consumer needs it, not for symmetry. Shipping
+  // it unused would be vocabulary with no example, which is exactly what
+  // `tests/vocabcov` exists to catch. Field 4 is left free for it.
+  //
+  // Empty = ungated, which is what every entry that does not author this
+  // field is.
+  //
+  // Staging-time metadata only: the eventbus parser ignores it. An entry
+  // that survives the filter keeps its tag, so the staged proto goes on
+  // documenting why it is there.
+  string plugin_feature = 3;
+}
+
+// RetryPolicy — delivery-retry shape, shared across per-event
+// override, per-channel default, and domain default. Defined
+// here because event annotations are the most-specific tier;
+// module.proto imports this file to reference RetryPolicy from
+// Channel + EventDefaults.
+//
+// Semantics: a subscriber's failure to ack within
+// `ack_wait_seconds` triggers a redelivery; total attempts cap
+// at `max_deliver` (which INCLUDES the initial delivery, so
+// `max_deliver: 1` = "no retries"). Beyond the cap, transports
+// that support DLQ route the message there; MEMORY drops with
+// an observability counter increment.
+message RetryPolicy {
+  // Maximum total delivery attempts including the first. Set
+  // to 1 for best-effort channels (typical for MEMORY); leave
+  // unset to inherit the cascade default. Zero is treated as
+  // "unset" (presence-aware merge); use the framework default
+  // (3) to mean "three attempts explicitly".
+  int32 max_deliver = 1;
+
+  // Per-attempt timeout. The transport waits this long for a
+  // subscriber ack before counting the attempt as failed and
+  // scheduling a redelivery (or DLQ-routing if at the cap).
+  // Zero treated as "unset"; falls through cascade.
+  int32 ack_wait_seconds = 2;
+
+  // Backoff shape between successive delivery attempts.
+  // UNSPECIFIED falls through cascade.
+  Backoff backoff = 3;
+}
+
+// Backoff — inter-attempt delay shape for RetryPolicy.
+//
+// Values are prefixed with `BACKOFF_` per proto3's flat enum-
+// value scope (every enum value lives at package level, not
+// inside its enum), avoiding collisions with future additions
+// to other w17 enums.
+//
+//   BACKOFF_CONSTANT     — wait `ack_wait_seconds` between every retry.
+//   BACKOFF_LINEAR       — wait `attempt * ack_wait_seconds`.
+//   BACKOFF_EXPONENTIAL  — wait `(2^attempt) * ack_wait_seconds`,
+//                          capped per transport (NATS ~5min,
+//                          Redis Streams ~5min, MEMORY ~30s).
+enum Backoff {
+  BACKOFF_UNSPECIFIED = 0;
+  BACKOFF_CONSTANT    = 1;
+  BACKOFF_LINEAR      = 2;
+  BACKOFF_EXPONENTIAL = 3;
+}

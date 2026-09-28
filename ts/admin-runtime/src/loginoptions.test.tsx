@@ -54,9 +54,9 @@ function renderLogin(auth: Partial<AdminSpec["auth"]>) {
   );
 }
 
-const marb: AdminSignInOption = {
-  label: "Sign in with Marb",
-  start_url: "/api/v1/auth/oauth/marb/authorize?redirect_after=/admin",
+const acmeProvider: AdminSignInOption = {
+  label: "Sign in with Acme",
+  start_url: "/api/v1/auth/oauth/acme/authorize?redirect_after=/admin",
 };
 const google: AdminSignInOption = {
   label: "Sign in with Google",
@@ -82,17 +82,17 @@ describe("password only (the default)", () => {
 
 describe("password + federated", () => {
   it("offers both, and each button links where the spec says", () => {
-    renderLogin({ sign_in_options: [marb, google] });
+    renderLogin({ sign_in_options: [acmeProvider, google] });
     expect(usernameField()).not.toBeNull();
 
-    const marbBtn = screen.getByRole("link", { name: marb.label });
-    expect(marbBtn.getAttribute("href")).toBe(marb.start_url);
+    const acmeBtn = screen.getByRole("link", { name: acmeProvider.label });
+    expect(acmeBtn.getAttribute("href")).toBe(acmeProvider.start_url);
     const googleBtn = screen.getByRole("link", { name: google.label });
     expect(googleBtn.getAttribute("href")).toBe(google.start_url);
   });
 
   it("separates the two ways in", () => {
-    renderLogin({ sign_in_options: [marb] });
+    renderLogin({ sign_in_options: [acmeProvider] });
     // Without a divider the button reads as part of the form.
     expect(screen.getByText(/^or$/i)).toBeTruthy();
   });
@@ -100,19 +100,19 @@ describe("password + federated", () => {
 
 describe("federated only", () => {
   it("drops the credential form entirely", () => {
-    renderLogin({ sign_in_options: [marb], password_sign_in: false });
+    renderLogin({ sign_in_options: [acmeProvider], password_sign_in: false });
     expect(usernameField()).toBeNull();
     expect(passwordField()).toBeNull();
-    expect(screen.getByRole("link", { name: marb.label })).toBeTruthy();
+    expect(screen.getByRole("link", { name: acmeProvider.label })).toBeTruthy();
   });
 
   it("does not offer a divider with nothing on the other side", () => {
-    renderLogin({ sign_in_options: [marb], password_sign_in: false });
+    renderLogin({ sign_in_options: [acmeProvider], password_sign_in: false });
     expect(screen.queryByText(/^or$/i)).toBeNull();
   });
 
   it("says what to do instead of asking for credentials", () => {
-    renderLogin({ sign_in_options: [marb], password_sign_in: false });
+    renderLogin({ sign_in_options: [acmeProvider], password_sign_in: false });
     expect(screen.queryByText(/enter your credentials/i)).toBeNull();
   });
 });

@@ -115,7 +115,7 @@ type AclRole struct {
 	// obvious way to write a two-word key and it is refused — by codegen now,
 	// and before that only by the database at apply time, which meant in CI or
 	// in production. This line says so because it did not, while the line above
-	// said it about `name` (marb, 2026-09-23).
+	// said it about `name` (a consumer, 2026-09-23).
 	//
 	// The seeded Role row's primary key is derived from this, not from
 	// `name`. That distinction is the whole reason it exists: with the PK
@@ -397,7 +397,7 @@ var (
 	// put the option on one file to close three invite endpoints and
 	// closed their whole sign-in flow with it: `SessionService.Authorize`
 	// and `Logout` live in a SIBLING file of the same directory, and
-	// both started refusing with no role able to open them (marb #71).
+	// both started refusing with no role able to open them (a consumer).
 	//
 	// So: put it on the sentinel when you mean the module or domain, and
 	// when you mean a narrower set, reach for `(w17.acl_service)` or the
