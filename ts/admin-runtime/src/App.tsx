@@ -44,7 +44,7 @@ import { globalNavItemSlotKey } from "./types";
 import { TranslateProvider, translatorFor, useT } from "./i18n";
 import type { AdminSpec, SlotRegistry, WhoAmIResp } from "./types";
 
-type View =
+export type View =
   | { kind: "overview" }
   | { kind: "list"; pageName: string }
   | { kind: "detail"; pageName: string; rowId: string }
@@ -445,7 +445,14 @@ function navigate(next: View): void {
 // serializeView maps a view to its hash path. rowId / pageName
 // flow through encodeURIComponent so non-ASCII ids + names with
 // slashes survive the round trip.
-function serializeView(v: View): string {
+//
+// Exported for the same reason parseHash is: the two are inverses and
+// nothing was checking that. serializeView's switch is exhaustive over
+// View, so a fifth kind fails to COMPILE here — and would slip past
+// parseHash silently, which returns null for anything it does not
+// recognise and lets the caller fall back to the default view. A route
+// that quietly goes to the overview is the shape worth pinning.
+export function serializeView(v: View): string {
   switch (v.kind) {
     case "overview":
       return "/overview";

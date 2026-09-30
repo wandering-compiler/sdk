@@ -503,7 +503,9 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
               <TextInput
                 label={t("Search")}
                 leftSection={<IconSearch size={16} />}
-                placeholder={`Search across ${searchFieldNames.map(humanizeLabel).join(", ")}`}
+                placeholder={t("Search across {fields}", {
+                  fields: searchFieldNames.map(humanizeLabel).join(", "),
+                })}
                 value={searchValue}
                 onChange={(e) => setSearchValue(e.currentTarget.value)}
               />

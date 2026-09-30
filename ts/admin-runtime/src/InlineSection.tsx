@@ -25,6 +25,7 @@ import {
   Table,
   Text,
   TextInput,
+  PasswordInput,
   Title,
 } from "@mantine/core";
 
@@ -53,7 +54,19 @@ interface ListResp {
 export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineSectionProps) {
   const t = useT();
   const [rows, setRows] = useState<Row[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // TWO errors, because they mean different things to the reader.
+  //
+  // A failed LOAD means there is no collection to show, so the body gives way to
+  // the message. A failed DELETE means the collection on screen is still the
+  // truth and one action did not happen — hiding the table there loses data the
+  // operator already had, and leaves them with no way back: nothing re-fetches
+  // except a successful mutation.
+  //
+  // Both were one `error` before, and neither was ever cleared, so a single
+  // failed request blanked the section for the life of the page even after a
+  // later load succeeded.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [formMode, setFormMode] = useState<"add" | "edit" | null>(null);
   const [formRow, setFormRow] = useState<Row | null>(null);
@@ -66,11 +79,18 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
     apiGet<ListResp>(url)
       .then((resp) => {
         if (cancelled) return;
+        setLoadError(null);
+        // And the ACTION error, because a load replaces the collection: a delete
+        // that failed against the previous parent has nothing to say about these
+        // rows, and leaving it up attaches a message to data it was never about.
+        // Splitting the two errors without this only moved the stale-message bug
+        // one level down.
+        setActionError(null);
         setRows(extractRows(resp));
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -81,7 +101,9 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
     return (
       <Stack gap="xs">
         <Title order={5}>{inline.label ? t(inline.label) : humanizeLabel(inline.page)}</Title>
-        <Text c="red">Inline target page {inline.page} missing from spec.</Text>
+        <Text c="red">
+          {t("Inline target page {page} is missing from the spec.", { page: inline.page })}
+        </Text>
       </Stack>
     );
   }
@@ -135,10 +157,11 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
       const url = inline.delete_endpoint
         .replace("{id}", encodeURIComponent(parentId))
         .replace("{child_id}", encodeURIComponent(childId));
+      setActionError(null);
       await apiDelete(url);
       setReloadTick((t) => t + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -153,19 +176,20 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
         )}
       </Group>
 
-      {error && <Text c="red">{error}</Text>}
-      {!error && rows == null && (
+      {loadError && <Text c="red">{loadError}</Text>}
+      {actionError && <Text c="red">{actionError}</Text>}
+      {!loadError && rows == null && (
         <Group>
           <Loader size="sm" />
           <Text size="sm">{t("Loading…")}</Text>
         </Group>
       )}
-      {!error && rows != null && rows.length === 0 && (
+      {!loadError && rows != null && rows.length === 0 && (
         <Text c="dimmed" size="sm">
-          No related {humanizeLabel(inline.page)} rows.
+          {t("No related {name} rows.", { name: humanizeLabel(inline.page) })}
         </Text>
       )}
-      {!error &&
+      {!loadError &&
       rows != null &&
       rows.length > 0 &&
       columns.length > 0 &&
@@ -228,7 +252,7 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
             );
           })}
         </Stack>
-      ) : !error && rows != null && rows.length > 0 && columns.length > 0 ? (
+      ) : !loadError && rows != null && rows.length > 0 && columns.length > 0 ? (
         <Table striped withTableBorder>
           <Table.Thead>
             <Table.Tr>
@@ -292,6 +316,7 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
           mode={formMode}
           row={formRow}
           fields={editableFields}
+          fieldTypes={targetPage.detail?.field_types || {}}
           inline={inline}
           parentId={parentId}
           onClose={closeForm}
@@ -314,6 +339,13 @@ interface InlineFormModalProps {
   mode: "add" | "edit";
   row: Row | null;
   fields: string[];
+  // The CHILD page's semantic field types, so a secret is not treated like a string.
+  // Without them this form seeded every field from the row into a plain TextInput —
+  // including a password column, whose stored hash then sat there in clear text and
+  // went back on submit as the new password. Same defect DetailPage carried
+  // (docs/decisions/which-components-belong-in-the-gate.md), one layer down and
+  // unmasked.
+  fieldTypes: Record<string, string>;
   inline: AdminInlineSpec;
   parentId: string;
   onClose: () => void;
@@ -324,6 +356,7 @@ function InlineFormModal({
   mode,
   row,
   fields,
+  fieldTypes,
   inline,
   parentId,
   onClose,
@@ -332,7 +365,11 @@ function InlineFormModal({
   const t = useT();
   const initial: Record<string, string> = {};
   for (const f of fields) {
-    const v = row ? row[f] : undefined;
+    // A PASSWORD field is never seeded: the row carries the stored hash, and an empty
+    // submit means "leave it alone" — the same contract DetailPage states. SECRET and
+    // CRYPTED_SECRET read back their real value, so they ARE seeded; they are only
+    // masked below.
+    const v = fieldTypes[f] === "PASSWORD" ? undefined : row ? row[f] : undefined;
     initial[f] = displayString(v);
   }
   const [values, setValues] = useState<Record<string, string>>(initial);
@@ -368,20 +405,50 @@ function InlineFormModal({
   };
 
   const title =
-    mode === "add" ? `Add ${humanizeLabel(inline.page)}` : `Edit ${humanizeLabel(inline.page)}`;
+    mode === "add"
+      ? t("Add {name}", { name: humanizeLabel(inline.page) })
+      : t("Edit {name}", { name: humanizeLabel(inline.page) });
 
   return (
     <Modal opened onClose={onClose} title={title} centered>
       <Stack>
-        {fields.map((f) => (
-          <TextInput
-            key={f}
-            label={humanizeLabel(f)}
-            value={values[f] || ""}
-            onChange={(e) => setValues((prev) => ({ ...prev, [f]: e.currentTarget.value }))}
-            disabled={submitting}
-          />
-        ))}
+        {fields.map((f) =>
+          fieldTypes[f] === "PASSWORD" ||
+          fieldTypes[f] === "SECRET" ||
+          fieldTypes[f] === "CRYPTED_SECRET" ? (
+            <PasswordInput
+              key={f}
+              label={humanizeLabel(f)}
+              // Only a password is empty-means-unchanged; a seeded secret must not be
+              // told to leave itself empty.
+              placeholder={
+                fieldTypes[f] === "PASSWORD" ? t("Leave empty to keep current") : undefined
+              }
+              value={values[f] || ""}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                setValues((prev) => ({ ...prev, [f]: value }));
+              }}
+              disabled={submitting}
+            />
+          ) : (
+            <TextInput
+              key={f}
+              label={humanizeLabel(f)}
+              value={values[f] || ""}
+              // Value read BEFORE the updater — see eventhandlers.test.ts. React nulls a
+              // synthetic event's `currentTarget` once the handler returns and a
+              // functional updater runs later, so the inline form's fields threw
+              // "Cannot read properties of null (reading 'value')" on the first
+              // keystroke. Same defect as ActionModal's, found by sweeping for it.
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                setValues((prev) => ({ ...prev, [f]: value }));
+              }}
+              disabled={submitting}
+            />
+          ),
+        )}
         {error && (
           <Text c="red" size="sm">
             {error}

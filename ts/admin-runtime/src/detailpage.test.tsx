@@ -12,9 +12,25 @@ vi.mock("./api", async () => {
 });
 const { apiGet } = await import("./api");
 
+// The language override below is a GLOBAL: navigator is one object for the whole
+// worker, so a test that pins "cs" and walks away leaves every later test in the
+// same worker formatting in Czech. That is invisible under the default pool, which
+// gives each file its own worker, and it is what made four OverviewPage tests fail
+// ~37% of the time under a single worker: they assert "399,400" and got "399 400"
+// — a narrow no-break space and a comma decimal, which is Czech.
+// DELETE the override rather than restoring a captured descriptor. In a shared
+// worker the descriptor read at module load may already BE another file's
+// override, so "restoring" it would put that language back. navigator.language
+// lives on Navigator.prototype, so removing the own property un-shadows the real
+// getter — which is the only value that is correct no matter who ran first.
+function clearNavigatorLanguage() {
+  delete (window.navigator as { language?: string }).language;
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  clearNavigatorLanguage();
 });
 
 // docs/specs/i18n/formatting.md — a detail view formats the same value the

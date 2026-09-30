@@ -17,7 +17,9 @@
     "Delete this row?",
     "Detail",
     "Edit",
+    "Edit {name}",
     "Enter your credentials to continue.",
+    "Inline target page {page} is missing from the spec.",
     "Leave empty to keep current",
     "Light theme",
     "Loading…",
@@ -26,6 +28,7 @@
     "No list view",
     "No pages declared in spec.",
     "No records found",
+    "No related {name} rows.",
     "Nothing here yet",
     "Other",
     "Overview",
@@ -34,6 +37,7 @@
     "Rows per page",
     "Save",
     "Search",
+    "Search across {fields}",
     "Section",
     "Select at least one row",
     "Select at least one row to run this action.",
@@ -46,7 +50,14 @@
     "This page has no list configured.",
     "Unavailable",
     "Username",
+    "Will apply to {target}.",
     "You cannot create records on this page.",
-    "or"
+    "no rows",
+    "or",
+    "this page",
+    "{count} selected row",
+    "{count} selected rows",
+    "{mode} — click to switch",
+    "{mode}. Click to switch color theme."
   ]
 }

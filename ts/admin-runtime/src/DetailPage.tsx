@@ -119,7 +119,11 @@ export function DetailPage({
         // fields we render get registered; extras pass
         // through untouched on submit (they're not in the
         // form state at all).
-        reset(resp);
+        //
+        // Through formSeed, which blanks PASSWORD fields — see its comment: reset()
+        // beats the absent defaultValue, so without this the stored hash became the
+        // form's value and the next save submitted it as the new password.
+        reset(formSeed(resp, detail.field_types));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -178,7 +182,9 @@ export function DetailPage({
         response: detail.update_response_ref,
       });
       setRow(updated);
-      reset(updated);
+      // Same blanking on the way back: a save response carries the stored hash too, so
+      // re-seeding from it raw would re-arm the bug one save later.
+      reset(formSeed(updated, detail.field_types));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -396,6 +402,47 @@ export function DetailPage({
   );
 }
 
+// isSecretType — the semantic types whose value must not appear as characters on a
+// screen. All three are excluded from an admin's DEFAULT list columns and detail fields
+// by the generator (`masked` in srcgo/domains/gateway/admin/spec_gen.go); this is what
+// happens when an author names one explicitly anyway.
+//
+// ⚠️ NOT the same question as seeding. PASSWORD's read value is a HASH, so it must never
+// enter the form (formSeed blanks it). SECRET and CRYPTED_SECRET read back the VALUE —
+// "you write a value, you read that value back" — so blanking them would make an
+// untouched field submit "" and wipe the secret. They are seeded and masked; the
+// password is neither.
+function isSecretType(semType: string | undefined): boolean {
+  return semType === "PASSWORD" || semType === "SECRET" || semType === "CRYPTED_SECRET";
+}
+
+// formSeed is what reaches react-hook-form's `reset` — the read (or save) response with
+// every PASSWORD field BLANKED.
+//
+// ⚠️ Without it the contract written at the PasswordInput below — "No defaultValue —
+// passwords never round-trip from the read response (the stored hash is useless to
+// pre-fill with). Empty submit = don't change" — was false in practice. `reset(resp)`
+// owns every registered field and puts the response's value back over whatever the JSX
+// said, which the comment at the display-only branch already spells out for formatted
+// values. For a password that meant the stored hash landed in the input and the next
+// Save PATCHed it as the NEW password: the server hashes what it receives, so the
+// account ends up with the old hash as its password and nobody can sign in.
+//
+// Blanking rather than deleting the key: the field is registered, so an absent value
+// still reads as "" out of the form, and blanking keeps the seed and the form agreeing
+// about which fields exist.
+function formSeed(
+  resp: Record<string, unknown>,
+  fieldTypes: Record<string, string> | undefined,
+): Record<string, unknown> {
+  if (!fieldTypes) return resp;
+  const seed: Record<string, unknown> = { ...resp };
+  for (const [field, semType] of Object.entries(fieldTypes)) {
+    if (semType === "PASSWORD" && field in seed) seed[field] = "";
+  }
+  return seed;
+}
+
 // humanizeTabId turns a slot id like "audit_log" into a tab
 // label like "Audit log" — kebab-case ids work the same way.
 function humanizeTabId(id: string): string {
@@ -496,7 +543,7 @@ export function renderFieldInput({
   // then vanish. Not registering it is also the honest shape — a value the
   // form will never submit is not part of the form.
   if (mode === "readonly" || display) {
-    if (semType === "PASSWORD") {
+    if (isSecretType(semType)) {
       // Don't render the hash — useless to display + invites
       // mistakes (e.g., screenshot leaks). Show an inert
       // placeholder so the form layout doesn't collapse.
@@ -506,12 +553,14 @@ export function renderFieldInput({
     }
     return <TextInput key={field} label={humanizeLabel(field)} disabled value={value} readOnly />;
   }
-  if (semType === "PASSWORD") {
+  if (isSecretType(semType)) {
     return (
       <PasswordInput
         key={field}
         label={humanizeLabel(field)}
-        placeholder={tr("Leave empty to keep current")}
+        // Only a PASSWORD is empty-means-unchanged. A SECRET is seeded with its real
+        // value, so telling the operator to leave it empty would invite them to blank it.
+        placeholder={semType === "PASSWORD" ? tr("Leave empty to keep current") : undefined}
         // No defaultValue — passwords never round-trip from the
         // read response (the stored hash is useless to pre-fill
         // with). Empty submit = "don't change" per REV-151.

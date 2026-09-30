@@ -3,6 +3,7 @@ package restgw_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -649,4 +650,80 @@ func captureLog(t *testing.T, fn func()) string {
 	defer log.SetOutput(orig)
 	fn()
 	return buf.String()
+}
+
+// A caller refused by the ACL gate is told WHICH CAUSE, and a test can pin that
+// without the refusal naming anything internal.
+//
+// The regression this exists for: the permission name went to observability only,
+// so every ACL refusal on this surface read
+// `{"code":"PERMISSION_DENIED","message":"You do not have access to this."}` with
+// no details. Three different causes — a role too narrow, a missing membership, a
+// mistyped path — became one string, and because that string is per-CODE an
+// assertion on it cannot fail. A consumer measured it live and it cost their
+// seven ACL checks their only real assertion (2026-09-28).
+//
+// ⚠️ Two consumer reports pull opposite ways here and the test holds both ends.
+// One reported service and method names reaching an end user in a browser, which
+// is why the name is hidden; the other reported that the refusal then became
+// untestable. The detail CODE satisfies both, and this test fails if either end
+// slips — the name appearing, or the code going away.
+func TestWriteForbiddenCtx_NamesThePermissionOnBothChannels(t *testing.T) {
+	rec := httptest.NewRecorder()
+	restgw.WriteForbiddenCtx(context.Background(), rec, "billing.WalletMutation.OpenTopup")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details []struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode envelope: %v — body %s", err, rec.Body.String())
+	}
+	if env.Error.Code != "PERMISSION_DENIED" {
+		t.Errorf("code = %q, want the canonical gRPC name", env.Error.Code)
+	}
+	// The NAME must not be here, and the CODE must. Both halves, because either
+	// alone is a regression: without the code the refusal is untestable, and with
+	// the name a browser learns the service and method a consumer reported as a
+	// leak.
+	if strings.Contains(rec.Body.String(), "billing.WalletMutation.OpenTopup") {
+		t.Errorf("the permission name reached the caller — that leak is closed on purpose: %s", rec.Body.String())
+	}
+	if env.Error.Message != "You do not have access to this." {
+		t.Errorf("message = %q, want the code's catalogue sentence", env.Error.Message)
+	}
+	if len(env.Error.Details) != 1 {
+		t.Fatalf("details = %d, want exactly one request-level detail: %s", len(env.Error.Details), rec.Body.String())
+	}
+	if env.Error.Details[0].Code != "MISSING_PERMISSION" {
+		t.Errorf("detail code = %q, want MISSING_PERMISSION — that is what a test pins instead of the sentence", env.Error.Details[0].Code)
+	}
+	// Same SHAPE as the rpc transport's gate, which always sets a message: one
+	// refusal must not arrive in two shapes depending on which surface answered.
+	if env.Error.Details[0].Message != env.Error.Message {
+		t.Errorf("detail message = %q, want the same sentence the envelope carries (%q)", env.Error.Details[0].Message, env.Error.Message)
+	}
+}
+
+// With no permission to name there is nothing to add, and the generic refusal is
+// the honest answer. Guards the branch: a version that always attached a detail
+// would ship an empty one.
+func TestWriteForbiddenCtx_NoPermissionStaysGeneric(t *testing.T) {
+	rec := httptest.NewRecorder()
+	restgw.WriteForbiddenCtx(context.Background(), rec, "")
+	if strings.Contains(rec.Body.String(), "MISSING_PERMISSION") {
+		t.Errorf("attached a detail with nothing in it: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "PERMISSION_DENIED") {
+		t.Errorf("lost the code: %s", rec.Body.String())
+	}
 }

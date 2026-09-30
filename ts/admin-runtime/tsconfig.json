@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["src", "vitest.config.ts", "vitest.setup.ts"]
+  "include": ["src", "types", "vitest.config.ts", "vitest.setup.ts"]
 }

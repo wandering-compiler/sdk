@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { adminUiLanguage, makeTranslator, translatorFor } from "./i18n";
 import type { AdminCatalogs } from "./i18n";
@@ -14,6 +14,23 @@ const catalogs: AdminCatalogs = {
   cs: { Save: "Uložit", "Add {name}": "Přidat {name}" },
   de: { Save: "Speichern" },
 };
+
+// navigator is ONE object per worker, so pinning a language here and not putting it
+// back leaves every later test in the same worker formatting in that language. See
+// the note in detailpage.test.tsx: this is what made four OverviewPage tests fail
+// about 37% of the time under a single worker.
+// DELETE the override rather than restoring a captured descriptor. In a shared
+// worker the descriptor read at module load may already BE another file's
+// override, so "restoring" it would put that language back. navigator.language
+// lives on Navigator.prototype, so removing the own property un-shadows the real
+// getter — which is the only value that is correct no matter who ran first.
+function clearNavigatorLanguage() {
+  delete (window.navigator as { language?: string }).language;
+}
+
+afterEach(() => {
+  clearNavigatorLanguage();
+});
 
 function withNavigatorLanguage(lang: string) {
   Object.defineProperty(window.navigator, "language", { value: lang, configurable: true });

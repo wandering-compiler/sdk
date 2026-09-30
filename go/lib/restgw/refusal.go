@@ -112,7 +112,46 @@ func WriteForbiddenCtx(ctx context.Context, w http.ResponseWriter, perm string) 
 	if perm != "" {
 		operator = "forbidden: missing permission " + perm
 	}
-	WriteRefusal(ctx, w, codes.PermissionDenied, operator)
+	if perm == "" {
+		WriteRefusal(ctx, w, codes.PermissionDenied, operator)
+		return
+	}
+	// The caller is told WHICH CAUSE — never which permission.
+	//
+	// This used to hand `operator` to WriteRefusal, which routes it to
+	// observability and writes only the code's generic sentence. For every other
+	// refusal that is right — a decode failure names a Go function, and the
+	// caller can do nothing with it. For THIS one it deleted the answer: a role
+	// too narrow, a membership missing, and a mistyped path all became
+	// `{"code":"PERMISSION_DENIED","message":"You do not have access to this."}`
+	// with no details, so a caller could not tell them apart and a test
+	// asserting on that sentence could not fail — it is per-code. A consumer
+	// measured it live and their seven ACL checks lost their only real
+	// assertion (2026-09-28).
+	//
+	// ⚠️ And the NAME still does not travel. The first version of this fix
+	// interpolated it into the sentence, and an existing test refused — because
+	// hiding it closed a leak ANOTHER consumer reported: service and method names
+	// reaching an end user in a browser. Both reports are right, and the name
+	// satisfies only one of them.
+	//
+	// The detail CODE satisfies both. It says which cause without naming anything
+	// internal: a test pins `MISSING_PERMISSION` and can tell it from
+	// `NO_PERMISSIONS_RESOLVED` or `NO_PRINCIPAL`, while the browser learns
+	// nothing it did not already send. The name keeps going to the operator, who
+	// is the reader who can act on it.
+	//
+	// The detail repeats the sentence, and that is for SHAPE rather than for the
+	// reader. The rpc transport's gate builds its detail through
+	// grpcerr.ForUser, which always sets a message — so leaving this one empty
+	// made the same refusal arrive in two shapes depending on which surface
+	// answered, and two shapes for one thing is exactly the drift that put this
+	// bug in only one of the surfaces to begin with.
+	sentence := i18n.T(ctx, grpcerr.UserMsgid(codes.PermissionDenied), nil)
+	reportByCode(ctx, codes.PermissionDenied, status.Error(codes.PermissionDenied, operator))
+	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.PermissionDenied),
+		GRPCCodeName(codes.PermissionDenied), sentence,
+		[]FieldError{{Code: grpcerr.CodeMissingPermission, Message: sentence}})
 }
 
 // WriteUnauthorizedCtx writes the canonical 401 without naming the credential

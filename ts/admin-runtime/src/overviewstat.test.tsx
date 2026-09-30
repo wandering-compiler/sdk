@@ -54,8 +54,20 @@ describe("OverviewPage STAT widget", () => {
   it("renders an int64 value that arrives as a string, grouped", async () => {
     vi.mocked(apiGet).mockResolvedValue({ wallet_count: "5", balance_total: "399400" });
     renderOverview();
-    await waitFor(() => expect(screen.getByText("5")).toBeTruthy());
-    expect(screen.getByText("399,400")).toBeTruthy();
+    // Wait for the value being ASSERTED, not for a different one. Two cells
+    // need not land in the same render pass, so waiting on the count and then
+    // reading the total without waiting passes only when React happens to
+    // flush them together.
+    //
+    // ⚠️ This was NOT the cause of the single-worker flake, and the measurement
+    // is the useful part: making all four tests wait properly left the rate
+    // unchanged, and moved the failures from instant to a timeout. Raising that
+    // timeout to 8 s did not help either — so the grouped value is ABSENT, not
+    // late. See docs/todos/overviewstat-flakes-under-one-worker.
+    await waitFor(() => {
+      expect(screen.getByText("5")).toBeTruthy();
+      expect(screen.getByText("399,400")).toBeTruthy();
+    });
     // The failure this guards is silent, so assert the wrong answer is
     // absent rather than only that the right one is present.
     expect(screen.queryByText("0")).toBeNull();
@@ -64,8 +76,10 @@ describe("OverviewPage STAT widget", () => {
   it("renders a 32-bit value that arrives as a number", async () => {
     vi.mocked(apiGet).mockResolvedValue({ wallet_count: 5, balance_total: 399400 });
     renderOverview();
-    await waitFor(() => expect(screen.getByText("5")).toBeTruthy());
-    expect(screen.getByText("399,400")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("5")).toBeTruthy();
+      expect(screen.getByText("399,400")).toBeTruthy();
+    });
   });
 
   // A STAT cell is not always a count. When the compiler resolved a
@@ -81,9 +95,11 @@ describe("OverviewPage STAT widget", () => {
     };
     vi.mocked(apiGet).mockResolvedValue({ wallet_count: "5", balance_total: "399400" });
     renderOverview(spec);
-    await waitFor(() => expect(screen.getByText("399,400.00")).toBeTruthy());
-    // The undeclared cell keeps the plain grouped count.
-    expect(screen.getByText("5")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("399,400.00")).toBeTruthy();
+      // The undeclared cell keeps the plain grouped count.
+      expect(screen.getByText("5")).toBeTruthy();
+    });
   });
 
   // The wire coercion still runs FIRST under a format: an omitted
@@ -106,7 +122,9 @@ describe("OverviewPage STAT widget", () => {
   it("renders an omitted (zero) field as 0", async () => {
     vi.mocked(apiGet).mockResolvedValue({ wallet_count: "5" });
     renderOverview();
-    await waitFor(() => expect(screen.getByText("5")).toBeTruthy());
-    expect(screen.getByText("0")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("5")).toBeTruthy();
+      expect(screen.getByText("0")).toBeTruthy();
+    });
   });
 });

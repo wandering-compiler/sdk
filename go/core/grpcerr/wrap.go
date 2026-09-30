@@ -174,6 +174,27 @@ const (
 	CodeTimeout         = "TIMEOUT"
 	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
 	CodeInternal        = "INTERNAL"
+
+	// The ACL gate's three refusals. All three are PERMISSION_DENIED on the
+	// wire, and until 2026-09-28 that was ALL a caller could see: the gate said
+	// which permission was missing in `status.Message()`, and the two-audience
+	// split (#4) demoted that to the operator channel — correctly, and without
+	// noticing that this emitter's prose was the answer rather than a diagnostic.
+	//
+	// The consequence a consumer measured: `PERMISSION_DENIED` reads identically
+	// for "your role is too narrow", "you are in no organization" and "the
+	// gateway never authenticated you" — three different fixes behind one
+	// sentence — and an assertion on that sentence cannot fail, because it is
+	// per-code. The generator's own comment had argued the opposite case
+	// ("NAME the permission … it is already public: the permission catalogue
+	// ships to every consumer in the ACL lock") and described behaviour the code
+	// no longer delivered.
+	//
+	// So each cause gets its own DETAIL code. The code is what a test asserts
+	// and what a client branches on; the sentence stays translatable.
+	CodeMissingPermission = "MISSING_PERMISSION"
+	CodeNoPermissions     = "NO_PERMISSIONS_RESOLVED"
+	CodeNoPrincipal       = "NO_PRINCIPAL"
 )
 
 // UserMsgid is the sentence a PERSON gets for a gRPC code when nobody wrote
@@ -249,9 +270,43 @@ func Vocabulary() []string {
 			out = append(out, m)
 		}
 	}
+	// The ACL gate's sentences are not per-code — PERMISSION_DENIED has three
+	// causes worth telling apart — so they are listed rather than derived. They
+	// still have to be HARVESTED, or a translator never sees them and the
+	// caller gets English.
+	for _, m := range []string{MsgidNoPermissions} {
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
 	sort.Strings(out)
 	return out
 }
+
+// The ACL gate's caller-facing sentences.
+//
+// ⚠️ NO internal name appears in either, and that is a decision with two
+// consumer reports behind it pulling opposite ways. One reported service and
+// method names reaching an end user in a browser, and closing that leak is why
+// this surface stopped saying which permission was missing. Another then reported
+// that the refusal had become untestable — `PERMISSION_DENIED` reads the same for
+// a narrow role, a missing membership and a mistyped path, and the sentence is
+// per-code so an assertion on it cannot fail.
+//
+// Both are right, and neither the name nor silence satisfies both. What does is
+// the detail CODE: it says WHICH CAUSE without naming anything internal, so a
+// test can pin the cause and a browser learns nothing it did not already send.
+// See CodeMissingPermission and its siblings.
+const (
+	// Only ONE extra sentence, and the asymmetry is the point. An empty
+	// permission set has an ACTION behind it (choose an organization), so it
+	// earns its own sentence. A missing principal does not: the caller cannot
+	// tell a missing credential from a misconfigured gateway, so they get the
+	// code's own sentence and NO_PRINCIPAL in the detail. A msgid nothing can
+	// show is a sentence harvested for translators to no purpose.
+	MsgidNoPermissions = "No permissions are in effect for you here. If access is scoped by organization, choose one and try again."
+)
 
 // ForUser builds an error that says one thing to an operator and another to a
 // person — the shape every hand-written handler should reach for.
@@ -266,7 +321,24 @@ func Vocabulary() []string {
 // user-facing is treated as though nobody wrote it for a user, because nobody
 // did.
 func ForUser(ctx context.Context, c codes.Code, method, dev, code, userMsgid string) error {
-	return forCaller(ctx, c, method, dev, code, userMsgid)
+	return forCaller(ctx, c, method, dev, code, userMsgid, nil)
+}
+
+// ForUserWith is ForUser for a sentence that has to name a VALUE.
+//
+// The msgid stays the whole translatable sentence with `{placeholder}` holes,
+// and the values arrive separately — `i18n.T` substitutes them. Both halves
+// matter and a consumer found out why the hard way: they first wrote the value
+// INTO the msgid (`period 2027-03 is already locked`), which makes a different
+// msgid for every month, so no catalogue entry can ever match and the caller
+// gets the key. Interpolating instead keeps one entry a translator can hold.
+//
+// Use it when the fact IS the answer — which permission is missing, which
+// organization was needed. When the sentence is complete without a value,
+// ForUser is the one to reach for: a placeholder nothing fills is a hole in the
+// sentence a reader sees.
+func ForUserWith(ctx context.Context, c codes.Code, method, dev, code, userMsgid string, params map[string]string) error {
+	return forCaller(ctx, c, method, dev, code, userMsgid, params)
 }
 
 // forCaller builds the two-audience error this package owes both of its
@@ -279,11 +351,11 @@ func ForUser(ctx context.Context, c codes.Code, method, dev, code, userMsgid str
 //
 // One string cannot serve both. That is the whole defect this replaces: the
 // gateway was showing the operator's copy because it was the only copy.
-func forCaller(ctx context.Context, c codes.Code, method, dev, code, userMsgid string) error {
+func forCaller(ctx context.Context, c codes.Code, method, dev, code, userMsgid string, params map[string]string) error {
 	st := status.New(c, method+": "+dev)
 	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
 		Code:    code,
-		Message: i18n.T(ctx, userMsgid, nil),
+		Message: i18n.T(ctx, userMsgid, params),
 	}))
 	if err != nil {
 		// coverage-exempt: WithDetails only fails if the detail cannot
@@ -298,7 +370,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		return nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return forCaller(ctx, codes.NotFound, method, "not found", CodeNotFound, UserMsgid(codes.NotFound))
+		return forCaller(ctx, codes.NotFound, method, "not found", CodeNotFound, UserMsgid(codes.NotFound), nil)
 	}
 	// Transient classes BEFORE constraint parsing — a serialization
 	// failure or deadlock (40001 / 40P01) is not a constraint
@@ -329,7 +401,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// restart its unit of work, and callers of a method that
 	// declares `tx_isolation: SERIALIZABLE` should expect to.
 	if isRetryable(err, d) {
-		return forCaller(ctx, codes.Aborted, method, "retryable failure", CodeConflictRetry, UserMsgid(codes.Aborted))
+		return forCaller(ctx, codes.Aborted, method, "retryable failure", CodeConflictRetry, UserMsgid(codes.Aborted), nil)
 	}
 	// Context cancellation / deadline BEFORE constraint parsing —
 	// a DB call aborted by a cancelled or timed-out context is not
@@ -338,10 +410,10 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// client disconnect / slow query). Surface the canonical gRPC
 	// codes the caller already expects for these conditions.
 	if errors.Is(err, context.Canceled) {
-		return forCaller(ctx, codes.Canceled, method, "canceled", CodeCanceled, UserMsgid(codes.Canceled))
+		return forCaller(ctx, codes.Canceled, method, "canceled", CodeCanceled, UserMsgid(codes.Canceled), nil)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return forCaller(ctx, codes.DeadlineExceeded, method, "deadline exceeded", CodeTimeout, UserMsgid(codes.DeadlineExceeded))
+		return forCaller(ctx, codes.DeadlineExceeded, method, "deadline exceeded", CodeTimeout, UserMsgid(codes.DeadlineExceeded), nil)
 	}
 	// SQL "data exception" class — a value the CALLER supplied that the
 	// column cannot hold. It is not a constraint violation (no constraint
@@ -358,7 +430,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// FALLBACK and not the intended path.
 	if isDataException(err, d) {
 		return forCaller(ctx, codes.InvalidArgument, method,
-			"a value does not fit the column it was written to", CodeValueOutOfRange, UserMsgid(codes.InvalidArgument))
+			"a value does not fit the column it was written to", CodeValueOutOfRange, UserMsgid(codes.InvalidArgument), nil)
 	}
 	ce, ok := parseByDialect(err, d)
 	if !ok {
@@ -369,7 +441,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		// fallback when neither exporter is configured) —
 		// REV-031 Phase C-6.
 		observx.ReportError(ctx, fmt.Errorf("%s: %w", method, err))
-		return forCaller(ctx, codes.Internal, method, "internal error", CodeInternal, UserMsgid(codes.Internal))
+		return forCaller(ctx, codes.Internal, method, "internal error", CodeInternal, UserMsgid(codes.Internal), nil)
 	}
 	info, found := lookupRegistry(registry, ce)
 	if !found {
@@ -395,7 +467,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		// database's own vocabulary. With a detail attached, every writer
 		// has something to render instead.
 		return forCaller(ctx, codes.FailedPrecondition, method,
-			"unmapped "+detail, CodeInternal, UserMsgid(codes.FailedPrecondition))
+			"unmapped "+detail, CodeInternal, UserMsgid(codes.FailedPrecondition), nil)
 	}
 	// Successfully-mapped constraint violation — a routine,
 	// user-correctable failure (dup email, CHECK, NOT NULL), NOT a

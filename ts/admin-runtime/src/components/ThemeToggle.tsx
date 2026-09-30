@@ -31,12 +31,12 @@ export function ThemeToggle() {
     current === "light" ? IconSunHigh : current === "dark" ? IconMoon : IconDeviceDesktop;
 
   return (
-    <Tooltip label={`${label} — click to switch`} withArrow>
+    <Tooltip label={t("{mode} — click to switch", { mode: label })} withArrow>
       <ActionIcon
         variant="default"
         size="lg"
         radius="md"
-        aria-label={`${label}. Click to switch color theme.`}
+        aria-label={t("{mode}. Click to switch color theme.", { mode: label })}
         onClick={() => setColorScheme(next)}
       >
         <Icon size={18} />

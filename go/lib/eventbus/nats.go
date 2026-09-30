@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wandering-compiler/sdk/go/core/observx"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -169,7 +171,45 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		opts.InstanceID = sanitizeInstanceID(opts.InstanceID)
 	}
 
-	nc, err := natsgo.Connect(opts.DSN)
+	// A LINK THAT DROPS HAS TO BE AUDIBLE.
+	//
+	// natsgo.Connect with no options reconnects on its own — and says nothing,
+	// at any point, whatever happens. A consumer lost half an hour to exactly
+	// that: their broker was recreated by an ordinary `docker compose up -d`,
+	// delivery stopped, and the subscriber's log held one line from before the
+	// restart and nothing after it. Sign-in returned 200, the challenge row
+	// appeared, and the code never arrived.
+	//
+	// These four handlers do not repair anything. They make the difference
+	// between "the bus is quiet because nothing was emitted" and "the bus is
+	// quiet because it is not connected" visible from a log, which is the only
+	// place an operator can look.
+	nc, err := natsgo.Connect(opts.DSN,
+		natsgo.DisconnectErrHandler(func(_ *natsgo.Conn, cerr error) {
+			log.Printf("eventbus nats: connection LOST (%v) — delivery is stopped until it returns", cerr)
+		}),
+		natsgo.ReconnectHandler(func(c *natsgo.Conn) {
+			// Reconnected is not the same as subscribed. If the server was
+			// recreated rather than restarted, its JetStream state went with
+			// it: the streams and consumers this process was using are gone,
+			// and the consume loop below is what reports that.
+			log.Printf("eventbus nats: reconnected to %s — verifying consumers", c.ConnectedUrl())
+		}),
+		natsgo.ClosedHandler(func(_ *natsgo.Conn) {
+			// Terminal. nats.go gives up after MaxReconnects and never tries
+			// again, so a process that reaches here delivers nothing for the
+			// rest of its life and must be restarted.
+			log.Print("eventbus nats: connection CLOSED for good — this process will deliver nothing until it is restarted")
+			observx.ReportError(context.Background(), errors.New("eventbus nats: connection closed permanently"))
+		}),
+		natsgo.ErrorHandler(func(_ *natsgo.Conn, sub *natsgo.Subscription, aerr error) {
+			subject := ""
+			if sub != nil {
+				subject = sub.Subject
+			}
+			log.Printf("eventbus nats: async error on %q: %v", subject, aerr)
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("nats connect %s: %w", opts.DSN, err)
 	}
@@ -703,7 +743,23 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		}
 		s.bus.opts.Observer.OnDeliverSuccess(s.channel, topic)
 		_ = msg.Ack()
-	})
+	},
+		// THE CONSUME LOOP'S OWN FAILURES, which are otherwise discarded.
+		//
+		// Consume retries internally and reports what it hit here. With no
+		// handler the errors go nowhere, and the loudest case is the one a
+		// consumer reported: their broker was RECREATED, not restarted, so its
+		// JetStream state went with it. The client reconnected to a server that
+		// had never heard of this consumer, every pull failed, and the process
+		// logged nothing at all — delivery simply stopped.
+		//
+		// This does not re-create the consumer. It ends the silence, which is
+		// the part that cost half an hour; a subscriber that cannot pull is
+		// visible now instead of merely idle.
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, cerr error) {
+			reportBusFailure("consume", s.channel, consumerName, cerr)
+		}),
+	)
 	if err != nil {
 		return fmt.Errorf("nats consume: %w", err)
 	}

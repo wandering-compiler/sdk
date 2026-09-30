@@ -92,7 +92,7 @@ export function CreatePage({ page, whoami, slots, onBack, onCreated }: CreatePag
 
   return (
     <Stack gap="lg">
-      <PageHeader title={`Add ${pageLabel(page)}`} onBack={onBack} />
+      <PageHeader title={t("Add {name}", { name: pageLabel(page) })} onBack={onBack} />
       {error && <StateView kind="error" message={error} />}
       <Paper withBorder p="md" radius="md">
         <form onSubmit={handleSubmit(onSubmit)}>

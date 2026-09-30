@@ -99,17 +99,26 @@ export function ActionModal({
   // …unless this is a PAGE action, which never had a selection to be missing.
   // Gating it on one would make the button permanently dead.
   const hasSelection = isPageAction || selectedIds.length > 0;
+  // These three feed `t("Will apply to {target}.")`, so leaving them raw produced a
+  // HALF-translated sentence — worse than an untranslated one, because it reads as
+  // a bug rather than as a missing catalogue. Neither the JSX-text check nor the
+  // prop check could see them: they are plain literals in a ternary.
+  //
+  // Two msgids rather than one with a suffix, because this translator has no
+  // plural form — `t()` substitutes, it does not count.
   const targetText = isPageAction
-    ? "this page"
-    : selectedIds.length > 0
-      ? `${selectedIds.length} selected row${selectedIds.length === 1 ? "" : "s"}`
-      : "no rows";
+    ? t("this page")
+    : selectedIds.length === 1
+      ? t("{count} selected row", { count: selectedIds.length })
+      : selectedIds.length > 0
+        ? t("{count} selected rows", { count: selectedIds.length })
+        : t("no rows");
 
   return (
     <Modal opened={open} onClose={handleClose} title={label} centered>
       <Stack>
         <Text size="sm" c="dimmed">
-          Will apply to {targetText}.
+          {t("Will apply to {target}.", { target: targetText })}
         </Text>
 
         {!hasSelection && (
@@ -146,7 +155,17 @@ export function ActionModal({
                 key={f}
                 label={humanizeLabel(f)}
                 value={extras[f] || ""}
-                onChange={(e) => setExtras((prev) => ({ ...prev, [f]: e.currentTarget.value }))}
+                // Read the value BEFORE the updater. React nulls a synthetic event's
+                // `currentTarget` once the handler returns, and a functional updater
+                // runs later — so `e.currentTarget.value` INSIDE it threw
+                // "Cannot read properties of null (reading 'value')" on the first
+                // keystroke. Every extra field of every action was unusable, and
+                // nothing noticed because nothing had ever typed into one: this file
+                // had one of its five functions covered.
+                onChange={(e) => {
+                  const value = e.currentTarget.value;
+                  setExtras((prev) => ({ ...prev, [f]: value }));
+                }}
                 disabled={submitting}
               />
             ))}
