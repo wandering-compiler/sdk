@@ -252,7 +252,7 @@ func checkHTTP(ctx context.Context, tgt string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s answered %s", healthz.Path, resp.Status)
@@ -269,7 +269,7 @@ func checkGRPC(ctx context.Context, tgt string, getenv func(string) string) erro
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	resp, err := grpc_health_v1.NewHealthClient(conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{})
 	if err != nil {
 		return err

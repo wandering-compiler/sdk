@@ -52,6 +52,21 @@ const (
 	PushMode_PUSH_MODE_AUTO   PushMode = 0
 	PushMode_PUSH_MODE_CREATE PushMode = 1
 	PushMode_PUSH_MODE_UPDATE PushMode = 2
+	// DRY_RUN plans and stores NOTHING — no migration, no schema, no revision,
+	// no lock pin. It answers "what would a push do now?": the findings still
+	// needing a decision, the connections a push would migrate, the decisions
+	// sent that match no finding (reported, not refused — see
+	// PushSchemaResponse.unused_decisions), and the base it planned against.
+	// Create-vs-update is resolved as AUTO; force_initial still applies.
+	// `w17ctl migrate check` sends it.
+	//
+	// A MODE, not a flag, on purpose: a console that predates it refuses an
+	// unknown mode ("unknown mode") instead of ignoring an unknown field and
+	// running a real push. A dry run must fail closed on an old server.
+	//
+	// Not subject to a project's ci_only lock: that lock guards what gets
+	// MINTED, and a dry run mints nothing. Any member who may push may ask.
+	PushMode_PUSH_MODE_DRY_RUN PushMode = 3
 )
 
 // Enum value maps for PushMode.
@@ -60,11 +75,13 @@ var (
 		0: "PUSH_MODE_AUTO",
 		1: "PUSH_MODE_CREATE",
 		2: "PUSH_MODE_UPDATE",
+		3: "PUSH_MODE_DRY_RUN",
 	}
 	PushMode_value = map[string]int32{
-		"PUSH_MODE_AUTO":   0,
-		"PUSH_MODE_CREATE": 1,
-		"PUSH_MODE_UPDATE": 2,
+		"PUSH_MODE_AUTO":    0,
+		"PUSH_MODE_CREATE":  1,
+		"PUSH_MODE_UPDATE":  2,
+		"PUSH_MODE_DRY_RUN": 3,
 	}
 )
 
@@ -617,7 +634,24 @@ type PushSchemaResponse struct {
 	// resolved_mode reports the create-vs-update the server actually applied
 	// (AUTO resolves to CREATE or UPDATE server-side) so the client can label
 	// the push "initial schema" vs "schema revision".
-	ResolvedMode  PushMode `protobuf:"varint,3,opt,name=resolved_mode,json=resolvedMode,proto3,enum=w17.registry.PushMode" json:"resolved_mode,omitempty"`
+	ResolvedMode PushMode `protobuf:"varint,3,opt,name=resolved_mode,json=resolvedMode,proto3,enum=w17.registry.PushMode" json:"resolved_mode,omitempty"`
+	// unused_decisions — DRY_RUN only: the decision keys (the part of a
+	// `decide` entry before `=`) that match no finding. A real push REFUSES
+	// these, because a decision matching nothing can let a coexisting
+	// column-wide fallback run instead; a dry run reports them so the client
+	// can name the stale decision rather than fail on it. The remaining
+	// decisions are still applied to the plan.
+	UnusedDecisions []string `protobuf:"bytes,4,rep,name=unused_decisions,json=unusedDecisions,proto3" json:"unused_decisions,omitempty"`
+	// changed_connections — DRY_RUN only: every connection a push would store a
+	// migration for, sorted. Empty with no findings = the stored schema already
+	// matches the proto; nothing to generate.
+	ChangedConnections []string `protobuf:"bytes,5,rep,name=changed_connections,json=changedConnections,proto3" json:"changed_connections,omitempty"`
+	// base — DRY_RUN only: identifies the stored schema this plan diffs
+	// against (empty when the project has none yet). Every mint changes it.
+	// A decision is written against a base and applies only while the base is
+	// the same: once a release consumes it, the base moves and the decision
+	// can never decide a later change of the same column.
+	Base          string `protobuf:"bytes,6,opt,name=base,proto3" json:"base,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -673,15 +707,51 @@ func (x *PushSchemaResponse) GetResolvedMode() PushMode {
 	return PushMode_PUSH_MODE_AUTO
 }
 
+func (x *PushSchemaResponse) GetUnusedDecisions() []string {
+	if x != nil {
+		return x.UnusedDecisions
+	}
+	return nil
+}
+
+func (x *PushSchemaResponse) GetChangedConnections() []string {
+	if x != nil {
+		return x.ChangedConnections
+	}
+	return nil
+}
+
+func (x *PushSchemaResponse) GetBase() string {
+	if x != nil {
+		return x.Base
+	}
+	return ""
+}
+
 // Finding is one unresolved planner decision, flattened from
 // planpb.ReviewFinding (+ its ColumnRef) to the plain fields the client prints.
 type Finding struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
-	ColumnName    string                 `protobuf:"bytes,2,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"`
-	FieldNumber   int32                  `protobuf:"varint,3,opt,name=field_number,json=fieldNumber,proto3" json:"field_number,omitempty"`
-	Axis          string                 `protobuf:"bytes,4,opt,name=axis,proto3" json:"axis,omitempty"`
-	Rationale     string                 `protobuf:"bytes,5,opt,name=rationale,proto3" json:"rationale,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	TableName   string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	ColumnName  string                 `protobuf:"bytes,2,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"`
+	FieldNumber int32                  `protobuf:"varint,3,opt,name=field_number,json=fieldNumber,proto3" json:"field_number,omitempty"`
+	Axis        string                 `protobuf:"bytes,4,opt,name=axis,proto3" json:"axis,omitempty"`
+	Rationale   string                 `protobuf:"bytes,5,opt,name=rationale,proto3" json:"rationale,omitempty"`
+	// decide_key is the exact key a decision for THIS finding uses — the part
+	// of `--decide <key>=<strategy>` before `=`: `table.column:axis`, or
+	// `table:axis` for a table-level finding. The client copies it; it never
+	// composes one.
+	DecideKey string `protobuf:"bytes,6,opt,name=decide_key,json=decideKey,proto3" json:"decide_key,omitempty"`
+	// proposed is the classifier's default strategy, as a decision value.
+	Proposed string `protobuf:"bytes,7,opt,name=proposed,proto3" json:"proposed,omitempty"`
+	// options are the strategies a decision may choose, as decision values
+	// (`safe`, `lossless_using`, `needs_confirm`, `drop_and_create`; a
+	// `custom` body is always possible and is not listed). Includes proposed.
+	Options []string `protobuf:"bytes,8,rep,name=options,proto3" json:"options,omitempty"`
+	// prev_summary / curr_summary describe the change in human terms (e.g. the
+	// column's type before and after). Either may be empty.
+	PrevSummary   string `protobuf:"bytes,9,opt,name=prev_summary,json=prevSummary,proto3" json:"prev_summary,omitempty"`
+	CurrSummary   string `protobuf:"bytes,10,opt,name=curr_summary,json=currSummary,proto3" json:"curr_summary,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -747,6 +817,41 @@ func (x *Finding) GetAxis() string {
 func (x *Finding) GetRationale() string {
 	if x != nil {
 		return x.Rationale
+	}
+	return ""
+}
+
+func (x *Finding) GetDecideKey() string {
+	if x != nil {
+		return x.DecideKey
+	}
+	return ""
+}
+
+func (x *Finding) GetProposed() string {
+	if x != nil {
+		return x.Proposed
+	}
+	return ""
+}
+
+func (x *Finding) GetOptions() []string {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+func (x *Finding) GetPrevSummary() string {
+	if x != nil {
+		return x.PrevSummary
+	}
+	return ""
+}
+
+func (x *Finding) GetCurrSummary() string {
+	if x != nil {
+		return x.CurrSummary
 	}
 	return ""
 }
@@ -1607,13 +1712,16 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\rinitiative_id\x18\a \x01(\tR\finitiativeId\x1aB\n" +
 	"\x14DecideCustomSqlEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbd\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xad\x02\n" +
 	"\x12PushSchemaResponse\x127\n" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x17.w17.registry.MigrationR\n" +
 	"migrations\x121\n" +
 	"\bfindings\x18\x02 \x03(\v2\x15.w17.registry.FindingR\bfindings\x12;\n" +
-	"\rresolved_mode\x18\x03 \x01(\x0e2\x16.w17.registry.PushModeR\fresolvedMode\"\x9e\x01\n" +
+	"\rresolved_mode\x18\x03 \x01(\x0e2\x16.w17.registry.PushModeR\fresolvedMode\x12)\n" +
+	"\x10unused_decisions\x18\x04 \x03(\tR\x0funusedDecisions\x12/\n" +
+	"\x13changed_connections\x18\x05 \x03(\tR\x12changedConnections\x12\x12\n" +
+	"\x04base\x18\x06 \x01(\tR\x04base\"\xb9\x02\n" +
 	"\aFinding\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
@@ -1621,7 +1729,14 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"columnName\x12!\n" +
 	"\ffield_number\x18\x03 \x01(\x05R\vfieldNumber\x12\x12\n" +
 	"\x04axis\x18\x04 \x01(\tR\x04axis\x12\x1c\n" +
-	"\trationale\x18\x05 \x01(\tR\trationale\"\x9a\x01\n" +
+	"\trationale\x18\x05 \x01(\tR\trationale\x12\x1d\n" +
+	"\n" +
+	"decide_key\x18\x06 \x01(\tR\tdecideKey\x12\x1a\n" +
+	"\bproposed\x18\a \x01(\tR\bproposed\x12\x18\n" +
+	"\aoptions\x18\b \x03(\tR\aoptions\x12!\n" +
+	"\fprev_summary\x18\t \x01(\tR\vprevSummary\x12!\n" +
+	"\fcurr_summary\x18\n" +
+	" \x01(\tR\vcurrSummary\"\x9a\x01\n" +
 	"\x17PushRawMigrationRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x1e\n" +
@@ -1677,11 +1792,12 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\x14ResetHistoryResponse\x12-\n" +
 	"\x12migrations_dropped\x18\x01 \x01(\x05R\x11migrationsDropped\x124\n" +
 	"\x16raw_migrations_dropped\x18\x02 \x01(\x05R\x14rawMigrationsDropped\x12*\n" +
-	"\x11raw_migration_ids\x18\x03 \x03(\tR\x0frawMigrationIds*J\n" +
+	"\x11raw_migration_ids\x18\x03 \x03(\tR\x0frawMigrationIds*a\n" +
 	"\bPushMode\x12\x12\n" +
 	"\x0ePUSH_MODE_AUTO\x10\x00\x12\x14\n" +
 	"\x10PUSH_MODE_CREATE\x10\x01\x12\x14\n" +
-	"\x10PUSH_MODE_UPDATE\x10\x02*\x80\x01\n" +
+	"\x10PUSH_MODE_UPDATE\x10\x02\x12\x15\n" +
+	"\x11PUSH_MODE_DRY_RUN\x10\x03*\x80\x01\n" +
 	"\x12ResetHistoryPolicy\x12$\n" +
 	" RESET_HISTORY_POLICY_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cRESET_HISTORY_POLICY_DISCARD\x10\x01\x12\"\n" +
