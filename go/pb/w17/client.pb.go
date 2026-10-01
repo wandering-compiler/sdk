@@ -157,14 +157,59 @@ var file_w17_client_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.MethodOptions.
 var (
+	// (w17.returns_entities) — query method annotation declaring
+	// the entity TYPES this RPC's response is keyed by.
+	//
+	// Usage:
+	//
+	//	rpc GetAccount(GetReq) returns (Account) {
+	//	  option (w17.returns_entities) = "Account";
+	//	}
+	//
+	// Multi-entity response (e.g. JOIN-shaped):
+	//
+	//	rpc GetAccountWithOwner(GetReq) returns (Joined) {
+	//	  option (w17.returns_entities) = "Account";
+	//	  option (w17.returns_entities) = "User";
+	//	}
+	//
 	// repeated string returns_entities = 50140;
 	E_ReturnsEntities = &file_w17_client_proto_extTypes[0]
+	// (w17.touches_entities) — mutation method annotation
+	// declaring the entity TYPES this RPC modifies. Drives both
+	// page-local cache invalidation (immediate, on success) and
+	// cross-tab invalidation via the reserved `w17.invalidate`
+	// eventbus topic (when the BE emits it — auto-emit codegen
+	// is C4.3+).
+	//
+	// Usage:
+	//
+	//	rpc UpdateAccount(UpdateReq) returns (Account) {
+	//	  option (w17.touches_entities) = "Account";
+	//	}
+	//
 	// repeated string touches_entities = 50141;
 	E_TouchesEntities = &file_w17_client_proto_extTypes[1]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
 var (
+	// (w17.entity_id) — field annotation declaring this proto
+	// field is the entity's primary identifier. The FE client
+	// reads it to compute the `(group, message, id)` cache tag
+	// per response payload.
+	//
+	// Exactly one per message that any `(w17.returns_entities)`
+	// references — the parser refuses zero (no tag-stamp
+	// possible) or multiple (ambiguous identity).
+	//
+	// Usage:
+	//
+	//	message Account {
+	//	  string id = 1 [(w17.entity_id) = true];
+	//	  string name = 2;
+	//	}
+	//
 	// optional bool entity_id = 50142;
 	E_EntityId = &file_w17_client_proto_extTypes[2]
 )

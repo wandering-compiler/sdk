@@ -507,6 +507,10 @@ var file_w17_domain_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.FileOptions.
 var (
+	// (w17.domain) — domain-level configuration option. Lives in
+	// `proto/domains/<domain>/w17.proto` only; loader rejects it
+	// at module or file scope.
+	//
 	// optional w17.Domain domain = 51021;
 	E_Domain = &file_w17_domain_proto_extTypes[0]
 )

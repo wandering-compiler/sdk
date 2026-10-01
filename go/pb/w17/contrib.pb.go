@@ -178,6 +178,34 @@ var file_w17_contrib_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.MessageOptions.
 var (
+	// (w17.contrib.extends) on `message` — add fields to a
+	// PLUGIN's message from the consuming project, without
+	// forking the plugin.
+	//
+	// The extension is an ordinary message in the project's own
+	// proto tree that names the plugin's message by its
+	// fully-qualified name AFTER STAGING — `<activating domain's
+	// package>.<registered_as>.<Message>`, e.g.
+	// `myproj.app.auth.User`, never the plugin author's own
+	// package, which staging rewrites away. At IR build time the
+	// migrator merges the extension's fields into the target's
+	// record, so one SQL table carries both halves.
+	//
+	// One plugin can be activated SEVERAL times in a project (a
+	// customer realm plus a staff realm), each with its own
+	// tables; `target` picks exactly one of them. That is what
+	// lets an extension mean "the identity my users have" rather
+	// than "every identity table this plugin ever produced".
+	//
+	// Field-number collisions across plugin + extension are
+	// refused at IR-merge time. Convention: plugin fields take
+	// 1-99 and extensions start at 100 — author hygiene, not a
+	// manifest-enforced rule, because the collision check alone
+	// is sufficient.
+	//
+	// Body: [Extends]. Worked example + the staging rules: the
+	// header of this file and docs/specs/plugins/.
+	//
 	// optional w17.contrib.Extends extends = 51022;
 	E_Extends = &file_w17_contrib_proto_extTypes[0]
 	// (w17.contrib.plugin_feature) on `message` — opt a message

@@ -939,6 +939,8 @@ type LockEditIntent struct {
 	//	*LockEditIntent_SetDirLayout
 	//	*LockEditIntent_AddDeployTarget
 	//	*LockEditIntent_RemoveDeployTarget
+	//	*LockEditIntent_RemoveClientStub
+	//	*LockEditIntent_SetClientStub
 	Intent        isLockEditIntent_Intent `protobuf_oneof:"intent"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1197,6 +1199,24 @@ func (x *LockEditIntent) GetRemoveDeployTarget() *RemoveDeployTargetIntent {
 	return nil
 }
 
+func (x *LockEditIntent) GetRemoveClientStub() *RemoveClientStubIntent {
+	if x != nil {
+		if x, ok := x.Intent.(*LockEditIntent_RemoveClientStub); ok {
+			return x.RemoveClientStub
+		}
+	}
+	return nil
+}
+
+func (x *LockEditIntent) GetSetClientStub() *SetClientStubIntent {
+	if x != nil {
+		if x, ok := x.Intent.(*LockEditIntent_SetClientStub); ok {
+			return x.SetClientStub
+		}
+	}
+	return nil
+}
+
 type isLockEditIntent_Intent interface {
 	isLockEditIntent_Intent()
 }
@@ -1297,6 +1317,14 @@ type LockEditIntent_RemoveDeployTarget struct {
 	RemoveDeployTarget *RemoveDeployTargetIntent `protobuf:"bytes,24,opt,name=remove_deploy_target,json=removeDeployTarget,proto3,oneof"`
 }
 
+type LockEditIntent_RemoveClientStub struct {
+	RemoveClientStub *RemoveClientStubIntent `protobuf:"bytes,25,opt,name=remove_client_stub,json=removeClientStub,proto3,oneof"`
+}
+
+type LockEditIntent_SetClientStub struct {
+	SetClientStub *SetClientStubIntent `protobuf:"bytes,26,opt,name=set_client_stub,json=setClientStub,proto3,oneof"`
+}
+
 func (*LockEditIntent_AddConnection) isLockEditIntent_Intent() {}
 
 func (*LockEditIntent_SetDefaultConnection) isLockEditIntent_Intent() {}
@@ -1344,6 +1372,10 @@ func (*LockEditIntent_SetDirLayout) isLockEditIntent_Intent() {}
 func (*LockEditIntent_AddDeployTarget) isLockEditIntent_Intent() {}
 
 func (*LockEditIntent_RemoveDeployTarget) isLockEditIntent_Intent() {}
+
+func (*LockEditIntent_RemoveClientStub) isLockEditIntent_Intent() {}
+
+func (*LockEditIntent_SetClientStub) isLockEditIntent_Intent() {}
 
 // InstallPluginIntent appends an installed plugin to the lock (the `w17ctl
 // plugin install` write). The server rejects a duplicate name. source is the
@@ -2686,6 +2718,134 @@ func (x *AddClientStubIntent) GetRestSurface() string {
 	return ""
 }
 
+// RemoveClientStubIntent drops the generated_code.clients[] entry at
+// output_root. Refused when no entry claims it. The tree on disk is the
+// client's to delete: the lock stops generating it, it does not erase it.
+type RemoveClientStubIntent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OutputRoot    string                 `protobuf:"bytes,1,opt,name=output_root,json=outputRoot,proto3" json:"output_root,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveClientStubIntent) Reset() {
+	*x = RemoveClientStubIntent{}
+	mi := &file_w17compiler_codegen_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveClientStubIntent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveClientStubIntent) ProtoMessage() {}
+
+func (x *RemoveClientStubIntent) ProtoReflect() protoreflect.Message {
+	mi := &file_w17compiler_codegen_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveClientStubIntent.ProtoReflect.Descriptor instead.
+func (*RemoveClientStubIntent) Descriptor() ([]byte, []int) {
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *RemoveClientStubIntent) GetOutputRoot() string {
+	if x != nil {
+		return x.OutputRoot
+	}
+	return ""
+}
+
+// SetClientStubIntent changes an existing clients[] entry in place, found by
+// output_root — only the fields that are SET. Asked for by a consumer: with
+// add-only, switching an entry to another rest_surface meant editing the
+// signed lock by hand. Tokens are the AddClientStubIntent ones; an empty
+// rest_surface (set) clears the scoping. At least one field must be set.
+type SetClientStubIntent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OutputRoot    string                 `protobuf:"bytes,1,opt,name=output_root,json=outputRoot,proto3" json:"output_root,omitempty"`
+	RestSurface   *string                `protobuf:"bytes,2,opt,name=rest_surface,json=restSurface,proto3,oneof" json:"rest_surface,omitempty"`
+	Framework     *string                `protobuf:"bytes,3,opt,name=framework,proto3,oneof" json:"framework,omitempty"`
+	Language      *string                `protobuf:"bytes,4,opt,name=language,proto3,oneof" json:"language,omitempty"`
+	Wire          *string                `protobuf:"bytes,5,opt,name=wire,proto3,oneof" json:"wire,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetClientStubIntent) Reset() {
+	*x = SetClientStubIntent{}
+	mi := &file_w17compiler_codegen_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetClientStubIntent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetClientStubIntent) ProtoMessage() {}
+
+func (x *SetClientStubIntent) ProtoReflect() protoreflect.Message {
+	mi := &file_w17compiler_codegen_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetClientStubIntent.ProtoReflect.Descriptor instead.
+func (*SetClientStubIntent) Descriptor() ([]byte, []int) {
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *SetClientStubIntent) GetOutputRoot() string {
+	if x != nil {
+		return x.OutputRoot
+	}
+	return ""
+}
+
+func (x *SetClientStubIntent) GetRestSurface() string {
+	if x != nil && x.RestSurface != nil {
+		return *x.RestSurface
+	}
+	return ""
+}
+
+func (x *SetClientStubIntent) GetFramework() string {
+	if x != nil && x.Framework != nil {
+		return *x.Framework
+	}
+	return ""
+}
+
+func (x *SetClientStubIntent) GetLanguage() string {
+	if x != nil && x.Language != nil {
+		return *x.Language
+	}
+	return ""
+}
+
+func (x *SetClientStubIntent) GetWire() string {
+	if x != nil && x.Wire != nil {
+		return *x.Wire
+	}
+	return ""
+}
+
 // BootstrapLockIntent builds a brand-new project lock from the `w17ctl init`
 // wizard answers (the EditLock request carries empty lock bytes). The server
 // assembles the whole lock — dirs, pb-stub language, i18n, e2e, CI configs,
@@ -2717,7 +2877,7 @@ type SetPbStubIntent struct {
 
 func (x *SetPbStubIntent) Reset() {
 	*x = SetPbStubIntent{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[33]
+	mi := &file_w17compiler_codegen_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2729,7 +2889,7 @@ func (x *SetPbStubIntent) String() string {
 func (*SetPbStubIntent) ProtoMessage() {}
 
 func (x *SetPbStubIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[33]
+	mi := &file_w17compiler_codegen_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2742,7 +2902,7 @@ func (x *SetPbStubIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPbStubIntent.ProtoReflect.Descriptor instead.
 func (*SetPbStubIntent) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{33}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SetPbStubIntent) GetLanguage() string {
@@ -2800,7 +2960,7 @@ type SetDirLayoutIntent struct {
 
 func (x *SetDirLayoutIntent) Reset() {
 	*x = SetDirLayoutIntent{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[34]
+	mi := &file_w17compiler_codegen_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2812,7 +2972,7 @@ func (x *SetDirLayoutIntent) String() string {
 func (*SetDirLayoutIntent) ProtoMessage() {}
 
 func (x *SetDirLayoutIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[34]
+	mi := &file_w17compiler_codegen_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2825,7 +2985,7 @@ func (x *SetDirLayoutIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDirLayoutIntent.ProtoReflect.Descriptor instead.
 func (*SetDirLayoutIntent) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{34}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SetDirLayoutIntent) GetProtoDir() string {
@@ -2877,7 +3037,7 @@ type SetBusinessBundleIntent struct {
 
 func (x *SetBusinessBundleIntent) Reset() {
 	*x = SetBusinessBundleIntent{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[35]
+	mi := &file_w17compiler_codegen_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2889,7 +3049,7 @@ func (x *SetBusinessBundleIntent) String() string {
 func (*SetBusinessBundleIntent) ProtoMessage() {}
 
 func (x *SetBusinessBundleIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[35]
+	mi := &file_w17compiler_codegen_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2902,7 +3062,7 @@ func (x *SetBusinessBundleIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBusinessBundleIntent.ProtoReflect.Descriptor instead.
 func (*SetBusinessBundleIntent) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{35}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *SetBusinessBundleIntent) GetDomain() string {
@@ -2952,7 +3112,7 @@ type BootstrapLockIntent struct {
 
 func (x *BootstrapLockIntent) Reset() {
 	*x = BootstrapLockIntent{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[36]
+	mi := &file_w17compiler_codegen_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2964,7 +3124,7 @@ func (x *BootstrapLockIntent) String() string {
 func (*BootstrapLockIntent) ProtoMessage() {}
 
 func (x *BootstrapLockIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[36]
+	mi := &file_w17compiler_codegen_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2977,7 +3137,7 @@ func (x *BootstrapLockIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapLockIntent.ProtoReflect.Descriptor instead.
 func (*BootstrapLockIntent) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{36}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *BootstrapLockIntent) GetProjectId() string {
@@ -3067,7 +3227,7 @@ type EditLockRequest struct {
 
 func (x *EditLockRequest) Reset() {
 	*x = EditLockRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[37]
+	mi := &file_w17compiler_codegen_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3079,7 +3239,7 @@ func (x *EditLockRequest) String() string {
 func (*EditLockRequest) ProtoMessage() {}
 
 func (x *EditLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[37]
+	mi := &file_w17compiler_codegen_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3092,7 +3252,7 @@ func (x *EditLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EditLockRequest.ProtoReflect.Descriptor instead.
 func (*EditLockRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{37}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *EditLockRequest) GetLock() []byte {
@@ -3118,7 +3278,7 @@ type EditLockResponse struct {
 
 func (x *EditLockResponse) Reset() {
 	*x = EditLockResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[38]
+	mi := &file_w17compiler_codegen_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3130,7 +3290,7 @@ func (x *EditLockResponse) String() string {
 func (*EditLockResponse) ProtoMessage() {}
 
 func (x *EditLockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[38]
+	mi := &file_w17compiler_codegen_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3143,7 +3303,7 @@ func (x *EditLockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EditLockResponse.ProtoReflect.Descriptor instead.
 func (*EditLockResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{38}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *EditLockResponse) GetLock() []byte {
@@ -3166,7 +3326,7 @@ type DescribeLockRequest struct {
 
 func (x *DescribeLockRequest) Reset() {
 	*x = DescribeLockRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[39]
+	mi := &file_w17compiler_codegen_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3178,7 +3338,7 @@ func (x *DescribeLockRequest) String() string {
 func (*DescribeLockRequest) ProtoMessage() {}
 
 func (x *DescribeLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[39]
+	mi := &file_w17compiler_codegen_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3191,7 +3351,7 @@ func (x *DescribeLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DescribeLockRequest.ProtoReflect.Descriptor instead.
 func (*DescribeLockRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{39}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *DescribeLockRequest) GetLock() []byte {
@@ -3292,7 +3452,7 @@ type LockView struct {
 
 func (x *LockView) Reset() {
 	*x = LockView{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[40]
+	mi := &file_w17compiler_codegen_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3304,7 +3464,7 @@ func (x *LockView) String() string {
 func (*LockView) ProtoMessage() {}
 
 func (x *LockView) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[40]
+	mi := &file_w17compiler_codegen_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3317,7 +3477,7 @@ func (x *LockView) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockView.ProtoReflect.Descriptor instead.
 func (*LockView) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{40}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *LockView) GetConnections() []*LockConnection {
@@ -3479,7 +3639,7 @@ type LockReplica struct {
 
 func (x *LockReplica) Reset() {
 	*x = LockReplica{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[41]
+	mi := &file_w17compiler_codegen_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3491,7 +3651,7 @@ func (x *LockReplica) String() string {
 func (*LockReplica) ProtoMessage() {}
 
 func (x *LockReplica) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[41]
+	mi := &file_w17compiler_codegen_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3504,7 +3664,7 @@ func (x *LockReplica) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockReplica.ProtoReflect.Descriptor instead.
 func (*LockReplica) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{41}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *LockReplica) GetService() string {
@@ -3533,7 +3693,7 @@ type LockGrpcClient struct {
 
 func (x *LockGrpcClient) Reset() {
 	*x = LockGrpcClient{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[42]
+	mi := &file_w17compiler_codegen_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3545,7 +3705,7 @@ func (x *LockGrpcClient) String() string {
 func (*LockGrpcClient) ProtoMessage() {}
 
 func (x *LockGrpcClient) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[42]
+	mi := &file_w17compiler_codegen_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3558,7 +3718,7 @@ func (x *LockGrpcClient) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockGrpcClient.ProtoReflect.Descriptor instead.
 func (*LockGrpcClient) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{42}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *LockGrpcClient) GetLanguage() string {
@@ -3589,7 +3749,7 @@ type LockComposedBinary struct {
 
 func (x *LockComposedBinary) Reset() {
 	*x = LockComposedBinary{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[43]
+	mi := &file_w17compiler_codegen_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3601,7 +3761,7 @@ func (x *LockComposedBinary) String() string {
 func (*LockComposedBinary) ProtoMessage() {}
 
 func (x *LockComposedBinary) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[43]
+	mi := &file_w17compiler_codegen_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3614,7 +3774,7 @@ func (x *LockComposedBinary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockComposedBinary.ProtoReflect.Descriptor instead.
 func (*LockComposedBinary) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{43}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *LockComposedBinary) GetDomain() string {
@@ -3651,7 +3811,7 @@ type LockBusinessBundle struct {
 
 func (x *LockBusinessBundle) Reset() {
 	*x = LockBusinessBundle{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[44]
+	mi := &file_w17compiler_codegen_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3663,7 +3823,7 @@ func (x *LockBusinessBundle) String() string {
 func (*LockBusinessBundle) ProtoMessage() {}
 
 func (x *LockBusinessBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[44]
+	mi := &file_w17compiler_codegen_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3676,7 +3836,7 @@ func (x *LockBusinessBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockBusinessBundle.ProtoReflect.Descriptor instead.
 func (*LockBusinessBundle) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{44}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *LockBusinessBundle) GetDomain() string {
@@ -3705,18 +3865,22 @@ func (x *LockBusinessBundle) GetEnvCount() int32 {
 // framework/language/wire are friendly display strings (e.g. REACT, TYPESCRIPT,
 // JSON) — the enum name with its CLIENT_*_ prefix stripped.
 type LockClientStub struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Framework     string                 `protobuf:"bytes,1,opt,name=framework,proto3" json:"framework,omitempty"`
-	Language      string                 `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
-	OutputRoot    string                 `protobuf:"bytes,3,opt,name=output_root,json=outputRoot,proto3" json:"output_root,omitempty"`
-	Wire          string                 `protobuf:"bytes,4,opt,name=wire,proto3" json:"wire,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Framework  string                 `protobuf:"bytes,1,opt,name=framework,proto3" json:"framework,omitempty"`
+	Language   string                 `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
+	OutputRoot string                 `protobuf:"bytes,3,opt,name=output_root,json=outputRoot,proto3" json:"output_root,omitempty"`
+	Wire       string                 `protobuf:"bytes,4,opt,name=wire,proto3" json:"wire,omitempty"`
+	// rest_surface is the surface this client serves (empty = the whole
+	// project's). `client list` shows it: with several publishing domains it
+	// is what tells two entries apart.
+	RestSurface   string `protobuf:"bytes,5,opt,name=rest_surface,json=restSurface,proto3" json:"rest_surface,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LockClientStub) Reset() {
 	*x = LockClientStub{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[45]
+	mi := &file_w17compiler_codegen_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3728,7 +3892,7 @@ func (x *LockClientStub) String() string {
 func (*LockClientStub) ProtoMessage() {}
 
 func (x *LockClientStub) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[45]
+	mi := &file_w17compiler_codegen_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3741,7 +3905,7 @@ func (x *LockClientStub) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockClientStub.ProtoReflect.Descriptor instead.
 func (*LockClientStub) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{45}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *LockClientStub) GetFramework() string {
@@ -3772,6 +3936,13 @@ func (x *LockClientStub) GetWire() string {
 	return ""
 }
 
+func (x *LockClientStub) GetRestSurface() string {
+	if x != nil {
+		return x.RestSurface
+	}
+	return ""
+}
+
 type LockConnection struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -3782,7 +3953,7 @@ type LockConnection struct {
 
 func (x *LockConnection) Reset() {
 	*x = LockConnection{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[46]
+	mi := &file_w17compiler_codegen_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3794,7 +3965,7 @@ func (x *LockConnection) String() string {
 func (*LockConnection) ProtoMessage() {}
 
 func (x *LockConnection) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[46]
+	mi := &file_w17compiler_codegen_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3807,7 +3978,7 @@ func (x *LockConnection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockConnection.ProtoReflect.Descriptor instead.
 func (*LockConnection) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{46}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *LockConnection) GetName() string {
@@ -3837,7 +4008,7 @@ type LockSecrets struct {
 
 func (x *LockSecrets) Reset() {
 	*x = LockSecrets{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[47]
+	mi := &file_w17compiler_codegen_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3849,7 +4020,7 @@ func (x *LockSecrets) String() string {
 func (*LockSecrets) ProtoMessage() {}
 
 func (x *LockSecrets) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[47]
+	mi := &file_w17compiler_codegen_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3862,7 +4033,7 @@ func (x *LockSecrets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockSecrets.ProtoReflect.Descriptor instead.
 func (*LockSecrets) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{47}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *LockSecrets) GetBackend() string {
@@ -3902,7 +4073,7 @@ type ConnectionExtensions struct {
 
 func (x *ConnectionExtensions) Reset() {
 	*x = ConnectionExtensions{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[48]
+	mi := &file_w17compiler_codegen_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3914,7 +4085,7 @@ func (x *ConnectionExtensions) String() string {
 func (*ConnectionExtensions) ProtoMessage() {}
 
 func (x *ConnectionExtensions) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[48]
+	mi := &file_w17compiler_codegen_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3927,7 +4098,7 @@ func (x *ConnectionExtensions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionExtensions.ProtoReflect.Descriptor instead.
 func (*ConnectionExtensions) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{48}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ConnectionExtensions) GetConnection() string {
@@ -3972,7 +4143,7 @@ type RenderProjectScaffoldRequest struct {
 
 func (x *RenderProjectScaffoldRequest) Reset() {
 	*x = RenderProjectScaffoldRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[49]
+	mi := &file_w17compiler_codegen_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3984,7 +4155,7 @@ func (x *RenderProjectScaffoldRequest) String() string {
 func (*RenderProjectScaffoldRequest) ProtoMessage() {}
 
 func (x *RenderProjectScaffoldRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[49]
+	mi := &file_w17compiler_codegen_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3997,7 +4168,7 @@ func (x *RenderProjectScaffoldRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderProjectScaffoldRequest.ProtoReflect.Descriptor instead.
 func (*RenderProjectScaffoldRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{49}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *RenderProjectScaffoldRequest) GetFiles() []*ProtoFile {
@@ -4041,7 +4212,7 @@ type MergePoRequest struct {
 
 func (x *MergePoRequest) Reset() {
 	*x = MergePoRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[50]
+	mi := &file_w17compiler_codegen_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4053,7 +4224,7 @@ func (x *MergePoRequest) String() string {
 func (*MergePoRequest) ProtoMessage() {}
 
 func (x *MergePoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[50]
+	mi := &file_w17compiler_codegen_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4066,7 +4237,7 @@ func (x *MergePoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergePoRequest.ProtoReflect.Descriptor instead.
 func (*MergePoRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{50}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *MergePoRequest) GetScaffold() []byte {
@@ -4099,7 +4270,7 @@ type MergePoResponse struct {
 
 func (x *MergePoResponse) Reset() {
 	*x = MergePoResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[51]
+	mi := &file_w17compiler_codegen_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4111,7 +4282,7 @@ func (x *MergePoResponse) String() string {
 func (*MergePoResponse) ProtoMessage() {}
 
 func (x *MergePoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[51]
+	mi := &file_w17compiler_codegen_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4124,7 +4295,7 @@ func (x *MergePoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergePoResponse.ProtoReflect.Descriptor instead.
 func (*MergePoResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{51}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *MergePoResponse) GetMerged() []byte {
@@ -4146,7 +4317,7 @@ type GeneratePluginPbRequest struct {
 
 func (x *GeneratePluginPbRequest) Reset() {
 	*x = GeneratePluginPbRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[52]
+	mi := &file_w17compiler_codegen_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4158,7 +4329,7 @@ func (x *GeneratePluginPbRequest) String() string {
 func (*GeneratePluginPbRequest) ProtoMessage() {}
 
 func (x *GeneratePluginPbRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[52]
+	mi := &file_w17compiler_codegen_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4171,7 +4342,7 @@ func (x *GeneratePluginPbRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeneratePluginPbRequest.ProtoReflect.Descriptor instead.
 func (*GeneratePluginPbRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{52}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *GeneratePluginPbRequest) GetFiles() []*ProtoFile {
@@ -4197,7 +4368,7 @@ type DiscoverPluginSandboxesRequest struct {
 
 func (x *DiscoverPluginSandboxesRequest) Reset() {
 	*x = DiscoverPluginSandboxesRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[53]
+	mi := &file_w17compiler_codegen_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4209,7 +4380,7 @@ func (x *DiscoverPluginSandboxesRequest) String() string {
 func (*DiscoverPluginSandboxesRequest) ProtoMessage() {}
 
 func (x *DiscoverPluginSandboxesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[53]
+	mi := &file_w17compiler_codegen_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4222,7 +4393,7 @@ func (x *DiscoverPluginSandboxesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscoverPluginSandboxesRequest.ProtoReflect.Descriptor instead.
 func (*DiscoverPluginSandboxesRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{53}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *DiscoverPluginSandboxesRequest) GetFiles() []*ProtoFile {
@@ -4241,7 +4412,7 @@ type PluginSandboxes struct {
 
 func (x *PluginSandboxes) Reset() {
 	*x = PluginSandboxes{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[54]
+	mi := &file_w17compiler_codegen_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4253,7 +4424,7 @@ func (x *PluginSandboxes) String() string {
 func (*PluginSandboxes) ProtoMessage() {}
 
 func (x *PluginSandboxes) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[54]
+	mi := &file_w17compiler_codegen_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4266,7 +4437,7 @@ func (x *PluginSandboxes) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginSandboxes.ProtoReflect.Descriptor instead.
 func (*PluginSandboxes) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{54}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PluginSandboxes) GetSandboxes() []*PluginSandbox {
@@ -4291,7 +4462,7 @@ type PluginSandbox struct {
 
 func (x *PluginSandbox) Reset() {
 	*x = PluginSandbox{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[55]
+	mi := &file_w17compiler_codegen_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4303,7 +4474,7 @@ func (x *PluginSandbox) String() string {
 func (*PluginSandbox) ProtoMessage() {}
 
 func (x *PluginSandbox) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[55]
+	mi := &file_w17compiler_codegen_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4316,7 +4487,7 @@ func (x *PluginSandbox) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginSandbox.ProtoReflect.Descriptor instead.
 func (*PluginSandbox) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{55}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *PluginSandbox) GetName() string {
@@ -4364,7 +4535,7 @@ type SandboxEnv struct {
 
 func (x *SandboxEnv) Reset() {
 	*x = SandboxEnv{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[56]
+	mi := &file_w17compiler_codegen_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4376,7 +4547,7 @@ func (x *SandboxEnv) String() string {
 func (*SandboxEnv) ProtoMessage() {}
 
 func (x *SandboxEnv) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[56]
+	mi := &file_w17compiler_codegen_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4389,7 +4560,7 @@ func (x *SandboxEnv) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxEnv.ProtoReflect.Descriptor instead.
 func (*SandboxEnv) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{56}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *SandboxEnv) GetName() string {
@@ -4430,7 +4601,7 @@ type GenerateClientRequest struct {
 
 func (x *GenerateClientRequest) Reset() {
 	*x = GenerateClientRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[57]
+	mi := &file_w17compiler_codegen_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4442,7 +4613,7 @@ func (x *GenerateClientRequest) String() string {
 func (*GenerateClientRequest) ProtoMessage() {}
 
 func (x *GenerateClientRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[57]
+	mi := &file_w17compiler_codegen_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4455,7 +4626,7 @@ func (x *GenerateClientRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateClientRequest.ProtoReflect.Descriptor instead.
 func (*GenerateClientRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{57}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GenerateClientRequest) GetFiles() []*ProtoFile {
@@ -4502,7 +4673,7 @@ type VerifyRequest struct {
 
 func (x *VerifyRequest) Reset() {
 	*x = VerifyRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[58]
+	mi := &file_w17compiler_codegen_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4514,7 +4685,7 @@ func (x *VerifyRequest) String() string {
 func (*VerifyRequest) ProtoMessage() {}
 
 func (x *VerifyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[58]
+	mi := &file_w17compiler_codegen_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4527,7 +4698,7 @@ func (x *VerifyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyRequest.ProtoReflect.Descriptor instead.
 func (*VerifyRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{58}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *VerifyRequest) GetFiles() []*ProtoFile {
@@ -4554,7 +4725,7 @@ type VerifyResult struct {
 
 func (x *VerifyResult) Reset() {
 	*x = VerifyResult{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[59]
+	mi := &file_w17compiler_codegen_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4566,7 +4737,7 @@ func (x *VerifyResult) String() string {
 func (*VerifyResult) ProtoMessage() {}
 
 func (x *VerifyResult) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[59]
+	mi := &file_w17compiler_codegen_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4579,7 +4750,7 @@ func (x *VerifyResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyResult.ProtoReflect.Descriptor instead.
 func (*VerifyResult) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{59}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *VerifyResult) GetOk() bool {
@@ -4608,7 +4779,7 @@ type VerifyLockRequest struct {
 
 func (x *VerifyLockRequest) Reset() {
 	*x = VerifyLockRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[60]
+	mi := &file_w17compiler_codegen_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4620,7 +4791,7 @@ func (x *VerifyLockRequest) String() string {
 func (*VerifyLockRequest) ProtoMessage() {}
 
 func (x *VerifyLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[60]
+	mi := &file_w17compiler_codegen_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4633,7 +4804,7 @@ func (x *VerifyLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyLockRequest.ProtoReflect.Descriptor instead.
 func (*VerifyLockRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{60}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *VerifyLockRequest) GetLock() []byte {
@@ -4671,7 +4842,7 @@ type GenerateE2ERequest struct {
 
 func (x *GenerateE2ERequest) Reset() {
 	*x = GenerateE2ERequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[61]
+	mi := &file_w17compiler_codegen_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4683,7 +4854,7 @@ func (x *GenerateE2ERequest) String() string {
 func (*GenerateE2ERequest) ProtoMessage() {}
 
 func (x *GenerateE2ERequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[61]
+	mi := &file_w17compiler_codegen_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4696,7 +4867,7 @@ func (x *GenerateE2ERequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateE2ERequest.ProtoReflect.Descriptor instead.
 func (*GenerateE2ERequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{61}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *GenerateE2ERequest) GetFiles() []*ProtoFile {
@@ -4763,7 +4934,7 @@ type GenerateProjectMapRequest struct {
 
 func (x *GenerateProjectMapRequest) Reset() {
 	*x = GenerateProjectMapRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[62]
+	mi := &file_w17compiler_codegen_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4775,7 +4946,7 @@ func (x *GenerateProjectMapRequest) String() string {
 func (*GenerateProjectMapRequest) ProtoMessage() {}
 
 func (x *GenerateProjectMapRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[62]
+	mi := &file_w17compiler_codegen_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4788,7 +4959,7 @@ func (x *GenerateProjectMapRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateProjectMapRequest.ProtoReflect.Descriptor instead.
 func (*GenerateProjectMapRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{62}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *GenerateProjectMapRequest) GetFiles() []*ProtoFile {
@@ -4853,7 +5024,7 @@ type GenerateBusinessRequest struct {
 
 func (x *GenerateBusinessRequest) Reset() {
 	*x = GenerateBusinessRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[63]
+	mi := &file_w17compiler_codegen_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4865,7 +5036,7 @@ func (x *GenerateBusinessRequest) String() string {
 func (*GenerateBusinessRequest) ProtoMessage() {}
 
 func (x *GenerateBusinessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[63]
+	mi := &file_w17compiler_codegen_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4878,7 +5049,7 @@ func (x *GenerateBusinessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateBusinessRequest.ProtoReflect.Descriptor instead.
 func (*GenerateBusinessRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{63}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *GenerateBusinessRequest) GetFiles() []*ProtoFile {
@@ -4959,7 +5130,7 @@ type BusinessBundle struct {
 
 func (x *BusinessBundle) Reset() {
 	*x = BusinessBundle{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[64]
+	mi := &file_w17compiler_codegen_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4971,7 +5142,7 @@ func (x *BusinessBundle) String() string {
 func (*BusinessBundle) ProtoMessage() {}
 
 func (x *BusinessBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[64]
+	mi := &file_w17compiler_codegen_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4984,7 +5155,7 @@ func (x *BusinessBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BusinessBundle.ProtoReflect.Descriptor instead.
 func (*BusinessBundle) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{64}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *BusinessBundle) GetDomain() string {
@@ -5021,7 +5192,7 @@ type BusinessEnv struct {
 
 func (x *BusinessEnv) Reset() {
 	*x = BusinessEnv{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[65]
+	mi := &file_w17compiler_codegen_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5033,7 +5204,7 @@ func (x *BusinessEnv) String() string {
 func (*BusinessEnv) ProtoMessage() {}
 
 func (x *BusinessEnv) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[65]
+	mi := &file_w17compiler_codegen_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5046,7 +5217,7 @@ func (x *BusinessEnv) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BusinessEnv.ProtoReflect.Descriptor instead.
 func (*BusinessEnv) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{65}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *BusinessEnv) GetName() string {
@@ -5097,7 +5268,7 @@ type GenerateAclRequest struct {
 
 func (x *GenerateAclRequest) Reset() {
 	*x = GenerateAclRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[66]
+	mi := &file_w17compiler_codegen_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5109,7 +5280,7 @@ func (x *GenerateAclRequest) String() string {
 func (*GenerateAclRequest) ProtoMessage() {}
 
 func (x *GenerateAclRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[66]
+	mi := &file_w17compiler_codegen_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5122,7 +5293,7 @@ func (x *GenerateAclRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateAclRequest.ProtoReflect.Descriptor instead.
 func (*GenerateAclRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{66}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GenerateAclRequest) GetFiles() []*ProtoFile {
@@ -5162,7 +5333,7 @@ type GenerateMcpRequest struct {
 
 func (x *GenerateMcpRequest) Reset() {
 	*x = GenerateMcpRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[67]
+	mi := &file_w17compiler_codegen_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5174,7 +5345,7 @@ func (x *GenerateMcpRequest) String() string {
 func (*GenerateMcpRequest) ProtoMessage() {}
 
 func (x *GenerateMcpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[67]
+	mi := &file_w17compiler_codegen_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5187,7 +5358,7 @@ func (x *GenerateMcpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateMcpRequest.ProtoReflect.Descriptor instead.
 func (*GenerateMcpRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{67}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *GenerateMcpRequest) GetFiles() []*ProtoFile {
@@ -5262,7 +5433,7 @@ type GenerateGrpcClientsRequest struct {
 
 func (x *GenerateGrpcClientsRequest) Reset() {
 	*x = GenerateGrpcClientsRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[68]
+	mi := &file_w17compiler_codegen_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5274,7 +5445,7 @@ func (x *GenerateGrpcClientsRequest) String() string {
 func (*GenerateGrpcClientsRequest) ProtoMessage() {}
 
 func (x *GenerateGrpcClientsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[68]
+	mi := &file_w17compiler_codegen_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5287,7 +5458,7 @@ func (x *GenerateGrpcClientsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateGrpcClientsRequest.ProtoReflect.Descriptor instead.
 func (*GenerateGrpcClientsRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{68}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *GenerateGrpcClientsRequest) GetFiles() []*ProtoFile {
@@ -5371,7 +5542,7 @@ type GenerateEventbusRequest struct {
 
 func (x *GenerateEventbusRequest) Reset() {
 	*x = GenerateEventbusRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[69]
+	mi := &file_w17compiler_codegen_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5383,7 +5554,7 @@ func (x *GenerateEventbusRequest) String() string {
 func (*GenerateEventbusRequest) ProtoMessage() {}
 
 func (x *GenerateEventbusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[69]
+	mi := &file_w17compiler_codegen_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5396,7 +5567,7 @@ func (x *GenerateEventbusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateEventbusRequest.ProtoReflect.Descriptor instead.
 func (*GenerateEventbusRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{69}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *GenerateEventbusRequest) GetFiles() []*ProtoFile {
@@ -5526,7 +5697,7 @@ type GenerateProjectRequest struct {
 
 func (x *GenerateProjectRequest) Reset() {
 	*x = GenerateProjectRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[70]
+	mi := &file_w17compiler_codegen_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5538,7 +5709,7 @@ func (x *GenerateProjectRequest) String() string {
 func (*GenerateProjectRequest) ProtoMessage() {}
 
 func (x *GenerateProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[70]
+	mi := &file_w17compiler_codegen_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5551,7 +5722,7 @@ func (x *GenerateProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateProjectRequest.ProtoReflect.Descriptor instead.
 func (*GenerateProjectRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{70}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *GenerateProjectRequest) GetFiles() []*ProtoFile {
@@ -5672,7 +5843,7 @@ type GeneratedOp struct {
 
 func (x *GeneratedOp) Reset() {
 	*x = GeneratedOp{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[71]
+	mi := &file_w17compiler_codegen_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5684,7 +5855,7 @@ func (x *GeneratedOp) String() string {
 func (*GeneratedOp) ProtoMessage() {}
 
 func (x *GeneratedOp) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[71]
+	mi := &file_w17compiler_codegen_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5697,7 +5868,7 @@ func (x *GeneratedOp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeneratedOp.ProtoReflect.Descriptor instead.
 func (*GeneratedOp) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{71}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *GeneratedOp) GetOp() isGeneratedOp_Op {
@@ -5793,7 +5964,7 @@ type SdkRequirement struct {
 
 func (x *SdkRequirement) Reset() {
 	*x = SdkRequirement{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[72]
+	mi := &file_w17compiler_codegen_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5805,7 +5976,7 @@ func (x *SdkRequirement) String() string {
 func (*SdkRequirement) ProtoMessage() {}
 
 func (x *SdkRequirement) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[72]
+	mi := &file_w17compiler_codegen_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5818,7 +5989,7 @@ func (x *SdkRequirement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SdkRequirement.ProtoReflect.Descriptor instead.
 func (*SdkRequirement) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{72}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *SdkRequirement) GetVersion() string {
@@ -5881,7 +6052,7 @@ type GenerateCiRequest struct {
 
 func (x *GenerateCiRequest) Reset() {
 	*x = GenerateCiRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[73]
+	mi := &file_w17compiler_codegen_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5893,7 +6064,7 @@ func (x *GenerateCiRequest) String() string {
 func (*GenerateCiRequest) ProtoMessage() {}
 
 func (x *GenerateCiRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[73]
+	mi := &file_w17compiler_codegen_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5906,7 +6077,7 @@ func (x *GenerateCiRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateCiRequest.ProtoReflect.Descriptor instead.
 func (*GenerateCiRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{73}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *GenerateCiRequest) GetProviders() []string {
@@ -5956,7 +6127,7 @@ type GenerateCiResponse struct {
 
 func (x *GenerateCiResponse) Reset() {
 	*x = GenerateCiResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[74]
+	mi := &file_w17compiler_codegen_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5968,7 +6139,7 @@ func (x *GenerateCiResponse) String() string {
 func (*GenerateCiResponse) ProtoMessage() {}
 
 func (x *GenerateCiResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[74]
+	mi := &file_w17compiler_codegen_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5981,7 +6152,7 @@ func (x *GenerateCiResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateCiResponse.ProtoReflect.Descriptor instead.
 func (*GenerateCiResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{74}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *GenerateCiResponse) GetFiles() []*GeneratedFile {
@@ -6041,7 +6212,7 @@ type CompileIRRequest struct {
 
 func (x *CompileIRRequest) Reset() {
 	*x = CompileIRRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[75]
+	mi := &file_w17compiler_codegen_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6053,7 +6224,7 @@ func (x *CompileIRRequest) String() string {
 func (*CompileIRRequest) ProtoMessage() {}
 
 func (x *CompileIRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[75]
+	mi := &file_w17compiler_codegen_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6066,7 +6237,7 @@ func (x *CompileIRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompileIRRequest.ProtoReflect.Descriptor instead.
 func (*CompileIRRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{75}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *CompileIRRequest) GetFiles() []*ProtoFile {
@@ -6150,7 +6321,7 @@ type CompileIRResponse struct {
 
 func (x *CompileIRResponse) Reset() {
 	*x = CompileIRResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[76]
+	mi := &file_w17compiler_codegen_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6162,7 +6333,7 @@ func (x *CompileIRResponse) String() string {
 func (*CompileIRResponse) ProtoMessage() {}
 
 func (x *CompileIRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[76]
+	mi := &file_w17compiler_codegen_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6175,7 +6346,7 @@ func (x *CompileIRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompileIRResponse.ProtoReflect.Descriptor instead.
 func (*CompileIRResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{76}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *CompileIRResponse) GetSchema() []byte {
@@ -6212,7 +6383,7 @@ type ClassifyIRRequest struct {
 
 func (x *ClassifyIRRequest) Reset() {
 	*x = ClassifyIRRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[77]
+	mi := &file_w17compiler_codegen_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6224,7 +6395,7 @@ func (x *ClassifyIRRequest) String() string {
 func (*ClassifyIRRequest) ProtoMessage() {}
 
 func (x *ClassifyIRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[77]
+	mi := &file_w17compiler_codegen_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6237,7 +6408,7 @@ func (x *ClassifyIRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClassifyIRRequest.ProtoReflect.Descriptor instead.
 func (*ClassifyIRRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{77}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ClassifyIRRequest) GetBase() []byte {
@@ -6278,7 +6449,7 @@ type ClassifyIRResponse struct {
 
 func (x *ClassifyIRResponse) Reset() {
 	*x = ClassifyIRResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[78]
+	mi := &file_w17compiler_codegen_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6290,7 +6461,7 @@ func (x *ClassifyIRResponse) String() string {
 func (*ClassifyIRResponse) ProtoMessage() {}
 
 func (x *ClassifyIRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[78]
+	mi := &file_w17compiler_codegen_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6303,7 +6474,7 @@ func (x *ClassifyIRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClassifyIRResponse.ProtoReflect.Descriptor instead.
 func (*ClassifyIRResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{78}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ClassifyIRResponse) GetFindings() []*CompatFinding {
@@ -6350,7 +6521,7 @@ type CompatFinding struct {
 
 func (x *CompatFinding) Reset() {
 	*x = CompatFinding{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[79]
+	mi := &file_w17compiler_codegen_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6362,7 +6533,7 @@ func (x *CompatFinding) String() string {
 func (*CompatFinding) ProtoMessage() {}
 
 func (x *CompatFinding) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[79]
+	mi := &file_w17compiler_codegen_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6375,7 +6546,7 @@ func (x *CompatFinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompatFinding.ProtoReflect.Descriptor instead.
 func (*CompatFinding) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{79}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *CompatFinding) GetDomain() string {
@@ -6459,7 +6630,7 @@ type PlanIRRequest struct {
 
 func (x *PlanIRRequest) Reset() {
 	*x = PlanIRRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[80]
+	mi := &file_w17compiler_codegen_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6471,7 +6642,7 @@ func (x *PlanIRRequest) String() string {
 func (*PlanIRRequest) ProtoMessage() {}
 
 func (x *PlanIRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[80]
+	mi := &file_w17compiler_codegen_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6484,7 +6655,7 @@ func (x *PlanIRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanIRRequest.ProtoReflect.Descriptor instead.
 func (*PlanIRRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{80}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *PlanIRRequest) GetBase() []byte {
@@ -6536,7 +6707,7 @@ type DumpFixturesRequest struct {
 
 func (x *DumpFixturesRequest) Reset() {
 	*x = DumpFixturesRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[81]
+	mi := &file_w17compiler_codegen_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6548,7 +6719,7 @@ func (x *DumpFixturesRequest) String() string {
 func (*DumpFixturesRequest) ProtoMessage() {}
 
 func (x *DumpFixturesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[81]
+	mi := &file_w17compiler_codegen_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6561,7 +6732,7 @@ func (x *DumpFixturesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DumpFixturesRequest.ProtoReflect.Descriptor instead.
 func (*DumpFixturesRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{81}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *DumpFixturesRequest) GetIr() []byte {
@@ -6603,7 +6774,7 @@ type DumpFixtureQuery struct {
 
 func (x *DumpFixtureQuery) Reset() {
 	*x = DumpFixtureQuery{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[82]
+	mi := &file_w17compiler_codegen_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6615,7 +6786,7 @@ func (x *DumpFixtureQuery) String() string {
 func (*DumpFixtureQuery) ProtoMessage() {}
 
 func (x *DumpFixtureQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[82]
+	mi := &file_w17compiler_codegen_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6628,7 +6799,7 @@ func (x *DumpFixtureQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DumpFixtureQuery.ProtoReflect.Descriptor instead.
 func (*DumpFixtureQuery) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{82}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *DumpFixtureQuery) GetModel() string {
@@ -6670,7 +6841,7 @@ type DumpFixturesResponse struct {
 
 func (x *DumpFixturesResponse) Reset() {
 	*x = DumpFixturesResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[83]
+	mi := &file_w17compiler_codegen_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6682,7 +6853,7 @@ func (x *DumpFixturesResponse) String() string {
 func (*DumpFixturesResponse) ProtoMessage() {}
 
 func (x *DumpFixturesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[83]
+	mi := &file_w17compiler_codegen_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6695,7 +6866,7 @@ func (x *DumpFixturesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DumpFixturesResponse.ProtoReflect.Descriptor instead.
 func (*DumpFixturesResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{83}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *DumpFixturesResponse) GetQueries() []*DumpFixtureQuery {
@@ -6718,7 +6889,7 @@ type ObservedStore struct {
 
 func (x *ObservedStore) Reset() {
 	*x = ObservedStore{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[84]
+	mi := &file_w17compiler_codegen_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6730,7 +6901,7 @@ func (x *ObservedStore) String() string {
 func (*ObservedStore) ProtoMessage() {}
 
 func (x *ObservedStore) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[84]
+	mi := &file_w17compiler_codegen_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6743,7 +6914,7 @@ func (x *ObservedStore) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedStore.ProtoReflect.Descriptor instead.
 func (*ObservedStore) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{84}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *ObservedStore) GetConnection() string {
@@ -6774,7 +6945,7 @@ type ObservedIndex struct {
 
 func (x *ObservedIndex) Reset() {
 	*x = ObservedIndex{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[85]
+	mi := &file_w17compiler_codegen_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6786,7 +6957,7 @@ func (x *ObservedIndex) String() string {
 func (*ObservedIndex) ProtoMessage() {}
 
 func (x *ObservedIndex) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[85]
+	mi := &file_w17compiler_codegen_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6799,7 +6970,7 @@ func (x *ObservedIndex) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedIndex.ProtoReflect.Descriptor instead.
 func (*ObservedIndex) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{85}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *ObservedIndex) GetName() string {
@@ -6848,7 +7019,7 @@ type ObservedForeignKey struct {
 
 func (x *ObservedForeignKey) Reset() {
 	*x = ObservedForeignKey{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[86]
+	mi := &file_w17compiler_codegen_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6860,7 +7031,7 @@ func (x *ObservedForeignKey) String() string {
 func (*ObservedForeignKey) ProtoMessage() {}
 
 func (x *ObservedForeignKey) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[86]
+	mi := &file_w17compiler_codegen_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6873,7 +7044,7 @@ func (x *ObservedForeignKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedForeignKey.ProtoReflect.Descriptor instead.
 func (*ObservedForeignKey) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{86}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *ObservedForeignKey) GetName() string {
@@ -6967,7 +7138,7 @@ type ObservedTable struct {
 
 func (x *ObservedTable) Reset() {
 	*x = ObservedTable{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[87]
+	mi := &file_w17compiler_codegen_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6979,7 +7150,7 @@ func (x *ObservedTable) String() string {
 func (*ObservedTable) ProtoMessage() {}
 
 func (x *ObservedTable) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[87]
+	mi := &file_w17compiler_codegen_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6992,7 +7163,7 @@ func (x *ObservedTable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedTable.ProtoReflect.Descriptor instead.
 func (*ObservedTable) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{87}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *ObservedTable) GetSchema() string {
@@ -7069,7 +7240,7 @@ type CheckMemberSet struct {
 
 func (x *CheckMemberSet) Reset() {
 	*x = CheckMemberSet{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[88]
+	mi := &file_w17compiler_codegen_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7081,7 +7252,7 @@ func (x *CheckMemberSet) String() string {
 func (*CheckMemberSet) ProtoMessage() {}
 
 func (x *CheckMemberSet) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[88]
+	mi := &file_w17compiler_codegen_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7094,7 +7265,7 @@ func (x *CheckMemberSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckMemberSet.ProtoReflect.Descriptor instead.
 func (*CheckMemberSet) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{88}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *CheckMemberSet) GetMembers() []string {
@@ -7140,7 +7311,7 @@ type ObservedColumn struct {
 
 func (x *ObservedColumn) Reset() {
 	*x = ObservedColumn{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[89]
+	mi := &file_w17compiler_codegen_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7152,7 +7323,7 @@ func (x *ObservedColumn) String() string {
 func (*ObservedColumn) ProtoMessage() {}
 
 func (x *ObservedColumn) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[89]
+	mi := &file_w17compiler_codegen_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7165,7 +7336,7 @@ func (x *ObservedColumn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedColumn.ProtoReflect.Descriptor instead.
 func (*ObservedColumn) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{89}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *ObservedColumn) GetName() string {
@@ -7232,7 +7403,7 @@ type PlanBaseline struct {
 
 func (x *PlanBaseline) Reset() {
 	*x = PlanBaseline{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[90]
+	mi := &file_w17compiler_codegen_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7244,7 +7415,7 @@ func (x *PlanBaseline) String() string {
 func (*PlanBaseline) ProtoMessage() {}
 
 func (x *PlanBaseline) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[90]
+	mi := &file_w17compiler_codegen_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7257,7 +7428,7 @@ func (x *PlanBaseline) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanBaseline.ProtoReflect.Descriptor instead.
 func (*PlanBaseline) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{90}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *PlanBaseline) GetConnection() string {
@@ -7304,7 +7475,7 @@ type PlanIRResponse struct {
 
 func (x *PlanIRResponse) Reset() {
 	*x = PlanIRResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[91]
+	mi := &file_w17compiler_codegen_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7316,7 +7487,7 @@ func (x *PlanIRResponse) String() string {
 func (*PlanIRResponse) ProtoMessage() {}
 
 func (x *PlanIRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[91]
+	mi := &file_w17compiler_codegen_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7329,7 +7500,7 @@ func (x *PlanIRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanIRResponse.ProtoReflect.Descriptor instead.
 func (*PlanIRResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{91}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *PlanIRResponse) GetPlan() []byte {
@@ -7365,7 +7536,7 @@ type LossyChange struct {
 
 func (x *LossyChange) Reset() {
 	*x = LossyChange{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[92]
+	mi := &file_w17compiler_codegen_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7377,7 +7548,7 @@ func (x *LossyChange) String() string {
 func (*LossyChange) ProtoMessage() {}
 
 func (x *LossyChange) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[92]
+	mi := &file_w17compiler_codegen_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7390,7 +7561,7 @@ func (x *LossyChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LossyChange.ProtoReflect.Descriptor instead.
 func (*LossyChange) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{92}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *LossyChange) GetConnection() string {
@@ -7640,7 +7811,7 @@ type GenerateRequest struct {
 
 func (x *GenerateRequest) Reset() {
 	*x = GenerateRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[93]
+	mi := &file_w17compiler_codegen_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7652,7 +7823,7 @@ func (x *GenerateRequest) String() string {
 func (*GenerateRequest) ProtoMessage() {}
 
 func (x *GenerateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[93]
+	mi := &file_w17compiler_codegen_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7665,7 +7836,7 @@ func (x *GenerateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateRequest.ProtoReflect.Descriptor instead.
 func (*GenerateRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{93}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *GenerateRequest) GetServiceId() string {
@@ -7834,7 +8005,7 @@ type FormatOverrideEntry struct {
 
 func (x *FormatOverrideEntry) Reset() {
 	*x = FormatOverrideEntry{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[94]
+	mi := &file_w17compiler_codegen_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7846,7 +8017,7 @@ func (x *FormatOverrideEntry) String() string {
 func (*FormatOverrideEntry) ProtoMessage() {}
 
 func (x *FormatOverrideEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[94]
+	mi := &file_w17compiler_codegen_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7859,7 +8030,7 @@ func (x *FormatOverrideEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FormatOverrideEntry.ProtoReflect.Descriptor instead.
 func (*FormatOverrideEntry) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{94}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *FormatOverrideEntry) GetLanguage() string {
@@ -7927,7 +8098,7 @@ type ReplaceDirectives struct {
 
 func (x *ReplaceDirectives) Reset() {
 	*x = ReplaceDirectives{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[95]
+	mi := &file_w17compiler_codegen_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7939,7 +8110,7 @@ func (x *ReplaceDirectives) String() string {
 func (*ReplaceDirectives) ProtoMessage() {}
 
 func (x *ReplaceDirectives) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[95]
+	mi := &file_w17compiler_codegen_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7952,7 +8123,7 @@ func (x *ReplaceDirectives) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplaceDirectives.ProtoReflect.Descriptor instead.
 func (*ReplaceDirectives) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{95}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *ReplaceDirectives) GetParentTo() string {
@@ -8039,7 +8210,7 @@ type DepVersions struct {
 
 func (x *DepVersions) Reset() {
 	*x = DepVersions{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[96]
+	mi := &file_w17compiler_codegen_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8051,7 +8222,7 @@ func (x *DepVersions) String() string {
 func (*DepVersions) ProtoMessage() {}
 
 func (x *DepVersions) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[96]
+	mi := &file_w17compiler_codegen_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8064,7 +8235,7 @@ func (x *DepVersions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DepVersions.ProtoReflect.Descriptor instead.
 func (*DepVersions) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{96}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *DepVersions) GetGrpc() string {
@@ -8302,7 +8473,7 @@ type GatewayTarget struct {
 
 func (x *GatewayTarget) Reset() {
 	*x = GatewayTarget{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[97]
+	mi := &file_w17compiler_codegen_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8314,7 +8485,7 @@ func (x *GatewayTarget) String() string {
 func (*GatewayTarget) ProtoMessage() {}
 
 func (x *GatewayTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[97]
+	mi := &file_w17compiler_codegen_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8327,7 +8498,7 @@ func (x *GatewayTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayTarget.ProtoReflect.Descriptor instead.
 func (*GatewayTarget) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{97}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *GatewayTarget) GetGoModule() string {
@@ -8535,7 +8706,7 @@ type AdminTarget struct {
 
 func (x *AdminTarget) Reset() {
 	*x = AdminTarget{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[98]
+	mi := &file_w17compiler_codegen_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8547,7 +8718,7 @@ func (x *AdminTarget) String() string {
 func (*AdminTarget) ProtoMessage() {}
 
 func (x *AdminTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[98]
+	mi := &file_w17compiler_codegen_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8560,7 +8731,7 @@ func (x *AdminTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminTarget.ProtoReflect.Descriptor instead.
 func (*AdminTarget) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{98}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *AdminTarget) GetGoModule() string {
@@ -8701,7 +8872,7 @@ type StubTarget struct {
 
 func (x *StubTarget) Reset() {
 	*x = StubTarget{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[99]
+	mi := &file_w17compiler_codegen_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8713,7 +8884,7 @@ func (x *StubTarget) String() string {
 func (*StubTarget) ProtoMessage() {}
 
 func (x *StubTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[99]
+	mi := &file_w17compiler_codegen_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8726,7 +8897,7 @@ func (x *StubTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StubTarget.ProtoReflect.Descriptor instead.
 func (*StubTarget) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{99}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *StubTarget) GetLanguage() string {
@@ -8770,7 +8941,7 @@ type ProtoFile struct {
 
 func (x *ProtoFile) Reset() {
 	*x = ProtoFile{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[100]
+	mi := &file_w17compiler_codegen_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8782,7 +8953,7 @@ func (x *ProtoFile) String() string {
 func (*ProtoFile) ProtoMessage() {}
 
 func (x *ProtoFile) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[100]
+	mi := &file_w17compiler_codegen_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8795,7 +8966,7 @@ func (x *ProtoFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtoFile.ProtoReflect.Descriptor instead.
 func (*ProtoFile) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{100}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *ProtoFile) GetFilename() string {
@@ -8832,7 +9003,7 @@ type GenerateResponse struct {
 
 func (x *GenerateResponse) Reset() {
 	*x = GenerateResponse{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[101]
+	mi := &file_w17compiler_codegen_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8844,7 +9015,7 @@ func (x *GenerateResponse) String() string {
 func (*GenerateResponse) ProtoMessage() {}
 
 func (x *GenerateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[101]
+	mi := &file_w17compiler_codegen_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8857,7 +9028,7 @@ func (x *GenerateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateResponse.ProtoReflect.Descriptor instead.
 func (*GenerateResponse) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{101}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *GenerateResponse) GetFiles() []*GeneratedFile {
@@ -8886,7 +9057,7 @@ type ListPluginCatalogRequest struct {
 
 func (x *ListPluginCatalogRequest) Reset() {
 	*x = ListPluginCatalogRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[102]
+	mi := &file_w17compiler_codegen_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8898,7 +9069,7 @@ func (x *ListPluginCatalogRequest) String() string {
 func (*ListPluginCatalogRequest) ProtoMessage() {}
 
 func (x *ListPluginCatalogRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[102]
+	mi := &file_w17compiler_codegen_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8911,7 +9082,7 @@ func (x *ListPluginCatalogRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPluginCatalogRequest.ProtoReflect.Descriptor instead.
 func (*ListPluginCatalogRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{102}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{104}
 }
 
 // PluginCatalog is what the console can serve. `version` comes from each
@@ -8926,7 +9097,7 @@ type PluginCatalog struct {
 
 func (x *PluginCatalog) Reset() {
 	*x = PluginCatalog{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[103]
+	mi := &file_w17compiler_codegen_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8938,7 +9109,7 @@ func (x *PluginCatalog) String() string {
 func (*PluginCatalog) ProtoMessage() {}
 
 func (x *PluginCatalog) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[103]
+	mi := &file_w17compiler_codegen_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8951,7 +9122,7 @@ func (x *PluginCatalog) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginCatalog.ProtoReflect.Descriptor instead.
 func (*PluginCatalog) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{103}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *PluginCatalog) GetPlugins() []*CataloguePlugin {
@@ -8972,7 +9143,7 @@ type CataloguePlugin struct {
 
 func (x *CataloguePlugin) Reset() {
 	*x = CataloguePlugin{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[104]
+	mi := &file_w17compiler_codegen_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8984,7 +9155,7 @@ func (x *CataloguePlugin) String() string {
 func (*CataloguePlugin) ProtoMessage() {}
 
 func (x *CataloguePlugin) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[104]
+	mi := &file_w17compiler_codegen_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8997,7 +9168,7 @@ func (x *CataloguePlugin) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CataloguePlugin.ProtoReflect.Descriptor instead.
 func (*CataloguePlugin) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{104}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *CataloguePlugin) GetName() string {
@@ -9036,7 +9207,7 @@ type FetchPluginRequest struct {
 
 func (x *FetchPluginRequest) Reset() {
 	*x = FetchPluginRequest{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[105]
+	mi := &file_w17compiler_codegen_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9048,7 +9219,7 @@ func (x *FetchPluginRequest) String() string {
 func (*FetchPluginRequest) ProtoMessage() {}
 
 func (x *FetchPluginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[105]
+	mi := &file_w17compiler_codegen_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9061,7 +9232,7 @@ func (x *FetchPluginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchPluginRequest.ProtoReflect.Descriptor instead.
 func (*FetchPluginRequest) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{105}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *FetchPluginRequest) GetName() string {
@@ -9089,7 +9260,7 @@ type GeneratedFile struct {
 
 func (x *GeneratedFile) Reset() {
 	*x = GeneratedFile{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[106]
+	mi := &file_w17compiler_codegen_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9101,7 +9272,7 @@ func (x *GeneratedFile) String() string {
 func (*GeneratedFile) ProtoMessage() {}
 
 func (x *GeneratedFile) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[106]
+	mi := &file_w17compiler_codegen_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9114,7 +9285,7 @@ func (x *GeneratedFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeneratedFile.ProtoReflect.Descriptor instead.
 func (*GeneratedFile) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{106}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *GeneratedFile) GetRelativePath() string {
@@ -9168,7 +9339,7 @@ type CodegenError struct {
 
 func (x *CodegenError) Reset() {
 	*x = CodegenError{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[107]
+	mi := &file_w17compiler_codegen_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9180,7 +9351,7 @@ func (x *CodegenError) String() string {
 func (*CodegenError) ProtoMessage() {}
 
 func (x *CodegenError) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[107]
+	mi := &file_w17compiler_codegen_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9193,7 +9364,7 @@ func (x *CodegenError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodegenError.ProtoReflect.Descriptor instead.
 func (*CodegenError) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{107}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *CodegenError) GetStage() Stage {
@@ -9244,7 +9415,7 @@ type Diagnostic struct {
 
 func (x *Diagnostic) Reset() {
 	*x = Diagnostic{}
-	mi := &file_w17compiler_codegen_proto_msgTypes[108]
+	mi := &file_w17compiler_codegen_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9256,7 +9427,7 @@ func (x *Diagnostic) String() string {
 func (*Diagnostic) ProtoMessage() {}
 
 func (x *Diagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_w17compiler_codegen_proto_msgTypes[108]
+	mi := &file_w17compiler_codegen_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9269,7 +9440,7 @@ func (x *Diagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Diagnostic.ProtoReflect.Descriptor instead.
 func (*Diagnostic) Descriptor() ([]byte, []int) {
-	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{108}
+	return file_w17compiler_codegen_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *Diagnostic) GetMessage() string {
@@ -9349,7 +9520,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\bUNSIGNED\x10\x01\x12\f\n" +
 	"\bVERIFIED\x10\x02\x12\v\n" +
 	"\aINVALID\x10\x03\x12\x1c\n" +
-	"\x18SIGNED_FOR_ANOTHER_MAJOR\x10\x04\"\xb0\x10\n" +
+	"\x18SIGNED_FOR_ANOTHER_MAJOR\x10\x04\"\xe1\x11\n" +
 	"\x0eLockEditIntent\x12Q\n" +
 	"\x0eadd_connection\x18\x01 \x01(\v2(.w17.storage.codegen.AddConnectionIntentH\x00R\raddConnection\x12g\n" +
 	"\x16set_default_connection\x18\x02 \x01(\v2/.w17.storage.codegen.SetDefaultConnectionIntentH\x00R\x14setDefaultConnection\x12^\n" +
@@ -9376,7 +9547,9 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x13set_business_bundle\x18\x15 \x01(\v2,.w17.storage.codegen.SetBusinessBundleIntentH\x00R\x11setBusinessBundle\x12O\n" +
 	"\x0eset_dir_layout\x18\x16 \x01(\v2'.w17.storage.codegen.SetDirLayoutIntentH\x00R\fsetDirLayout\x12X\n" +
 	"\x11add_deploy_target\x18\x17 \x01(\v2*.w17.storage.codegen.AddDeployTargetIntentH\x00R\x0faddDeployTarget\x12a\n" +
-	"\x14remove_deploy_target\x18\x18 \x01(\v2-.w17.storage.codegen.RemoveDeployTargetIntentH\x00R\x12removeDeployTargetB\b\n" +
+	"\x14remove_deploy_target\x18\x18 \x01(\v2-.w17.storage.codegen.RemoveDeployTargetIntentH\x00R\x12removeDeployTarget\x12[\n" +
+	"\x12remove_client_stub\x18\x19 \x01(\v2+.w17.storage.codegen.RemoveClientStubIntentH\x00R\x10removeClientStub\x12R\n" +
+	"\x0fset_client_stub\x18\x1a \x01(\v2(.w17.storage.codegen.SetClientStubIntentH\x00R\rsetClientStubB\b\n" +
 	"\x06intent\"f\n" +
 	"\x12AdoptProjectIntent\x12\x1d\n" +
 	"\n" +
@@ -9455,7 +9628,22 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\voutput_root\x18\x03 \x01(\tR\n" +
 	"outputRoot\x12\x12\n" +
 	"\x04wire\x18\x04 \x01(\tR\x04wire\x12!\n" +
-	"\frest_surface\x18\x05 \x01(\tR\vrestSurface\"h\n" +
+	"\frest_surface\x18\x05 \x01(\tR\vrestSurface\"9\n" +
+	"\x16RemoveClientStubIntent\x12\x1f\n" +
+	"\voutput_root\x18\x01 \x01(\tR\n" +
+	"outputRoot\"\xf0\x01\n" +
+	"\x13SetClientStubIntent\x12\x1f\n" +
+	"\voutput_root\x18\x01 \x01(\tR\n" +
+	"outputRoot\x12&\n" +
+	"\frest_surface\x18\x02 \x01(\tH\x00R\vrestSurface\x88\x01\x01\x12!\n" +
+	"\tframework\x18\x03 \x01(\tH\x01R\tframework\x88\x01\x01\x12\x1f\n" +
+	"\blanguage\x18\x04 \x01(\tH\x02R\blanguage\x88\x01\x01\x12\x17\n" +
+	"\x04wire\x18\x05 \x01(\tH\x03R\x04wire\x88\x01\x01B\x0f\n" +
+	"\r_rest_surfaceB\f\n" +
+	"\n" +
+	"_frameworkB\v\n" +
+	"\t_languageB\a\n" +
+	"\x05_wire\"h\n" +
 	"\x0fSetPbStubIntent\x12\x1a\n" +
 	"\blanguage\x18\x01 \x01(\tR\blanguage\x12\x1f\n" +
 	"\voutput_root\x18\x02 \x01(\tR\n" +
@@ -9534,13 +9722,14 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x12LockBusinessBundle\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1a\n" +
 	"\bregister\x18\x02 \x01(\tR\bregister\x12\x1b\n" +
-	"\tenv_count\x18\x03 \x01(\x05R\benvCount\"\x7f\n" +
+	"\tenv_count\x18\x03 \x01(\x05R\benvCount\"\xa2\x01\n" +
 	"\x0eLockClientStub\x12\x1c\n" +
 	"\tframework\x18\x01 \x01(\tR\tframework\x12\x1a\n" +
 	"\blanguage\x18\x02 \x01(\tR\blanguage\x12\x1f\n" +
 	"\voutput_root\x18\x03 \x01(\tR\n" +
 	"outputRoot\x12\x12\n" +
-	"\x04wire\x18\x04 \x01(\tR\x04wire\">\n" +
+	"\x04wire\x18\x04 \x01(\tR\x04wire\x12!\n" +
+	"\frest_surface\x18\x05 \x01(\tR\vrestSurface\">\n" +
 	"\x0eLockConnection\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\adefault\x18\x02 \x01(\bR\adefault\"b\n" +
@@ -9996,7 +10185,7 @@ func file_w17compiler_codegen_proto_rawDescGZIP() []byte {
 }
 
 var file_w17compiler_codegen_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_w17compiler_codegen_proto_msgTypes = make([]protoimpl.MessageInfo, 113)
+var file_w17compiler_codegen_proto_msgTypes = make([]protoimpl.MessageInfo, 115)
 var file_w17compiler_codegen_proto_goTypes = []any{
 	(Dialect)(0),                           // 0: w17.storage.codegen.Dialect
 	(Stage)(0),                             // 1: w17.storage.codegen.Stage
@@ -10034,89 +10223,91 @@ var file_w17compiler_codegen_proto_goTypes = []any{
 	(*AddDeployTargetIntent)(nil),          // 33: w17.storage.codegen.AddDeployTargetIntent
 	(*RemoveDeployTargetIntent)(nil),       // 34: w17.storage.codegen.RemoveDeployTargetIntent
 	(*AddClientStubIntent)(nil),            // 35: w17.storage.codegen.AddClientStubIntent
-	(*SetPbStubIntent)(nil),                // 36: w17.storage.codegen.SetPbStubIntent
-	(*SetDirLayoutIntent)(nil),             // 37: w17.storage.codegen.SetDirLayoutIntent
-	(*SetBusinessBundleIntent)(nil),        // 38: w17.storage.codegen.SetBusinessBundleIntent
-	(*BootstrapLockIntent)(nil),            // 39: w17.storage.codegen.BootstrapLockIntent
-	(*EditLockRequest)(nil),                // 40: w17.storage.codegen.EditLockRequest
-	(*EditLockResponse)(nil),               // 41: w17.storage.codegen.EditLockResponse
-	(*DescribeLockRequest)(nil),            // 42: w17.storage.codegen.DescribeLockRequest
-	(*LockView)(nil),                       // 43: w17.storage.codegen.LockView
-	(*LockReplica)(nil),                    // 44: w17.storage.codegen.LockReplica
-	(*LockGrpcClient)(nil),                 // 45: w17.storage.codegen.LockGrpcClient
-	(*LockComposedBinary)(nil),             // 46: w17.storage.codegen.LockComposedBinary
-	(*LockBusinessBundle)(nil),             // 47: w17.storage.codegen.LockBusinessBundle
-	(*LockClientStub)(nil),                 // 48: w17.storage.codegen.LockClientStub
-	(*LockConnection)(nil),                 // 49: w17.storage.codegen.LockConnection
-	(*LockSecrets)(nil),                    // 50: w17.storage.codegen.LockSecrets
-	(*ConnectionExtensions)(nil),           // 51: w17.storage.codegen.ConnectionExtensions
-	(*RenderProjectScaffoldRequest)(nil),   // 52: w17.storage.codegen.RenderProjectScaffoldRequest
-	(*MergePoRequest)(nil),                 // 53: w17.storage.codegen.MergePoRequest
-	(*MergePoResponse)(nil),                // 54: w17.storage.codegen.MergePoResponse
-	(*GeneratePluginPbRequest)(nil),        // 55: w17.storage.codegen.GeneratePluginPbRequest
-	(*DiscoverPluginSandboxesRequest)(nil), // 56: w17.storage.codegen.DiscoverPluginSandboxesRequest
-	(*PluginSandboxes)(nil),                // 57: w17.storage.codegen.PluginSandboxes
-	(*PluginSandbox)(nil),                  // 58: w17.storage.codegen.PluginSandbox
-	(*SandboxEnv)(nil),                     // 59: w17.storage.codegen.SandboxEnv
-	(*GenerateClientRequest)(nil),          // 60: w17.storage.codegen.GenerateClientRequest
-	(*VerifyRequest)(nil),                  // 61: w17.storage.codegen.VerifyRequest
-	(*VerifyResult)(nil),                   // 62: w17.storage.codegen.VerifyResult
-	(*VerifyLockRequest)(nil),              // 63: w17.storage.codegen.VerifyLockRequest
-	(*GenerateE2ERequest)(nil),             // 64: w17.storage.codegen.GenerateE2eRequest
-	(*GenerateProjectMapRequest)(nil),      // 65: w17.storage.codegen.GenerateProjectMapRequest
-	(*GenerateBusinessRequest)(nil),        // 66: w17.storage.codegen.GenerateBusinessRequest
-	(*BusinessBundle)(nil),                 // 67: w17.storage.codegen.BusinessBundle
-	(*BusinessEnv)(nil),                    // 68: w17.storage.codegen.BusinessEnv
-	(*GenerateAclRequest)(nil),             // 69: w17.storage.codegen.GenerateAclRequest
-	(*GenerateMcpRequest)(nil),             // 70: w17.storage.codegen.GenerateMcpRequest
-	(*GenerateGrpcClientsRequest)(nil),     // 71: w17.storage.codegen.GenerateGrpcClientsRequest
-	(*GenerateEventbusRequest)(nil),        // 72: w17.storage.codegen.GenerateEventbusRequest
-	(*GenerateProjectRequest)(nil),         // 73: w17.storage.codegen.GenerateProjectRequest
-	(*GeneratedOp)(nil),                    // 74: w17.storage.codegen.GeneratedOp
-	(*SdkRequirement)(nil),                 // 75: w17.storage.codegen.SdkRequirement
-	(*GenerateCiRequest)(nil),              // 76: w17.storage.codegen.GenerateCiRequest
-	(*GenerateCiResponse)(nil),             // 77: w17.storage.codegen.GenerateCiResponse
-	(*CompileIRRequest)(nil),               // 78: w17.storage.codegen.CompileIRRequest
-	(*CompileIRResponse)(nil),              // 79: w17.storage.codegen.CompileIRResponse
-	(*ClassifyIRRequest)(nil),              // 80: w17.storage.codegen.ClassifyIRRequest
-	(*ClassifyIRResponse)(nil),             // 81: w17.storage.codegen.ClassifyIRResponse
-	(*CompatFinding)(nil),                  // 82: w17.storage.codegen.CompatFinding
-	(*PlanIRRequest)(nil),                  // 83: w17.storage.codegen.PlanIRRequest
-	(*DumpFixturesRequest)(nil),            // 84: w17.storage.codegen.DumpFixturesRequest
-	(*DumpFixtureQuery)(nil),               // 85: w17.storage.codegen.DumpFixtureQuery
-	(*DumpFixturesResponse)(nil),           // 86: w17.storage.codegen.DumpFixturesResponse
-	(*ObservedStore)(nil),                  // 87: w17.storage.codegen.ObservedStore
-	(*ObservedIndex)(nil),                  // 88: w17.storage.codegen.ObservedIndex
-	(*ObservedForeignKey)(nil),             // 89: w17.storage.codegen.ObservedForeignKey
-	(*ObservedTable)(nil),                  // 90: w17.storage.codegen.ObservedTable
-	(*CheckMemberSet)(nil),                 // 91: w17.storage.codegen.CheckMemberSet
-	(*ObservedColumn)(nil),                 // 92: w17.storage.codegen.ObservedColumn
-	(*PlanBaseline)(nil),                   // 93: w17.storage.codegen.PlanBaseline
-	(*PlanIRResponse)(nil),                 // 94: w17.storage.codegen.PlanIRResponse
-	(*LossyChange)(nil),                    // 95: w17.storage.codegen.LossyChange
-	(*GenerateRequest)(nil),                // 96: w17.storage.codegen.GenerateRequest
-	(*FormatOverrideEntry)(nil),            // 97: w17.storage.codegen.FormatOverrideEntry
-	(*ReplaceDirectives)(nil),              // 98: w17.storage.codegen.ReplaceDirectives
-	(*DepVersions)(nil),                    // 99: w17.storage.codegen.DepVersions
-	(*GatewayTarget)(nil),                  // 100: w17.storage.codegen.GatewayTarget
-	(*AdminTarget)(nil),                    // 101: w17.storage.codegen.AdminTarget
-	(*StubTarget)(nil),                     // 102: w17.storage.codegen.StubTarget
-	(*ProtoFile)(nil),                      // 103: w17.storage.codegen.ProtoFile
-	(*GenerateResponse)(nil),               // 104: w17.storage.codegen.GenerateResponse
-	(*ListPluginCatalogRequest)(nil),       // 105: w17.storage.codegen.ListPluginCatalogRequest
-	(*PluginCatalog)(nil),                  // 106: w17.storage.codegen.PluginCatalog
-	(*CataloguePlugin)(nil),                // 107: w17.storage.codegen.CataloguePlugin
-	(*FetchPluginRequest)(nil),             // 108: w17.storage.codegen.FetchPluginRequest
-	(*GeneratedFile)(nil),                  // 109: w17.storage.codegen.GeneratedFile
-	(*CodegenError)(nil),                   // 110: w17.storage.codegen.CodegenError
-	(*Diagnostic)(nil),                     // 111: w17.storage.codegen.Diagnostic
-	nil,                                    // 112: w17.storage.codegen.AdmissionStatusResponse.DecisionsEntry
-	nil,                                    // 113: w17.storage.codegen.ObservedTable.CheckMembersEntry
-	nil,                                    // 114: w17.storage.codegen.ObservedTable.CheckDefsEntry
-	nil,                                    // 115: w17.storage.codegen.GenerateRequest.ReplicasEntry
+	(*RemoveClientStubIntent)(nil),         // 36: w17.storage.codegen.RemoveClientStubIntent
+	(*SetClientStubIntent)(nil),            // 37: w17.storage.codegen.SetClientStubIntent
+	(*SetPbStubIntent)(nil),                // 38: w17.storage.codegen.SetPbStubIntent
+	(*SetDirLayoutIntent)(nil),             // 39: w17.storage.codegen.SetDirLayoutIntent
+	(*SetBusinessBundleIntent)(nil),        // 40: w17.storage.codegen.SetBusinessBundleIntent
+	(*BootstrapLockIntent)(nil),            // 41: w17.storage.codegen.BootstrapLockIntent
+	(*EditLockRequest)(nil),                // 42: w17.storage.codegen.EditLockRequest
+	(*EditLockResponse)(nil),               // 43: w17.storage.codegen.EditLockResponse
+	(*DescribeLockRequest)(nil),            // 44: w17.storage.codegen.DescribeLockRequest
+	(*LockView)(nil),                       // 45: w17.storage.codegen.LockView
+	(*LockReplica)(nil),                    // 46: w17.storage.codegen.LockReplica
+	(*LockGrpcClient)(nil),                 // 47: w17.storage.codegen.LockGrpcClient
+	(*LockComposedBinary)(nil),             // 48: w17.storage.codegen.LockComposedBinary
+	(*LockBusinessBundle)(nil),             // 49: w17.storage.codegen.LockBusinessBundle
+	(*LockClientStub)(nil),                 // 50: w17.storage.codegen.LockClientStub
+	(*LockConnection)(nil),                 // 51: w17.storage.codegen.LockConnection
+	(*LockSecrets)(nil),                    // 52: w17.storage.codegen.LockSecrets
+	(*ConnectionExtensions)(nil),           // 53: w17.storage.codegen.ConnectionExtensions
+	(*RenderProjectScaffoldRequest)(nil),   // 54: w17.storage.codegen.RenderProjectScaffoldRequest
+	(*MergePoRequest)(nil),                 // 55: w17.storage.codegen.MergePoRequest
+	(*MergePoResponse)(nil),                // 56: w17.storage.codegen.MergePoResponse
+	(*GeneratePluginPbRequest)(nil),        // 57: w17.storage.codegen.GeneratePluginPbRequest
+	(*DiscoverPluginSandboxesRequest)(nil), // 58: w17.storage.codegen.DiscoverPluginSandboxesRequest
+	(*PluginSandboxes)(nil),                // 59: w17.storage.codegen.PluginSandboxes
+	(*PluginSandbox)(nil),                  // 60: w17.storage.codegen.PluginSandbox
+	(*SandboxEnv)(nil),                     // 61: w17.storage.codegen.SandboxEnv
+	(*GenerateClientRequest)(nil),          // 62: w17.storage.codegen.GenerateClientRequest
+	(*VerifyRequest)(nil),                  // 63: w17.storage.codegen.VerifyRequest
+	(*VerifyResult)(nil),                   // 64: w17.storage.codegen.VerifyResult
+	(*VerifyLockRequest)(nil),              // 65: w17.storage.codegen.VerifyLockRequest
+	(*GenerateE2ERequest)(nil),             // 66: w17.storage.codegen.GenerateE2eRequest
+	(*GenerateProjectMapRequest)(nil),      // 67: w17.storage.codegen.GenerateProjectMapRequest
+	(*GenerateBusinessRequest)(nil),        // 68: w17.storage.codegen.GenerateBusinessRequest
+	(*BusinessBundle)(nil),                 // 69: w17.storage.codegen.BusinessBundle
+	(*BusinessEnv)(nil),                    // 70: w17.storage.codegen.BusinessEnv
+	(*GenerateAclRequest)(nil),             // 71: w17.storage.codegen.GenerateAclRequest
+	(*GenerateMcpRequest)(nil),             // 72: w17.storage.codegen.GenerateMcpRequest
+	(*GenerateGrpcClientsRequest)(nil),     // 73: w17.storage.codegen.GenerateGrpcClientsRequest
+	(*GenerateEventbusRequest)(nil),        // 74: w17.storage.codegen.GenerateEventbusRequest
+	(*GenerateProjectRequest)(nil),         // 75: w17.storage.codegen.GenerateProjectRequest
+	(*GeneratedOp)(nil),                    // 76: w17.storage.codegen.GeneratedOp
+	(*SdkRequirement)(nil),                 // 77: w17.storage.codegen.SdkRequirement
+	(*GenerateCiRequest)(nil),              // 78: w17.storage.codegen.GenerateCiRequest
+	(*GenerateCiResponse)(nil),             // 79: w17.storage.codegen.GenerateCiResponse
+	(*CompileIRRequest)(nil),               // 80: w17.storage.codegen.CompileIRRequest
+	(*CompileIRResponse)(nil),              // 81: w17.storage.codegen.CompileIRResponse
+	(*ClassifyIRRequest)(nil),              // 82: w17.storage.codegen.ClassifyIRRequest
+	(*ClassifyIRResponse)(nil),             // 83: w17.storage.codegen.ClassifyIRResponse
+	(*CompatFinding)(nil),                  // 84: w17.storage.codegen.CompatFinding
+	(*PlanIRRequest)(nil),                  // 85: w17.storage.codegen.PlanIRRequest
+	(*DumpFixturesRequest)(nil),            // 86: w17.storage.codegen.DumpFixturesRequest
+	(*DumpFixtureQuery)(nil),               // 87: w17.storage.codegen.DumpFixtureQuery
+	(*DumpFixturesResponse)(nil),           // 88: w17.storage.codegen.DumpFixturesResponse
+	(*ObservedStore)(nil),                  // 89: w17.storage.codegen.ObservedStore
+	(*ObservedIndex)(nil),                  // 90: w17.storage.codegen.ObservedIndex
+	(*ObservedForeignKey)(nil),             // 91: w17.storage.codegen.ObservedForeignKey
+	(*ObservedTable)(nil),                  // 92: w17.storage.codegen.ObservedTable
+	(*CheckMemberSet)(nil),                 // 93: w17.storage.codegen.CheckMemberSet
+	(*ObservedColumn)(nil),                 // 94: w17.storage.codegen.ObservedColumn
+	(*PlanBaseline)(nil),                   // 95: w17.storage.codegen.PlanBaseline
+	(*PlanIRResponse)(nil),                 // 96: w17.storage.codegen.PlanIRResponse
+	(*LossyChange)(nil),                    // 97: w17.storage.codegen.LossyChange
+	(*GenerateRequest)(nil),                // 98: w17.storage.codegen.GenerateRequest
+	(*FormatOverrideEntry)(nil),            // 99: w17.storage.codegen.FormatOverrideEntry
+	(*ReplaceDirectives)(nil),              // 100: w17.storage.codegen.ReplaceDirectives
+	(*DepVersions)(nil),                    // 101: w17.storage.codegen.DepVersions
+	(*GatewayTarget)(nil),                  // 102: w17.storage.codegen.GatewayTarget
+	(*AdminTarget)(nil),                    // 103: w17.storage.codegen.AdminTarget
+	(*StubTarget)(nil),                     // 104: w17.storage.codegen.StubTarget
+	(*ProtoFile)(nil),                      // 105: w17.storage.codegen.ProtoFile
+	(*GenerateResponse)(nil),               // 106: w17.storage.codegen.GenerateResponse
+	(*ListPluginCatalogRequest)(nil),       // 107: w17.storage.codegen.ListPluginCatalogRequest
+	(*PluginCatalog)(nil),                  // 108: w17.storage.codegen.PluginCatalog
+	(*CataloguePlugin)(nil),                // 109: w17.storage.codegen.CataloguePlugin
+	(*FetchPluginRequest)(nil),             // 110: w17.storage.codegen.FetchPluginRequest
+	(*GeneratedFile)(nil),                  // 111: w17.storage.codegen.GeneratedFile
+	(*CodegenError)(nil),                   // 112: w17.storage.codegen.CodegenError
+	(*Diagnostic)(nil),                     // 113: w17.storage.codegen.Diagnostic
+	nil,                                    // 114: w17.storage.codegen.AdmissionStatusResponse.DecisionsEntry
+	nil,                                    // 115: w17.storage.codegen.ObservedTable.CheckMembersEntry
+	nil,                                    // 116: w17.storage.codegen.ObservedTable.CheckDefsEntry
+	nil,                                    // 117: w17.storage.codegen.GenerateRequest.ReplicasEntry
 }
 var file_w17compiler_codegen_proto_depIdxs = []int32{
-	112, // 0: w17.storage.codegen.AdmissionStatusResponse.decisions:type_name -> w17.storage.codegen.AdmissionStatusResponse.DecisionsEntry
+	114, // 0: w17.storage.codegen.AdmissionStatusResponse.decisions:type_name -> w17.storage.codegen.AdmissionStatusResponse.DecisionsEntry
 	7,   // 1: w17.storage.codegen.InspectPluginManifestRequest.installed:type_name -> w17.storage.codegen.InstalledPlugin
 	11,  // 2: w17.storage.codegen.InspectPluginManifestResponse.signature:type_name -> w17.storage.codegen.SignatureVerdict
 	2,   // 3: w17.storage.codegen.SignatureVerdict.state:type_name -> w17.storage.codegen.SignatureVerdict.State
@@ -10133,151 +10324,153 @@ var file_w17compiler_codegen_proto_depIdxs = []int32{
 	31,  // 14: w17.storage.codegen.LockEditIntent.add_ci_config:type_name -> w17.storage.codegen.AddCiConfigIntent
 	32,  // 15: w17.storage.codegen.LockEditIntent.remove_ci_config:type_name -> w17.storage.codegen.RemoveCiConfigIntent
 	35,  // 16: w17.storage.codegen.LockEditIntent.add_client_stub:type_name -> w17.storage.codegen.AddClientStubIntent
-	39,  // 17: w17.storage.codegen.LockEditIntent.bootstrap_lock:type_name -> w17.storage.codegen.BootstrapLockIntent
+	41,  // 17: w17.storage.codegen.LockEditIntent.bootstrap_lock:type_name -> w17.storage.codegen.BootstrapLockIntent
 	19,  // 18: w17.storage.codegen.LockEditIntent.pin_targets:type_name -> w17.storage.codegen.PinTargetsIntent
 	14,  // 19: w17.storage.codegen.LockEditIntent.install_plugin:type_name -> w17.storage.codegen.InstallPluginIntent
 	17,  // 20: w17.storage.codegen.LockEditIntent.set_plugin_versions:type_name -> w17.storage.codegen.SetPluginVersionsIntent
 	13,  // 21: w17.storage.codegen.LockEditIntent.adopt_project:type_name -> w17.storage.codegen.AdoptProjectIntent
 	16,  // 22: w17.storage.codegen.LockEditIntent.set_sdk_version:type_name -> w17.storage.codegen.SetSdkVersionIntent
-	36,  // 23: w17.storage.codegen.LockEditIntent.set_pb_stub:type_name -> w17.storage.codegen.SetPbStubIntent
-	38,  // 24: w17.storage.codegen.LockEditIntent.set_business_bundle:type_name -> w17.storage.codegen.SetBusinessBundleIntent
-	37,  // 25: w17.storage.codegen.LockEditIntent.set_dir_layout:type_name -> w17.storage.codegen.SetDirLayoutIntent
+	38,  // 23: w17.storage.codegen.LockEditIntent.set_pb_stub:type_name -> w17.storage.codegen.SetPbStubIntent
+	40,  // 24: w17.storage.codegen.LockEditIntent.set_business_bundle:type_name -> w17.storage.codegen.SetBusinessBundleIntent
+	39,  // 25: w17.storage.codegen.LockEditIntent.set_dir_layout:type_name -> w17.storage.codegen.SetDirLayoutIntent
 	33,  // 26: w17.storage.codegen.LockEditIntent.add_deploy_target:type_name -> w17.storage.codegen.AddDeployTargetIntent
 	34,  // 27: w17.storage.codegen.LockEditIntent.remove_deploy_target:type_name -> w17.storage.codegen.RemoveDeployTargetIntent
-	15,  // 28: w17.storage.codegen.InstallPluginIntent.git:type_name -> w17.storage.codegen.PluginGitPin
-	18,  // 29: w17.storage.codegen.SetPluginVersionsIntent.plugins:type_name -> w17.storage.codegen.PluginVersion
-	15,  // 30: w17.storage.codegen.PluginVersion.git:type_name -> w17.storage.codegen.PluginGitPin
-	20,  // 31: w17.storage.codegen.PinTargetsIntent.targets:type_name -> w17.storage.codegen.PinTarget
-	49,  // 32: w17.storage.codegen.BootstrapLockIntent.connections:type_name -> w17.storage.codegen.LockConnection
-	12,  // 33: w17.storage.codegen.EditLockRequest.intent:type_name -> w17.storage.codegen.LockEditIntent
-	49,  // 34: w17.storage.codegen.LockView.connections:type_name -> w17.storage.codegen.LockConnection
-	50,  // 35: w17.storage.codegen.LockView.secrets:type_name -> w17.storage.codegen.LockSecrets
-	44,  // 36: w17.storage.codegen.LockView.replicas:type_name -> w17.storage.codegen.LockReplica
-	45,  // 37: w17.storage.codegen.LockView.grpc_clients:type_name -> w17.storage.codegen.LockGrpcClient
-	46,  // 38: w17.storage.codegen.LockView.binaries:type_name -> w17.storage.codegen.LockComposedBinary
-	47,  // 39: w17.storage.codegen.LockView.business_bundles:type_name -> w17.storage.codegen.LockBusinessBundle
-	48,  // 40: w17.storage.codegen.LockView.clients:type_name -> w17.storage.codegen.LockClientStub
-	99,  // 41: w17.storage.codegen.LockView.compiler_pins:type_name -> w17.storage.codegen.DepVersions
-	103, // 42: w17.storage.codegen.RenderProjectScaffoldRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	51,  // 43: w17.storage.codegen.RenderProjectScaffoldRequest.connection_extensions:type_name -> w17.storage.codegen.ConnectionExtensions
-	103, // 44: w17.storage.codegen.GeneratePluginPbRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 45: w17.storage.codegen.DiscoverPluginSandboxesRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	58,  // 46: w17.storage.codegen.PluginSandboxes.sandboxes:type_name -> w17.storage.codegen.PluginSandbox
-	59,  // 47: w17.storage.codegen.PluginSandbox.env:type_name -> w17.storage.codegen.SandboxEnv
-	103, // 48: w17.storage.codegen.GenerateClientRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	109, // 49: w17.storage.codegen.GenerateClientRequest.po_files:type_name -> w17.storage.codegen.GeneratedFile
-	103, // 50: w17.storage.codegen.VerifyRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 51: w17.storage.codegen.GenerateE2eRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 52: w17.storage.codegen.GenerateE2eRequest.e2e_inputs:type_name -> w17.storage.codegen.ProtoFile
-	103, // 53: w17.storage.codegen.GenerateProjectMapRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 54: w17.storage.codegen.GenerateProjectMapRequest.gen_files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 55: w17.storage.codegen.GenerateBusinessRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	67,  // 56: w17.storage.codegen.GenerateBusinessRequest.bundles:type_name -> w17.storage.codegen.BusinessBundle
-	68,  // 57: w17.storage.codegen.BusinessBundle.env:type_name -> w17.storage.codegen.BusinessEnv
-	103, // 58: w17.storage.codegen.GenerateAclRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 59: w17.storage.codegen.GenerateMcpRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 60: w17.storage.codegen.GenerateGrpcClientsRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 61: w17.storage.codegen.GenerateEventbusRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	103, // 62: w17.storage.codegen.GenerateProjectRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	99,  // 63: w17.storage.codegen.GenerateProjectRequest.dep_versions:type_name -> w17.storage.codegen.DepVersions
-	103, // 64: w17.storage.codegen.GenerateProjectRequest.gen_files:type_name -> w17.storage.codegen.ProtoFile
-	109, // 65: w17.storage.codegen.GenerateProjectRequest.existing_po:type_name -> w17.storage.codegen.GeneratedFile
-	103, // 66: w17.storage.codegen.GenerateProjectRequest.e2e_inputs:type_name -> w17.storage.codegen.ProtoFile
-	109, // 67: w17.storage.codegen.GeneratedOp.write:type_name -> w17.storage.codegen.GeneratedFile
-	75,  // 68: w17.storage.codegen.GeneratedOp.sdk_requirement:type_name -> w17.storage.codegen.SdkRequirement
-	109, // 69: w17.storage.codegen.GenerateCiResponse.files:type_name -> w17.storage.codegen.GeneratedFile
-	103, // 70: w17.storage.codegen.CompileIRRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	102, // 71: w17.storage.codegen.CompileIRRequest.stub_targets:type_name -> w17.storage.codegen.StubTarget
-	82,  // 72: w17.storage.codegen.ClassifyIRResponse.findings:type_name -> w17.storage.codegen.CompatFinding
-	93,  // 73: w17.storage.codegen.PlanIRRequest.baselines:type_name -> w17.storage.codegen.PlanBaseline
-	87,  // 74: w17.storage.codegen.PlanIRRequest.observed:type_name -> w17.storage.codegen.ObservedStore
-	85,  // 75: w17.storage.codegen.DumpFixturesResponse.queries:type_name -> w17.storage.codegen.DumpFixtureQuery
-	90,  // 76: w17.storage.codegen.ObservedStore.tables:type_name -> w17.storage.codegen.ObservedTable
-	92,  // 77: w17.storage.codegen.ObservedTable.columns:type_name -> w17.storage.codegen.ObservedColumn
-	88,  // 78: w17.storage.codegen.ObservedTable.indexes:type_name -> w17.storage.codegen.ObservedIndex
-	89,  // 79: w17.storage.codegen.ObservedTable.foreign_keys:type_name -> w17.storage.codegen.ObservedForeignKey
-	113, // 80: w17.storage.codegen.ObservedTable.check_members:type_name -> w17.storage.codegen.ObservedTable.CheckMembersEntry
-	114, // 81: w17.storage.codegen.ObservedTable.check_defs:type_name -> w17.storage.codegen.ObservedTable.CheckDefsEntry
-	95,  // 82: w17.storage.codegen.PlanIRResponse.lossy:type_name -> w17.storage.codegen.LossyChange
-	103, // 83: w17.storage.codegen.GenerateRequest.files:type_name -> w17.storage.codegen.ProtoFile
-	102, // 84: w17.storage.codegen.GenerateRequest.stub_targets:type_name -> w17.storage.codegen.StubTarget
-	100, // 85: w17.storage.codegen.GenerateRequest.gateway_targets:type_name -> w17.storage.codegen.GatewayTarget
-	101, // 86: w17.storage.codegen.GenerateRequest.admin_targets:type_name -> w17.storage.codegen.AdminTarget
-	99,  // 87: w17.storage.codegen.GenerateRequest.dep_versions:type_name -> w17.storage.codegen.DepVersions
-	98,  // 88: w17.storage.codegen.GenerateRequest.replace_directives:type_name -> w17.storage.codegen.ReplaceDirectives
-	115, // 89: w17.storage.codegen.GenerateRequest.replicas:type_name -> w17.storage.codegen.GenerateRequest.ReplicasEntry
-	97,  // 90: w17.storage.codegen.GenerateRequest.format_overrides:type_name -> w17.storage.codegen.FormatOverrideEntry
-	109, // 91: w17.storage.codegen.GenerateRequest.existing_po:type_name -> w17.storage.codegen.GeneratedFile
-	109, // 92: w17.storage.codegen.GenerateResponse.files:type_name -> w17.storage.codegen.GeneratedFile
-	107, // 93: w17.storage.codegen.PluginCatalog.plugins:type_name -> w17.storage.codegen.CataloguePlugin
-	1,   // 94: w17.storage.codegen.CodegenError.stage:type_name -> w17.storage.codegen.Stage
-	111, // 95: w17.storage.codegen.CodegenError.diagnostics:type_name -> w17.storage.codegen.Diagnostic
-	91,  // 96: w17.storage.codegen.ObservedTable.CheckMembersEntry.value:type_name -> w17.storage.codegen.CheckMemberSet
-	96,  // 97: w17.storage.codegen.CodegenService.Generate:input_type -> w17.storage.codegen.GenerateRequest
-	78,  // 98: w17.storage.codegen.CodegenService.CompileIR:input_type -> w17.storage.codegen.CompileIRRequest
-	76,  // 99: w17.storage.codegen.CodegenService.GenerateCi:input_type -> w17.storage.codegen.GenerateCiRequest
-	72,  // 100: w17.storage.codegen.CodegenService.GenerateEventbus:input_type -> w17.storage.codegen.GenerateEventbusRequest
-	71,  // 101: w17.storage.codegen.CodegenService.GenerateGrpcClients:input_type -> w17.storage.codegen.GenerateGrpcClientsRequest
-	70,  // 102: w17.storage.codegen.CodegenService.GenerateMcp:input_type -> w17.storage.codegen.GenerateMcpRequest
-	69,  // 103: w17.storage.codegen.CodegenService.GenerateAcl:input_type -> w17.storage.codegen.GenerateAclRequest
-	66,  // 104: w17.storage.codegen.CodegenService.GenerateBusiness:input_type -> w17.storage.codegen.GenerateBusinessRequest
-	65,  // 105: w17.storage.codegen.CodegenService.GenerateProjectMap:input_type -> w17.storage.codegen.GenerateProjectMapRequest
-	64,  // 106: w17.storage.codegen.CodegenService.GenerateE2e:input_type -> w17.storage.codegen.GenerateE2eRequest
-	73,  // 107: w17.storage.codegen.CodegenService.GenerateProject:input_type -> w17.storage.codegen.GenerateProjectRequest
-	61,  // 108: w17.storage.codegen.CodegenService.VerifyAcl:input_type -> w17.storage.codegen.VerifyRequest
-	61,  // 109: w17.storage.codegen.CodegenService.VerifyEventbus:input_type -> w17.storage.codegen.VerifyRequest
-	63,  // 110: w17.storage.codegen.CodegenService.VerifyLock:input_type -> w17.storage.codegen.VerifyLockRequest
-	80,  // 111: w17.storage.codegen.CodegenService.Classify:input_type -> w17.storage.codegen.ClassifyIRRequest
-	83,  // 112: w17.storage.codegen.CodegenService.Plan:input_type -> w17.storage.codegen.PlanIRRequest
-	84,  // 113: w17.storage.codegen.CodegenService.DumpFixtures:input_type -> w17.storage.codegen.DumpFixturesRequest
-	60,  // 114: w17.storage.codegen.CodegenService.GenerateClient:input_type -> w17.storage.codegen.GenerateClientRequest
-	56,  // 115: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:input_type -> w17.storage.codegen.DiscoverPluginSandboxesRequest
-	55,  // 116: w17.storage.codegen.CodegenService.GeneratePluginPb:input_type -> w17.storage.codegen.GeneratePluginPbRequest
-	53,  // 117: w17.storage.codegen.CodegenService.MergePo:input_type -> w17.storage.codegen.MergePoRequest
-	52,  // 118: w17.storage.codegen.CodegenService.RenderProjectScaffold:input_type -> w17.storage.codegen.RenderProjectScaffoldRequest
-	40,  // 119: w17.storage.codegen.CodegenService.EditLock:input_type -> w17.storage.codegen.EditLockRequest
-	42,  // 120: w17.storage.codegen.CodegenService.DescribeLock:input_type -> w17.storage.codegen.DescribeLockRequest
-	6,   // 121: w17.storage.codegen.CodegenService.InspectPluginManifest:input_type -> w17.storage.codegen.InspectPluginManifestRequest
-	9,   // 122: w17.storage.codegen.CodegenService.SignPluginRelease:input_type -> w17.storage.codegen.SignPluginReleaseRequest
-	105, // 123: w17.storage.codegen.CodegenService.ListPluginCatalog:input_type -> w17.storage.codegen.ListPluginCatalogRequest
-	108, // 124: w17.storage.codegen.CodegenService.FetchPlugin:input_type -> w17.storage.codegen.FetchPluginRequest
-	3,   // 125: w17.storage.codegen.CodegenService.Guide:input_type -> w17.storage.codegen.GuideRequest
-	4,   // 126: w17.storage.codegen.CodegenService.AdmissionStatus:input_type -> w17.storage.codegen.AdmissionStatusRequest
-	104, // 127: w17.storage.codegen.CodegenService.Generate:output_type -> w17.storage.codegen.GenerateResponse
-	79,  // 128: w17.storage.codegen.CodegenService.CompileIR:output_type -> w17.storage.codegen.CompileIRResponse
-	77,  // 129: w17.storage.codegen.CodegenService.GenerateCi:output_type -> w17.storage.codegen.GenerateCiResponse
-	109, // 130: w17.storage.codegen.CodegenService.GenerateEventbus:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 131: w17.storage.codegen.CodegenService.GenerateGrpcClients:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 132: w17.storage.codegen.CodegenService.GenerateMcp:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 133: w17.storage.codegen.CodegenService.GenerateAcl:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 134: w17.storage.codegen.CodegenService.GenerateBusiness:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 135: w17.storage.codegen.CodegenService.GenerateProjectMap:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 136: w17.storage.codegen.CodegenService.GenerateE2e:output_type -> w17.storage.codegen.GeneratedFile
-	74,  // 137: w17.storage.codegen.CodegenService.GenerateProject:output_type -> w17.storage.codegen.GeneratedOp
-	62,  // 138: w17.storage.codegen.CodegenService.VerifyAcl:output_type -> w17.storage.codegen.VerifyResult
-	62,  // 139: w17.storage.codegen.CodegenService.VerifyEventbus:output_type -> w17.storage.codegen.VerifyResult
-	62,  // 140: w17.storage.codegen.CodegenService.VerifyLock:output_type -> w17.storage.codegen.VerifyResult
-	81,  // 141: w17.storage.codegen.CodegenService.Classify:output_type -> w17.storage.codegen.ClassifyIRResponse
-	94,  // 142: w17.storage.codegen.CodegenService.Plan:output_type -> w17.storage.codegen.PlanIRResponse
-	86,  // 143: w17.storage.codegen.CodegenService.DumpFixtures:output_type -> w17.storage.codegen.DumpFixturesResponse
-	109, // 144: w17.storage.codegen.CodegenService.GenerateClient:output_type -> w17.storage.codegen.GeneratedFile
-	57,  // 145: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:output_type -> w17.storage.codegen.PluginSandboxes
-	109, // 146: w17.storage.codegen.CodegenService.GeneratePluginPb:output_type -> w17.storage.codegen.GeneratedFile
-	54,  // 147: w17.storage.codegen.CodegenService.MergePo:output_type -> w17.storage.codegen.MergePoResponse
-	109, // 148: w17.storage.codegen.CodegenService.RenderProjectScaffold:output_type -> w17.storage.codegen.GeneratedFile
-	41,  // 149: w17.storage.codegen.CodegenService.EditLock:output_type -> w17.storage.codegen.EditLockResponse
-	43,  // 150: w17.storage.codegen.CodegenService.DescribeLock:output_type -> w17.storage.codegen.LockView
-	8,   // 151: w17.storage.codegen.CodegenService.InspectPluginManifest:output_type -> w17.storage.codegen.InspectPluginManifestResponse
-	10,  // 152: w17.storage.codegen.CodegenService.SignPluginRelease:output_type -> w17.storage.codegen.SignPluginReleaseResponse
-	106, // 153: w17.storage.codegen.CodegenService.ListPluginCatalog:output_type -> w17.storage.codegen.PluginCatalog
-	109, // 154: w17.storage.codegen.CodegenService.FetchPlugin:output_type -> w17.storage.codegen.GeneratedFile
-	109, // 155: w17.storage.codegen.CodegenService.Guide:output_type -> w17.storage.codegen.GeneratedFile
-	5,   // 156: w17.storage.codegen.CodegenService.AdmissionStatus:output_type -> w17.storage.codegen.AdmissionStatusResponse
-	127, // [127:157] is the sub-list for method output_type
-	97,  // [97:127] is the sub-list for method input_type
-	97,  // [97:97] is the sub-list for extension type_name
-	97,  // [97:97] is the sub-list for extension extendee
-	0,   // [0:97] is the sub-list for field type_name
+	36,  // 28: w17.storage.codegen.LockEditIntent.remove_client_stub:type_name -> w17.storage.codegen.RemoveClientStubIntent
+	37,  // 29: w17.storage.codegen.LockEditIntent.set_client_stub:type_name -> w17.storage.codegen.SetClientStubIntent
+	15,  // 30: w17.storage.codegen.InstallPluginIntent.git:type_name -> w17.storage.codegen.PluginGitPin
+	18,  // 31: w17.storage.codegen.SetPluginVersionsIntent.plugins:type_name -> w17.storage.codegen.PluginVersion
+	15,  // 32: w17.storage.codegen.PluginVersion.git:type_name -> w17.storage.codegen.PluginGitPin
+	20,  // 33: w17.storage.codegen.PinTargetsIntent.targets:type_name -> w17.storage.codegen.PinTarget
+	51,  // 34: w17.storage.codegen.BootstrapLockIntent.connections:type_name -> w17.storage.codegen.LockConnection
+	12,  // 35: w17.storage.codegen.EditLockRequest.intent:type_name -> w17.storage.codegen.LockEditIntent
+	51,  // 36: w17.storage.codegen.LockView.connections:type_name -> w17.storage.codegen.LockConnection
+	52,  // 37: w17.storage.codegen.LockView.secrets:type_name -> w17.storage.codegen.LockSecrets
+	46,  // 38: w17.storage.codegen.LockView.replicas:type_name -> w17.storage.codegen.LockReplica
+	47,  // 39: w17.storage.codegen.LockView.grpc_clients:type_name -> w17.storage.codegen.LockGrpcClient
+	48,  // 40: w17.storage.codegen.LockView.binaries:type_name -> w17.storage.codegen.LockComposedBinary
+	49,  // 41: w17.storage.codegen.LockView.business_bundles:type_name -> w17.storage.codegen.LockBusinessBundle
+	50,  // 42: w17.storage.codegen.LockView.clients:type_name -> w17.storage.codegen.LockClientStub
+	101, // 43: w17.storage.codegen.LockView.compiler_pins:type_name -> w17.storage.codegen.DepVersions
+	105, // 44: w17.storage.codegen.RenderProjectScaffoldRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	53,  // 45: w17.storage.codegen.RenderProjectScaffoldRequest.connection_extensions:type_name -> w17.storage.codegen.ConnectionExtensions
+	105, // 46: w17.storage.codegen.GeneratePluginPbRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 47: w17.storage.codegen.DiscoverPluginSandboxesRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	60,  // 48: w17.storage.codegen.PluginSandboxes.sandboxes:type_name -> w17.storage.codegen.PluginSandbox
+	61,  // 49: w17.storage.codegen.PluginSandbox.env:type_name -> w17.storage.codegen.SandboxEnv
+	105, // 50: w17.storage.codegen.GenerateClientRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	111, // 51: w17.storage.codegen.GenerateClientRequest.po_files:type_name -> w17.storage.codegen.GeneratedFile
+	105, // 52: w17.storage.codegen.VerifyRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 53: w17.storage.codegen.GenerateE2eRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 54: w17.storage.codegen.GenerateE2eRequest.e2e_inputs:type_name -> w17.storage.codegen.ProtoFile
+	105, // 55: w17.storage.codegen.GenerateProjectMapRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 56: w17.storage.codegen.GenerateProjectMapRequest.gen_files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 57: w17.storage.codegen.GenerateBusinessRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	69,  // 58: w17.storage.codegen.GenerateBusinessRequest.bundles:type_name -> w17.storage.codegen.BusinessBundle
+	70,  // 59: w17.storage.codegen.BusinessBundle.env:type_name -> w17.storage.codegen.BusinessEnv
+	105, // 60: w17.storage.codegen.GenerateAclRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 61: w17.storage.codegen.GenerateMcpRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 62: w17.storage.codegen.GenerateGrpcClientsRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 63: w17.storage.codegen.GenerateEventbusRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	105, // 64: w17.storage.codegen.GenerateProjectRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	101, // 65: w17.storage.codegen.GenerateProjectRequest.dep_versions:type_name -> w17.storage.codegen.DepVersions
+	105, // 66: w17.storage.codegen.GenerateProjectRequest.gen_files:type_name -> w17.storage.codegen.ProtoFile
+	111, // 67: w17.storage.codegen.GenerateProjectRequest.existing_po:type_name -> w17.storage.codegen.GeneratedFile
+	105, // 68: w17.storage.codegen.GenerateProjectRequest.e2e_inputs:type_name -> w17.storage.codegen.ProtoFile
+	111, // 69: w17.storage.codegen.GeneratedOp.write:type_name -> w17.storage.codegen.GeneratedFile
+	77,  // 70: w17.storage.codegen.GeneratedOp.sdk_requirement:type_name -> w17.storage.codegen.SdkRequirement
+	111, // 71: w17.storage.codegen.GenerateCiResponse.files:type_name -> w17.storage.codegen.GeneratedFile
+	105, // 72: w17.storage.codegen.CompileIRRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	104, // 73: w17.storage.codegen.CompileIRRequest.stub_targets:type_name -> w17.storage.codegen.StubTarget
+	84,  // 74: w17.storage.codegen.ClassifyIRResponse.findings:type_name -> w17.storage.codegen.CompatFinding
+	95,  // 75: w17.storage.codegen.PlanIRRequest.baselines:type_name -> w17.storage.codegen.PlanBaseline
+	89,  // 76: w17.storage.codegen.PlanIRRequest.observed:type_name -> w17.storage.codegen.ObservedStore
+	87,  // 77: w17.storage.codegen.DumpFixturesResponse.queries:type_name -> w17.storage.codegen.DumpFixtureQuery
+	92,  // 78: w17.storage.codegen.ObservedStore.tables:type_name -> w17.storage.codegen.ObservedTable
+	94,  // 79: w17.storage.codegen.ObservedTable.columns:type_name -> w17.storage.codegen.ObservedColumn
+	90,  // 80: w17.storage.codegen.ObservedTable.indexes:type_name -> w17.storage.codegen.ObservedIndex
+	91,  // 81: w17.storage.codegen.ObservedTable.foreign_keys:type_name -> w17.storage.codegen.ObservedForeignKey
+	115, // 82: w17.storage.codegen.ObservedTable.check_members:type_name -> w17.storage.codegen.ObservedTable.CheckMembersEntry
+	116, // 83: w17.storage.codegen.ObservedTable.check_defs:type_name -> w17.storage.codegen.ObservedTable.CheckDefsEntry
+	97,  // 84: w17.storage.codegen.PlanIRResponse.lossy:type_name -> w17.storage.codegen.LossyChange
+	105, // 85: w17.storage.codegen.GenerateRequest.files:type_name -> w17.storage.codegen.ProtoFile
+	104, // 86: w17.storage.codegen.GenerateRequest.stub_targets:type_name -> w17.storage.codegen.StubTarget
+	102, // 87: w17.storage.codegen.GenerateRequest.gateway_targets:type_name -> w17.storage.codegen.GatewayTarget
+	103, // 88: w17.storage.codegen.GenerateRequest.admin_targets:type_name -> w17.storage.codegen.AdminTarget
+	101, // 89: w17.storage.codegen.GenerateRequest.dep_versions:type_name -> w17.storage.codegen.DepVersions
+	100, // 90: w17.storage.codegen.GenerateRequest.replace_directives:type_name -> w17.storage.codegen.ReplaceDirectives
+	117, // 91: w17.storage.codegen.GenerateRequest.replicas:type_name -> w17.storage.codegen.GenerateRequest.ReplicasEntry
+	99,  // 92: w17.storage.codegen.GenerateRequest.format_overrides:type_name -> w17.storage.codegen.FormatOverrideEntry
+	111, // 93: w17.storage.codegen.GenerateRequest.existing_po:type_name -> w17.storage.codegen.GeneratedFile
+	111, // 94: w17.storage.codegen.GenerateResponse.files:type_name -> w17.storage.codegen.GeneratedFile
+	109, // 95: w17.storage.codegen.PluginCatalog.plugins:type_name -> w17.storage.codegen.CataloguePlugin
+	1,   // 96: w17.storage.codegen.CodegenError.stage:type_name -> w17.storage.codegen.Stage
+	113, // 97: w17.storage.codegen.CodegenError.diagnostics:type_name -> w17.storage.codegen.Diagnostic
+	93,  // 98: w17.storage.codegen.ObservedTable.CheckMembersEntry.value:type_name -> w17.storage.codegen.CheckMemberSet
+	98,  // 99: w17.storage.codegen.CodegenService.Generate:input_type -> w17.storage.codegen.GenerateRequest
+	80,  // 100: w17.storage.codegen.CodegenService.CompileIR:input_type -> w17.storage.codegen.CompileIRRequest
+	78,  // 101: w17.storage.codegen.CodegenService.GenerateCi:input_type -> w17.storage.codegen.GenerateCiRequest
+	74,  // 102: w17.storage.codegen.CodegenService.GenerateEventbus:input_type -> w17.storage.codegen.GenerateEventbusRequest
+	73,  // 103: w17.storage.codegen.CodegenService.GenerateGrpcClients:input_type -> w17.storage.codegen.GenerateGrpcClientsRequest
+	72,  // 104: w17.storage.codegen.CodegenService.GenerateMcp:input_type -> w17.storage.codegen.GenerateMcpRequest
+	71,  // 105: w17.storage.codegen.CodegenService.GenerateAcl:input_type -> w17.storage.codegen.GenerateAclRequest
+	68,  // 106: w17.storage.codegen.CodegenService.GenerateBusiness:input_type -> w17.storage.codegen.GenerateBusinessRequest
+	67,  // 107: w17.storage.codegen.CodegenService.GenerateProjectMap:input_type -> w17.storage.codegen.GenerateProjectMapRequest
+	66,  // 108: w17.storage.codegen.CodegenService.GenerateE2e:input_type -> w17.storage.codegen.GenerateE2eRequest
+	75,  // 109: w17.storage.codegen.CodegenService.GenerateProject:input_type -> w17.storage.codegen.GenerateProjectRequest
+	63,  // 110: w17.storage.codegen.CodegenService.VerifyAcl:input_type -> w17.storage.codegen.VerifyRequest
+	63,  // 111: w17.storage.codegen.CodegenService.VerifyEventbus:input_type -> w17.storage.codegen.VerifyRequest
+	65,  // 112: w17.storage.codegen.CodegenService.VerifyLock:input_type -> w17.storage.codegen.VerifyLockRequest
+	82,  // 113: w17.storage.codegen.CodegenService.Classify:input_type -> w17.storage.codegen.ClassifyIRRequest
+	85,  // 114: w17.storage.codegen.CodegenService.Plan:input_type -> w17.storage.codegen.PlanIRRequest
+	86,  // 115: w17.storage.codegen.CodegenService.DumpFixtures:input_type -> w17.storage.codegen.DumpFixturesRequest
+	62,  // 116: w17.storage.codegen.CodegenService.GenerateClient:input_type -> w17.storage.codegen.GenerateClientRequest
+	58,  // 117: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:input_type -> w17.storage.codegen.DiscoverPluginSandboxesRequest
+	57,  // 118: w17.storage.codegen.CodegenService.GeneratePluginPb:input_type -> w17.storage.codegen.GeneratePluginPbRequest
+	55,  // 119: w17.storage.codegen.CodegenService.MergePo:input_type -> w17.storage.codegen.MergePoRequest
+	54,  // 120: w17.storage.codegen.CodegenService.RenderProjectScaffold:input_type -> w17.storage.codegen.RenderProjectScaffoldRequest
+	42,  // 121: w17.storage.codegen.CodegenService.EditLock:input_type -> w17.storage.codegen.EditLockRequest
+	44,  // 122: w17.storage.codegen.CodegenService.DescribeLock:input_type -> w17.storage.codegen.DescribeLockRequest
+	6,   // 123: w17.storage.codegen.CodegenService.InspectPluginManifest:input_type -> w17.storage.codegen.InspectPluginManifestRequest
+	9,   // 124: w17.storage.codegen.CodegenService.SignPluginRelease:input_type -> w17.storage.codegen.SignPluginReleaseRequest
+	107, // 125: w17.storage.codegen.CodegenService.ListPluginCatalog:input_type -> w17.storage.codegen.ListPluginCatalogRequest
+	110, // 126: w17.storage.codegen.CodegenService.FetchPlugin:input_type -> w17.storage.codegen.FetchPluginRequest
+	3,   // 127: w17.storage.codegen.CodegenService.Guide:input_type -> w17.storage.codegen.GuideRequest
+	4,   // 128: w17.storage.codegen.CodegenService.AdmissionStatus:input_type -> w17.storage.codegen.AdmissionStatusRequest
+	106, // 129: w17.storage.codegen.CodegenService.Generate:output_type -> w17.storage.codegen.GenerateResponse
+	81,  // 130: w17.storage.codegen.CodegenService.CompileIR:output_type -> w17.storage.codegen.CompileIRResponse
+	79,  // 131: w17.storage.codegen.CodegenService.GenerateCi:output_type -> w17.storage.codegen.GenerateCiResponse
+	111, // 132: w17.storage.codegen.CodegenService.GenerateEventbus:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 133: w17.storage.codegen.CodegenService.GenerateGrpcClients:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 134: w17.storage.codegen.CodegenService.GenerateMcp:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 135: w17.storage.codegen.CodegenService.GenerateAcl:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 136: w17.storage.codegen.CodegenService.GenerateBusiness:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 137: w17.storage.codegen.CodegenService.GenerateProjectMap:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 138: w17.storage.codegen.CodegenService.GenerateE2e:output_type -> w17.storage.codegen.GeneratedFile
+	76,  // 139: w17.storage.codegen.CodegenService.GenerateProject:output_type -> w17.storage.codegen.GeneratedOp
+	64,  // 140: w17.storage.codegen.CodegenService.VerifyAcl:output_type -> w17.storage.codegen.VerifyResult
+	64,  // 141: w17.storage.codegen.CodegenService.VerifyEventbus:output_type -> w17.storage.codegen.VerifyResult
+	64,  // 142: w17.storage.codegen.CodegenService.VerifyLock:output_type -> w17.storage.codegen.VerifyResult
+	83,  // 143: w17.storage.codegen.CodegenService.Classify:output_type -> w17.storage.codegen.ClassifyIRResponse
+	96,  // 144: w17.storage.codegen.CodegenService.Plan:output_type -> w17.storage.codegen.PlanIRResponse
+	88,  // 145: w17.storage.codegen.CodegenService.DumpFixtures:output_type -> w17.storage.codegen.DumpFixturesResponse
+	111, // 146: w17.storage.codegen.CodegenService.GenerateClient:output_type -> w17.storage.codegen.GeneratedFile
+	59,  // 147: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:output_type -> w17.storage.codegen.PluginSandboxes
+	111, // 148: w17.storage.codegen.CodegenService.GeneratePluginPb:output_type -> w17.storage.codegen.GeneratedFile
+	56,  // 149: w17.storage.codegen.CodegenService.MergePo:output_type -> w17.storage.codegen.MergePoResponse
+	111, // 150: w17.storage.codegen.CodegenService.RenderProjectScaffold:output_type -> w17.storage.codegen.GeneratedFile
+	43,  // 151: w17.storage.codegen.CodegenService.EditLock:output_type -> w17.storage.codegen.EditLockResponse
+	45,  // 152: w17.storage.codegen.CodegenService.DescribeLock:output_type -> w17.storage.codegen.LockView
+	8,   // 153: w17.storage.codegen.CodegenService.InspectPluginManifest:output_type -> w17.storage.codegen.InspectPluginManifestResponse
+	10,  // 154: w17.storage.codegen.CodegenService.SignPluginRelease:output_type -> w17.storage.codegen.SignPluginReleaseResponse
+	108, // 155: w17.storage.codegen.CodegenService.ListPluginCatalog:output_type -> w17.storage.codegen.PluginCatalog
+	111, // 156: w17.storage.codegen.CodegenService.FetchPlugin:output_type -> w17.storage.codegen.GeneratedFile
+	111, // 157: w17.storage.codegen.CodegenService.Guide:output_type -> w17.storage.codegen.GeneratedFile
+	5,   // 158: w17.storage.codegen.CodegenService.AdmissionStatus:output_type -> w17.storage.codegen.AdmissionStatusResponse
+	129, // [129:159] is the sub-list for method output_type
+	99,  // [99:129] is the sub-list for method input_type
+	99,  // [99:99] is the sub-list for extension type_name
+	99,  // [99:99] is the sub-list for extension extendee
+	0,   // [0:99] is the sub-list for field type_name
 }
 
 func init() { file_w17compiler_codegen_proto_init() }
@@ -10310,8 +10503,11 @@ func file_w17compiler_codegen_proto_init() {
 		(*LockEditIntent_SetDirLayout)(nil),
 		(*LockEditIntent_AddDeployTarget)(nil),
 		(*LockEditIntent_RemoveDeployTarget)(nil),
+		(*LockEditIntent_RemoveClientStub)(nil),
+		(*LockEditIntent_SetClientStub)(nil),
 	}
-	file_w17compiler_codegen_proto_msgTypes[71].OneofWrappers = []any{
+	file_w17compiler_codegen_proto_msgTypes[34].OneofWrappers = []any{}
+	file_w17compiler_codegen_proto_msgTypes[73].OneofWrappers = []any{
 		(*GeneratedOp_Write)(nil),
 		(*GeneratedOp_Delete)(nil),
 		(*GeneratedOp_Warning)(nil),
@@ -10323,7 +10519,7 @@ func file_w17compiler_codegen_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17compiler_codegen_proto_rawDesc), len(file_w17compiler_codegen_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   113,
+			NumMessages:   115,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

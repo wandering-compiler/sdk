@@ -2095,18 +2095,98 @@ var file_w17_field_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.FieldOptions.
 var (
+	// Field declares the DB / data semantics of a proto field. Previously split
+	// across (w17.field) + (w17.validate) — merged 2026-04-20 (the split was
+	// artificial: max_len appeared on both, CHECK-vs-app enforcement is a target
+	// concern, not a source concern). See docs/archive/iteration-1.md D7 and
+	// docs/archive/iteration-1-m1-rev.md.
+	//
+	// Usage:
+	//
+	//	string slug = 2 [(w17.field) = { type: SLUG, max_len: 120, unique: true }];
+	//	double price = 5 [(w17.field) = { type: MONEY, gte: 0 }];
+	//	google.protobuf.Timestamp created_at = 10
+	//	  [(w17.field) = { type: DATETIME, default_auto: NOW }];
+	//
 	// optional w17.Field field = 51001;
 	E_Field = &file_w17_field_proto_extTypes[0]
 )
 
 // Extension fields to descriptorpb.MessageOptions.
 var (
+	// (w17.validate) — message-level cross-field validation rules
+	// (G3-V-01). Companion to (w17.field): single-field constraints
+	// (max_len, gte, regex, …) belong on the field; rules that span
+	// MULTIPLE fields (`required_if`, `at_most_one`, `less_than`,
+	// `not_contains`, …) belong here.
+	//
+	// Usage:
+	//
+	//	message ChangePasswordReq {
+	//	  string old_password = 1;
+	//	  string new_password = 2 [(w17.field) = { min_len: 8 }];
+	//	  string email        = 3 [(w17.field) = { type: EMAIL }];
+	//
+	//	  option (w17.validate) = {
+	//	    rules: [
+	//	      { kind: REQUIRED_IF,  field: "new_password", when_field: "old_password" },
+	//	      { kind: NOT_CONTAINS, field: "new_password", against_fields: ["email"] },
+	//	    ]
+	//	  };
+	//	}
+	//
+	// Field references use dotted notation for nested messages —
+	// `user.email` resolves through `req.GetUser().GetEmail()`. The
+	// validation walker resolves paths via proto reflection at
+	// codegen time + emits the matching Go accessor chain.
+	//
 	// optional w17.Validate validate = 51002;
 	E_Validate = &file_w17_field_proto_extTypes[1]
 )
 
 // Extension fields to descriptorpb.EnumValueOptions.
 var (
+	// (w17.value_display) — generic per-enum-value UI metadata. The
+	// annotation is consumed by every layer that surfaces an enum
+	// value to a human: admin generator's Select / MultiSelect
+	// renderer, TS client's value-of-enum helpers, future
+	// audit-log + diff renderers.
+	//
+	// All three fields are optional. Consumers walk them in order:
+	//
+	//   - `label` empty → auto-derive from the proto value name
+	//     (`TASK_CREATED` → `"Task Created"`). Authors that want
+	//     a specific text override here; values left blank stay
+	//     deterministic + reasonable without per-value effort.
+	//   - `description` empty → consumers OMIT the description
+	//     line entirely (tooltip / help text simply doesn't render).
+	//     No fallback humanization for descriptions — the
+	//     human-readable label IS the description fallback.
+	//   - `deprecated` false → no special treatment; true → UI
+	//     renders the value but flags it (strikethrough, dimmed,
+	//     tooltip). Writes that assign a deprecated value get a
+	//     soft warning; reads keep working so existing rows stay
+	//     valid until the operator migrates them off.
+	//
+	// Usage:
+	//
+	//	enum TaskStatus {
+	//	  TASK_STATUS_UNSPECIFIED = 0;
+	//	  TASK_TODO       = 1 [(w17.value_display) = { label: "To do" }];
+	//	  TASK_IN_PROGRESS = 2 [(w17.value_display) = { label: "In progress" }];
+	//	  TASK_DONE       = 3 [(w17.value_display) = { label: "Done",
+	//	                                                description: "Closed; archived after 30 days." }];
+	//	  TASK_DEFERRED   = 4 [(w17.value_display) = { label: "Deferred",
+	//	                                                deprecated: true }];
+	//	}
+	//
+	// The generator-emitted lock enums (w17.lock.acl.proto's
+	// AclPermission, forthcoming w17.lock.events.proto's wrapper
+	// oneof) carry the annotation when their source schema
+	// supplies a label hint (e.g. `(w17.acl).label` on an RPC
+	// method when that surface is added) or fall back to
+	// humanize-from-name.
+	//
 	// optional w17.EnumValueDisplay value_display = 51009;
 	E_ValueDisplay = &file_w17_field_proto_extTypes[2]
 )

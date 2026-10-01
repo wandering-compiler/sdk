@@ -862,6 +862,22 @@ var file_w17_module_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.FileOptions.
 var (
+	// (w17.module) — module/domain-level configuration option.
+	//
+	// CONVENTION (REV-008): it belongs in a `w17.proto` sentinel at
+	// domain or module root, not in regular type / service files.
+	// The convention is NOT enforced — the loader reads the option
+	// wherever it finds it, and a regular file's own option is the
+	// most-specific tier of the cascade above. Enforcement stays
+	// deferred because the fixtures + shipped examples still declare
+	// it file-level (docs/decisions/module-options-vocab-cleanup.md
+	// §Consequences); adding the reject is a sweep, not a one-liner.
+	//
+	// One sub-field DOES enforce its scope: `channels[]` /
+	// `event_defaults` are lifted only from the DOMAIN-ROOT
+	// `w17.proto`, and a sub-module sentinel declaring them is a
+	// parse-time diag (see those fields below).
+	//
 	// optional w17.Module module = 51020;
 	E_Module = &file_w17_module_proto_extTypes[0]
 )

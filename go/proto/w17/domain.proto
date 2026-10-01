@@ -32,10 +32,10 @@ import "google/protobuf/descriptor.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// (w17.domain) — domain-level configuration option. Lives in
-// `proto/domains/<domain>/w17.proto` only; loader rejects it
-// at module or file scope.
 extend google.protobuf.FileOptions {
+	// (w17.domain) — domain-level configuration option. Lives in
+	// `proto/domains/<domain>/w17.proto` only; loader rejects it
+	// at module or file scope.
   Domain domain = 51021;
 }
 

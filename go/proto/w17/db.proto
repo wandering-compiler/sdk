@@ -6,232 +6,232 @@ import "google/protobuf/descriptor.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/db;dbpb";
 
-// (w17.db.table) — message-level DB configuration.
-//
-// Usage:
-//   message Product {
-//     option (w17.db.table) = {
-//       name: "products",
-//       indexes: [
-//         { fields: ["category_id", "is_active"] }
-//       ]
-//     };
-//     ...
-//   }
 extend google.protobuf.MessageOptions {
+	// (w17.db.table) — message-level DB configuration.
+	//
+	// Usage:
+	//   message Product {
+	//     option (w17.db.table) = {
+	//       name: "products",
+	//       indexes: [
+	//         { fields: ["category_id", "is_active"] }
+	//       ]
+	//     };
+	//     ...
+	//   }
   Table table = 51000;
 }
 
-// (w17.db.column) — field-level STORAGE overrides. Data semantics
-// (type, constraints, uniqueness, defaults) live on (w17.field).
-// (w17.db.column) is reserved for choices that don't affect the data
-// contract: storage indexes, column-name overrides for legacy adoption,
-// future tablespace / storage parameters.
-//
-// Usage:
-//   string email = 3 [
-//     (w17.field)     = { type: EMAIL, unique: true },
-//     (w17.db.column) = { index: true, name: "email_address" }
-//   ];
 extend google.protobuf.FieldOptions {
+	// (w17.db.column) — field-level STORAGE overrides. Data semantics
+	// (type, constraints, uniqueness, defaults) live on (w17.field).
+	// (w17.db.column) is reserved for choices that don't affect the data
+	// contract: storage indexes, column-name overrides for legacy adoption,
+	// future tablespace / storage parameters.
+	//
+	// Usage:
+	//   string email = 3 [
+	//     (w17.field)     = { type: EMAIL, unique: true },
+	//     (w17.db.column) = { index: true, name: "email_address" }
+	//   ];
   Column column = 51002;
 }
 
-// (w17.db.method) — gRPC-method-level DB operations. Every gRPC
-// method that touches storage declares its DQL surface here: a
-// single ordered `ops` list of named operations, executed in source
-// order (each op's kind — read vs write — is derived from its DQL).
-// Multi-operation methods (read-then-write, read-then-read, write-
-// then-read-back, etc.) chain via `:<name>.<col>` aliases that
-// reference the result of an earlier-named operation in the method.
-//
-// Single-query usage:
-//
-//   rpc GetUser(GetUserReq) returns (GetUserResp) {
-//     option (w17.db.method) = {
-//       ops: {
-//         name: "main",
-//         dql: "SELECT u FROM User u WHERE u.id = :user_id"
-//       }
-//     };
-//   }
-//
-// Single-mutation usage (RETURNING populates the response):
-//
-//   rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
-//     option (w17.db.method) = {
-//       ops: {
-//         name: "insert",
-//         dql: "INSERT INTO User SET :user RETURNING id, created_at"
-//       }
-//     };
-//   }
-//
-// Multi-operation usage (load-then-save with cross-op alias):
-//
-//   rpc IncrementCounter(IncReq) returns (IncResp) {
-//     option (w17.db.method) = {
-//       ops: {
-//         name: "load",
-//         dql: "SELECT c.value FROM Counter c WHERE c.id = :id"
-//       },
-//       ops: {
-//         name: "save",
-//         dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id"
-//       }
-//     };
-//   }
-//
-// Locks (`(w17.db.lock)`) are a sibling method-level annotation
-// (declared below); `execution_plan` (below) overrides the default
-// source order — required for multi-connection methods.
 extend google.protobuf.MethodOptions {
+	// (w17.db.method) — gRPC-method-level DB operations. Every gRPC
+	// method that touches storage declares its DQL surface here: a
+	// single ordered `ops` list of named operations, executed in source
+	// order (each op's kind — read vs write — is derived from its DQL).
+	// Multi-operation methods (read-then-write, read-then-read, write-
+	// then-read-back, etc.) chain via `:<name>.<col>` aliases that
+	// reference the result of an earlier-named operation in the method.
+	//
+	// Single-query usage:
+	//
+	//   rpc GetUser(GetUserReq) returns (GetUserResp) {
+	//     option (w17.db.method) = {
+	//       ops: {
+	//         name: "main",
+	//         dql: "SELECT u FROM User u WHERE u.id = :user_id"
+	//       }
+	//     };
+	//   }
+	//
+	// Single-mutation usage (RETURNING populates the response):
+	//
+	//   rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
+	//     option (w17.db.method) = {
+	//       ops: {
+	//         name: "insert",
+	//         dql: "INSERT INTO User SET :user RETURNING id, created_at"
+	//       }
+	//     };
+	//   }
+	//
+	// Multi-operation usage (load-then-save with cross-op alias):
+	//
+	//   rpc IncrementCounter(IncReq) returns (IncResp) {
+	//     option (w17.db.method) = {
+	//       ops: {
+	//         name: "load",
+	//         dql: "SELECT c.value FROM Counter c WHERE c.id = :id"
+	//       },
+	//       ops: {
+	//         name: "save",
+	//         dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id"
+	//       }
+	//     };
+	//   }
+	//
+	// Locks (`(w17.db.lock)`) are a sibling method-level annotation
+	// (declared below); `execution_plan` (below) overrides the default
+	// source order — required for multi-connection methods.
   Method method = 51006;
 }
 
-// (w17.db.lock) — per-method row-lock declaration with explicit
-// resource targets. Each entry names a model and the lock kind
-// to apply; codegen emits the matching `FOR UPDATE / FOR SHARE /
-// NOWAIT / SKIP LOCKED` suffix only on the SELECTs that touch
-// the named resource. SELECTs in the same method that don't
-// reference any named resource emit no suffix — this is the
-// per-statement filtering rule (D-e2e-4, 2026-05-03), introduced
-// to stop the deadlock storm caused by the previous blanket-on-
-// every-SELECT semantic on multi-relation methods.
-//
-// Query-only methods MAY declare a lock (REV-046). The codegen
-// emits a tx-aware preamble that applies the suffix only when the
-// caller has adopted a transaction, and silently skips it on a
-// naked-pool call — a lock outside a transaction would be released
-// at statement end anyway. Shape constraints on that path
-// (single-row + list-shaped only; streaming / JOIN bodies /
-// multi-op / multi-conn refused) are enforced in the codegen.
-//
-// Usage:
-//
-//   rpc IncrementCounter(IncReq) returns (IncResp) {
-//     option (w17.db.method) = {
-//       ops:    { name: "load", dql: "SELECT c.value FROM Counter c WHERE c.id = :id" }
-//       ops: { name: "save", dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id" }
-//     };
-//     option (w17.db.lock) = {
-//       locks: [
-//         { resource: "Counter", kind: SELECT_FOR_UPDATE }
-//       ]
-//     };
-//   }
-//
-// KV / QUEUE connections ignore the lock (no transactional row
-// locking primitive). SQLite skips the suffix too — its locking
-// is implicit via the underlying journal mode (no row-level FOR
-// UPDATE in SQL syntax).
-//
-// Backward compat: the previous bare-enum form
-// (`option (w17.db.lock) = SELECT_FOR_UPDATE`) is gone — codegen
-// rejects any annotation whose `locks` list is empty with a
-// fix-up suggestion. Clean break, no consumers in the wild.
 extend google.protobuf.MethodOptions {
+	// (w17.db.lock) — per-method row-lock declaration with explicit
+	// resource targets. Each entry names a model and the lock kind
+	// to apply; codegen emits the matching `FOR UPDATE / FOR SHARE /
+	// NOWAIT / SKIP LOCKED` suffix only on the SELECTs that touch
+	// the named resource. SELECTs in the same method that don't
+	// reference any named resource emit no suffix — this is the
+	// per-statement filtering rule (D-e2e-4, 2026-05-03), introduced
+	// to stop the deadlock storm caused by the previous blanket-on-
+	// every-SELECT semantic on multi-relation methods.
+	//
+	// Query-only methods MAY declare a lock (REV-046). The codegen
+	// emits a tx-aware preamble that applies the suffix only when the
+	// caller has adopted a transaction, and silently skips it on a
+	// naked-pool call — a lock outside a transaction would be released
+	// at statement end anyway. Shape constraints on that path
+	// (single-row + list-shaped only; streaming / JOIN bodies /
+	// multi-op / multi-conn refused) are enforced in the codegen.
+	//
+	// Usage:
+	//
+	//   rpc IncrementCounter(IncReq) returns (IncResp) {
+	//     option (w17.db.method) = {
+	//       ops:    { name: "load", dql: "SELECT c.value FROM Counter c WHERE c.id = :id" }
+	//       ops: { name: "save", dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id" }
+	//     };
+	//     option (w17.db.lock) = {
+	//       locks: [
+	//         { resource: "Counter", kind: SELECT_FOR_UPDATE }
+	//       ]
+	//     };
+	//   }
+	//
+	// KV / QUEUE connections ignore the lock (no transactional row
+	// locking primitive). SQLite skips the suffix too — its locking
+	// is implicit via the underlying journal mode (no row-level FOR
+	// UPDATE in SQL syntax).
+	//
+	// Backward compat: the previous bare-enum form
+	// (`option (w17.db.lock) = SELECT_FOR_UPDATE`) is gone — codegen
+	// rejects any annotation whose `locks` list is empty with a
+	// fix-up suggestion. Clean break, no consumers in the wild.
   Lock lock = 51007;
 }
 
-// (w17.db.enum_value) — enum-value-level annotation. Per-value
-// metadata that survives into the schema-driven codegen
-// surface. Today only carries `sort_sql` for D-iter2-dql-9
-// (ORDER BY-by-enum); future enum-value uses (CHECK-list
-// values, KV index keys) extend this message.
-//
-// Usage:
-//
-//   enum UserSortField {
-//     USER_SORT_UNSPECIFIED = 0;
-//     USER_SORT_NAME    = 1 [(w17.db.enum_value) = { sort_sql: "name DESC" }];
-//     USER_SORT_CREATED = 2 [(w17.db.enum_value) = { sort_sql: "created_at DESC" }];
-//   }
-//
-// Codegen reads each value's annotation when an `ORDER BY
-// :<path>` clause resolves to a field of this enum type and
-// renders a static `CASE :<path> WHEN <num> THEN <sort_sql>
-// ... END` expression. UNSPECIFIED with no annotation is the
-// "no sort" value (CASE returns NULL → SQL falls back to the
-// trailing ORDER BY items). Per D-iter2-dql-9 every non-zero
-// enum value used as a sort key MUST carry the annotation —
-// codegen rejects values missing `sort_sql`.
-//
-// The fragment is OPAQUE raw SQL and only its PRESENCE is checked
-// (TC-24) — the author owns what is inside it, which is what the
-// escape hatch means. One consequence is worth spelling out because
-// it is not obvious from "raw SQL": a fragment is spliced into
-// whichever query resolves this enum, so a BARE column (`name DESC`)
-// travels safely while an ALIAS-QUALIFIED one (`u.name DESC`) binds
-// the fragment to one query's FROM alias. Share such an enum across
-// two methods and the second one fails at runtime, positionless, and
-// only on the calls that send that value. Prefer bare columns on an
-// enum more than one method sorts by.
-//
-// (T1-4 pass #14, A-4 — ACCEPTED by the owner 2026-08-13: the
-// alias coupling IS the author's responsibility this annotation
-// documents, and the failure is loud. Recorded rather than gated.)
 extend google.protobuf.EnumValueOptions {
+	// (w17.db.enum_value) — enum-value-level annotation. Per-value
+	// metadata that survives into the schema-driven codegen
+	// surface. Today only carries `sort_sql` for D-iter2-dql-9
+	// (ORDER BY-by-enum); future enum-value uses (CHECK-list
+	// values, KV index keys) extend this message.
+	//
+	// Usage:
+	//
+	//   enum UserSortField {
+	//     USER_SORT_UNSPECIFIED = 0;
+	//     USER_SORT_NAME    = 1 [(w17.db.enum_value) = { sort_sql: "name DESC" }];
+	//     USER_SORT_CREATED = 2 [(w17.db.enum_value) = { sort_sql: "created_at DESC" }];
+	//   }
+	//
+	// Codegen reads each value's annotation when an `ORDER BY
+	// :<path>` clause resolves to a field of this enum type and
+	// renders a static `CASE :<path> WHEN <num> THEN <sort_sql>
+	// ... END` expression. UNSPECIFIED with no annotation is the
+	// "no sort" value (CASE returns NULL → SQL falls back to the
+	// trailing ORDER BY items). Per D-iter2-dql-9 every non-zero
+	// enum value used as a sort key MUST carry the annotation —
+	// codegen rejects values missing `sort_sql`.
+	//
+	// The fragment is OPAQUE raw SQL and only its PRESENCE is checked
+	// (TC-24) — the author owns what is inside it, which is what the
+	// escape hatch means. One consequence is worth spelling out because
+	// it is not obvious from "raw SQL": a fragment is spliced into
+	// whichever query resolves this enum, so a BARE column (`name DESC`)
+	// travels safely while an ALIAS-QUALIFIED one (`u.name DESC`) binds
+	// the fragment to one query's FROM alias. Share such an enum across
+	// two methods and the second one fails at runtime, positionless, and
+	// only on the calls that send that value. Prefer bare columns on an
+	// enum more than one method sorts by.
+	//
+	// (T1-4 pass #14, A-4 — ACCEPTED by the owner 2026-08-13: the
+	// alias coupling IS the author's responsibility this annotation
+	// documents, and the failure is loud. Recorded rather than gated.)
   EnumValueColumn enum_value = 51008;
 }
 
-// (w17.db.scope) — REV-147 — per-model data-scope declaration.
-// One entry per scope axis: each `name` becomes the
-// `AuthResp.scopes` map key + the `x-w17-scope-<name>`
-// metadata key suffix; each `path` is the dotted DQL access
-// that resolves to the scope-bearing column.
-//
-// Path syntax: `<column>` — a DIRECT column on the scoped table.
-// That is the whole supported surface today. A dotted path
-// (`task.tenant_id` — scoping a model by a column reached through
-// a relation) is REFUSED at storage codegen with a pointer at this
-// limitation; the alias-path resolution slice is parked (B6.x).
-// So a model that needs isolating must carry its own scope column.
-//
-// The scope layer does not auto-JOIN, and nothing here makes it
-// JOIN: scoping a JOINED model by ITS OWN column is supported and
-// puts the predicate on that JOIN's ON clause.
-//
-// Multi-entry = multi-axis isolation; effective filter is
-// AND of every scope's WHERE.
-//
-// Usage:
-//
-//   message Task {
-//     option (w17.db.table) = { name: "tasks" };
-//     option (w17.db.scope) = {
-//       entries: [{ name: "tenant_id", path: "tenant_id" }]
-//     };
-//
-//     int64  id        = 1 [(w17.field) = { pk: true }];
-//     string tenant_id = 2 [(w17.field) = { type: UUID }];
-//     ...
-//   }
-//
-//   message Comment {
-//     option (w17.db.table) = { name: "comments" };
-//     option (w17.db.scope) = {
-//       entries: [{ name: "tenant_id", path: "tenant_id" }]
-//     };
-//
-//     // Denormalised: a child of Task carries its own tenant_id
-//     // rather than reaching the parent's. Until the dotted-path
-//     // slice lands this is the way to scope a child — the
-//     // alternative is `(w17.db.bypass_scope)` plus a hand-written
-//     // WHERE in the query's DQL.
-//     string tenant_id = 3 [(w17.field) = { type: UUID }];
-//   }
-//
-// Auth backend returns the caller's scope values in
-// AuthResp.scopes (a `map<string,string>` field, parser-
-// enforced when any scoped model exists on the surface).
-// Gateway threads per-scope values via `x-w17-scope-<name>`
-// gRPC metadata. Storage codegen auto-appends WHERE filters
-// on SELECT/UPDATE/DELETE and auto-stamps INSERT SET from
-// metadata. Missing scope metadata → 403 PERMISSION_DENIED.
-//
-// Full spec: docs/specs/storage/data-scopes.md.
 extend google.protobuf.MessageOptions {
+	// (w17.db.scope) — REV-147 — per-model data-scope declaration.
+	// One entry per scope axis: each `name` becomes the
+	// `AuthResp.scopes` map key + the `x-w17-scope-<name>`
+	// metadata key suffix; each `path` is the dotted DQL access
+	// that resolves to the scope-bearing column.
+	//
+	// Path syntax: `<column>` — a DIRECT column on the scoped table.
+	// That is the whole supported surface today. A dotted path
+	// (`task.tenant_id` — scoping a model by a column reached through
+	// a relation) is REFUSED at storage codegen with a pointer at this
+	// limitation; the alias-path resolution slice is parked (B6.x).
+	// So a model that needs isolating must carry its own scope column.
+	//
+	// The scope layer does not auto-JOIN, and nothing here makes it
+	// JOIN: scoping a JOINED model by ITS OWN column is supported and
+	// puts the predicate on that JOIN's ON clause.
+	//
+	// Multi-entry = multi-axis isolation; effective filter is
+	// AND of every scope's WHERE.
+	//
+	// Usage:
+	//
+	//   message Task {
+	//     option (w17.db.table) = { name: "tasks" };
+	//     option (w17.db.scope) = {
+	//       entries: [{ name: "tenant_id", path: "tenant_id" }]
+	//     };
+	//
+	//     int64  id        = 1 [(w17.field) = { pk: true }];
+	//     string tenant_id = 2 [(w17.field) = { type: UUID }];
+	//     ...
+	//   }
+	//
+	//   message Comment {
+	//     option (w17.db.table) = { name: "comments" };
+	//     option (w17.db.scope) = {
+	//       entries: [{ name: "tenant_id", path: "tenant_id" }]
+	//     };
+	//
+	//     // Denormalised: a child of Task carries its own tenant_id
+	//     // rather than reaching the parent's. Until the dotted-path
+	//     // slice lands this is the way to scope a child — the
+	//     // alternative is `(w17.db.bypass_scope)` plus a hand-written
+	//     // WHERE in the query's DQL.
+	//     string tenant_id = 3 [(w17.field) = { type: UUID }];
+	//   }
+	//
+	// Auth backend returns the caller's scope values in
+	// AuthResp.scopes (a `map<string,string>` field, parser-
+	// enforced when any scoped model exists on the surface).
+	// Gateway threads per-scope values via `x-w17-scope-<name>`
+	// gRPC metadata. Storage codegen auto-appends WHERE filters
+	// on SELECT/UPDATE/DELETE and auto-stamps INSERT SET from
+	// metadata. Missing scope metadata → 403 PERMISSION_DENIED.
+	//
+	// Full spec: docs/specs/storage/data-scopes.md.
   Scope scope = 51009;
 }
 
@@ -264,52 +264,52 @@ message ScopeEntry {
   string path = 2;
 }
 
-// (w17.db.bypass_scope) — REV-147 — opt-out from one or more
-// data scopes on a method or service. Admin endpoints +
-// migration jobs that legitimately need to read/write across
-// scopes declare the bypass here so the codegen skips the
-// auto-WHERE / INSERT auto-stamp / fail-closed metadata
-// guard for the listed scope names.
-//
-// Forms:
-//   ["*"]                       — bypass every scope on every
-//                                  scoped model the method/service
-//                                  touches.
-//   ["tenant_id"]               — bypass listed scopes only;
-//                                  other scopes (multi-scope
-//                                  models) still apply.
-//
-// The two layers UNION — they do not override one another.
-// A method-level list ADDS to the service-level one (and either
-// side's `"*"` makes the whole thing a wildcard), so a method
-// cannot narrow a bypass its service declared: once a service
-// says `bypass_scope_service = "*"`, no method under it can put
-// a scope back. Declare the service-level slot only for a
-// service whose EVERY method is meant to be unscoped.
-//
-// Default (no annotation) = no bypass; every touched scoped
-// model gets its full auto-WHERE + fail-closed guard.
-//
-// Both are `repeated string`: name one scope per `option`
-// statement (there is no `= [...]` list form for an option).
-// Service-level uses the `bypass_scope_service` slot below —
-// `bypass_scope` extends MethodOptions and will not compile
-// inside a `service` body.
-//
-// Usage:
-//
-//   service AdminService {
-//     option (w17.db.bypass_scope_service) = "*";
-//     rpc PurgeStaleTasks(...) returns (...);
-//   }
-//
-//   service TaskMutation {
-//     rpc ReassignTenant(...) returns (...) {
-//       option (w17.db.bypass_scope) = "tenant_id";
-//       option (w17.db.bypass_scope) = "org_id";  // repeat to add
-//     }
-//   }
 extend google.protobuf.MethodOptions {
+	// (w17.db.bypass_scope) — REV-147 — opt-out from one or more
+	// data scopes on a method or service. Admin endpoints +
+	// migration jobs that legitimately need to read/write across
+	// scopes declare the bypass here so the codegen skips the
+	// auto-WHERE / INSERT auto-stamp / fail-closed metadata
+	// guard for the listed scope names.
+	//
+	// Forms:
+	//   ["*"]                       — bypass every scope on every
+	//                                  scoped model the method/service
+	//                                  touches.
+	//   ["tenant_id"]               — bypass listed scopes only;
+	//                                  other scopes (multi-scope
+	//                                  models) still apply.
+	//
+	// The two layers UNION — they do not override one another.
+	// A method-level list ADDS to the service-level one (and either
+	// side's `"*"` makes the whole thing a wildcard), so a method
+	// cannot narrow a bypass its service declared: once a service
+	// says `bypass_scope_service = "*"`, no method under it can put
+	// a scope back. Declare the service-level slot only for a
+	// service whose EVERY method is meant to be unscoped.
+	//
+	// Default (no annotation) = no bypass; every touched scoped
+	// model gets its full auto-WHERE + fail-closed guard.
+	//
+	// Both are `repeated string`: name one scope per `option`
+	// statement (there is no `= [...]` list form for an option).
+	// Service-level uses the `bypass_scope_service` slot below —
+	// `bypass_scope` extends MethodOptions and will not compile
+	// inside a `service` body.
+	//
+	// Usage:
+	//
+	//   service AdminService {
+	//     option (w17.db.bypass_scope_service) = "*";
+	//     rpc PurgeStaleTasks(...) returns (...);
+	//   }
+	//
+	//   service TaskMutation {
+	//     rpc ReassignTenant(...) returns (...) {
+	//       option (w17.db.bypass_scope) = "tenant_id";
+	//       option (w17.db.bypass_scope) = "org_id";  // repeat to add
+	//     }
+	//   }
   repeated string bypass_scope = 51010;
 }
 
@@ -319,7 +319,25 @@ extend google.protobuf.ServiceOptions {
   // extension names to be unique within a package even
   // across different extension targets (same constraint
   // that drove REV-146's `acl_endpoint` vs `acl_service`
-  // split). Method-level wins when both apply.
+  // split).
+  //
+  // ⚠️ THE TWO LAYERS UNION. This comment used to end "Method-
+  // level wins when both apply", which is false and false in the
+  // dangerous direction: `scopeopts.EffectiveBypass` returns the
+  // union of the two lists, and either side's `"*"` makes the
+  // whole thing a wildcard. A method CANNOT narrow a bypass its
+  // service declared.
+  //
+  // The misreading the old sentence invited: declare
+  // `bypass_scope_service = "*"` on the service, then
+  // `bypass_scope = "tenant_id"` on one method, and believe that
+  // method bypasses the tenant scope only. The service's
+  // wildcard already bypassed every scope, and the method's
+  // narrower list adds nothing — so the author believes they
+  // have scoping they do not have.
+  //
+  // Declare this slot only for a service whose EVERY method is
+  // meant to be unscoped. Pinned by scopeopts' TestEffectiveBypass.
   repeated string bypass_scope_service = 51011;
 }
 
