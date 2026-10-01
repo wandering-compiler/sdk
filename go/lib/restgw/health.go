@@ -5,31 +5,18 @@
 // want end-to-end health bolt on a custom probe via a
 // lightweight backend RPC.
 //
-// Mirrors the protobridge `runtime/health.go` pattern the
-// conventions doc points at. Pre-marshals at init time so
-// the per-request path is one Header().Set + WriteHeader +
-// Write — no allocation on the hot path.
+// The handler itself lives in core/healthz since every HTTP
+// listener of a generated binary (admin, MCP) mounts it and the
+// `<binary> health` probe asks for it — this name stays because
+// the generated REST serve.go calls it.
 
 package restgw
 
 import (
-	"encoding/json"
 	"net/http"
-)
 
-// healthBody is the pre-marshaled `{"status":"ok"}` payload.
-// Marshal can't fail on this trivial struct; the literal
-// bytes serve as a defensive fallback if a future schema
-// addition breaks the assumption.
-var healthBody = func() []byte {
-	body, err := json.Marshal(struct {
-		Status string `json:"status"`
-	}{Status: "ok"})
-	if err != nil {
-		return []byte(`{"status":"ok"}`)
-	}
-	return body
-}()
+	"github.com/wandering-compiler/sdk/go/core/healthz"
+)
 
 // HealthHandler returns an http.HandlerFunc serving 200 OK
 // with `{"status":"ok"}`. Registered by main.go on
@@ -42,11 +29,5 @@ var healthBody = func() []byte {
 // about (k8s liveness probe should not fail because the
 // auth service is briefly unreachable).
 func HealthHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		// Client-disconnect mid-write is normal for probes —
-		// drop the error.
-		_, _ = w.Write(healthBody)
-	}
+	return healthz.Handler()
 }

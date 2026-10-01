@@ -94,7 +94,8 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		fmt.Fprint(out(opts),
 			"usage: <binary> [command]\n\n"+
 				"  migrate    apply / fetch / roll back / report this bundle's migrations\n"+
-				"  fixtures   apply the rendered seed data\n\n"+
+				"  fixtures   apply the rendered seed data\n"+
+				"  health     probe this binary's listeners (a container HEALTHCHECK)\n\n"+
 				"Run a command with --help for its flags. With no command the bundle\n"+
 				"starts its server, which is what a container image does by default.\n")
 		return true, nil
@@ -117,7 +118,8 @@ func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
 		return true, fmt.Errorf(
 			"unknown command %q\n\n"+
 				"  migrate    apply / fetch / roll back / report this bundle's migrations\n"+
-				"  fixtures   apply the rendered seed data\n\n"+
+				"  fixtures   apply the rendered seed data\n"+
+				"  health     probe this binary's listeners (a container HEALTHCHECK)\n\n"+
 				"With NO command the bundle starts its server, which is what a container\n"+
 				"image does by default. There is no `schema` command: a generated binary\n"+
 				"carries its migrations, so there is no schema for it to read.",

@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wandering-compiler/sdk/go/core/healthz"
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
@@ -319,6 +320,9 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 
 	mux := http.NewServeMux()
 	mux.Handle(EndpointPath, drainAwareStream(srv))
+	// Liveness for `<binary> health` and any orchestrator probe. Outside the
+	// MCP endpoint and its auth: answering at all is the signal.
+	mux.Handle(healthz.Path, healthz.Handler())
 	httpSrv.Handler = mux
 
 	errCh := make(chan error, 1)

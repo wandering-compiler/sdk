@@ -28,6 +28,9 @@ var Reserved = map[string]string{
 	"fixtures": "a generated binary that owns a database answers `fixtures` itself (apply), " +
 		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
 		"shadowed silently rather than refused",
+	"health": "every generated server binary answers `health` itself (probing the listeners it opens, for a container " +
+		"HEALTHCHECK), dispatching on it before any project command is consulted — so a project command of the same " +
+		"name would be shadowed silently rather than refused",
 }
 
 // The reserved words, as constants, so the dispatcher and the tests that check
@@ -36,4 +39,5 @@ const (
 	Migrate  = "migrate"
 	Fixtures = "fixtures"
 	Schema   = "schema"
+	Health   = "health"
 )
