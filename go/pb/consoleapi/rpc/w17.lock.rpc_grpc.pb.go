@@ -272,6 +272,7 @@ const (
 	Codegen_DiscoverPluginSandboxes_FullMethodName = "/w17lock.console.rpc.Codegen/DiscoverPluginSandboxes"
 	Codegen_GeneratePluginPb_FullMethodName        = "/w17lock.console.rpc.Codegen/GeneratePluginPb"
 	Codegen_InspectPluginManifest_FullMethodName   = "/w17lock.console.rpc.Codegen/InspectPluginManifest"
+	Codegen_SignPluginRelease_FullMethodName       = "/w17lock.console.rpc.Codegen/SignPluginRelease"
 	Codegen_ListPluginCatalog_FullMethodName       = "/w17lock.console.rpc.Codegen/ListPluginCatalog"
 	Codegen_FetchPlugin_FullMethodName             = "/w17lock.console.rpc.Codegen/FetchPlugin"
 	Codegen_MergePo_FullMethodName                 = "/w17lock.console.rpc.Codegen/MergePo"
@@ -339,6 +340,10 @@ type CodegenClient interface {
 	// degrading (dial.go's assertion).
 	GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile], error)
 	InspectPluginManifest(ctx context.Context, in *w17compiler.InspectPluginManifestRequest, opts ...grpc.CallOption) (*w17compiler.InspectPluginManifestResponse, error)
+	// The publish-side half of InspectPluginManifest's verify. Re-hosted like
+	// the rest: the signing key lives with the console, so `w17ctl plugin sign`
+	// reaches it the same way every other compiler surface is reached.
+	SignPluginRelease(ctx context.Context, in *w17compiler.SignPluginReleaseRequest, opts ...grpc.CallOption) (*w17compiler.SignPluginReleaseResponse, error)
 	// The plugin CATALOGUE, re-hosted like the rest of the surface. The client
 	// carries no catalogue of its own any more, so these two are the ONLY way
 	// `plugin list/install/update` sees a plugin — a change to a plugin now
@@ -663,6 +668,16 @@ func (c *codegenClient) InspectPluginManifest(ctx context.Context, in *w17compil
 	return out, nil
 }
 
+func (c *codegenClient) SignPluginRelease(ctx context.Context, in *w17compiler.SignPluginReleaseRequest, opts ...grpc.CallOption) (*w17compiler.SignPluginReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(w17compiler.SignPluginReleaseResponse)
+	err := c.cc.Invoke(ctx, Codegen_SignPluginRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codegenClient) ListPluginCatalog(ctx context.Context, in *w17compiler.ListPluginCatalogRequest, opts ...grpc.CallOption) (*w17compiler.PluginCatalog, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(w17compiler.PluginCatalog)
@@ -827,6 +842,10 @@ type CodegenServer interface {
 	// degrading (dial.go's assertion).
 	GeneratePluginPb(grpc.BidiStreamingServer[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile]) error
 	InspectPluginManifest(context.Context, *w17compiler.InspectPluginManifestRequest) (*w17compiler.InspectPluginManifestResponse, error)
+	// The publish-side half of InspectPluginManifest's verify. Re-hosted like
+	// the rest: the signing key lives with the console, so `w17ctl plugin sign`
+	// reaches it the same way every other compiler surface is reached.
+	SignPluginRelease(context.Context, *w17compiler.SignPluginReleaseRequest) (*w17compiler.SignPluginReleaseResponse, error)
 	// The plugin CATALOGUE, re-hosted like the rest of the surface. The client
 	// carries no catalogue of its own any more, so these two are the ONLY way
 	// `plugin list/install/update` sees a plugin — a change to a plugin now
@@ -928,6 +947,9 @@ func (UnimplementedCodegenServer) GeneratePluginPb(grpc.BidiStreamingServer[w17c
 }
 func (UnimplementedCodegenServer) InspectPluginManifest(context.Context, *w17compiler.InspectPluginManifestRequest) (*w17compiler.InspectPluginManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InspectPluginManifest not implemented")
+}
+func (UnimplementedCodegenServer) SignPluginRelease(context.Context, *w17compiler.SignPluginReleaseRequest) (*w17compiler.SignPluginReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SignPluginRelease not implemented")
 }
 func (UnimplementedCodegenServer) ListPluginCatalog(context.Context, *w17compiler.ListPluginCatalogRequest) (*w17compiler.PluginCatalog, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPluginCatalog not implemented")
@@ -1259,6 +1281,24 @@ func _Codegen_InspectPluginManifest_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Codegen_SignPluginRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(w17compiler.SignPluginReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServer).SignPluginRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Codegen_SignPluginRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServer).SignPluginRelease(ctx, req.(*w17compiler.SignPluginReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Codegen_ListPluginCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(w17compiler.ListPluginCatalogRequest)
 	if err := dec(in); err != nil {
@@ -1428,6 +1468,10 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InspectPluginManifest",
 			Handler:    _Codegen_InspectPluginManifest_Handler,
+		},
+		{
+			MethodName: "SignPluginRelease",
+			Handler:    _Codegen_SignPluginRelease_Handler,
 		},
 		{
 			MethodName: "ListPluginCatalog",

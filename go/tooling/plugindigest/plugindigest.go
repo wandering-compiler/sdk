@@ -48,6 +48,23 @@ var skipDirs = map[string]bool{
 	".git": true,
 	// Reproduced by a consumer's own toolchain, never shipped, and large.
 	"node_modules": true,
+	// A throwaway project `w17ctl plugin dev` built to run this plugin as
+	// itself.
+	//
+	// ⚠️ THE SAME CIRCULARITY plugin.sig has, one level up. `plugin dev --out`
+	// can put its project inside the tree it is testing, and that project is
+	// BUILT BY installing this plugin — which digests it. So the digest would
+	// change while the thing being digested was being generated, and no two
+	// runs would agree.
+	//
+	// A directory name rather than a root-relative path, unlike plugin.sig: a
+	// dev project is a dev project wherever it sits, and there is no legitimate
+	// `.w17dev` inside a plugin that a consumer compiles.
+	//
+	// The published form does not carry it either — the render copies
+	// plugin.yaml, README, proto/ and src/, and this is none of those — so this
+	// is the second of two places that have to agree, not the only one.
+	".w17dev": true,
 }
 
 // skipPaths are dropped by their path RELATIVE to the plugin root.
@@ -67,6 +84,58 @@ var skipPaths = map[string]bool{
 // droppings only; anything a plugin author writes on purpose is covered.
 var skipFiles = map[string]bool{
 	".DS_Store": true,
+}
+
+// skipRootFiles are dropped by their path RELATIVE to the plugin root, so the
+// exclusion covers exactly the one file that has to be excluded and nothing
+// that merely shares its name.
+//
+// `plugin.sig` is the signature file, which cannot be part of what it signs. A
+// plugin's signature binds this digest; if the digest covered the file holding
+// it, writing the signature would change the digest it was computed over, and
+// no signed plugin could ever verify — a circularity with no fixed point, not a
+// bug that shows up sometimes.
+//
+// The exclusion lives here rather than in the signer because BOTH ends have to
+// agree: the publisher hashes a tree with no signature in it yet, and the
+// consumer hashes one that has had a signature added. Two definitions of the
+// digest is not a check.
+//
+// ⚠️ ROOT-relative, not by name like `skipFiles` above. The signature is read
+// from the root and nowhere else, so an `internal/plugin.sig` is an ordinary
+// file the author wrote — and excluding it by name would carve a hole in the
+// digest at every depth of the tree, which is somewhere to put content that a
+// signed plugin does not cover.
+var skipRootFiles = map[string]bool{
+	"plugin.sig": true,
+}
+
+// Check reports whether s has the shape `Of` produces: 64 lowercase hex
+// characters.
+//
+// It lives beside `Of` because the shape is this package's to define, and both
+// ends of a signature need the same answer — the publisher, which must not mint
+// a claim over something no tree can yield, and anyone reading a digest off the
+// wire.
+//
+// ⚠️ LOWERCASE IS REQUIRED, NOT NORMALISED. `Of` emits lowercase, so uppercase
+// hex means the caller computed the digest some other way — and a caller who
+// did that is a caller whose digest may differ from `Of`'s in ways case-folding
+// would hide. Refusing says so; quietly lowercasing would let the real
+// disagreement through.
+func Check(s string) error {
+	const want = sha256.Size * 2
+	if len(s) != want {
+		return fmt.Errorf("plugin digest: %d characters, want %d — this is not a plugin digest", len(s), want)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') {
+			continue
+		}
+		return fmt.Errorf("plugin digest: %q at position %d — a plugin digest is lowercase hex", string(c), i)
+	}
+	return nil
 }
 
 // Of returns the hex sha256 digest of the plugin tree rooted at dir.
@@ -129,6 +198,12 @@ func Of(dir string) (string, error) {
 		rel, rerr := filepath.Rel(dir, p)
 		if rerr != nil {
 			return rerr
+		}
+		// After the regular-file check on purpose: a symlinked `plugin.sig`
+		// is still refused, because "a plugin tree carries files" is a
+		// statement about the tree and not about what the digest covers.
+		if skipRootFiles[filepath.ToSlash(rel)] {
+			return nil
 		}
 		fi, ierr := d.Info()
 		if ierr != nil {

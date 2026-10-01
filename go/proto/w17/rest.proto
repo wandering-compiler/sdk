@@ -42,11 +42,10 @@ extend google.protobuf.FileOptions {
 // at one prefix, with its own identity (name + version), its
 // own auth method, and a tree of grouped endpoints / streams.
 //
-// Multiple `rest_*.proto` files in the same domain produce
-// multiple surfaces; each surface gets its own gateway mux at
-// codegen time (or its own gateway binary, depending on deploy
-// config — to be decided when we ship the multi-surface
-// gateway main).
+// One surface per DOMAIN: every domain may publish its own,
+// served by that domain's own gateway (`<domain>-gateway`), and
+// a project may have as many as it has domains. A second
+// `(w17.rest_api)` in the SAME domain is a hard error.
 message RestApi {
   // Logical name of the surface — "public" / "admin" /
   // "partner" / "internal". Surfaces in tooling
@@ -57,9 +56,7 @@ message RestApi {
   // Version of this surface — "v1" / "v2" / "2026-05-07". Free-
   // form string; surfaces in OpenAPI's `info.version`. Used
   // alongside `name` to disambiguate surfaces in catalog
-  // output. Convention is to keep one surface per major
-  // version: `rest_v1.proto` + `rest_v2.proto` rather than
-  // mixing.
+  // output.
   string version = 2;
 
   // URL prefix prepended to every group's prefix (and thus

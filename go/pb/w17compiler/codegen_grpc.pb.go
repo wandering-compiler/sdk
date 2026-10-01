@@ -63,6 +63,7 @@ const (
 	CodegenService_EditLock_FullMethodName                = "/w17.storage.codegen.CodegenService/EditLock"
 	CodegenService_DescribeLock_FullMethodName            = "/w17.storage.codegen.CodegenService/DescribeLock"
 	CodegenService_InspectPluginManifest_FullMethodName   = "/w17.storage.codegen.CodegenService/InspectPluginManifest"
+	CodegenService_SignPluginRelease_FullMethodName       = "/w17.storage.codegen.CodegenService/SignPluginRelease"
 	CodegenService_ListPluginCatalog_FullMethodName       = "/w17.storage.codegen.CodegenService/ListPluginCatalog"
 	CodegenService_FetchPlugin_FullMethodName             = "/w17.storage.codegen.CodegenService/FetchPlugin"
 	CodegenService_Guide_FullMethodName                   = "/w17.storage.codegen.CodegenService/Guide"
@@ -343,6 +344,25 @@ type CodegenServiceClient interface {
 	// gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
 	// refusal.
 	InspectPluginManifest(ctx context.Context, in *InspectPluginManifestRequest, opts ...grpc.CallOption) (*InspectPluginManifestResponse, error)
+	// SignPluginRelease signs a plugin release, and is the publish-side half of
+	// InspectPluginManifest's verify.
+	//
+	// The KEY NEVER LEAVES THE CONSOLE. Signing is a service, not a key anyone
+	// holds — the same boundary codegen already draws, on the same reasoning:
+	// whoever can generate a plugin can sign one, and nobody generates for free.
+	//
+	// ⚠️ THE REQUEST CARRIES THE MANIFEST, NOT A NAME AND A VERSION, and that is
+	// the whole point of its shape. The console parses the identity out of the
+	// manifest here exactly as it does at verify — same parser, same fields — so
+	// the claim signed at publish is the claim rebuilt at install by
+	// construction. A request that named its own identity could sign `auth` for
+	// a tree whose manifest says something else, and nobody would learn of it
+	// until an install failed on a release that was never verifiable.
+	//
+	// The digest is the publisher's: the console never sees the tree, so it
+	// attests "these bytes, under this identity, left me" and not "these bytes
+	// are what I read". A parse / validation failure is INVALID_ARGUMENT.
+	SignPluginRelease(ctx context.Context, in *SignPluginReleaseRequest, opts ...grpc.CallOption) (*SignPluginReleaseResponse, error)
 	// ListPluginCatalog / FetchPlugin serve the plugin CATALOGUE from the
 	// console.
 	//
@@ -733,6 +753,16 @@ func (c *codegenServiceClient) InspectPluginManifest(ctx context.Context, in *In
 	return out, nil
 }
 
+func (c *codegenServiceClient) SignPluginRelease(ctx context.Context, in *SignPluginReleaseRequest, opts ...grpc.CallOption) (*SignPluginReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SignPluginReleaseResponse)
+	err := c.cc.Invoke(ctx, CodegenService_SignPluginRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codegenServiceClient) ListPluginCatalog(ctx context.Context, in *ListPluginCatalogRequest, opts ...grpc.CallOption) (*PluginCatalog, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PluginCatalog)
@@ -1065,6 +1095,25 @@ type CodegenServiceServer interface {
 	// gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
 	// refusal.
 	InspectPluginManifest(context.Context, *InspectPluginManifestRequest) (*InspectPluginManifestResponse, error)
+	// SignPluginRelease signs a plugin release, and is the publish-side half of
+	// InspectPluginManifest's verify.
+	//
+	// The KEY NEVER LEAVES THE CONSOLE. Signing is a service, not a key anyone
+	// holds — the same boundary codegen already draws, on the same reasoning:
+	// whoever can generate a plugin can sign one, and nobody generates for free.
+	//
+	// ⚠️ THE REQUEST CARRIES THE MANIFEST, NOT A NAME AND A VERSION, and that is
+	// the whole point of its shape. The console parses the identity out of the
+	// manifest here exactly as it does at verify — same parser, same fields — so
+	// the claim signed at publish is the claim rebuilt at install by
+	// construction. A request that named its own identity could sign `auth` for
+	// a tree whose manifest says something else, and nobody would learn of it
+	// until an install failed on a release that was never verifiable.
+	//
+	// The digest is the publisher's: the console never sees the tree, so it
+	// attests "these bytes, under this identity, left me" and not "these bytes
+	// are what I read". A parse / validation failure is INVALID_ARGUMENT.
+	SignPluginRelease(context.Context, *SignPluginReleaseRequest) (*SignPluginReleaseResponse, error)
 	// ListPluginCatalog / FetchPlugin serve the plugin CATALOGUE from the
 	// console.
 	//
@@ -1195,6 +1244,9 @@ func (UnimplementedCodegenServiceServer) DescribeLock(context.Context, *Describe
 }
 func (UnimplementedCodegenServiceServer) InspectPluginManifest(context.Context, *InspectPluginManifestRequest) (*InspectPluginManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InspectPluginManifest not implemented")
+}
+func (UnimplementedCodegenServiceServer) SignPluginRelease(context.Context, *SignPluginReleaseRequest) (*SignPluginReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SignPluginRelease not implemented")
 }
 func (UnimplementedCodegenServiceServer) ListPluginCatalog(context.Context, *ListPluginCatalogRequest) (*PluginCatalog, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPluginCatalog not implemented")
@@ -1579,6 +1631,24 @@ func _CodegenService_InspectPluginManifest_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CodegenService_SignPluginRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignPluginReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServiceServer).SignPluginRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodegenService_SignPluginRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServiceServer).SignPluginRelease(ctx, req.(*SignPluginReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CodegenService_ListPluginCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListPluginCatalogRequest)
 	if err := dec(in); err != nil {
@@ -1695,6 +1765,10 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InspectPluginManifest",
 			Handler:    _CodegenService_InspectPluginManifest_Handler,
+		},
+		{
+			MethodName: "SignPluginRelease",
+			Handler:    _CodegenService_SignPluginRelease_Handler,
 		},
 		{
 			MethodName: "ListPluginCatalog",

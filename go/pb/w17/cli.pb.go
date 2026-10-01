@@ -205,8 +205,8 @@ var (
 	// `(w17.rest_api)` (REV-017), `(w17.mcp_api)` (REV-018) and
 	// `(w17.rpc_api)` (REV-152).
 	//
-	// One CLI surface per parse; two files carrying `(w17.cli_api)`
-	// is a hard error.
+	// One CLI surface per domain; two files in one domain carrying
+	// `(w17.cli_api)` is a hard error.
 	//
 	// optional w17.CliApi cli_api = 50115;
 	E_CliApi = &file_w17_cli_proto_extTypes[1]

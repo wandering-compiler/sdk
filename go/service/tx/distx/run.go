@@ -84,7 +84,7 @@ func Run(
 			// stays the error. The rollback failure is real too — a
 			// transaction may be left open — so it is named rather than
 			// dropped.
-			err = fmt.Errorf("%w (rollback also failed: %v)", err, rerr)
+			err = fmt.Errorf("%w (rollback also failed: %v)", err, rerr) //nolint:errorlint // rerr is named, not wrapped: errors.Is must answer for fn's error, not the rollback's.
 		}
 	}()
 

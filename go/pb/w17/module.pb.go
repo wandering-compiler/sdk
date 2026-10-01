@@ -413,8 +413,45 @@ type Module struct {
 	//
 	// Same scope rule as `channels`: domain-level only.
 	EventDefaults *EventDefaults `protobuf:"bytes,5,opt,name=event_defaults,json=eventDefaults,proto3" json:"event_defaults,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Extra build-context excludes, appended to the `Dockerfile.dockerignore`
+	// every generated bundle ships.
+	//
+	// It exists because the generated list cannot be complete and must not try to
+	// be. A bundle builds with the PROJECT ROOT as its context — it has to, since
+	// it imports hand-written code from outside `w17/` — and the generated excludes
+	// cover exactly two things: a running stack's state, and trees w17 itself wrote
+	// that no build step reads. They deliberately stop there rather than guess at
+	// `dist/`, `target/`, `bin/` or a media directory, because those belong to the
+	// project and guessing would decide what somebody else's code can see.
+	//
+	// The consequence, measured on a consumer 2026-09-30: their build context was
+	// ~2.5 GB and BuildKit keeps one cache record of it PER BUNDLE built, so a
+	// single build's records came to ~8 GB — while the same project's w17-generated
+	// tree weighs 7.9 MB. The weight was their own, and they had no way to say so:
+	// BuildKit reads `<dockerfile>.dockerignore` beside the Dockerfile IN PREFERENCE
+	// to a `.dockerignore` at the context root, so the tool-owned file silently won
+	// and a project-root exclude list did nothing for w17's builds.
+	//
+	// Declared here rather than read from a file on disk because codegen runs on the
+	// CONSOLE, which sees the pushed proto tree and never the project's working
+	// copy. A path only the client can read is a path the compiler cannot validate.
+	//
+	// ⚠️ Same danger as the generated list, and the same gate: an exclude that a
+	// Dockerfile DOES read makes BuildKit copy nothing and say nothing, and the
+	// failure surfaces as a missing file inside the image. Codegen refuses a pattern
+	// that would hide a path the bundle's Dockerfile reads.
+	//
+	// Patterns are `.dockerignore` syntax, relative to the context root:
+	//
+	//	option (w17.module) = {
+	//	  build_context_excludes: ["frontend/dist/", "*.mp4", "testdata/large/"]
+	//	};
+	//
+	// Domain-level like `channels`: the context is the project's, not a module's,
+	// so every bundle gets the same list.
+	BuildContextExcludes []string `protobuf:"bytes,6,rep,name=build_context_excludes,json=buildContextExcludes,proto3" json:"build_context_excludes,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *Module) Reset() {
@@ -478,6 +515,13 @@ func (x *Module) GetChannels() []*Channel {
 func (x *Module) GetEventDefaults() *EventDefaults {
 	if x != nil {
 		return x.EventDefaults
+	}
+	return nil
+}
+
+func (x *Module) GetBuildContextExcludes() []string {
+	if x != nil {
+		return x.BuildContextExcludes
 	}
 	return nil
 }
@@ -826,7 +870,7 @@ var File_w17_module_proto protoreflect.FileDescriptor
 
 const file_w17_module_proto_rawDesc = "" +
 	"\n" +
-	"\x10w17/module.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x0fw17/event.proto\"\xef\x01\n" +
+	"\x10w17/module.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x0fw17/event.proto\"\xa5\x02\n" +
 	"\x06Module\x12\x16\n" +
 	"\x06schema\x18\x01 \x01(\tR\x06schema\x12&\n" +
 	"\ftable_prefix\x18\x02 \x01(\bH\x00R\vtablePrefix\x88\x01\x01\x12/\n" +
@@ -834,7 +878,8 @@ const file_w17_module_proto_rawDesc = "" +
 	"connection\x18\x03 \x01(\v2\x0f.w17.ConnectionR\n" +
 	"connection\x12(\n" +
 	"\bchannels\x18\x04 \x03(\v2\f.w17.ChannelR\bchannels\x129\n" +
-	"\x0eevent_defaults\x18\x05 \x01(\v2\x12.w17.EventDefaultsR\reventDefaultsB\x0f\n" +
+	"\x0eevent_defaults\x18\x05 \x01(\v2\x12.w17.EventDefaultsR\reventDefaults\x124\n" +
+	"\x16build_context_excludes\x18\x06 \x03(\tR\x14buildContextExcludesB\x0f\n" +
 	"\r_table_prefix\"\x89\x02\n" +
 	"\n" +
 	"Connection\x12\x12\n" +

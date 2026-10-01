@@ -318,8 +318,9 @@ var (
 	// do the picking. The file declares ZERO messages, like
 	// `(w17.rest_api)` (REV-017) and `(w17.mcp_api)` (REV-018).
 	//
-	// One rpc surface per parse (one generated `grpcapi.proto`);
-	// two files carrying `(w17.rpc_api)` is a hard error.
+	// One rpc surface per domain (one generated
+	// `w17.lock.rpc.proto` per domain); two files in one domain
+	// carrying `(w17.rpc_api)` is a hard error.
 	//
 	// optional w17.RpcApi rpc_api = 50113;
 	E_RpcApi = &file_w17_rpc_proto_extTypes[2]

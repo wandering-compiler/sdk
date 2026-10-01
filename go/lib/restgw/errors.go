@@ -233,7 +233,44 @@ func clientFacing(ctx context.Context, st *status.Status, details []FieldError) 
 	// copies of one sentence drift, and here the drift would be silent in a
 	// particular way: only one copy is harvested into the catalogs, so the
 	// other renders English in every declared language with nothing to say so.
-	return code, i18n.T(ctx, grpcerr.UserMsgid(st.Code()), nil)
+	return code, ClientSentence(ctx, st.Code())
+}
+
+// ClientSentence is step 2 of clientFacing's demotion, on its own so the other
+// side of this gateway can reach it: the gRPC code's generic sentence, translated
+// through the catalog.
+//
+// Exported because the generated handlers refuse some requests WITHOUT a backend
+// status to demote — their own validation of the decoded request, before the
+// backend is dialled — and they were writing their own prose into the envelope
+// instead. See [PreflightSentence].
+func ClientSentence(ctx context.Context, c codes.Code) string {
+	return i18n.T(ctx, grpcerr.UserMsgid(c), nil)
+}
+
+// PreflightSentence is what a person sees when the GATEWAY refused the request
+// before it ever reached the backend — its own validation of the decoded request.
+//
+// It exists because that path had no status to demote and so bypassed
+// [clientFacing] entirely: the generated handler passed the literal
+// `"validation failed"` as the envelope's `message`. A consumer measured the
+// consequence on 2026-09-30 — the same `INVALID_ARGUMENT` surface answered
+// `validation failed` for a bad enum caught at the gateway and
+// `The request could not be accepted as sent.` for a violation the backend
+// raised, so `surfaces.md`'s "identical for every INVALID_ARGUMENT" was false
+// from the outside, which is the only place it matters.
+//
+// `validation failed` is not a sentence for a person: lower case, no full stop,
+// developer vocabulary. It is the OPERATOR's phrasing, and it still is — it stays
+// as the backend status message, where `status.Message()` is deliberately never a
+// candidate for what a client sees.
+//
+// Takes no code on purpose. Every caller is the gateway refusing a malformed
+// request, so the code is INVALID_ARGUMENT by construction; a `codes.Code`
+// parameter would put `google.golang.org/grpc/codes` into the import block of
+// every generated handler, which today imports it nowhere.
+func PreflightSentence(ctx context.Context) string {
+	return ClientSentence(ctx, codes.InvalidArgument)
 }
 
 // The transport scrub that used to live here is GONE, not relocated.

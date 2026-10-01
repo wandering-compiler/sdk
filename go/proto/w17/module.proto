@@ -119,6 +119,44 @@ message Module {
   //
   // Same scope rule as `channels`: domain-level only.
   EventDefaults event_defaults = 5;
+
+  // Extra build-context excludes, appended to the `Dockerfile.dockerignore`
+  // every generated bundle ships.
+  //
+  // It exists because the generated list cannot be complete and must not try to
+  // be. A bundle builds with the PROJECT ROOT as its context — it has to, since
+  // it imports hand-written code from outside `w17/` — and the generated excludes
+  // cover exactly two things: a running stack's state, and trees w17 itself wrote
+  // that no build step reads. They deliberately stop there rather than guess at
+  // `dist/`, `target/`, `bin/` or a media directory, because those belong to the
+  // project and guessing would decide what somebody else's code can see.
+  //
+  // The consequence, measured on a consumer 2026-09-30: their build context was
+  // ~2.5 GB and BuildKit keeps one cache record of it PER BUNDLE built, so a
+  // single build's records came to ~8 GB — while the same project's w17-generated
+  // tree weighs 7.9 MB. The weight was their own, and they had no way to say so:
+  // BuildKit reads `<dockerfile>.dockerignore` beside the Dockerfile IN PREFERENCE
+  // to a `.dockerignore` at the context root, so the tool-owned file silently won
+  // and a project-root exclude list did nothing for w17's builds.
+  //
+  // Declared here rather than read from a file on disk because codegen runs on the
+  // CONSOLE, which sees the pushed proto tree and never the project's working
+  // copy. A path only the client can read is a path the compiler cannot validate.
+  //
+  // ⚠️ Same danger as the generated list, and the same gate: an exclude that a
+  // Dockerfile DOES read makes BuildKit copy nothing and say nothing, and the
+  // failure surfaces as a missing file inside the image. Codegen refuses a pattern
+  // that would hide a path the bundle's Dockerfile reads.
+  //
+  // Patterns are `.dockerignore` syntax, relative to the context root:
+  //
+  //   option (w17.module) = {
+  //     build_context_excludes: ["frontend/dist/", "*.mp4", "testdata/large/"]
+  //   };
+  //
+  // Domain-level like `channels`: the context is the project's, not a module's,
+  // so every bundle gets the same list.
+  repeated string build_context_excludes = 6;
 }
 
 // Connection identifies one DB target: a logical name + dialect

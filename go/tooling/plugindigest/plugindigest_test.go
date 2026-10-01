@@ -3,6 +3,7 @@ package plugindigest
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,5 +216,138 @@ func TestOf_StillCoversHandwrittenSource(t *testing.T) {
 	b := digestOf(t, map[string]string{"src/handlers/x.go": "package handlers\n\nfunc sneaky() {}\n"})
 	if a == b {
 		t.Fatal("an edit to a handler did not change the digest")
+	}
+}
+
+// The signature file cannot be part of what it signs.
+//
+// A plugin's signature binds the digest of its tree. If the digest covered the
+// file holding the signature, writing that file would change the digest it was
+// computed over — so no signed plugin could ever verify, at all, rather than
+// occasionally. Both ends have to agree on the exclusion: the publisher hashes
+// a tree with no signature yet, the consumer hashes one that has had a
+// signature added, and those two hashes are the same hash or the check means
+// nothing.
+func TestSignatureFileIsNotPartOfTheDigest(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plugin.yaml"), []byte("name: probe\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of: %v", err)
+	}
+	// Exactly what publishing does: compute the digest, sign it, write the
+	// signature beside the manifest.
+	if err := os.WriteFile(filepath.Join(dir, "plugin.sig"), []byte("deadbeef\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of after signing: %v", err)
+	}
+
+	if before != after {
+		t.Fatalf("writing the signature changed the digest it signs (%s → %s) — "+
+			"no signed plugin could verify", before, after)
+	}
+}
+
+// The exclusion is ROOT-relative, and that is not a detail.
+//
+// The signature is read from the root and nowhere else, so a `plugin.sig` deeper
+// in the tree is an ordinary file its author wrote. Excluding it by NAME — the
+// way `.DS_Store` is excluded — would carve a hole in the digest at every depth,
+// and a hole in a digest is somewhere to put content that a signed plugin does
+// not cover: the signature would still verify with the file present, absent, or
+// carrying anything at all.
+func TestASignatureFileBelowTheRootIsStillCovered(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, map[string]string{
+		"plugin.yaml":             "name: probe\n",
+		"src/handlers/plugin.sig": "not the signature — a file called that\n",
+	})
+
+	before, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of: %v", err)
+	}
+	write(t, dir, map[string]string{
+		"src/handlers/plugin.sig": "different bytes entirely\n",
+	})
+	after, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of after edit: %v", err)
+	}
+
+	if before == after {
+		t.Fatal("a file below the root named plugin.sig was excluded from the digest — " +
+			"the exclusion is by name rather than by path, which leaves a hole at every " +
+			"depth of a signed tree")
+	}
+}
+
+// Check accepts exactly what Of produces, and nothing else.
+//
+// The pairing is the test: a validator that drifts from its producer is worse
+// than none, because it refuses real digests while the thing it guards carries
+// on.
+func TestCheckAcceptsWhatOfProduces(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, map[string]string{"plugin.yaml": "name: probe\n"})
+	d, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of: %v", err)
+	}
+	if err := Check(d); err != nil {
+		t.Fatalf("Check refused what Of produced (%q): %v", d, err)
+	}
+
+	for _, bad := range []string{
+		"", "hello", d[:len(d)-1], d + "0", strings.ToUpper(d),
+		d[:len(d)-2] + "zz",
+	} {
+		if err := Check(bad); err == nil {
+			t.Fatalf("Check accepted %q, which Of would never produce", bad)
+		}
+	}
+}
+
+// A dev project inside the tree does not move the tree's digest.
+//
+// `w17ctl plugin dev --out` can put its throwaway project inside the plugin it
+// is testing, and that project is built BY installing the plugin — which
+// digests it. Without the exclusion the digest would change while the thing
+// being digested was being generated, so no two runs would agree and a signed
+// plugin under development could never verify.
+//
+// The same circularity `plugin.sig` has, one level up: there the file is the
+// output of digesting, here the directory is.
+func TestADevProjectInsideThePluginDoesNotMoveTheDigest(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, map[string]string{
+		"plugin.yaml":       "name: probe\n",
+		"src/handlers/h.go": "package handlers\n",
+	})
+	before, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of: %v", err)
+	}
+
+	// What a dev run leaves behind: a whole generated project.
+	write(t, dir, map[string]string{
+		".w17dev/w17/lock.yaml":                   "project: plugindev\n",
+		".w17dev/proto/domains/app/w17.proto":     "syntax = \"proto3\";\n",
+		".w17dev/srcgo/gen/pb/models.pb.go":       "package pb\n",
+		".w17dev/w17/services/app-storage/go.mod": "module example.com/x\n",
+	})
+	after, err := Of(dir)
+	if err != nil {
+		t.Fatalf("Of after a dev run: %v", err)
+	}
+	if before != after {
+		t.Fatalf("a dev project moved the plugin's digest (%s → %s) — the digest would "+
+			"change while the thing being digested was being generated", before, after)
 	}
 }
