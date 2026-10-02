@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/service/tx/txscope"
 )
 
 // HeaderName is the gRPC metadata key the spec assigns to the
@@ -382,7 +383,27 @@ func (o DeferOutcome) String() string {
 // Its context should be detached from the request (`context.WithoutCancel`)
 // — the RPC that queued it has already returned, and its ctx may well be
 // cancelled by the time the commit lands.
+//
+// An IN-PROCESS transaction comes first (txscope): a business method composing
+// another one inside its own `distx.Run` reaches the callee's emit wrapper in
+// the same process, where no registry is wired (business tier) and the
+// transaction travels in OUTGOING metadata this function's header read cannot
+// see. Without this, the callee's event was announced before the caller
+// committed — and kept when the caller rolled back.
 func DeferUntilCommit(ctx context.Context, reg CommitHook, fn func()) DeferOutcome {
+	switch txscope.AfterCommit(ctx, fn) {
+	case txscope.Deferred:
+		return EmitDeferred
+	case txscope.Discarded:
+		// The method returned after its transaction was rolled back — its
+		// writes are gone, so its announcement goes too. Rare by
+		// construction, so it is said once rather than dropped in silence.
+		observx.ReportError(ctx, errors.New(
+			"txregistry: dropped an announcement made after its in-process transaction rolled back"))
+		return EmitDropped
+	case txscope.AlreadyCommitted:
+		return EmitNow
+	}
 	if reg == nil || fn == nil {
 		return EmitNow
 	}

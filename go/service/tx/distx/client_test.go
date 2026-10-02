@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/inprocgrpc"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
@@ -200,5 +201,42 @@ func TestBegin_SingleReplica(t *testing.T) {
 func TestConnIDHeader_MatchesRustContract(t *testing.T) {
 	if distx.ConnIDHeader != "w17-conn-id" {
 		t.Fatalf("ConnIDHeader = %q; must equal the Rust proxy CONN_ID_HEADER \"w17-conn-id\"", distx.ConnIDHeader)
+	}
+}
+
+// A rollback on a done context still reaches the server — on BOTH transports.
+//
+// The commonest reason to roll back is that the request's context is done, and
+// a gRPC client refuses a call on a done context before it leaves the process:
+// over the wire every hand-written `defer tx.Rollback(ctx)` silently failed
+// exactly when it mattered, and the transaction was held until the server timed
+// it out. In-process the rollback went through only because that transport
+// ignored the context — which it no longer does.
+func TestRollback_OutlivesADoneContext(t *testing.T) {
+	transports := map[string]func(*fakeDistxServer) distxpb.W17DistributedTransactionClient{
+		"wire": func(srv *fakeDistxServer) distxpb.W17DistributedTransactionClient { return newFakeClient(t, srv) },
+		"in-process": func(srv *fakeDistxServer) distxpb.W17DistributedTransactionClient {
+			conn := inprocgrpc.New()
+			distxpb.RegisterW17DistributedTransactionServer(conn, srv)
+			return distxpb.NewW17DistributedTransactionClient(conn)
+		},
+	}
+	for name, mk := range transports {
+		t.Run(name, func(t *testing.T) {
+			srv := &fakeDistxServer{}
+			client := mk(srv)
+			ctx, cancel := context.WithCancel(context.Background())
+			tx, _, err := distx.Begin(ctx, client, &distxpb.BeginRequest{ConnectionName: "main"})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			cancel()
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatalf("Rollback on a done context: %v", err)
+			}
+			if srv.lastTxID != "tx-123" {
+				t.Errorf("the rollback never reached the server (tx_id %q) — the transaction stays held until it times out", srv.lastTxID)
+			}
+		})
 	}
 }

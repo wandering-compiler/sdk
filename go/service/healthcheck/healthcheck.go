@@ -108,17 +108,61 @@ type Options struct {
 
 	// Getenv reads the internal-TLS variables. Nil means os.Getenv.
 	Getenv func(string) string
+
+	// Final: no other command dispatcher follows this one in the binary's
+	// main — `health` is its only command. Dispatch then also owns the
+	// command table: `--help` prints usage instead of starting the server,
+	// and a bare word it does not know is an ERROR instead of a server
+	// start. A binary with a migrate dispatcher after this one leaves it
+	// false; that dispatcher does the same for its larger table.
+	//
+	// Before it existed, a business, admin or gateway binary given
+	// `--help` or `migrate status` started its server and sat there — a
+	// deploy step gating on it waited forever, and a reader concluded the
+	// binary ignored its arguments (a consumer, 2026-10-01).
+	Final bool
 }
 
 // Dispatch is the one branch a generated main needs. argv is os.Args[1:]; it
 // reports whether the first word was `health` and, if so, what probing did.
 // Any other word is left to the next dispatcher (migratecli) or the server.
 func Dispatch(ctx context.Context, argv []string, opts Options) (bool, error) {
-	if len(argv) == 0 || argv[0] != Command {
+	if len(argv) == 0 {
 		return false, nil
 	}
-	return true, Run(ctx, argv[1:], opts)
+	if argv[0] == Command {
+		return true, Run(ctx, argv[1:], opts)
+	}
+	if !opts.Final {
+		return false, nil
+	}
+	switch argv[0] {
+	case "-h", "--help", "help":
+		out := opts.Out
+		if out == nil {
+			out = os.Stdout
+		}
+		fmt.Fprint(out, finalUsage)
+		return true, nil
+	}
+	// A FLAG falls through: the generated main may have its own. A bare
+	// word is a command, and this binary has exactly one.
+	if !strings.HasPrefix(argv[0], "-") {
+		return true, fmt.Errorf("unknown command %q\n\n%s", argv[0], finalUsage)
+	}
+	return false, nil
 }
+
+// finalUsage is the whole command table of a binary whose only command is
+// `health` — one that owns no database, so it has no `migrate`/`fixtures`.
+const finalUsage = `usage: <binary> [command]
+
+  health     probe this binary's listeners (a container HEALTHCHECK)
+
+With NO command the binary starts its server, which is what a container image
+does by default. This binary owns no database: migrations are applied by the
+binary that serves it (its storage bundle, or the composed -server).
+`
 
 const usage = `usage: <binary> health [--timeout DURATION]
 

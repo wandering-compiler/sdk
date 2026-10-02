@@ -53,6 +53,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
+	"github.com/wandering-compiler/sdk/go/service/tx/txscope"
 )
 
 var tracer = otel.Tracer("github.com/wandering-compiler/sdk/go/service/inprocgrpc")
@@ -230,6 +231,9 @@ func (c *Conn) RegisterService(sd *grpc.ServiceDesc, impl any) {
 // rejected, because a caller that passes one is not wrong — the composed
 // deployment simply has nothing for it to configure.
 func (c *Conn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) (err error) {
+	if err := refuseDoneContext(ctx); err != nil {
+		return err
+	}
 	e := c.methods[method]
 	if e == nil {
 		return status.Errorf(grpccodes.Unimplemented, "inprocgrpc: no in-process handler registered for %s", method)
@@ -267,6 +271,31 @@ func (c *Conn) Invoke(ctx context.Context, method string, args, reply any, opts 
 	}
 	if err := copyProto(reply, resp); err != nil {
 		return err
+	}
+	return nil
+}
+
+// refuseDoneContext refuses a call whose context is already done, the way the
+// wire client does: grpc-go never starts a call on a cancelled or expired
+// context, so the server never sees it and the caller gets Canceled or
+// DeadlineExceeded.
+//
+// In-process, the call used to be dispatched anyway — the handler ran with a
+// context that was already done, and whatever it did before it first looked at
+// that context happened. One measured consequence: a cancelled caller's
+// distx.Run COMMITTED in a composed binary and rolled back over the wire. A
+// composed binary is supposed to be observationally the same deployment as the
+// split one, so this is the wire's answer, checked before anything else —
+// before the method lookup, because over the wire the call never reaches a
+// server that could say Unimplemented.
+//
+// Nothing in a composed binary relies on the old behaviour on purpose: the
+// shutdown drain runs on a fresh context, eventbus handlers and publishes run
+// detached (context.WithoutCancel), and a distx rollback detaches itself
+// (TxHandle.Rollback).
+func refuseDoneContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return status.FromContextError(err).Err()
 	}
 	return nil
 }
@@ -396,6 +425,12 @@ var _ grpc.ServerTransportStream = (*inprocServerTransportStream)(nil)
 // storage's scope guard) — the propagation was accidental, and this makes
 // it deliberate and identical to the wire's.
 func serverContext(ctx context.Context) context.Context {
+	// A tier hop is a process boundary in meaning: the callee sees the
+	// caller's transaction through its metadata (w17-tx-id, moved to the
+	// incoming side below), exactly as over the wire — never through the
+	// in-process scope, which would make it JOIN here and open its own in a
+	// split deployment. See txscope.Detach.
+	ctx = txscope.Detach(ctx)
 	ctx = principal.ForwardToOutgoing(ctx)
 	md, _ := metadata.FromOutgoingContext(ctx)
 	ctx = metadata.NewIncomingContext(ctx, md)
@@ -414,6 +449,9 @@ func serverContext(ctx context.Context) context.Context {
 // RecvMsgs it, giving natural backpressure (the producing handler can't
 // outrun the consumer — e.g. the gateway forwarding to a real wire client).
 func (c *Conn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, _ ...grpc.CallOption) (grpc.ClientStream, error) {
+	if err := refuseDoneContext(ctx); err != nil {
+		return nil, err
+	}
 	e := c.streams[method]
 	if e == nil {
 		return nil, status.Errorf(grpccodes.Unimplemented, "inprocgrpc: no in-process handler registered for streaming %s", method)

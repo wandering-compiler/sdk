@@ -202,6 +202,9 @@ files, so a half-applied group is a state no fixture describes.
   --domain DOMAIN    seed just this domain; omitted = every domain
   --connection CONN  which owned connection to seed (needed if the bundle serves several)
   --dry-run          list what would be applied, apply nothing
+  --allow-stale      seed even when the rendered seeds are older than the
+                     fixtures beside them (refused by default: a stale render
+                     seeds yesterday's rows)
 
 Groups are a CONVENTION, not a safety gate: what "dev" and "prod" mean is the
 project's to decide by naming its groups, and what a given environment applies
@@ -273,13 +276,17 @@ type applyFlags struct {
 	fetch      bool
 	dryRun     bool
 	allowNoDSN bool
-	logFormat  string
-	parallel   int
-	fake       bool
+	// allowStale: fixtures apply seeds from a render older than its fixtures.
+	allowStale bool
+	// verb is the subcommand these flags were parsed for.
+	verb      string
+	logFormat string
+	parallel  int
+	fake      bool
 }
 
 func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
-	var f applyFlags
+	f := applyFlags{verb: name}
 	fs := flag.NewFlagSet("migrate "+name, flag.ContinueOnError)
 	fs.SetOutput(out)
 	fs.StringVar(&f.lock, "lock", "w17/lock.yaml", "lock file holding per-connection targets")
@@ -294,6 +301,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
 	fs.BoolVar(&f.fake, "fake", false, "apply only: RECORD each pending migration without running it — for a database that already holds what they describe. Each is checked against the database first and refused if it does not match")
+	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that are older than the fixtures beside them (the deliberate override — a stale render seeds yesterday's rows)")
 	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
@@ -411,6 +419,40 @@ func runRollback(ctx context.Context, args []string, opts Options, out io.Writer
 	})
 }
 
+// warnUnpinned names, out loud, every connection this binary serves that the
+// lock pins no migration for.
+//
+// Such a connection used to be skipped in silence: `status` printed "up to
+// date — nothing pending", `apply` succeeded, and when the connection had
+// tables its database stayed EMPTY under a green deploy (a consumer,
+// 2026-10-01: a domain whose schema had never been generated).
+//
+// It WARNS rather than refuses because the binary cannot tell the two cases
+// apart. A Postgres connection with tables and a pin missing is that
+// failure; a Redis connection with nothing to migrate is unpinned
+// legitimately, forever. The lock carries no dialect and the binary no
+// schema — refusing here blocked the second to catch the first (the first
+// version of this did, and an e2e over a Redis connection caught it).
+//
+// The strict gate lives where the truth is: `w17ctl migrate check
+// --generated` asks the console, which knows every connection's schema, and
+// fails when one has changes no migration covers or a migration the lock
+// does not pin. The warning sends the reader there.
+//
+// Rollback and fixtures do not warn: rolling back nothing is correct, and
+// seeding needs a database, not a pin.
+func warnUnpinned(verb string, targets []migrate.ConnTarget, lockPath string, out io.Writer) {
+	for _, t := range targets {
+		if t.TargetMigrationID != "" {
+			continue
+		}
+		fmt.Fprintf(out, "migrate %s: WARNING %s pins no migration for %s, which this binary serves — nothing is applied to it.\n"+
+			"  If it has tables, its database stays EMPTY: the lock never received its migration.\n"+
+			"  check: `w17ctl migrate check --generated` (CI identity) fails when that is the case; a connection with nothing to migrate (often Redis/KV) is fine.\n",
+			verb, lockPath, t.Connection)
+	}
+}
+
 // buildConfig assembles the orchestrator config from the lock, the owned
 // connection set, and the environment's DSNs.
 func buildConfig(ctx context.Context, f applyFlags, opts Options, out io.Writer) (migrate.Config, error) {
@@ -419,6 +461,13 @@ func buildConfig(ctx context.Context, f applyFlags, opts Options, out io.Writer)
 		return migrate.Config{}, fmt.Errorf("migrate: %w", err)
 	}
 	targets := ownedTargets(lk.ConnTargets(), opts.Connections)
+	// FIRST, before a DSN is resolved or anything is fetched: when a later
+	// step fails on something else (a pinned connection's missing DSN, no
+	// console address for --fetch), the unpinned warning is already out and
+	// may be the actual answer. apply and status only.
+	if f.verb == "apply" || f.verb == "status" {
+		warnUnpinned(f.verb, targets, f.lock, out)
+	}
 	if len(targets) == 0 {
 		// Not an error worth failing a deploy over on its own, but it must not
 		// read as success either: a bundle that migrates nothing because it

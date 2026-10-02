@@ -185,6 +185,19 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	// quiet because it is not connected" visible from a log, which is the only
 	// place an operator can look.
 	nc, err := natsgo.Connect(opts.DSN,
+		// A close THIS process asks for (NatsBus.Close at shutdown) fires no
+		// handler at all; one with any other cause still fires them all.
+		//
+		// Without it, nats.go ran the disconnect and closed handlers below on
+		// every ordinary shutdown — SIGTERM on a retired blue/green colour —
+		// and each one put "connection closed permanently" into Sentry and
+		// "connection LOST" into the log (a consumer, 2026-10-02): one false
+		// error per eventbus bundle per deploy, burying the real outage.
+		//
+		// The decision is made where the close is CAUSED, not where a callback
+		// later runs: a flag read inside the handler would also swallow a real
+		// outage whose callback was already queued when Close set it.
+		natsgo.NoCallbacksAfterClientClose(),
 		natsgo.DisconnectErrHandler(func(_ *natsgo.Conn, cerr error) {
 			log.Printf("eventbus nats: connection LOST (%v) — delivery is stopped until it returns", cerr)
 		}),
@@ -198,7 +211,8 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		natsgo.ClosedHandler(func(_ *natsgo.Conn) {
 			// Terminal. nats.go gives up after MaxReconnects and never tries
 			// again, so a process that reaches here delivers nothing for the
-			// rest of its life and must be restarted.
+			// rest of its life and must be restarted. (Never reached by our own
+			// Close — see NoCallbacksAfterClientClose above.)
 			log.Print("eventbus nats: connection CLOSED for good — this process will deliver nothing until it is restarted")
 			observx.ReportError(context.Background(), errors.New("eventbus nats: connection closed permanently"))
 		}),
@@ -244,6 +258,9 @@ func (b *NatsBus) Close(ctx context.Context) error {
 	}
 	if conn != nil {
 		conn.Close()
+		// Said here, by the closer: the connection's own handlers stay silent
+		// for a close this process asked for (NoCallbacksAfterClientClose).
+		log.Print("eventbus nats: connection closed (shutdown)")
 	}
 	return nil
 }

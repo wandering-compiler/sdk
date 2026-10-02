@@ -75,15 +75,6 @@ const (
 
 // fetchMigrations pulls every migration up to each target's pin.
 func fetchMigrations(ctx context.Context, projectID string, targets []migrate.ConnTarget, getenv func(string) string) ([]*applyfetchpb.Migration, error) {
-	addr := getenv(envConsoleAddr)
-	if addr == "" {
-		return nil, fmt.Errorf(
-			"migrate: --fetch needs a console address\n"+
-				"  fix: set %s to the console's gRPC endpoint (e.g. grpcs://api.w17.app:50051),\n"+
-				"       or drop --fetch and point --migrations at artefacts fetched elsewhere",
-			envConsoleAddr,
-		)
-	}
 	var want []*applyfetchpb.Target
 	for _, t := range targets {
 		if t.TargetMigrationID == "" {
@@ -94,8 +85,21 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 			UpToMigrationId: t.TargetMigrationID,
 		})
 	}
+	// Nothing pinned, nothing to fetch — and so no console needed. Checked
+	// before the address, so `apply --fetch` on a lock whose served
+	// connections are all unpinned warns and finishes instead of failing on
+	// a console it never had to call.
 	if len(want) == 0 {
 		return nil, nil
+	}
+	addr := getenv(envConsoleAddr)
+	if addr == "" {
+		return nil, fmt.Errorf(
+			"migrate: --fetch needs a console address\n"+
+				"  fix: set %s to the console's gRPC endpoint (e.g. grpcs://api.w17.app:50051),\n"+
+				"       or drop --fetch and point --migrations at artefacts fetched elsewhere",
+			envConsoleAddr,
+		)
 	}
 
 	conn, err := dialFetch(addr, getenv)

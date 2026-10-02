@@ -370,3 +370,76 @@ func TestFixturesApply_NothingSeedableNamesTheUnsetVariables(t *testing.T) {
 		t.Errorf("refusal should name the variable that was not set: %v", err)
 	}
 }
+
+// A render older than its fixture is refused before anything is seeded — the
+// consumer's PERMISSION_DENIED came from roles seeded out of a render that
+// predated the permission. Scoped: a stale fixture in another domain or group
+// is not this run's business.
+func TestFixturesApply_RefusesARenderOlderThanItsFixture(t *testing.T) {
+	rec := &recordingSeeder{}
+	withSeeder(t, rec)
+	root := t.TempDir()
+	rendered := filepath.Join(root, "w17", "fixtures")
+	seed := migrate.FixtureSeed{Domain: "app", Name: "acl-roles",
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO roles")}}
+	if err := migrate.WriteFixtureSeed(rendered, seed); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(root, "fixtures", "app", "acl-roles.json")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte(`{"rows":["now with permission 282"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.WriteRenderManifest(rendered, &migrate.RenderManifest{
+		SourceRoot: "../../fixtures",
+		Seeds: map[string]migrate.RenderedSource{
+			"app/acl-roles": {Source: "app/acl-roles.json", SHA256: migrate.FixtureDigest([]byte(`{"rows":["before"]}`))},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lock := writeLock(t, migrate.LockConnection{Name: "app-postgres"})
+	env := Options{Getenv: envMap{"W17_TARGET_APP_POSTGRES": "postgres://x/y"}.get}
+	apply := func(extra ...string) error {
+		var out strings.Builder
+		env.Out = &out
+		return runFixtures(context.Background(), append([]string{"apply", "--lock", lock, "--fixtures", rendered}, extra...), env, &out)
+	}
+
+	err := apply()
+	if err == nil || !strings.Contains(err.Error(), "acl-roles.json — "+migrate.StaleChanged) || !strings.Contains(err.Error(), "w17ctl fixtures render") {
+		t.Fatalf("stale render was not refused: %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("seeded anyway: %+v", rec.calls)
+	}
+	if !strings.Contains(err.Error(), "--allow-stale") {
+		t.Errorf("refusal names no override: %v", err)
+	}
+	// The deliberate override seeds.
+	if err := apply("--allow-stale"); err != nil {
+		t.Fatalf("--allow-stale refused: %v", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("--allow-stale did not seed: %+v", rec.calls)
+	}
+	rec.calls = nil
+	// Another domain's staleness is not this run's.
+	if err := apply("--domain", "billing"); err != nil && strings.Contains(err.Error(), "older than") {
+		t.Fatalf("a stale fixture in another domain refused this run: %v", err)
+	}
+	// Re-rendered (digest matches again) → seeds.
+	body, _ := os.ReadFile(src)
+	_ = migrate.WriteRenderManifest(rendered, &migrate.RenderManifest{
+		SourceRoot: "../../fixtures",
+		Seeds:      map[string]migrate.RenderedSource{"app/acl-roles": {Source: "app/acl-roles.json", SHA256: migrate.FixtureDigest(body)}},
+	})
+	if err := apply(); err != nil {
+		t.Fatalf("fresh render refused: %v", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("fresh render not seeded: %+v", rec.calls)
+	}
+}

@@ -69,7 +69,12 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	// The semconv version MUST be the one go.opentelemetry.io/otel/sdk's
+	// resource.Default() uses: merging resources with different schema
+	// URLs is an error, and MustInit returns it — every generated binary
+	// with OTel on would refuse to boot. TestMustInit_FullStack catches a
+	// mismatch; bump this with the SDK (v1.45.0 uses v1.43.0).
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 )
 

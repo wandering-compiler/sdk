@@ -133,6 +133,18 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 // loadSeeds resolves the rendered fixtures, from disk or from the console.
 func loadSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Options, out io.Writer) ([]migrate.FixtureSeed, error) {
 	if !f.fetch {
+		// A render older than its fixture seeds yesterday's rows — the roles
+		// without the permission the new endpoint needs, and an endpoint that
+		// answers PERMISSION_DENIED with nothing pointing at the seed (a
+		// consumer, twice). Refuse when the authoring tree is beside the
+		// render and disagrees with it; a deployed image carries only the
+		// render, and there StaleRenders has nothing to compare and says so
+		// by returning nothing.
+		if !f.allowStale {
+			if err := refuseStaleRender(f.fixtures, f.domain, f.group); err != nil {
+				return nil, err
+			}
+		}
 		fsys := os.DirFS(f.fixtures)
 		seeds, err := migrate.LoadFixtureSeeds(fsys, f.domain, f.group)
 		if err != nil {
@@ -285,4 +297,35 @@ func groupLabel(group string) string {
 		return "(default)"
 	}
 	return group
+}
+
+// refuseStaleRender fails when the rendered seeds this apply would read no
+// longer match the fixtures they were rendered from. Scoped to what this run
+// applies: a stale fixture in another domain, or in a group this run does not
+// seed, is not this run's to refuse.
+func refuseStaleRender(dir, domain, group string) error {
+	stale, err := migrate.StaleRenders(dir)
+	if err != nil {
+		return fmt.Errorf("fixtures: %w", err)
+	}
+	var mine []migrate.StaleRender
+	for _, s := range stale {
+		segs := strings.Split(s.Source, "/")
+		if len(segs) < 2 {
+			continue
+		}
+		if domain != "" && segs[0] != domain {
+			continue
+		}
+		if strings.Join(segs[1:len(segs)-1], "/") != group {
+			continue
+		}
+		mine = append(mine, s)
+	}
+	if len(mine) == 0 {
+		return nil
+	}
+	return fmt.Errorf("fixtures: the rendered seeds in %s are older than the fixtures they came from:\n%s\n"+
+		"  override: --allow-stale seeds from the render as it is",
+		dir, migrate.FormatStaleRenders(mine))
 }

@@ -203,3 +203,69 @@ func TestRollback_IsItsOwnSubcommand(t *testing.T) {
 		t.Errorf("rollback must be a recognised subcommand, got %v", err)
 	}
 }
+
+// A connection this binary serves with nothing pinned in the lock: the
+// consumer's case (2026-10-01) — `status` said "up to date — nothing
+// pending" without a word, `apply` succeeded, and a database with tables
+// stayed empty under a green deploy. Both now WARN, naming it and the gate
+// that knows (`migrate check --generated`). They do not refuse: a Redis
+// connection with nothing to migrate is unpinned legitimately, and the
+// binary cannot tell it from the failure.
+func TestApplyAndStatus_WarnAboutAServedConnectionWithNoPin(t *testing.T) {
+	lock := writeLock(t,
+		migrate.LockConnection{Name: "app-postgres", TargetMigrationID: "ts-1", TargetContentSha256: "aa"},
+		migrate.LockConnection{Name: "auth-postgres"},
+	)
+	for _, verb := range []string{"status", "apply"} {
+		var out strings.Builder
+		_, err := Dispatch(context.Background(), []string{"migrate", verb, "--lock", lock},
+			Options{Connections: []string{"auth-postgres"}, Getenv: envMap{}.get, Out: &out})
+		if err != nil {
+			t.Errorf("%s on a served, unpinned connection must not refuse (it may be a Redis with nothing to migrate): %v", verb, err)
+		}
+		if !strings.Contains(out.String(), "WARNING") || !strings.Contains(out.String(), "auth-postgres") ||
+			!strings.Contains(out.String(), "migrate check --generated") {
+			t.Errorf("%s must warn, naming the connection and the gate: %q", verb, out.String())
+		}
+	}
+
+	// A connection this binary does NOT serve is not its business.
+	var out strings.Builder
+	_, _ = Dispatch(context.Background(), []string{"migrate", "status", "--lock", lock}, Options{
+		Connections: []string{"app-postgres"}, Getenv: envMap{"W17_TARGET_APP_POSTGRES": "postgres://127.0.0.1:1/x"}.get, Out: &out,
+	})
+	if strings.Contains(out.String(), "auth-postgres") {
+		t.Errorf("an unpinned connection another binary serves must not be warned about here: %q", out.String())
+	}
+}
+
+// The warning goes out before anything else can fail (Copilot on #146):
+// `apply --fetch` with only unpinned connections needs no console and
+// finishes, and in a mixed lock the warning is printed even though the
+// pinned connection's missing DSN then fails the run.
+func TestUnpinned_IsReportedBeforeDSNsAndFetching(t *testing.T) {
+	onlyUnpinned := writeLock(t, migrate.LockConnection{Name: "app-redis"})
+	var out strings.Builder
+	_, err := Dispatch(context.Background(), []string{"migrate", "apply", "--fetch", "--lock", onlyUnpinned},
+		Options{Connections: []string{"app-redis"}, Getenv: envMap{}.get, Out: &out})
+	if err != nil {
+		t.Fatalf("nothing pinned must not need a console: %v", err)
+	}
+	if !strings.Contains(out.String(), "WARNING") {
+		t.Errorf("the unpinned connection must still be announced: %q", out.String())
+	}
+
+	mixed := writeLock(t,
+		migrate.LockConnection{Name: "app-postgres", TargetMigrationID: "ts-1", TargetContentSha256: "aa"},
+		migrate.LockConnection{Name: "auth-postgres"},
+	)
+	out.Reset()
+	_, err = Dispatch(context.Background(), []string{"migrate", "apply", "--lock", mixed},
+		Options{Connections: []string{"app-postgres", "auth-postgres"}, Getenv: envMap{}.get, Out: &out})
+	if err == nil {
+		t.Fatal("the pinned connection's missing DSN must still fail the run")
+	}
+	if !strings.Contains(out.String(), "WARNING") || !strings.Contains(out.String(), "auth-postgres") {
+		t.Errorf("the unpinned connection must be warned about before the DSN error: %q", out.String())
+	}
+}

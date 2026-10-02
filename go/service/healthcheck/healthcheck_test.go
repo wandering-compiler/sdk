@@ -301,3 +301,29 @@ func writeLeaf(t *testing.T, dir, dnsName string) (certPath, keyPath string) {
 	}
 	return certPath, keyPath
 }
+
+// A binary whose only command is `health` (business, admin, a standalone
+// gateway) answers --help and refuses an unknown word instead of starting
+// its server — a consumer's `<business> migrate status` and `--help` both
+// bound the port and hung (2026-10-01). Without Final, every word but
+// `health` is left to the next dispatcher, as before.
+func TestDispatch_FinalOwnsTheCommandTable(t *testing.T) {
+	var out strings.Builder
+	handled, err := healthcheck.Dispatch(context.Background(), []string{"--help"}, healthcheck.Options{Final: true, Out: &out})
+	if !handled || err != nil || !strings.Contains(out.String(), "health") {
+		t.Errorf("--help: handled=%v err=%v out=%q — want usage, no server", handled, err, out.String())
+	}
+	handled, err = healthcheck.Dispatch(context.Background(), []string{"migrate", "status"}, healthcheck.Options{Final: true})
+	if !handled || err == nil || !strings.Contains(err.Error(), `unknown command "migrate"`) {
+		t.Errorf("an unknown word must be refused, not start the server: handled=%v err=%v", handled, err)
+	}
+	if handled, _ := healthcheck.Dispatch(context.Background(), []string{"--listen=:9000"}, healthcheck.Options{Final: true}); handled {
+		t.Error("a flag belongs to the generated main and must fall through")
+	}
+	if handled, _ := healthcheck.Dispatch(context.Background(), nil, healthcheck.Options{Final: true}); handled {
+		t.Error("no argument means: start the server")
+	}
+	if handled, _ := healthcheck.Dispatch(context.Background(), []string{"migrate"}, healthcheck.Options{}); handled {
+		t.Error("without Final, a non-health word is the next dispatcher's")
+	}
+}

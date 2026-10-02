@@ -93,6 +93,16 @@ func Run(
 		return err
 	}
 
+	// A caller that is gone gets no commit — on EVERY transport. Over the
+	// wire the gRPC client refuses a call on a dead context by itself; an
+	// in-process conn (a composed binary) dispatches it anyway, so the same
+	// cancelled request committed there and rolled back over the wire.
+	// Returned BEFORE Commit with done still false: the deferred rollback
+	// runs, on its detached context.
+	if cerr := ctx.Err(); cerr != nil {
+		err = fmt.Errorf("distx.Run: not committing, the caller's context is done: %w", cerr)
+		return err
+	}
 	if cerr := handle.Commit(ctx); cerr != nil {
 		// Not wrapped as "the function failed": it did not. Everything fn did
 		// is lost, and the message has to say which half went wrong or a
