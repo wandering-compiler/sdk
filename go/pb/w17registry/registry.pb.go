@@ -517,6 +517,16 @@ type PushSchemaRequest struct {
 	// grammar (`<table>.<col>[:<axis>]=<strategy>` / `=custom:<path>`) against
 	// the plan's NEEDS_CONFIRM findings and re-plans with the resolutions, so a
 	// decidable finding no longer blocks the push.
+	//
+	// A key may be bound to one change: `<key>@<finding id>=<strategy>`, the id
+	// copied from Finding.finding_id. A bound decision resolves only the
+	// finding with that id; one whose key still has a finding but a different
+	// id was made for a different change and is UNUSED (a real push refuses
+	// it). Decision files are always sent bound. An unbound key (a hand-typed
+	// `--decide`, or a client that predates finding_id) keeps the key-only
+	// match, and is refused when its key names the same column in two tables.
+	// A console that predates bound keys refuses them (unknown axis) — it
+	// fails closed rather than applying them unbound.
 	Decide []string `protobuf:"bytes,5,rep,name=decide,proto3" json:"decide,omitempty"`
 	// decide_custom_sql maps a `custom:<path>` referenced in `decide` to its SQL
 	// body. The client reads the local file (the console can't see the client
@@ -636,7 +646,10 @@ type PushSchemaResponse struct {
 	// the push "initial schema" vs "schema revision".
 	ResolvedMode PushMode `protobuf:"varint,3,opt,name=resolved_mode,json=resolvedMode,proto3,enum=w17.registry.PushMode" json:"resolved_mode,omitempty"`
 	// unused_decisions — DRY_RUN only: the decision keys (the part of a
-	// `decide` entry before `=`) that match no finding. A real push REFUSES
+	// `decide` entry before `=`, `@<finding id>` included when the entry was
+	// bound) that match no finding — for a bound key, also one whose column
+	// now has a DIFFERENT change (findings then carries that change under the
+	// same decide_key). A real push REFUSES
 	// these, because a decision matching nothing can let a coexisting
 	// column-wide fallback run instead; a dry run reports them so the client
 	// can name the stale decision rather than fail on it. The remaining
@@ -650,7 +663,10 @@ type PushSchemaResponse struct {
 	// against (empty when the project has none yet). Every mint changes it.
 	// A decision is written against a base and applies only while the base is
 	// the same: once a release consumes it, the base moves and the decision
-	// can never decide a later change of the same column.
+	// can never decide a later change of the same column. The base check is
+	// the client's; a real push carries no base. What the console itself
+	// holds a decision to is its finding id (Finding.finding_id), which a mint
+	// between the dry run and the push moves whenever it changes the column.
 	Base          string `protobuf:"bytes,6,opt,name=base,proto3" json:"base,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -750,8 +766,27 @@ type Finding struct {
 	Options []string `protobuf:"bytes,8,rep,name=options,proto3" json:"options,omitempty"`
 	// prev_summary / curr_summary describe the change in human terms (e.g. the
 	// column's type before and after). Either may be empty.
-	PrevSummary   string `protobuf:"bytes,9,opt,name=prev_summary,json=prevSummary,proto3" json:"prev_summary,omitempty"`
-	CurrSummary   string `protobuf:"bytes,10,opt,name=curr_summary,json=currSummary,proto3" json:"curr_summary,omitempty"`
+	PrevSummary string `protobuf:"bytes,9,opt,name=prev_summary,json=prevSummary,proto3" json:"prev_summary,omitempty"`
+	CurrSummary string `protobuf:"bytes,10,opt,name=curr_summary,json=currSummary,proto3" json:"curr_summary,omitempty"`
+	// finding_id identifies THIS change — the console's finding id (a digest of
+	// the table, the axis and the column's shape before and after), where
+	// decide_key names only the column. Opaque to the client: a decision file
+	// records it and sends it back as `<decide_key>@<finding_id>=<strategy>`,
+	// which binds the decision to this change alone. When the same column
+	// changes differently later, the bound decision matches nothing (a dry run
+	// names it in unused_decisions, a real push refuses it) instead of
+	// deciding a change nobody reviewed. It also tells apart two tables that
+	// share a bare name, and so a decide_key (two SCHEMA namespaces, two
+	// connections).
+	//
+	// ABSENT ("") means a console that predates it — never "any change". A
+	// client must not write a decision file for a finding without one: a file
+	// that cannot say which change it decides could approve a different one.
+	FindingId string `protobuf:"bytes,11,opt,name=finding_id,json=findingId,proto3" json:"finding_id,omitempty"`
+	// table_fqn is the table's proto message FQN (e.g. `billing.User`) —
+	// unique where table_name is not. For the person deciding: two findings
+	// with one decide_key differ here. Empty from a console that predates it.
+	TableFqn      string `protobuf:"bytes,12,opt,name=table_fqn,json=tableFqn,proto3" json:"table_fqn,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -852,6 +887,20 @@ func (x *Finding) GetPrevSummary() string {
 func (x *Finding) GetCurrSummary() string {
 	if x != nil {
 		return x.CurrSummary
+	}
+	return ""
+}
+
+func (x *Finding) GetFindingId() string {
+	if x != nil {
+		return x.FindingId
+	}
+	return ""
+}
+
+func (x *Finding) GetTableFqn() string {
+	if x != nil {
+		return x.TableFqn
 	}
 	return ""
 }
@@ -1721,7 +1770,7 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\rresolved_mode\x18\x03 \x01(\x0e2\x16.w17.registry.PushModeR\fresolvedMode\x12)\n" +
 	"\x10unused_decisions\x18\x04 \x03(\tR\x0funusedDecisions\x12/\n" +
 	"\x13changed_connections\x18\x05 \x03(\tR\x12changedConnections\x12\x12\n" +
-	"\x04base\x18\x06 \x01(\tR\x04base\"\xb9\x02\n" +
+	"\x04base\x18\x06 \x01(\tR\x04base\"\xf5\x02\n" +
 	"\aFinding\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
@@ -1736,7 +1785,10 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\aoptions\x18\b \x03(\tR\aoptions\x12!\n" +
 	"\fprev_summary\x18\t \x01(\tR\vprevSummary\x12!\n" +
 	"\fcurr_summary\x18\n" +
-	" \x01(\tR\vcurrSummary\"\x9a\x01\n" +
+	" \x01(\tR\vcurrSummary\x12\x1d\n" +
+	"\n" +
+	"finding_id\x18\v \x01(\tR\tfindingId\x12\x1b\n" +
+	"\ttable_fqn\x18\f \x01(\tR\btableFqn\"\x9a\x01\n" +
 	"\x17PushRawMigrationRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x1e\n" +
