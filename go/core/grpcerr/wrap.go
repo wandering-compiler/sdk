@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -341,6 +342,22 @@ func ForUserWith(ctx context.Context, c codes.Code, method, dev, code, userMsgid
 	return forCaller(ctx, c, method, dev, code, userMsgid, params)
 }
 
+// OnEmpty is what a generated op answers with when it finds no row and its
+// author said what that means — `(w17.db.method).ops[].on_empty`.
+//
+// It answers only for a missing row: every other error goes through [Wrap]
+// unchanged, so a constraint hit or a cancelled context inside the same op
+// still reads as what it is. `field` names the request field the sentence is
+// about (empty for none); `params` fills the msgid's `{placeholder}` holes,
+// exactly as in [ForUserWith].
+func OnEmpty(ctx context.Context, method string, err error, registry *ConstraintRegistry, d Dialect,
+	c codes.Code, op, code, field, userMsgid string, params map[string]string) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return forCallerOn(ctx, c, method, "op "+strconv.Quote(op)+" found no row", code, field, userMsgid, params)
+	}
+	return Wrap(ctx, method, err, registry, d)
+}
+
 // forCaller builds the two-audience error this package owes both of its
 // readers.
 //
@@ -352,10 +369,17 @@ func ForUserWith(ctx context.Context, c codes.Code, method, dev, code, userMsgid
 // One string cannot serve both. That is the whole defect this replaces: the
 // gateway was showing the operator's copy because it was the only copy.
 func forCaller(ctx context.Context, c codes.Code, method, dev, code, userMsgid string, params map[string]string) error {
+	return forCallerOn(ctx, c, method, dev, code, "", userMsgid, params)
+}
+
+// forCallerOn is forCaller with the request field the refusal is about, which
+// lands in ErrorDetail.field. Empty leaves the detail field-less.
+func forCallerOn(ctx context.Context, c codes.Code, method, dev, code, field, userMsgid string, params map[string]string) error {
 	st := status.New(c, method+": "+dev)
 	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
 		Code:    code,
 		Message: i18n.T(ctx, userMsgid, params),
+		Field:   field,
 	}))
 	if err != nil {
 		// coverage-exempt: WithDetails only fails if the detail cannot

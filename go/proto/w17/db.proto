@@ -714,6 +714,80 @@ enum TxIsolation {
 message Operation {
   string name = 1;
   string dql = 2;
+
+  // What the caller is told when this op finds no row.
+  //
+  // An intermediate op that reads one row aborts the method when the row is
+  // not there, and until this field existed it always aborted the same way:
+  // NOT_FOUND, "The item you asked for does not exist." That sentence is right
+  // for the op that loads the item the caller named and wrong for every other
+  // one. In
+  //
+  //   m:    SELECT … FROM OrgMembership m WHERE m.id = :id
+  //   r:    SELECT r.id FROM Role r WHERE r.name = :role AND r.org_scoped
+  //   main: UPDATE OrgMembership SET role = :role WHERE id = :id …
+  //
+  // a mistyped role is not a missing membership, but both answered alike, so
+  // the person who mistyped it was sent to look for an item that exists.
+  //
+  //   ops: {
+  //     name: "r"
+  //     dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.name = :role …"
+  //     on_empty: {
+  //       code:       ON_EMPTY_INVALID_ARGUMENT
+  //       error_code: "UNKNOWN_ROLE"
+  //       field:      "role"
+  //       message:    "There is no organization role named {role}."
+  //     }
+  //   }
+  //
+  // Only an op whose miss can happen accepts it: an INTERMEDIATE op that reads
+  // one row — a SELECT, or a write whose RETURNING a later op reads. The
+  // response producer's miss is the method's own NOT_FOUND, and a write nothing
+  // reads back runs without a scan, so zero rows is not an error there; codegen
+  // refuses the field on both rather than accept a sentence nobody can see.
+  OnEmpty on_empty = 3;
+}
+
+// OnEmpty is the refusal an [Operation] answers with when it finds no row.
+// See Operation.on_empty.
+message OnEmpty {
+  // The gRPC code. UNSPECIFIED means NOT_FOUND — the code the op answered
+  // with before it could say anything else.
+  OnEmptyCode code = 1;
+
+  // The machine-readable code a client branches on — ErrorDetail.code.
+  // Required, upper snake case (`UNKNOWN_ROLE`). Name the case, not the
+  // mechanism: a client reads it to decide what to show.
+  string error_code = 2;
+
+  // The sentence a PERSON reads — ErrorDetail.message. Required. It is a msgid:
+  // codegen puts it in the project's `.po` and the runtime translates it.
+  //
+  // `{name}` is replaced by the value of the request field `name`, so one
+  // catalogue entry serves every value. Each placeholder must name a scalar
+  // field of the method's request message; codegen refuses one that does not.
+  string message = 3;
+
+  // The request field the refusal is about — ErrorDetail.field, which a form
+  // uses to put the sentence next to the input. Optional; when set it must
+  // name a field of the method's request message.
+  string field = 4;
+}
+
+// OnEmptyCode is the gRPC code of an [OnEmpty] refusal. Three codes, because
+// those are the three meanings a missing row can have from the caller's side:
+//
+//   NOT_FOUND           the thing the caller asked about does not exist;
+//   INVALID_ARGUMENT    a value in the request names nothing (a typo, an
+//                       unknown label) — the caller fixes the request;
+//   FAILED_PRECONDITION the request is fine, the current state refuses it
+//                       (a guard SELECT such as "balance >= :amount").
+enum OnEmptyCode {
+  ON_EMPTY_CODE_UNSPECIFIED = 0;
+  ON_EMPTY_NOT_FOUND = 1;
+  ON_EMPTY_INVALID_ARGUMENT = 2;
+  ON_EMPTY_FAILED_PRECONDITION = 3;
 }
 
 // Module + Connection + Dialect + Capability + StorageEncoding

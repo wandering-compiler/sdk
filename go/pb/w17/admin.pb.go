@@ -1208,6 +1208,15 @@ type AdminDetail struct {
 	Read string `protobuf:"bytes,1,opt,name=read,proto3" json:"read,omitempty"`
 	// Storage method ref — update. Optional; absent = detail
 	// is read-only (no edit form, no save button).
+	//
+	// May also name a PLUGIN's Service method — the way a plugin puts a Go
+	// rule in front of an admin write (auth's OrgMemberships page edits a
+	// role through AuthService.UpdateOrgMembershipRole, which holds it to the
+	// role ceiling). The admin sends the verified principal with every call
+	// (`x-w17-user`, as the gateway does), and with no DQL to read, the
+	// mass-assignment guards on `fields` / `readonly_fields` read the
+	// method's REQUEST: every field but the URL-stamped key is one a direct
+	// call sets. See docs/specs/admin/pages.md §Binding a Service method.
 	Update string `protobuf:"bytes,2,opt,name=update,proto3" json:"update,omitempty"`
 	// Storage method ref — delete. Optional; absent = no
 	// delete button on the detail view.

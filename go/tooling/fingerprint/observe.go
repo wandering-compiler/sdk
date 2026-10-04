@@ -23,6 +23,24 @@ import (
 // missing.
 type Observed struct {
 	Tables []ObservedTable
+	// EnumTypes are the database's native ENUM types with their labels. A
+	// column only NAMES its type; the labels — what the database will
+	// actually accept — live here, and a column is tied to its entry by
+	// spelling (ObservedEnumType.Type == Column.DataType).
+	EnumTypes []ObservedEnumType
+}
+
+// ObservedEnumType is one native enum type: where it lives, how a column of
+// it spells its type, and the labels in the database's sort order.
+type ObservedEnumType struct {
+	Schema string
+	Name   string
+	// Type is `format_type(oid, NULL)` — the exact string a column of this
+	// type reports as its DataType on the same connection, qualified when the
+	// type is not on the reader's search_path.
+	Type string
+	// Labels in `enumsortorder`: the order is part of the type.
+	Labels []string
 }
 
 // ObservedTable is one table, identified by the pair that actually names it.
@@ -39,8 +57,22 @@ type ObservedTable struct {
 	// PrimaryKey is the key's columns in key order, as the database spells
 	// them.
 	PrimaryKey []string
+	// PrimaryKeyName is the key CONSTRAINT's name. Not derivable: Postgres
+	// names an inline key `<table>_pkey`, but a hand-made table can name it
+	// anything and a renamed table keeps its old `<old>_pkey` — and a key
+	// change that drops a derived name that does not exist fails its ADD
+	// PRIMARY KEY with "multiple primary keys" (pass #49 B49-6). Empty for
+	// a table with no key.
+	PrimaryKeyName string
 	// ForeignKeys are the table's FK constraints.
 	ForeignKeys []ObservedForeignKey
+	// Uniques are the table's UNIQUE constraints — invisible before pass #49
+	// B49-10, because the index read skips constraint-backed indexes and the
+	// constraint read took only FKs and checks. UniquesRead says they were
+	// READ: absent is not empty, and a reader that did not look must not be
+	// taken for a table that has none.
+	Uniques     []ObservedUnique
+	UniquesRead bool
 	// Checks are the table's CHECK constraints, by name.
 	Checks []string
 	// CheckMembers is the MEMBER SET of every membership check, by constraint
@@ -59,25 +91,34 @@ type ObservedTable struct {
 	// why comparing whole expressions was rejected.
 	CheckMembers map[string][]string
 	// CheckDefs is every CHECK constraint's full definition, by name, exactly
-	// as `pg_get_constraintdef` renders it. Nothing COMPARES this text —
-	// names and member sets stay the comparison keys, for the reason Checks
-	// documents — it is carried so a constraint the schema does not declare
-	// can be planned for a DROP under its real identity, with a DOWN that
-	// can actually re-create it.
+	// as `pg_get_constraintdef` renders it — the raw text; this reader
+	// interprets nothing. The console uses it to drop an undeclared
+	// constraint under its real identity with a DOWN that re-creates it, and
+	// (pass #49 M4) to read a declared check's bounds / pattern back as facts
+	// and to compare a raw check's normalised body.
 	CheckDefs map[string]string
 }
 
-// ObservedForeignKey is one FK constraint: the column it constrains and what
-// it points at. Single-column only, which is what w17 emits; a composite one
-// reports its first column and is compared on that.
+// ObservedForeignKey is one FK constraint: the columns it constrains and
+// what it points at.
 type ObservedForeignKey struct {
 	Name string
 	// Columns are every column the key constrains, in the database's order.
 	// Plural because a scope-preserving key constrains two, and the pair —
 	// not either one alone — is what identifies it against a declaration.
-	Columns      []string
-	TargetTable  string
+	Columns     []string
+	TargetTable string
+	// TargetSchema is the namespace the referenced table lives in. A
+	// table's identity is the pair: without it a key into `other.u` is
+	// indistinguishable from one into `public.u` (pass #49 B49-12 / B49-15).
+	// Empty means not reported (an older reader).
+	TargetSchema string
+	// TargetColumn is the FIRST referenced column — kept for consumers that
+	// predate TargetColumns.
 	TargetColumn string
+	// TargetColumns are every referenced column, paired position by
+	// position with Columns (`confkey` order). Empty means not reported.
+	TargetColumns []string
 	// OnDelete is the key's deletion rule in its SQL spelling — "NO ACTION",
 	// "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT". Carried because a
 	// rule flip is otherwise invisible end to end: a stale CASCADE keeps
@@ -164,7 +205,7 @@ func ObservePostgres(ctx context.Context, conn PgxQuerier) (Observed, error) {
 		if err != nil {
 			return Observed{}, err
 		}
-		idx, pk, err := pgObserveIndexes(ctx, conn, r.schema, r.name)
+		idx, pk, pkName, err := pgObserveIndexes(ctx, conn, r.schema, r.name)
 		if err != nil {
 			return Observed{}, err
 		}
@@ -172,12 +213,67 @@ func ObservePostgres(ctx context.Context, conn PgxQuerier) (Observed, error) {
 		if err != nil {
 			return Observed{}, err
 		}
+		uniques, err := pgObserveUniques(ctx, conn, r.schema, r.name)
+		if err != nil {
+			return Observed{}, err
+		}
 		out.Tables = append(out.Tables, ObservedTable{
-			Schema: r.schema, Name: r.name, Columns: cols, Indexes: idx, PrimaryKey: pk,
+			Schema: r.schema, Name: r.name, Columns: cols, Indexes: idx, PrimaryKey: pk, PrimaryKeyName: pkName,
 			ForeignKeys: fks, Checks: checks, CheckMembers: members, CheckDefs: defs,
+			Uniques: uniques, UniquesRead: true,
 		})
 	}
+	enums, err := pgObserveEnumTypes(ctx, conn)
+	if err != nil {
+		return Observed{}, err
+	}
+	out.EnumTypes = enums
 	return out, nil
+}
+
+// pgObserveEnumTypes reads every native enum type with its labels.
+//
+// The same namespace rules as the table read: the server's own schemas are
+// out, and so is anything an EXTENSION owns — the type itself, or one living
+// in a schema the extension created. A type no migration made is not this
+// reader's to report.
+//
+// Labels come in `enumsortorder`, not alphabetically: the order is part of
+// the type (it is what `<` and ORDER BY use), so a reorder is a change.
+func pgObserveEnumTypes(ctx context.Context, conn PgxQuerier) ([]ObservedEnumType, error) {
+	rows, err := conn.Query(ctx, `
+		SELECT n.nspname,
+		       t.typname,
+		       format_type(t.oid, NULL),
+		       COALESCE((SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder)
+		                   FROM pg_enum e WHERE e.enumtypid = t.oid), '{}')
+		  FROM pg_type t
+		  JOIN pg_namespace n ON n.oid = t.typnamespace
+		 WHERE t.typtype = 'e'
+		   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+		   AND n.nspname NOT LIKE 'pg\_%'
+		   AND NOT EXISTS (
+		         SELECT 1 FROM pg_depend d
+		          WHERE d.classid = 'pg_type'::regclass
+		            AND d.objid = t.oid AND d.deptype = 'e')
+		   AND NOT EXISTS (
+		         SELECT 1 FROM pg_depend d
+		          WHERE d.classid = 'pg_namespace'::regclass
+		            AND d.objid = n.oid AND d.deptype = 'e')
+		 ORDER BY n.nspname, t.typname`)
+	if err != nil {
+		return nil, fmt.Errorf("postgres observe enum types: %w", err)
+	}
+	defer rows.Close()
+	var out []ObservedEnumType
+	for rows.Next() {
+		var et ObservedEnumType
+		if err := rows.Scan(&et.Schema, &et.Name, &et.Type, &et.Labels); err != nil {
+			return nil, fmt.Errorf("postgres observe scan enum type: %w", err)
+		}
+		out = append(out, et)
+	}
+	return out, rows.Err()
 }
 
 // pgObserveIndexes reads a table's indexes and its primary key.
@@ -190,7 +286,7 @@ func ObservePostgres(ctx context.Context, conn PgxQuerier) (Observed, error) {
 // UNIQUE constraint is created by the constraint and dropped with it; no
 // migration ever names one, so reported as an index it reads as something the
 // schema never declared and gets planned for a DROP that would fail.
-func pgObserveIndexes(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedIndex, []string, error) {
+func pgObserveIndexes(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedIndex, []string, string, error) {
 	rows, err := conn.Query(ctx, `
 		SELECT ic.relname,
 		       i.indisunique,
@@ -210,7 +306,7 @@ func pgObserveIndexes(ctx context.Context, conn PgxQuerier, schema, table string
 		 ORDER BY ic.relname`,
 		schema, table)
 	if err != nil {
-		return nil, nil, fmt.Errorf("postgres observe indexes %s.%s: %w", schema, table, err)
+		return nil, nil, "", fmt.Errorf("postgres observe indexes %s.%s: %w", schema, table, err)
 	}
 	defer rows.Close()
 	var out []ObservedIndex
@@ -219,25 +315,30 @@ func pgObserveIndexes(ctx context.Context, conn PgxQuerier, schema, table string
 		var unique, primary bool
 		var cols []string
 		if err := rows.Scan(&name, &unique, &primary, &def, &cols); err != nil {
-			return nil, nil, fmt.Errorf("postgres observe scan index %s.%s: %w", schema, table, err)
+			return nil, nil, "", fmt.Errorf("postgres observe scan index %s.%s: %w", schema, table, err)
 		}
 		out = append(out, ObservedIndex{Name: name, Unique: unique, Definition: def})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("postgres observe indexes %s.%s: %w", schema, table, err)
+		return nil, nil, "", fmt.Errorf("postgres observe indexes %s.%s: %w", schema, table, err)
 	}
 
-	pk, err := pgObservePrimaryKey(ctx, conn, schema, table)
+	pk, pkName, err := pgObservePrimaryKey(ctx, conn, schema, table)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return out, pk, nil
+	return out, pk, pkName, nil
 }
 
-// pgObservePrimaryKey reads the primary key's columns, in key order.
-func pgObservePrimaryKey(ctx context.Context, conn PgxQuerier, schema, table string) ([]string, error) {
+// pgObservePrimaryKey reads the primary key's columns, in key order, and
+// the name of the CONSTRAINT that owns the key's index (pass #49 B49-6: the
+// name is not derivable — see ObservedTable.PrimaryKeyName).
+func pgObservePrimaryKey(ctx context.Context, conn PgxQuerier, schema, table string) ([]string, string, error) {
 	rows, err := conn.Query(ctx, `
-		SELECT a.attname
+		SELECT a.attname,
+		       COALESCE((SELECT c.conname FROM pg_constraint c
+		                  WHERE c.conindid = i.indexrelid AND c.conrelid = i.indrelid
+		                    AND c.contype = 'p'), '')
 		  FROM pg_index i
 		  JOIN pg_class tc ON tc.oid = i.indrelid
 		  JOIN pg_namespace n ON n.oid = tc.relnamespace
@@ -247,18 +348,20 @@ func pgObservePrimaryKey(ctx context.Context, conn PgxQuerier, schema, table str
 		 ORDER BY k.ord`,
 		schema, table)
 	if err != nil {
-		return nil, fmt.Errorf("postgres observe primary key %s.%s: %w", schema, table, err)
+		return nil, "", fmt.Errorf("postgres observe primary key %s.%s: %w", schema, table, err)
 	}
 	defer rows.Close()
 	var out []string
+	var keyName string
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("postgres observe scan primary key %s.%s: %w", schema, table, err)
+		var name, conname string
+		if err := rows.Scan(&name, &conname); err != nil {
+			return nil, "", fmt.Errorf("postgres observe scan primary key %s.%s: %w", schema, table, err)
 		}
 		out = append(out, name)
+		keyName = conname
 	}
-	return out, rows.Err()
+	return out, keyName, rows.Err()
 }
 
 func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string) ([]Column, error) {
@@ -338,13 +441,16 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		                   FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
 		                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '{}'),
 		       COALESCE(ft.relname, ''),
-		       COALESCE((SELECT a.attname FROM pg_attribute a
-		                  WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]), ''),
+		       COALESCE(fn.nspname, ''),
+		       COALESCE((SELECT array_agg(a.attname ORDER BY k.ord)
+		                   FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+		                   JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum), '{}'),
 		       c.confdeltype
 		  FROM pg_constraint c
 		  JOIN pg_class tc ON tc.oid = c.conrelid
 		  JOIN pg_namespace n ON n.oid = tc.relnamespace
 		  LEFT JOIN pg_class ft ON ft.oid = c.confrelid
+		  LEFT JOIN pg_namespace fn ON fn.oid = ft.relnamespace
 		 WHERE n.nspname = $1 AND tc.relname = $2 AND c.contype IN ('f', 'c')
 		   AND c.conislocal AND c.conparentid = 0
 		 ORDER BY c.conname`,
@@ -358,18 +464,22 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 	members := map[string][]string{}
 	defs := map[string]string{}
 	for rows.Next() {
-		var name, def, target, targetCol string
-		var cols []string
+		var name, def, target, targetSchema string
+		var cols, targetCols []string
 		var kind, delType byte
-		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetCol, &delType); err != nil {
+		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetSchema, &targetCols, &delType); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
 		}
 		switch kind {
 		case 'f':
-			fks = append(fks, ObservedForeignKey{
-				Name: name, Columns: cols, TargetTable: target, TargetColumn: targetCol,
-				OnDelete: fkRuleSQL(delType),
-			})
+			fk := ObservedForeignKey{
+				Name: name, Columns: cols, TargetTable: target, TargetSchema: targetSchema,
+				TargetColumns: targetCols, OnDelete: fkRuleSQL(delType),
+			}
+			if len(targetCols) > 0 {
+				fk.TargetColumn = targetCols[0]
+			}
+			fks = append(fks, fk)
 		case 'c':
 			checks = append(checks, name)
 			defs[name] = def
@@ -379,6 +489,44 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		}
 	}
 	return fks, checks, members, defs, rows.Err()
+}
+
+// ObservedUnique is one UNIQUE constraint: its name and its columns in key
+// order.
+type ObservedUnique struct {
+	Name    string
+	Columns []string
+}
+
+// pgObserveUniques reads a table's UNIQUE constraints (contype 'u'), with the
+// same local-only rule the other constraints follow (an inherited clone
+// cannot be dropped on the child).
+func pgObserveUniques(ctx context.Context, conn PgxQuerier, schema, table string) ([]ObservedUnique, error) {
+	rows, err := conn.Query(ctx, `
+		SELECT c.conname,
+		       COALESCE((SELECT array_agg(a.attname ORDER BY k.ord)
+		                   FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+		                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '{}')
+		  FROM pg_constraint c
+		  JOIN pg_class tc ON tc.oid = c.conrelid
+		  JOIN pg_namespace n ON n.oid = tc.relnamespace
+		 WHERE n.nspname = $1 AND tc.relname = $2 AND c.contype = 'u'
+		   AND c.conislocal AND c.conparentid = 0
+		 ORDER BY c.conname`,
+		schema, table)
+	if err != nil {
+		return nil, fmt.Errorf("postgres observe unique constraints %s.%s: %w", schema, table, err)
+	}
+	defer rows.Close()
+	var out []ObservedUnique
+	for rows.Next() {
+		var u ObservedUnique
+		if err := rows.Scan(&u.Name, &u.Columns); err != nil {
+			return nil, fmt.Errorf("postgres observe scan unique constraint %s.%s: %w", schema, table, err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // fkRuleSQL spells pg_constraint.confdeltype the way SQL does. An unknown
@@ -463,6 +611,15 @@ func singleCheckMember(def string) ([]string, bool) {
 	}
 	lhs := strings.TrimPrefix(def[:eq], "CHECK")
 	lhs = strings.TrimLeft(lhs, " (")
+	// A VARCHAR (or CHAR) column comes back CAST on the left —
+	// `(((v1)::text = 'draft'::text))`, measured on postgres:14/16/18 — so
+	// the column is the parenthesised operand of a cast, not a bare
+	// identifier (pass #49 B49-8). Unwrapped only when what follows the
+	// paren is a cast and nothing else; whether what is INSIDE is a bare
+	// column is still decided below, so `(lower(v))::text` stays out.
+	if i := strings.Index(lhs, ")::"); i >= 0 && trimTrailingCast(lhs[i+1:]) == "" {
+		lhs = lhs[:i]
+	}
 	lhs = strings.TrimSuffix(strings.TrimPrefix(lhs, `"`), `"`)
 	if !isBareIdentifier(lhs) {
 		return nil, false
