@@ -721,6 +721,22 @@ message RestEndpoint {
   // back — the value made the whole round trip and was echoed into a
   // JSON field nobody could act on. This is the missing half.
   BrowserRedirect browser_redirect = 18;
+
+  // org_from_path (2026-10-04) — the path segment `{<name>}` names the
+  // organization this request acts in, as the `W17-Org` header does. The
+  // gateway puts its value in that header BEFORE authentication, so the
+  // auth plugin resolves and validates it like any header value (membership,
+  // grants narrowed to it); a request whose `W17-Org` header names a
+  // different org is refused (400).
+  //
+  // Why a URL and not only the header: a URL then names what it shows —
+  // deep links work, and anything keyed by URL (a cache, a log line) tells
+  // two orgs apart. The placeholder must appear in the endpoint's full path
+  // and binds to a request field like any other path param; the handler
+  // reads the VERIFIED org from its scope, not from that field.
+  //
+  // Empty (the default) = the org comes from the header alone.
+  string org_from_path = 19;
 }
 
 // MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata

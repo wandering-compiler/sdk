@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"fmt"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -76,12 +78,60 @@ func (s *Scope) expandString(str string) (any, error) {
 			}
 			return ""
 		}
-		return fmt.Sprint(val)
+		return textOf(val)
 	})
 	if firstErr != nil {
 		return nil, firstErr
 	}
 	return out, nil
+}
+
+// expandRegex interpolates a regex pattern: each `${…}` token is resolved
+// like anywhere else and substituted as a LITERAL (regexp.QuoteMeta) — a
+// captured value is data to find, so `1.2` must not match `1x2`. A `$`
+// escaped with a backslash (`\${x}`, the usual way to mean those characters
+// in a regex) is not a token.
+func (s *Scope) expandRegex(pattern string) (string, error) {
+	var b strings.Builder
+	last := 0
+	for _, loc := range regexTokens(pattern) {
+		b.WriteString(pattern[last:loc[0]])
+		val, err := s.resolve(pattern[loc[0]+2 : loc[1]-1])
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(regexp.QuoteMeta(textOf(val)))
+		last = loc[1]
+	}
+	b.WriteString(pattern[last:])
+	return b.String(), nil
+}
+
+// regexTokens finds the `${…}` tokens of a regex pattern, skipping one whose
+// `$` is backslash-escaped.
+func regexTokens(pattern string) [][]int {
+	var out [][]int
+	for _, loc := range tokenRE.FindAllStringIndex(pattern, -1) {
+		if loc[0] > 0 && pattern[loc[0]-1] == '\\' {
+			continue
+		}
+		out = append(out, loc)
+	}
+	return out
+}
+
+// textOf renders a resolved value for substitution into a string. A JSON
+// number decodes as float64, and fmt.Sprint writes 1234567 as 1.234567e+06 —
+// so a captured id embedded in `<ID>${id}</ID>` would never match. Integral
+// values print as integers, the rest without an exponent.
+func textOf(v any) string {
+	if f, ok := v.(float64); ok {
+		if f == math.Trunc(f) && math.Abs(f) < 1<<53 {
+			return strconv.FormatInt(int64(f), 10)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return fmt.Sprint(v)
 }
 
 // resolve evaluates one token body: a generator (reserved `random:`

@@ -1482,8 +1482,23 @@ type RestEndpoint struct {
 	// back — the value made the whole round trip and was echoed into a
 	// JSON field nobody could act on. This is the missing half.
 	BrowserRedirect *BrowserRedirect `protobuf:"bytes,18,opt,name=browser_redirect,json=browserRedirect,proto3" json:"browser_redirect,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// org_from_path (2026-10-04) — the path segment `{<name>}` names the
+	// organization this request acts in, as the `W17-Org` header does. The
+	// gateway puts its value in that header BEFORE authentication, so the
+	// auth plugin resolves and validates it like any header value (membership,
+	// grants narrowed to it); a request whose `W17-Org` header names a
+	// different org is refused (400).
+	//
+	// Why a URL and not only the header: a URL then names what it shows —
+	// deep links work, and anything keyed by URL (a cache, a log line) tells
+	// two orgs apart. The placeholder must appear in the endpoint's full path
+	// and binds to a request field like any other path param; the handler
+	// reads the VERIFIED org from its scope, not from that field.
+	//
+	// Empty (the default) = the org comes from the header alone.
+	OrgFromPath   string `protobuf:"bytes,19,opt,name=org_from_path,json=orgFromPath,proto3" json:"org_from_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestEndpoint) Reset() {
@@ -1619,6 +1634,13 @@ func (x *RestEndpoint) GetBrowserRedirect() *BrowserRedirect {
 		return x.BrowserRedirect
 	}
 	return nil
+}
+
+func (x *RestEndpoint) GetOrgFromPath() string {
+	if x != nil {
+		return x.OrgFromPath
+	}
+	return ""
 }
 
 // MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata
@@ -2296,7 +2318,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\xeb\x04\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\x8f\x05\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2315,7 +2337,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\n" +
 	"credential\x18\x11 \x01(\v2\x0f.w17.CredentialR\n" +
 	"credential\x12?\n" +
-	"\x10browser_redirect\x18\x12 \x01(\v2\x14.w17.BrowserRedirectR\x0fbrowserRedirectJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
+	"\x10browser_redirect\x18\x12 \x01(\v2\x14.w17.BrowserRedirectR\x0fbrowserRedirect\x12\"\n" +
+	"\rorg_from_path\x18\x13 \x01(\tR\vorgFromPathJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
 	"\x0fMetadataBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1a\n" +

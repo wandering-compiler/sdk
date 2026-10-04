@@ -174,11 +174,25 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		if pat == "" {
 			return nil, fmt.Errorf("regex: missing `pattern`")
 		}
+		// `${…}` in a pattern is interpolated like everywhere else, at MATCH
+		// time (the scope holds the captures then, not now). Checked here
+		// with each token as a literal stand-in, so a pattern that is not a
+		// regex still fails at decode rather than mid-run.
+		if toks := regexTokens(pat); len(toks) > 0 {
+			stand := pat
+			for i := len(toks) - 1; i >= 0; i-- {
+				stand = stand[:toks[i][0]] + "x" + stand[toks[i][1]:]
+			}
+			if _, err := regexp.Compile(stand); err != nil {
+				return nil, fmt.Errorf("regex: bad pattern %q: %w", pat, err)
+			}
+			return regexMatcher{pattern: pat}, nil
+		}
 		re, err := regexp.Compile(pat)
 		if err != nil {
 			return nil, fmt.Errorf("regex: bad pattern %q: %w", pat, err)
 		}
-		return regexMatcher{re: re}, nil
+		return regexMatcher{pattern: pat, re: re}, nil
 	case "count":
 		op, _ := m["op"].(string)
 		if op == "" {
@@ -337,15 +351,40 @@ func (emptyMatcher) Match(actual any, present bool, _ *Scope) error {
 	return nil
 }
 
-type regexMatcher struct{ re *regexp.Regexp }
+// regexMatcher: re is compiled at decode when the pattern has no `${…}`;
+// otherwise it is compiled per match from the interpolated pattern.
+//
+// It used to compile the raw pattern only, so `${rt_number}` was matched as
+// those literal characters (a consumer, 2026-10-04). A whole-pattern token
+// then failed loudly, but `(${expected}|.*)` or `.*${id}.*` would have PASSED
+// against anything — a vacuous assertion that reads correctly.
+type regexMatcher struct {
+	pattern string
+	re      *regexp.Regexp
+}
 
-func (m regexMatcher) Match(actual any, present bool, _ *Scope) error {
+func (m regexMatcher) Match(actual any, present bool, scope *Scope) error {
+	re := m.re
+	shown := m.pattern
+	if re == nil {
+		if scope == nil {
+			return fmt.Errorf("regex %q: interpolates `${…}`, and no scope was given to resolve it", m.pattern)
+		}
+		pat, err := scope.expandRegex(m.pattern)
+		if err != nil {
+			return fmt.Errorf("regex %q: %w", m.pattern, err)
+		}
+		if re, err = regexp.Compile(pat); err != nil {
+			return fmt.Errorf("regex %q (interpolated %q): %w", m.pattern, pat, err)
+		}
+		shown = fmt.Sprintf("%s (interpolated %q)", m.pattern, pat)
+	}
 	if !present {
-		return fmt.Errorf("regex %q: field absent", m.re.String())
+		return fmt.Errorf("regex %q: field absent", shown)
 	}
 	s := fmt.Sprint(actual)
-	if !m.re.MatchString(s) {
-		return fmt.Errorf("regex %q: no match for %q", m.re.String(), s)
+	if !re.MatchString(s) {
+		return fmt.Errorf("regex %q: no match for %q", shown, s)
 	}
 	return nil
 }
