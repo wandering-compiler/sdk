@@ -762,7 +762,8 @@ type Finding struct {
 	Proposed string `protobuf:"bytes,7,opt,name=proposed,proto3" json:"proposed,omitempty"`
 	// options are the strategies a decision may choose, as decision values
 	// (`safe`, `lossless_using`, `needs_confirm`, `drop_and_create`; a
-	// `custom` body is always possible and is not listed). Includes proposed.
+	// `custom` body is not listed — it is accepted unless custom_refused).
+	// Includes proposed.
 	Options []string `protobuf:"bytes,8,rep,name=options,proto3" json:"options,omitempty"`
 	// prev_summary / curr_summary describe the change in human terms (e.g. the
 	// column's type before and after). Either may be empty.
@@ -786,7 +787,11 @@ type Finding struct {
 	// table_fqn is the table's proto message FQN (e.g. `billing.User`) —
 	// unique where table_name is not. For the person deciding: two findings
 	// with one decide_key differ here. Empty from a console that predates it.
-	TableFqn      string `protobuf:"bytes,12,opt,name=table_fqn,json=tableFqn,proto3" json:"table_fqn,omitempty"`
+	TableFqn string `protobuf:"bytes,12,opt,name=table_fqn,json=tableFqn,proto3" json:"table_fqn,omitempty"`
+	// custom_refused — the console refuses `custom: <file.sql>` for this
+	// finding: `options` are the only answers (e.g. a table_drop, which is
+	// confirmed or not, and has no SQL to replace). Absent = custom is accepted.
+	CustomRefused bool `protobuf:"varint,13,opt,name=custom_refused,json=customRefused,proto3" json:"custom_refused,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -903,6 +908,13 @@ func (x *Finding) GetTableFqn() string {
 		return x.TableFqn
 	}
 	return ""
+}
+
+func (x *Finding) GetCustomRefused() bool {
+	if x != nil {
+		return x.CustomRefused
+	}
+	return false
 }
 
 type PushRawMigrationRequest struct {
@@ -1770,7 +1782,7 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\rresolved_mode\x18\x03 \x01(\x0e2\x16.w17.registry.PushModeR\fresolvedMode\x12)\n" +
 	"\x10unused_decisions\x18\x04 \x03(\tR\x0funusedDecisions\x12/\n" +
 	"\x13changed_connections\x18\x05 \x03(\tR\x12changedConnections\x12\x12\n" +
-	"\x04base\x18\x06 \x01(\tR\x04base\"\xf5\x02\n" +
+	"\x04base\x18\x06 \x01(\tR\x04base\"\x9c\x03\n" +
 	"\aFinding\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
@@ -1788,7 +1800,8 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	" \x01(\tR\vcurrSummary\x12\x1d\n" +
 	"\n" +
 	"finding_id\x18\v \x01(\tR\tfindingId\x12\x1b\n" +
-	"\ttable_fqn\x18\f \x01(\tR\btableFqn\"\x9a\x01\n" +
+	"\ttable_fqn\x18\f \x01(\tR\btableFqn\x12%\n" +
+	"\x0ecustom_refused\x18\r \x01(\bR\rcustomRefused\"\x9a\x01\n" +
 	"\x17PushRawMigrationRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x1e\n" +
