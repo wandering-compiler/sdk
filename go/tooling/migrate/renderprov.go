@@ -219,6 +219,6 @@ func FormatStaleRenders(stale []StaleRender) string {
 	for _, s := range stale {
 		fmt.Fprintf(&b, "  %s — %s\n", filepath.ToSlash(filepath.Clean(s.Path)), s.Reason)
 	}
-	b.WriteString("  fix: run `w17ctl fixtures render` and commit the result — the rendered seed is what a binary applies, so a stale one seeds yesterday's rows")
+	b.WriteString("  fix: run `w17ctl fixtures render --prune` and commit the result — the rendered seed is what a binary applies, so a stale one seeds yesterday's rows (--prune also drops the seeds whose fixture is gone)")
 	return b.String()
 }

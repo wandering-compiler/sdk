@@ -48,12 +48,12 @@ func MetadataPropagationMiddleware(headers []string, next http.Handler) http.Han
 	}
 	keys := make([]string, len(headers))
 	for i, h := range headers {
-		keys[i] = strings.ToLower(h)
+		keys[i] = metadataKeyFor(h)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var pairs []string
 		for i, h := range headers {
-			v := r.Header.Get(h)
+			v := headerValue(r, h)
 			if v == "" {
 				continue
 			}
@@ -65,4 +65,31 @@ func MetadataPropagationMiddleware(headers []string, next http.Handler) http.Han
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// metadataKeyFor is the gRPC metadata key a forwarded header travels under:
+// its lower-cased name, except for the two the gRPC hop owns. `host` is the
+// transport's :authority (the backend's address) and `user-agent` is replaced
+// by the client's own ("grpc-go/…"), so forwarded under their own names the
+// browser's values never arrive. They travel as x-forwarded-host and
+// x-forwarded-user-agent instead (found live by examples/auth-proof: every
+// device was labelled grpc-go, and tenant_scope never saw a Host).
+func metadataKeyFor(header string) string {
+	switch k := strings.ToLower(header); k {
+	case "host":
+		return "x-forwarded-host"
+	case "user-agent":
+		return "x-forwarded-user-agent"
+	default:
+		return k
+	}
+}
+
+// headerValue reads a header to forward. Go keeps the request's Host out of
+// r.Header (it is r.Host), so Host read from the map was always empty.
+func headerValue(r *http.Request, header string) string {
+	if strings.EqualFold(header, "host") {
+		return r.Host
+	}
+	return r.Header.Get(header)
 }

@@ -13,11 +13,16 @@
 //     submit an empty selection and the button stays disabled.
 //   - Every extra field renders as a plain TextInput; iter-3
 //     introspects the proto descriptor for typed inputs.
+//   - An action that declares a `result` shows the named response
+//     fields after it succeeds, in this same modal, until the operator
+//     closes it. A SECRET result is shown once: the values live only in
+//     this component's state — never browser storage, never a log — and
+//     closing the modal discards them (ActionResultView below).
 
 import { useState } from "react";
-import { Button, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
+import { Button, Code, CopyButton, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
 
-import { apiPost } from "./api";
+import { apiPost, displayString } from "./api";
 import { humanizeLabel } from "./format";
 import { useT } from "./i18n";
 import type { AdminActionSpec } from "./types";
@@ -45,6 +50,11 @@ export function ActionModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(!action.confirm);
+  // The declared response fields of a SUCCEEDED action, as display text, in
+  // declared order. Non-null = the action ran and the modal now shows its
+  // result instead of its form. Held here and nowhere else, on purpose: for a
+  // secret result this state IS the only copy the browser has.
+  const [result, setResult] = useState<Array<[string, string]> | null>(null);
 
   // The spec contract declares `fields` unconditionally present, and the
   // generator now emits `[]` for an action with no extras. Older bundles
@@ -58,10 +68,17 @@ export function ActionModal({
     setSubmitting(false);
     setError(null);
     setConfirmed(!action.confirm);
+    setResult(null);
   };
 
   const handleClose = () => {
+    // Closing a shown result is when the page refreshes: the action already
+    // succeeded, and refreshing earlier could replace the page (a failed
+    // reload renders an error view) and unmount this modal — taking a
+    // one-time value with it before the operator copied it.
+    const ranWithResult = result !== null;
     reset();
+    if (ranWithResult) onSuccess();
     onClose();
   };
 
@@ -81,7 +98,12 @@ export function ActionModal({
       for (const f of fields) {
         if (f in extras) body[f] = extras[f];
       }
-      await apiPost(action.endpoint, body);
+      const resp = await apiPost<Record<string, unknown> | null>(action.endpoint, body);
+      if (action.result) {
+        setSubmitting(false);
+        setResult(resultValues(action.result.fields, resp));
+        return;
+      }
       reset();
       onSuccess();
       onClose();
@@ -113,6 +135,14 @@ export function ActionModal({
       : selectedIds.length > 0
         ? t("{count} selected rows", { count: selectedIds.length })
         : t("no rows");
+
+  if (result !== null) {
+    return (
+      <Modal opened={open} onClose={handleClose} title={label} centered>
+        <ActionResultView values={result} secret={!!action.result?.secret} onClose={handleClose} />
+      </Modal>
+    );
+  }
 
   return (
     <Modal opened={open} onClose={handleClose} title={label} centered>
@@ -186,5 +216,75 @@ export function ActionModal({
         )}
       </Stack>
     </Modal>
+  );
+}
+
+// resultValues reads the declared fields out of an action's JSON response, by
+// proto name (the admin wire's keys), in declared order. A field the response
+// does not carry — proto3 omits a zero value — reads as "".
+function resultValues(
+  fields: string[],
+  resp: Record<string, unknown> | null,
+): Array<[string, string]> {
+  return fields.map((f) => [f, displayString(resp?.[f])]);
+}
+
+interface ActionResultViewProps {
+  values: Array<[string, string]>;
+  secret: boolean;
+  onClose: () => void;
+}
+
+// ActionResultView shows a succeeded action's declared response fields, each
+// with a copy button.
+//
+// A SECRET result says it is shown once, and that is a promise this component
+// keeps by having nowhere else to put the values: they arrive as props from
+// ActionModal's state, are rendered, and go when the modal closes. Nothing
+// here writes storage, logs, or hands them to anything that might (the
+// actionmodal tests spy on all three).
+function ActionResultView({ values, secret, onClose }: ActionResultViewProps) {
+  const t = useT();
+  return (
+    <Stack>
+      {secret && (
+        <Text size="sm" fw={500} c="orange">
+          {t(
+            "Shown only once. Copy it now: nothing keeps it, and closing this dialog discards it.",
+          )}
+        </Text>
+      )}
+      {values.map(([field, value]) => (
+        <Stack key={field} gap={4}>
+          <Text size="sm" fw={500}>
+            {humanizeLabel(field)}
+          </Text>
+          <Group gap="xs" wrap="nowrap" align="flex-start">
+            <Code
+              block
+              style={{ flex: 1, wordBreak: "break-all" }}
+              data-testid={`action-result-${field}`}
+            >
+              {value}
+            </Code>
+            <CopyButton value={value}>
+              {({ copied, copy }) => (
+                <Button
+                  size="xs"
+                  variant="light"
+                  onClick={copy}
+                  aria-label={t("Copy {field}", { field: humanizeLabel(field) })}
+                >
+                  {copied ? t("Copied") : t("Copy")}
+                </Button>
+              )}
+            </CopyButton>
+          </Group>
+        </Stack>
+      ))}
+      <Group justify="flex-end">
+        <Button onClick={onClose}>{t("Close")}</Button>
+      </Group>
+    </Stack>
   );
 }

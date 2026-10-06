@@ -358,6 +358,14 @@ func OnEmpty(ctx context.Context, method string, err error, registry *Constraint
 	return Wrap(ctx, method, err, registry, d)
 }
 
+// OnPresent is what a generated op answers with when it finds a row its author
+// said must not exist — `(w17.db.method).ops[].on_present`, the guard for "no
+// locked period", "not blocked". There is no error to classify: finding the row
+// IS the refusal, so it takes none. `field` and `params` are OnEmpty's.
+func OnPresent(ctx context.Context, method string, c codes.Code, op, code, field, userMsgid string, params map[string]string) error {
+	return forCallerOn(ctx, c, method, "op "+strconv.Quote(op)+" found a row it guards against", code, field, userMsgid, params)
+}
+
 // forCaller builds the two-audience error this package owes both of its
 // readers.
 //

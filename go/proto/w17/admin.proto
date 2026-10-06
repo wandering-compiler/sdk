@@ -640,9 +640,9 @@ message AdminAction {
 
   // Storage method ref. Request must have `repeated string ids`
   // — except under `target: PAGE`, which operates on no rows and
-  // whose request must not have one. Response is empty / status
-  // only (action result is not displayed in v1, only success /
-  // failure).
+  // whose request must not have one. The response is discarded
+  // unless `result` names fields of it to show; without `result`
+  // the operator sees only success / failure.
   string source = 2;
 
   // Subset of action-request extras (everything beyond
@@ -662,6 +662,37 @@ message AdminAction {
 
   // Where the action appears in the UI. Default LIST.
   AdminActionTarget target = 6;
+
+  // What the operator is shown once the action succeeds. Absent =
+  // success / failure only, and the response body is discarded.
+  //
+  // For an action whose OUTCOME is the point: "issue a registration
+  // code", "rotate the API key", "generate an invite link". Without
+  // it such an action does its work and shows nobody the result.
+  AdminActionResult result = 7;
+}
+
+// AdminActionResult names the parts of an action's RESPONSE the admin
+// shows after the action succeeds — in a dialog the operator closes.
+message AdminActionResult {
+  // Response fields to show, in declared order. Required: a `result`
+  // with no fields is a parse error, because it would open a dialog
+  // with nothing in it. Each must be a singular field of the source
+  // method's response whose JSON is a plain value — a scalar, or a
+  // google.protobuf.Timestamp. Enums, nested messages and repeated
+  // fields are refused (the dialog renders values as text, and an
+  // enum is a bare number on the JSON wire).
+  repeated string fields = 1;
+
+  // The values are secrets the operator sees ONCE: a one-time code, a
+  // freshly minted key. The dialog says so and offers a copy button
+  // per value; the values live only in that dialog's state and are
+  // gone when it closes — never written to browser storage, never
+  // logged by the admin runtime. The generated handler answers with
+  // `Cache-Control: no-store`, so no browser or proxy cache keeps the
+  // response either. Nothing can show the value again: a lost one is
+  // replaced by running the action again.
+  bool secret = 2;
 }
 
 enum AdminActionTarget {

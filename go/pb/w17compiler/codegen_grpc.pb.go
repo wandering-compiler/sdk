@@ -49,6 +49,7 @@ const (
 	CodegenService_GenerateProjectMap_FullMethodName      = "/w17.storage.codegen.CodegenService/GenerateProjectMap"
 	CodegenService_GenerateE2E_FullMethodName             = "/w17.storage.codegen.CodegenService/GenerateE2e"
 	CodegenService_GenerateProject_FullMethodName         = "/w17.storage.codegen.CodegenService/GenerateProject"
+	CodegenService_SignAclLock_FullMethodName             = "/w17.storage.codegen.CodegenService/SignAclLock"
 	CodegenService_VerifyAcl_FullMethodName               = "/w17.storage.codegen.CodegenService/VerifyAcl"
 	CodegenService_VerifyEventbus_FullMethodName          = "/w17.storage.codegen.CodegenService/VerifyEventbus"
 	CodegenService_VerifyLock_FullMethodName              = "/w17.storage.codegen.CodegenService/VerifyLock"
@@ -225,6 +226,13 @@ type CodegenServiceClient interface {
 	// refused rather than ignored — a silently dropped go_module would pick
 	// the wrong module path and show up as a compile error in generated code.
 	GenerateProject(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateProjectRequest, GeneratedOp], error)
+	// SignAclLock signs an ACL permission lock a codegen WORKER computed. A
+	// worker holds no signing key (docs/specs/console/codegen-on-the-cluster.md
+	// §5): it returns each changed lock unsigned, as a GeneratedOp.sign, and the
+	// client asks the console — which checks the caller may generate the
+	// project, verifies the prior lock's signature and refuses an allocation
+	// that breaks its lineage — before writing it. The console compiles nothing.
+	SignAclLock(ctx context.Context, in *SignAclLockRequest, opts ...grpc.CallOption) (*SignAclLockResponse, error)
 	// VerifyAcl / VerifyEventbus recompute the committed lock from the
 	// uploaded proto set (which includes the committed lock) and report
 	// whether it still matches — the CI drift hook (`w17ctl verify`),
@@ -597,6 +605,16 @@ func (c *codegenServiceClient) GenerateProject(ctx context.Context, opts ...grpc
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CodegenService_GenerateProjectClient = grpc.BidiStreamingClient[GenerateProjectRequest, GeneratedOp]
+
+func (c *codegenServiceClient) SignAclLock(ctx context.Context, in *SignAclLockRequest, opts ...grpc.CallOption) (*SignAclLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SignAclLockResponse)
+	err := c.cc.Invoke(ctx, CodegenService_SignAclLock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *codegenServiceClient) VerifyAcl(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -976,6 +994,13 @@ type CodegenServiceServer interface {
 	// refused rather than ignored — a silently dropped go_module would pick
 	// the wrong module path and show up as a compile error in generated code.
 	GenerateProject(grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]) error
+	// SignAclLock signs an ACL permission lock a codegen WORKER computed. A
+	// worker holds no signing key (docs/specs/console/codegen-on-the-cluster.md
+	// §5): it returns each changed lock unsigned, as a GeneratedOp.sign, and the
+	// client asks the console — which checks the caller may generate the
+	// project, verifies the prior lock's signature and refuses an allocation
+	// that breaks its lineage — before writing it. The console compiles nothing.
+	SignAclLock(context.Context, *SignAclLockRequest) (*SignAclLockResponse, error)
 	// VerifyAcl / VerifyEventbus recompute the committed lock from the
 	// uploaded proto set (which includes the committed lock) and report
 	// whether it still matches — the CI drift hook (`w17ctl verify`),
@@ -1203,6 +1228,9 @@ func (UnimplementedCodegenServiceServer) GenerateE2E(*GenerateE2ERequest, grpc.S
 func (UnimplementedCodegenServiceServer) GenerateProject(grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]) error {
 	return status.Error(codes.Unimplemented, "method GenerateProject not implemented")
 }
+func (UnimplementedCodegenServiceServer) SignAclLock(context.Context, *SignAclLockRequest) (*SignAclLockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SignAclLock not implemented")
+}
 func (UnimplementedCodegenServiceServer) VerifyAcl(context.Context, *VerifyRequest) (*VerifyResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyAcl not implemented")
 }
@@ -1407,6 +1435,24 @@ func _CodegenService_GenerateProject_Handler(srv interface{}, stream grpc.Server
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CodegenService_GenerateProjectServer = grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]
+
+func _CodegenService_SignAclLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignAclLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServiceServer).SignAclLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodegenService_SignAclLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServiceServer).SignAclLock(ctx, req.(*SignAclLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _CodegenService_VerifyAcl_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(VerifyRequest)
@@ -1721,6 +1767,10 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GenerateCi",
 			Handler:    _CodegenService_GenerateCi_Handler,
+		},
+		{
+			MethodName: "SignAclLock",
+			Handler:    _CodegenService_SignAclLock_Handler,
 		},
 		{
 			MethodName: "VerifyAcl",

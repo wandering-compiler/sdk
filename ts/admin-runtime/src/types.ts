@@ -296,6 +296,17 @@ export interface AdminActionSpec {
   // permission_ids don't include all of these. UX-only —
   // backend enforces.
   required_permissions?: number[];
+  // What to show once the action succeeds. Absent = the response is
+  // discarded and the operator sees success / failure only.
+  result?: AdminActionResultSpec;
+}
+
+// AdminActionResultSpec — the response fields an action shows after it
+// succeeds (proto names, in declared order). `secret` = shown once with a
+// copy button and kept nowhere: not in storage, not in a log, gone on close.
+export interface AdminActionResultSpec {
+  fields: string[];
+  secret: boolean;
 }
 
 export interface AdminListSpec {

@@ -11,6 +11,7 @@ export type {
   AdminDetailSpec,
   AdminFieldsetSpec,
   AdminActionSpec,
+  AdminActionResultSpec,
   AdminInlineSpec,
   AdminAuthSpec,
   AdminNavGroup,

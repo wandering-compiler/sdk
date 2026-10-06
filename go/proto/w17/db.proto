@@ -747,6 +747,62 @@ message Operation {
   // reads back runs without a scan, so zero rows is not an error there; codegen
   // refuses the field on both rather than accept a sentence nobody can see.
   OnEmpty on_empty = 3;
+
+  // What the caller is told when this op FINDS a row — the guard for an
+  // invariant that says something must NOT exist.
+  //
+  // `on_empty` covers "the row must be there" (an op that finds nothing aborts).
+  // The opposite invariant is just as common in writes — a locked period, a
+  // block, a duplicate no unique index can express — and before this field it
+  // could be written only for an UPDATE or DELETE, as `AND NOT EXISTS (…)` in
+  // the write's own WHERE. An INSERT has no WHERE:
+  //
+  //   ops: {
+  //     name: "locked"
+  //     dql:  "SELECT pl.id AS id FROM @module.PeriodLock pl
+  //            WHERE pl.year = :year AND pl.month = :month"
+  //     on_present: {
+  //       code:       ON_PRESENT_FAILED_PRECONDITION
+  //       error_code: "PERIOD_LOCKED"
+  //       message:    "The period {year}-{month} is closed."
+  //     }
+  //   }
+  //   ops: { name: "main", dql: "INSERT INTO @module.Expense SET … RETURNING id" }
+  //
+  // The op runs in the method's transaction like every other op, and the method
+  // continues only when it found NO row, so it is as atomic as the `NOT EXISTS`
+  // it replaces: both read the guarded table once, in the same transaction as
+  // the write.
+  //
+  // Accepted only on an intermediate SELECT. It produces nothing — it continues
+  // only when it found no row — so no later op may read it, and it is refused
+  // together with on_empty (which would refuse the opposite outcome).
+  OnPresent on_present = 4;
+}
+
+// OnPresent is the refusal an [Operation] answers with when it finds a row.
+// The fields mean what they mean in [OnEmpty]. See Operation.on_present.
+message OnPresent {
+  // The gRPC code. UNSPECIFIED means FAILED_PRECONDITION — the request is fine,
+  // the current state refuses it, which is what a guard usually says.
+  OnPresentCode code = 1;
+  string error_code = 2;
+  string message = 3;
+  string field = 4;
+}
+
+// OnPresentCode is the gRPC code of an [OnPresent] refusal:
+//
+//   FAILED_PRECONDITION the request is fine, the current state refuses it
+//                       (a locked period, a blocked account);
+//   ALREADY_EXISTS      the thing the request would create is already there
+//                       (a duplicate no unique index can express);
+//   INVALID_ARGUMENT    a value in the request names something it may not.
+enum OnPresentCode {
+  ON_PRESENT_CODE_UNSPECIFIED = 0;
+  ON_PRESENT_FAILED_PRECONDITION = 1;
+  ON_PRESENT_ALREADY_EXISTS = 2;
+  ON_PRESENT_INVALID_ARGUMENT = 3;
 }
 
 // OnEmpty is the refusal an [Operation] answers with when it finds no row.

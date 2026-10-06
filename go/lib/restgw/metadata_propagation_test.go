@@ -82,3 +82,28 @@ func TestMetadataPropagationMiddleware_PreservesIncomingMetadata(t *testing.T) {
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "upstream-key", "upstream-val")
 	mw.ServeHTTP(httptest.NewRecorder(), req.WithContext(ctx))
 }
+
+// Host and User-Agent are the two headers the gRPC hop owns (:authority, and
+// its own client UA), so they travel under x-forwarded-* — and Host comes from
+// r.Host, because Go keeps it out of r.Header. Found live by
+// examples/auth-proof: tenant_scope never saw a Host, every device was
+// labelled "grpc-go/…".
+func TestMetadataPropagationMiddleware_HostAndUserAgentTravelForwarded(t *testing.T) {
+	var got metadata.MD
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ = metadata.FromOutgoingContext(r.Context())
+	})
+	mw := restgw.MetadataPropagationMiddleware([]string{"Host", "User-Agent", "X-Device-Id"}, inner)
+	req := httptest.NewRequest(http.MethodGet, "http://alpha.example:8443/x", nil)
+	req.Header.Set("User-Agent", "Firefox/140")
+	req.Header.Set("X-Device-Id", "dev-1")
+	mw.ServeHTTP(httptest.NewRecorder(), req)
+	for k, want := range map[string]string{"x-forwarded-host": "alpha.example:8443", "x-forwarded-user-agent": "Firefox/140", "x-device-id": "dev-1"} {
+		if v := got.Get(k); len(v) != 1 || v[0] != want {
+			t.Errorf("%s = %v, want %q", k, v, want)
+		}
+	}
+	if v := got.Get("host"); len(v) != 0 {
+		t.Errorf("host forwarded under the key the transport owns: %v", v)
+	}
+}

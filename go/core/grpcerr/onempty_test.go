@@ -68,3 +68,25 @@ func TestOnEmpty_AnyOtherErrorIsWrapsAnswer(t *testing.T) {
 		t.Errorf("a cancellation was answered with the op's refusal: %v", detail)
 	}
 }
+
+// A row an op guards against is answered with the author's refusal, with the
+// same four parts OnEmpty carries, and the operator's copy names the op.
+func TestOnPresent_AFoundRowIsTheAuthorsRefusal(t *testing.T) {
+	err := grpcerr.OnPresent(context.Background(), "ExpenseMutation.CreateExpense",
+		codes.FailedPrecondition, "locked", "PERIOD_LOCKED", "month",
+		"The period {month} is closed.", map[string]string{"month": "2026-09"})
+
+	st, detail := errorDetail(t, err)
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", st.Code())
+	}
+	if !strings.Contains(st.Message(), `op "locked" found a row it guards against`) {
+		t.Errorf("operator message does not name the op: %q", st.Message())
+	}
+	if detail.GetCode() != "PERIOD_LOCKED" || detail.GetField() != "month" {
+		t.Errorf("detail = %v, want code PERIOD_LOCKED on field month", detail)
+	}
+	if detail.GetMessage() != "The period 2026-09 is closed." {
+		t.Errorf("detail message = %q", detail.GetMessage())
+	}
+}
