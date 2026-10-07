@@ -258,6 +258,8 @@ const (
 	Codegen_VerifyAcl_FullMethodName               = "/w17lock.console.rpc.Codegen/VerifyAcl"
 	Codegen_VerifyEventbus_FullMethodName          = "/w17lock.console.rpc.Codegen/VerifyEventbus"
 	Codegen_VerifyLock_FullMethodName              = "/w17lock.console.rpc.Codegen/VerifyLock"
+	Codegen_GenerateEgressClient_FullMethodName    = "/w17lock.console.rpc.Codegen/GenerateEgressClient"
+	Codegen_VerifyEgressClient_FullMethodName      = "/w17lock.console.rpc.Codegen/VerifyEgressClient"
 	Codegen_Classify_FullMethodName                = "/w17lock.console.rpc.Codegen/Classify"
 	Codegen_Plan_FullMethodName                    = "/w17lock.console.rpc.Codegen/Plan"
 	Codegen_GenerateClient_FullMethodName          = "/w17lock.console.rpc.Codegen/GenerateClient"
@@ -309,6 +311,14 @@ type CodegenClient interface {
 	VerifyAcl(ctx context.Context, in *w17compiler.VerifyRequest, opts ...grpc.CallOption) (*w17compiler.VerifyResult, error)
 	VerifyEventbus(ctx context.Context, in *w17compiler.VerifyRequest, opts ...grpc.CallOption) (*w17compiler.VerifyResult, error)
 	VerifyLock(ctx context.Context, in *w17compiler.VerifyLockRequest, opts ...grpc.CallOption) (*w17compiler.VerifyResult, error)
+	// Egress clients (docs/todos/egress-rest-client.md): a third-party REST
+	// API, from its OpenAPI document, as a signed generated client. Served by
+	// the console, not placed on the cluster: the result is signed, and the
+	// console holds the key. The request streams — a published document is
+	// larger than one gRPC message.
+	GenerateEgressClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse], error)
+	// The release gate's check of one committed client (`w17ctl verify`).
+	VerifyEgressClient(ctx context.Context, in *w17compiler.VerifyEgressClientRequest, opts ...grpc.CallOption) (*w17compiler.VerifyResult, error)
 	// Compat + migration planning (compiler-owned engines over opaque IR bytes).
 	Classify(ctx context.Context, in *w17compiler.ClassifyIRRequest, opts ...grpc.CallOption) (*w17compiler.ClassifyIRResponse, error)
 	Plan(ctx context.Context, in *w17compiler.PlanIRRequest, opts ...grpc.CallOption) (*w17compiler.PlanIRResponse, error)
@@ -442,6 +452,29 @@ func (c *codegenClient) VerifyLock(ctx context.Context, in *w17compiler.VerifyLo
 	return out, nil
 }
 
+func (c *codegenClient) GenerateEgressClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[1], Codegen_GenerateEgressClient_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Codegen_GenerateEgressClientClient = grpc.BidiStreamingClient[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse]
+
+func (c *codegenClient) VerifyEgressClient(ctx context.Context, in *w17compiler.VerifyEgressClientRequest, opts ...grpc.CallOption) (*w17compiler.VerifyResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(w17compiler.VerifyResult)
+	err := c.cc.Invoke(ctx, Codegen_VerifyEgressClient_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codegenClient) Classify(ctx context.Context, in *w17compiler.ClassifyIRRequest, opts ...grpc.CallOption) (*w17compiler.ClassifyIRResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(w17compiler.ClassifyIRResponse)
@@ -464,7 +497,7 @@ func (c *codegenClient) Plan(ctx context.Context, in *w17compiler.PlanIRRequest,
 
 func (c *codegenClient) GenerateClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GenerateClientRequest, w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[1], Codegen_GenerateClient_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[2], Codegen_GenerateClient_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +520,7 @@ func (c *codegenClient) DiscoverPluginSandboxes(ctx context.Context, in *w17comp
 
 func (c *codegenClient) GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[w17compiler.GeneratePluginPbRequest, w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[2], Codegen_GeneratePluginPb_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[3], Codegen_GeneratePluginPb_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +563,7 @@ func (c *codegenClient) ListPluginCatalog(ctx context.Context, in *w17compiler.L
 
 func (c *codegenClient) FetchPlugin(ctx context.Context, in *w17compiler.FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[3], Codegen_FetchPlugin_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[4], Codegen_FetchPlugin_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +592,7 @@ func (c *codegenClient) MergePo(ctx context.Context, in *w17compiler.MergePoRequ
 
 func (c *codegenClient) RenderProjectScaffold(ctx context.Context, in *w17compiler.RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[4], Codegen_RenderProjectScaffold_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[5], Codegen_RenderProjectScaffold_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -588,7 +621,7 @@ func (c *codegenClient) EditLock(ctx context.Context, in *w17compiler.EditLockRe
 
 func (c *codegenClient) Guide(ctx context.Context, in *w17compiler.GuideRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[w17compiler.GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[5], Codegen_Guide_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Codegen_ServiceDesc.Streams[6], Codegen_Guide_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -659,6 +692,14 @@ type CodegenServer interface {
 	VerifyAcl(context.Context, *w17compiler.VerifyRequest) (*w17compiler.VerifyResult, error)
 	VerifyEventbus(context.Context, *w17compiler.VerifyRequest) (*w17compiler.VerifyResult, error)
 	VerifyLock(context.Context, *w17compiler.VerifyLockRequest) (*w17compiler.VerifyResult, error)
+	// Egress clients (docs/todos/egress-rest-client.md): a third-party REST
+	// API, from its OpenAPI document, as a signed generated client. Served by
+	// the console, not placed on the cluster: the result is signed, and the
+	// console holds the key. The request streams — a published document is
+	// larger than one gRPC message.
+	GenerateEgressClient(grpc.BidiStreamingServer[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse]) error
+	// The release gate's check of one committed client (`w17ctl verify`).
+	VerifyEgressClient(context.Context, *w17compiler.VerifyEgressClientRequest) (*w17compiler.VerifyResult, error)
 	// Compat + migration planning (compiler-owned engines over opaque IR bytes).
 	Classify(context.Context, *w17compiler.ClassifyIRRequest) (*w17compiler.ClassifyIRResponse, error)
 	Plan(context.Context, *w17compiler.PlanIRRequest) (*w17compiler.PlanIRResponse, error)
@@ -739,6 +780,12 @@ func (UnimplementedCodegenServer) VerifyEventbus(context.Context, *w17compiler.V
 }
 func (UnimplementedCodegenServer) VerifyLock(context.Context, *w17compiler.VerifyLockRequest) (*w17compiler.VerifyResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyLock not implemented")
+}
+func (UnimplementedCodegenServer) GenerateEgressClient(grpc.BidiStreamingServer[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse]) error {
+	return status.Error(codes.Unimplemented, "method GenerateEgressClient not implemented")
+}
+func (UnimplementedCodegenServer) VerifyEgressClient(context.Context, *w17compiler.VerifyEgressClientRequest) (*w17compiler.VerifyResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyEgressClient not implemented")
 }
 func (UnimplementedCodegenServer) Classify(context.Context, *w17compiler.ClassifyIRRequest) (*w17compiler.ClassifyIRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Classify not implemented")
@@ -917,6 +964,31 @@ func _Codegen_VerifyLock_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CodegenServer).VerifyLock(ctx, req.(*w17compiler.VerifyLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Codegen_GenerateEgressClient_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CodegenServer).GenerateEgressClient(&grpc.GenericServerStream[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Codegen_GenerateEgressClientServer = grpc.BidiStreamingServer[w17compiler.GenerateEgressClientRequest, w17compiler.GenerateEgressClientResponse]
+
+func _Codegen_VerifyEgressClient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(w17compiler.VerifyEgressClientRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServer).VerifyEgressClient(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Codegen_VerifyEgressClient_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServer).VerifyEgressClient(ctx, req.(*w17compiler.VerifyEgressClientRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1180,6 +1252,10 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Codegen_VerifyLock_Handler,
 		},
 		{
+			MethodName: "VerifyEgressClient",
+			Handler:    _Codegen_VerifyEgressClient_Handler,
+		},
+		{
 			MethodName: "Classify",
 			Handler:    _Codegen_Classify_Handler,
 		},
@@ -1224,6 +1300,12 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "CompileIR",
 			Handler:       _Codegen_CompileIR_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "GenerateEgressClient",
+			Handler:       _Codegen_GenerateEgressClient_Handler,
+			ServerStreams: true,
 			ClientStreams: true,
 		},
 		{
