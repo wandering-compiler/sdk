@@ -1,0 +1,74 @@
+// Hand-written, NOT generator output: shapes the converter does not emit
+// today (or refuses), which the codec must still handle without a panic or
+// a silent loss. The generator's own output is in feature_shop.proto and
+// shapes.proto.
+syntax = "proto3";
+
+package clients.probe;
+
+import "w17/egress.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+message Loose {
+  repeated google.protobuf.Value items = 1 [(w17.egress_field) = { name: "items" }];
+  map<string, google.protobuf.Value> meta = 2 [(w17.egress_field) = { name: "meta" }];
+  optional int64 i = 3 [(w17.egress_field) = { name: "i" }];
+  optional uint64 u = 4 [(w17.egress_field) = { name: "u" }];
+  optional double d = 5 [(w17.egress_field) = { name: "d" }];
+  optional string s = 6 [(w17.egress_field) = { name: "s" }];
+  map<string, string> m = 7 [(w17.egress_field) = { name: "m" }];
+  google.protobuf.Struct st = 8 [(w17.egress_field) = { name: "st" }];
+  google.protobuf.Timestamp ts = 9 [(w17.egress_field) = { name: "ts" }];
+  google.protobuf.Int64Value w = 10 [(w17.egress_field) = { name: "w" }];
+  repeated int64 list = 11 [(w17.egress_field) = { name: "list" }];
+}
+
+message A {
+  double r = 1 [(w17.egress_field) = { name: "r" required: true }];
+  optional string label = 2 [(w17.egress_field) = { name: "label" }];
+}
+
+message B {
+  double r = 1 [(w17.egress_field) = { name: "r" required: true }];
+  optional string label = 2 [(w17.egress_field) = { name: "label" }];
+  optional string extra = 3 [(w17.egress_field) = { name: "extra" }];
+}
+
+// Untagged arms differing only by an optional property.
+message AB {
+  oneof value {
+    option (w17.egress_union) = {};
+    A a = 1;
+    B b = 2;
+  }
+}
+
+// A discriminated union with an arm that cannot carry the discriminator.
+message Bad {
+  oneof value {
+    option (w17.egress_union) = { discriminator: "kind" };
+    A a = 1 [(w17.egress_field) = { tag: "a" }];
+    google.protobuf.Struct free = 2 [(w17.egress_field) = { tag: "free" }];
+  }
+}
+
+message WithEmpty {
+  oneof value {
+    option (w17.egress_union) = {};
+    google.protobuf.Empty empty = 1;
+    string s = 2;
+  }
+}
+
+message Scalar {
+  double value = 1 [(w17.egress_field) = { in: EGRESS_IN_BODY }];
+}
+
+message Holder {
+  AB ab = 1 [(w17.egress_field) = { name: "ab" }];
+  Bad bad = 2 [(w17.egress_field) = { name: "bad" }];
+  WithEmpty e = 3 [(w17.egress_field) = { name: "e" }];
+}

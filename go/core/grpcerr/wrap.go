@@ -543,9 +543,14 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// `docs/specs/runtime/error-envelope.md` still describes the wire as
 	// "English defaults"; that text predates P1.5 by ten days and was
 	// already half-false. It is corrected alongside this.
+	//
+	// `{constraint}` and `{table}` are the placeholders a table-level
+	// validation message may use (w17/db.proto, TableValidationMessage). They
+	// were documented and never filled: an author who wrote one put literal
+	// braces on the wire. The engine reports both; an empty one stays empty.
 	message := info.Message
 	if message != "" {
-		message = i18n.T(ctx, message, nil)
+		message = i18n.T(ctx, message, map[string]string{"constraint": ce.Name, "table": ce.Table})
 	}
 	detail := ce.Kind + " violation"
 	if info.Field != "" && message != "" {

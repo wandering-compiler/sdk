@@ -139,6 +139,31 @@ func TestWrap_PgConstraint_RegistryHit_ByName(t *testing.T) {
 	}
 }
 
+// A table-level validation message may name `{constraint}` and `{table}`
+// (w17/db.proto, TableValidationMessage). Both were documented and neither was
+// filled, so an author who used one shipped literal braces.
+func TestWrap_PgConstraint_FillsTheConstraintAndTablePlaceholders(t *testing.T) {
+	registry := &ConstraintRegistry{
+		ByName: map[string]ConstraintInfo{
+			"plans_window_order": {Code: "INVALID_VALUE", Message: "{table} refused the row ({constraint})"},
+		},
+	}
+	pgErr := &pgconn.PgError{Code: "23514", ConstraintName: "plans_window_order", TableName: "plans"}
+	var got error
+	withCapturedLog(t, func() {
+		got = Wrap(context.Background(), "PlanMutation.CreatePlan", pgErr, registry, DialectPostgres)
+	})
+	st, _ := status.FromError(got)
+	details := st.Details()
+	if len(details) != 1 {
+		t.Fatalf("len(details) = %d, want 1", len(details))
+	}
+	d, _ := details[0].(*w17pb.ErrorDetail)
+	if want := "plans refused the row (plans_window_order)"; d.GetMessage() != want {
+		t.Errorf("message = %q, want %q", d.GetMessage(), want)
+	}
+}
+
 // INVARIANT: a mapped violation's status MESSAGE names the field and says
 // what is wrong with it — it does not merely classify the failure.
 //

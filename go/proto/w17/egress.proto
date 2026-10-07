@@ -1,0 +1,173 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// w17/egress.proto — the options carried by a generated egress client
+// (`proto/clients/<name>/<name>.proto`): a third-party REST API, described
+// by its OpenAPI document, presented to the project as one gRPC service.
+//
+// Nobody writes these by hand. `w17ctl client generate` converts the
+// vendored OpenAPI document into the client's proto, and every option below
+// is how that proto remembers what the upstream really says on the wire —
+// the exact JSON key, the HTTP method and path, where a request field goes,
+// which property tags a union, which string an enum value travels as. The
+// runtime reads them; it never reads the OpenAPI document.
+//
+// The proto stays in w17's naming (snake_case fields, PascalCase messages);
+// these options carry the upstream's. Design and phases:
+// docs/todos/egress-rest-client.md.
+
+extend google.protobuf.FileOptions {
+  // (w17.egress_client) — marks the file as a generated egress client and
+  // records where it came from. Exactly one per client file; the file
+  // declares exactly one service, the client's `<Name>Api`.
+  EgressClient egress_client = 50180;
+}
+
+extend google.protobuf.MethodOptions {
+  // (w17.egress_call) — the HTTP request one method of the client's
+  // service performs: method, path template and request encoding. Every
+  // method of an egress client's service carries it.
+  EgressCall egress_call = 50181;
+}
+
+extend google.protobuf.FieldOptions {
+  // (w17.egress_field) — how one proto field travels on the upstream's
+  // wire: its exact JSON key (or parameter name), where a request field
+  // goes (path / query / header / the body itself), whether the schema
+  // requires it, and — on a union arm — the discriminator value that
+  // selects it.
+  EgressField egress_field = 50182;
+}
+
+extend google.protobuf.OneofOptions {
+  // (w17.egress_union) — an OpenAPI `oneOf` / `anyOf`. The message holding
+  // the oneof IS the union: on the wire it is the selected arm's value,
+  // not an object with one key per arm. With a discriminator the arm is
+  // chosen by the named property's value (each arm's
+  // `(w17.egress_field).tag`); without one, by shape — the JSON kind for a
+  // scalar arm, the required properties for an object arm.
+  EgressUnion egress_union = 50183;
+}
+
+extend google.protobuf.EnumValueOptions {
+  // (w17.egress_enum_value) — the exact string the upstream sends for this
+  // enum value. Matching is by this string, never by the proto name, which
+  // was derived from it and may differ (case, characters a proto
+  // identifier cannot hold, a collision suffix). The `_UNSPECIFIED` zero
+  // value carries none: an upstream string the enum does not know decodes
+  // to it.
+  string egress_enum_value = 50184;
+}
+
+// EgressClient — provenance of a generated client.
+message EgressClient {
+  // The client's name, snake_case — the `<name>` of `proto/clients/<name>/`
+  // and of `W17_CLIENT_<NAME>_DSN`.
+  string name = 1;
+
+  // `info.title` of the OpenAPI document.
+  string title = 2;
+
+  // `info.version` of the OpenAPI document — the upstream API's version,
+  // not the OpenAPI specification's.
+  string api_version = 3;
+
+  // The OpenAPI specification version the document declares (`3.0.3`,
+  // `3.1.0`, …).
+  string openapi_version = 4;
+
+  // `servers[0].url` of the document, when it has one: the base URL the
+  // generated DSN template starts from. Configuration, not a default — the
+  // runtime takes the base URL from the DSN only.
+  string server_url = 5;
+}
+
+// EgressCall — one HTTP operation.
+message EgressCall {
+  // HTTP method, upper case: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+  string method = 1;
+
+  // Path template exactly as the OpenAPI document writes it, relative to
+  // the base URL: `/v1/payment_intents/{intent}`. Each `{token}` is filled
+  // from the request field whose `(w17.egress_field)` is
+  // `{ in: PATH, name: "<token>" }`.
+  string path = 2;
+
+  // The document's `operationId`, when it has one.
+  string operation_id = 3;
+
+  // How the request body is encoded. UNSPECIFIED = the operation sends no
+  // body.
+  EgressEncoding request_encoding = 4;
+
+  // The success status the operation documents (200, 201, 204, …). Any 2xx
+  // is accepted at runtime; this records which one the response message was
+  // generated from.
+  uint32 success_status = 5;
+
+  // The name of the operation's `Idempotency-Key`-style header parameter,
+  // when it declares one. A non-idempotent method (POST / PATCH) retries
+  // only when this is set: the client fills the header once per call, and
+  // every attempt reuses it.
+  string idempotency_header = 6;
+}
+
+// EgressField — one field's wire identity.
+message EgressField {
+  // The upstream's exact name: the JSON property key, or the path / query /
+  // header parameter name.
+  string name = 1;
+
+  // Where a REQUEST field travels; on a wrapper message's single field,
+  // EGRESS_IN_BODY. Unset everywhere else.
+  EgressIn in = 2;
+
+  // The schema lists this property as `required` (or the parameter as
+  // `required: true`). On an untagged union's object arm, the required
+  // properties are what selects the arm.
+  bool required = 3;
+
+  // On a oneof arm of a discriminated union: the discriminator value that
+  // selects this arm.
+  string tag = 4;
+}
+
+// EgressUnion — a oneof that is an OpenAPI union.
+message EgressUnion {
+  // The discriminator property name (`object`, `type`, …). Empty = an
+  // untagged union, resolved by shape.
+  string discriminator = 1;
+}
+
+// EgressIn — where a request field travels.
+enum EgressIn {
+  EGRESS_IN_UNSPECIFIED = 0;
+  // Fills the path template token of the same name.
+  EGRESS_IN_PATH = 1;
+  // A query parameter; a repeated field repeats the parameter.
+  EGRESS_IN_QUERY = 2;
+  // A request header.
+  EGRESS_IN_HEADER = 3;
+  // The field IS the whole JSON value of its context. On a request field:
+  // the field is the request body. On the single field of a wrapper
+  // message: the message renders as that field's value, with no key of its
+  // own — how a JSON array or scalar (which a message cannot be by itself)
+  // stands where a message must: a response body, a union arm, a map value,
+  // an item of an array of arrays.
+  EGRESS_IN_BODY = 4;
+}
+
+// EgressEncoding — request body encoding.
+enum EgressEncoding {
+  EGRESS_ENCODING_UNSPECIFIED = 0;
+  // application/json
+  EGRESS_ENCODING_JSON = 1;
+  // application/x-www-form-urlencoded, nested fields in the deep-object
+  // convention (`metadata[order_id]=42`, `items[0][price]=…`).
+  EGRESS_ENCODING_FORM = 2;
+}

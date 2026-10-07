@@ -52,6 +52,8 @@ const (
 	CodegenService_SignAclLock_FullMethodName             = "/w17.storage.codegen.CodegenService/SignAclLock"
 	CodegenService_VerifyAcl_FullMethodName               = "/w17.storage.codegen.CodegenService/VerifyAcl"
 	CodegenService_VerifyEventbus_FullMethodName          = "/w17.storage.codegen.CodegenService/VerifyEventbus"
+	CodegenService_GenerateEgressClient_FullMethodName    = "/w17.storage.codegen.CodegenService/GenerateEgressClient"
+	CodegenService_VerifyEgressClient_FullMethodName      = "/w17.storage.codegen.CodegenService/VerifyEgressClient"
 	CodegenService_VerifyLock_FullMethodName              = "/w17.storage.codegen.CodegenService/VerifyLock"
 	CodegenService_Classify_FullMethodName                = "/w17.storage.codegen.CodegenService/Classify"
 	CodegenService_Plan_FullMethodName                    = "/w17.storage.codegen.CodegenService/Plan"
@@ -240,6 +242,23 @@ type CodegenServiceClient interface {
 	// a message, NOT a gRPC error (it's an expected outcome).
 	VerifyAcl(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	VerifyEventbus(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error)
+	// GenerateEgressClient turns an OpenAPI document into a signed egress
+	// client (docs/todos/egress-rest-client.md): the client fetched or read
+	// the document, the console selects the operations, converts them to the
+	// client's `<name>.proto`, writes its `client.yaml` and signs the set.
+	// The client writes the files where the response says, plus the document
+	// itself, byte for byte as it sent it.
+	//
+	// The REQUEST streams: a published OpenAPI document (Stripe's is ~7 MB)
+	// exceeds the 4 MiB the console's gateway→backend hop carries in one
+	// message. The first message holds every field; later ones only
+	// `document` chunks, appended in order. One response.
+	GenerateEgressClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateEgressClientRequest, GenerateEgressClientResponse], error)
+	// VerifyEgressClient checks one committed client's signature — the
+	// release gate's question for `proto/clients/<name>/`, and the one
+	// codegen asks before it compiles a client. A mismatch is `ok=false` and
+	// a message, NOT a gRPC error, like the other Verify* RPCs.
+	VerifyEgressClient(ctx context.Context, in *VerifyEgressClientRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	// VerifyLock checks the committed `w17/lock.yaml` signature server-side
 	// — the client performs ZERO cryptography (public-split boundary §4: no
 	// signing key in the public binary). The thin client ships the on-disk
@@ -636,6 +655,29 @@ func (c *codegenServiceClient) VerifyEventbus(ctx context.Context, in *VerifyReq
 	return out, nil
 }
 
+func (c *codegenServiceClient) GenerateEgressClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateEgressClientRequest, GenerateEgressClientResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[9], CodegenService_GenerateEgressClient_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GenerateEgressClientRequest, GenerateEgressClientResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CodegenService_GenerateEgressClientClient = grpc.BidiStreamingClient[GenerateEgressClientRequest, GenerateEgressClientResponse]
+
+func (c *codegenServiceClient) VerifyEgressClient(ctx context.Context, in *VerifyEgressClientRequest, opts ...grpc.CallOption) (*VerifyResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifyResult)
+	err := c.cc.Invoke(ctx, CodegenService_VerifyEgressClient_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codegenServiceClient) VerifyLock(ctx context.Context, in *VerifyLockRequest, opts ...grpc.CallOption) (*VerifyResult, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VerifyResult)
@@ -678,7 +720,7 @@ func (c *codegenServiceClient) DumpFixtures(ctx context.Context, in *DumpFixture
 
 func (c *codegenServiceClient) GenerateClient(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateClientRequest, GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[9], CodegenService_GenerateClient_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[10], CodegenService_GenerateClient_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +743,7 @@ func (c *codegenServiceClient) DiscoverPluginSandboxes(ctx context.Context, in *
 
 func (c *codegenServiceClient) GeneratePluginPb(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GeneratePluginPbRequest, GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[10], CodegenService_GeneratePluginPb_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[11], CodegenService_GeneratePluginPb_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -724,7 +766,7 @@ func (c *codegenServiceClient) MergePo(ctx context.Context, in *MergePoRequest, 
 
 func (c *codegenServiceClient) RenderProjectScaffold(ctx context.Context, in *RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[11], CodegenService_RenderProjectScaffold_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[12], CodegenService_RenderProjectScaffold_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -793,7 +835,7 @@ func (c *codegenServiceClient) ListPluginCatalog(ctx context.Context, in *ListPl
 
 func (c *codegenServiceClient) FetchPlugin(ctx context.Context, in *FetchPluginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[12], CodegenService_FetchPlugin_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[13], CodegenService_FetchPlugin_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -812,7 +854,7 @@ type CodegenService_FetchPluginClient = grpc.ServerStreamingClient[GeneratedFile
 
 func (c *codegenServiceClient) Guide(ctx context.Context, in *GuideRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[13], CodegenService_Guide_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CodegenService_ServiceDesc.Streams[14], CodegenService_Guide_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1008,6 +1050,23 @@ type CodegenServiceServer interface {
 	// a message, NOT a gRPC error (it's an expected outcome).
 	VerifyAcl(context.Context, *VerifyRequest) (*VerifyResult, error)
 	VerifyEventbus(context.Context, *VerifyRequest) (*VerifyResult, error)
+	// GenerateEgressClient turns an OpenAPI document into a signed egress
+	// client (docs/todos/egress-rest-client.md): the client fetched or read
+	// the document, the console selects the operations, converts them to the
+	// client's `<name>.proto`, writes its `client.yaml` and signs the set.
+	// The client writes the files where the response says, plus the document
+	// itself, byte for byte as it sent it.
+	//
+	// The REQUEST streams: a published OpenAPI document (Stripe's is ~7 MB)
+	// exceeds the 4 MiB the console's gateway→backend hop carries in one
+	// message. The first message holds every field; later ones only
+	// `document` chunks, appended in order. One response.
+	GenerateEgressClient(grpc.BidiStreamingServer[GenerateEgressClientRequest, GenerateEgressClientResponse]) error
+	// VerifyEgressClient checks one committed client's signature — the
+	// release gate's question for `proto/clients/<name>/`, and the one
+	// codegen asks before it compiles a client. A mismatch is `ok=false` and
+	// a message, NOT a gRPC error, like the other Verify* RPCs.
+	VerifyEgressClient(context.Context, *VerifyEgressClientRequest) (*VerifyResult, error)
 	// VerifyLock checks the committed `w17/lock.yaml` signature server-side
 	// — the client performs ZERO cryptography (public-split boundary §4: no
 	// signing key in the public binary). The thin client ships the on-disk
@@ -1236,6 +1295,12 @@ func (UnimplementedCodegenServiceServer) VerifyAcl(context.Context, *VerifyReque
 }
 func (UnimplementedCodegenServiceServer) VerifyEventbus(context.Context, *VerifyRequest) (*VerifyResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyEventbus not implemented")
+}
+func (UnimplementedCodegenServiceServer) GenerateEgressClient(grpc.BidiStreamingServer[GenerateEgressClientRequest, GenerateEgressClientResponse]) error {
+	return status.Error(codes.Unimplemented, "method GenerateEgressClient not implemented")
+}
+func (UnimplementedCodegenServiceServer) VerifyEgressClient(context.Context, *VerifyEgressClientRequest) (*VerifyResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyEgressClient not implemented")
 }
 func (UnimplementedCodegenServiceServer) VerifyLock(context.Context, *VerifyLockRequest) (*VerifyResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyLock not implemented")
@@ -1486,6 +1551,31 @@ func _CodegenService_VerifyEventbus_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CodegenServiceServer).VerifyEventbus(ctx, req.(*VerifyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CodegenService_GenerateEgressClient_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CodegenServiceServer).GenerateEgressClient(&grpc.GenericServerStream[GenerateEgressClientRequest, GenerateEgressClientResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CodegenService_GenerateEgressClientServer = grpc.BidiStreamingServer[GenerateEgressClientRequest, GenerateEgressClientResponse]
+
+func _CodegenService_VerifyEgressClient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyEgressClientRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodegenServiceServer).VerifyEgressClient(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodegenService_VerifyEgressClient_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodegenServiceServer).VerifyEgressClient(ctx, req.(*VerifyEgressClientRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1781,6 +1871,10 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CodegenService_VerifyEventbus_Handler,
 		},
 		{
+			MethodName: "VerifyEgressClient",
+			Handler:    _CodegenService_VerifyEgressClient_Handler,
+		},
+		{
 			MethodName: "VerifyLock",
 			Handler:    _CodegenService_VerifyLock_Handler,
 		},
@@ -1873,6 +1967,12 @@ var CodegenService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "GenerateProject",
 			Handler:       _CodegenService_GenerateProject_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "GenerateEgressClient",
+			Handler:       _CodegenService_GenerateEgressClient_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},
