@@ -39,6 +39,12 @@ func streamServer(t *testing.T, frames []string, hang bool, status int) *httptes
 		w.WriteHeader(http.StatusOK)
 		fl.Flush()
 		for _, f := range frames {
+			if strings.HasPrefix(f, "event:") {
+				// A whole frame, written as the gateway writes an error.
+				fmt.Fprintf(w, "%s\n\n", f)
+				fl.Flush()
+				continue
+			}
 			fmt.Fprintf(w, "data: %s\n\n", f)
 			fl.Flush()
 		}
@@ -286,5 +292,169 @@ func TestSSEStreamCaller_ClosedStreamIsNotATimeout(t *testing.T) {
 	}
 	if _, err := conn.Next(ctx, time.Second); !errors.Is(err, ErrStreamClosed) {
 		t.Errorf("a finished stream reported %v, want ErrStreamClosed — a timeout here would read as a hung server", err)
+	}
+}
+
+// overloadedFrame is what restgw.WriteSSEGRPCError sends for a backend that
+// refused with RESOURCE_EXHAUSTED and a request-level detail.
+const overloadedFrame = "event: error\ndata: " +
+	`{"error":{"code":"RESOURCE_EXHAUSTED","message":"Busy, try again.","details":[{"code":"PARSE_OVERLOADED","message":"Busy, try again."}]}}`
+
+// TestExpectStream_ErrorFrameIsTheRefusal — the case a consumer could not
+// write (2026-10-06). A refusal the BACKEND makes arrives after the gateway
+// has sent `200 text/event-stream`, so it is an `event: error` frame; the
+// runner read the 200 as "the stream opened" and reported SUCCEEDED against
+// a server that had answered correctly.
+func TestExpectStream_ErrorFrameIsTheRefusal(t *testing.T) {
+	srv := streamServer(t, []string{overloadedFrame}, false, 0)
+
+	s := streamStep(nil)
+	s.ExpectError = &ExpectError{
+		Code:    "RESOURCE_EXHAUSTED",
+		Details: []ExpectErrorDetail{{Code: "PARSE_OVERLOADED"}},
+	}
+	if err := runStream(t, srv, s); err != nil {
+		t.Fatalf("an error frame carrying the declared refusal should satisfy expect_error: %v", err)
+	}
+}
+
+// TestExpectStream_ErrorFrameWithAnotherCodeFails — the decoy: the frame is
+// READ, not merely noticed.
+func TestExpectStream_ErrorFrameWithAnotherCodeFails(t *testing.T) {
+	srv := streamServer(t, []string{overloadedFrame}, false, 0)
+
+	s := streamStep(nil)
+	s.ExpectError = &ExpectError{Code: "PERMISSION_DENIED"}
+	err := runStream(t, srv, s)
+	if err == nil || !strings.Contains(err.Error(), "RESOURCE_EXHAUSTED") {
+		t.Fatalf("a RESOURCE_EXHAUSTED frame satisfied a PERMISSION_DENIED case, or the failure did not name what came: %v", err)
+	}
+
+	s.ExpectError = &ExpectError{Code: "RESOURCE_EXHAUSTED", Details: []ExpectErrorDetail{{Code: "SCOPE_DENIED"}}}
+	if err := runStream(t, srv, s); err == nil || !strings.Contains(err.Error(), "PARSE_OVERLOADED") {
+		t.Fatalf("a detail from another rule satisfied the case, or the failure did not name the rule that fired: %v", err)
+	}
+}
+
+// TestExpectStream_RefusalCaseFailsWhenTheStreamEndsClean — a stream that
+// opens, sends nothing and closes refused nobody.
+func TestExpectStream_RefusalCaseFailsWhenTheStreamEndsClean(t *testing.T) {
+	srv := streamServer(t, nil, false, 0)
+
+	s := streamStep(nil)
+	s.ExpectError = &ExpectError{Code: "RESOURCE_EXHAUSTED"}
+	err := runStream(t, srv, s)
+	if err == nil || !strings.Contains(err.Error(), "ENDED without an error frame") {
+		t.Fatalf("a stream that closed clean satisfied a refusal case: %v", err)
+	}
+}
+
+// TestExpectStream_FramesThenError — `expect_stream` + `expect_error`: the
+// declared frames, then the failure. How a long job that fails partway looks.
+func TestExpectStream_FramesThenError(t *testing.T) {
+	srv := streamServer(t, []string{`{"progress":1}`, `{"progress":2}`, overloadedFrame}, false, 0)
+
+	s := streamStep(&ExpectStream{Frames: []map[string]any{{"progress": 1}, {"progress": 2}}})
+	s.ExpectError = &ExpectError{Code: "RESOURCE_EXHAUSTED"}
+	if err := runStream(t, srv, s); err != nil {
+		t.Fatalf("frames followed by the declared error frame: %v", err)
+	}
+
+	// Decoy: the same frames, then a clean close.
+	clean := streamServer(t, []string{`{"progress":1}`, `{"progress":2}`}, false, 0)
+	if err := runStream(t, clean, s); err == nil {
+		t.Fatal("a stream that finished clean satisfied a frames-then-error case")
+	}
+}
+
+// TestExpectStream_ErrorFrameFailsAFrameCase — without expect_error, an error
+// frame is a FAILURE wherever it lands: in place of a declared frame, and in
+// place of the close.
+func TestExpectStream_ErrorFrameFailsAFrameCase(t *testing.T) {
+	srv := streamServer(t, []string{overloadedFrame}, false, 0)
+	err := runStream(t, srv, streamStep(&ExpectStream{Frames: []map[string]any{{"id": "t1"}}}))
+	if err == nil || !strings.Contains(err.Error(), "error frame instead — RESOURCE_EXHAUSTED") {
+		t.Fatalf("an error frame in place of frame[0]: %v", err)
+	}
+
+	tail := streamServer(t, []string{`{"id":"t1"}`, overloadedFrame}, false, 0)
+	err = runStream(t, tail, streamStep(&ExpectStream{Frames: []map[string]any{{"id": "t1"}}}))
+	if err == nil || !strings.Contains(err.Error(), "ended with an error frame") {
+		t.Fatalf("an error frame in place of the close passed as a finished stream: %v", err)
+	}
+}
+
+// TestExpectStream_AStreamStepAssertingNothingFails — a step on a streaming
+// endpoint with neither expect_stream nor expect_error used to go down the
+// UNARY caller, which read the 200 as success: green over an endpoint that
+// may have answered only an error frame.
+func TestExpectStream_AStreamStepAssertingNothingFails(t *testing.T) {
+	srv := streamServer(t, []string{overloadedFrame}, false, 0)
+	err := runStream(t, srv, streamStep(nil))
+	if err == nil || !strings.Contains(err.Error(), "without expect_stream or expect_error") {
+		t.Fatalf("a stream step that asserts nothing: %v", err)
+	}
+}
+
+// TestExpectStream_ANonEnvelopeErrorFrameKeepsItsWords — an error frame that
+// is not our envelope still names what it said; decoding Data alone reported
+// `null`.
+func TestExpectStream_ANonEnvelopeErrorFrameKeepsItsWords(t *testing.T) {
+	srv := streamServer(t, []string{"event: error\ndata: upstream connect error"}, false, 0)
+
+	s := streamStep(nil)
+	s.ExpectError = &ExpectError{Code: "RESOURCE_EXHAUSTED"}
+	err := runStream(t, srv, s)
+	if err == nil || !strings.Contains(err.Error(), "upstream connect error") {
+		t.Fatalf("a non-envelope error frame lost its text: %v", err)
+	}
+}
+
+// TestExpectStream_ACredentialIsRefused — a step naming its own credential
+// drops the scenario's bearer, and the stream caller presents nothing else:
+// the stream would open unauthenticated and a refusal case would pass on the
+// missing credential.
+func TestExpectStream_ACredentialIsRefused(t *testing.T) {
+	srv := streamServer(t, nil, false, http.StatusUnauthorized)
+
+	s := streamStep(nil)
+	s.Credential = "Basic dXNlcjpwYXNz"
+	s.ExpectError = &ExpectError{Code: "PERMISSION_DENIED"}
+	err := runStream(t, srv, s)
+	if err == nil || !strings.Contains(err.Error(), "names a credential on the stream") {
+		t.Fatalf("a credential on a stream step: %v", err)
+	}
+}
+
+// TestExpectStream_RefusalTimeoutIsTheErrorsOwn — a handler that refuses only
+// after some work answers later than the default per-frame wait, and a
+// refusal-only case has no `expect_stream` to carry a timeout. Its own
+// `timeout_ms` bounds the wait for the error frame — both ways.
+func TestExpectStream_RefusalTimeoutIsTheErrorsOwn(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/tasks/stream", func(w http.ResponseWriter, r *http.Request) {
+		fl := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl.Flush()
+		select {
+		case <-time.After(400 * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprintf(w, "%s\n\n", overloadedFrame)
+		fl.Flush()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	s := streamStep(nil)
+	s.ExpectError = &ExpectError{Code: "RESOURCE_EXHAUSTED", TimeoutMs: 100}
+	if err := runStream(t, srv, s); err == nil || !strings.Contains(err.Error(), "went quiet") {
+		t.Fatalf("a 100 ms bound waited for a refusal sent at 400 ms: %v", err)
+	}
+	s.ExpectError.TimeoutMs = 3000
+	if err := runStream(t, srv, s); err != nil {
+		t.Fatalf("a refusal inside the declared bound: %v", err)
 	}
 }

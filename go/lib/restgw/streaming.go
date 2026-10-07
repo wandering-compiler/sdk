@@ -153,17 +153,38 @@ func WriteSSEEventWithTimeout(w http.ResponseWriter, flusher http.Flusher, msg p
 // gateway has to translate them onto the SSE wire as a
 // regular event.
 func WriteSSEError(w http.ResponseWriter, flusher http.Flusher, code, message string) {
-	body := errorEnvelopeJSON(code, message, nil)
+	WriteSSEErrorWithDetails(w, flusher, code, message, nil)
+}
+
+// WriteSSEErrorWithDetails is WriteSSEError carrying the envelope's
+// `details[]` — the same envelope [WriteErrorWithDetails] writes on the
+// unary side and [WSWriteErrorWithDetails] on a socket.
+func WriteSSEErrorWithDetails(w http.ResponseWriter, flusher http.Flusher, code, message string, details []FieldError) {
+	body := errorEnvelopeJSON(code, message, details)
 	_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", body)
 	flusher.Flush()
 }
 
-// WriteSSEGRPCError unpacks a gRPC error to (code, message)
-// and emits it as an SSE error event. Generated handlers
-// call this when stream.Recv returns a non-EOF error;
-// non-status errors (network blip) fall through to
-// "INTERNAL".
+// WriteSSEGRPCError is [WriteSSEGRPCErrorCtx] without a request in scope:
+// the fallback sentence stays in the source locale. Generated handlers use
+// the Ctx form; this one stays for code generated before it.
 func WriteSSEGRPCError(w http.ResponseWriter, flusher http.Flusher, err error) {
+	WriteSSEGRPCErrorCtx(context.Background(), w, flusher, err)
+}
+
+// WriteSSEGRPCErrorCtx unpacks a gRPC error and emits it as an SSE error
+// event. Generated handlers call this when stream.Recv returns a non-EOF
+// error; non-status errors (network blip) fall through to "INTERNAL".
+//
+// It writes what [WriteGRPCErrorCtx] writes, because on a stream it is the
+// ONLY place a refusal can go. The gateway has sent `200 text/event-stream`
+// before the backend handler runs, so every refusal the handler makes —
+// scope, ACL, overload — reaches the client as this frame and nothing else.
+// This leg used to drop the envelope's `details[]` (and the request's
+// context with them), so a backend's stable code (`PARSE_OVERLOADED`) never
+// left the gateway on a stream while the same refusal on a unary call or a
+// socket carried it.
+func WriteSSEGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, err error) {
 	if err == nil {
 		return
 	}
@@ -173,30 +194,37 @@ func WriteSSEGRPCError(w http.ResponseWriter, flusher http.Flusher, err error) {
 		// response body, and leaving this path on the old behaviour meant
 		// the developer's message — service prefix included — simply left
 		// by a different door.
-		reportByCode(context.Background(), st.Code(), err)
-		code, message := clientFacing(context.Background(), st, fieldErrorsFromStatus(st))
-		WriteSSEError(w, flusher, code, message)
+		reportByCode(ctx, st.Code(), err)
+		details := fieldErrorsFromStatus(st)
+		code, message := clientFacing(ctx, st, details)
+		WriteSSEErrorWithDetails(w, flusher, code, message, details)
 		return
 	}
 	// Non-status (transport / unexpected): its text carries internal
 	// topology, so it is logged and genericised — the unary path's
 	// restgw-sec-3 posture, which this leg was emitting raw.
-	observx.ReportError(context.Background(), err)
+	observx.ReportError(ctx, err)
 	WriteSSEError(w, flusher, "INTERNAL", "internal error")
 }
 
-// WriteSSEGRPCErrorWithTimeout wraps WriteSSEGRPCError with a per-write
-// deadline (G3-GW-09 error-path sibling, Q5-gw-1) so the terminal error
-// frame can't pin the handler goroutine on a half-open client. timeout
-// of 0 disables the bound (same as WriteSSEGRPCError).
+// WriteSSEGRPCErrorWithTimeout is [WriteSSEGRPCErrorCtxWithTimeout] without
+// a request in scope; kept for code generated before the Ctx form.
 func WriteSSEGRPCErrorWithTimeout(w http.ResponseWriter, flusher http.Flusher, err error, timeout time.Duration) {
+	WriteSSEGRPCErrorCtxWithTimeout(context.Background(), w, flusher, err, timeout)
+}
+
+// WriteSSEGRPCErrorCtxWithTimeout wraps WriteSSEGRPCErrorCtx with a
+// per-write deadline (G3-GW-09 error-path sibling, Q5-gw-1) so the terminal
+// error frame can't pin the handler goroutine on a half-open client.
+// timeout of 0 disables the bound.
+func WriteSSEGRPCErrorCtxWithTimeout(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, err error, timeout time.Duration) {
 	if timeout > 0 {
 		ctrl := http.NewResponseController(w)
 		if derr := ctrl.SetWriteDeadline(time.Now().Add(timeout)); derr == nil {
 			defer func() { _ = ctrl.SetWriteDeadline(time.Time{}) }()
 		}
 	}
-	WriteSSEGRPCError(w, flusher, err)
+	WriteSSEGRPCErrorCtx(ctx, w, flusher, err)
 }
 
 // AcceptWebSocket upgrades the HTTP request to a WebSocket

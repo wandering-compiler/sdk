@@ -122,7 +122,7 @@ func FromTargets(specs []TargetSpec, opts ...option) migrate.ApplierFor {
 			}
 			return a, nil
 		}
-		return nil, fmt.Errorf("connection %q: unrecognised DSN scheme in %q (supported: postgres://)",
+		return nil, fmt.Errorf("connection %q: unrecognised DSN scheme in %q (supported: postgres://, mysql://, sqlite://, redis://, nats://, s3://)",
 			connection, spec.DSN)
 	}
 }

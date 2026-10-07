@@ -126,6 +126,15 @@ type ObservedForeignKey struct {
 	// means the rule was NOT read (an older reader), which a consumer must
 	// treat as "do not compare", never as "NO ACTION".
 	OnDelete string
+	// DeleteSetColumns are the columns the SET NULL / SET DEFAULT action is
+	// limited to (`confdelsetcols`, PostgreSQL 15+: `SET NULL (col)`); empty
+	// means every referencing column. The two forms report the same
+	// OnDelete, and on a scope-preserving key the bare one nulls the tenant
+	// column, so a parent with children cannot be deleted.
+	DeleteSetColumns []string
+	// DeleteSetColumnsRead says DeleteSetColumns was read. False from an
+	// older reader or a database before PostgreSQL 15: do not compare.
+	DeleteSetColumnsRead bool
 }
 
 // ObservedIndex is one index as the database defines it.
@@ -445,7 +454,14 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		       COALESCE((SELECT array_agg(a.attname ORDER BY k.ord)
 		                   FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
 		                   JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum), '{}'),
-		       c.confdeltype
+		       c.confdeltype,
+		       -- confdelsetcols exists from PostgreSQL 15; read through
+		       -- to_jsonb so the query also runs on an older server, where
+		       -- the key is absent and the list is reported as not read.
+		       (to_jsonb(c) ? 'confdelsetcols'),
+		       COALESCE((SELECT array_agg(a.attname ORDER BY k.ord)
+		                   FROM jsonb_array_elements_text(COALESCE(NULLIF(to_jsonb(c)->'confdelsetcols', 'null'::jsonb), '[]'::jsonb)) WITH ORDINALITY AS k(attnum, ord)
+		                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum::int2), '{}')
 		  FROM pg_constraint c
 		  JOIN pg_class tc ON tc.oid = c.conrelid
 		  JOIN pg_namespace n ON n.oid = tc.relnamespace
@@ -467,7 +483,9 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		var name, def, target, targetSchema string
 		var cols, targetCols []string
 		var kind, delType byte
-		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetSchema, &targetCols, &delType); err != nil {
+		var delSetRead bool
+		var delSetCols []string
+		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetSchema, &targetCols, &delType, &delSetRead, &delSetCols); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
 		}
 		switch kind {
@@ -475,6 +493,7 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 			fk := ObservedForeignKey{
 				Name: name, Columns: cols, TargetTable: target, TargetSchema: targetSchema,
 				TargetColumns: targetCols, OnDelete: fkRuleSQL(delType),
+				DeleteSetColumns: delSetCols, DeleteSetColumnsRead: delSetRead,
 			}
 			if len(targetCols) > 0 {
 				fk.TargetColumn = targetCols[0]

@@ -337,14 +337,27 @@ func noEnv(string) string { return "" }
 // the listener presents — so the chain is still verified against the CA the
 // stack trusts.
 func dialOptions(getenv func(string) string) ([]grpc.DialOption, error) {
+	// The probe dials THIS container's own listener, so it follows the
+	// SERVER's posture: under "terminated" the listener is plaintext even
+	// though every outgoing dial is TLS.
+	if !grpcclient.InternalTLSEnabled(getenv(grpcclient.EnvInternalTLS)) {
+		// The helper's own off arm, with the switch read as the listener reads it.
+		off, err := grpcclient.TLSDialOption(func(k string) string {
+			if k == grpcclient.EnvInternalTLS {
+				return ""
+			}
+			return getenv(k)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return []grpc.DialOption{off}, nil
+	}
 	tlsOpt, err := grpcclient.TLSDialOption(getenv)
 	if err != nil {
 		return nil, err
 	}
 	opts := []grpc.DialOption{tlsOpt}
-	if !grpcclient.InternalTLSEnabled(getenv(grpcclient.EnvInternalTLS)) {
-		return opts, nil
-	}
 	name, err := leafServerName(getenv(grpcclient.EnvInternalTLSCert), getenv(grpcclient.EnvInternalTLSKey))
 	if err != nil {
 		return nil, err

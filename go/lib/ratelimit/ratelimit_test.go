@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
@@ -396,5 +398,81 @@ func TestAllowChargeable_ChargeIsIdempotentAndNilSafe(t *testing.T) {
 	}
 	if ok, _ := lim.AllowChargeable(ctx); ok {
 		t.Error("the bucket did not empty after its burst was spent on failures")
+	}
+}
+
+func reqFrom(remote string, xff ...string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	r.RemoteAddr = remote
+	for _, v := range xff {
+		r.Header.Add("X-Forwarded-For", v)
+	}
+	return r
+}
+
+// An HTTP request's context carries no gRPC peer, so the context-based Allow
+// buckets every HTTP caller under one key. The request API must resolve the
+// caller from the request itself: two clients behind the same edge are two
+// buckets, and one draining its own leaves the other untouched.
+func TestAllowRequest_ClientsBehindOneEdgeAreSeparateBuckets(t *testing.T) {
+	l := New(Config{PerMinute: 60, Burst: 2, TrustedProxies: prefixes(t, "10.0.0.0/8")})
+	attacker := reqFrom("10.0.1.7:41000", "198.51.100.66")
+	victim := reqFrom("10.0.1.7:41001", "203.0.113.9")
+
+	for i := 0; i < 2; i++ {
+		l.AllowRequest(attacker)
+	}
+	if l.AllowRequest(attacker) {
+		t.Fatal("attacker should be exhausted")
+	}
+	if !l.AllowRequest(victim) {
+		t.Fatal("a second client behind the same edge was refused by the first one's traffic — the HTTP key collapsed")
+	}
+	if got := l.RequestKey(victim); got != "203.0.113.9" {
+		t.Errorf("RequestKey = %q, want the forwarded client", got)
+	}
+}
+
+// The spoofing and rightmost-untrusted rules hold for the HTTP header as
+// they do for gRPC metadata — the same keyFor reads both.
+func TestRequestKey_ForwardedRules(t *testing.T) {
+	l := New(Config{PerMinute: 60, Burst: 5, TrustedProxies: prefixes(t, "10.0.0.0/8")})
+	if got := l.RequestKey(reqFrom("203.0.113.7:5000", "198.51.100.1")); got != "203.0.113.7" {
+		t.Errorf("untrusted peer's header was believed: key=%q", got)
+	}
+	if got := l.RequestKey(reqFrom("10.110.0.5:5000", "198.51.100.66, 203.0.113.9", "10.110.0.4")); got != "203.0.113.9" {
+		t.Errorf("wrong hop chosen across two header lines: key=%q", got)
+	}
+	if got := l.RequestKey(reqFrom("[2001:db8:1:2::7]:443")); got != "2001:db8:1:2::/64" {
+		t.Errorf("IPv6 peer not bucketed by /64: key=%q", got)
+	}
+}
+
+func TestAllowChargeableRequest_ChargesOnlyFailures(t *testing.T) {
+	l := New(Config{PerMinute: 6, Burst: 2})
+	r := reqFrom("203.0.113.9:1234")
+	for i := 0; i < 20; i++ {
+		if ok, _ := l.AllowChargeableRequest(r); !ok {
+			t.Fatalf("a successful caller was throttled after %d requests", i)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		_, charge := l.AllowChargeableRequest(r)
+		charge()
+	}
+	if ok, _ := l.AllowChargeableRequest(r); ok {
+		t.Error("failures are not charged")
+	}
+	if ok, _ := l.AllowChargeableRequest(reqFrom("198.51.100.1:1234")); !ok {
+		t.Error("another client was refused by the first one's failures")
+	}
+	var nilL *Limiter
+	if ok, charge := nilL.AllowChargeableRequest(r); !ok {
+		t.Error("nil limiter must admit")
+	} else {
+		charge()
+	}
+	if !nilL.AllowRequest(r) {
+		t.Error("nil limiter must allow")
 	}
 }

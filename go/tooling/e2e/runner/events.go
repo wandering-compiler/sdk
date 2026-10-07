@@ -54,6 +54,11 @@ const DefaultAwaitTimeoutMs = 5000
 type Event struct {
 	Topic string
 	Data  map[string]any
+
+	// Raw is the `data:` text as it arrived. Data is empty for a payload
+	// that is not a JSON object, and a failure reported from Data alone
+	// would then say `null` about a frame that said something.
+	Raw string
 }
 
 // EventSubscriber opens a live subscription to the gateway's public event
@@ -181,7 +186,7 @@ func (s *sseSub) read() {
 			_ = json.Unmarshal([]byte(data), &payload)
 		}
 		select {
-		case s.frames <- Event{Topic: event, Data: payload}:
+		case s.frames <- Event{Topic: event, Data: payload, Raw: data}:
 		case <-s.done:
 		}
 		event, data = "", ""
@@ -272,7 +277,7 @@ func (s *sseSub) Next(ctx context.Context, timeout time.Duration) (Event, error)
 			return Event{}, ErrStreamClosed
 		}
 		if ev.Topic == "error" {
-			return Event{}, fmt.Errorf("stream error frame: %v", ev.Data)
+			return Event{}, streamErrorFrame(ev)
 		}
 		return ev, nil
 	}

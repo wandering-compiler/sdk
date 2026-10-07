@@ -336,41 +336,19 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	}
 
 	// A streaming endpoint is OPENED, not called: its response is the frame
-	// sequence, and there is no single body to match. The refusal path stays
-	// shared — a refused connect answers the same REST envelope a refused
-	// call does, so `expect_error:` means one thing on both.
-	if s.ExpectStream != nil || (s.ExpectError != nil && s.Endpoint.Stream) {
+	// sequence, and there is no single body to match. EVERY step on one takes
+	// this path, whatever it asserts — a stream step sent down the unary
+	// caller would read a 200 with an event-stream body as a success, and that
+	// is a green over an endpoint that may have answered nothing but an error.
+	if s.Endpoint.Stream || s.ExpectStream != nil {
 		if cfg.streams == nil {
 			return fmt.Errorf("step opens the stream %s but no stream caller configured (pass runner.WithStreamCaller)", s.Endpoint.Ref)
 		}
-		conn, err := cfg.streams.OpenStream(ctx, s.Endpoint, input, token, headers)
-		if s.ExpectError != nil {
-			if conn != nil {
-				_ = conn.Close()
-			}
-			return matchCallError(s.ExpectError, err, scope)
-		}
-		if err != nil {
-			return err
-		}
-		defer func() { _ = conn.Close() }()
-		return matchStream(ctx, s.ExpectStream, conn, scope)
-	}
-
-	resp, err := caller.Call(ctx, s.Endpoint, input, token, headers, credential, s.Files)
-	if s.ExpectTransportError != nil {
-		if err := matchTransportError(s.ExpectTransportError, err, scope); err != nil {
-			return err
-		}
-	} else if s.ExpectError != nil {
-		if err := matchCallError(s.ExpectError, err, scope); err != nil {
+		if err := runStreamStep(ctx, s, cfg.streams, input, token, headers, scope); err != nil {
 			return err
 		}
 	} else {
-		if err != nil {
-			return err
-		}
-		if err := runtime.MatchExpect(s.Expect, resp, scope); err != nil {
+		if err := runUnaryStep(ctx, s, caller, input, token, headers, credential, scope); err != nil {
 			return err
 		}
 	}
@@ -389,6 +367,22 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		}
 	}
 	return nil
+}
+
+// runUnaryStep issues a non-streaming call and asserts its one outcome: the
+// response, a coded refusal, or a refusal below the surface.
+func runUnaryStep(ctx context.Context, s Step, caller Caller, input map[string]any, token string, headers map[string]string, credential string, scope *runtime.Scope) error {
+	resp, err := caller.Call(ctx, s.Endpoint, input, token, headers, credential, s.Files)
+	switch {
+	case s.ExpectTransportError != nil:
+		return matchTransportError(s.ExpectTransportError, err, scope)
+	case s.ExpectError != nil:
+		return matchCallError(s.ExpectError, err, scope)
+	case err != nil:
+		return err
+	default:
+		return runtime.MatchExpect(s.Expect, resp, scope)
+	}
 }
 
 // ExpectError is a step's refusal contract — the canonical code the
@@ -417,6 +411,11 @@ type ExpectError struct {
 	// single request routinely trips more than one rule and pinning the
 	// full set would make every case depend on the others' fixtures.
 	Details []ExpectErrorDetail
+
+	// TimeoutMs bounds the wait for a STREAM's refusal frame. Zero → the
+	// declared frames' timeout, else DefaultAwaitTimeoutMs. A unary call
+	// ignores it; codegen refuses it there.
+	TimeoutMs int
 }
 
 // ExpectErrorDetail is one expected `details[]` entry. Only the set

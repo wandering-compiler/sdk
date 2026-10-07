@@ -401,6 +401,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := preflightExtensions(ctx, ac, pending); err != nil {
 		return err
 	}
+	// The namespaces the migrations' tables are qualified with — created here,
+	// after the extension check refused nothing (so a refused run still writes
+	// nothing) and before the first migration. See prepareSchemas.
+	if err := prepareSchemas(ctx, ac, pending); err != nil {
+		return err
+	}
 
 	logger := newLogger(out, cfg.LogFormat)
 

@@ -136,14 +136,28 @@ const (
 )
 
 // InternalTLSEnabled reports whether the stack-wide internal-TLS
-// switch ([EnvInternalTLS]) is on. Shared spelling so the client and
-// [grpcserver] agree on what "on" means.
+// switch ([EnvInternalTLS]) is on — whether a w17 SERVER listens with TLS.
+// Shared spelling so the client and [grpcserver] agree on what "on" means.
 func InternalTLSEnabled(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "on", "true", "1", "yes":
 		return true
 	}
 	return false
+}
+
+// InternalTLSTerminated is the switch's third value, "terminated": the
+// platform terminates TLS in front of every service (Cloud Run's front end),
+// so a SERVER listens in plaintext while a CLIENT must dial TLS against the
+// system roots — the platform's certificate, not the stack's.
+func InternalTLSTerminated(v string) bool {
+	return strings.EqualFold(strings.TrimSpace(v), "terminated")
+}
+
+// InternalTLSDial reports whether a CLIENT dials TLS: the switch is on, or
+// the platform terminates it.
+func InternalTLSDial(v string) bool {
+	return InternalTLSEnabled(v) || InternalTLSTerminated(v)
 }
 
 // Dial opens a non-blocking client connection to addr. Wires
@@ -187,6 +201,9 @@ func Dial(addr string, lookup LookupFunc, opts ...grpc.DialOption) (*grpc.Client
 //
 //	W17_INTERNAL_TLS        — off (unset / not truthy) → plain h2c.
 //	                          "on" → dial TLS, verifying the server.
+//	                          "terminated" → dial TLS (system roots) to a
+//	                          server whose platform terminates TLS in
+//	                          front of it; the server itself listens plain.
 //	W17_INTERNAL_TLS_CA     — CA bundle to verify the server leaf
 //	                          (RootCAs). Unset = system trust roots.
 //	W17_INTERNAL_TLS_CERT   — this node's leaf cert, presented only
@@ -215,7 +232,7 @@ func Dial(addr string, lookup LookupFunc, opts ...grpc.DialOption) (*grpc.Client
 // of at dial-time. Exposed separately from [Dial] for callers that own
 // their full DialOption list and just need the TLS slot.
 func TLSDialOption(lookup LookupFunc) (grpc.DialOption, error) {
-	if lookup == nil || !InternalTLSEnabled(lookup(EnvInternalTLS)) {
+	if lookup == nil || !InternalTLSDial(lookup(EnvInternalTLS)) {
 		// Switch off (default): plain h2c. The internal mesh is trusted
 		// / infra-secured; plaintext between services is intended here.
 		return grpc.WithTransportCredentials(insecure.NewCredentials()), nil

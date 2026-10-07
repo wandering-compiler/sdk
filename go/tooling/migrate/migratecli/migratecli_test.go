@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
@@ -267,5 +268,30 @@ func TestUnpinned_IsReportedBeforeDSNsAndFetching(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "WARNING") || !strings.Contains(out.String(), "auth-postgres") {
 		t.Errorf("the unpinned connection must be warned about before the DSN error: %q", out.String())
+	}
+}
+
+// --exit-code is what a cloud deploy checks: its one-off task reports an exit
+// code, not the text the swarm deploy matches. Up to date stays success,
+// pending fails — and still lists what is pending.
+func TestReportStatus_ExitCode(t *testing.T) {
+	pending := []migrate.Pending{{Connection: "app-postgres", Migration: &applyfetchpb.Migration{Id: "ts-2"}}}
+	for _, tc := range []struct {
+		pending  []migrate.Pending
+		exitCode bool
+		wantErr  bool
+	}{
+		{nil, true, false},
+		{pending, false, false},
+		{pending, true, true},
+	} {
+		var out strings.Builder
+		err := reportStatus(&out, tc.pending, tc.exitCode)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("pending=%d exitCode=%v: err = %v", len(tc.pending), tc.exitCode, err)
+		}
+		if len(tc.pending) > 0 && !strings.Contains(out.String(), "ts-2") {
+			t.Errorf("the pending migration must be listed: %q", out.String())
+		}
 	}
 }

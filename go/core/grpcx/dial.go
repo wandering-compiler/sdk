@@ -133,8 +133,11 @@ func forwardPrincipalStreamInterceptor(ctx context.Context, desc *grpc.StreamDes
 // bundles call this to decide the [DialOpts] bool, so every inter-tier
 // dialer reads one switch — no per-service knob to diverge. Off is the
 // default; the internal mesh is a trusted network the infra secures.
+//
+// It answers for a DIALER, so "terminated" (the platform terminates TLS in
+// front of the server) counts as on.
 func InternalTLSEnabled() bool {
-	return grpcclient.InternalTLSEnabled(os.Getenv(grpcclient.EnvInternalTLS))
+	return grpcclient.InternalTLSDial(os.Getenv(grpcclient.EnvInternalTLS))
 }
 
 // clientTLSConfig builds the client tls.Config from the stack-wide

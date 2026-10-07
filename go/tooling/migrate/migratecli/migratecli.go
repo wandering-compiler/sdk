@@ -234,6 +234,10 @@ flags (apply):
   --log-format text|json
   --parallel N        worker count for KV data migrations; 0 = the migration's own
 
+flags (status): those of apply, plus
+  --exit-code         exit non-zero while anything is pending — for a deploy
+                      that reads the one-off task's exit code, not its output
+
 flags (rollback):
   --to MIGRATION_ID   highest id to KEEP applied. REQUIRED and has no default:
                       rollback is destructive, and an omitted value that meant
@@ -283,6 +287,8 @@ type applyFlags struct {
 	logFormat string
 	parallel  int
 	fake      bool
+	// exitCode: status fails while anything is pending.
+	exitCode bool
 }
 
 func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
@@ -304,6 +310,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that are older than the fixtures beside them (the deliberate override — a stale render seeds yesterday's rows)")
 	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
+	fs.BoolVar(&f.exitCode, "exit-code", false, "status only: exit non-zero while anything is pending (for a deploy that can read an exit code, not the output)")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
 	if err := fs.Parse(args); err != nil {
 		return f, fmt.Errorf("migrate %s: %w", name, err)
@@ -366,6 +373,12 @@ func runStatus(ctx context.Context, args []string, opts Options, out io.Writer) 
 	if err != nil {
 		return err
 	}
+	return reportStatus(out, pending, f.exitCode)
+}
+
+// reportStatus prints the plan; with exitCode a pending migration is an error,
+// for a deploy that sees the one-off task's exit code and not its output.
+func reportStatus(out io.Writer, pending []migrate.Pending, exitCode bool) error {
 	if len(pending) == 0 {
 		fmt.Fprintln(out, "migrate status: up to date — nothing pending")
 		return nil
@@ -373,6 +386,9 @@ func runStatus(ctx context.Context, args []string, opts Options, out io.Writer) 
 	fmt.Fprintf(out, "migrate status: %d migration(s) pending\n", len(pending))
 	for _, p := range pending {
 		fmt.Fprintf(out, "  %-24s %s\n", p.Connection, p.Migration.GetId())
+	}
+	if exitCode {
+		return fmt.Errorf("migrate status: %d migration(s) pending (--exit-code)", len(pending))
 	}
 	return nil
 }

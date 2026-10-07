@@ -6,11 +6,11 @@
 // nowhere and the cost of trying is one rejected call. The methods flagged
 // ExcludeAuth are different: sign-in and token-mint MUST answer an
 // unauthenticated caller, so they are the one place where guessing is free
-// and repeatable. Nothing else in the generated stack bounds that. The REST
-// transport's nginx config carries a rate-limit block, but the rpc transport
-// has no nginx in front of it, and a TLS terminator does not help either:
-// gRPC multiplexes many calls over ONE connection, so anything counting
-// connections barely counts calls.
+// and repeatable. Nothing else in the generated stack bounds that: the edge
+// in front proxies whole hosts and counts nothing per endpoint, and counting
+// connections would not help either — gRPC multiplexes many calls over ONE
+// connection. So every transport (rpc, REST, the admin's sign-in) limits its
+// public methods in-process, through this package.
 //
 // Deliberately NOT a global cap. One bucket for the whole surface means one
 // attacker starves every real user, which converts a credential-stuffing
@@ -20,6 +20,7 @@ package ratelimit
 import (
 	"context"
 	"log"
+	"net/http"
 	"net/netip"
 	"os"
 	"strconv"
@@ -222,6 +223,10 @@ func (l *Limiter) AllowChargeable(ctx context.Context) (allowed bool, charge fun
 	if !resolved {
 		l.warnCollapsed()
 	}
+	return l.chargeable(key)
+}
+
+func (l *Limiter) chargeable(key string) (bool, func()) {
 	lim := l.limiterFor(key)
 	now := l.now()
 	if lim.TokensAt(now) < 1 {
@@ -314,20 +319,24 @@ func (l *Limiter) ClientKey(ctx context.Context) string {
 // reaches the process. The fix is upstream — terminate HTTP at the proxy, or
 // enable PROXY protocol — which is why this reports rather than guesses.
 func (l *Limiter) clientKey(ctx context.Context) (string, bool) {
-	peerAddr := peerIP(ctx)
+	var forwarded []string
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		forwarded = md.Get("x-forwarded-for")
+	}
+	return l.keyFor(peerIP(ctx), forwarded)
+}
 
+// keyFor is the transport-free half of clientKey: the immediate peer and the
+// X-Forwarded-For values it sent, from gRPC metadata or an HTTP header alike.
+func (l *Limiter) keyFor(peerAddr netip.Addr, forwarded []string) (string, bool) {
 	if !l.trusted(peerAddr) {
 		// The peer IS the client (no terminator in front, or an untrusted
 		// one whose header we correctly refuse to believe).
-		return addrKey(peerAddr, ctx), true
+		return addrKey(peerAddr), true
 	}
 
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return addrKey(peerAddr, ctx), false
-	}
 	var hops []string
-	for _, v := range md.Get("x-forwarded-for") {
+	for _, v := range forwarded {
 		for _, part := range strings.Split(v, ",") {
 			if p := strings.TrimSpace(part); p != "" {
 				hops = append(hops, p)
@@ -344,7 +353,7 @@ func (l *Limiter) clientKey(ctx context.Context) (string, bool) {
 		}
 	}
 	// A trusted peer that forwarded nothing usable — the collapse.
-	return addrKey(peerAddr, ctx), false
+	return addrKey(peerAddr), false
 }
 
 func (l *Limiter) trusted(ip netip.Addr) bool {
@@ -362,7 +371,7 @@ func (l *Limiter) trusted(ip netip.Addr) bool {
 // addrKey is the fallback bucket name. An unparseable peer buckets under a
 // single shared key rather than under "" per call: a caller whose address we
 // cannot read must not get an unmetered bucket each time.
-func addrKey(ip netip.Addr, _ context.Context) string {
+func addrKey(ip netip.Addr) string {
 	if ip.IsValid() {
 		return bucketForAddr(ip)
 	}
@@ -392,6 +401,52 @@ func bucketForAddr(ip netip.Addr) string {
 		}
 	}
 	return ip.String()
+}
+
+// AllowRequest is [Limiter.Allow] for an HTTP request: the caller is
+// r.RemoteAddr, or — when that is a trusted proxy — the X-Forwarded-For hop
+// it appended, read under the same right-to-left rule.
+//
+// The context-based Allow cannot serve HTTP. An http.Request's context
+// carries neither a gRPC peer nor incoming metadata, so every request
+// resolved to the one fallback key and the per-client limit was a single
+// global bucket: one client could drain it and refuse everybody else.
+func (l *Limiter) AllowRequest(r *http.Request) bool {
+	if l == nil {
+		return true
+	}
+	key, resolved := l.requestKey(r)
+	if !resolved {
+		l.warnCollapsed()
+	}
+	return l.allowKey(key)
+}
+
+// AllowChargeableRequest is [Limiter.AllowChargeable] for an HTTP request
+// (see [Limiter.AllowRequest] for how the caller is resolved).
+func (l *Limiter) AllowChargeableRequest(r *http.Request) (allowed bool, charge func()) {
+	if l == nil {
+		return true, func() {}
+	}
+	key, resolved := l.requestKey(r)
+	if !resolved {
+		l.warnCollapsed()
+	}
+	return l.chargeable(key)
+}
+
+// RequestKey is [Limiter.ClientKey] for an HTTP request.
+func (l *Limiter) RequestKey(r *http.Request) string {
+	key, _ := l.requestKey(r)
+	return key
+}
+
+func (l *Limiter) requestKey(r *http.Request) (string, bool) {
+	ip, err := netip.ParseAddr(stripPort(r.RemoteAddr))
+	if err != nil {
+		ip = netip.Addr{}
+	}
+	return l.keyFor(ip, r.Header.Values("X-Forwarded-For"))
 }
 
 func peerIP(ctx context.Context) netip.Addr {

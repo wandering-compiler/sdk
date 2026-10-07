@@ -87,6 +87,11 @@ func TestFromTargets_UnknownDSNScheme(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unrecognised DSN scheme") {
 		t.Errorf("expected scheme error, got %v", err)
 	}
+	// The hint lists every scheme the applier takes: it said `postgres://`
+	// alone, so a bare `host:6379` redis target read as "redis unsupported".
+	if err != nil && !strings.Contains(err.Error(), "redis://") {
+		t.Errorf("the refusal does not name redis:// among the supported schemes: %v", err)
+	}
 }
 
 // TestFromTargets_AllDialectsRoute — every supported scheme
