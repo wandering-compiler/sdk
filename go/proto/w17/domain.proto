@@ -51,6 +51,33 @@ message Domain {
   //
   // Spec: docs/specs/plugins/activation.md.
   repeated PluginActivation plugins = 1;
+
+  // Shared modules this domain persists. A shared module
+  // (proto/shared/[<groups…>/]<module>/) holds types that belong to no
+  // domain: ONE type for every domain that uses it. Registering it gives
+  // its models tables in THIS domain's database (prefixed with `as`),
+  // migrations, and a place in this domain's DQL (`<as>.<Model>`). A
+  // domain that does not register it uses the types only (a nested
+  // message, a payload). The data is per domain: two domains that
+  // register one module have two tables of one shape, each with its own
+  // rows.
+  //
+  // Decision: docs/decisions/shared-models-one-type-persisted-where-registered.md.
+  repeated SharedRegistration register = 2;
+}
+
+// SharedRegistration is one row of (w17.domain).register.
+message SharedRegistration {
+  // The shared module, by its path under the proto root:
+  // "shared/estate", or "shared/<group>/estate" for a grouped one.
+  string module = 1;
+  // The name the module takes in this domain — its table prefix and its
+  // DQL module (`estate.Estate`). Default: the module's own name. Follows
+  // the module-name rules, and must not name one of this domain's
+  // modules, plugin activations or other registrations. One registration
+  // per module per domain: under one type, a second name would leave
+  // `<as>.<Model>` naming two tables.
+  string as = 2;
 }
 
 // PluginActivation is one row of (w17.domain).plugins.
