@@ -207,7 +207,7 @@ type Event struct {
 	// or on an in-memory channel (broadcast-only). The
 	// public/internal distinction only governs stream surfacing.
 	Public bool `protobuf:"varint,4,opt,name=public,proto3" json:"public,omitempty"`
-	// REV-090 — optional FE delivery-reliability policy. When set,
+	// Optional FE delivery-reliability policy. When set,
 	// the generated FE client polls `delivery.fallback.query`,
 	// diffs the result across polls, and synthesizes THIS event on
 	// the browser pub/sub surface (`client.events.X.subscribe`) in
@@ -217,7 +217,7 @@ type Event struct {
 	// → the event stays best-effort (push-only).
 	//
 	// FE-only: BE / MCP durable consumers already get at-least-once
-	// from the bus. See docs/specs/eventbus/delivery-fallback.md.
+	// from the bus.
 	Delivery      *EventDelivery `protobuf:"bytes,5,opt,name=delivery,proto3" json:"delivery,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -398,7 +398,7 @@ func (x *EventDelivery) GetDedupKey() []string {
 // by polling a domain-local query and diffing its result. Reuses
 // PayloadMapping + the emit payload-mapping engine, adding the
 // `$entity.*` (the diffed row) and `$principal.*` (the caller)
-// roots. See docs/specs/eventbus/delivery-fallback.md.
+// roots.
 type EventFallback struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Domain-local RPC whose response lists the entities to diff.
@@ -544,7 +544,7 @@ func (x *EventFallback) GetReconstructFn() string {
 type EmitConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Event ref — `<file>.<MessageName>` or
-	// `<module>.<file>.<MessageName>`, matching the REV-015 ref
+	// `<module>.<file>.<MessageName>`, matching the ref
 	// shape used by REST registry method refs. Plain
 	// `<MessageName>` is accepted iff unambiguous within the
 	// enclosing domain's event index.
@@ -608,7 +608,7 @@ func (x *EmitConfig) GetPayload() *PayloadMapping {
 // PayloadMapping — declarative field-to-source mapping for the
 // emit interceptor's payload construction.
 //
-// Source-expression syntax mirrors REV-020's
+// Source-expression syntax mirrors the
 // `(w17.rest_api).fields[].ref` engine:
 //
 //	"$request.<field>"        — top-level scalar from the RPC
@@ -895,7 +895,7 @@ var (
 	// `channel` (must exist in the domain's `(w17.module).channels[]`)
 	// and `topic` (filter key — subscribers glob-match against it).
 	// Per-event retry override is optional; resolves through the
-	// four-tier cascade documented in channels-config.md.
+	// four-tier cascade documented on `Event.retry`.
 	//
 	// optional w17.Event event = 50130;
 	E_Event = &file_w17_event_proto_extTypes[0]
@@ -908,7 +908,7 @@ var (
 	// against the enclosing domain's EventRegistry (cross-domain
 	// refs are a parse-time diag). Payload mapping uses the same
 	// `$request.*` / `$response.*` / literal-string syntax as
-	// REV-020's `(w17.rest_api).fields[]`.
+	// `(w17.rest_api).fields[]`.
 	//
 	// Emit is generated as a server-side interceptor + in-process
 	// wrapper, so it fires on every path that reaches the handler.
@@ -927,7 +927,6 @@ var (
 	//
 	// The same event MUST NOT also carry `event_emit` (or a second
 	// `event_emit_gateway`): an event has exactly one emit site.
-	// See docs/specs/eventbus/emit-gateway.md.
 	//
 	// optional w17.EmitConfig event_emit_gateway = 50133;
 	E_EventEmitGateway = &file_w17_event_proto_extTypes[2]

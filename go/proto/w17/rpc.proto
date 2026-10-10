@@ -6,7 +6,7 @@ import "google/protobuf/descriptor.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// REV-152 (2026-06-10) — gRPC gateway ("rpc") exposure
+// gRPC gateway ("rpc") exposure
 // annotations. The third gateway transport, sibling to REST
 // (`rest.proto`) and MCP (`mcp.proto`): a public gRPC surface
 // for technical (non-browser) clients over HTTP/2.
@@ -42,7 +42,7 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 //     are shared. There is no `Unimplemented` half-service —
 //     the new service declares exactly the picked methods.
 //
-// Driven by `srcgo/domains/gateway/parser`: every loaded
+// Driven by the gateway parser: every loaded
 // `.proto` carrying `option (w17.rpc_api) = { ... }` declares
 // one rpc surface; methods carrying `(w17.rpc) = true` are the
 // picks. The generator emits `schema/grpcapi.proto` (public
@@ -59,7 +59,7 @@ extend google.protobuf.MethodOptions {
   // backend request/response message types. Streaming
   // qualifiers (server / client / bidi) carry over verbatim and
   // are forwarded natively. Sibling-scalar shape mirrors
-  // `(w17.mcp)` (REV-018): a bare bool pick + a separate string
+  // `(w17.mcp)`: a bare bool pick + a separate string
   // override, rather than a message option.
   bool rpc = 50111;
 
@@ -82,7 +82,7 @@ extend google.protobuf.FileOptions {
   // rpc (gRPC gateway) surface registry. A sentinel carrying the
   // surface's identity + knobs; the per-method `(w17.rpc)` flags
   // do the picking. The file declares ZERO messages, like
-  // `(w17.rest_api)` (REV-017) and `(w17.mcp_api)` (REV-018).
+  // `(w17.rest_api)` and `(w17.mcp_api)`.
   //
   // One rpc surface per domain (one generated
   // `w17.lock.rpc.proto` per domain); two files in one domain
@@ -119,13 +119,13 @@ message RpcApi {
 
   // Field 5 reserved for `repeated AuthMethod auth_methods` — the
   // bearer/basic surface auth declaration, mirroring
-  // `RestApi.auth_methods` (REV-146). Wired by the separate auth
+  // `RestApi.auth_methods`. Wired by the separate auth
   // task; kept off the number space so it lands without a renumber.
   reserved 5;
   reserved "auth_methods";
 
   // Logical groupings of the public surface — mirrors
-  // `RestApi.groups` (REV-017). Each group's `name` is a public
+  // `RestApi.groups`. Each group's `name` is a public
   // gRPC service in the emitted `w17.lock.rpc.proto`; its `refs`
   // name the backend methods that service wraps. The picked
   // methods carry the gateway-tier concerns (event emit, auth,
@@ -140,7 +140,7 @@ message RpcApi {
 }
 
 // RpcGroup buckets backend methods under one public gRPC service
-// — the gRPC sibling of `RestGroup` (REV-017). Where REST groups
+// — the gRPC sibling of `RestGroup`. Where REST groups
 // surface as a URL sub-prefix + OpenAPI tag, an rpc group's
 // `name` IS the public `service` name emitted into
 // `w17.lock.rpc.proto`. Methods drawn from several backend
@@ -164,7 +164,7 @@ message RpcGroup {
   //   "console.initiatives.SnapshotMutation.PushSnapshot" — one method
   //
   // `<module>` is the proto module (last package segment), matching
-  // the FK / REST `ref` shape (REV-015 / REV-017). Resolution is
+  // the FK / REST `ref` shape. Resolution is
   // domain-scoped; a cross-domain ref is a parse-time error. The
   // request/response message types are reused verbatim from the
   // backend (imported into the lock, never redefined).

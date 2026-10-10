@@ -6,7 +6,7 @@ import "google/protobuf/descriptor.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// REV-150 (2026-05-20) — admin registry annotation surface.
+// Admin registry annotation surface.
 //
 // Django-shaped administrative UI. The author writes one
 // `admin.proto` file per domain carrying `option (w17.admin_api)`;
@@ -18,13 +18,10 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // gateway).
 //
 // The admin bundle is a Go binary that serves:
-//   - a minified React SPA (admin runtime + project's REV-141
-//     client + Mantine v7), and
+//   - a minified React SPA (admin runtime + project's generated
+//     FE client + Mantine v7), and
 //   - a small REST surface (WhoAmI / Authenticate + per-method
 //     REST shim) that mirrors gateway semantics.
-//
-// Spec: docs/specs/admin/architecture.md + admin/pages.md.
-// ADR:  docs/decisions/admin-architecture.md.
 
 extend google.protobuf.FileOptions {
   // (w17.admin_api) — file-level admin registry. Carries the
@@ -84,9 +81,9 @@ extend google.protobuf.FieldOptions {
 
 extend google.protobuf.MethodOptions {
   // (w17.admin_bypass_acl) — admin endpoint opts out of the
-  // ACL gate (REV-146). Equivalent to declaring the method
+  // ACL gate. Equivalent to declaring the method
   // exempt from permission checks; the gateway still threads
-  // scopes (REV-147) unless those are also bypassed via
+  // data scopes unless those are also bypassed via
   // `(w17.db.bypass_scope)` on the storage side.
   //
   // Use sparingly — admin endpoints that need bypass typically
@@ -116,7 +113,7 @@ message AdminApi {
   // write nothing here: activating the auth plugin auto-wires
   // login_method + user_lookup via its admin preset (presetinject).
   // Set an explicit block only to point at non-plugin methods.
-  // (Authorization — per-endpoint ACL, REV-146 — is layered on top;
+  // (Authorization — per-endpoint ACL — is layered on top;
   // a superadmin/wildcard role grants the whole catalogue.)
   AdminAuth auth = 3;
 
@@ -192,7 +189,7 @@ message AdminApi {
 //     → delegates to `user_lookup` (returns identity + perms + scopes)
 //   every other admin endpoint
 //     → middleware calls `user_lookup`, threads perms + scopes into
-//       gRPC metadata, REV-146 / REV-147 enforce as usual
+//       gRPC metadata, ACL + data scopes enforce as usual
 message AdminAuth {
   // Reference to the gRPC method that authenticates a caller.
   // "<module>.<Service>.<Method>" — same resolution rules as
@@ -210,8 +207,8 @@ message AdminAuth {
   // the caller's identity + permissions + scopes. Called by
   // the admin middleware on every request (cached for the
   // request's lifetime). Response must carry
-  // `repeated string permissions` (REV-146) and `map<string,
-  // string> scopes` (REV-147) when those features are active.
+  // `repeated string permissions` (ACL) and `map<string,
+  // string> scopes` (data scopes) when those features are active.
   // Required.
   string user_lookup = 2;
 
@@ -356,7 +353,7 @@ message AdminPage {
 // AdminList declares the list view of one admin page.
 message AdminList {
   // Storage method ref, "<module>.<Service>.<Method>". Must
-  // return `repeated <item>` (or a paged carrier per REV-148),
+  // return `repeated <item>` (or a cursor-paged carrier),
   // where `<item>` is the list's RESPONSE-ITEM message. `<item>`
   // is validated for shape only — it is NEVER compared to
   // `AdminPage.model`, so it may be a read-only PROJECTION message
@@ -483,7 +480,7 @@ message AdminColumn {
   // row's title, which is text, so there is no value left for a
   // number or date format to act on. Refused rather than ignored:
   // a format that silently does nothing is a bug the author cannot
-  // see. Spec: docs/specs/i18n/formatting.md.
+  // see.
   string format = 6;
 }
 
@@ -539,7 +536,7 @@ message AdminDetail {
   // (`x-w17-user`, as the gateway does), and with no DQL to read, the
   // mass-assignment guards on `fields` / `readonly_fields` read the
   // method's REQUEST: every field but the URL-stamped key is one a direct
-  // call sets. See docs/specs/admin/pages.md §Binding a Service method.
+  // call sets.
   string update = 2;
 
   // Storage method ref — delete. Optional; absent = no

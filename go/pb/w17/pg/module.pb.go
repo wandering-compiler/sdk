@@ -33,7 +33,7 @@ type PgModule struct {
 	// error). Domain alias must not collide with a project-level alias
 	// (that's also a compile error — no shadowing).
 	CustomTypes []*CustomType `protobuf:"bytes,1,rep,name=custom_types,json=customTypes,proto3" json:"custom_types,omitempty"`
-	// REV-024 (F1, 2026-05-09) — domain-level custom_functions
+	// Domain-level custom_functions
 	// registry. Author registers PG functions / operators that DQL
 	// queries reference (pgvector `<->`, postgis `ST_*`, custom
 	// plpgsql functions). DQL typecheck consults this set after
@@ -208,7 +208,7 @@ func (x *CustomType) GetDescription() string {
 // CustomFunction — one registered PG function / operator that DQL
 // queries reference. Author registers at project or domain level;
 // DQL typecheck merges all registries and consults them after the
-// builtin set. REV-024 (F1, 2026-05-09).
+// builtin set.
 //
 // MVP scope: name + extensions only. Typecheck accepts ANY arg shape
 // for registered names (permissive — runtime PG surfaces signature

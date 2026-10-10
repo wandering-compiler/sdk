@@ -8,8 +8,8 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
 // Client-generator vocabulary — annotations the FE client
 // codegen reads to drive entity-tagged cache invalidation
-// (REV-140 / C4). All annotations are opt-in: a project with
-// none of them gets the C1 dumb-drop-on-mutation behaviour;
+// All annotations are opt-in: a project with
+// none of them gets the dumb-drop-on-mutation behaviour;
 // declaring entity tags upgrades to smart-drop-by-type.
 //
 // **The three annotations form one cooperative shape:**

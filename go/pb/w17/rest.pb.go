@@ -22,7 +22,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// TokenType (REV-146) — discriminator for the credential-scheme
+// TokenType — discriminator for the credential-scheme
 // router. Gateway classifies the request's Authorization header
 // at request time and picks an auth method whose `token_types`
 // covers the classified scheme.
@@ -139,7 +139,7 @@ func (TokenType) EnumDescriptor() ([]byte, []int) {
 // from. Auth-context magic ("/users/me/...") deliberately
 // isn't here — auth-bound endpoints look like every other
 // auth-required endpoint, with the user_id arriving via gRPC
-// metadata (REV-017's auth middleware).
+// metadata (set by the gateway's auth middleware).
 type FieldSource int32
 
 const (
@@ -453,7 +453,7 @@ type RestApi struct {
 	// verbatim in OpenAPI `info.description`. Empty = no
 	// description block; OpenAPI still emits.
 	Description string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	// REV-146 — authentication methods for this surface. Each
+	// Authentication methods for this surface. Each
 	// entry references one RPC (by `<module>.<Service>.<Method>`
 	// ref) and declares which credential token types it handles.
 	// Empty list = surface has no auth middleware; endpoints on
@@ -480,7 +480,7 @@ type RestApi struct {
 	//
 	//   - return a response type carrying `repeated int32
 	//     permission_ids` whenever any model or endpoint on this
-	//     surface has effective ACL. REV-146 permissions are
+	//     surface has effective ACL. ACL permissions are
 	//     deterministic integer ids allocated in the lock, and the
 	//     generated gate calls `GetPermissionIds()` on this
 	//     response.
@@ -503,7 +503,7 @@ type RestApi struct {
 	// sub-prefix. Empty list = empty surface (parser warns; the
 	// file still produces a mux but it has zero routes).
 	Groups []*RestGroup `protobuf:"bytes,6,rep,name=groups,proto3" json:"groups,omitempty"`
-	// REV-020 — HTTP→gRPC metadata propagation across every
+	// HTTP→gRPC metadata propagation across every
 	// endpoint of this surface. Tracing / correlation IDs /
 	// baggage. Headers DO NOT appear on request msgs; storage
 	// handlers read them via `metadata.FromIncomingContext`.
@@ -512,7 +512,7 @@ type RestApi struct {
 	// `extend_defaults: true` to ADD to the default set rather
 	// than override it.
 	MetadataPropagation *MetadataPropagation `protobuf:"bytes,7,opt,name=metadata_propagation,json=metadataPropagation,proto3" json:"metadata_propagation,omitempty"`
-	// REV-149 — i18n default locale for this REST surface. Empty
+	// i18n default locale for this REST surface. Empty
 	// = "en". Must be one of the project's lock-declared
 	// `languages` — enforced at CODEGEN, not by the parser, which
 	// is handed descriptors and never sees the lock. (This said
@@ -550,8 +550,6 @@ type RestApi struct {
 	// not gated by an include. Individual plugin methods can instead be
 	// wired by hand as ordinary `groups[].endpoints[]` (by ref) with no
 	// include at all.
-	//
-	// Spec: docs/decisions/plugin-surfaces-opt-in.md.
 	Include       []*PluginInclude `protobuf:"bytes,9,rep,name=include,proto3" json:"include,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -653,8 +651,7 @@ func (x *RestApi) GetInclude() []*PluginInclude {
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
 // is the plugin's activation name in this domain (`registered_as`);
 // `mount` is an optional URL sub-path prepended to every included
-// group prefix (empty = no remount). Spec:
-// docs/decisions/plugin-surfaces-opt-in.md.
+// group prefix (empty = no remount).
 type PluginInclude struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Plugin        string                 `protobuf:"bytes,1,opt,name=plugin,proto3" json:"plugin,omitempty"`
@@ -836,7 +833,7 @@ func (x *BrowserRedirect) GetAllowExternal() bool {
 	return false
 }
 
-// AuthMethod (REV-146) — one entry of `RestApi.auth_methods[]`.
+// AuthMethod — one entry of `RestApi.auth_methods[]`.
 // Pairs a method ref with the credential token types the method
 // claims to handle. Gateway dispatches per request by peeking
 // the Authorization scheme + matching against declared token
@@ -902,7 +899,7 @@ func (x *AuthMethod) GetTokenTypes() []TokenType {
 	return nil
 }
 
-// Credential (REV-162) — declares that THIS endpoint carries its
+// Credential — declares that THIS endpoint carries its
 // credential in the URL rather than in a header, and names where.
 // Presence routes the endpoint's auth call to the surface's
 // URL_TOKEN auth method; absence means the endpoint authenticates
@@ -1004,7 +1001,7 @@ func (x *Credential) GetQueryParam() string {
 // metadata's per-key list.
 //
 // No prefix is stripped. This doc claimed an `X-` strip
-// (`X-Request-Id` → `request-id`) from REV-020 until 2026-07-30;
+// (`X-Request-Id` → `request-id`) for a long time;
 // the middleware has always done a plain `strings.ToLower`, and
 // nothing noticed because no example declared the annotation, so
 // the only readers were authors following a rule the runtime
@@ -1032,7 +1029,7 @@ type MetadataPropagation struct {
 	// is added on top. When false (default), `headers` (if
 	// non-empty) replaces the defaults entirely.
 	ExtendDefaults bool `protobuf:"varint,2,opt,name=extend_defaults,json=extendDefaults,proto3" json:"extend_defaults,omitempty"`
-	// REV-149 — propagate an HTTP header into a DIFFERENT-named
+	// Propagate an HTTP header into a DIFFERENT-named
 	// gRPC metadata key. The `headers[]` form above forwards a
 	// header verbatim (lowercased, X- prefix stripped); this
 	// form is for cases where the HTTP-side and gRPC-side names
@@ -1107,7 +1104,7 @@ func (x *MetadataPropagation) GetHeaderRenames() []*HeaderRename {
 	return nil
 }
 
-// HeaderRename (REV-149) — one HTTP→metadata renaming entry of
+// HeaderRename — one HTTP→metadata renaming entry of
 // `MetadataPropagation.header_renames[]`. Headers absent on the
 // request produce no metadata entry (no empty-string stamping).
 // Multi-valued HTTP headers fan out as the metadata key's per-
@@ -1293,7 +1290,7 @@ func (x *RestGroup) GetName() string {
 // Default body shape: the WHOLE request message is the JSON
 // body, MINUS every field bound elsewhere (path template,
 // `fields[]`, `query_expand`). The body shortcut `body:
-// "<fieldname>"` (REV-020) overrides this — the body becomes
+// "<fieldname>"` overrides this — the body becomes
 // that one field's contents, unwrapped to top-level JSON.
 // Path templates always auto-bind top-level fields whose name
 // matches the `{token}`; explicit `fields[]` is the escape
@@ -1302,8 +1299,8 @@ func (x *RestGroup) GetName() string {
 type RestEndpoint struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Reference to the gRPC method, "<module>.<Service>.<Method>".
-	// Module is the proto module (matching FK ref shape from
-	// REV-015). Resolution is domain-scoped: a `rest.proto` in
+	// Module is the proto module (matching the FK ref
+	// shape). Resolution is domain-scoped: a `rest.proto` in
 	// `proto/domains/<domain>/` may only reference methods
 	// declared under the same domain. Cross-domain refs are a
 	// parse-time error — cross-domain orchestration belongs in
@@ -1328,7 +1325,7 @@ type RestEndpoint struct {
 	// tools / internal services. Streaming endpoints (i.e.
 	// `RestStream`, not this message) don't honor this field.
 	ResponseOmitFields []string `protobuf:"bytes,8,rep,name=response_omit_fields,json=responseOmitFields,proto3" json:"response_omit_fields,omitempty"`
-	// REV-020 — explicit field-to-HTTP-slot routing. Each
+	// Explicit field-to-HTTP-slot routing. Each
 	// entry pulls a request-msg field from a non-body source
 	// (path / query / header). Fields not listed here keep
 	// their default behavior: top-level fields whose name
@@ -1342,7 +1339,7 @@ type RestEndpoint struct {
 	// optimistic-concurrency etags), explicit renames where
 	// the URL key differs from the proto field name.
 	Fields []*FieldBinding `protobuf:"bytes,9,rep,name=fields,proto3" json:"fields,omitempty"`
-	// REV-020 — body shape:
+	// Body shape:
 	//
 	//	""            (default) the JSON body is the whole
 	//	              request msg, minus every field bound
@@ -1364,7 +1361,7 @@ type RestEndpoint struct {
 	//	              header (otherwise they have nowhere to
 	//	              land).
 	Body string `protobuf:"bytes,10,opt,name=body,proto3" json:"body,omitempty"`
-	// REV-020 — submessage-to-query expansion shortcut. Each
+	// Submessage-to-query expansion shortcut. Each
 	// entry names a request-msg field; every leaf scalar
 	// reachable below that field becomes a query parameter at
 	// its leaf-segment name. Use for paginated lists where the
@@ -1398,7 +1395,7 @@ type RestEndpoint struct {
 	// forbidden otherwise (multipart=true with no FILE_PART
 	// is a meaningless toggle, parser rejects).
 	Multipart bool `protobuf:"varint,12,opt,name=multipart,proto3" json:"multipart,omitempty"`
-	// REV-148 — cursor-style pagination opt-in. When set with
+	// Cursor-style pagination opt-in. When set with
 	// `enabled = true`, the generated REST handler encodes the
 	// original request into a base64-url-safe cursor and
 	// returns a `w17.Paging` envelope (which the response
@@ -1406,10 +1403,8 @@ type RestEndpoint struct {
 	// missing). Storage layer stays paging-agnostic; the
 	// keyset WHERE clause + ORDER BY boundaries are derived
 	// by the codegen from the storage method's DQL ORDER BY.
-	//
-	// Spec: docs/specs/gateway/cursor-paging.md
 	Paged *PagedConfig `protobuf:"bytes,13,opt,name=paged,proto3" json:"paged,omitempty"`
-	// REV-149 — route an HTTP slot (path token / query param /
+	// Route an HTTP slot (path token / query param /
 	// header) into a gRPC metadata key instead of into a
 	// request-msg field. The sibling of `fields[]` (which
 	// routes into a msg field): same source enumeration
@@ -1423,7 +1418,7 @@ type RestEndpoint struct {
 	//     idempotency-key metadata where the storage tier reads
 	//     it for upsert dedup.
 	//   - Tenant override: `?tenant=X` query → w17-tenant
-	//     metadata where REV-147 scopes auto-stamp it onto
+	//     metadata where data scopes auto-stamp it onto
 	//     mutations.
 	//
 	// The msg-field routing (`fields[]`) and the metadata
@@ -1455,7 +1450,7 @@ type RestEndpoint struct {
 	// Set this to resolve a within-group naming collision, or to give
 	// an operation a friendlier name than its gRPC method.
 	OperationId string `protobuf:"bytes,16,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	// REV-162 — this endpoint's credential travels in the URL, not
+	// This endpoint's credential travels in the URL, not
 	// in a header. Routes the auth call to the surface's URL_TOKEN
 	// auth method and names the path/query slot the token sits in.
 	// Unset (the default) = ordinary header authentication.
@@ -1643,8 +1638,8 @@ func (x *RestEndpoint) GetOrgFromPath() string {
 	return ""
 }
 
-// MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata
-// routing entry. Sibling of `FieldBinding` (REV-020) which
+// MetadataBinding — one HTTP-slot → gRPC-metadata
+// routing entry. Sibling of `FieldBinding` which
 // targets a request-msg field; this one targets a metadata key.
 // Field-binding semantic for source resolution (PATH_VAR /
 // QUERY_PARAM / HEADER) is shared verbatim; FILE_PART is
@@ -1721,7 +1716,7 @@ func (x *MetadataBinding) GetMetadata() string {
 }
 
 // PagedConfig configures cursor-based pagination on one
-// REST endpoint (REV-148). Every field has a sensible
+// REST endpoint. Every field has a sensible
 // default; the boolean sugar form `paged: true` in the
 // registry decompiles to `PagedConfig{ enabled: true }`
 // with defaults applied.
@@ -1818,7 +1813,7 @@ func (x *PagedConfig) GetMaxLimit() uint32 {
 }
 
 // FieldBinding routes one request-msg field to a non-body
-// HTTP slot (REV-020). Fields not in any binding keep default
+// HTTP slot. Fields not in any binding keep default
 // behavior — body-bound for non-GET/DELETE verbs, ignored for
 // GET/DELETE.
 type FieldBinding struct {
@@ -1926,13 +1921,14 @@ type RestStream struct {
 	// `RestApi.auth_methods[]` is populated. Same semantic as
 	// RestEndpoint.exclude_auth.
 	ExcludeAuth bool `protobuf:"varint,4,opt,name=exclude_auth,json=excludeAuth,proto3" json:"exclude_auth,omitempty"`
-	// REV-149 — route a path token / query param / header into a gRPC
+	// Route a path token / query param / header into a gRPC
 	// metadata key for THIS stream. Same shape and semantics as
 	// RestEndpoint.metadata_bindings.
 	//
-	// Field 6 previously held `required_headers`, a REV-017 leftover.
-	// REV-020 replaced that mechanism on RestEndpoint with `fields[]` +
-	// api-level `metadata_propagation` and deleted it there — but not
+	// Field 6 previously held `required_headers`, a leftover of the
+	// first REST registry. `fields[]` + api-level
+	// `metadata_propagation` replaced that mechanism on RestEndpoint
+	// and deleted it there — but not
 	// here, so it sat on this message reading nothing for months: the
 	// parser never touched it, no emitter consumed it, and its doc
 	// deferred to a sibling that no longer existed. Streams were left
@@ -1946,13 +1942,13 @@ type RestStream struct {
 	// Explicit operation name — same semantic as
 	// RestEndpoint.operation_id, for streaming operations.
 	OperationId string `protobuf:"bytes,7,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	// REV-020 — explicit field-to-HTTP-slot routing, same shape and
+	// Explicit field-to-HTTP-slot routing, same shape and
 	// semantics as RestEndpoint.fields. A stream's request message is
 	// sent once at connect, so binding a header / query param into it is
 	// the same operation it is for a unary call. Path-template tokens
 	// already auto-promote to implicit PATH_VAR bindings.
 	Fields []*FieldBinding `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
-	// REV-163 — this stream's credential travels in the URL. Same
+	// This stream's credential travels in the URL. Same
 	// shape and same meaning as RestEndpoint.credential: the stream
 	// stays fully authenticated, its credential simply arrives
 	// somewhere a browser opening an EventSource can put it.
@@ -1971,9 +1967,9 @@ type RestStream struct {
 	// long as the TCP connection survives. The hole was never
 	// URL_TOKEN's — a Bearer-authenticated stream had it too — but
 	// a capability link turns "in practice it closes itself" into
-	// "it does not". So REV-163 ships periodic re-auth for EVERY
-	// authenticated stream and this field on top of it; see
-	// docs/specs/gateway/url-credentials.md.
+	// "it does not". So the gateway re-authenticates EVERY
+	// authenticated stream periodically, and this field sits on top
+	// of that.
 	//
 	// The `?ticket=` flow (ws_auth.go) is a different tool and not
 	// a substitute: a ticket is a SWAP for an existing credential —
@@ -2262,7 +2258,7 @@ var (
 	// a REST surface registry. The author wires which gRPC
 	// methods are exposed at which URLs by referencing them via
 	// string `ref` paths. The file declares ZERO messages — it's
-	// a sentinel, similar to `w17.proto` cascade files (REV-004).
+	// a sentinel, similar to `w17.proto` cascade files.
 	//
 	// optional w17.RestApi rest_api = 50110;
 	E_RestApi = &file_w17_rest_proto_extTypes[0]

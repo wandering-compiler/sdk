@@ -46,7 +46,7 @@ message PgProject {
   // focused on cross-cutting concerns.
   repeated CustomType custom_types = 1;
 
-  // REV-024 (F1, 2026-05-09) — project-wide custom_functions
+  // Project-wide custom_functions
   // registry. Same shape + collision rules as
   // PgModule.custom_functions, but visible to every domain.
   // Typical entries: ST_* (postgis), pgvector helpers, shared

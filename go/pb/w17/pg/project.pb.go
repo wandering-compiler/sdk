@@ -37,7 +37,7 @@ type PgProject struct {
 	// domain's (w17.pg.module).custom_types instead — keeps project file
 	// focused on cross-cutting concerns.
 	CustomTypes []*CustomType `protobuf:"bytes,1,rep,name=custom_types,json=customTypes,proto3" json:"custom_types,omitempty"`
-	// REV-024 (F1, 2026-05-09) — project-wide custom_functions
+	// Project-wide custom_functions
 	// registry. Same shape + collision rules as
 	// PgModule.custom_functions, but visible to every domain.
 	// Typical entries: ST_* (postgis), pgvector helpers, shared
