@@ -1,0 +1,3271 @@
+// COMPILER CONTRACT (canonical) — the CodegenService request/response surface.
+// Homed under the `w17compiler/` namespace (a non-colliding top-dir) so a
+// console-as-w17 project can import it without clashing with its own domains/
+// tree during buf stub-gen. This is the SINGLE source: schemagen compiles it
+// into PUBLIC codegenpb (go_package below → sdk/go/pb), and the descriptor
+// registers under `w17compiler/codegen.proto` — the same path the generated
+// rpc-gateway schema imports, so gRPC reflection resolves the full service.
+//
+// PUBLIC WIRE CONTRACT, private IMPL. This is the protocol between w17ctl and
+// whatever hosts codegen (the bootstrap daemon, or a console-as-w17 project
+// that re-hosts + gates it). It is therefore a pure ENVELOPE — proto files in,
+// file ops out, everything compiler-internal (lock, IR, descriptors) carried as
+// opaque `bytes`, so no compiler-internal typed proto leaks into the SDK. The
+// codegen IMPLEMENTATION stays in the compiler's private core. Marking the
+// methods `(w17.rpc)` lets a console-as-w17 host gate the service through its
+// rpc gateway under this native name; the gateway parser gates marked methods
+// from imported protos, so the host needs no facade.
+//
+syntax = "proto3";
+
+package w17.storage.codegen;
+
+// w17/rpc.proto defines the (w17.rpc) method option that gates a method through
+// a console-as-w17 host's generated rpc gateway (see the file doc above).
+import "w17/rpc.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17compiler;codegenpb";
+
+
+// CodegenService is the storage-domain codegen surface: takes
+// a project's full `.proto` set (so cross-file imports resolve)
+// + the project's `service_id` and returns the generated
+// Storage-layer Go handler files. Per-file dialect / Go
+// package / proto import path are derived server-side from
+// each file's annotations (see [GenerateRequest] doc).
+//
+// Deployment shape mirrors migrator's: storage/ defines the
+// service + a hand-written server, console/ wraps it on the
+// hosted gRPC endpoint, w17ctl is the developer-side CLI client.
+//
+// What's generated today: Storage-layer Go handler files +
+// per-language pb / gRPC stubs (driven by the request's
+// `stub_targets`; backed by an internal `bufbuild/buf` docker
+// invocation per `lib/bufrun`). Per conventions-global/grpc.md
+// the wandering-compiler does NOT generate Service / Facade
+// layers — those are user-written against the generated
+// stubs.
+//
+// Future scope (separate tasks; same RPC surface, fields added
+// to the response):
+//   - Gateway-domain code (REST/MCP proxy + event emit) when
+//     that domain's generator lands.
+//
+// Not supported in M1:
+//   - Multi-op gRPC methods (one Query + one Mutation per
+//     method). The underlying generator returns
+//     FailedPrecondition for those.
+service CodegenService {
+  // Generate compiles the input project's .proto files into
+  // Storage-layer Go handler files. Input includes every
+  // .proto in the project so cross-file imports resolve;
+  // server walks each file's services and aggregates the
+  // result.
+  //
+  // Returns gRPC INVALID_ARGUMENT for malformed input,
+  // FAILED_PRECONDITION for unsupported shapes (e.g. multi-op
+  // methods), INTERNAL for unexpected pipeline failures.
+  // OK = success; the response carries the generated files.
+  rpc Generate(GenerateRequest) returns (GenerateResponse);
+
+  // CompileIR builds the relational IR (Schema) from the project's
+  // proto set — the same stage→load→build prologue Generate runs
+  // internally, stopping at the IR. Lets a thin client (w17ctl) build
+  // IR over the API instead of embedding migrator/ir + migrator/loader.
+  //
+  // The client uploads its full file set (incl. plugin trees + the
+  // domain's `w17.lock.acl.proto`) exactly as for Generate; the server
+  // stages files, materializes plugin activations, loads via
+  // protocompile, and builds the IR. ACL permission CHECK-lists are NOT
+  // resolved server-side (the lock is a local artifact): the client
+  // passes pre-resolved `acl_permissions` / `acl_permission_ids`, the
+  // same union it computed locally before this RPC existed.
+  //
+  // INVALID_ARGUMENT for malformed/empty input or a build error;
+  // INTERNAL for unexpected staging failures.
+  // ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+  // A receiver's default cap is 4 MiB and a project's protos reach it around
+  // 95k lines, where the call is refused outright rather than slowing down.
+  // First message carries the header, the rest carry files; a later message
+  // changing a header field is refused rather than ignored. See
+  // GenerateProject for the measurement this comes from.
+  rpc CompileIR(stream CompileIRRequest) returns (CompileIRResponse) {
+    // Gated through a console-as-w17 host's rpc gateway (schema push path).
+    option (w17.rpc) = true;
+  }
+
+  // GenerateCi renders the opt-in CI configs for the requested providers
+  // from the project's lock data (providers + connection names) — the
+  // first of the seam-D generator family moved off w17ctl's in-process
+  // migrator/cmd/cli onto a sibling codegen RPC (thin-client refactor
+  // Step 3a). Returns the rendered files (relative paths + contents); the
+  // client writes them under the project's CI tree (executable bit by
+  // .sh suffix). CI generation needs no proto set — it's pure lock-driven
+  // templating.
+  rpc GenerateCi(GenerateCiRequest) returns (GenerateCiResponse);
+
+  // GenerateEventbus renders the per-domain subscriber bundle(s) + the
+  // events lock from the project's proto set (seam-D generator family,
+  // thin-client refactor Step 3a). Distinct from the emit-interceptor
+  // code Generate folds into the storage bundle: this is the standalone
+  // `<domain>-eventbus/` module (main.go, dispatch, channels, Dockerfile,
+  // …). The server stages the uploaded protos and runs the same
+  // generator the CLI did; the client writes the returned files under its
+  // services dir.
+  rpc GenerateEventbus(GenerateEventbusRequest) returns (stream GeneratedFile);
+
+  // GenerateGrpcClients renders the typed gRPC client package(s) from the
+  // project's services (seam-D, thin-client refactor Step 3a). Proto-only
+  // (no generated-Go-tree read). Drives both the per-domain project-pb
+  // clients and the w17/stubs partitioned clients (the request's `out` +
+  // `w17_stubs_pb` select which). The server runs the same generator the
+  // CLI did against the staged protos; the client writes the result under
+  // `out`.
+  rpc GenerateGrpcClients(GenerateGrpcClientsRequest) returns (stream GeneratedFile);
+
+  // GenerateMcp renders the per-domain MCP-server bundle(s) from the
+  // project's MCP surface (seam-D, thin-client refactor Step 3a).
+  // Proto-only. The client passes the bundle's replace-path knobs
+  // (srcgo_rel / sdk_go_rel) it computes locally; the server runs the
+  // generator and returns the bundle files.
+  rpc GenerateMcp(GenerateMcpRequest) returns (stream GeneratedFile);
+
+  // GenerateAcl refreshes the per-domain ACL permission lock
+  // (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface (seam-D,
+  // thin-client refactor Step 3a). Proto-only, no knobs — the generator
+  // resolves the w17 vocab from the server's own proto root. Returns the
+  // regenerated lock(s); the client writes them back into the proto tree.
+  rpc GenerateAcl(GenerateAclRequest) returns (stream GeneratedFile);
+
+  // GenerateBusiness renders the generated <domain>-business bundle(s)
+  // (the binary w17 builds for a domain when the project opts in via the
+  // lock's business_bundles) (seam-D, thin-client refactor Step 3a).
+  // Proto-only apart from reading the project's gen-dir go.mod for the
+  // grpc version, which the client uploads in `go_mod`.
+  rpc GenerateBusiness(GenerateBusinessRequest) returns (stream GeneratedFile);
+
+  // GenerateProjectMap renders the AI navigation map (w17/map/*.map +
+  // w17/AGENTS.md) from the project's proto surface (seam-D, thin-client
+  // refactor Step 3a). Best-effort. The grpc-client cross-domain edges are
+  // derived from the generated Go tree, which the client uploads in
+  // `gen_files` (empty = proto-only map, those edges omitted).
+  rpc GenerateProjectMap(GenerateProjectMapRequest) returns (stream GeneratedFile);
+
+  // GenerateE2e scaffolds the generated e2e test skeletons (one
+  // gRPC-shaped test per REST/MCP endpoint, generate-if-missing) from the
+  // project's surface (seam-D, thin-client refactor Step 3a). Proto-only.
+  rpc GenerateE2e(GenerateE2eRequest) returns (stream GeneratedFile);
+
+  // GenerateProject runs the WHOLE codegen pipeline server-side and streams
+  // the resulting filesystem operations. It absorbs the orchestration that
+  // used to live in the client (`internal/codegen.Run` +
+  // `runDeclaredGenerators`): surface detection, target derivation,
+  // composition, and the per-generator sequencing — calling every other
+  // Generate* method internally. The thin client only gathers LOCAL inputs
+  // (the proto tree, the lock, the go.mod dep-versions, the co-dev env), and
+  // applies each streamed op under the project root. WRITE ops carry a file;
+  // DELETE ops carry a path the server determined is superseded (the
+  // bundle-sweep / clean-paths logic moved server-side too), so the client
+  // does no derivation — just overwrite / write-if-missing / remove.
+  // ⚠️ The REQUEST streams too, and that is a ceiling rather than an
+  // optimisation.
+  //
+  // A unary request carries the whole proto tree in ONE gRPC message, and a
+  // receiver's default cap is 4 MiB. Measured: at ~101k lines of proto the
+  // tree is 4.16 MB and the call is refused outright with ResourceExhausted
+  // — no degradation, no warning, one line further and codegen simply stops
+  // working. Every real project's protos run ~43 bytes a line, so that
+  // ceiling lands near 95k lines whoever writes them.
+  //
+  // Lifting the cap was the other option and it only MOVES the ceiling: the
+  // message still assembles whole on both sides. Streaming removes it.
+  //
+  // What it does NOT do is save memory worth counting. The server still
+  // needs every file before it can start — imports resolve across the whole
+  // set — so the tree is held either way. At 50k lines the source is 2 MB
+  // against a 935 MB peak: 0.2%. The ceiling is the whole reason.
+  //
+  // Protocol: the FIRST message carries the header fields; every message may
+  // carry `files` / `gen_files`, which the server appends in arrival order.
+  // A later message repeating a header field with a DIFFERENT value is
+  // refused rather than ignored — a silently dropped go_module would pick
+  // the wrong module path and show up as a compile error in generated code.
+  rpc GenerateProject(stream GenerateProjectRequest) returns (stream GeneratedOp) {
+    // Gated through a console-as-w17 host's rpc gateway (the codegen path).
+    // Bidi flows host→gateway→in-process tier (inprocgrpc streams).
+    option (w17.rpc) = true;
+  }
+
+  // SignAclLock signs an ACL permission lock a codegen WORKER computed. A
+  // worker holds no signing key: it returns each changed lock unsigned, as a GeneratedOp.sign, and the
+  // client asks the console — which checks the caller may generate the
+  // project, verifies the prior lock's signature and refuses an allocation
+  // that breaks its lineage — before writing it. The console compiles nothing.
+  rpc SignAclLock(SignAclLockRequest) returns (SignAclLockResponse);
+
+  // VerifyAcl / VerifyEventbus recompute the committed lock from the
+  // uploaded proto set (which includes the committed lock) and report
+  // whether it still matches — the CI drift hook (`w17ctl verify`),
+  // thin-client refactor Step 3a. Drift is reported as `ok=false` +
+  // a message, NOT a gRPC error (it's an expected outcome).
+  rpc VerifyAcl(VerifyRequest) returns (VerifyResult);
+  rpc VerifyEventbus(VerifyRequest) returns (VerifyResult);
+
+  // GenerateEgressClient turns an OpenAPI document into a signed egress
+  // client: the client fetched or read
+  // the document, the console selects the operations, converts them to the
+  // client's `<name>.proto`, writes its `client.yaml` and signs the set.
+  // The client writes the files where the response says, plus the document
+  // itself, byte for byte as it sent it.
+  //
+  // The REQUEST streams: a published OpenAPI document (Stripe's is ~7 MB)
+  // exceeds the 4 MiB the console's gateway→backend hop carries in one
+  // message. The first message holds every field; later ones only
+  // `document` chunks, appended in order. One response.
+  rpc GenerateEgressClient(stream GenerateEgressClientRequest) returns (stream GenerateEgressClientResponse);
+
+  // VerifyEgressClient checks one committed client's signature — the
+  // release gate's question for `proto/clients/<name>/`, and the one
+  // codegen asks before it compiles a client. A mismatch is `ok=false` and
+  // a message, NOT a gRPC error, like the other Verify* RPCs.
+  rpc VerifyEgressClient(VerifyEgressClientRequest) returns (VerifyResult);
+
+  // VerifyLock checks the committed `w17/lock.yaml` signature server-side
+  // — the client performs ZERO cryptography (public-split boundary §4: no
+  // signing key in the public binary). The thin client ships the on-disk
+  // lock bytes; the console (which holds the verifier) confirms the
+  // signature + canonical form. The CI consistency hook (`w17ctl verify`):
+  // a hand-edited / tampered / unsigned committed lock is reported as
+  // `ok=false` + a message, NOT a gRPC error (an expected outcome).
+  rpc VerifyLock(VerifyLockRequest) returns (VerifyResult);
+
+  // Classify runs the compat engine (lib/compat — the DB/WIRE/API
+  // breaking-change classifier) over two compiled IR states base→head and
+  // returns the findings + the dev/prod gate decision (public-split: the
+  // engine is a COMPILER concern, so the thin client classifies over the
+  // API instead of holding lib/compat or the IR type). base/head are the
+  // opaque marshalled IR bytes the client already carries (a snapshot's
+  // `ir_schema` or a fresh CompileIR output) — like CompileIRResponse.schema,
+  // so this PUBLIC contract pulls in no compiler-internal typed proto. An
+  // empty base = initial state (everything in head is an addition).
+  rpc Classify(ClassifyIRRequest) returns (ClassifyIRResponse);
+
+  // Plan runs the migration planner (the engine.Plan diff engine — a
+  // COMPILER concern) over two compiled IR states base→head and returns the
+  // rendered per-connection migration plan. base/head are the opaque
+  // marshalled IR bytes the client already carries (a checkpoint's ir_schema
+  // or a fresh CompileIR output); the returned plan is itself opaque bytes
+  // (a marshalled migrator plan) the thin client APPLIES to its local stores
+  // — so this PUBLIC contract pulls in no compiler-internal typed proto.
+  // Empty base = initial migration (full create); empty head = teardown.
+  rpc Plan(PlanIRRequest) returns (PlanIRResponse);
+
+  // DumpFixtures renders, per model, a NATIVE query whose rows are already in
+  // the fixture's on-disk shape. The client runs them against its own store
+  // and writes the bytes.
+  //
+  // The shaping is here rather than in the client on purpose. Reading rows
+  // back as fixtures needs the table→model mapping AND the per-carrier value
+  // conversions, and both are compiler knowledge — a public client carrying
+  // them means a conversion fix ships as a client release every consumer has
+  // to take, which is the reason the plugin catalogue moved server-side after
+  // `org_invite` shipped a defect that could not be corrected without cutting
+  // rc.10. So the console emits the statement and the client executes it,
+  // exactly as it already does for `migrate apply` and the dev plan.
+  rpc DumpFixtures(DumpFixturesRequest) returns (DumpFixturesResponse);
+
+  // GenerateClient renders the FE client tree(s) (TS/JS/React/Vue)
+  // declared in the lock's generated_code.clients[] (seam-D, thin-client
+  // refactor Step 3a — the last generator off the in-process toolchain).
+  // The server runs the FE client generator against the staged proto set
+  // + lock; the client writes the returned trees under each client's
+  // output_root.
+  // ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+  // A receiver's default cap is 4 MiB and a project's protos reach it around
+  // 95k lines, where the call is refused outright rather than slowing down.
+  // First message carries the header, the rest carry files; a later message
+  // changing a header field is refused rather than ignored. See
+  // GenerateProject for the measurement this comes from.
+  rpc GenerateClient(stream GenerateClientRequest) returns (stream GeneratedFile);
+
+  // DiscoverPluginSandboxes returns each activated plugin's dev-only
+  // sandbox declarations (image services the project's compose tree
+  // wires in) — discovering activations needs the proto loader, so a
+  // thin client asks the console instead of parsing locally (thin-client
+  // refactor Step 3a). The client folds the result into its
+  // (loader-free) compose render.
+  rpc DiscoverPluginSandboxes(DiscoverPluginSandboxesRequest) returns (PluginSandboxes);
+
+  // GeneratePluginPb compiles a plugin's standalone src/gen/pb from its
+  // proto/ tree (the author-side `plugin gen-pb` dev/test loop). The
+  // client uploads the raw plugin protos + plugin.yaml; the server parses
+  // the manifest, expands the author-side placeholders, runs buf, and
+  // returns the pb.go files. The client only reads the inputs + writes
+  // the results — no buf/loader/manifest logic client-side.
+  // ⚠️ The REQUEST streams: the proto tree does not fit one gRPC message.
+  // A receiver's default cap is 4 MiB and a project's protos reach it around
+  // 95k lines, where the call is refused outright rather than slowing down.
+  // First message carries the header, the rest carry files; a later message
+  // changing a header field is refused rather than ignored. See
+  // GenerateProject for the measurement this comes from.
+  rpc GeneratePluginPb(stream GeneratePluginPbRequest) returns (stream GeneratedFile);
+
+  // MergePo merges the freshly-scaffolded .po catalog INTO the existing
+  // on-disk one (msgmerge-style: existing translator msgstrs survive, new
+  // scaffold msgids land with empty msgstr). The .po merge is i18n logic,
+  // so it runs server-side; the client reads the existing file, ships
+  // both, and writes the returned merged body.
+  rpc MergePo(MergePoRequest) returns (MergePoResponse);
+
+  // RenderProjectScaffold renders the project-level compose.w17.yaml
+  // (tool-owned, always) + the once-only compose.yaml stub. The render is
+  // composegen/managegen logic, so it runs server-side: the client ships
+  // the lock + the on-disk bundle compose-include paths + the protos (for
+  // plugin-sandbox discovery), and writes the returned files (compose.yaml
+  // only when absent). Returns compose.w17.yaml + compose.yaml.
+  rpc RenderProjectScaffold(RenderProjectScaffoldRequest) returns (stream GeneratedFile);
+
+  // EditLock applies one editor INTENT to the lock and returns the
+  // re-signed bytes (public-split Block 2 §8.2). The console owns the
+  // lock: a dumb client must not sign (boundary §4) and editing requires
+  // re-signing, so editor commands ship the current lock bytes + a typed
+  // intent rather than constructing lockpb themselves. The server decodes,
+  // applies the intent, validates (dup names, default conflicts, …),
+  // re-signs via lock/sealing, and returns canonical bytes the client
+  // writes to w17/lock.yaml. Empty lock = a fresh project (the intent
+  // bootstraps it). The oneof grows one arm per editor family.
+  rpc EditLock(EditLockRequest) returns (EditLockResponse);
+
+  // DescribeLock decodes the lock and returns the routing fields the thin
+  // client reads (public-split Block 2 §8.2) — replacing client-side
+  // lock.Effective* / lockpb parsing. The console address (w17_url) is NOT
+  // here: you can't dial the console to learn where it is, so that one
+  // field is sourced from flag / env / registry / compiled default instead.
+  rpc DescribeLock(DescribeLockRequest) returns (LockView);
+
+  // InspectPluginManifest parses + validates a plugin's plugin.yaml and runs
+  // its requirement check server-side — the plugin-system semantics
+  // (Manifest schema + Validate + CheckRequires) are compiler-domain, so the
+  // thin client uploads the raw manifest bytes + the installed-plugin set and
+  // gets back the identity (name/version) it records + any requirement
+  // warnings to print. Replaces the client-side console/plugins ParseManifest
+  // / CheckRequires (public-split Block 3). A parse / validation failure is a
+  // gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
+  // refusal.
+  rpc InspectPluginManifest(InspectPluginManifestRequest) returns (InspectPluginManifestResponse);
+
+  // SignPluginRelease signs a plugin release, and is the publish-side half of
+  // InspectPluginManifest's verify.
+  //
+  // The KEY NEVER LEAVES THE CONSOLE. Signing is a service, not a key anyone
+  // holds — the same boundary codegen already draws, on the same reasoning:
+  // whoever can generate a plugin can sign one, and nobody generates for free.
+  //
+  // ⚠️ THE REQUEST CARRIES THE MANIFEST, NOT A NAME AND A VERSION, and that is
+  // the whole point of its shape. The console parses the identity out of the
+  // manifest here exactly as it does at verify — same parser, same fields — so
+  // the claim signed at publish is the claim rebuilt at install by
+  // construction. A request that named its own identity could sign `auth` for
+  // a tree whose manifest says something else, and nobody would learn of it
+  // until an install failed on a release that was never verifiable.
+  //
+  // The digest is the publisher's: the console never sees the tree, so it
+  // attests "these bytes, under this identity, left me" and not "these bytes
+  // are what I read". A parse / validation failure is INVALID_ARGUMENT.
+  rpc SignPluginRelease(SignPluginReleaseRequest) returns (SignPluginReleaseResponse);
+
+  // ListPluginCatalog / FetchPlugin serve the plugin CATALOGUE from the
+  // console.
+  //
+  // The catalogue used to live only inside the w17ctl binary, which made a
+  // client release the only path from a plugin change to a consumer:
+  // deploying the console delivered nothing. That is not a packaging
+  // detail — `org_invite` shipped in rc.9 with a defect and could not be
+  // corrected without cutting rc.10 and telling every consumer to
+  // reinstall.
+  //
+  // It also finishes a move already half-made. The manifest is parsed and
+  // validated server-side (InspectPluginManifest above) because "the
+  // plugin-system semantics are compiler-domain — the client holds no
+  // console/plugins". The semantics moved; the bytes stayed behind.
+  //
+  // FetchPlugin streams GeneratedFile, the same shape GeneratePluginPb
+  // already streams, so "a file tree over gRPC" is an established
+  // mechanism here rather than a new one.
+  rpc ListPluginCatalog(ListPluginCatalogRequest) returns (PluginCatalog);
+  rpc FetchPlugin(FetchPluginRequest) returns (stream GeneratedFile);
+
+  // Guide renders the w17 PLATFORM self-description — the w17/specs/ reference
+  // (annotation catalog + architecture primer + escape hatches) a coding agent
+  // reads to understand the technology before designing a project. It is
+  // generated SERVER-SIDE (the annotation catalog walks the compiler's own w17
+  // proto option definitions) so an old thin client never ships an outdated
+  // description: when codegen changes, the reference changes with it. Takes no
+  // project input — the vocabulary is the compiler's. The files stream back
+  // one at a time (relative paths under the project's w17/ tree), which the
+  // client writes verbatim.
+  rpc Guide(GuideRequest) returns (stream GeneratedFile);
+
+  // AdmissionStatus reads the codegen admission gate's live counters — the
+  // "future status surface" the gate's telemetry was built for and never
+  // got, which left the gate working and nobody able to say how much it was
+  // turning away.
+  //
+  // It answers what the per-decision log lines cannot. A log says one
+  // request was rejected; it does not say how many have been, how deep the
+  // queue is RIGHT NOW, or how far the cost model has drifted — and the
+  // drift number (observed growth ÷ estimate) is the one that decides when
+  // the calibrated constants need re-fitting.
+  //
+  // Takes no project input and touches no project state: it reads
+  // process-local counters. Answers UNAVAILABLE when the server was built
+  // without an admission controller at all, so "the gate is off" and "the
+  // gate admitted everything" never read the same.
+  rpc AdmissionStatus(AdmissionStatusRequest) returns (AdmissionStatusResponse);
+}
+
+// GuideRequest carries no project input — the platform description is derived
+// entirely from the compiler's own vocabulary + version.
+message GuideRequest {}
+
+message AdmissionStatusRequest {}
+
+// AdmissionStatusResponse mirrors the in-process snapshot. Counts are
+// cumulative since process start; the depths are instantaneous.
+message AdmissionStatusResponse {
+  // enabled reports whether the gate is on at all. False makes every other
+  // field meaningless rather than reassuring — read it first.
+  bool enabled = 1;
+
+  // The live limits, so a reader never has to guess which configuration
+  // produced these numbers.
+  int32 max_queue_size = 2;
+  int64 max_lines      = 3;
+
+  // Instantaneous depths.
+  int32 in_flight = 4;
+  int32 waiting   = 5;
+
+  // decisions counts outcomes by name: admitted, rejected_queue_full,
+  // rejected_max_lines, timeout, cancelled. A map rather than five fields
+  // because the outcome set is the gate's business, not the wire's — a new
+  // reason must not need a proto change to become visible.
+  map<string, int64> decisions = 6;
+
+  // Wait time spent in the memory queue, in milliseconds (the wire has no
+  // duration here on purpose: this is a human-read diagnostic, and a
+  // Duration message buys nothing a millisecond count does not).
+  int64 wait_total_ms = 7;
+  int64 wait_max_ms   = 8;
+
+  // The calibration loop. runs / ratio_* describe estimate-vs-observed over
+  // completed runs; under_estimates counts the runs whose observed growth
+  // exceeded the estimate — the number that says "recalibrate".
+  int64  runs            = 9;
+  double ratio_sum       = 10;
+  double ratio_max       = 11;
+  int64  under_estimates = 12;
+}
+
+message InspectPluginManifestRequest {
+  // manifest_yaml is the raw plugin.yaml body (the client ships back the
+  // bytes FetchPlugin streamed to it, verbatim — it never parses them).
+  bytes manifest_yaml = 1;
+  // source labels the manifest for error messages (e.g. "console:auth/plugin.yaml").
+  string source = 2;
+  // installed enumerates the project's currently-installed plugins, for the
+  // requirement check (CheckRequires). Empty for a pure parse (e.g. list).
+  repeated InstalledPlugin installed = 3;
+
+  // digest + signature are what the console VERIFIES, and the client is only
+  // ever the courier for them.
+  //
+  // The client computes the digest itself (`plugindigest.Of` lives in the
+  // public SDK precisely so both ends get the same answer, and hashing is not
+  // trust cryptography — `stack build` hashes today). It never checks the
+  // signature: public-split §4 puts anything that verifies an artefact on the
+  // console, the same rule that put VerifyLock there.
+  //
+  // `signature` is the BODY of the tree's plugin.sig, verbatim — not a bare
+  // hex signature. The console parses it, because the console wrote it.
+  //
+  // The console verifies against the claim IT computes for three of the four
+  // facts — this digest, this name and version — because a tree cannot assert
+  // its own identity or its own contents. The PLATFORM is the exception and
+  // comes out of the signature file: it is not a fact about the tree at all
+  // but about what the plugin was published against, and a console that
+  // assumes it is its own stops verifying every existing signature the moment
+  // its platform moves.
+  //
+  // Whether the asserted platform is ACCEPTABLE here is then a separate
+  // question with its own verdict state, because "signed for another major"
+  // and "altered" need opposite advice.
+  //
+  // Both empty means "not signed", which is not the same as "signed wrongly"
+  // and is reported differently: every plugin published before signing existed
+  // is unsigned, and refusing those would retire the catalogue.
+  string digest = 4;
+  string signature = 5;
+}
+
+// InstalledPlugin is the irpb-free {name, version} pair CheckRequires needs.
+message InstalledPlugin {
+  string name = 1;
+  string version = 2;
+}
+
+message InspectPluginManifestResponse {
+  // name / version parsed from the manifest — what the client records in the
+  // lock + displays.
+  string name = 1;
+  string version = 2;
+  // warnings from CheckRequires (unsatisfied soft requirements) — the client
+  // prints them; they don't fail the install.
+  repeated string warnings = 3;
+
+  // signature is the verdict on the digest + signature the request carried.
+  SignatureVerdict signature = 4;
+}
+
+message SignPluginReleaseRequest {
+  // manifest_yaml is the raw plugin.yaml of the tree being released. The
+  // console parses the plugin's name and version out of it rather than taking
+  // them as strings, so publish and install derive the claim's identity the
+  // same way — see the RPC comment.
+  bytes manifest_yaml = 1;
+  // source labels the manifest for error messages (e.g. "plugins/auth/plugin.yaml").
+  string source = 2;
+  // digest is the publisher's `plugindigest.Of` over the tree, which excludes
+  // the signature file by construction — the signature cannot be part of what
+  // it signs.
+  string digest = 3;
+}
+
+message SignPluginReleaseResponse {
+  // signature is the BODY of the plugin.sig to write, verbatim — not a bare
+  // hex signature.
+  //
+  // The console renders it because the console parses it: the client is a
+  // courier for this file in both directions and never learns its shape. The
+  // file carries the platform the release was signed against, because that is
+  // the one fact in a claim the verifying console cannot derive from what it
+  // holds.
+  string signature = 1;
+  // platform is the CONTRACT version baked into the claim
+  // (plugins.PlatformVersion), not w17ctl's release version. It is echoed so
+  // the publisher can record what the release was signed under.
+  string platform = 2;
+  // plugin / version are what the console PARSED and therefore what it signed.
+  // Echoed rather than assumed: a publisher that meant to release something
+  // else finds out here, not at somebody's install.
+  string plugin = 3;
+  string version = 4;
+}
+
+// SignatureVerdict is what the console concluded about a plugin's signature.
+//
+// A verdict rather than a bare bool, because "unsigned" and "signed by a key we
+// do not trust" call for different words to whoever reads them: the first is a
+// plugin published before signing existed, the second is a tree that has been
+// altered or signed by somebody else.
+message SignatureVerdict {
+  enum State {
+    // Reserved: an unset field must not read as "verified".
+    STATE_UNSPECIFIED = 0;
+    // No signature travelled with the plugin.
+    UNSIGNED = 1;
+    // The signature verifies against the claim the console computed.
+    VERIFIED = 2;
+    // A signature travelled and does not verify.
+    INVALID = 3;
+    // A signature travelled, verifies, and was made for a DIFFERENT MAJOR of
+    // the platform contract.
+    //
+    // Not INVALID, and the distinction is the reason this state exists. The
+    // signature is sound and the tree is exactly what its publisher released —
+    // it was simply written against a contract this w17 no longer serves.
+    // "Altered" and "for another w17" call for opposite actions: re-fetch, or
+    // install a build for this platform. Reporting the second as the first
+    // sends people hunting a tampering that never happened.
+    //
+    // This is where the CEILING lives now. A plugin signed under 1.x is
+    // implicitly `< 2` — the stamp is unforgeable, so it can be trusted as a
+    // pin, which is what lets requires_w17 stop declaring an upper half.
+    SIGNED_FOR_ANOTHER_MAJOR = 4;
+  }
+  State state = 1;
+  // platform is the contract version the signature binds, echoed back so the
+  // client can record it. Empty unless state is VERIFIED — an unverified
+  // signature's contents are not facts.
+  string platform = 2;
+  // detail is the operator-facing reason, set when state is INVALID.
+  string detail = 3;
+}
+
+// LockEditIntent is the typed mutation an editor command sends to EditLock.
+// One arm per editor family; the server maps it onto the decoded lock.
+message LockEditIntent {
+  oneof intent {
+    AddConnectionIntent add_connection = 1;
+    SetDefaultConnectionIntent set_default_connection = 2;
+    SetSecretsBackendIntent set_secrets_backend = 3;
+    InitSecretsAgeIntent init_secrets_age = 4;
+    SetReplicasIntent set_replicas = 5;
+    UnsetReplicasIntent unset_replicas = 6;
+    AddGrpcClientIntent add_grpc_client = 7;
+    ComposeBinaryIntent compose_binary = 8;
+    DecomposeBinaryIntent decompose_binary = 9;
+    AddBusinessBundleIntent add_business_bundle = 10;
+    AddCiConfigIntent add_ci_config = 11;
+    RemoveCiConfigIntent remove_ci_config = 12;
+    AddClientStubIntent add_client_stub = 13;
+    BootstrapLockIntent bootstrap_lock = 14;
+    PinTargetsIntent pin_targets = 15;
+    InstallPluginIntent install_plugin = 16;
+    SetPluginVersionsIntent set_plugin_versions = 17;
+    AdoptProjectIntent adopt_project = 18;
+    SetSdkVersionIntent set_sdk_version = 19;
+    SetPbStubIntent set_pb_stub = 20;
+    SetBusinessBundleIntent set_business_bundle = 21;
+    SetDirLayoutIntent set_dir_layout = 22;
+    AddDeployTargetIntent add_deploy_target = 23;
+    RemoveDeployTargetIntent remove_deploy_target = 24;
+    RemoveClientStubIntent remove_client_stub = 25;
+    SetClientStubIntent set_client_stub = 26;
+    SetInfraIntent set_infra = 27;
+    EditInfraIntent edit_infra = 28;
+  }
+}
+
+// SetInfraIntent replaces the lock's whole `infra` block (`w17ctl infra
+// init|update|remove`). The console validates it (target, environment names,
+// edge/tls pairing, cron syntax, ranges) and refuses an invalid one whole.
+// clear = true removes the block (the next codegen then deletes every
+// generated deploy/ artefact). A replace-whole edit rather than per-field
+// intents: the wizard always holds the complete choice, and a partial edit
+// would let two fields be validated against a state that never coexists.
+message SetInfraIntent {
+  LockInfra infra = 1;
+  bool clear = 2;
+}
+
+// EditInfraIntent changes w17/infra.yaml (EditLockRequest.infra) value by
+// value: `w17ctl infra set|unset|target|workload`. The console applies every
+// set, then every unset, to the file's YAML tree (comments and order kept),
+// validates the whole and returns the new bytes in EditLockResponse.infra.
+// With nothing to set or unset it still moves a lock's infra block into the
+// file (`w17ctl infra migrate`). Paths are dotted (`environments.prod.
+// workloads.web.replicas`); values are YAML of the field's type.
+// Schema: w17/specs/infra.schema.json.
+message EditInfraIntent {
+  repeated InfraValue set = 1;
+  repeated string unset = 2;
+}
+message InfraValue {
+  string path = 1;
+  string value = 2;
+}
+
+// LockInfra is the public projection of the lock's `infra` block — the same
+// fields, for the client's prompts and `infra show`. See the lock proto's
+// Infra for each field's meaning.
+message LockInfra {
+  string target = 1;
+  repeated LockInfraEnvironment environments = 2;
+  LockInfraCI ci = 3;
+}
+message LockInfraCI {
+  string provider = 1;
+  string registry = 2;
+  string runner = 3;
+  string platforms = 4;
+}
+message LockInfraEnvironment {
+  // target: the name of the environment's target in w17/infra.yaml;
+  // target_kind its kind (swarm | aws-ecs | gcp-cloudrun). LockInfra.target
+  // is the kind every environment shares, empty when they differ.
+  string target = 12;
+  string target_kind = 13;
+  string name = 1;
+  map<string, string> hosts = 2;
+  string edge = 3;
+  string tls = 4;
+  string acme_email = 5;
+  LockInfraBackups backups = 6;
+  LockInfraHost host = 7;
+  LockInfraCloud cloud = 8;
+  string domain = 9;
+  string deploy_branch = 10;
+  repeated LockInfraPluginDeploy plugins = 11;
+}
+message LockInfraPluginDeploy {
+  string activation = 1;
+  map<string, LockInfraAdopterService> services = 2;
+}
+message LockInfraAdopterService {
+  string bundle = 1;
+  string image = 2;
+  repeated string command = 3;
+  int32 replicas = 4;
+  string cpus = 5;
+  string memory = 6;
+}
+message LockInfraBackups {
+  bool enabled = 1;
+  int32 keep_days = 2;
+  string base_schedule = 3;
+  string verify_schedule = 4;
+  int32 archive_timeout_s = 5;
+  string alert = 6;
+}
+message LockInfraHost {
+  bool install_docker = 1;
+  bool manage_firewall = 2;
+  bool ssh_no_password = 3;
+  string ssh = 4;
+}
+message LockInfraCloud {
+  string region = 1;
+  string account = 2;
+}
+
+// InstallPluginIntent appends an installed plugin to the lock (the `w17ctl
+// plugin install` write). The server rejects a duplicate name. source is the
+// install origin ("internal" for the console's own catalogue).
+// AdoptProjectIntent points an EXISTING lock at a project registered on THIS
+// console — the one edit `bootstrap_lock` cannot make, because bootstrap
+// builds a lock from nothing and `w17ctl init` refuses to overwrite one that
+// exists.
+//
+// It exists because closing a hole opened a gap. The commit proof now refuses
+// a write to a project the registry does not have, which is right; but a
+// project that had been generating against ANOTHER console arrives with a
+// project_id that console minted, and nothing could put a new one in its
+// place. `init` refuses (correctly — it would rewrite connections, pins and
+// plugin activations), `project import` is the local port registry, and
+// `project import-from` needs a target that already exists. So a real project
+// could neither push nor register: a security fix with no migration path.
+//
+// Deliberately narrow. It rewrites the project's IDENTITY and nothing else —
+// connections, pinned targets, generated_code and plugin activations are the
+// state the lock exists to carry, and an "adopt" that reconstructed them from
+// defaults would silently lose exactly what makes reconstruction impossible by
+// hand.
+//
+// NOT related to `w17gen acl generate --adopt-lineage`, which waives a SIGNATURE
+// check on a permission allocation. This one changes a field and re-signs
+// normally; nothing is waived.
+message AdoptProjectIntent {
+  // The project id this console minted for the caller's RegisterProject call.
+  // Required: the whole point of the intent.
+  string project_id = 1;
+
+  // The project NAME as registered. Empty leaves the lock's name alone —
+  // a rename is a separate decision and this intent does not smuggle one.
+  string project = 2;
+
+  // The console this project now lives on. Empty leaves the lock's w17_url
+  // alone. It is stored rather than dialled (the client resolves its console
+  // from the flag, the logged-in console, then its compiled default), so a
+  // stale value misleads a reader rather than misrouting a call — worth
+  // fixing on adoption, not worth forcing.
+  string w17_url = 3;
+}
+
+message InstallPluginIntent {
+  string name = 1;
+  string version = 2;
+  string source = 3;
+
+  // Provenance for a `git`-sourced plugin. Required when source is `git` and
+  // refused otherwise — the marker and the coordinates are one fact, and a
+  // lock carrying half of it would claim provenance it cannot produce.
+  PluginGitPin git = 4;
+}
+
+// PluginGitPin mirrors the lock's own GitPin across the public/private
+// boundary. It is a copy rather than an import because this file is the PUBLIC
+// contract and the lock's proto is private to the compiler — the same reason
+// InstalledPlugin exists beside the lock's PluginInstall. The two must stay in
+// step; the server converts between them in one place (applyInstallPlugin).
+//
+// Why three values and not just the tag: a tag is a movable pointer, the
+// commit is immutable but only resolvable through git, and the digest is what
+// survives the clone, the copy into the project and the commit into the
+// consumer's repo — the bytes that will actually be compiled. See the lock
+// proto's GitPin for the full account.
+message PluginGitPin {
+  string repo = 1;
+  string ref = 2;
+  string commit = 3;
+  string digest = 4;
+}
+
+// SetPluginVersionsIntent updates the version (+ source) of one or more
+// already-installed plugins in place (the `w17ctl plugin update` write —
+// batched so a `--all` run re-signs once). The server rejects a name that
+// isn't installed.
+// SetSdkVersionIntent sets (or clears) `lock.sdk_version` — the ONE version
+// of the public Go runtime every generated module of the project requires.
+//
+// An intent rather than a client-side edit because the lock is SIGNED by the
+// console: the client uploads bytes, the console validates, writes and
+// re-signs. That is also where the version's SHAPE is checked, for the same
+// reason every other rule lives server-side — a dumb client that validated
+// this would be holding a rule about the Go module ecosystem.
+//
+// Empty version CLEARS the pin, restoring the zero-pseudo-version behaviour.
+// Clearing has to be expressible: a field you can only ever set is a field
+// you cannot back out of after a bad pin.
+message SetSdkVersionIntent {
+  string version = 1;
+}
+
+message SetPluginVersionsIntent {
+  repeated PluginVersion plugins = 1;
+}
+
+message PluginVersion {
+  string name = 1;
+  string version = 2;
+  string source = 3;
+
+  // The NEW provenance, when an update moves a plugin to another published
+  // version. Carrying the version without it would leave the previous pin in
+  // place beside a new version number — a lock that passes validation and
+  // names bytes nobody fetched.
+  PluginGitPin git = 4;
+}
+
+// PinTargetsIntent pins each affected connection's deploy target after a schema
+// push (the lock's connection target_migration_id / target_content_sha256). On
+// a fresh lock (empty input bytes) the server stamps project_id; on an existing
+// lock it rejects a project_id mismatch and upserts each connection's pin in
+// place. Replaces the client-side schema.PinLockTargets read-modify-write.
+message PinTargetsIntent {
+  string project_id = 1;
+  repeated PinTarget targets = 2;
+}
+
+message PinTarget {
+  string connection = 1;
+  string target_migration_id = 2;
+  string target_content_sha256 = 3;
+}
+
+// AddConnectionIntent registers a new connection NAME (+ optional default
+// mark) in the lock. Dialect/version are NOT here — they live in proto
+// (the domain w17.proto's (w17.module).connection); the lock tracks only
+// the name + which connection is the project default.
+message AddConnectionIntent {
+  string name = 1;
+  bool mark_default = 2;
+}
+
+// SetDefaultConnectionIntent transfers the project default mark to an
+// existing connection (unsetting any current default in the same write).
+message SetDefaultConnectionIntent {
+  string name = 1;
+}
+
+// SetSecretsBackendIntent sets the deploy-boundary secrets materialiser
+// (plain | sops | eso | vault | cloud-csi). The client validates the name
+// (it drives the sops side-file render); the server just records it.
+message SetSecretsBackendIntent {
+  string backend = 1;
+}
+
+// InitSecretsAgeIntent records a freshly-minted age recipient (public key)
+// in the lock + defaults secrets.mode to "auto" when unset. Idempotent: a
+// recipient already present is not duplicated. The age KEYPAIR is minted +
+// the private key written client-side (secret-file crypto, not lock
+// signing) — only the public recipient rides the lock.
+message InitSecretsAgeIntent {
+  string recipient = 1;
+}
+
+// SetReplicasIntent sets (replace-or-append) a deployable bundle's PROD
+// replica count in generated_code.replicas[]. The server's re-sign Validate
+// enforces the rules (count >= 1, no folded tier scaled past 1).
+message SetReplicasIntent {
+  string service = 1;
+  int32 count = 2;
+}
+
+// UnsetReplicasIntent removes a bundle's replica-count entry (revert to the
+// single-replica default); errors if no entry exists.
+message UnsetReplicasIntent {
+  string service = 1;
+}
+
+// AddGrpcClientIntent appends a generated_code.grpc_clients[] entry (the Go
+// gRPC clients package codegen renders). language normalises to "go" (the
+// only one today); output_root empty derives from the lock's stubs. The
+// server rejects an unknown language + a duplicate output_root.
+message AddGrpcClientIntent {
+  string language = 1;
+  string output_root = 2;
+}
+
+// ComposeBinaryIntent sets (replace-or-append) a domain's
+// generated_code.binaries[] entry — folding several of the domain's generated
+// components into ONE binary instead of the default one-binary-per-component
+// layout. The server validates the component combo (gateway-anchored; a
+// storage-bearing set folds the full tier stack into one <domain>-server)
+// authoritatively before re-signing.
+message ComposeBinaryIntent {
+  string domain = 1;
+  repeated string components = 2;
+}
+
+// DecomposeBinaryIntent removes a domain's composed-binary declaration (revert
+// to standalone per-component binaries); errors if no entry exists.
+message DecomposeBinaryIntent {
+  string domain = 1;
+}
+
+// AddBusinessBundleIntent appends a generated_code.business_bundles[] entry (the
+// <domain>-business bundle codegen emits — the facade tier the project's
+// RegisterBusiness plugs into). env carries RAW name[:type[:default[:description]]]
+// specs; the server parses + validates them (type ∈ string|bool|int|secret;
+// a secret bakes no default) and rejects a duplicate domain, before re-signing.
+message AddBusinessBundleIntent {
+  string domain = 1;
+  string register = 2;
+  repeated string env = 3;
+}
+
+// AddCiConfigIntent opts a CI provider into generated e2e CI
+// (generated_code.ci_configs[]). The server validates the provider name
+// (github|gitlab|circleci|azure|bitbucket|jenkins|generic) and is idempotent —
+// an already-declared provider is left untouched — before re-signing.
+message AddCiConfigIntent {
+  string provider = 1;
+}
+
+// RemoveCiConfigIntent removes a CI provider's declaration (stop generating its
+// config); errors if the provider isn't declared.
+message RemoveCiConfigIntent {
+  string provider = 1;
+}
+
+// AddDeployTargetIntent opts a deploy target into generated artefacts
+// (generated_code.deploy_targets[]). The server validates the target name
+// (today: kubernetes) and is idempotent — an already-declared target is left
+// untouched — before re-signing.
+//
+// Docker is NOT a valid value: it is always emitted and cannot be turned off,
+// so accepting it here would suggest it could be removed.
+message AddDeployTargetIntent {
+  string target = 1;
+}
+
+// RemoveDeployTargetIntent removes a deploy target's declaration (stop
+// generating its artefacts); errors if the target isn't declared. The next
+// codegen also SWEEPS the files it had emitted, so a project does not keep a
+// stale manifest nothing regenerates.
+message RemoveDeployTargetIntent {
+  string target = 1;
+}
+
+// AddClientStubIntent appends a generated_code.clients[] entry (an FE client
+// codegen target). The client sends canonical tokens — framework ∈
+// core|react|react-native|vue, language ∈ typescript|javascript, wire ∈
+// unspecified|json|pb — which the server maps to the lock enums; output_root is
+// required + unique across existing entries. The server validates before
+// re-signing.
+message AddClientStubIntent {
+  string framework = 1;
+  string language = 2;
+  string output_root = 3;
+  string wire = 4;
+  // rest_surface scopes the client to one `(w17.rest_api)` surface by its
+  // `name`. Empty keeps the whole-project shape, where every method must
+  // be REST-addressable. See ClientStub.rest_surface in the lock proto for
+  // why a project can need the narrowing.
+  string rest_surface = 5;
+}
+
+// RemoveClientStubIntent drops the generated_code.clients[] entry at
+// output_root. Refused when no entry claims it. The tree on disk is the
+// client's to delete: the lock stops generating it, it does not erase it.
+message RemoveClientStubIntent {
+  string output_root = 1;
+}
+
+// SetClientStubIntent changes an existing clients[] entry in place, found by
+// output_root — only the fields that are SET. Asked for by a consumer: with
+// add-only, switching an entry to another rest_surface meant editing the
+// signed lock by hand. Tokens are the AddClientStubIntent ones; an empty
+// rest_surface (set) clears the scoping. At least one field must be set.
+message SetClientStubIntent {
+  string output_root = 1;
+  optional string rest_surface = 2;
+  optional string framework = 3;
+  optional string language = 4;
+  optional string wire = 5;
+}
+
+// BootstrapLockIntent builds a brand-new project lock from the `w17ctl init`
+// wizard answers (the EditLock request carries empty lock bytes). The server
+// assembles the whole lock — dirs, pb-stub language, i18n, e2e, CI configs,
+// connections — validates it (CI providers; the re-sign Validate enforces the
+// rest), and re-signs. The client holds no lockpb and builds nothing.
+// project_id is the console-assigned id from RegisterProject; ci is the raw
+// wizard spec ("" / none / all / comma-separated providers).
+// SetPbStubIntent sets a `pb_stubs[]` entry's on-disk root and import prefix.
+//
+// It exists because those two fields had NO writer: `init` does not carry them
+// (BootstrapLockIntent has no such field) and no edit intent touched them, so
+// every project on earth had them empty and no way to change that. A project
+// whose stubs root is not the convention needs `package` — it is the module
+// identity, stated in the lock instead of recovered by reading a go.mod off
+// disk — and until now it could not state it.
+//
+// language selects the entry ("go"). An entry for that language is replaced;
+// one that does not exist yet is appended. An empty `output_root` keeps the
+// derivation from `stubs` (`<stubs>/pb`); `package` empty is still accepted
+// today and is what every pre-existing lock holds.
+message SetPbStubIntent {
+  string language = 1;
+  string output_root = 2;
+  string package = 3;
+}
+
+// SetDirLayoutIntent re-points the project's DIRECTORY fields after init.
+//
+// Asked for by a consumer, and the shape of the ask is migration: you want a
+// provisional `w17proto/` while an existing tree is still being converted, then
+// the real directory once the conversion lands. Today that answer is given once,
+// in the wizard, and never again — so the first week of adopting w17 on an
+// existing codebase ends in a re-init.
+//
+// ⚠️ It re-points the LOCK ONLY. Nothing is moved, copied or deleted: the tree
+// is mid-conversion in exactly the case this exists for, so moving it would
+// fight the caller. Generated output under the OLD directory is left where it
+// is and becomes stale — the command's output says so, because a silent
+// re-point leaves orphaned artefacts that nothing applies.
+//
+// Three fields and not six. `pb_language`, `languages` and `e2e` are missing
+// deliberately: each has a different second half (what happens to stubs already
+// generated in the old language is not the same question as what happens to a
+// directory), and sharing one command would make the unanswered ones look as
+// settled as the answered ones.
+//
+// Every field is OPTIONAL — empty means "leave this one alone" — because a
+// caller changing `proto_dir` must not have to restate a `languages_dir` it
+// never touched.
+message SetDirLayoutIntent {
+  string proto_dir = 1;
+  string stubs = 2;
+  string languages_dir = 3;
+}
+
+// SetBusinessBundleIntent rewrites an existing `business_bundles[]` entry.
+//
+// `add` refuses a second entry for a domain (one bundle per domain), and
+// nothing could edit the first — so a `register` path typed wrong in the
+// first five minutes of a project cost a full reinit. A consumer paid that,
+// and named it as one of a family: decisions taken at `init` that `init`
+// gives no way to revise. `pb_stubs` was the previous one.
+//
+// domain selects the entry and must already exist — this is `set`, not
+// `add`, and creating one here would hide a typo'd domain as a new bundle.
+// Empty `register` leaves the path as it stands; `env` REPLACES the whole
+// list when present, because a per-entry edit of an ordered list needs a
+// key those entries do not have.
+message SetBusinessBundleIntent {
+  string domain = 1;
+  string register = 2;
+  repeated string env = 3;
+  // replace_env distinguishes "leave the env list alone" from "set it to
+  // empty": both arrive as a zero-length repeated field, and a list that
+  // cannot be cleared is the same one-way door this intent exists to fix.
+  bool replace_env = 4;
+}
+
+message BootstrapLockIntent {
+  string project_id = 1;
+  string project = 2;
+  string w17_url = 3;
+  string proto_dir = 4;
+  string stubs = 5;
+  string languages_dir = 6;
+  string pb_language = 7;
+  repeated string languages = 8;
+  bool e2e = 9;
+  string ci = 10;
+  repeated LockConnection connections = 11;
+}
+
+message EditLockRequest {
+  bytes lock = 1;            // current w17/lock.yaml bytes (empty = fresh)
+  LockEditIntent intent = 2;
+  // The current w17/infra.yaml bytes (empty = no file yet). Read by the
+  // set_infra and edit_infra intents, which return the new file in
+  // EditLockResponse.infra; every other intent ignores it.
+  bytes infra = 3;
+}
+
+message EditLockResponse {
+  bytes lock = 1;            // re-signed canonical lock bytes to write back
+  // infra_written: write `infra` to w17/infra.yaml (an infra intent ran).
+  // Comments and order of the file sent are kept; an empty `infra` with
+  // infra_written set means the file goes (the whole infrastructure was
+  // removed).
+  bytes infra = 2;
+  bool infra_written = 3;
+  // What the client prints after the edit (a lock block moved into the file).
+  repeated string notes = 4;
+}
+
+// PlaceGenerateRequest — the console's placement call for a GenerateProject
+// run on the codegen cluster.
+//
+// Unary and SHORT on purpose: the console is the single entry point and holds
+// no long-lived connection. A run is placed with `start`; while no worker is
+// free the client polls with `poll` every `retry_after_ms`. The stream itself
+// goes to the address a `granted` answer names, never to the console.
+message PlaceGenerateRequest {
+  oneof step {
+    PlaceGenerateStart start = 1;
+    PlaceGeneratePoll poll = 2;
+  }
+}
+
+// PlaceGenerateStart opens a placement. For a run over a PROJECT the console
+// checks the caller's entitlement to the lock's project, stamps the project's
+// organization and SIGNS the lock here — the worker that runs the generation
+// holds no signing key.
+message PlaceGenerateStart {
+  // The raw `w17/lock.yaml` bytes as the client read them from disk — exactly
+  // what it then sends as the run's lock. Empty for PLACEMENT_OP_PLUGIN_PB,
+  // which has no project.
+  bytes lock = 1;
+  // The number of proto source lines the client will upload. A size the pool
+  // cannot generate is refused here, before anything is queued.
+  int64 proto_lines = 2;
+  // Which generating RPC the run is. Zero is GenerateProject, so a client that
+  // predates the field places what it always placed.
+  PlacementOp op = 3;
+}
+
+// PlacementOp names the generating RPC a placement is for. Every one of them
+// runs on a codegen worker; the console serves none (codegen-on-the-cluster).
+//
+// The op decides what the console does at `start`, not what the worker may
+// run: a ticket is not bound to an RPC (the relay forwards any method, the
+// worker allows the generating ones). That is sound because nothing a worker
+// returns is trusted for its signature — the lock is the one the console
+// signed at placement, and an ACL lock is signed by the console afterwards
+// (SignAclLock), each behind the caller's entitlement to the project.
+enum PlacementOp {
+  // GenerateProject — `w17ctl codegen`. Lock required, signed at placement.
+  PLACEMENT_OP_GENERATE_PROJECT = 0;
+  // GenerateClient — `w17ctl target client generate`. Lock required, signed
+  // at placement: the FE generator verifies the lock it stages.
+  PLACEMENT_OP_GENERATE_CLIENT = 1;
+  // GeneratePluginPb — `w17ctl plugin gen-pb`, a plugin author's stubs. No
+  // project and no lock, so nothing is signed; the caller still has to be
+  // signed in, and the placement counts against their organization's cap.
+  PLACEMENT_OP_PLUGIN_PB = 2;
+}
+
+// PlaceGeneratePoll asks after a queued placement.
+message PlaceGeneratePoll {
+  // The handle a `queued` answer returned. A bearer secret bound to the
+  // principal and project that created it.
+  string reservation = 1;
+}
+
+message PlaceGenerateResponse {
+  oneof state {
+    PlaceGenerateQueued queued = 1;
+    PlaceGenerateGranted granted = 2;
+  }
+  // The lock signed by the console: the `w17/lock.yaml` bytes the client
+  // writes once the run succeeds and sends as GenerateProjectRequest.lock_yaml.
+  // Set on the answer to `start` only; the client keeps it across polls.
+  bytes signed_lock_yaml = 3;
+  // Warnings raised while signing (an organization stamp the console could
+  // not complete, say), printed by the client like a run's warnings.
+  repeated string warnings = 4;
+}
+
+// PlaceGenerateQueued — no worker is free yet.
+message PlaceGenerateQueued {
+  string reservation = 1;
+  // 1-based position in the relay's queue at the time of the answer.
+  int32 position = 2;
+  // When to poll again.
+  int32 retry_after_ms = 3;
+}
+
+// SignRequest is a generated file the run could not sign — a codegen worker
+// holds no key. The client has the console sign it (SignAclLock for
+// ACL_LOCK) and writes the signed bytes at `path`; it never writes `unsigned`.
+message SignRequest {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // A domain's `w17.lock.acl.proto`: its permission allocation.
+    ACL_LOCK = 1;
+  }
+  Kind kind = 1;
+  // Project-relative path the signed file is written to.
+  string path = 2;
+  // The domain the lock's signature is bound to.
+  string domain = 3;
+  // The rendered file, complete except for its signature option.
+  bytes unsigned = 4;
+}
+
+message SignAclLockRequest {
+  // The proto-marshalled w17.console.lock.Lock of the project — the same
+  // bytes PlaceGenerateStart carries; the console gates on its project.
+  bytes lock = 1;
+  // The domain the allocation belongs to.
+  string domain = 2;
+  // The domain's committed, signed `w17.lock.acl.proto`, or empty for a
+  // domain's first allocation. Its signature is verified; the new allocation
+  // must extend it.
+  bytes prior = 3;
+  // SignRequest.unsigned.
+  bytes unsigned = 4;
+}
+
+message SignAclLockResponse {
+  // The file to write: `unsigned` with its signature option stamped in.
+  bytes signed = 1;
+}
+
+// GenerateEgressClientRequest — see CodegenService.GenerateEgressClient.
+// Every field but `document` is read from the FIRST message only.
+message GenerateEgressClientRequest {
+  // The proto-marshalled w17.console.lock.Lock of the project: the console
+  // gates on its project, and binds the signature to it.
+  bytes lock = 1;
+  // Where the document came from, as the developer gave it (a URL or a
+  // project-relative path). Recorded in client.yaml; used to resolve a
+  // relative `servers[].url`.
+  string source = 2;
+  // The client name; empty = derived from source.
+  string name = 3;
+  // Selectors: request lines ("GET /users/{id}") and operationIds. Both
+  // empty = every operation of the document.
+  repeated string endpoints = 4;
+  repeated string operations = 5;
+  // A chunk of the OpenAPI document (JSON or YAML), appended in order.
+  bytes document = 6;
+}
+
+// GenerateEgressClientResponse — the signed client.
+message GenerateEgressClientResponse {
+  string name = 1;
+  // The files to write, project-relative: `<proto root>/clients/<name>/`
+  // `<name>.proto` and `client.yaml`.
+  repeated GeneratedFile files = 2;
+  // Where to write the document the request carried, unchanged
+  // (`…/openapi.json` or `…/openapi.yaml`, after its format). It is part of
+  // the signed set by its sha256.
+  string document_path = 3;
+  // The selected operations as request lines.
+  repeated string operations = 4;
+  // The client's DSN env var and a template for it, with placeholders for
+  // the credentials the document's security schemes ask for.
+  string env_var = 5;
+  string dsn_template = 6;
+  // Alternatives and security schemes the DSN cannot express.
+  repeated string auth_notes = 7;
+  repeated string warnings = 8;
+}
+
+// VerifyEgressClientRequest — one committed client.
+message VerifyEgressClientRequest {
+  bytes lock = 1;
+  // The client's directory name under `<proto root>/clients/`.
+  string name = 2;
+  // The committed `<name>.proto` and `client.yaml`.
+  bytes proto = 3;
+  bytes client_yaml = 4;
+  // SHA-256 (hex) of the committed document with every CRLF read as LF —
+  // the client hashes the file rather than shipping several megabytes to be
+  // hashed here, and normalises line endings because git may have rewritten
+  // them on checkout.
+  string document_sha256 = 5;
+}
+
+// PlaceGenerateGranted — a worker is held for this run.
+message PlaceGenerateGranted {
+  // Where to open the GenerateProject stream (host:port of a relay's proxy).
+  string address = 1;
+  // SHA-256 (hex) of the relay's proxy certificate; the client pins it.
+  string cert_fingerprint = 2;
+  // Single-use ticket, sent as the `w17-cluster-ticket` metadata of the
+  // GenerateProject call. Valid for a short claim window only.
+  string ticket = 3;
+}
+
+message DescribeLockRequest {
+  bytes lock = 1;            // current w17/lock.yaml bytes
+
+  // want_compiler_pins asks for the compiler's own ecosystem pins in the
+  // response. Off by default: DescribeLock is mostly a lock reader and most
+  // callers have no use for them.
+  bool want_compiler_pins = 2;
+
+  // The current w17/infra.yaml bytes. LockView.infra is then the file's
+  // infrastructure (the lock's own infra block when the file is empty and
+  // the lock still carries one).
+  bytes infra = 3;
+  // want_infra_effective asks for LockView.infra_effective: every resolved
+  // value with where it came from (`w17ctl infra show --effective`), for
+  // infra_effective_env only, or all environments when that is empty.
+  bool want_infra_effective = 4;
+  string infra_effective_env = 5;
+}
+
+// LockView is the read projection of the lock the thin client routes on.
+// Grows as read sites migrate off lockpb; w17_url is deliberately absent
+// (see DescribeLock).
+message LockView {
+  repeated LockConnection connections = 1;
+  string default_connection = 2;  // EffectiveDefault (the resolved default name)
+  string proto_dir = 3;           // EffectiveProtoDir
+  string services_dir = 4;        // EffectiveServicesDir
+  string languages_dir = 5;       // EffectiveLanguagesDir
+  LockSecrets secrets = 6;        // secrets backend/mode/recipients
+  repeated LockReplica replicas = 7;  // generated_code.replicas[]
+  repeated LockGrpcClient grpc_clients = 8;  // generated_code.grpc_clients[]
+  repeated LockComposedBinary binaries = 9;  // generated_code.binaries[]
+  repeated LockBusinessBundle business_bundles = 10;  // generated_code.business_bundles[]
+  repeated string ci_providers = 11;  // generated_code.ci_configs[].provider
+  repeated LockClientStub clients = 12;  // generated_code.clients[]
+
+  // CompilerPins are the ecosystem-library versions THIS compiler ships
+  // with — the floor every generated bundle is rendered against.
+  //
+  // It answers `w17ctl verify`'s release gate. A bundle's go.mod pins the
+  // libraries the generated code links, and one last regenerated by an older
+  // compiler is internally consistent, builds, and may name a version the
+  // compiler has since moved off for a CVE. The consumer's checkout has no
+  // compiler, so the floor has to travel.
+  //
+  // A FLOOR, not an equality: a project is free to pin ABOVE it (the merge in
+  // mergeWithCompilerVersions takes the higher of the two), so only a bundle
+  // BELOW is stale. That also means the answer does not depend on what the
+  // caller pins, which is why this request carries no versions of its own.
+  //
+  // The same comparison `TestGeneratedBundles_DoNotPinOlderThanCompiler`
+  // makes in this repo — it is the oracle that caught the original finding,
+  // and it can only run here because the manifest is embedded in the compiler.
+  DepVersions compiler_pins = 21;
+  string project = 13;            // lock.project (the proto package prefix source)
+  string e2e_dir = 14;            // EffectiveE2eDir (empty = e2e not enabled)
+  // lock.autosync tri-state: "" = unset (default-on), "true", "false". The
+  // dev-DB workflow mode the client combines with its devconfig override.
+  string autosync = 15;
+  // clean_paths is the set of project-root-relative dirs codegen owns (services
+  // dir + pb-stub / client / grpc-client output roots + languages dir) — what
+  // `codegen` prunes orphans under and `stack clean` removes. Computed
+  // server-side (it needs the pb-stub output roots the view doesn't otherwise
+  // expose).
+  repeated string clean_paths = 16;
+  // plugin_pb_root is the Go pb output root that plugin-activation staging
+  // expands `@project`/`@pkg` against — the SAME value `goPbRoot` picks over
+  // the codegen path's derived stub_targets: the first Go `pb_stubs[]`
+  // output_root, else the standalone `w17/stubs/pb` module. The schema/migrate
+  // IR-compile path threads this back into `CompileIRRequest.stub_targets` so a
+  // plugin-activated project can `migrate generate` (the full `codegen` path
+  // derives stub_targets itself; the IR-compile path has only the lock view).
+  // Lock-derived (no go.mod needed); the client supplies go_module separately.
+  string plugin_pb_root = 17;
+  // gen_dir is the project's Go module root for hand-written code — the FIRST
+  // SEGMENT of the effective stubs root (`w17src` for `stubs: w17src/gen`,
+  // `srcgo` by default). The client needs it to NAME the path a domain's
+  // hand-written facade belongs at; it cannot read the lock itself, and the
+  // default is only right for a project that took the default. A consumer
+  // whose tree is `w17src/` was told by `domain add` to write into the default
+  // `srcgo` directory, which their project does not have.
+  string gen_dir = 19;
+  // deploy_targets are the OPTIONAL deploy targets the lock declares
+  // (generated_code.deploy_targets[].target). Docker is always emitted and is
+  // never listed. Empty = docker only.
+  repeated string deploy_targets = 20;
+
+  // sdk_floor is the oldest sdk/go the code THIS console generates can build
+  // against — the published sdk snapshot of the commit it was deployed from,
+  // handed to it at deploy (`W17_SDK_FLOOR`). Empty on a console that was not
+  // told (local, co-dev, an older deploy); the client then falls back to the
+  // floor it was published with.
+  //
+  // It exists because that fallback is the CLIENT's floor, and the code comes
+  // from the CONSOLE: after a deploy, a client from the day before accepted a
+  // pin the freshly generated code could not build against, codegen exited 0,
+  // and the build image reported `undefined:`.
+  string sdk_floor = 22;
+
+  // infra is the project's declared infrastructure (absent = none
+  // declared): w17/infra.yaml (DescribeLockRequest.infra), or the lock's own
+  // infra block while the project has not moved it into the file.
+  LockInfra infra = 23;
+  // infra_source: "file" | "lock" | "" (none declared). "lock" = the block
+  // still lives in the lock; `w17ctl infra migrate` moves it.
+  string infra_source = 26;
+  // The rendered effective view, when asked (want_infra_effective).
+  string infra_effective = 27;
+
+  // prune_paths are roots where codegen removes the generated files this run
+  // did not write — like clean_paths — but that `stack clean` must NOT remove
+  // wholesale, because people keep their own files there: `deploy/` holds the
+  // sealed `.env.enc` files and certificates beside the generated stack. Only
+  // files carrying the generated-code marker are ever pruned.
+  repeated string prune_paths = 24;
+
+  // 18 was a `gen_dir` projection, added and withdrawn on 2026-09-15. It went
+  // out in one SDK snapshot and one console deploy before being reverted: no
+  // released client ever read it, but the number is burned rather than reused.
+  // The gen dir is NOT projected on purpose — a project that moves its stubs
+  // root states its import prefix through `pb_stubs[].package`, which carries
+  // the module identity in the lock instead of having the client recover it by
+  // reading a go.mod off disk.
+  reserved 18;
+}
+
+// LockReplica projects one generated_code.replicas[] entry for
+// `target scale list`.
+message LockReplica {
+  string service = 1;
+  int32 count = 2;
+}
+
+// LockGrpcClient projects one generated_code.grpc_clients[] entry for
+// `target grpc-client list` + the add wizard's duplicate-output_root check.
+message LockGrpcClient {
+  string language = 1;
+  string output_root = 2;
+}
+
+// LockComposedBinary projects one generated_code.binaries[] entry for
+// `target binary list`. name is the server-derived binary name (storage-bearing
+// set → <domain>-server, else gateway-anchored → <domain>-gateway).
+message LockComposedBinary {
+  string domain = 1;
+  repeated string components = 2;
+  string name = 3;
+}
+
+// LockBusinessBundle projects one generated_code.business_bundles[] entry for
+// `target business list` (domain, RegisterBusiness import, declared env count).
+message LockBusinessBundle {
+  string domain = 1;
+  string register = 2;
+  int32 env_count = 3;
+}
+
+// LockClientStub projects one generated_code.clients[] entry for
+// `target client list` + the add wizard's duplicate-output_root check. The
+// framework/language/wire are friendly display strings (e.g. REACT, TYPESCRIPT,
+// JSON) — the enum name with its CLIENT_*_ prefix stripped.
+message LockClientStub {
+  string framework = 1;
+  string language = 2;
+  string output_root = 3;
+  string wire = 4;
+  // rest_surface is the surface this client serves (empty = the whole
+  // project's). `client list` shows it: with several publishing domains it
+  // is what tells two entries apart.
+  string rest_surface = 5;
+}
+
+message LockConnection {
+  string name = 1;
+  bool default = 2;
+}
+
+// LockSecrets projects the lock's secrets block for the secrets commands
+// (the age recipients the encrypt/sops paths read; the backend/mode).
+message LockSecrets {
+  string backend = 1;
+  string mode = 2;
+  repeated string age_recipients = 3;
+}
+
+// RenderProjectScaffoldRequest carries everything the project-level
+// compose render needs that the server can't see: the lock (connections
+// + project name), the on-disk bundle compose-include paths, and the
+// protos (for plugin-sandbox discovery).
+// ConnectionExtensions is one connection's required-extension set, as the
+// migration manifest computed it.
+message ConnectionExtensions {
+  string connection = 1;          // lock connection name
+  repeated string extensions = 2; // e.g. ["postgis"]
+}
+
+message RenderProjectScaffoldRequest {
+  repeated ProtoFile files = 1;          // protos, for sandbox discovery
+  bytes lock = 2;                        // proto-marshalled w17.console.lock.Lock
+  repeated string bundle_includes = 3;   // services-dir-relative compose.yaml paths
+
+  // What each connection's schema REQUIRES — the manifest's own set, per
+  // connection. It picks the database IMAGE: a connection whose plan opens
+  // with `CREATE EXTENSION postgis` cannot run on stock postgres, where the
+  // extension is not on disk.
+  //
+  // Passed IN rather than derived here, and that is the whole point. This
+  // request carries the protos but not `go_module` / `gen_dir` /
+  // `stub_targets`, which plugin activation staging needs — so an IR compile
+  // attempted from it succeeds for a project without plugins and fails for
+  // one with them. The first version of this did exactly that and swallowed
+  // the error: a consumer with the agent plugin got `postgres:18` for a
+  // geometry connection while the same codegen run wrote `postgis` into their
+  // snapshot, and the byte size of the file never changed.
+  //
+  // The caller that owns the IR answers. An empty list means stock images —
+  // which is correct for every project that requires nothing.
+  repeated ConnectionExtensions connection_extensions = 4;
+
+}
+
+// MergePoRequest carries the freshly-scaffolded .po + the existing
+// on-disk .po + the language tag (basename minus .po).
+message MergePoRequest {
+  bytes scaffold = 1; // the server-scaffolded catalog (new msgids)
+  bytes existing = 2; // the current on-disk catalog (translator msgstrs)
+  string lang = 3;    // language tag for the re-emitted header
+}
+
+message MergePoResponse {
+  bytes merged = 1;
+}
+
+// GeneratePluginPbRequest carries the plugin's raw proto/ files + its
+// plugin.yaml (the server reads go_module from it).
+message GeneratePluginPbRequest {
+  repeated ProtoFile files = 1; // proto-root-relative ("types/models.proto")
+  bytes plugin_yaml = 2;        // the plugin's plugin.yaml manifest
+}
+
+message DiscoverPluginSandboxesRequest {
+  repeated ProtoFile files = 1;
+}
+
+message PluginSandboxes {
+  repeated PluginSandbox sandboxes = 1;
+}
+
+// PluginSandbox mirrors composegen.Sandbox (a dev image service a plugin
+// declares for the project's compose tree).
+message PluginSandbox {
+  string name = 1;
+  string description = 2;
+  string image = 3;
+  repeated string ports = 4;
+  repeated SandboxEnv env = 5;
+}
+
+message SandboxEnv {
+  string name = 1;
+  string value = 2;
+}
+
+message GenerateClientRequest {
+  repeated ProtoFile files = 1;
+  // Lock is the signed `w17/lock.yaml` content — the generator reads
+  // generated_code.clients[] (frameworks / languages / output roots).
+  bytes lock = 2;
+  // GoModule is the consumer's go.mod module line — needed when the
+  // project declares plugin activations (placeholder expansion), since the
+  // server stages only protos (not the project go.mod).
+  string go_module = 3;
+
+  // PoFiles are the project's i18n catalogs (`<languages_dir>/<domain>/<lang>.po`,
+  // project-root-relative paths + FINAL merged contents) the FE generator
+  // bakes into `i18n.ts`. The server stages only protos + lock, so without
+  // these the staged `loadProjectCatalogs` finds nothing and emits an empty
+  // catalog. The caller supplies the merged .po (GenerateProject merges the
+  // scaffold with the uploaded existing; the standalone path uploads the
+  // on-disk .po verbatim). Empty = no i18n catalogs (English-only client).
+  repeated GeneratedFile po_files = 4;
+}
+
+message VerifyRequest {
+  // Files is the project proto set INCLUDING the committed locks
+  // (w17.lock.acl.proto / w17.lock.events.proto) the check compares
+  // against.
+  repeated ProtoFile files = 1;
+  // GoModule is the consumer's go.mod module line — needed by ACL/
+  // eventbus verification when the project declares plugin activations
+  // (placeholder expansion), since the server stages only protos.
+  string go_module = 2;
+}
+
+message VerifyResult {
+  bool ok = 1;       // true = in sync; false = drift (or a check failure)
+  string message = 2; // the drift / failure detail when ok=false
+}
+
+// VerifyLockRequest carries the committed lock as the raw on-disk
+// `w17/lock.yaml` bytes (YAML, signature block included) — opaque to the
+// client, decoded + signature-verified server-side.
+message VerifyLockRequest {
+  bytes lock = 1;
+}
+
+message GenerateE2eRequest {
+  repeated ProtoFile files = 1;
+  string go_module = 2;
+  // Out is the project-relative e2e output dir (the lock's e2e_dir).
+  string out = 3;
+  string services_dir = 4;
+  string pb_root = 5;
+  // E2eInputs is the project's CURRENT on-disk e2e tree (`<out>/**`,
+  // project-root-relative paths + contents): the hand-written stress presets
+  // (`<out>/<domain>/stress/**`) the e2erunner harness is built from, plus the
+  // existing test skeletons (generate-if-missing) the runner's scenario list is
+  // read back from. The server stages only protos, so without these the
+  // generator finds no stress presets → emits a harness-less main_test.go while
+  // a committed stress_gen_test.go lingers → the e2erunner bundle won't compile.
+  // Staged (excluded from the output) so the runner regenerates consistently.
+  repeated ProtoFile e2e_inputs = 6;
+  // W17Path threads W17_WANDERING_COMPILER_PATH (project-root-relative) so the
+  // e2erunner go.mod gets its co-dev sdk/go replace. The daemon's own env is
+  // empty, so without this a fresh co-dev e2erunner won't build. Empty ==
+  // published-module mode.
+  string w17_path = 7;
+}
+
+message GenerateProjectMapRequest {
+  repeated ProtoFile files = 1;
+  string go_module = 2;
+  string pb_root = 3;
+  // GenFiles are the generated Go files (relative paths under the gen dir,
+  // e.g. `<gen>/domains/<d>/...go`) the map's go/parser reads for
+  // cross-domain grpc-client edges. Optional — omitted = proto-only map.
+  repeated ProtoFile gen_files = 4;
+}
+
+message GenerateBusinessRequest {
+  repeated ProtoFile files = 1;
+  string go_module = 2;
+  string services_dir = 3;
+  string gen_dir = 4;
+  string w17_stubs_pb = 5;
+  // GoMod is the project's `<gen_dir>/go.mod` content — the generator
+  // reads its `google.golang.org/grpc` require line to pin the bundle's
+  // grpc version. Empty is tolerated (the generator falls back).
+  string go_mod = 6;
+  repeated BusinessBundle bundles = 7;
+  // W17Path threads W17_WANDERING_COMPILER_PATH (project-root-relative) so the
+  // bundle go.mod gets its co-dev sdk/go replace.
+  // The daemon's own env is empty, so without this a fresh co-dev business
+  // bundle won't build. Empty == published-module mode.
+  string w17_path = 8;
+
+  // sdk_go_version is the project's declared runtime pin
+  // (`lock.sdk_version`), so the business bundle's go.mod requires the
+  // SAME sdk/go as every other module of the project.
+  //
+  // It has to be threaded rather than derived: this generator runs staged
+  // and reads its other pins off the project's go.mod ON DISK, which
+  // answers what the project currently requires — not what it should. The
+  // difference is the whole point of the field.
+  //
+  // Empty ⇒ the zero pseudo-version, unchanged from before.
+  string sdk_go_version = 9;
+
+  // languages_dir is the project's catalog root (`<languages_dir>/<domain>`
+  // holds the domain's `.po`). Empty = the project declares no languages.
+  //
+  // The business tier is where a project's HAND-WRITTEN facades run, and
+  // their grpcerr.ForUser sentences are translated in this process — but
+  // the bundle never registered a catalog, so every one stayed in its
+  // msgid whatever the request's locale. The storage tier had the same gap
+  // and closed it earlier; this tier was missed.
+  string languages_dir = 10;
+}
+
+// BusinessBundle mirrors the lock's business_bundles[] entry (the domains
+// w17 should emit a business binary for).
+message BusinessBundle {
+  string domain = 1;
+  // Register is the go-module-relative import path of the domain's
+  // RegisterBusiness package.
+  string register = 2;
+  repeated BusinessEnv env = 3;
+}
+
+message BusinessEnv {
+  string name = 1;
+  string type = 2;
+  string default = 3;
+  string description = 4;
+  bool secret = 5;
+}
+
+message GenerateAclRequest {
+  repeated ProtoFile files = 1;
+  // GoModule is the consumer's go.mod module line. The client sends
+  // it because the server stages only protos (not the project go.mod), and
+  // plugin-activation placeholder expansion needs the module path.
+  string go_module = 2;
+}
+
+// GenerateMcpRequest carries the project proto set + the MCP bundle knobs
+// (same values the client formerly passed to the in-process command).
+message GenerateMcpRequest {
+  repeated ProtoFile files = 1;
+  string go_module = 2;
+  // ServicesDir is the bundle output root (the lock's services_dir).
+  string services_dir = 3;
+  // SrcgoRel / SdkGoRel are the bundle-relative replace targets for the
+  // project's srcgo + the sdk/go (computed client-side from the project
+  // layout + W17_WANDERING_COMPILER_PATH).
+  string srcgo_rel = 4;
+  string sdk_go_rel = 5;
+  // BackendAddr is the baked-in default dial target for the MCP server.
+  string backend_addr = 6;
+  // W17StubsPb selects w17/stubs import mode.
+  string w17_stubs_pb = 7;
+}
+
+// GenerateGrpcClientsRequest carries the project proto set + the
+// client-package knobs (same values the client formerly passed to the
+// in-process command).
+message GenerateGrpcClientsRequest {
+  repeated ProtoFile files = 1;
+  string go_module = 2;
+  // Out is the project-relative output root for the generated clients
+  // (per-domain `<out>/<domain>/<tier>/clients.go`). Client + server must
+  // agree so the returned relative paths land correctly.
+  string out = 3;
+  string pb_root = 4;
+  // W17StubsPb selects the w17/stubs pb import prefix (the stubs-module
+  // partitioned clients variant); empty = the project-pb clients variant.
+  string w17_stubs_pb = 5;
+  // Distx wires the distributed-tx platform client package.
+  bool distx = 6;
+}
+
+// GenerateEventbusRequest carries the project proto set + the
+// import-path knobs the eventbus generator threads into the bundle (same
+// values the client formerly passed to the in-process command).
+message GenerateEventbusRequest {
+  // Files is the project's full proto tree (relative wire names; plugin
+  // trees ride along for the bundle's event sweep). Same contract as
+  // GenerateRequest.files.
+  repeated ProtoFile files = 1;
+  // GoModule is the consuming project's module path — drives the bundle's
+  // generated import statements + the lock proto's go_package.
+  string go_module = 2;
+  // W17StubsPb / PbRoot select where the bundle imports event + envelope
+  // types from (the w17/stubs module vs the project's shared pb tree).
+  string w17_stubs_pb = 3;
+  string pb_root = 4;
+  // PerBundlePb makes the bundle own its pb subtree (zero-code-isolation).
+  bool per_bundle_pb = 5;
+  // ServicesDir is the project-relative output root for the bundle
+  // (lock's services_dir; the client + server must agree so the returned
+  // relative paths land in the right place). Empty == "w17/services".
+  string services_dir = 6;
+  // W17Path threads W17_WANDERING_COMPILER_PATH (project-root-relative) so the
+  // bundle go.mod gets its co-dev sdk/go replace.
+  // The daemon's own env is empty, so without this a fresh co-dev eventbus
+  // bundle won't build. Empty == published-module mode.
+  string w17_path = 7;
+  // deploy_targets are the OPTIONAL deploy targets the project asked for
+  // (lock `generated_code.deploy_targets[]`). Docker is always emitted and
+  // never appears here. Empty = docker only — which is the DEFAULT, and the
+  // reason this field exists: `deploy/prod/k8s.yaml` went into every bundle
+  // of every project until 2026-09-22.
+  repeated string deploy_targets = 8;
+}
+
+// The stage-run-collect generator RPCs used to share a `GeneratedFiles`
+// envelope — one repeated field carrying the whole run. That envelope is
+// gone: every one of them now server-streams `GeneratedFile`, because a
+// single response message caps the whole generated output at gRPC's
+// default 4 MiB receive limit on the gateway→backend hop
+// (sdk/go/lib/grpcclient.Dial sets no call options). Streaming makes the
+// per-message size one FILE, so the cap stops being a project-size limit.
+
+// GenerateProjectRequest carries ONLY the local inputs a thin client can
+// gather without any compiler logic: the proto tree, the signed lock, the
+// project's go.module / gen_dir / services_dir, the go.mod dep-versions
+// (read from the local go.mod), and the co-dev path env. Everything else —
+// which generators to run, every derived target/param, the composition, the
+// supersede-sweep — the server derives from these inputs.
+// ⚠️ STREAMED: see the rpc. The first message carries the header fields
+// below; `files` / `gen_files` may be spread across any number of messages
+// and are appended in arrival order.
+message GenerateProjectRequest {
+  repeated ProtoFile files = 1;   // the project's proto tree, in chunks (proto-root-relative)
+  bytes lock = 2;                 // proto-marshalled w17.console.lock.Lock
+  string go_module = 3;           // the project's go.mod module path
+  string gen_dir = 4;             // empty == "srcgo"
+  string services_dir = 5;        // IGNORED server-side: GenerateProject derives services_dir from the lock (lock.EffectiveServicesDir). The client sends the same lock-derived value; kept on the wire for symmetry with gen_dir / future use.
+  DepVersions dep_versions = 6;   // versions read from the local go.mod
+  string w17_path = 7;             // W17_WANDERING_COMPILER_PATH (co-dev replace dirs); empty == published-module mode
+  bool force = 8;                 // RESERVED: the server ignores this today — `--force` is a purely client-side collision concern (the client overwrites existing files in its own apply loop). Kept on the wire for a future server-side skip-if-unchanged gate.
+
+  // GenFiles is the project's current generated+hand-written Go tree under
+  // `<gen_dir>/domains/` (project-root-relative filenames). The server
+  // threads it into the project-map step, whose grpc-client cross-domain
+  // edges are derived by go/parser over the HAND-WRITTEN tree
+  // (grpcClientCrossEdges) — the server can't see local disk, so the thin
+  // client uploads it (a local read, no logic). Empty = proto-only map.
+  repeated ProtoFile gen_files = 9;
+
+  // LockYaml is the RAW, signed `w17/lock.yaml` file bytes (verbatim on-disk
+  // content). The FE-client generator (GenerateClient) loads the lock from a
+  // staged `w17/lock.yaml` and verifies its signature, so it needs the exact
+  // signed YAML — the proto-marshalled `lock` (field 2) won't round-trip
+  // through that path. Every other server step uses `lock` (proto). Empty
+  // when the project declares no FE clients (the client step is skipped).
+  bytes lock_yaml = 10;
+
+  // GenGoMod is the project's `<gen_dir>/go.mod` content (verbatim). The
+  // business-bundle generator reads it for the bundle's grpc pin AND the
+  // sdk/go layout that picks the secret import path — more than dep_versions
+  // captures — so the thin client uploads the real file (a local read).
+  // Empty when the project declares no business bundles (that step is
+  // skipped).
+  string gen_go_mod = 11;
+
+  // ExistingPo are the project's CURRENT on-disk i18n catalogs
+  // (`<languages_dir>/<domain>/<lang>.po`, project-root-relative paths +
+  // contents). The server merges them with the main Generate's freshly
+  // harvested .po scaffolds (msgmerge-style: translator msgstrs survive, new
+  // msgids land empty), emits the MERGED .po as the write op, AND feeds the
+  // merged set to the FE generator so `i18n.ts` bakes the translated catalog.
+  // The .po merge thus runs fully server-side now. Empty on a first codegen
+  // (no existing catalogs yet) or a project with no languages.
+  repeated GeneratedFile existing_po = 12;
+
+  // E2eInputs is the project's CURRENT on-disk e2e tree (`<e2e_dir>/**`,
+  // project-root-relative paths + contents) — the hand-written stress presets +
+  // existing test skeletons the e2e generator reads to build the e2erunner
+  // (the server stages only protos otherwise → a harness-less runner that won't
+  // compile against a lingering stress_gen_test.go). Empty when the project
+  // declares no e2e_dir.
+  repeated ProtoFile e2e_inputs = 13;
+
+  // W17ctlVersion is the calling CLIENT's own build identity, forwarded to
+  // the CI render so a generated pipeline installs exactly the version the
+  // developer ran. Only the client can answer this: the version is an ldflag
+  // on its binary (w17ctl/internal/core.Version).
+  //
+  // EMPTY is a real answer — a locally built client has none — and the render
+  // treats it as "install the newest release, and say why in a comment"
+  // rather than inventing a number.
+  string w17ctl_version = 14;
+
+  // The project's w17/infra.yaml (empty = none). Codegen renders deploy/
+  // from it — or from the lock's own infra block while the project has not
+  // moved it into the file — and refuses a file that does not validate,
+  // naming w17/infra.yaml:line:col.
+  bytes infra = 15;
+}
+
+// HandlerMsgids is one domain's share of the hand-written sentences.
+message HandlerMsgids {
+  // domain the sentences are raised in, read from the file's
+  // `<gen_dir>/domains/<domain>/` path. Empty = the file is in no domain's
+  // tree, so the sentences go to EVERY domain's catalog: a sentence in a
+  // shared helper can surface from any of them.
+  string domain = 1;
+  repeated string msgids = 2;
+}
+
+// GeneratedOp is one filesystem operation in the GenerateProject stream.
+// The client applies it under the project root with no interpretation:
+//   write  → overwrite (or write-if-missing when GeneratedFile.if_missing)
+//   delete → remove relative_path (a server-determined superseded artifact)
+message GeneratedOp {
+  oneof op {
+    GeneratedFile write = 1;
+    string delete = 2;
+    // warning is a non-fatal advisory from the underlying codegen (e.g. an
+    // MCP surface put behind a non-OAuth login). The client collects these
+    // and prints them last under a ⚠ banner — generation still succeeded.
+    // Carried in-band because GenerateProject streams ops (no unary
+    // GenerateResponse.warnings channel to ride on).
+    string warning = 3;
+    // sdk_requirement is a floor the generated code itself declares for the
+    // project's sdk/go pin — today the highest `requires_sdk` among the
+    // ACTIVATED plugins, whose hand-written handlers are staged into the
+    // project and built against its pin. The client checks the pin against
+    // it beside its own floor and the console's (LockView.sdk_floor), at the
+    // same step, so the refusal names the plugin. Old clients ignore it.
+    SdkRequirement sdk_requirement = 4;
+    // sign is a file the run produced but could not sign (a codegen worker
+    // holds no key). The client has the console sign it, then writes it like
+    // a `write`. Never written unsigned.
+    SignRequest sign = 5;
+  }
+}
+
+// SdkRequirement is one declared sdk/go floor and what declared it.
+message SdkRequirement {
+  string version = 1;  // canonical Go module version
+  string source = 2;   // e.g. "plugin auth (requires_sdk)"
+}
+
+// GenerateCiRequest carries the lock-derived inputs the CI generator
+// needs: the providers to render + the project's connection names (used
+// best-effort to pre-wire the commented unit-test slot's DB service/DSN).
+message GenerateCiRequest {
+  repeated string providers = 1;
+  repeated string connections = 2;
+  // console_addr is the project's own `w17_url`. The rendered pipeline's
+  // publish job signs in to it and runs `w17ctl push` — the one place a
+  // migration is created, and only for a merged, green tree.
+  //
+  // Empty renders that job commented out rather than pointing it at a
+  // guess: a workflow that pushes a schema to the wrong console is worse
+  // than one the consumer has to finish by hand.
+  string console_addr = 3;
+
+  // GeneratedPaths are the project-relative roots `w17ctl codegen`
+  // writes into — `w17/` plus the stub root the lock records.
+  //
+  // The generated pipeline uploads them as a build ARTEFACT. With the
+  // compiler's output gitignored (the shape w17 steers projects to),
+  // the repo holds the authored code and nothing else, so a CI run that
+  // produced a tree and kept no copy leaves the project with its
+  // generated code nowhere at all. The artefact is where it lives.
+  repeated string generated_paths = 4;
+
+  // w17ctl_version is the version of the CLIENT that asked for this render,
+  // read from its own build identity. The pipeline installs exactly that
+  // version, so a CI run reproduces what the developer ran.
+  //
+  // The console cannot supply this: the version is an ldflag on the client
+  // binary, and the client is the only participant that knows which one it
+  // is. Before this field the generator had a `v0.0.0` placeholder with a
+  // "pin once the client repo publishes releases" TODO — the releases had
+  // been published for a month, and every generated pipeline was asking a
+  // release host for a version that never existed.
+  //
+  // EMPTY is a real answer, not a missing one: a locally built client has no
+  // version (see w17ctl/internal/core.Version), and the render must not
+  // invent one. The pipeline then installs the newest release and says why
+  // in a comment, which is the honest reading of "generated by a dev build".
+  string w17ctl_version = 5;
+}
+
+// GenerateCiResponse returns the rendered CI files (reusing GeneratedFile:
+// relative_path + contents). The client infers the executable bit from a
+// .sh suffix when writing.
+message GenerateCiResponse {
+  repeated GeneratedFile files = 1;
+}
+
+// CompileIRRequest mirrors the IR-relevant subset of GenerateRequest
+// (the staging + plugin-activation machinery is shared) plus the
+// orchestrator-resolved ACL catalogue the IR builder needs. Reuses
+// ProtoFile + StubTarget from this file.
+message CompileIRRequest {
+  // Files is the project's full `.proto` set (same contract as
+  // GenerateRequest.files — relative paths, cross-file imports resolve
+  // by filename, plugin trees + acl lock ride along). At least one
+  // required.
+  repeated ProtoFile files = 1;
+
+  // GoModule / GenDir / StubTargets feed plugin-activation staging
+  // (`@project`/pb import-path expansion in materialized plugin protos)
+  // — same role as in GenerateRequest. Optional for plugin-free
+  // projects.
+  string go_module = 2;
+  string gen_dir = 3;
+  repeated StubTarget stub_targets = 4;
+
+  // DefaultConnection is the lock's default connection name, threaded
+  // to BuildOptions.LockDefault (tables with no explicit connection
+  // bind to it).
+  string default_connection = 5;
+
+  // AclPermissions / AclPermissionIds are the activating domain's
+  // pre-resolved permission value names / numeric ids (union of
+  // permissions ∪ reserved, sorted) — the client reads its local
+  // `w17.lock.acl.proto` and passes them so fields annotated
+  // `(w17.field).auto_choices = ACL_PERMISSIONS{,_IDS}` compile to a
+  // real `CHECK col IN (…)`. Empty → the IR builder's empty-catalogue
+  // `CHECK (false)` + warning, same as a non-ACL project.
+  repeated string acl_permissions = 6;
+  repeated int32 acl_permission_ids = 7;
+
+  // IncludeDescriptors attaches a FileDescriptorSet to the returned
+  // Schema even for relational (non-STORAGE_PROTOBUF) schemas — the
+  // compat engine's WIRE + API domains need it. Mirrors the client's
+  // loadSchemaSetWithDescriptors (snapshot push). The IR builder only
+  // populates it for STORAGE_PROTOBUF schemas by default.
+  bool include_descriptors = 8;
+
+  // Roots scopes which protos the loader treats as ENTRY points (their
+  // relative filenames, as in files[].filename). The IR is built from
+  // roots + their transitive imports only — so a subset push (specific
+  // --proto files) builds exactly its reachable tables, while the full
+  // `files` set is still uploaded so those imports resolve. Empty = load
+  // every non-plugin .proto in `files` (whole-project IR).
+  repeated string roots = 9;
+}
+
+// CompileIRResponse wraps the built Schema. Build errors surface via
+// gRPC status; non-fatal IR-builder diagnostics ride in `warnings`.
+message CompileIRResponse {
+  // schema is the proto-marshalled w17.common.ir.Schema (the compiler's
+  // relational IR). Carried as opaque bytes — like the `lock` field on the
+  // request — so this PUBLIC contract pulls in no compiler-internal typed
+  // proto (the IR lives in the compiler's private pb). The caller
+  // unmarshals it with its own irpb.Schema. Wire-compatible with the former
+  // typed `w17.common.ir.Schema schema = 1` (both length-delimited, field 1).
+  bytes schema = 1;
+  repeated string warnings = 2;
+}
+
+// ClassifyIRRequest carries two compiled IR states for the compat engine.
+// base / head are proto-marshalled w17.common.ir.Schema — opaque bytes (the
+// same form as CompileIRResponse.schema and a snapshot's ir_schema), so this
+// PUBLIC contract pulls in no compiler-internal typed proto; the server
+// unmarshals them with its own irpb.Schema.
+message ClassifyIRRequest {
+  // base is the IR before the change. Empty = initial state.
+  bytes base = 1;
+  // head is the IR after the change.
+  bytes head = 2;
+  // mode is the environment posture for the gate decision: "prod" blocks
+  // breaking changes; anything else (incl. empty) is "dev" (breaking warns).
+  string mode = 3;
+}
+
+// ClassifyIRResponse mirrors compat.Report on the wire (a flat, typed
+// alternative to the private compatpb).
+message ClassifyIRResponse {
+  repeated CompatFinding findings = 1;
+  // max_severity is the rollup ("SAFE" / "WARN" / "BREAKING").
+  string max_severity = 2;
+  // action is the gate result for the request's mode ("allow"/"warn"/"block").
+  string action = 3;
+  // blocked is a convenience for action == "block" (the merge-time refusal).
+  bool blocked = 4;
+}
+
+// CompatFinding is one classified change — a wire mirror of compat.Finding.
+// Domain / Severity string values are a PINNED contract: "DB"/"WIRE"/"API"
+// and "SAFE"/"WARN"/"BREAKING".
+message CompatFinding {
+  string domain = 1;    // "DB" | "WIRE" | "API"
+  string severity = 2;  // "SAFE" | "WARN" | "BREAKING"
+  string change = 3;    // short structured kind ("add_column", "drop_table", …)
+  string message = 4;   // human-readable; PART OF THE PUBLIC SURFACE (CI/UI match on it)
+  string symbol = 5;    // affected table/column/message/field symbol
+}
+
+// PlanIRRequest carries two compiled IR states for the migration planner.
+// base / head are proto-marshalled w17.common.ir.Schema — opaque bytes (the
+// same form as ClassifyIRRequest), so this PUBLIC contract pulls in no
+// compiler-internal typed proto.
+message PlanIRRequest {
+  // base is the IR before the change. Empty = initial migration (full create).
+  bytes base = 1;
+  // head is the IR after the change. Empty = teardown.
+  bytes head = 2;
+  // baselines pins, per connection, the migration a database built from this
+  // plan must RECORD in its applied ledger. Read straight off the caller's
+  // lock, which is also what the deploy gate reads — one source, so the row
+  // written and the row checked for cannot name different migrations.
+  //
+  // Optional and per-connection: a connection absent from this list gets an
+  // empty `baseline_sql` and records nothing. The dev diff-apply path
+  // (`stack build`) sends none — it reconciles a developer's local store,
+  // which no deploy gate ever inspects.
+  repeated PlanBaseline baselines = 3;
+
+  // observed is what the caller's databases ACTUALLY contain right now, read
+  // straight out of them.
+  //
+  // `base` is what the console BELIEVES they contain — the checkpoint it
+  // recorded after the last apply — and the two can disagree without anybody
+  // noticing: a database edited by hand, a `--target` pointed somewhere else,
+  // a branch whose checkpoint belongs to a different tree. The plan is then
+  // computed against a state that does not exist, and the SQL it produces is
+  // applied to one that does.
+  //
+  // Sent so the server can REFUSE instead of planning against a fiction. It is
+  // deliberately a dumb structural read — tables and columns, no
+  // interpretation — because the client must not have to understand a schema
+  // to report one, and the console already owns every rule for deciding what a
+  // difference means.
+  //
+  // Optional. Absent means "I could not look" (a store with no introspection,
+  // an older client), which is not the same as "nothing is there" and does not
+  // refuse anything.
+  repeated ObservedStore observed = 4;
+
+  // targets names the connections this run will APPLY the plan to.
+  //
+  // A store missing from `observed` is either one the client cannot read
+  // (MySQL / SQLite have no observer) or one this run has no target for (a
+  // SQLite file store, a Postgres store with no published port) — absence
+  // alone cannot tell them apart, and they need opposite answers. A targeted
+  // one is planned from `base` (the record of what the last sync applied; no
+  // record → a full CREATE); an untargeted one is left out of the plan and
+  // the loss list, and `PlanIRResponse.checkpoint` keeps its old state so the
+  // change is planned when it is next targeted.
+  //
+  // ABSENT is not a value: no `targets` message means an older client that
+  // does not say, and the console keeps the behaviour it had before the
+  // field — every store it was not shown is left alone, and no checkpoint
+  // comes back. A present message with no connections means "this run
+  // applies to nothing".
+  PlanTargets targets = 5;
+}
+
+// PlanTargets is the set of connections a dev sync will apply to. A message
+// rather than a bare repeated field so ABSENT (an older client) and EMPTY
+// (applies to nothing) stay distinguishable on the wire.
+message PlanTargets {
+  repeated string connections = 1;
+}
+
+// PlanCheckpoint is the record a client must store after it applied the plan
+// it came with — opaque IR bytes, never decoded by the client.
+message PlanCheckpoint {
+  bytes ir = 1;
+}
+
+// DumpFixturesRequest asks for the queries that read one connection's rows
+// back as fixtures.
+message DumpFixturesRequest {
+  // The project's IR, shipped opaquely the way every other call does — the
+  // client never decodes it.
+  bytes ir = 1;
+
+  // Which connection's tables to dump. Empty means every connection the
+  // schema names.
+  string connection = 2;
+
+  // Rows per table, zero for no cap. The emitted statement fetches one MORE
+  // than this so the caller can tell a full page from an overflowing one: a
+  // fixture is a curated starting point rather than a backup, and a silently
+  // truncated one seeds a partial world while looking whole.
+  int64 limit = 3;
+}
+
+// DumpFixtureQuery is one model's projection.
+message DumpFixtureQuery {
+  // The dotted `<module>.<Message>` name the fixture rows will carry.
+  string model = 1;
+  // The SQL table it reads, so a message can name a place.
+  string table = 2;
+  // The statement: one column, one JSON value per row, already shaped.
+  string sql = 3;
+  // The limit this was rendered for, echoed so the caller compares against
+  // the number the console used rather than re-deriving it.
+  int64 limit = 4;
+}
+
+message DumpFixturesResponse {
+  // In LOAD ORDER — an FK toposort, so re-applying what comes back never
+  // writes a child before its parent.
+  repeated DumpFixtureQuery queries = 1;
+}
+
+// ObservedStore is one connection's live schema as the client found it.
+message ObservedStore {
+  // connection is the lock connection NAME, so the server can line each store
+  // up with the migration the plan produces for it.
+  string connection = 1;
+  repeated ObservedTable tables = 2;
+
+  // The database's native ENUM types (`pg_type.typtype = 'e'`) with their
+  // labels in the database's sort order — the one schema object a column's
+  // type NAME cannot describe. Without them a converged-looking column hid
+  // every label change: a value the author added never reached the type
+  // (INSERT then refused it, 22P02, behind a sync that said converged), a
+  // removal or reorder bypassed the refusal the stored base raises, and a
+  // dropped enum column left its type behind so re-adding it collided
+  // (42710).
+  //
+  // A column is tied to its type by SPELLING: `type` below is exactly what
+  // `format_type` answers for the type, which is what a column of that type
+  // reports as ObservedColumn.type on the same connection.
+  //
+  // ABSENT is not EMPTY in effect: a column whose type matches no entry here
+  // — an old client that sends none, or a type that is not an enum — keeps
+  // the old behaviour (the declared labels are trusted, a leftover column is
+  // carried by its type spelling alone).
+  repeated ObservedEnumType enum_types = 3;
+}
+
+// ObservedEnumType is one native enum type as the database defines it.
+message ObservedEnumType {
+  // The namespace the type lives in and its bare name — the pair a CREATE
+  // TYPE / DROP TYPE names, independent of the reader's search_path.
+  string schema = 1;
+  string name = 2;
+  // `format_type(oid, NULL)`: the spelling a column of this type reports
+  // (`t_status`, `billing.t_status`, `"Odd Name"`), qualified exactly when
+  // the type is not visible on the reader's search_path.
+  string type = 3;
+  // The labels, in `enumsortorder` — the order IS part of the type (it is
+  // the order `ORDER BY` and `<` use), so it is carried, not sorted.
+  repeated string labels = 4;
+}
+
+// ObservedIndex is one index as the database defines it.
+message ObservedIndex {
+  string name = 1;
+  bool unique = 2;
+  // The whole CREATE INDEX statement, as `pg_get_indexdef` renders it.
+  // The client parses nothing; the console restates a leftover index from
+  // it and compares it, normalised, against the declared index's rendering
+  // (raw and structured indexes alike).
+  string definition = 3;
+}
+
+// ObservedForeignKey is one FK constraint as the database defines it.
+message ObservedForeignKey {
+  string name = 1;
+  // Every column the key constrains, in the database's order. Plural because
+  // a scope-preserving key constrains two, and the PAIR is what identifies it
+  // against a declaration — the name Postgres derives for such a key picks a
+  // different column than w17's own derivation does.
+  repeated string columns = 2;
+  string target_table = 3;
+  string target_column = 4;
+
+  // The ON DELETE rule as the database reports it, normalised to the SQL
+  // spelling: "NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT".
+  // Carried because a deletion-rule flip is otherwise invisible end to end —
+  // a stale CASCADE keeps deleting data through a relationship the author
+  // turned off. Empty means NOT REPORTED (an old client), and the server
+  // must skip the rule comparison rather than read it as "NO ACTION" —
+  // absent is not a value.
+  string on_delete = 5;
+
+  // The SCHEMA the referenced table lives in (`confrelid`'s namespace), as
+  // the database reports it. Carried because a table's identity is the pair
+  // (schema, name): without it a leftover key's DOWN re-add fell back to the
+  // OWNER's schema (`REFERENCES "owner"."u"` for a key into `other.u`), and
+  // two schemas holding same-named tables made the drop ordering resolve
+  // every unqualified target to every same-named table — an acyclic database
+  // refused as an "FK cycle". Empty means NOT
+  // REPORTED (an old client): the server keeps today's owner-namespace
+  // fallback — absent is not a value.
+  string target_schema = 6;
+
+  // EVERY referenced column, in the key's order (`confkey`), paired
+  // position by position with `columns`. `target_column` stays the first of
+  // them for old servers. Carried because a composite key restated from
+  // its first column alone is a different, narrower constraint. Empty
+  // means NOT REPORTED (an old client): the server
+  // keeps today's first-column behaviour.
+  repeated string target_columns = 7;
+
+  // The columns the key's ON DELETE SET NULL / SET DEFAULT is limited to
+  // (`pg_constraint.confdelsetcols`, PostgreSQL 15+): `SET NULL (col)`.
+  // Empty with delete_set_columns_read = true means the action names no
+  // list — it sets EVERY referencing column. Carried because the two forms
+  // share one `on_delete` rule, and a scope-preserving key's bare SET NULL
+  // nulls its tenant column: a parent with children could never be deleted.
+  repeated string delete_set_columns = 8;
+
+  // Whether delete_set_columns was read. False from an old client, or from
+  // a database before PostgreSQL 15 (which has no list): the server then
+  // does not compare the list — absent is not a value.
+  bool delete_set_columns_read = 9;
+}
+
+// ObservedTable is one table as the database reports it.
+message ObservedTable {
+  // schema is the namespace the table lives in — `public` unless a
+  // (w17.module).schema put it elsewhere. Carried because a table's identity
+  // is the pair, and a namespace that failed to be created is exactly the kind
+  // of drift this exists to catch.
+  string schema = 1;
+  string name = 2;
+  repeated ObservedColumn columns = 3;
+
+  // The table's own indexes — the ones a CREATE INDEX made. The index a
+  // primary key or a unique CONSTRAINT creates underneath itself is left out:
+  // it belongs to the constraint, no migration names it, and reported here it
+  // would read as an index the schema never declared.
+  repeated ObservedIndex indexes = 4;
+
+  // The primary key's columns, in key order, as the database spells them.
+  repeated string primary_key = 5;
+
+  repeated ObservedForeignKey foreign_keys = 6;
+
+  // The NAMES of the table's CHECK constraints. Names rather than
+  // expressions: Postgres rewrites a check body, so comparing expressions
+  // reports a change on every check ever written, while the name is derived
+  // from the column and the kind of check and answers the only question a
+  // sync has — is it still there.
+  repeated string checks = 7;
+
+  // The MEMBER SET of every membership check, by constraint name — the
+  // numbers or strings a `CHECK col IN (…)` admits.
+  //
+  // Names alone cannot see this one change: a membership check derived from
+  // a growing catalogue keeps its name for life and rewrites its BODY every
+  // time the catalogue gains a member, so a sync comparing names reports
+  // "unchanged" for a database whose CHECK still admits the set it was
+  // created with — everything added since is refused at INSERT by a
+  // constraint the schema step just called current. The client already READ
+  // the live sets; without this field it threw them away, which made the
+  // server-side member comparison inert for every consumer except the
+  // console's own in-process reader.
+  //
+  // ABSENT is not EMPTY: an old client that omits the map keeps the
+  // fallback behaviour (the declared members are trusted), exactly like an
+  // absent observation. A name missing FROM the map means that check's
+  // members could not be read, and the same fallback applies per check.
+  map<string, CheckMemberSet> check_members = 8;
+
+  // The full definition of every CHECK constraint, by name, exactly as
+  // `pg_get_constraintdef` renders it. It lets a constraint the schema does
+  // not declare be planned for a DROP under its real identity, with a DOWN
+  // that can re-create it. The console also reads a
+  // declared length / range / regex check's facts back out of it and
+  // compares a raw check's normalised body, so an authored body edit
+  // reaches the database. Absent (old client) means leftover checks are not
+  // seen and declared bodies are trusted, which is the old behaviour.
+  map<string, string> check_defs = 9;
+
+  // The primary key CONSTRAINT's name (`pg_constraint.conname` of the `p`
+  // row). Not derivable: Postgres names an inline key `<table>_pkey`, but a
+  // hand-made table can say `CONSTRAINT my_pk PRIMARY KEY`, and a renamed
+  // table keeps its old `<old>_pkey`. A key change that DROPs a derived
+  // name then no-ops and the ADD PRIMARY KEY fails with "multiple primary
+  // keys" (42P16). Empty means NOT REPORTED (an old client,
+  // or a table with no key): the server keeps deriving `<table>_pkey`.
+  string primary_key_name = 10;
+
+  // The table's UNIQUE constraints (`pg_constraint.contype = 'u'`): name
+  // and columns. Invisible before this field — the index read
+  // skips constraint-backed indexes and the constraint read took only FKs
+  // and checks — so the UNIQUE (scope, ref) a scope-preserving FK needs on
+  // its parent could never be compared, added or dropped on the live base.
+  //
+  // A MESSAGE, not a bare repeated field, because ABSENT and EMPTY lead to
+  // opposite plans: absent (an old client) means "not read" and the server
+  // keeps the declared uniques; present-and-empty means the table has none,
+  // and every declared one is planned for an ADD.
+  ObservedUniqueConstraints unique_constraints = 11;
+}
+
+// ObservedUniqueConstraints wraps a table's UNIQUE constraints so the field
+// has presence (see ObservedTable.unique_constraints).
+message ObservedUniqueConstraints {
+  repeated ObservedUniqueConstraint items = 1;
+}
+
+// ObservedUniqueConstraint is one UNIQUE constraint as the database defines
+// it: its name and its columns in key order.
+message ObservedUniqueConstraint {
+  string name = 1;
+  repeated string columns = 2;
+}
+
+// CheckMemberSet is one membership check's admitted values, as strings —
+// one shape for the numeric and the string carrier, compared as a set.
+message CheckMemberSet {
+  repeated string members = 1;
+}
+
+// ObservedColumn is one column as the database reports it.
+//
+// Type is the database's OWN spelling (`character varying`, `bigint`), not a
+// w17 type: the client does not map, and the server compares what it knows the
+// emitter wrote against what the database says it stored.
+message ObservedColumn {
+  string name = 1;
+  string type = 2;
+  bool nullable = 3;
+
+  // The DEFAULT expression as the database renders it (`'untitled'::text`,
+  // `now()`, `nextval('...')`), empty when the column has none.
+  //
+  // Carried because a default is part of the schema the sync reconciles, and
+  // the server cannot ask the database itself: the client holds the
+  // connection. Compared against what the emitter would render rather than
+  // parsed back into a declaration.
+  string default_expr = 4;
+
+  // The column is GENERATED (`attgenerated <> ''`) — default_expr then holds
+  // the GENERATION expression, which lives in the same catalogue slot a
+  // DEFAULT does. Without this flag the reconstruction read the expression
+  // as a phantom default and planned a `DROP DEFAULT` that cannot apply.
+  // Absent (an older client) means UNKNOWN, not false: the
+  // server keeps a declared-generated column converged when a non-empty
+  // default_expr arrives flag-less.
+  bool generated = 5;
+
+  // The column is IDENTITY (`attidentity <> ''`) — it self-generates and has
+  // NO pg_attrdef row, so without this flag it is indistinguishable from a
+  // column with no default. Absent means unknown, same as `generated`.
+  bool identity = 6;
+}
+
+// PlanBaseline is one connection's ledger pin, mirroring the two lock fields
+// it is copied from.
+message PlanBaseline {
+  // connection is the lock connection NAME. An entry naming a connection the
+  // plan has no migration for is ignored rather than refused: a lock may pin
+  // connections whose schema this plan does not build.
+  string connection = 1;
+  // migration_id is the lock's `target_migration_id` — the id the deploy gate
+  // looks for in w17_migrations.
+  string migration_id = 2;
+  // content_sha256 is the lock's `target_content_sha256`, HEX-encoded exactly
+  // as the lock spells it. Hex rather than bytes so the client copies the
+  // field through verbatim and only the server, which owns the per-dialect
+  // literal syntax, decides how a hash is written down.
+  string content_sha256 = 3;
+}
+
+// PlanIRResponse wraps the rendered migration plan.
+message PlanIRResponse {
+  // plan is a proto-marshalled w17.migrator.plan.Plan — opaque bytes the thin
+  // client applies to its local stores (the migrator plan type is a compiler
+  // internal, kept off this PUBLIC contract).
+  bytes plan = 1;
+
+  // lossy names every change in this plan that DESTROYS something: a table
+  // dropped, a column dropped, a column retyped.
+  //
+  // The console can see it and the client cannot — the plan crosses the wire
+  // as SQL, and asking the client to recognise a DROP in a string is asking it
+  // to parse SQL. So the judgement is made where the ops are, and the DECISION
+  // is left where the person is: a developer's local database is theirs, and
+  // the answer to "this will drop the column you were working on" is not the
+  // same for everyone every time.
+  repeated LossyChange lossy = 2;
+
+  // checkpoint is what the client records once the plan applied cleanly,
+  // INSTEAD of the head IR it sent.
+  //
+  // It is the head for every connection the plan covered, and the request's
+  // `base` for every connection it left out (not in `targets`). Recording the
+  // head for those would claim a change that never reached them — and for a
+  // store the client cannot read, the record is the only base it is ever
+  // planned from, so the change would be lost for good.
+  //
+  // Set only when the request carried `targets`. ABSENT means a console that
+  // predates the field: the client cannot tell what to keep and must not
+  // invent it (it cannot read IR).
+  PlanCheckpoint checkpoint = 3;
+}
+
+// LossyChange is one destructive step of a plan, named so a person can decide
+// about it without reading SQL.
+message LossyChange {
+  // connection is the store it lands in.
+  string connection = 1;
+  // kind is what happens: `drop_table`, `drop_column`, `retype_column`.
+  string kind = 2;
+  // object is what it happens to: `users` or `users.email`.
+  string object = 3;
+  // detail says what changes, when the kind alone does not: a retype's old
+  // and new type. Empty otherwise.
+  string detail = 4;
+}
+
+message GenerateRequest {
+  // ServiceId identifies the calling project (matches
+  // `.w17/lock.yaml`'s `service_id`). Carried through audit
+  // trails + future multi-tenancy / quota hooks; doesn't
+  // affect the generated output today.
+  string service_id = 1;
+
+  // Files is the project's full `.proto` set. The server
+  // stages them into a temp directory (the underlying loader
+  // uses protocompile, which reads from filesystem) so cross-
+  // file imports resolve via filename. Filenames are paths
+  // relative to the project's `proto/` root (e.g.
+  // `domains/user/services/service_user.proto`).
+  // At least one file required.
+  repeated ProtoFile files = 2;
+
+  // GoModule is the consuming project's Go module path
+  // (matches the `module` line of the project's `go.mod` —
+  // e.g. `github.com/example/api`). Threads through to the
+  // generated `main.go`'s handler import paths
+  // (`<go_module>/<gen_dir>/domains/<domain>/grpcapi/...`)
+  // so the binary can import the handler packages emitted in
+  // the same generation run.
+  //
+  // Optional today — when empty, the server skips main.go
+  // generation and only emits handler files. Required to
+  // produce a buildable per-domain binary.
+  string go_module = 3;
+
+  // GenDir is the project-relative directory where generated
+  // code lands (matches `.w17/lock.yaml`'s `gen_dir`).
+  // Threads through to main.go's handler import paths
+  // alongside go_module.
+  //
+  // Empty == "srcgo" (the conventions-global Go default).
+  string gen_dir = 4;
+
+  // ServicesDir is the directory (inside the Go module root,
+  // i.e. relative to gen_dir) where per-binary bundles land.
+  // Each bundle is a self-contained gRPC server tree:
+  //
+  //     <services_dir>/<domain>-storage/
+  //         main.go, Dockerfile, compose.yaml, k8s.yaml,
+  //         .env.defaults, .env.example,
+  //         query/, mutation/
+  //
+  // Threads through to:
+  //   - response relative_paths (`<services_dir>/<name>/...`)
+  //   - main.go's handler import paths
+  //     (`<go_module>/<services_dir>/<name>/<kind>`)
+  //   - Dockerfile / compose `go build` arg
+  //     (`./<services_dir>/<name>`)
+  //
+  // Empty == "services" (the convention default). Operators
+  // who want a different layout override per project via
+  // `.w17/lock.yaml`.
+  string services_dir = 5;
+
+  // StubTargets drives the per-language stub generator
+  // (`lib/bufrun`, docker-backed `bufbuild/buf` invocation).
+  // Each entry pairs a buf-supported source language with the
+  // consumer-side output root the generated stubs land under.
+  // Mandatory — at least one target required (validator
+  // rejects empty). MVP supports `language: "go"`; additional
+  // languages are added by extending `bufrun.langPlugins`
+  // (one map entry per language) and don't need a proto
+  // change.
+  //
+  // Example: `[{language: "go", output_root: "gen/pb"}]`
+  // produces Go stubs under `gen/pb/<source-rel-path>.pb.go`
+  // (path mirrors the input proto layout 1:1 via buf's
+  // `paths=source_relative`).
+  repeated StubTarget stub_targets = 6;
+
+  // GatewayTargets drives the per-binary REST gateway emit  // (the compiler's gateway generator). Optional: empty list skips
+  // gateway emit even when proto files carry `(w17.http)`
+  // annotations. One target produces one
+  // `<output_dir>/main.go` + `<output_dir>/handler/*.go`
+  // bundle.
+  repeated GatewayTarget gateway_targets = 7;
+
+  // AdminTargets drives the per-binary admin bundle emit
+  // Optional: empty list skips admin emit even when
+  // proto files carry `(w17.admin_api)`. One target produces
+  // one admin bundle (Go binary + embedded React SPA).
+  repeated AdminTarget admin_targets = 10;
+
+  // DepVersions pins the library versions templated into
+  // each per-bundle `go.mod`'s `require` block (slice
+  // 2026-05-04 — every generated bundle is its own Go
+  // module). The generator NEVER falls back to hardcoded
+  // versions from training data; the consumer is responsible
+  // for sourcing these from the project's already-pinned
+  // manifest (e.g. by parsing the parent `go.mod`).
+  // Required. See `feedback_verify_tool_versions` for the
+  // why.
+  DepVersions dep_versions = 8;
+
+  // ReplaceDirectives controls optional `replace` directives
+  // in each per-bundle go.mod. Consumers running in the dev
+  // tree against a local wandering-compiler checkout fill
+  // these so the generated bundle resolves runtime helpers
+  // + parent-module pb stubs from local paths. Production
+  // consumers leave these empty and rely on the module
+  // proxy.
+  ReplaceDirectives replace_directives = 9;
+
+  // DefaultConnection (A4 / A5b of plugin-system track) is the
+  // name of the connection marked `default: true` in the
+  // project's `.w17/lock.yaml`. The server-side codegen feeds
+  // it into `ir.BuildManyWithOptions(BuildOptions.LockDefault)`
+  // so files omitting `(w17.module).connection` inherit the
+  // named entry from the domain-level connection registry.
+  // Empty = pre-A4 behaviour (omitted-connection files emit
+  // on the nil-bucket single-DB path).
+  string default_connection = 12;
+
+  // Languages declares the BCP-47 tags the consumer wants
+  // gettext .po catalogs scaffolded for. The server harvests
+  // msgids per domain (validation.Defaults() + enum value
+  // labels + the prose and `_("…")` literals of every declared
+  // format template) and emits one .po per
+  // (domain, language) under
+  // `<languages_dir>/<domain>/<lang>.po`. Empty list
+  // skips i18n catalog emission entirely. Drawn from the
+  // consumer's lock (`lk.GetLanguages()`).
+  repeated string languages = 13;
+
+  // LanguagesDir is the consumer-relative path the catalog
+  // tree roots at (e.g. "w17/languages"). Server prepends
+  // it to every emitted `.po` / `.json` file's relative
+  // path. Empty = lock.DefaultLanguagesDir fallback applies
+  // server-side. Drawn from `lock.EffectiveLanguagesDir(lk)`.
+  string languages_dir = 14;
+
+  // SecretsBackend is the project's deploy-boundary secret
+  // materialiser (lock `secrets.backend`): "plain" (default) /
+  // "sops" / "eso" / "vault" / "cloud-csi". For eso/vault/
+  // cloud-csi the storage bundle additionally emits a
+  // `deploy/prod/secrets-<backend>.yaml` manifest that populates
+  // the `<domain>-storage-secrets` k8s Secret the Deployment
+  // references. Empty/plain/sops emit no extra manifest. Drawn
+  // from `lk.GetSecrets().GetBackend()`.
+  string secrets_backend = 15;
+
+  // Replicas is the per-service PROD replica count (storage gRPC
+  // proxy feature), keyed by deployable bundle name
+  // (`<domain>-storage`, …). Drawn from the lock's `replicas[]`. The
+  // storage codegen reads `replicas["<domain>-storage"]`: a value > 1
+  // makes the storage bundle's deploy/prod artifacts materialize the
+  // contract-blind storage gRPC proxy in front of a backend fan-out
+  // (StatefulSet + headless Service on k8s, N named services on
+  // compose), with the canonical `<domain>-storage` name handed to the
+  // proxy so clients dial it unchanged. Absent / <= 1 = single replica,
+  // output byte-identical to pre-feature. Folded tiers (a storage
+  // component absorbed into a `<domain>-server`) can't carry a count > 1
+  // — lock.Validate rejects that upstream.
+  map<string, int32> replicas = 16;
+
+  // FormatOverrides is the project's locale-aware formatting remap,
+  // flattened from the lock's `formats` map (`lock.EffectiveFormats`).
+  // Each entry says "requests in <language> format <kind> the <locale>
+  // way"; anything unlisted formats its own way.
+  //
+  // Flattened to a repeated triple because proto has no map-of-maps.
+  // The server rebuilds the nested shape before handing it to a
+  // generator, so the wire order carries no meaning — but the client
+  // sends it sorted anyway, so two identical projects produce
+  // byte-identical requests.
+  repeated FormatOverrideEntry format_overrides = 17;
+
+  // AdminLanguages declares the BCP-47 tags the ADMIN's own gettext
+  // catalogs cover, from the lock's `admin_languages` (which inherits
+  // `languages` when unset). The admin is a separate translation SPACE
+  // from the app — different translators, different audience, and not
+  // necessarily the same language set — so its catalogs live in their
+  // own tree at `<languages_dir>/<admin-bundle>/<lang>.po`. Empty skips
+  // the admin catalog entirely.
+  repeated string admin_languages = 18;
+
+  // ExistingPo are the project's CURRENT on-disk i18n catalogs
+  // (project-root-relative paths + contents). The server merges each
+  // freshly harvested scaffold INTO the matching one before emitting it,
+  // so translator msgstrs survive and new msgids land empty.
+  //
+  // It rides the main Generate rather than only GenerateProject because
+  // the ADMIN spec has to carry translated strings, and the spec is
+  // written here — one layer below where the merge used to live. Empty
+  // on a first codegen, or for a project with no languages.
+  repeated GeneratedFile existing_po = 19;
+
+  // BusinessDomains lists the domains the project declares a
+  // `<domain>-business` bundle for (lock `business_bundles[]`).
+  //
+  // It decides where a facade's `(w17.event_emit)` helpers may be
+  // rendered. The wrapper that fires an emit is installed by the
+  // binary that SERVES the method, so a facade's belongs to its
+  // business bundle — and where the project declares no such bundle,
+  // no generated binary registers that facade at all, so the
+  // annotation would be configuration nothing can act on. Codegen
+  // refuses that rather than emitting a helper into a bundle whose
+  // process never reaches it (the shape that shipped a silent no-op
+  // to a consumer: it compiled, it read as configured, and the event
+  // was never published).
+  repeated string business_domains = 20;
+
+  // proto_dir is the consuming project's hand-authored proto root
+  // (`generated_code.proto_dir`, default "proto"). The plugin install tree
+  // lives at `<proto_dir>/plugins/<name>/`, and a generated bundle's go.mod
+  // `replace` has to point at the plugin source THERE. It used to be a
+  // constant "proto/plugins" whose own comment named this gap ("read from the
+  // consumer's lock file when w17ctl evolves to override the default"): a
+  // project with a non-default proto dir got a replace pointing at a
+  // directory that does not exist, and only `go build` said so. Empty ==
+  // "proto".
+  string proto_dir = 21;
+
+  // deploy_targets are the OPTIONAL deploy targets the project asked for
+  // (lock `generated_code.deploy_targets[]`). Docker is always emitted and
+  // never appears here.
+  //
+  // Empty means docker only, and that is the DEFAULT — `deploy/prod/k8s.yaml`
+  // was rendered into every bundle of every project until 2026-09-22, for a
+  // platform most of them will never deploy to. A server that ignored this
+  // field would go on emitting it, which is why the sweep below travels with
+  // the request rather than being inferred from what is on disk: the compiler
+  // cannot see the consumer's disk.
+  repeated string deploy_targets = 22;
+
+  // handler_msgids are the user-facing sentences the project's HAND-WRITTEN
+  // Go raises — the `userMsgid` of every grpcerr.ForUser / ForUserWith /
+  // OnPresent call and the msgid of every i18n.T call — harvested from
+  // GenerateProjectRequest.gen_files, the tree the client already uploads.
+  //
+  // Without them a handler's sentence reaches no catalog, and worse than
+  // "untranslated": the .po merge drops every msgid the harvest does not
+  // know, so a translator who added one by hand lost it on the next codegen.
+  repeated HandlerMsgids handler_msgids = 23;
+}
+
+// FormatOverrideEntry is one (language, kind) → locale remap, the
+// flattened form of a `Lock.formats` cell.
+message FormatOverrideEntry {
+  // Language — the request language this entry applies to; a declared
+  // `languages` entry, lock-validated.
+  string language = 1;
+  // Kind — one of `i18n.FormatKinds()`: number / decimal / percent /
+  // date / time / datetime.
+  string kind = 2;
+  // Locale — whose row of the frozen table that kind borrows; a locale
+  // the built-in table carries, lock-validated.
+  string locale = 3;
+}
+
+// ReplaceDirectives carries the `replace` rewrites the
+// generator emits into each per-bundle go.mod. Both fields
+// are paths the consumer maintains (typically relative to
+// the bundle dir).
+message ReplaceDirectives {
+  // ParentTo overrides the parent project's module (the one
+  // hosting the protoc-generated `pb/`). Empty = no replace.
+  // Ignored when `per_bundle_pb` is set — per-bundle pb mode
+  // emits no parent-module `require` / `replace` lines at all.
+  string parent_to = 1;
+
+  // WanderingCompilerTo is the co-dev monorepo checkout path used to derive
+  // the bundle's sibling sdk/go replace. Empty = no replace; the consumer
+  // pulls the runtime from the module proxy.
+  string wandering_compiler_to = 2;
+
+  // PerBundlePb opts the codegen into per-bundle pb mode
+  // (Zero-Code Isolation Rule —
+  // `docs/conventions-global/structure.md`). When true, every
+  // generated bundle owns a private copy of the proto-stub
+  // tree under `<bundle>/src/pb/`, and the codegen rewrites
+  // every `<parent-module>/pb/...` import in the rendered
+  // handler / main.go / emit.go sources to
+  // `<bundle-module>/src/pb/...`. The bundle's go.mod skips
+  // the parent-module `require` + `replace` block entirely —
+  // bundle resolves all parent-project types through its own
+  // src/pb subtree.
+  //
+  // The caller (e2egen / w17gen CLI) is responsible for actually
+  // populating each bundle's `src/pb/` subtree via a
+  // per-bundle protoc invocation (e2egen's `protocBundle`
+  // helper does this). Without that step the bundle's
+  // rewritten imports point at empty directories.
+  //
+  // False (default) keeps the legacy shared-pb shape:
+  // bundles import from `<parent-module>/pb/...` and the
+  // bundle's go.mod requires the parent module + applies
+  // `parent_to` as a local-replace.
+  bool per_bundle_pb = 3;
+}
+
+// DepVersions enumerates every library version the per-bundle
+// go.mod's `require` block templates in.
+message DepVersions {
+  string grpc = 1;            // google.golang.org/grpc
+  string protobuf = 2;        // google.golang.org/protobuf
+  string lib_pq = 3;          // github.com/lib/pq
+  string go_mysql = 4;        // github.com/go-sql-driver/mysql
+  string modernc_sqlite = 5;  // modernc.org/sqlite
+  string go_redis = 6;        // github.com/redis/go-redis/v9
+  // field 7 reserved (was: gox, an external helper module). The
+  // project migrated off gox into sdk/go/*; no go.mod template ever
+  // rendered this pin.
+  reserved 7;
+  reserved "gox";
+  // Gateway-flavoured bundles only — the gateway main.go
+  // template imports otelgrpc (gRPC backend dial-time tracing
+  // hookup) and coder/websocket (WS upgrade for streaming
+  // RPCs). Storage bundles never see these requires.
+  string otel_grpc = 8;       // go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
+  string coder_websocket = 9; // github.com/coder/websocket
+  string go_chi = 10;         // github.com/go-chi/chi/v5
+  // Eventbus-flavoured storage bundles only — main.go opens a
+  // NATS dispatcher when (w17.event_emit) annotations exist
+  // on the domain's RPCs.
+  string nats_go = 11;        // github.com/nats-io/nats.go
+  // MCP-flavoured gateway bundles only — the gateway's src/mcp
+  // package imports mcp-go directly (tool registration + the
+  // CallToolRequest type), beside the runtime glue in
+  // sdk/go/lib/mcp.
+  //
+  // It exists because the require was never emitted at all. The
+  // gateway has rendered those imports since MCP moved onto it,
+  // and every example built them anyway — inside a go.work
+  // workspace, where the module graph supplies what the bundle's
+  // own go.mod omits. A consumer building the bundle outside a
+  // workspace got `imports … from implicitly required module`.
+  //
+  // Pin source is sdk/go/go.mod, not the project's go.mod: the generated
+  // code pairs mcp-go with sdk/go/lib/mcp, so the version that
+  // must agree is the SDK's.
+  string mcp_go = 12;         // github.com/mark3labs/mcp-go
+
+  // sdk_go — the version of the PUBLIC runtime every module of one
+  // project requires: `github.com/wandering-compiler/sdk/go`.
+  //
+  // Unlike every pin above, this one does NOT come from a manifest the
+  // compiler embeds. It comes from the project's lock (`sdk_version`),
+  // and the console cannot supply it: the consumer-visible version is a
+  // pseudo-version minted by the SDK's publish workflow into a separate
+  // public mirror repo, timestamped at the moment of publish rather than
+  // at the source commit, so a console built from a given commit has no
+  // way to know it. See scripts/publish-sdk.sh.
+  //
+  // It rides HERE rather than being threaded separately because this
+  // message is already the one carrier every go.mod emitter receives —
+  // and the whole point is that the four emit sites cannot disagree. A
+  // second channel would be a second chance to drift.
+  //
+  // Empty ⇒ the previous behaviour verbatim: the zero pseudo-version
+  // `v0.0.0-00010101000000-000000000000`, which a consumer's resolver
+  // then moves independently per module.
+  string sdk_go = 13;         // github.com/wandering-compiler/sdk/go
+}
+
+// GatewayTarget drives the per-binary REST gateway emit// (the compiler's gateway generator — translates incoming
+// HTTP/JSON to the underlying gRPC service via the routing
+// declared in `(w17.http)` annotations). Empty list (no
+// targets) skips gateway emit even when proto files carry
+// REST annotations.
+//
+// One target = one generated `cmd/<output_dir>/` bundle. A
+// project hosting multiple gateways under different env
+// prefixes / module paths declares one target each.
+message GatewayTarget {
+  // GoModule is the consuming project's Go module path
+  // (matches the `module` line of go.mod). Threaded into the
+  // generated main.go's handler-package import. Required.
+  string go_module = 1;
+
+  // OutputDir is the gateway-bundle directory the emitted
+  // files land under, relative to the Go module root (i.e.
+  // relative to gen_dir — same anchor as `services_dir`).
+  // Conventional Go layout puts binaries under `cmd/` at the
+  // module root, so a typical value is `cmd/gateway-<domain>`
+  // (e.g. `cmd/gateway-tasks`). Required.
+  string output_dir = 2;
+
+  // EnvPrefix prefixes the gateway binary's env vars
+  // (`<EnvPrefix>_BACKEND_ADDR`, `<EnvPrefix>_LISTEN_ADDR`).
+  // Conventional value: domain name uppercased, e.g.
+  // `GATEWAY_TASKS`. Required.
+  string env_prefix = 3;
+
+  // Domain restricts this target to services declared under
+  // the matching `proto/domains/<domain>/...` tree. Empty =
+  // include every (w17.http)-annotated service in one
+  // bundle (legacy / cross-domain shape). Set to one
+  // domain name per target to emit per-domain gateway
+  // bundles (slice 2026-05-04 — every gateway binds to ONE
+  // business/facade tier, naming convention
+  // `<domain>-gateway`).
+  string domain = 4;
+
+  // I18nDir is the codegen-baked default for the
+  // `<EnvPrefix>_I18N_DIR` env var on the generated main.go.
+  // Typically a relative escape from the bundle root to the
+  // project's shared catalog tree
+  // (e.g. `"../../w17-languages/app"`). The orchestrator
+  // computes this from `lock.EffectiveLanguagesDir(lk)` +
+  // the depth of `gen_dir`. Empty = generator falls back to
+  // the literal `"languages"` (cwd-relative; useful for
+  // tests / standalone codegen without a project root).
+  //
+  // The `.po` files themselves are NOT emitted by this
+  // codegen — they live at project level under
+  // `<languages_dir>/<domain>/<lang>.po`, written by the
+  // CLI orchestrator with if-not-exists semantic so
+  // translator edits survive regen.
+  string i18n_dir = 5;
+
+  // AbsorbAdmin folds the domain's admin component into THIS
+  // gateway binary (composed-binary feature). When set, the
+  // gateway's unified `src/main.go` imports the admin bundle's
+  // `package adminapp` and runs `adminapp.Run` as a component
+  // under bootstrap.Run (its own HTTP listener + env, one
+  // observx init), and the gateway go.mod requires + replaces
+  // the admin module. The matching AdminTarget is emitted
+  // library-only (AdminTarget.library_only). Set by the CLI
+  // codegen orchestrator from the lock's `binaries[]` for a
+  // `{gateway, admin}` composed binary on this domain.
+  bool absorb_admin = 6;
+
+  // AbsorbedAdminModule is the Go module path of the absorbed
+  // admin bundle (`<admin_go_module>/<admin_output_dir>`).
+  // Required when absorb_admin is set — the gateway main imports
+  // it as `adminapp` and the gateway go.mod requires it.
+  string absorbed_admin_module = 7;
+
+  // AbsorbedAdminReplacePath is the gateway-go.mod-relative
+  // `replace` target for the absorbed admin module (e.g.
+  // "../<domain>-admin", the two bundles being siblings under
+  // the services dir). Empty omits the replace line (published
+  // mode resolves via the proxy). Only used when absorb_admin.
+  string absorbed_admin_replace_path = 8;
+
+  // AbsorbStorage folds the domain's STORAGE tier into THIS binary,
+  // turning the bundle into a single `<domain>-server`: instead of the
+  // standalone gateway main, codegen emits a -server main that builds an
+  // in-process inprocgrpc.Conn, registers the storage tier's servers on
+  // it (storage bundle's importable `package app`), and runs the REST
+  // transport against that Conn via rest.ServeComposed — so gateway
+  // handlers reach storage by DIRECT in-process call (no tier-to-tier
+  // TCP). The matching storage bundle is emitted library-only. Set by the
+  // CLI codegen orchestrator from the lock's `binaries[]` for a
+  // storage-bearing (-server) composed binary on this domain.
+  bool absorb_storage = 9;
+
+  // AbsorbedStorageModule is the Go module path of the absorbed storage
+  // bundle (`<go_module>/<storage_output_dir>`). Required when
+  // absorb_storage — the -server main imports its `package app`
+  // (`<module>/src/app`) and the go.mod requires it.
+  string absorbed_storage_module = 10;
+
+  // AbsorbedStorageReplacePath is the -server-go.mod-relative `replace`
+  // target for the absorbed storage module (e.g. "../<domain>-storage",
+  // siblings under the services dir). Empty omits the replace line. Only
+  // used when absorb_storage.
+  string absorbed_storage_replace_path = 11;
+
+  // AbsorbBusiness folds the domain's BUSINESS tier into the -server too:
+  // the -server main builds a second in-process Conn for the business
+  // tier, injects an in-process ClientSet (NewClientSetInProcess over the
+  // storage Conn — the business facade calls storage in-process), and
+  // registers the business servers. Gated independently of absorb_storage
+  // because a -server may host storage with no business facade. Requires
+  // absorb_storage (business reaches storage in-process). The matching
+  // business bundle is emitted library-only.
+  bool absorb_business = 12;
+
+  // AbsorbedBusinessModule is the Go module path of the absorbed business
+  // bundle (`<go_module>/<business_output_dir>`). Required when
+  // absorb_business — the -server main imports its `package app`.
+  string absorbed_business_module = 13;
+
+  // AbsorbedBusinessReplacePath is the -server-go.mod-relative `replace`
+  // target for the absorbed business module. Empty omits the replace
+  // line. Only used when absorb_business.
+  string absorbed_business_replace_path = 14;
+
+  // AbsorbEventbus folds the domain's EVENTBUS subscriber tier into the
+  // -server: the -server main imports the eventbus bundle's `package app`
+  // and runs eventbusapp.RunComposed(storageConn, businessConn) — the
+  // subscriber still consumes the external bus (NATS/Redis) but dispatches
+  // each event to its handler service by DIRECT in-process call. The
+  // matching eventbus bundle is emitted library-only. Requires
+  // absorb_storage.
+  bool absorb_eventbus = 15;
+
+  // AbsorbedEventbusModule is the Go module path of the absorbed eventbus
+  // bundle (`<go_module>/<eventbus_output_dir>`). Required when
+  // absorb_eventbus — the -server main imports its `package app`.
+  string absorbed_eventbus_module = 16;
+
+  // AbsorbedEventbusReplacePath is the -server-go.mod-relative `replace`
+  // target for the absorbed eventbus module. Empty omits the replace
+  // line. Only used when absorb_eventbus.
+  string absorbed_eventbus_replace_path = 17;
+
+  // Field 18 (emit_ctl) retired: the standalone
+  // `<domain>-ctl` is now emitted purely from the proto surface (a
+  // `(w17.cli_api)` with rpc-exposed picks), like the in-bundle
+  // `<domain>-cli` and the REST gateway — no lock opt-in.
+  reserved 18;
+  reserved "emit_ctl";
+
+  // HasStandaloneBusiness records that the domain ships a STANDALONE
+  // `<domain>-business` bundle (declared via the lock's
+  // business_bundles[]) that runs as its OWN process in the default
+  // multi-bundle topology. The gateway routes facade (`*Service` /
+  // `*Facade`) methods to the business tier and storage (`*Query` /
+  // `*Mutation`) methods to the storage tier (see gatewayBackendConn);
+  // those two conns default to the SAME `<PREFIX>_BACKEND_ADDR`, so
+  // without a distinct business address the facade calls are misrouted
+  // to storage and fail with `unknown service` (UNIMPLEMENTED). When
+  // set, the gateway's `.env(.defaults/.example)` + k8s manifest emit
+  // `<PREFIX>_BUSINESS_BACKEND_ADDR=<domain>-business:50051` so facade
+  // traffic reaches the business bundle. Left FALSE when the facade tier
+  // is co-hosted in storage (no business_bundles[] entry) or absorbed
+  // in-process by a composed `-server` (absorb_business) — both share a
+  // single backend and need no override. Set by the codegen orchestrator
+  // from the lock's business_bundles[] AND(!) absorb_business == false.
+  bool has_standalone_business = 19;
+}
+
+// AdminTarget drives the per-binary admin bundle emit
+// (the compiler's admin generator). Mirror of GatewayTarget for
+// admin-flavoured bundles. One target = one
+// `<output_dir>/` admin bundle (Go binary + embedded React SPA).
+// Empty list (no targets) skips admin emit even when proto
+// files carry `(w17.admin_api)`.
+message AdminTarget {
+  // GoModule is the consuming project's Go module path. Same
+  // role as GatewayTarget.go_module. Required.
+  string go_module = 1;
+
+  // OutputDir is the admin-bundle directory under the Go
+  // module root. Convention: `<domain>-admin` or
+  // `cmd/<domain>-admin`. Required.
+  string output_dir = 2;
+
+  // EnvPrefix prefixes the admin binary's env vars
+  // (`<EnvPrefix>_BACKEND_ADDR`, `<EnvPrefix>_LISTEN_ADDR`,
+  // `<EnvPrefix>_HOST_PORT`). Conventional value: domain name
+  // uppercased + `_ADMIN`, e.g. `USERS_ADMIN`. Required.
+  string env_prefix = 3;
+
+  // Domain restricts this target to the matching
+  // `proto/domains/<domain>/admin.proto` registry. Empty =
+  // include any file carrying `(w17.admin_api)`. Required in
+  // practice because the parser refuses cross-domain refs;
+  // the codegen orchestrator simply scopes the parse set.
+  string domain = 4;
+
+  // AdminRuntimeNpmSpec is the dependency specifier the
+  // generated `spa/package.json` lists for `@w17/admin-runtime`.
+  // Either a registry pin (e.g. "^0.1.0") or a workspace-
+  // relative path (e.g. "file:../../../admin-runtime", resolving
+  // to the runtime w17ctl vendors into the project's w17/)
+  // during local development. Required.
+  string admin_runtime_npm_spec = 5;
+
+  // ClientNpmSpec is the dependency specifier for the
+  // project's already-generated TS client. Either a
+  // registry pin or a `file:` path. Required.
+  string client_npm_spec = 6;
+
+  // AdminRuntimePath is the project-root-relative path the
+  // emitted Dockerfile COPYs into the build context so the
+  // SPA's `file:` reference to `@w17/admin-runtime` resolves
+  // (e.g. "w17/admin-runtime", where w17ctl drops
+  // sdk/ts/admin-runtime at codegen). Empty = the SPA's
+  // package.json must reference a registry-published
+  // `@w17/admin-runtime` instead; the Dockerfile skips the
+  // workspace COPY in that case.
+  string admin_runtime_path = 7;
+
+  // NodeVersion pins the Node image tag the Dockerfile's
+  // SPA build stage runs on (e.g. "22-alpine"). Per
+  // `feedback_verify_tool_versions`, codegen never falls back
+  // to a hardcoded version. Required.
+  string node_version = 8;
+
+  // GoVersion pins the Go image tag the Dockerfile's build
+  // stage uses (e.g. "1.26-alpine"). Required.
+  string go_version = 9;
+
+  // HostPort is the default host port the dev compose
+  // publishes (`<host_port>:8080`). Operators override via
+  // `<EnvPrefix>_HOST_PORT` in .env. Zero = 8080 default.
+  int32 host_port = 10;
+
+  // LibraryOnly emits this admin bundle as an importable library
+  // (the bundle-root `package adminapp` serve.go + spa_embed.go +
+  // handler pkg + SPA scaffold + go.mod) WITHOUT the standalone
+  // `cmd/admin/main.go` entry or the Dockerfile / compose / .env
+  // deploy artefacts. Set by the CLI codegen orchestrator when a
+  // gateway binary absorbs this domain's admin component
+  // (GatewayTarget.absorb_admin) — the gateway owns the process
+  // entry + deploy wiring and calls adminapp.Run itself. False =
+  // the conventional standalone admin binary.
+  bool library_only = 11;
+
+  // Wire is the admin SPA's HTTP wire — "pb" (default) or "json", from
+  // the lock's `admin_wire`. The admin surface negotiates both
+  // server-side either way; this is what the generated console asks
+  // for.
+  string wire = 12;
+}
+
+// StubTarget is one (language, output_root) pair driving the
+// stub generator. Multiple targets land in one
+// [GenerateRequest] when the project consumes stubs from
+// several languages (e.g. Go backend + Python data-pipeline
+// producer); each target produces its own subtree in the
+// response.
+message StubTarget {
+  // Language is the buf-supported source language identifier.
+  // MVP recognises "go"; additional languages land via
+  // `lib/bufrun.langPlugins` map extension. Validator rejects
+  // unsupported values with the supported set listed.
+  string language = 1;
+
+  // OutputRoot is the consumer-side relative path under which
+  // generated stubs land (e.g. "gen/pb" for Go, "srcpy/pb"
+  // for Python). Each generated file's relative_path is
+  // `<output_root>/<source-rel-path>.<lang-suffix>` — the
+  // proto directory layout maps 1:1 onto the stub layout.
+  // Required.
+  string output_root = 2;
+
+  // Module — Go-specific override for the per-file output
+  // path. When non-empty, switches the Go-plugin opts from
+  // `paths=source_relative` (file path mirrors source
+  // layout) to `module=<Module>` (file path = `go_package`
+  // with the given prefix stripped, per `protoc-gen-go`'s
+  // `--module` flag).
+  //
+  // Use when the project's proto files declare `go_package`
+  // values that don't follow the source-relative convention
+  // (e.g. legacy / migrated codebases). Empty (default) =
+  // 1:1 source-relative — recommended for greenfield projects.
+  // Other languages ignore this field today.
+  string module = 3;
+
+  // Package is the import-path prefix the compiler uses to
+  // COMPUTE each proto's go_package itself, injected via buf
+  // managed mode — so the protos carry no in-file
+  // `option go_package`. When set (Go only), the compiler maps
+  // every staged proto to `<package>/<computed-dir>` (domain
+  // modules flatten to `<package>/domains/<domain>/<module>`,
+  // everything else mirrors its source dir) and feeds those as
+  // per-file managed overrides. Pair with Module = this same
+  // value so the managed go_package drives the output layout.
+  //
+  // Empty (default) = managed mode off; buf falls back to each
+  // proto's in-file `option go_package` (legacy path). The Go
+  // package NAME is derived from the path's last segment — no
+  // `;alias`, no `pb` suffix.
+  string package = 4;
+}
+
+// ProtoFile is one input .proto plus its filename. Filename
+// drives import resolution — `import "user/types.proto"` looks
+// up a file with that exact filename in the staged set.
+message ProtoFile {
+  string filename = 1;
+  bytes contents = 2;
+}
+
+enum Dialect {
+  DIALECT_UNSPECIFIED = 0;
+  DIALECT_POSTGRES = 1;
+  DIALECT_MYSQL = 2;
+  DIALECT_SQLITE = 3;
+}
+
+// GenerateResponse carries the rendered files. Errors come via
+// gRPC status (success-or-failure, not partial). Non-fatal
+// warnings ride alongside a SUCCESSFUL response in `warnings`:
+// codegen still emits every file, but the CLI surfaces these
+// prominently so the operator sees design antipatterns it chose
+// not to hard-fail on (e.g. an MCP surface put behind a non-OAuth
+// login — see gateway/generator.MCPAuthWarnings).
+message GenerateResponse {
+  repeated GeneratedFile files = 1;
+
+  // Non-fatal advisories. Empty on a clean run. Each string is a
+  // self-contained, multi-line human-readable message (the CLI
+  // boxes them under a ⚠ banner). Generation succeeded regardless.
+  repeated string warnings = 2;
+}
+
+// GeneratedFile is one rendered Go source file. The
+// relative_path is the conventional layout
+// (`gen/grpcapi/storage/<service_snake>.go`); the CLI client
+// splices it under its `--out` root.
+message ListPluginCatalogRequest {}
+
+// PluginCatalog is what the console can serve. `version` comes from each
+// plugin's own manifest, parsed server-side — the client is told the
+// version rather than reading a manifest to find it.
+message PluginCatalog {
+  repeated CataloguePlugin plugins = 1;
+}
+
+message CataloguePlugin {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+}
+
+// FetchPluginRequest names ONE plugin. No version field yet, and the
+// omission is deliberate rather than forgotten: the console serves exactly
+// one catalogue — the one it was built with — so there is nothing to
+// select between. When versions arrive this gains a `version` and the
+// server gains a history to pick from; a field that today could only ever
+// hold one legal value would be a promise the console cannot keep.
+message FetchPluginRequest {
+  string name = 1;
+}
+
+message GeneratedFile {
+  string relative_path = 1;
+  bytes contents = 2;
+
+  // if_missing requests generate-if-missing semantics:
+  // the CLI writes this file only when it does not already exist on
+  // disk, never overwriting a hand-edited copy. Default false =
+  // overwrite (the behaviour every other generated file relies on).
+  // Used by the CLI transport for per-command body files, the escape
+  // hatch where authors inject local stdlib/bash logic around
+  // the remote call.
+  bool if_missing = 3;
+
+  // formatted says the server wrote contents gofmt-exact, so the client
+  // writes them as they are instead of formatting them: the storage files
+  // (compiled templates) and the protoc-gen-go output (stubs, plugin
+  // gen/pb). Not checked per run: W17_FASTTMPL_VERIFY checks it over the
+  // benchmark and the examples, and a release is checked by regenerating
+  // the adopters' projects and comparing.
+  bool formatted = 4;
+}
+
+// CodegenError is the typed status detail for gRPC error
+// responses. The status code (INVALID_ARGUMENT,
+// FAILED_PRECONDITION, INTERNAL) classifies the error broadly;
+// this detail scopes to stage + location + structured per-issue
+// diagnostics. Attached via `status.WithDetails(err)` server-
+// side; clients pull it out with `status.FromError(err).Details()`.
+message CodegenError {
+  // Stage is the pipeline phase that produced the error.
+  Stage stage = 1;
+
+  // Filename is the input `.proto` where the issue surfaced.
+  // Empty for stage-validation errors that don't involve a
+  // specific file.
+  string filename = 2;
+
+  // ServiceName is the gRPC service whose method caused the
+  // issue (empty when N/A — e.g. validation, parse).
+  string service_name = 3;
+
+  // MethodName is the gRPC method that caused the issue
+  // (empty when N/A).
+  string method_name = 4;
+
+  // Diagnostics carries structured per-issue messages from the
+  // underlying layers. Typically one entry; multi-issue stages
+  // (typecheck) produce more.
+  repeated Diagnostic diagnostics = 5;
+}
+
+enum Stage {
+  STAGE_UNSPECIFIED = 0;
+  STAGE_VALIDATION = 1;     // request-shape validation
+  STAGE_PARSE = 2;          // protocompile / loader parse
+  STAGE_SCHEMA = 3;          // ir.BuildMany
+  STAGE_TYPECHECK = 4;      // multiop / DQL typecheck
+  STAGE_EXPAND = 5;         // whole-message INSERT shortcut
+  STAGE_EMIT = 6;           // dialect emit + body emit + render
+  STAGE_UNSUPPORTED = 7;    // out-of-scope shape (multi-op, etc.)
+  STAGE_INTERNAL = 8;       // unexpected pipeline failure
+}
+
+// Diagnostic is one structured per-issue message (matches the
+// internal `typecheck.Diagnostic` shape — message + why + fix).
+message Diagnostic {
+  string message = 1;
+  string why = 2;
+  string fix = 3;
+}

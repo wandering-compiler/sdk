@@ -613,7 +613,7 @@ type SetHeadReq struct {
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	HeadSnapshotId string                 `protobuf:"bytes,2,opt,name=head_snapshot_id,json=headSnapshotId,proto3" json:"head_snapshot_id,omitempty"`
 	// expected_head_snapshot_id — compare-and-set on the head the caller READ
-	// (T3-7 D-F1). Empty string = "expected unset". Two merges that both read
+	// Empty string = "expected unset". Two merges that both read
 	// the same trunk head used to both land, and the loser's review stayed
 	// recorded MERGED while trunk pointed elsewhere; now the second one is
 	// refused with NotFound.

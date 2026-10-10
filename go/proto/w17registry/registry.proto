@@ -1,0 +1,469 @@
+// PUBLIC REGISTRY CONTRACT — the flattened, irpb-free authoring face of the
+// console's MigrationRegistry that the thin client (w17ctl's own module) uses
+// to PUSH a project's schema / fixtures and READ its migration history. Homed
+// under the dedicated `w17registry/` namespace (the authoring side; the deploy
+// side is `w17apply/`) so the public client imports ONLY this irpb-free shape,
+// never the compiler's IR-laden private pb (the MigrationRegistry, IR,
+// fixtures, and migration-plan packages).
+//
+// Public-split boundary: the client never handles the STRUCTURE of the IR, the migration
+// plan, the review findings, or a fixture body. It ships OPAQUE bytes (the
+// compiled-IR blob from CompileIR; a fixture's raw JSON) and gets back flat
+// string fields. The server (which owns the registry state + the migrator
+// planner + the schema-aware fixture validator) does all the structured work:
+//   - PushSchema decodes the IR, runs the planner (create / update resolved
+//     server-side from whether a schema is already stored), stores migrations,
+//     and flattens the result + any review findings to plain strings.
+//   - PushFixture validates the raw JSON against the project's STORED schema
+//     server-side (table/column/pk-arity resolution) — the client holds no
+//     schema, no fixtures package, no IR.
+// So the client carries none of registrypb / irpb / fixturespb / planpb.
+syntax = "proto3";
+
+package w17.registry;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17registry;w17registrypb";
+
+// ProjectRegistry is the console-served, irpb-free authoring face of the
+// MigrationRegistry the thin client needs. (The full MigrationRegistry —
+// IR-typed CreateSchema / UpdateSchema / GetSchema / RecordApplied / the
+// fixture read RPCs — stays private; reads ride the public MigrationFetch /
+// FixtureFetch contracts in w17apply/.)
+service ProjectRegistry {
+  // RegisterProject creates (or returns the existing) registry project for a
+  // human name. Idempotent on name — `w17ctl init` calls it.
+  rpc RegisterProject(RegisterProjectRequest) returns (RegisterProjectResponse);
+
+  // ListMigrations returns the project's stored migration history (flattened
+  // to irpb-free strings) in apply order, optionally filtered by connection /
+  // cursor. Unary — the client materialises the whole list anyway (browse +
+  // lock-pin). `w17ctl migrate list` + the push lock-pin fallback call it.
+  rpc ListMigrations(ListMigrationsRequest) returns (ListMigrationsResponse);
+
+  // PushSchema decodes the uploaded compiled IR, runs the migrator's planner,
+  // and stores the resulting migrations. The create-vs-update decision is
+  // resolved SERVER-side from `mode` (AUTO probes whether a schema is already
+  // stored); on unresolved planner findings nothing is stored and the flat
+  // findings come back so the client can print them. `w17ctl push` +
+  // `w17ctl migrate generate` call it.
+  rpc PushSchema(PushSchemaRequest) returns (PushSchemaResponse);
+
+  // PushRawMigration stores a hand-authored YAML data-migration body,
+  // bypassing the schema-driven planner (the TRANSFORM_FIELD escape hatch).
+  // Console validates + signs + stores. `w17ctl migrate migration` calls it.
+  rpc PushRawMigration(PushRawMigrationRequest) returns (PushRawMigrationResponse);
+
+  // PushFixture stores (or replaces) a fixture body for (project, domain,
+  // name). The raw JSON is validated SERVER-side against the project's stored
+  // schema (table / column / pk-arity) before storing — the client ships the
+  // bytes verbatim, holds no schema / fixtures logic. `w17ctl push` calls it.
+  rpc PushFixture(PushFixtureRequest) returns (PushFixtureResponse);
+
+  // ReleaseProjectToOrg / ClaimProject move a project between organizations,
+  // in two calls with two tokens.
+  //
+  // One token proves one side: the SOURCE org's proves the project may be
+  // given away, the TARGET org's proves the caller may receive it. A single
+  // call taking the target as a request field would accept any value it was
+  // handed — anyone holding their own org's token could move any project to
+  // themselves. The console cannot check the caller's memberships; the
+  // metadata carries one ACTIVE org, not a set.
+  //
+  // Release records intent only (empty target withdraws it); the project does
+  // not move and stays usable until claimed. Claim refuses unless the source
+  // offered it to exactly this org, and refuses a name collision by naming it
+  // so the caller can retry with new_project_name — never auto-renames,
+  // because the consuming repo's lock carries the name and is signed.
+  rpc ReleaseProjectToOrg(ReleaseProjectToOrgRequest) returns (ReleaseProjectToOrgResponse);
+  rpc ClaimProject(ClaimProjectRequest) returns (ClaimProjectResponse);
+
+  // ResetHistory collapses a project's migration history so a fresh baseline
+  // can be derived from the current schema — the FORGETTING half of recreate.
+  // It does not derive the new
+  // baseline: that is PushSchema taking its bootstrap (create) path, which is
+  // already what a project's first push does. So `w17ctl migrate reset` is
+  // ResetHistory(DISCARD) followed by the ordinary push, not a second code
+  // path that re-implements one.
+  //
+  // DESTRUCTIVE. Refuses unless `acknowledge_data_loss` is set. The loud
+  // banner and `--force` live in w17ctl, but a guard that exists only in the
+  // client is not a guard.
+  //
+  // Flat scalars throughout — nothing here carries registrypb / irpb, so the
+  // public mirror is the private RPC's shape unchanged.
+  rpc ResetHistory(ResetHistoryRequest) returns (ResetHistoryResponse);
+
+  // VerifyHistory answers whether a project's recorded migration history
+  // reproduces its stored schema — the clean-gate.
+  //
+  // The predicate existed server-side from the day revisions landed, and had
+  // no client surface at all: it ran only as UpdateSchema's own drift guard,
+  // so the answer reached an operator solely as a refused push. Import (#2)
+  // cannot work without asking it — only a history that provably reproduces
+  // its schema may be re-signed under a new scope, because afterwards nobody
+  // can tell the difference — and recreate and squash both want it read
+  // BEFORE they collapse anything.
+  //
+  // Read-only. Three verdicts, and UNKNOWN is not a failure: every project
+  // pushed before revisions were recorded reads that way, and treating "no
+  // evidence" as "bad evidence" would condemn every one of them.
+  rpc VerifyHistory(VerifyHistoryRequest) returns (VerifyHistoryResponse);
+
+  // ImportProject folds a whole source project into a target project:
+  // its migration history verbatim — re-signed under the target's scope,
+  // because a signature binds the project it was minted for — and its
+  // tables merged onto the target's stored schema.
+  //
+  // Preserves 1:1 and refuses rather than repairs: the source's history
+  // must be CONSISTENT (not merely un-drifted; UNKNOWN is refused too,
+  // since import re-signs and afterwards nothing can tell a vouched-for
+  // history from an unvouched one), no name may collide, and every body
+  // must verify under its own scope before it is re-signed. The source is
+  // never touched.
+  rpc ImportProject(ImportProjectRequest) returns (ImportProjectResponse);
+}
+
+// Migration is one stored migration flattened from the registry's IR-laden
+// `registrypb.Migration` to the irpb-free string fields the client reads
+// (listing + lock-pin). Bodies are NOT carried here — the apply path fetches
+// executable SQL over the separate MigrationFetch contract.
+message Migration {
+  string id = 1;
+  string connection = 2;
+  string content_sha256 = 3;
+}
+
+message RegisterProjectRequest {
+  // name is the human project name; the server returns its stable project_id.
+  string name = 1;
+}
+
+message RegisterProjectResponse {
+  string project_id = 1;
+}
+
+message ListMigrationsRequest {
+  string project_id = 1;
+  // connection scopes the list; empty = every connection interleaved by
+  // stored order.
+  string connection = 2;
+  // from_migration_id is a strict-after pagination cursor; empty = from start.
+  string from_migration_id = 3;
+  // up_to_migration_id is the upper bound; empty = no upper bound.
+  string up_to_migration_id = 4;
+}
+
+message ListMigrationsResponse {
+  repeated Migration migrations = 1;
+}
+
+// PushMode selects the create/update behaviour. AUTO is the default `push` /
+// `migrate generate` shape — the server probes whether a schema is already
+// stored and resolves to create (first push) or update (revision).
+enum PushMode {
+  PUSH_MODE_AUTO = 0;
+  PUSH_MODE_CREATE = 1;
+  PUSH_MODE_UPDATE = 2;
+  // DRY_RUN plans and stores NOTHING — no migration, no schema, no revision,
+  // no lock pin. It answers "what would a push do now?": the findings still
+  // needing a decision, the connections a push would migrate, the decisions
+  // sent that match no finding (reported, not refused — see
+  // PushSchemaResponse.unused_decisions), and the base it planned against.
+  // Create-vs-update is resolved as AUTO; force_initial still applies.
+  // `w17ctl migrate check` sends it.
+  //
+  // A MODE, not a flag, on purpose: a console that predates it refuses an
+  // unknown mode ("unknown mode") instead of ignoring an unknown field and
+  // running a real push. A dry run must fail closed on an old server.
+  //
+  // Not subject to a project's ci_only lock: that lock guards what gets
+  // MINTED, and a dry run mints nothing. Any member who may push may ask.
+  PUSH_MODE_DRY_RUN = 3;
+}
+
+message PushSchemaRequest {
+  string project_id = 1;
+  // ir is the opaque compiled-IR blob (the bytes CompileIR returned). The
+  // server decodes it with its own irpb.Schema — the client never does.
+  bytes ir = 2;
+  PushMode mode = 3;
+  // force_initial (AUTO only) forces create — a fresh project can't be
+  // silently treated as a revision. Ignored for explicit CREATE / UPDATE.
+  bool force_initial = 4;
+  // decide carries raw `--decide` flag strings — OPAQUE to the dumb client
+  // (it never parses them; closure 0 stays). The server parses the decide
+  // grammar (`<table>.<col>[:<axis>]=<strategy>` / `=custom:<path>`) against
+  // the plan's NEEDS_CONFIRM findings and re-plans with the resolutions, so a
+  // decidable finding no longer blocks the push.
+  //
+  // A key may be bound to one change: `<key>@<finding id>=<strategy>`, the id
+  // copied from Finding.finding_id. A bound decision resolves only the
+  // finding with that id; one whose key still has a finding but a different
+  // id was made for a different change and is UNUSED (a real push refuses
+  // it). Decision files are always sent bound. An unbound key (a hand-typed
+  // `--decide`, or a client that predates finding_id) keeps the key-only
+  // match, and is refused when its key names the same column in two tables.
+  // A console that predates bound keys refuses them (unknown axis) — it
+  // fails closed rather than applying them unbound.
+  repeated string decide = 5;
+  // decide_custom_sql maps a `custom:<path>` referenced in `decide` to its SQL
+  // body. The client reads the local file (the console can't see the client
+  // filesystem) and ships the body here; the server's decide loader resolves
+  // `custom:<path>` from this map instead of the filesystem.
+  map<string, string> decide_custom_sql = 6;
+  // initiative_id names the change request this push belongs to — the console
+  // initiative id (a UUID), which the client resolves the same way
+  // `w17ctl initiative current` does: from the current git branch.
+  //
+  // This is the bridge freezing a change request for a squash needs. The registry already records one revision per push; stamping the
+  // initiative onto that row is what makes "which migrations belong to change
+  // request X" answerable, and a range with EDGES is the only kind a squash
+  // may act on — a date window or a push count would quietly collapse another
+  // CR's work.
+  //
+  // Empty is legal and means "belongs to no initiative": every push made
+  // before this field existed reads that way, as does one made outside a git
+  // repo or against a console whose initiative is not materialized. Those
+  // migrations are simply not in any CR's range, which is the truth.
+  string initiative_id = 7;
+}
+
+message PushSchemaResponse {
+  // migrations stored by this push (one per affected connection), apply order.
+  // Empty when findings is non-empty (nothing stored).
+  repeated Migration migrations = 1;
+  // findings the planner couldn't auto-resolve — flattened from
+  // planpb.ReviewFinding to plain strings. Non-empty = nothing stored; the
+  // client prints them + retries.
+  repeated Finding findings = 2;
+  // resolved_mode reports the create-vs-update the server actually applied
+  // (AUTO resolves to CREATE or UPDATE server-side) so the client can label
+  // the push "initial schema" vs "schema revision".
+  PushMode resolved_mode = 3;
+  // unused_decisions — DRY_RUN only: the decision keys (the part of a
+  // `decide` entry before `=`, `@<finding id>` included when the entry was
+  // bound) that match no finding — for a bound key, also one whose column
+  // now has a DIFFERENT change (findings then carries that change under the
+  // same decide_key). A real push REFUSES
+  // these, because a decision matching nothing can let a coexisting
+  // column-wide fallback run instead; a dry run reports them so the client
+  // can name the stale decision rather than fail on it. The remaining
+  // decisions are still applied to the plan.
+  repeated string unused_decisions = 4;
+  // changed_connections — DRY_RUN only: every connection a push would store a
+  // migration for, sorted. Empty with no findings = the stored schema already
+  // matches the proto; nothing to generate.
+  repeated string changed_connections = 5;
+  // base — DRY_RUN only: identifies the stored schema this plan diffs
+  // against (empty when the project has none yet). Every mint changes it.
+  // A decision is written against a base and applies only while the base is
+  // the same: once a release consumes it, the base moves and the decision
+  // can never decide a later change of the same column. The base check is
+  // the client's; a real push carries no base. What the console itself
+  // holds a decision to is its finding id (Finding.finding_id), which a mint
+  // between the dry run and the push moves whenever it changes the column.
+  string base = 6;
+}
+
+// Finding is one unresolved planner decision, flattened from
+// planpb.ReviewFinding (+ its ColumnRef) to the plain fields the client prints.
+message Finding {
+  string table_name = 1;
+  string column_name = 2;
+  int32 field_number = 3;
+  string axis = 4;
+  string rationale = 5;
+  // decide_key is the exact key a decision for THIS finding uses — the part
+  // of `--decide <key>=<strategy>` before `=`: `table.column:axis`, or
+  // `table:axis` for a table-level finding. The client copies it; it never
+  // composes one.
+  string decide_key = 6;
+  // proposed is the classifier's default strategy, as a decision value.
+  string proposed = 7;
+  // options are the strategies a decision may choose, as decision values
+  // (`safe`, `lossless_using`, `needs_confirm`, `drop_and_create`; a
+  // `custom` body is not listed — it is accepted unless custom_refused).
+  // Includes proposed.
+  repeated string options = 8;
+  // prev_summary / curr_summary describe the change in human terms (e.g. the
+  // column's type before and after). Either may be empty.
+  string prev_summary = 9;
+  string curr_summary = 10;
+  // finding_id identifies THIS change — the console's finding id (a digest of
+  // the table, the axis and the column's shape before and after), where
+  // decide_key names only the column. Opaque to the client: a decision file
+  // records it and sends it back as `<decide_key>@<finding_id>=<strategy>`,
+  // which binds the decision to this change alone. When the same column
+  // changes differently later, the bound decision matches nothing (a dry run
+  // names it in unused_decisions, a real push refuses it) instead of
+  // deciding a change nobody reviewed. It also tells apart two tables that
+  // share a bare name, and so a decide_key (two SCHEMA namespaces, two
+  // connections).
+  //
+  // ABSENT ("") means a console that predates it — never "any change". A
+  // client must not write a decision file for a finding without one: a file
+  // that cannot say which change it decides could approve a different one.
+  string finding_id = 11;
+  // table_fqn is the table's proto message FQN (e.g. `billing.User`) —
+  // unique where table_name is not. For the person deciding: two findings
+  // with one decide_key differ here. Empty from a console that predates it.
+  string table_fqn = 12;
+  // custom_refused — the console refuses `custom: <file.sql>` for this
+  // finding: `options` are the only answers (e.g. a table_drop, which is
+  // confirmed or not, and has no SQL to replace). Absent = custom is accepted.
+  bool custom_refused = 13;
+}
+
+message PushRawMigrationRequest {
+  string project_id = 1;
+  string connection = 2;
+  // yaml_body is the hand-authored lib/datamigrate.Migration YAML; the server
+  // validates + signs + stores it.
+  string yaml_body = 3;
+  // initiative_id — see PushSchemaRequest. A hand-authored data migration
+  // belongs to a change request exactly like a schema diff does; leaving it
+  // unstamped would hide it from the range a freeze collapses.
+  string initiative_id = 4;
+}
+
+message PushRawMigrationResponse {
+  // migration is the stored result (server-assigned id + content_sha256).
+  Migration migration = 1;
+}
+
+message PushFixtureRequest {
+  string project_id = 1;
+  string domain = 2;
+  string name = 3;
+  // json is the fixture's raw canonical JSON body. The server decodes +
+  // validates it against the stored schema before storing.
+  bytes json = 4;
+}
+
+message PushFixtureResponse {
+  // content_sha256 of the stored body (audit / round-trip).
+  string content_sha256 = 1;
+  // row_count is the number of rows in the stored fixture (log hint).
+  int32 row_count = 2;
+}
+
+message ReleaseProjectToOrgRequest {
+  string project_id = 1;
+  // Empty WITHDRAWS a pending offer.
+  string target_org_id = 2;
+}
+
+message ReleaseProjectToOrgResponse {
+  string target_org_id = 1;
+}
+
+message ClaimProjectRequest {
+  string project_id = 1;
+  // Empty keeps the current name; supply one to resolve a reported collision.
+  string new_project_name = 2;
+}
+
+message ClaimProjectResponse {
+  // The name the project ended up with, to write back into the lock.
+  string project_name = 1;
+}
+
+// ResetHistoryPolicy selects what becomes of the migrations the reset leaves
+// behind. The two lifecycle processes that need this RPC differ ONLY here —
+// recreate forgets them, squash keeps them mapped.
+enum ResetHistoryPolicy {
+  RESET_HISTORY_POLICY_UNSPECIFIED = 0;
+
+  // DISCARD — recreate. The migrations are deleted and the project is left
+  // with no schema, so the next push takes the bootstrap (create) path and
+  // derives one initial migration.
+  //
+  // Dev / POC only: it forgets history that a deployed database still
+  // believes in, which is why the caller must also reset that database.
+  RESET_HISTORY_POLICY_DISCARD = 1;
+
+  // SUPERSEDE — squash. The migrations stay queryable and MAPPED, so a
+  // deployment that applied the old set is recognised as already at the new
+  // baseline. The collapsed rows stay listable via a `superseded_by`
+  // back-pointer while leaving the apply plan, and the baseline the next
+  // push derives names them so a live deployment can record it without
+  // running its DDL.
+  RESET_HISTORY_POLICY_SUPERSEDE = 2;
+}
+
+message ResetHistoryRequest {
+  string project_id = 1;
+  // Required. UNSPECIFIED is refused — a destructive call must name what it
+  // intends rather than inherit it from a zero value.
+  ResetHistoryPolicy policy = 2;
+  // Required for DISCARD. The server refuses without it.
+  bool acknowledge_data_loss = 3;
+  // initiative_id names the change request this freeze is collapsing —
+  // SUPERSEDE only; the server refuses it on DISCARD rather than ignoring it.
+  //
+  // It is an ASSERTION, not a narrowing: the server refuses unless every live
+  // migration belongs to that change request, naming the ones that do not and
+  // the change request each belongs to. What it buys is edges — a squash run
+  // while another CR's migrations happen to sit in the history collapses those
+  // too, and without this nothing says so.
+  //
+  // Empty keeps the unconditional whole-history collapse.
+  string initiative_id = 4;
+}
+
+message ImportProjectRequest {
+  string source_project_id = 1;
+  string target_project_id = 2;
+  // initiative_id stamps the revision the import records, so the imported
+  // range belongs to a change request like any other push.
+  string initiative_id = 3;
+}
+
+message ImportProjectResponse {
+  int32 migrations_imported = 1;
+  int32 tables_imported = 2;
+  int32 fixtures_imported = 3;
+}
+
+message VerifyHistoryRequest {
+  string project_id = 1;
+}
+
+// HistoryVerdict mirrors the registry's own three-valued answer.
+//
+// UNKNOWN is deliberately not an error value. A project that has migrations
+// but no revision records — every project pushed before revisions existed —
+// answers this way, and it says "no evidence", not "bad evidence". A caller
+// that treats it as drift would refuse work on every legacy project; a caller
+// that treats it as consistent would re-sign a history nothing can vouch for.
+// Both are wrong, which is why the third value exists rather than a bool.
+enum HistoryVerdict {
+  HISTORY_VERDICT_UNKNOWN = 0;
+  HISTORY_VERDICT_CONSISTENT = 1;
+  HISTORY_VERDICT_DRIFTED = 2;
+}
+
+message VerifyHistoryResponse {
+  HistoryVerdict verdict = 1;
+  // detail says what disagrees, and is set only for DRIFTED — it names the
+  // migration or the count that does not line up, because "your history
+  // drifted" without the row is not actionable.
+  string detail = 2;
+  // recorded_revisions is how many pushes are on record. Zero alongside
+  // UNKNOWN is the legacy shape; zero alongside CONSISTENT is a project
+  // nobody has pushed to yet.
+  int32 recorded_revisions = 3;
+}
+
+message ResetHistoryResponse {
+  // migrations_dropped counts every dropped migration, across connections.
+  int32 migrations_dropped = 1;
+  // raw_migrations_dropped counts the hand-authored raw data migrations among
+  // them. These CANNOT be re-derived from the schema (their bodies are
+  // author-owned), so the client prints this rather than letting the operator
+  // discover it afterwards.
+  int32 raw_migrations_dropped = 2;
+  // raw_migration_ids names those bodies, so the message can list them
+  // instead of only counting them.
+  repeated string raw_migration_ids = 3;
+}

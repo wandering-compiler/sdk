@@ -1,0 +1,89 @@
+// PUBLIC APPLY CONTRACT — the flattened dev-apply plan the thin client
+// executes against its LOCAL stores. Homed under a dedicated `w17apply/`
+// namespace (separate from the compiler-internal migrator plan) so the public
+// client imports ONLY this irpb-free shape, never the IR-laden
+// `w17.migrator.plan.Plan`.
+//
+// Public-split boundary:
+// the dev DB lifecycle plans server-side (the engine.Plan diff engine is a
+// COMPILER concern) and applies client-side. The server flattens its typed
+// `planpb.Plan` — whose `Migration.connection` is a `w17.common.ir.Connection`
+// and whose `Migration.plan` carries the full IR-typed op list — down to this
+// minimal {connection-name, up_sql, up_sql_post_tx} form. So the apply client
+// (moved into w17ctl's own module) needs NO compiler IR pb: it decodes
+// THIS, runs the SQL, done. Carried as the opaque `bytes` of
+// `CodegenService.Plan`'s `PlanIRResponse.plan` (the response field stays
+// bytes; only the payload type changed planpb.Plan → DevApplyPlan).
+syntax = "proto3";
+
+package w17.apply;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/applyplan;applyplanpb";
+
+// DevApplyPlan is the ordered per-connection migration body set the dev
+// diff-apply executes locally. Empty-diff connections are omitted by the
+// server-side flatten (same as the engine omits no-op buckets).
+message DevApplyPlan {
+  repeated DevMigration migrations = 1;
+}
+
+// DevMigration is one connection's apply payload, flattened from
+// `w17.migrator.plan.Migration` to drop every IR-typed field.
+message DevMigration {
+  // Connection is the target connection NAME (planpb.Migration.connection.name).
+  // Empty = the default bucket the client's Applier factory resolves to the
+  // project's main connection.
+  string connection = 1;
+
+  // UpSql is the transactional apply body (planpb.Migration.up_sql).
+  string up_sql = 2;
+
+  // RequiredExtensions are the Postgres extensions this connection's schema
+  // needs before its DDL can run — the manifest's aggregated set.
+  //
+  // They are carried HERE, in the artefact the generated binary applies,
+  // because the dev bootstrap that used to create them only ever ran once:
+  // `db/init/<domain>/00_extensions.sql` is mounted into initdb, and initdb
+  // runs on a FRESH VOLUME and never again. So a project that declared a new
+  // extension after its local database existed got the file rewritten and
+  // nothing applied — the query then failed at runtime naming a function
+  // nobody had created.
+  //
+  // Migration BODIES still carry no `CREATE EXTENSION`: provisioning one on a
+  // real target is a pre-apply step the deploying platform owns, and it may
+  // need superuser. This is the DEV path, where the same binary that applies
+  // the schema is the thing holding the connection.
+  repeated string required_extensions = 5;
+
+  // CREATE SCHEMA prerequisites, carried for the same reason as the
+  // extensions above: the tables in `up_sql` are qualified with these
+  // namespaces and cannot be created before they exist. They used to arrive
+  // only through a file mounted into one compose container's initdb, so every
+  // other way of building the database got the qualified DDL without them.
+  repeated string required_schemas = 6;
+
+  // UpSqlPostTx is the non-transactional skirt (planpb.Migration.up_sql_post_tx).
+  // The client folds it into up_sql with CONCURRENTLY stripped so it runs
+  // inside the dev transaction; empty for the common case.
+  string up_sql_post_tx = 3;
+
+  // BaselineSql records, in the target's applied ledger, the migration this
+  // built schema corresponds to. Rendered by the SERVER (the same per-dialect
+  // renderer that writes the record into an ordinary migration's up_sql), so
+  // the thin client executes a string and learns no dialect, and the two
+  // ledger writes cannot drift into spellings that read each other's rows as
+  // absent.
+  //
+  // Why a built schema needs one at all: the dev apply path walks no series
+  // and keeps no ledger, so a database built from this plan carries the
+  // tables and an EMPTY w17_migrations. The deploy gate compares the lock's
+  // `target_migration_id` against that table, so without this row it refuses
+  // every deploy after the first — and the remedy it names, `migrate apply`,
+  // would run the series' full CREATE against tables that already exist.
+  //
+  // Empty when the caller pinned no baseline (a project that has never been
+  // pushed, so there is no migration id to record) or when the dialect keeps
+  // no applied-state. Empty is applied as "record nothing", never as an
+  // error: a dev database that nobody deploys does not need a ledger.
+  string baseline_sql = 4;
+}
