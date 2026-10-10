@@ -9,7 +9,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// TestAdoptTx_UnknownIDIsLoud is the silent arm of T2-6 pass #8 D-F4.
+// TestAdoptTx_UnknownIDIsLoud: an unknown tx id is an error, never a
+// silently fresh transaction.
 //
 // A request that carries `w17-tx-id` is a request whose caller believes it
 // is inside someone else's transaction. When the id resolves to nothing in

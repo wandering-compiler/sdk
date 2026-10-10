@@ -12,7 +12,7 @@
 // flat output into one key (named after the oneof) carrying the set arm,
 // message arms tagged with [DiscriminatorKey] and scalar arms left bare;
 // and EXPANDS that shape back to flat keys before protojson decodes a
-// request. See docs/specs/gateway/json-dialect.md.
+// request. This is the gateway's JSON dialect for oneofs.
 //
 // proto3 `optional` is a synthetic single-field oneof
 // ([protoreflect.OneofDescriptor.IsSynthetic]) and is NOT collapsed.

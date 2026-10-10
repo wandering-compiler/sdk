@@ -1,4 +1,4 @@
-// Periodic stream re-authentication (REV-163).
+// Periodic stream re-authentication.
 //
 // A REST request authenticates on every call. A STREAM authenticates once,
 // at upgrade, and then never again — before this file there was no re-auth
@@ -10,7 +10,7 @@
 // it too. It stayed survivable because a session client reconnects
 // constantly — token refresh, tab reload, a network blip — and each
 // reconnect re-authenticates, so revocation landed within minutes in
-// practice. A capability link (REV-162 `credential`) has no session
+// practice. A capability link (a URL-carried `credential`) has no session
 // lifecycle at all. Nothing ever forces it to reconnect. "In practice it
 // closes itself" stops being true, which is why URL-carried credentials on
 // streams had to wait for this rather than ship before it.

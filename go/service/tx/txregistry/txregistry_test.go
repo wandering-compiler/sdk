@@ -93,8 +93,7 @@ func TestAdoptTx_HeaderEmpty(t *testing.T) {
 // id errors, so the generator surfaces `codes.InvalidArgument`
 // rather than opening a second, independently-committing
 // transaction under a caller who believes it is inside one
-// (T2-6 pass #8 D-F4, silent arm — see
-// df4_unknown_txid_test.go).
+// (see adopt_unknown_txid_test.go).
 func TestAdoptTx_UnknownID(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs(txregistry.HeaderName, "tx-unknown"))

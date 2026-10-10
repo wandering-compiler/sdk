@@ -6,7 +6,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// REV-032 Cat 4 sweep, F13: empty <PREFIX>_CORS_MAX_AGE
+// An empty <PREFIX>_CORS_MAX_AGE
 // (operator never set it) defaults to 600 seconds —
 // production-idiomatic per MDN best-practice; without
 // Access-Control-Max-Age browsers fall back to ~5 seconds

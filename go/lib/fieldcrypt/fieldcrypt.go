@@ -17,7 +17,7 @@
 // Deterministic mode leaks equality. On a high-entropy secret that is nothing;
 // on a low-entropy column it is a frequency table. The schema decides, because
 // the schema is where somebody already wrote down that they need to compare
-// the values — see docs/specs/storage/crypted-secret-field.md.
+// the values.
 //
 // # The stored form
 //
@@ -55,6 +55,36 @@ import (
 // has. Django's SECRET_KEY serves ten purposes at once and they now recommend
 // splitting it; there is no reason to arrive at the same place on purpose.
 const EnvKeys = "W17_FIELD_KEYS"
+
+// DevKeys is the keyring every generated .env.defaults carries, so the local
+// stack boots with nothing to set up. It is PUBLIC — the key is sha256 of a
+// fixed sentence — and protects nothing: the generated boot refuses it outside
+// W17_ENV=dev, the infra renderers replace it with CHANGE_ME, and `w17ctl
+// secrets seal` refuses it. A deployment's own: NewKeySpec.
+const DevKeys = "1:EjeJTfdvxIRaZpA9Jx6z4RZ9ZL9yhQxalMwx0kHtsD4="
+
+// NewKeySpec returns spec with a fresh random key appended as the next
+// version — `1:<key>` for an empty spec. New values are then encrypted with it
+// and the existing versions keep decrypting, which is a rotation's first step.
+func NewKeySpec(spec string) (string, error) {
+	next := 1
+	if strings.TrimSpace(spec) != "" {
+		kr, err := Parse(spec)
+		if err != nil {
+			return "", err
+		}
+		next = kr.current + 1
+	}
+	key := make([]byte, KeyBytes)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("fieldcrypt: random key: %w", err)
+	}
+	entry := strconv.Itoa(next) + ":" + base64.StdEncoding.EncodeToString(key)
+	if strings.TrimSpace(spec) == "" {
+		return entry, nil
+	}
+	return strings.TrimSpace(spec) + "," + entry, nil
+}
 
 // prefix marks a value this package produced. A column that was converted from
 // plaintext still holds rows without it, and saying so beats returning

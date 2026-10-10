@@ -49,8 +49,8 @@ import (
 // away PutFromTempFile, i.e. a second component deriving keys, which is
 // exactly the duplicated path logic the single-writer rule prevents.
 //
-// The generated business tier's ClientSet therefore exposes Reader (see
-// docs/specs/bundles/business-service.md); the gateway keeps the Driver.
+// The generated business tier's ClientSet therefore exposes Reader; the
+// gateway keeps the Driver.
 type Reader interface {
 	// Open returns a streaming reader for the stored object.
 	// Returns ErrNotFound for a missing key.
@@ -117,7 +117,7 @@ type Driver interface {
 // boot — so a code generator cannot bake the right staging path into
 // restgw.FilePartConfig.TmpDir, and an unset TmpDir means os.TempDir():
 // a different filesystem from any mounted volume, i.e. the cross-device
-// fallback on EVERY containerised upload (T3-7 pass #9, C-F4).
+// fallback on EVERY containerised upload.
 //
 // Drivers with no local filesystem (S3, the in-memory driver) simply
 // don't implement it; callers fall back to os.TempDir().

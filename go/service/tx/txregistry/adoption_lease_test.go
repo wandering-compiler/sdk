@@ -12,7 +12,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
 
-// T3-7 pass #7 C-F2 / C-F3 — the registry used to hand the same *sql.Tx to
+// The registry used to hand the same *sql.Tx to
 // anyone who asked and let a finisher close it under a running handler. Both
 // are one missing concept: an ADOPTION LEASE. These tests state the
 // invariants the lease buys, as invariants — none of them depends on the
@@ -39,7 +39,7 @@ func leaseReg(t *testing.T) (*txregistry.Memory, *sql.DB, string) {
 	return reg, db, id
 }
 
-// C-F2 — a method's writes are all-or-nothing. A finisher that lands between
+// A method's writes are all-or-nothing. A finisher that lands between
 // two statements of an adopted handler commits statement 1 and fails
 // statement 2, so the caller is told the method failed while half of it is
 // durable.
@@ -119,7 +119,7 @@ func TestFinisher_WaitsForTheAdopterToRelease(t *testing.T) {
 	}
 }
 
-// C-F3 — one transaction, one adopter at a time. Two RPCs holding the same
+// One transaction, one adopter at a time. Two RPCs holding the same
 // *sql.Tx interleave on a single backend connection; an open *sql.Rows from
 // a locked query plus a concurrent mutation desyncs the driver protocol.
 func TestAdoptedHandler_SecondAdopterIsNotHandedTheSameTx(t *testing.T) {

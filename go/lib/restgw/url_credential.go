@@ -1,4 +1,4 @@
-// URL-carried credentials (REV-162) — the runtime half of
+// URL-carried credentials — the runtime half of
 // `RestEndpoint.credential` / `TOKEN_TYPE_URL_TOKEN`.
 //
 // A capability link ("open your invoice") has a perfectly good

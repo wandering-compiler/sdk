@@ -567,7 +567,7 @@ func TestServeDownload_EmptyBucketPathSkipped(t *testing.T) {
 // serve goroutine, where the only evidence was one log line the startup
 // banner then contradicted. A composed binary hits that easily: its absorbed
 // admin listens on 9090 in the same process, the port the generated
-// `.env.example` recommended for metrics (T2-6 round 2, pass #6, D1-F3).
+// `.env.example` recommended for metrics.
 func TestMountMetricsListener_UnsetAndBindError(t *testing.T) {
 	if addr := restgw.MountMetricsListener("X", func(string) string { return "" }, func(string, ...any) {}); addr != "" {
 		t.Errorf("unset port should yield empty addr; got %q", addr)

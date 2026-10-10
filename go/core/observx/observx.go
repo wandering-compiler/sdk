@@ -1,5 +1,5 @@
 // Package observx is the wandering-compiler's unified
-// observability lib (REV-031 Phase C-6, 2026-05-09).
+// observability lib.
 // Replaces gox/errorx — same one-liner bootstrap shape but:
 //
 //   - Carries static service metadata (ServiceName + Version
@@ -81,7 +81,7 @@ import (
 // Config carries the bootstrap input for [MustInit]. Only
 // ServiceName is required; everything else is opt-in.
 //
-// REV-033 Cat 5 sweep — env conventions across the project:
+// Env conventions across the project:
 //
 //   - W17_* envs are project-branded, cross-binary (every
 //     storage + gateway binary reads the same key).
@@ -255,7 +255,7 @@ func MustInit(c Config) error {
 		}
 	}()
 
-	// REV-033 Cat 5 sweep, F9 — OTEL_SERVICE_NAME (semconv-
+	// OTEL_SERVICE_NAME (semconv-
 	// canonical knob) overrides the codegen-baked Config
 	// value. Lets ops re-tag a deployed binary (canary,
 	// multi-tenant) without rebuilding. Empty env keeps
@@ -267,7 +267,7 @@ func MustInit(c Config) error {
 		return errors.New("observx: ServiceName required")
 	}
 
-	// REV-033 Cat 5 sweep, F3 — fall back to the SDK-
+	// Fall back to the SDK-
 	// canonical OTEL_EXPORTER_OTLP_ENDPOINT when the
 	// branded W17_OTEL_ENDPOINT (which storage/gateway
 	// templates pass into Config.OTelEndpoint) is empty.

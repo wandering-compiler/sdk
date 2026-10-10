@@ -16,9 +16,8 @@ import (
 	_ "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
-// The fixture is the converter's own output for its feature document
-// (srcgo/domains/egress/protogen/testdata/features.golden.proto); a srcgo
-// test keeps this copy identical, so the codec is tested against exactly
+// The fixture is the converter's own output for its feature document (the
+// generator's golden proto); a generator-side test keeps this copy identical, so the codec is tested against exactly
 // what the generator emits.
 var (
 	shop   = compileFixture("feature_shop")

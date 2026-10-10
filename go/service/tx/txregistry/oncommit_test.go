@@ -10,7 +10,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
 
-// T2-6 D-F3 — a method that ADOPTS a caller's transaction does not commit
+// A method that ADOPTS a caller's transaction does not commit
 // it; the orchestrator does, later. Announcing the write when such a
 // method returns (an eventbus emit) publishes an event for a mutation
 // that is still provisional — so a rollback leaves subscribers acting on
@@ -57,7 +57,7 @@ func TestOnCommit_RunsAfterCommit(t *testing.T) {
 // goroutines that race over it. Both orderings are reachable: the drain (a
 // sibling RPC's grpcrollback, the Tier-2 timeout watcher, the coordinator's
 // Rollback RPC) can land after the emit registered, or between the handler's
-// last statement and the emit wrapper — see T3-7 pass #7 C-F1/B-F5.
+// last statement and the emit wrapper.
 func TestOnCommit_DroppedOnRollback(t *testing.T) {
 	t.Run("rollback lands after the emit registered", func(t *testing.T) {
 		reg, id := openReg(t)
@@ -93,7 +93,7 @@ func TestOnCommit_DroppedOnRollback(t *testing.T) {
 }
 
 // emitWrapper mirrors the branch the eventbus emitter generates into every
-// wrapped mutation (srcgo/domains/eventbus/codegen/wrap.go). The invariant
+// wrapped mutation. The invariant
 // above is a property of that seam, so the test drives the seam rather than
 // the registry call underneath it.
 func emitWrapper(ctx context.Context, reg txregistry.CommitHook, emit func()) {

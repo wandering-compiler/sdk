@@ -105,7 +105,7 @@ func TestDefaultAuthFunc_ExplicitEnvHyphenKey(t *testing.T) {
 	}
 }
 
-// C8-F8 (T2-6 pass #8) — a forwarded header may not target the
+// A forwarded header may not target the
 // gateway-owned metadata namespaces.
 //
 // The MCP auth translator builds its outgoing metadata by forwarding the

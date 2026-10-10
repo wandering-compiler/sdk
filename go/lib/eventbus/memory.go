@@ -45,8 +45,7 @@ type MemoryBusOptions struct {
 	// Nil -> DefaultObserver: failures and drops leave a trace, successes
 	// stay silent. Set NopObserver explicitly for the silent no-op — it
 	// stopped being the default when the promise four documents made about
-	// emit observability turned out to be unimplemented (T2-6 pass #9,
-	// D9-3). Implementations
+	// emit observability turned out to be unimplemented. Implementations
 	// run on the hot path; keep them O(1) — see Observer
 	// godoc.
 	Observer Observer
@@ -57,8 +56,7 @@ type MemoryBusOptions struct {
 // side). One bus = one shared registry = emit goroutines
 // invoke handlers registered on the same bus instance.
 //
-// Per spec docs/specs/eventbus/in-memory-transport.md, the bus
-// is the loopback that backs `TRANSPORT_MEMORY` channels:
+// The bus is the loopback that backs `TRANSPORT_MEMORY` channels:
 // emit-side serialises the envelope, spawns one goroutine per
 // matching handler, each handler runs with a context detached
 // from the emitting RPC's cancellation (trace headers carry

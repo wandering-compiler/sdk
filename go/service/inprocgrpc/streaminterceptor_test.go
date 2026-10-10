@@ -11,7 +11,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/inprocgrpc"
 )
 
-// TestConn_StreamInterceptor_Runs pins C-F7. NewStream never consulted an
+// TestConn_StreamInterceptor_Runs: NewStream never consulted an
 // interceptor chain and the Conn had no stream-interceptor option AT ALL,
 // so the in-process transport could not run one even in principle — while a
 // standalone bundle installs grpc.ChainStreamInterceptor on its

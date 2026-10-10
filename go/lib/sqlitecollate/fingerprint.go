@@ -13,7 +13,7 @@ import (
 // Fingerprint identifies the text ORDERING AND CASE FOLDING this build
 // applies, as a short opaque string.
 //
-// T1-4 pass #12, B-F5. This package's doc says registering the collation
+// This package's doc says registering the collation
 // from one shared package "guarantees the ordering an index was built
 // with is byte-for-byte the ordering a query compares with". That
 // guarantee holds within one BUILD and not across builds, which is the
@@ -37,8 +37,8 @@ import (
 //
 // The probe deliberately spans the axes the emitted SQL depends on:
 // accents (the as_cs contract), case (the same), non-Latin scripts,
-// combining marks in both normal forms (NFC/NFD order is the axis B-F4
-// measured), and characters whose upper/lower mappings are famously
+// combining marks in both normal forms (NFC/NFD order is a measured axis
+// of divergence), and characters whose upper/lower mappings are famously
 // locale- and version-sensitive.
 func Fingerprint() string {
 	probe := []string{

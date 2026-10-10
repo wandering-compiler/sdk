@@ -1,6 +1,6 @@
 // Package i18n is the runtime gettext catalog the wandering-
 // compiler's generated bundles use to localize user-facing
-// strings (REV-149).
+// strings.
 //
 // The package owns three concerns:
 //

@@ -42,8 +42,8 @@ import (
 // subscription simply dies with the process — a deliberate
 // simplification.)
 //
-// **Subscribe semantics.** Per the eventbus convention (see
-// docs/specs/eventbus/subscribers-registry.md), the adapter
+// **Subscribe semantics.** Per the eventbus subscriber
+// convention, the adapter
 // Subscribes with the catch-all `**` topic filter and re-checks
 // each client's requested topic set during fan-out. Keeps the
 // per-channel Subscribe count at one.

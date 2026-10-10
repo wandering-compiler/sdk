@@ -142,8 +142,7 @@ func (s *Server) SetToolPerm(name string, permID int32) {
 // on both its endpoint perm and — for model-backed methods — the model
 // perm (`<module>.<Model>#view`). Enforcing only the endpoint perm let a
 // token carrying it read the model through MCP while REST answered 403;
-// the same transport-parity argument is recorded for the RPC gateway in
-// docs/decisions/rpc-transport-enforces-acl.md (Q57-gateway-1).
+// the same transport-parity argument holds for the RPC gateway.
 func (s *Server) SetToolPerms(name string, permIDs ...int32) {
 	ids := make([]int32, 0, len(permIDs))
 	for _, id := range permIDs {
@@ -209,11 +208,11 @@ func (s *Server) filterTools(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
 	// caller may see nothing — the protocol has no way to distinguish
 	// them, so the operator has to be told on this side.
 	//
-	// a consumer, 2026-09-01: their MCP surface answered `[]` to every caller,
-	// token or not, because their database had zero rows in
-	// auth_rolepermission. They read it as "nothing is published" and went
-	// looking for a registration bug that did not exist. The tool WAS
-	// registered; nobody could see it.
+	// An MCP surface answering `[]` to every caller, token or not, is what
+	// a database with zero rows in auth_rolepermission produces. It reads
+	// as "nothing is published" and sends the operator looking for a
+	// registration bug that does not exist. The tool IS registered; nobody
+	// can see it.
 	if len(out) == 0 && len(tools) > 0 {
 		log.Printf("mcp: tools/list is EMPTY for this caller — all %d registered tool(s) are permission-gated "+
 			"and the caller resolved to %d permission(s). This is a PERMISSION result, not an empty registry: "+
@@ -478,12 +477,11 @@ func (s *Server) CallUnary(
 	}
 
 	// UseEnumNumbers mirrors restgw: enum values are INTEGERS on every w17
-	// JSON surface (docs/specs/gateway/json-dialect.md §2a, which names MCP
-	// explicitly). This site emitted NAMES while the comment below claimed
+	// JSON surface, MCP included. This site emitted NAMES while the comment below claimed
 	// the result matches "the tool's registered schema … and every other
 	// JSON surface" — and the registered schema advertises integers, so a
 	// client validating a result against the schema it was given saw a type
-	// mismatch on every enum field (T2-6 pass #9, A9-4).
+	// mismatch on every enum field.
 	out, err := protojson.MarshalOptions{UseProtoNames: true, UseEnumNumbers: true}.Marshal(respMsg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal response: %w", err)

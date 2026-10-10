@@ -340,8 +340,8 @@ func TestLimiter_NoWarningWhenTheClientIsResolvable(t *testing.T) {
 	}
 }
 
-// TestAllowChargeable_ChargesOnlyFailures — T2-6 pass #10, B10-7's second
-// half.
+// TestAllowChargeable_ChargesOnlyFailures — the limiter charges wrong
+// answers, not arrivals.
 //
 // The login limiter charged ARRIVALS. What it defends against is guessing,
 // and guessing means wrong answers — so a legitimate caller that

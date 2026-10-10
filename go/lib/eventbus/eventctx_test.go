@@ -9,8 +9,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/eventbus"
 )
 
-// TestEventContextReaders_GatewayTierReadsOutgoing is the B-F9 / C8-F3
-// regression guard.
+// TestEventContextReaders_GatewayTierReadsOutgoing is a regression guard:
+// gateway-tier readers must look at OUTGOING metadata.
 //
 // A gateway-tier emit is called with the context the REST / MCP handler
 // just BUILT for its downstream call: `r.Context()` plus OUTGOING metadata

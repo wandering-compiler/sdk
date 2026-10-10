@@ -9,7 +9,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// REV-147 — ScopeKey pins the metadata-key naming convention.
+// ScopeKey pins the metadata-key naming convention.
 // Both gateway emit + storage emit call this function so the
 // two sides agree on the wire format without literal-string
 // duplication.
@@ -29,7 +29,7 @@ func TestScopeKey(t *testing.T) {
 	}
 }
 
-// REV-147 — WriteMissingScope writes 403 PERMISSION_DENIED
+// WriteMissingScope writes 403 PERMISSION_DENIED
 // with the canonical message format. Generated storage
 // handlers call this when a required scope is absent from
 // the incoming gRPC metadata.

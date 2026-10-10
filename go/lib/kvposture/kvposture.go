@@ -2,7 +2,7 @@
 // just connected to is configured in a way that can silently drop entities the
 // declaration says it stores.
 //
-// T1-4 pass #12, B-F8. A `(w17.db)` model on a KV connection is an ENTITY —
+// A `(w17.db)` model on a KV connection is an ENTITY —
 // the same word the SQL tiers use — but nothing ever asked the server whether
 // it was going to keep it. On an instance configured as a CACHE
 // (`maxmemory-policy allkeys-*`) a stored entity is evictable: it disappears

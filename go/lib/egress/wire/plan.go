@@ -1,6 +1,6 @@
 // Package wire is the JSON (and form) codec of a generated egress client:
 // it renders a proto message the way the third-party API writes it, and
-// reads the API's JSON back (docs/todos/egress-rest-client.md, phase 3).
+// reads the API's JSON back.
 //
 // Everything it knows about the upstream comes from the options the
 // compiler put on the client's proto (proto/w17/egress.proto): the exact

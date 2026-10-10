@@ -13,7 +13,7 @@ import (
 )
 
 // Generated zero-allocation JSON marshalers (the perf layer of the w17
-// JSON dialect — docs/specs/gateway/json-dialect.md §5). SSE only
+// JSON dialect). SSE only
 // marshals, so the hot path is marshal: a generated per-message
 // MarshalFunc appends the w17-dialect JSON straight into a pooled buffer
 // — no protojson, no reflection, and it emits the collapsed oneof shape

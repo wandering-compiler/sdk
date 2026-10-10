@@ -1,12 +1,12 @@
 // HTTP-side OpenTelemetry + Prometheus surface for generated
-// REST gateways (G3i3-GW-C + G3i3-GW-D, REV-031 Phase C-6).
+// REST gateways.
 // OTel boot itself (TracerProvider + MeterProvider + W3C
 // propagator) lives in `lib/observx` — this file only carries
 // the HTTP-specific bits:
 //
 //   - **ObservabilityMiddleware**: combines otelhttp wrap +
 //     RequestID generation/echo + request_id-as-span-attribute
-//     (REV-032 Cat 4 sweep). One wrap, one ctx mutation, span
+//     One wrap, one ctx mutation, span
 //     attribute set in the same hop — generated gateway uses
 //     this instead of two separate middlewares.
 //   - **OTelMiddleware**: standalone otelhttp wrap. Kept for
@@ -50,8 +50,7 @@ import (
 )
 
 // ObservabilityMiddleware combines OTel HTTP instrumentation +
-// request-ID handling into a single wrap (REV-032, Cat 4
-// sweep). Sequence per request:
+// request-ID handling into a single wrap. Sequence per request:
 //
 //  1. otelhttp.NewHandler wraps the chain — span starts on
 //     entry; otelhttp emits standard `http.server.*` attrs +
@@ -156,8 +155,7 @@ func MetricsHandler() http.Handler {
 // startup banner then contradicted. A composed binary makes
 // that easy to hit — its absorbed admin component binds 9090 in
 // the SAME process, which is the port the generated
-// `.env.example` used to recommend for metrics (T2-6 round 2,
-// pass #6, D1-F3).
+// `.env.example` used to recommend for metrics.
 //
 // The metrics listener is intentionally separate from the
 // public mux: metrics endpoints carry detailed per-route

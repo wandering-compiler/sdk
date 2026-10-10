@@ -141,7 +141,7 @@ func TestExpandValuesPG(t *testing.T) {
 			want:      "INSERT INTO t (a, b, c, d, e, f, g, h, i, j, k) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11), ($12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
 		},
 		{
-			// Q47-dql-1: a string-literal column value containing a `)`
+			// A string-literal column value containing a `)`
 			// must not be mistaken for the tuple's closing paren.
 			name:      "string literal with paren — not a tuple boundary",
 			sql:       "INSERT INTO t (x, note) VALUES ($1, 'a)b') RETURNING id",
