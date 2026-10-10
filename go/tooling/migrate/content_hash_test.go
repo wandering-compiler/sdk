@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestContentHash pins the canonical injective encoding (writer-F2/sign-F5) so
+// TestContentHash pins the canonical injective encoding so
 // the console (which imports this exact function) and the apply tool can never
 // drift, and a format change is a deliberate, visible break.
 //
@@ -29,7 +29,7 @@ func TestContentHash(t *testing.T) {
 	}
 }
 
-// T2-5 B11-1 — the predecessor is an INPUT to the hash, not a field beside it.
+// The predecessor is an INPUT to the hash, not a field beside it.
 //
 // This is the property the whole fix rests on. If prev only travelled next to
 // content_sha256, whoever rewrites a migration's body rewrites its prev too and
@@ -71,8 +71,8 @@ func TestContentHash_PredecessorIsNotTruncated(t *testing.T) {
 // TestContentHashMatches_AcceptsADigestMintedBeforeExtensionBinding — a
 // migration stored months ago must still verify.
 //
-// T2-6 pass #10, B10-2 (measured). `e1ce9863e` bound the required-extension
-// set into `content_sha256`, reasoning that writing the segment "only when
+// Measured. Binding the required-extension set into `content_sha256` was
+// reasoned to be compatible because the segment is written "only when
 // non-empty" left every earlier digest untouched. That holds for a migration
 // declaring NO extensions and fails for exactly the ones that do: those were
 // stored — the manifest has travelled since April, `required_extensions`
@@ -81,7 +81,7 @@ func TestContentHash_PredecessorIsNotTruncated(t *testing.T) {
 // message about hand-editing, which bricks apply including a fresh
 // environment's first bootstrap.
 //
-// The commit's evidence was "verified against the production console: its
+// The change's evidence was "verified against the production console: its
 // one stored migration carries no manifest" — an existence check over ONE
 // deployment rather than over the shape.
 func TestContentHashMatches_AcceptsADigestMintedBeforeExtensionBinding(t *testing.T) {
@@ -121,13 +121,12 @@ func TestContentHashMatches_AcceptsADigestMintedBeforeExtensionBinding(t *testin
 	}
 }
 
-// TestMismatchRefusals_DoNotDiagnoseTamperingAsTheOnlyCause — T2-6 pass
-// #10, B10-3.
+// TestMismatchRefusals_DoNotDiagnoseTamperingAsTheOnlyCause.
 //
 // Both refusals attributed every digest mismatch to a hand edit. Since
 // required-extension binding there is a second, blameless cause on the
 // load side: an artifact fetched by a build whose hash formula differs
-// from this one. B10-2 made the CHECK accept both formulas; this pins the
+// from this one. ContentHashMatches makes the CHECK accept both formulas; this pins the
 // TEXT, because an operator staring at "someone hand-edited this" for a
 // file nobody touched goes looking for an intruder instead of re-fetching.
 //

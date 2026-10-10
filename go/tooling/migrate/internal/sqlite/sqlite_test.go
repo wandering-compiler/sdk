@@ -146,7 +146,7 @@ func TestClose_DoubleClose(t *testing.T) {
 func TestURLToDriverDSN_StripsAbsolute(t *testing.T) {
 	got := sqlite.URLToDriverDSN("sqlite:///abs/path.db")
 	// The path is the subject here; the session pragmas ride along on
-	// every DSN this builder produces (B-F7) and are pinned by
+	// every DSN this builder produces and are pinned by
 	// TestURLToDriverDSN_CarriesTheRuntimeSessionPragmas.
 	if path, _, _ := strings.Cut(got, "?"); path != "/abs/path.db" {
 		t.Errorf("got %q, want path /abs/path.db", got)
@@ -156,7 +156,7 @@ func TestURLToDriverDSN_StripsAbsolute(t *testing.T) {
 func TestURLToDriverDSN_StripsRelative(t *testing.T) {
 	got := sqlite.URLToDriverDSN("sqlite://relative.db")
 	// The path is the subject here; the session pragmas ride along on
-	// every DSN this builder produces (B-F7) and are pinned by
+	// every DSN this builder produces and are pinned by
 	// TestURLToDriverDSN_CarriesTheRuntimeSessionPragmas.
 	if path, _, _ := strings.Cut(got, "?"); path != "relative.db" {
 		t.Errorf("got %q, want path relative.db", got)
@@ -168,7 +168,7 @@ func TestURLToDriverDSN_FilePassThrough(t *testing.T) {
 	// "Pass through" is about the FORM: the driver-native shape is not
 	// rewritten. The session pragmas are still appended — a connection
 	// opened this way runs the same SQL as every other one, so it must
-	// mean the same thing (B-F7).
+	// mean the same thing.
 	if !strings.HasPrefix(got, "file:test.db?mode=rwc") {
 		t.Errorf("file: form should pass through unchanged; got %q", got)
 	}
@@ -181,7 +181,7 @@ func TestURLToDriverDSN_BarePathPassThrough(t *testing.T) {
 	got := sqlite.URLToDriverDSN("/tmp/raw.db")
 	// The PATH passes through; the session pragmas are appended to it,
 	// because a bare-path DSN opens the same kind of connection as any
-	// other and has to mean the same thing (B-F7).
+	// other and has to mean the same thing.
 	if path, _, _ := strings.Cut(got, "?"); path != "/tmp/raw.db" {
 		t.Errorf("bare path should pass through; got %q", got)
 	}
@@ -215,7 +215,7 @@ func TestWipe(t *testing.T) {
 	}
 }
 
-// T1-4 pass #12, B-F7. The applier must open its connection with the
+// The applier must open its connection with the
 // same session as the generated runtime.
 //
 // The runtime pins `case_sensitive_like` on every pooled connection so a
@@ -259,7 +259,7 @@ func TestURLToDriverDSN_CarriesTheRuntimeSessionPragmas(t *testing.T) {
 	}
 }
 
-// B-F5. The applier records which collator built this database's indexes,
+// The applier records which collator built this database's indexes,
 // and refuses to add more DDL on top of a database built with a different
 // one.
 //

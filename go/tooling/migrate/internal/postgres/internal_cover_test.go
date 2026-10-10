@@ -26,7 +26,7 @@ func TestSplitStatements(t *testing.T) {
 		{"trailing empty dropped", "A;;", []string{"A;"}},
 		{"interior blank dropped", "A;\n\n;B", []string{"A;", "B;"}},
 		{"surrounding whitespace trimmed", "  A  ;  B  ", []string{"A;", "B;"}},
-		// writer-F5 — a semicolon inside a single-quoted literal is NOT a boundary.
+		// A semicolon inside a single-quoted literal is NOT a boundary.
 		{"semicolon in string literal", "CREATE INDEX CONCURRENTLY i ON t (c) WHERE s = 'a;b'; UPDATE t SET x = 1", []string{"CREATE INDEX CONCURRENTLY i ON t (c) WHERE s = 'a;b';", "UPDATE t SET x = 1;"}},
 		{"escaped quote in literal", "INSERT INTO t VALUES ('a''b;c'); SELECT 1", []string{"INSERT INTO t VALUES ('a''b;c');", "SELECT 1;"}},
 		{"semicolon in line comment", "SELECT 1 -- a;b\nWHERE x = 1; SELECT 2", []string{"SELECT 1 -- a;b\nWHERE x = 1;", "SELECT 2;"}},

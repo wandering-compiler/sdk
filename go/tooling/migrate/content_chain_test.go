@@ -14,7 +14,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/stub"
 )
 
-// T2-5 B11-1 — the signed lock pinned only the TARGET migration.
+// The signed lock used to pin only the TARGET migration.
 //
 // Every migration applied on the way to that target carried nothing but its
 // own self-hash, which whoever holds the artifact directory recomputes for

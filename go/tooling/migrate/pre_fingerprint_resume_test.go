@@ -32,13 +32,12 @@ func (a *resumeApplier) ApplyPostTx(context.Context, *applyfetchpb.Migration) er
 	return nil
 }
 
-// TestPreFingerprint_DoesNotWedgeAResume — T3-7 pass #14, `D14-3`.
+// TestPreFingerprint_DoesNotWedgeAResume.
 //
-// The drift gate landed days before this pass and closed a real hole: it
-// refuses to apply a migration onto a database that is not in the state the
-// migration was planned against. `expected_pre_fingerprint` had been stamped
-// and compared nowhere for three passes, and automating apply is what made
-// that urgent.
+// The drift gate closed a real hole: it refuses to apply a migration onto a
+// database that is not in the state the migration was planned against.
+// `expected_pre_fingerprint` had been stamped and compared nowhere before it,
+// and automating apply is what made that urgent.
 //
 // Its closure introduced this. The check runs BEFORE `applyOrResume`, so it
 // also meets a migration whose in-tx half is already committed — a process
@@ -66,7 +65,7 @@ func TestPreFingerprint_DoesNotWedgeAResume(t *testing.T) {
 		t.Fatalf("the drift gate refused a migration that is mid-flight:\n%v\n\n"+
 			"Its in-tx half is committed, so the database is at the post-in-tx state by "+
 			"construction — the pre-state can never match again. The refusal blames a "+
-			"hand-applied DDL and every redeploy repeats it (T3-7 pass #14, D14-3).", err)
+			"hand-applied DDL and every redeploy repeats it.", err)
 	}
 	if err := applyOrResume(context.Background(), a, m, &out); err != nil {
 		t.Fatalf("resume: %v", err)

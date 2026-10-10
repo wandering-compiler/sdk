@@ -18,8 +18,7 @@ import (
 // binaries rather than reimplementing the dump format over pgx: a
 // snapshot must round-trip the *whole* database (tables, data,
 // sequences, indexes, the w17_migrations ledger), which pg_dump
-// already does correctly and is the precedent the spec names
-// (`docs/specs/storage/dev-db-lifecycle.md` S1). The binaries are a
+// already does correctly. The binaries are a
 // reasonable dependency for a developer-machine tool (w17ctl); the
 // factory only constructs this on the dev snapshot path, never on the
 // production apply path.

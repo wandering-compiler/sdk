@@ -9,14 +9,14 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/stub"
 )
 
-// T2-5 pass #2 T25-D2-1: the content-integrity gate degraded OPEN on a
+// The content-integrity gate degraded OPEN on a
 // degenerate lock. `Plan` skips the tamper check when target_content_sha256 is
 // empty (`want != "" && want != found`), so a lock whose pin was blanked — a
 // hand-edit, or a lock predating the pin — applies a MIGRATION WITHOUT verifying
 // its content against the pin. ContentHash always yields a non-empty value, so an
 // empty pin on a set target is always an anomaly; treating it as "skip" rather
 // than "refuse" fails open on the one control the offline client (which does not
-// re-verify the signature — D4) has to catch a tampered fetched artifact.
+// re-verify the signature) has to catch a tampered fetched artifact.
 
 // Apply: a pinned target with an EMPTY content hash must be REFUSED, not applied
 // unchecked. (Proven exploit: with an empty pin, a tampered artifact sailed

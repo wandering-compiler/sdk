@@ -49,7 +49,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("sqlite.New: dsn is empty")
 	}
-	// F7-A-5 / WOB3: register the W17_UNICODE collation before opening, so
+	// Register the W17_UNICODE collation before opening, so
 	// `CREATE TABLE ... COLLATE W17_UNICODE` DDL resolves (SQLite binds a
 	// column's collation at CREATE time) and the indexes the migrator builds
 	// order text identically to the runtime binary's queries. Global +
@@ -68,7 +68,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 }
 
 // AppliedHead returns the id of the most recently applied
-// migration on this DB by querying `w17_migrations` (D27).
+// migration on this DB by querying `w17_migrations`.
 // Missing table = empty string (treated as fresh DB by the
 // orchestrator). SQLite returns "no such table: w17_migrations"
 // on absence, sniffed via substring match on the error message
@@ -297,8 +297,8 @@ func (a *Applier) Fingerprint(ctx context.Context) (string, error) {
 //
 // The pragmas come from [dbsession.SQLitePragmas], the same declaration
 // the generated runtime renders, because the applier and the runtime
-// disagreeing about the session is a defect either way round: B-F7 was
-// LIKE meaning one thing here and another at serving time, with CHECK
+// disagreeing about the session is a defect either way round: one such
+// defect was LIKE meaning one thing here and another at serving time, with CHECK
 // expressions and partial-index predicates evaluated on this connection.
 // Asking the shared declaration is what keeps the next pin from having
 // to remember this call site exists.
@@ -316,11 +316,11 @@ func URLToDriverDSN(dsn string) string {
 // to apply on top of a database whose indexes were built with a different
 // one.
 //
-// T1-4 pass #12, B-F5 (Jiri 2026-08-08: stamp in the DB, next to the
-// migrations). The comparison itself lives in sqlitecollate, next to the
-// collation it characterises, so the applier and every generated runtime
-// read ONE implementation of "do these two builds order text the same
-// way" — writing it twice is the shape this pass keeps finding.
+// The stamp lives in the DB, next to the migrations. The comparison itself
+// lives in sqlitecollate, next to the collation it characterises, so the
+// applier and every generated runtime read ONE implementation of "do these
+// two builds order text the same way" — writing it twice is how the two
+// copies drift apart.
 //
 // Refusing HERE, at apply, because this is the moment the damage would be
 // done: applying DDL under a different collator is what builds the

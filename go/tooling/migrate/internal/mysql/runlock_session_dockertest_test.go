@@ -16,7 +16,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/mysql"
 )
 
-// TestRunLock_SurvivesAnIdleServerTimeout — T3-7 pass #15, `B15-15`.
+// TestRunLock_SurvivesAnIdleServerTimeout.
 //
 // The lock connection is touched exactly twice: GET_LOCK when the run starts
 // and RELEASE_LOCK when it ends. The whole migration happens in between, and

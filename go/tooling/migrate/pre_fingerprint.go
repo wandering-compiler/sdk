@@ -117,7 +117,7 @@ func checkPreFingerprint(ctx context.Context, applier Applier, m *applyfetchpb.M
 	// hand-applied DDL or a restore from another environment. The process
 	// was killed mid-skirt, which is precisely the case the resume machinery
 	// exists for, and every redeploy repeats the refusal. A permanent wedge
-	// wearing somebody else's name (T3-7 pass #14, D14-3).
+	// wearing somebody else's name.
 	//
 	// The pre-state WAS verified — when this migration began. Re-verifying
 	// it on resume asks whether the past is still the present.

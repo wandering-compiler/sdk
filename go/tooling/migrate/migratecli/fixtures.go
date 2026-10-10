@@ -63,8 +63,8 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 		// Say WHERE it looked. "Nothing to seed" is a success, and a success
 		// that names no source cannot be told apart from a run pointed at the
 		// wrong directory or filtered by a group nobody rendered — which is
-		// exactly how it read to a consumer, who took it as proof the step had run
-		// (2026-09-12). The three inputs that decide this answer are the
+		// exactly how it read to a consumer, who took it as proof the step had
+		// run. The three inputs that decide this answer are the
 		// directory, the domain filter and the group, so all three are named.
 		where := f.fixtures
 		if f.fetch {

@@ -15,8 +15,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/sqlite"
 )
 
-// F8-D-3: `VACUUM INTO` replays the schema DDL, so a DB whose string columns
-// carry `COLLATE W17_UNICODE` (every generated SQLite project since F7-A-5) can
+// `VACUUM INTO` replays the schema DDL, so a DB whose string columns
+// carry `COLLATE W17_UNICODE` (every generated SQLite project) can
 // only be dumped if the Snapshotter's own connection registers the collation.
 // Before the fix, Dump failed "no such collation sequence: W17_UNICODE".
 func TestSnapshotter_DumpsUnicodeCollatedDB(t *testing.T) {

@@ -9,19 +9,19 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
-// T2-5 pass #12 — the CLASS behind three of this pass's findings.
+// The CLASS behind three separate defects.
 //
-// `supersedes`, `adopt_sql` and `id` were each found separately, by different
-// lanes, and each is the same shape: `ContentHash` is a hand-written segment
-// list over a proto that keeps growing, and the fields nobody remembered to
-// add are the ones that decide what executes. That shape — "the enumeration
-// behind the proto" — is prior #1 in this dimension's brief, and the B11-1 fix
-// reproduced it while closing an instance of it.
+// `supersedes`, `adopt_sql` and `id` were each found separately, and each is
+// the same shape: `ContentHash` is a hand-written segment list over a proto
+// that keeps growing, and the fields nobody remembered to add are the ones
+// that decide what executes. That shape — "the enumeration behind the proto"
+// — is a well-known trap, and the content-hash chain reproduced it while
+// closing an instance of it.
 //
 // So this gate, not three more segments. Every field of the artefact must be
 // either an INPUT to the digest or explicitly excused WITH a reason, and a
 // field added tomorrow fails here until somebody decides which it is. Same
-// technique as the two classes closed on 2026-08-15
+// technique as two other descriptor-walking gates
 // (lock.TestCanonicalize_EveryRepeatedFieldIsClassified,
 // compat.TestColumnAxes_EveryFieldIsSeenOrExcused): walk the DESCRIPTOR, never
 // a list a human has to keep in sync.
@@ -33,7 +33,7 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 			"loadConnectionMigrations backfills it only when EMPTY (a self-heal for older fetches), " +
 			"so a wrong non-empty value survives into logging and adopt bookkeeping and is not " +
 			"corrected — which is why this is excused as unauthoritative rather than as derived " +
-			"(T2-5 pass #14, C14-13: the excuse used to claim the loader rewrites it unconditionally)",
+			"(an earlier version of this excuse wrongly claimed the loader rewrites it unconditionally)",
 		"adopt_preflight_sql": "fail-CLOSED, so stripping it cannot widen what an attacker can do. " +
 			"It is the check `migrate adopt` must pass before recording a migration it will not run, " +
 			"and an EMPTY value means REFUSE rather than \"nothing to check\", so tampering " +
@@ -68,8 +68,8 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 			t.Errorf("field %q travels with the artifact but does not change ContentHash.\n"+
 				"Every field is either an input to the digest or excused WITH a reason. If it cannot "+
 				"affect what executes on the target database, add it to `excused` and say why; if it "+
-				"can, hash it. Three findings in pass #12 were fields that quietly took the first "+
-				"option without anybody choosing it.", name)
+				"can, hash it. `supersedes`, `adopt_sql` and `id` were all fields that quietly took the "+
+				"first option without anybody choosing it.", name)
 		}
 	}
 }
@@ -81,7 +81,7 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 // this gate, and getting it wrong made the first version of it vacuous: the
 // encoding picks its version tag on whether the optional segments are present
 // at all, so an empty→set probe moves the digest through the TAG even when the
-// field's value is not covered. Measured while break-proofing this pass —
+// field's value is not covered. Measured while break-proofing this gate —
 // deleting the `adopt_sql` segment from ContentHash left the gate green.
 //
 // Driven off the descriptor rather than a switch on field names, so a new
