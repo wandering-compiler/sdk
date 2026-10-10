@@ -6,7 +6,7 @@ import (
 )
 
 // Snapshotter is the per-connection dump/restore surface for the
-// dev DB lifecycle (`docs/specs/storage/dev-db-lifecycle.md`). It is
+// dev DB lifecycle. It is
 // a deliberate mirror of Applier: one impl per target type
 // (PG / MySQL / SQLite / Redis / NATS / S3), selected by DSN scheme
 // through the same factory, but it serves the orthogonal concern of
@@ -15,8 +15,7 @@ import (
 // A snapshot is a full dump of a store's stateful contents to an
 // opaque byte stream that Restore can replay into a (possibly wiped)
 // store of the same dialect. Snapshots are disposable dev scratch
-// (`w17/tmp/<branch>/db/`), not a backup/DR mechanism — see the
-// spec's Non-goals.
+// (`w17/tmp/<branch>/db/`), not a backup/DR mechanism.
 //
 // Atomicity is NOT required per store: the branch-switch reconcile
 // quiesces writers (stops every container except the stateful
@@ -45,7 +44,7 @@ type Snapshotter interface {
 // It exists to separate two states a dump cannot tell apart. An object-less SQL
 // dump means either "this store is empty" or "the dump reached a different
 // database than the one this store names" — and the second is how a branch
-// switch came to restore a 722-byte file over a live database (a consumer). The
+// switch came to restore a 722-byte file over a live database. The
 // caller used to infer the second from the first and refuse both, which made a
 // brand-new empty store unswitchable except through the flag that WIPES.
 //

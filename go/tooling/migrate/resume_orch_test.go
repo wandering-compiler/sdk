@@ -83,7 +83,7 @@ func TestRun_ResumesPendingSkirt(t *testing.T) {
 	}
 }
 
-// TestPlanRollback_IncludesHalfAppliedAboveHead (writer-F1) — a PhasePending
+// TestPlanRollback_IncludesHalfAppliedAboveHead — a PhasePending
 // migration (in-tx half committed, skirt crashed) sits ABOVE AppliedHead's
 // post_tx_complete cutoff, but rollback must still undo it: it is invisible to
 // rollback otherwise, and its committed DDL + lying pending row persist.
@@ -105,11 +105,11 @@ func TestPlanRollback_IncludesHalfAppliedAboveHead(t *testing.T) {
 		t.Fatalf("PlanRollback: %v", err)
 	}
 	if len(pending) != 1 || pending[0].Migration.GetId() != "ts-2" {
-		t.Fatalf("writer-F1: half-applied ts-2 above head must be rolled back; got %+v", pending)
+		t.Fatalf("half-applied ts-2 above head must be rolled back; got %+v", pending)
 	}
 }
 
-// TestPlanRollback_HalfAppliedOnFreshLookingDB (writer-F1) — when the ONLY
+// TestPlanRollback_HalfAppliedOnFreshLookingDB — when the ONLY
 // migration is half-applied, AppliedHead is "" (no complete row), but rollback
 // must still undo it rather than report "nothing to roll back".
 func TestPlanRollback_HalfAppliedOnFreshLookingDB(t *testing.T) {
@@ -129,7 +129,7 @@ func TestPlanRollback_HalfAppliedOnFreshLookingDB(t *testing.T) {
 		t.Fatalf("PlanRollback: %v", err)
 	}
 	if len(pending) != 1 || pending[0].Migration.GetId() != "ts-1" {
-		t.Fatalf("writer-F1: a half-applied migration on a fresh-looking DB must roll back; got %+v", pending)
+		t.Fatalf("a half-applied migration on a fresh-looking DB must roll back; got %+v", pending)
 	}
 }
 

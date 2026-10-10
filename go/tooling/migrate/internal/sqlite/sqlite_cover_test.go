@@ -45,7 +45,7 @@ func TestParseDSN_NormalisesURLForm(t *testing.T) {
 		t.Errorf("URLDSN = %q, want raw input", cfg.URLDSN)
 	}
 	// The path is the subject; the session pragmas ride every DSN this
-	// builder produces (B-F7).
+	// builder produces.
 	if path, _, _ := strings.Cut(cfg.DriverDSN, "?"); path != "/abs/path.db" {
 		t.Errorf("DriverDSN = %q, want path /abs/path.db", cfg.DriverDSN)
 	}

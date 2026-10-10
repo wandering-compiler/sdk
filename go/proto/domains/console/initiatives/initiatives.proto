@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+// Console v2 — initiatives + snapshots STORAGE wire contract (client side).
+//
+// Plain-protobuf mirror of console-app's GENERATED storage services
+// (InitiativeQuery/Mutation, SnapshotQuery/Mutation), wire-compatible
+// with the server (same package `console.initiatives`, same service +
+// method names + field numbers). w17ctl calls these storage services
+// DIRECTLY — there is no hand-written facade tier. The lifecycle glue
+// (get-or-create, lazy push, head advance) is client-side orchestration
+// in w17ctl; "one trunk per project" is a DB partial-unique index; the
+// compat engine runs client-side. See the console's compat notes for the
+// single-source-of-this-mirror question.
+package console.initiatives;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/consoleapi/initiatives;initiativespb";
+
+import "google/protobuf/timestamp.proto";
+
+message Snapshot {
+  string id               = 1;
+  string project_id       = 2;
+  string initiative_id    = 3;
+  bytes  ir_schema        = 4;
+  string lock_hash        = 5;
+  string compiler_version = 6;
+  string created_by       = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message Initiative {
+  string id               = 1;
+  string project_id       = 2;
+  string name             = 3;
+  Status status           = 4;
+  string base_snapshot_id = 5;
+  string head_snapshot_id = 6;
+  bool   is_trunk         = 7;
+  string created_by       = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    OPEN               = 1;
+    MERGED             = 2;
+    ABANDONED          = 3;
+  }
+}
+
+// --- InitiativeQuery ---
+message FindInitiativeReq {
+  string project_id = 1;
+  string name       = 2;
+}
+message ListInitiativesReq {
+  string project_id = 1;
+}
+message ListInitiativesResp {
+  repeated Initiative rows = 1;
+}
+message GetInitiativeReq {
+  string id = 1;
+}
+
+// --- InitiativeMutation ---
+message CreateInitiativeReq {
+  string           project_id = 1;
+  string           name       = 2;
+  Initiative.Status status    = 3;
+  bool             is_trunk   = 4;
+  string           created_by = 5;
+}
+message CreateInitiativeResp {
+  string id = 1;
+}
+message SetHeadReq {
+  string id               = 1;
+  string head_snapshot_id = 2;
+  // expected_head_snapshot_id — compare-and-set on the head the caller READ
+  // (T3-7 D-F1). Empty string = "expected unset". Two merges that both read
+  // the same trunk head used to both land, and the loser's review stayed
+  // recorded MERGED while trunk pointed elsewhere; now the second one is
+  // refused with NotFound.
+  string expected_head_snapshot_id = 3;
+}
+message SetHeadResp {
+  string head_snapshot_id = 1;
+}
+message SetStatusReq {
+  string id = 1;
+  Initiative.Status status = 2;
+}
+message SetStatusResp {}
+
+// --- SnapshotQuery / SnapshotMutation ---
+message GetSnapshotReq {
+  string id = 1;
+}
+message PushSnapshotReq {
+  string project_id       = 1;
+  string initiative_id    = 2;
+  bytes  ir_schema        = 3;
+  string lock_hash        = 4;
+  string compiler_version = 5;
+  string created_by       = 6;
+}
+message PushSnapshotResp {
+  string snapshot_id = 1;
+}
+
+service InitiativeQuery {
+  rpc Find(FindInitiativeReq) returns (ListInitiativesResp);
+  rpc List(ListInitiativesReq) returns (ListInitiativesResp);
+  rpc Get(GetInitiativeReq) returns (Initiative);
+}
+
+service InitiativeMutation {
+  rpc Create(CreateInitiativeReq) returns (CreateInitiativeResp);
+  rpc SetHead(SetHeadReq) returns (SetHeadResp);
+  rpc SetStatus(SetStatusReq) returns (SetStatusResp);
+}
+
+service SnapshotQuery {
+  rpc Get(GetSnapshotReq) returns (Snapshot);
+}
+
+service SnapshotMutation {
+  rpc PushSnapshot(PushSnapshotReq) returns (PushSnapshotResp);
+}

@@ -174,7 +174,7 @@ func TestPlan_MarksAdoptOnlyTheSatisfiedBaseline(t *testing.T) {
 	}
 }
 
-// T2-5 pass #15 (T25-A15-5, HIGH) — a MID-RANGE head is not a database the
+// A MID-RANGE head is not a database the
 // baseline describes, and adopting for one skips the tail's DDL forever.
 //
 // The adopt decision was `head != "" && supersedes(m, head)` — ANY membership.

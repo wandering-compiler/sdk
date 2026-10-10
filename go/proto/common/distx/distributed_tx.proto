@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package w17.common.distx;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/common/distx;distxpb";
+
+// W17DistributedTransaction is the distributed-transaction
+// coordination surface every w17 storage binary registers per
+// `docs/archive/iteration-2-dql.md` §"W17DistributedTransaction".
+//
+// A caller drives a logical multi-RPC transaction by:
+//
+//   resp = stub.Begin({connection_name: "main"})  // → tx_id
+//   stub.SomeStorageMethod(req, metadata={"w17-tx-id": resp.tx_id})
+//   stub.AnotherStorageMethod(req, metadata={"w17-tx-id": resp.tx_id})
+//   stub.Commit({tx_id: resp.tx_id})  // or Rollback
+//
+// Storage handlers see the metadata, look up tx_id in the
+// running binary's tx registry, and run their queries inside
+// the open *sql.Tx. If the metadata is absent (caller didn't
+// open a tx, or the id resolves to nothing), the handler opens
+// a per-method tx — the slice 6H "always-fresh-tx" fallback.
+//
+// **Single-instance default (D-iter2-dql-11).** In the common
+// case of one storage binary per domain, `conn_id` is a
+// redundant axis — every `tx_id` resolves on the sole live
+// binary. The single-instance impl returns conn_id as an empty
+// string and ignores it on subsequent calls. Multi-instance
+// scale-out routes via `conn_id` through a future Rust
+// `grpcproxy` daemon (parked).
+service W17DistributedTransaction {
+  // Begin opens a fresh transaction on the named connection
+  // and returns the (conn_id, tx_id) pair the caller threads
+  // into subsequent storage RPCs. Single-instance leaves
+  // conn_id empty.
+  rpc Begin(BeginRequest) returns (BeginResponse);
+
+  // Commit finalises the tx for tx_id. Returns NotFound when
+  // the id doesn't resolve (already closed / never opened /
+  // binary restarted between Begin and Commit).
+  rpc Commit(CommitRequest) returns (CommitResponse);
+
+  // Rollback discards the tx for tx_id. Same NotFound on
+  // unknown id.
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+}
+
+message BeginRequest {
+  // ConnectionName names a connection declared in the domain's
+  // schema (D26 unique identifier). Single-instance ignores
+  // this until M2 multi-connection lands; multi-instance
+  // domains route Begin to the replica owning that connection.
+  string connection_name = 1;
+
+  // TxTimeoutMs — long-running transaction deadline in
+  // milliseconds (slice 6Q-F Tier 2). When > 0, the distx
+  // server wraps the tx's ctx with `context.WithTimeout`; on
+  // expiry the sql package auto-rolls back the underlying
+  // transaction. 0 (default) leaves the tx with the
+  // long-living `context.WithoutCancel(grpcCtx)` semantics
+  // documented on Begin's doc-comment.
+  //
+  // Two-tier model (`docs/archive/iteration-2-multidb.md` §M2-F):
+  //   - Tier 1 = `(w17.db.method).timeout_ms` — per-method
+  //     deadline applied to the storage handler's own ctx;
+  //     bounds individual statement work.
+  //   - Tier 2 (this field) = tx-wide deadline applied to the
+  //     long-running distributed-tx itself; bounds the tx
+  //     entity across multiple method calls. Typically the
+  //     facade caller propagates its own deadline-budget
+  //     here.
+  //
+  // Negative values are rejected at the gRPC boundary.
+  int32 tx_timeout_ms = 2;
+
+  // Isolation pins the transaction's isolation level at Begin —
+  // the ONLY moment at which it can be pinned, since no engine
+  // lets a running transaction change level.
+  //
+  // It exists because `(w17.db.method).tx_isolation` is a
+  // property of the METHOD, and a method that is CALLED inside
+  // someone else's transaction cannot open one. Before this
+  // field, such a method's declaration was silently dropped:
+  // the generated preamble applied the declared level only on
+  // its own fresh-tx branch, and the distributed-tx branch ran
+  // at whatever the driver default was (T3-7 pass #9 D-F7). The
+  // caller now states the level up front, and a method whose
+  // declaration the open transaction cannot satisfy REFUSES to
+  // adopt it (`txregistry.ErrIsolationTooWeak`) rather than
+  // running weaker than declared.
+  //
+  // Unspecified (the default) keeps the driver default, so
+  // every existing caller is unchanged.
+  Isolation isolation = 3;
+}
+
+// Isolation mirrors `(w17.db.method).tx_isolation`
+// (`w17.db.TxIsolation`) on the distributed-tx wire — same
+// names, same numbers — so a caller can open the transaction at
+// exactly the level the method it is about to call declares.
+// Duplicated rather than imported because this contract is the
+// public runtime surface and must not drag the compiler's
+// annotation vocabulary into every client.
+enum Isolation {
+  ISOLATION_UNSPECIFIED = 0;  // driver default
+  READ_UNCOMMITTED = 1;
+  READ_COMMITTED = 2;
+  REPEATABLE_READ = 3;
+  SERIALIZABLE = 4;
+}
+
+message BeginResponse {
+  // ConnId is the routing token the multi-instance grpcproxy
+  // uses to pin every subsequent RPC in this tx to the same
+  // backend replica. Single-instance returns empty — every RPC
+  // already lands on the sole live binary.
+  string conn_id = 1;
+
+  // TxId uniquely identifies the open tx within the binary
+  // (or, with the proxy, within the cluster). Caller threads
+  // this into the `w17-tx-id` gRPC metadata header on every
+  // subsequent storage RPC that should run inside this tx.
+  string tx_id = 2;
+}
+
+message CommitRequest {
+  string tx_id = 1;
+}
+message CommitResponse {}
+
+message RollbackRequest {
+  string tx_id = 1;
+}
+message RollbackResponse {}

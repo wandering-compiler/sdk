@@ -10,7 +10,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/sqlite"
 )
 
-// TestApply_FKEnforced_NonRebuild (B4, Fable audit T1-3 pass #1) — a plain
+// TestApply_FKEnforced_NonRebuild — a plain
 // (non-rebuild) migration must run with foreign-key enforcement ON, so an
 // INSERT that violates an FK fails atomically. The applier used to wrap EVERY
 // migration in `PRAGMA foreign_keys=OFF`, silently disabling enforcement — a

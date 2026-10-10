@@ -206,7 +206,7 @@ func TestRollback_IsItsOwnSubcommand(t *testing.T) {
 }
 
 // A connection this binary serves with nothing pinned in the lock: the
-// consumer's case (2026-10-01) — `status` said "up to date — nothing
+// silent-skip case — `status` said "up to date — nothing
 // pending" without a word, `apply` succeeded, and a database with tables
 // stayed empty under a green deploy. Both now WARN, naming it and the gate
 // that knows (`migrate check --generated`). They do not refuse: a Redis
@@ -240,7 +240,7 @@ func TestApplyAndStatus_WarnAboutAServedConnectionWithNoPin(t *testing.T) {
 	}
 }
 
-// The warning goes out before anything else can fail (Copilot on #146):
+// The warning goes out before anything else can fail:
 // `apply --fetch` with only unpinned connections needs no console and
 // finishes, and in a mixed lock the warning is printed even though the
 // pinned connection's missing DSN then fails the run.

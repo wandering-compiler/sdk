@@ -62,7 +62,7 @@ func New(ctx context.Context, urlDSN string) (*Applier, error) {
 }
 
 // AppliedHead returns the id of the most recently applied
-// migration on this DB by querying `w17_migrations` (D27).
+// migration on this DB by querying `w17_migrations`.
 // Missing table = empty string (treated as fresh DB by the
 // orchestrator). MySQL surfaces "Error 1146 (42S02): Table
 // '<schema>.w17_migrations' doesn't exist" — we sniff the SQLState
@@ -259,7 +259,7 @@ func URLToDriverDSN(urlDSN string) (string, error) {
 	// require it).
 	q := u.Query()
 	q.Set("multiStatements", "true")
-	// B-F6: and pin the session settings the emitted SQL depends on, from
+	// And pin the session settings the emitted SQL depends on, from
 	// the same declaration the generated runtime reads. This builder used
 	// to force multiStatements and nothing else, while the DDL emitter
 	// doubles backslashes for the default sql_mode — so under

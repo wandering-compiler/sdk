@@ -72,8 +72,7 @@ func (a *Applier) Fingerprint(_ context.Context) (string, error) {
 // orchestrator uses to filter pending.
 // IsPostgres satisfies migrate.PostgresDialect. The stub answers TRUE by
 // default because the tests that use it exercise the Postgres-only
-// extension preflight; a test wanting the non-PG behaviour sets NotPostgres
-// (T2-6 pass #10, D10-1).
+// extension preflight; a test wanting the non-PG behaviour sets NotPostgres.
 func (a *Applier) IsPostgres() bool { return !a.NotPostgres }
 
 func (a *Applier) AppliedHead(_ context.Context) (string, error) {

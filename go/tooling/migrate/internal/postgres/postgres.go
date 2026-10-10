@@ -68,7 +68,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("postgres.New: dsn is empty")
 	}
-	// B-F9 / B-F15: pin the session settings the emitted SQL depends on,
+	// Pin the session settings the emitted SQL depends on,
 	// from the same declaration the generated runtime reads. The applier
 	// was NOT self-guarding here, contrary to how it looked: pgx checks
 	// standard_conforming_strings inside sanitizeForSimpleQuery, which
@@ -87,7 +87,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 }
 
 // AppliedHead returns the id of the most recently applied
-// migration on this DB by querying `w17_migrations` (D27).
+// migration on this DB by querying `w17_migrations`.
 // Missing table = empty string (treated as fresh DB by the
 // orchestrator).
 //
@@ -99,7 +99,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 // IsPostgres satisfies migrate.PostgresDialect, so the extension preflight
 // knows its `DO $$ … pg_extension` probe means something here. The manifest
 // field it reads travels on every dialect for tracking, so the probe has to
-// ask rather than assume (T2-6 pass #10, D10-1).
+// ask rather than assume.
 func (a *Applier) IsPostgres() bool { return true }
 
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
@@ -119,7 +119,7 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		// 42P01 = undefined_table — fresh DB; the next applied
-		// migration's up_sql will CREATE w17_migrations (D27).
+		// migration's up_sql will CREATE w17_migrations.
 		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
 			return "", nil
 		}
@@ -320,7 +320,7 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 // comments (`-- …`) and block comments (`/* … */`) are NOT boundaries. Trims
 // whitespace + drops empties; preserves the trailing `;` on each statement.
 //
-// writer-F5: the old naive `strings.Split(sql, ";")` tore a raw CONCURRENTLY
+// The old naive `strings.Split(sql, ";")` tore a raw CONCURRENTLY
 // index whose partial-index predicate / expression carried a literal semicolon
 // (e.g. `… WHERE status = 'a;b'`) — a user-authorable escape-hatch shape — into
 // two syntactically-broken Execs AFTER the in-tx half already committed the
@@ -461,16 +461,16 @@ func (a *Applier) Close() error {
 }
 
 // Fingerprint extracts the canonical PG schema state via
-// information_schema and returns its hex-encoded sha256
-// (Phase D — D-iter3-14). Excludes the w17_migrations
+// information_schema and returns its hex-encoded sha256.
+// Excludes the w17_migrations
 // bookkeeping table; sorted by name + columns. The
-// orchestrator's Phase D drift check calls this before each
+// orchestrator's drift check calls this before each
 // pending migration and REFUSES on a mismatch. The comparison is
 // skipped only when the migration carries no
 // `expected_pre_fingerprint` or a `FAKE_` placeholder, which is
 // what console still emits until it grows shadow-DB integration
 // — so the gap is in what console PROMISES, not in whether this
-// is checked (T3-7 pass #15, C15-3).
+// is checked.
 func (a *Applier) Fingerprint(ctx context.Context) (string, error) {
 	schema, err := fingerprint.ExtractPostgres(ctx, a.conn)
 	if err != nil {

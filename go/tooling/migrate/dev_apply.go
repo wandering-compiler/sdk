@@ -47,7 +47,7 @@ func DevApply(ctx context.Context, plan *applyplanpb.DevApplyPlan, applierFor Ap
 // word so it never mangles an identifier that merely contains it.
 //
 // The word boundary is not enough on its own: it says nothing about WHERE
-// in the body the match sits (T2-5 pass #12, A12-12). Applied blind, the
+// in the body the match sits. Applied blind, the
 // strip rewrote string literals and comments too — a post-tx body holding
 // `VALUES ('built CONCURRENTLY')` came out as `VALUES ('built')`. post_tx is
 // where authored raw bodies live, and "the author owns what they persist" is
@@ -206,10 +206,10 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	// forever. The crash window is permanent and silent.
 	//
 	// ⚠️ Two earlier versions each got half of this. Appending everything
-	// left the baseline after an explicit COMMIT (D14-4). Splicing ONLY the
+	// left the baseline after an explicit COMMIT. Splicing ONLY the
 	// baseline in left the post-tx statements outside while the ledger row
 	// went inside — the same tear pointing the other way, produced by the
-	// fix for it (T3-7 pass #15, C15-9).
+	// fix for it.
 	//
 	// A body with NO envelope keeps the appended shape: a dialect without
 	// transactional DDL has nothing to be inside of, and inventing a BEGIN
@@ -238,7 +238,7 @@ func joinNonEmpty(sep string, parts ...string) string {
 // ⚠️ A substring search is not good enough and that is measured, not
 // theoretical: a post-tx statement containing `'after COMMIT; rebuild
 // stats'` had the baseline spliced into the middle of the author's string
-// literal (T3-7 pass #15, C15-9). The correct scanner already existed in
+// literal. The correct scanner already existed in
 // this file — `stripConcurrently` walks comments and quoted strings — and
 // simply was not used. Reusing its traversal rather than writing a second
 // one is the point: two scanners over the same grammar drift, and the one

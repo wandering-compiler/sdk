@@ -38,7 +38,7 @@ import (
 //
 // ⚠️ This used to name the RPCs (`CreateApiToken / ListApiTokens /
 // RevokeApiToken`), and the refusal below repeated it. Two things were wrong
-// with that, and a consumer walked into both (2026-09-24): an RPC name
+// with that, and both bite in practice: an RPC name
 // is not something a reader can run — no w17ctl command issues a token, so the
 // advice named an act the tool printing it cannot perform — and
 // `CreateApiToken` mints for the CALLER, which is a person, while a deploy

@@ -8,12 +8,11 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 )
 
-// TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued — T3-7 pass #14,
-// `D14-2`, and pass #15's `C15-10`.
+// TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued.
 //
 // ⚠️ THE FIRST VERSION OF THIS TEST CERTIFIED NOTHING. It computed
 // `tc.head != "" && tc.id <= tc.head` — its own expression, over its own
-// table — and imported no production code at all. Measured in pass #15:
+// table — and imported no production code at all. Measured:
 // deleting the ENTIRE apply-path post-lock re-read and skip left the whole
 // migrate suite green, and so did disabling the rollback refusal. Only
 // removing the literal string `AppliedHead` tripped anything.
@@ -44,7 +43,7 @@ func TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued(t *testing.T) {
 		t.Errorf("applied %d migration(s) that another run had already applied.\n\n"+
 			"Plan read the head before any lock existed; the lock was taken later. Without "+
 			"re-reading the head under the lock, the lock protects a decision made against "+
-			"a stale answer (T3-7 pass #14, D14-2).", fake.applied)
+			"a stale answer.", fake.applied)
 	}
 }
 
@@ -79,8 +78,8 @@ type noopHeld struct{}
 
 func (noopHeld) Release(context.Context) error { return nil }
 
-// TestRunRollback_ReVerifiesTheHeadUnderTheLock — the SECOND member of
-// D14-2's class, which the finder missed and the verifier named.
+// TestRunRollback_ReVerifiesTheHeadUnderTheLock — the rollback twin of the
+// stale-head defect above, easy to miss because the apply fix did not reach it.
 //
 // ⚠️ The property is NOT "lock before planning". Planning first is fine and
 // is what both paths do; what matters is that the decision is re-validated
@@ -120,8 +119,7 @@ func TestRunRollback_ReVerifiesTheHeadUnderTheLock(t *testing.T) {
 			"another run can apply or roll back in between and this one then undoes a " +
 			"migration chosen from a state nobody holds any more. The apply path re-reads " +
 			"and SKIPS; this path has to re-read and REFUSE, because a rollback whose head " +
-			"moved is being asked to undo something other than what it planned against " +
-			"(T3-7 pass #14, D14-2).")
+			"moved is being asked to undo something other than what it planned against.")
 	}
 }
 
@@ -145,8 +143,8 @@ func indexOfFunc(s, sub string) int {
 
 func readFileForTest(name string) ([]byte, error) { return os.ReadFile(name) }
 
-// TestRollback_RefusesOnlyWhenTheHeadActuallyMoved — T3-7 pass #15,
-// `B15-4`, and the behavioural half `C15-10` said this file was missing.
+// TestRollback_RefusesOnlyWhenTheHeadActuallyMoved — the behavioural half
+// of the rollback re-check, which the source-level test above cannot give.
 //
 // Two properties, and the first version of the fix had them the wrong way
 // round. It compared the head under the lock against the FIRST PLANNED ID,
@@ -249,7 +247,7 @@ func (f *rollbackHeadFake) Rollback(ctx context.Context, m *applyfetchpb.Migrati
 	return f.covFake.Rollback(ctx, m)
 }
 
-// TestApply_RefusesWhenTheHeadMovedBACKWARD — T3-7 pass #15, `A15-1`.
+// TestApply_RefusesWhenTheHeadMovedBACKWARD.
 //
 // The post-lock re-read covered one direction. If another run ADVANCED the
 // head, this one skips what it already applied — right. If another run moved
@@ -265,7 +263,7 @@ func (f *rollbackHeadFake) Rollback(ctx context.Context, m *applyfetchpb.Migrati
 // no longer holds it. Silent, permanent ledger/schema divergence, and the
 // run reports success.
 //
-// Proven by a verifier against production `migrate.Run` before being fixed:
+// Proven against production `migrate.Run` before being fixed:
 // head ts-2 pre-lock, ts-1 post-lock, a baseline superseding both — adopt_sql
 // executed and the run returned nil.
 //

@@ -116,8 +116,7 @@ func extensionPreflightSQL(exts []string) string {
 // MySQL or SQLite connection whose manifest carried the annotation got the
 // Postgres probe fired at it, failed on syntax, and was refused with "this
 // database is missing an extension the schema declares" — a healthy database
-// permanently unable to apply, told something untrue about why
-// (T2-6 pass #10, D10-1 ≡ B10-4).
+// permanently unable to apply, told something untrue about why.
 //
 // An optional interface rather than a new method on [Applier]: every
 // applier in this tree is a per-dialect package and knows the answer
@@ -140,7 +139,7 @@ type PostgresDialect interface {
 // fails, and the preflight goes silently dark against a real Postgres. A
 // check that disables itself when a decorator appears is the same fail-open
 // this gate was written to remove, one layer out. The live lane caught it
-// where a unit test over a bare applier could not (T2-6 pass #10, D10-1).
+// where a unit test over a bare applier could not.
 type WrappedApplier interface {
 	// Unwrap returns the applier this one decorates.
 	Unwrap() Applier
