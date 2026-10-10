@@ -267,7 +267,7 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		input = map[string]any{}
 	}
 	token := ""
-	// REV-162 — a capability-link endpoint IS auth-required, but its
+	// A capability-link endpoint IS auth-required, but its
 	// credential rides in the URL. Injecting the scenario's bearer
 	// token here would be worse than redundant: the case would pass
 	// while exercising a request no recipient of such a link can

@@ -1,6 +1,6 @@
 /**
  * The admin's gettext runtime — msgid → msgstr lookup plus `{name}`
- * substitution (docs/specs/i18n/formatting.md).
+ * substitution.
  *
  * The catalogs are baked into the spec at codegen time, from the admin's OWN
  * `.po` tree. That tree is separate from the app's per-domain one on purpose:

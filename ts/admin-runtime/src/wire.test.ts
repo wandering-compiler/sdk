@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WIRE_PARAM, codecFor, configureWire, resolveWire, wireIsPB } from "./wire";
 import type { WireCodecs } from "./wire";
 
-// docs/specs/admin/architecture.md — which wire the console asks for.
+// Which wire the console asks for.
 //
 // The server negotiates both directions either way, so everything here is
 // about what the SPA requests and, more importantly, when it must NOT request

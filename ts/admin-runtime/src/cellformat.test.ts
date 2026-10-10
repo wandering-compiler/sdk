@@ -8,7 +8,7 @@ import {
 } from "./cellFormat";
 import type { FormatContext, FormatSlot, FormatTemplate } from "./cellFormat";
 
-// docs/specs/i18n/formatting.md — the runtime half of cell formatting: apply
+// The runtime half of cell formatting: apply
 // a compiler-lowered slot, then substitute into the msgid. There is no parser
 // here on purpose; the compiler already did that.
 

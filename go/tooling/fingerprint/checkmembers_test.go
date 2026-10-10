@@ -36,7 +36,7 @@ func TestCheckMembersFromDef(t *testing.T) {
 		def:  "CHECK ((length(title) <= 200))",
 		ok:   false,
 	}, {
-		// A48-12 / F8b — Postgres renders a ONE-member set as a bare
+		// Postgres renders a ONE-member set as a bare
 		// equality, not as ARRAY or IN. Measured on postgres:16:
 		// `CHECK (status IN ('draft'))` comes back as this.
 		name: "single-member string set",
@@ -56,7 +56,7 @@ func TestCheckMembersFromDef(t *testing.T) {
 		want: []string{"it's"},
 		ok:   true,
 	}, {
-		// A48-14 / F16 — a comma INSIDE a quoted member is part of the
+		// A comma INSIDE a quoted member is part of the
 		// member, not a separator. Measured on postgres:16:
 		// `CHECK (status IN ('a,b','c'))` renders as this; a comma-blind
 		// split reports three phantom members for two real ones and a

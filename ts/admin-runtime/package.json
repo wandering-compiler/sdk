@@ -1,7 +1,7 @@
 {
   "name": "@w17/admin-runtime",
   "version": "0.1.0",
-  "description": "wandering-compiler admin SPA runtime \u2014 Mantine v7 + react-hook-form + spec-driven list/detail. Consumed as an npm dep by per-bundle admin SPA scaffolds emitted by REV-150.",
+  "description": "wandering-compiler admin SPA runtime \u2014 Mantine v7 + react-hook-form + spec-driven list/detail. Consumed as an npm dep by the per-bundle admin SPA scaffolds the compiler emits.",
   "type": "module",
   "exports": {
     ".": {

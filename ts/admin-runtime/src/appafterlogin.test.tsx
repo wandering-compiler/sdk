@@ -49,7 +49,7 @@ async function signIn() {
   // appends a " *" span to the label text, and the password field's
   // visibility toggle carries aria-label "Toggle password visibility"
   // — a plain /password/i matcher hits both.
-  await user.type(await screen.findByLabelText(/^Username/), "jiri");
+  await user.type(await screen.findByLabelText(/^Username/), "alice");
   await user.type(screen.getByLabelText(/^Password/), "hunter2");
   await user.click(screen.getByRole("button", { name: "Sign in" }));
 }
@@ -75,7 +75,7 @@ describe("App nav after a fresh sign-in", () => {
   // manual reload (token already in localStorage at mount) populated it.
   it("shows the permitted page without a reload", async () => {
     vi.mocked(apiPost).mockResolvedValue({ token: "t-1" });
-    vi.mocked(apiGet).mockResolvedValue({ user_id: "1", username: "jiri", permission_ids: [7] });
+    vi.mocked(apiGet).mockResolvedValue({ user_id: "1", username: "alice", permission_ids: [7] });
 
     renderApp();
     await signIn();
@@ -91,7 +91,7 @@ describe("App nav after a fresh sign-in", () => {
   // the post-login case cannot pass by breaking the one that worked.
   it("shows the permitted page when the token is already stored at mount", async () => {
     window.localStorage.setItem("w17_admin_token", "t-1");
-    vi.mocked(apiGet).mockResolvedValue({ user_id: "1", username: "jiri", permission_ids: [7] });
+    vi.mocked(apiGet).mockResolvedValue({ user_id: "1", username: "alice", permission_ids: [7] });
 
     renderApp();
 
@@ -107,7 +107,7 @@ describe("App nav after a fresh sign-in", () => {
   // nothing out and reports every box as zero.
   it("puts the nav entries inside a scroll container", async () => {
     window.localStorage.setItem("w17_admin_token", "t-1");
-    vi.mocked(apiGet).mockResolvedValue({ user_id: "1", username: "jiri", permission_ids: [7] });
+    vi.mocked(apiGet).mockResolvedValue({ user_id: "1", username: "alice", permission_ids: [7] });
 
     renderApp();
 

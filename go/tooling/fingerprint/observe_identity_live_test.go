@@ -1,6 +1,6 @@
 package fingerprint
 
-// T1-1 pass #49 (B49-6 / B49-12 / B49-15) — the observation reports what
+// The observation reports what
 // IDENTIFIES a primary key and a foreign key, not only their columns: the
 // key constraint's name (Postgres names an inline key `<table>_pkey`, a
 // hand-made one says anything), the schema a key's target lives in, and
@@ -8,7 +8,7 @@ package fingerprint
 // because each of the three is a catalogue join that a mock would only
 // restate.
 //
-// Gated on W17_PG_DSN like the srcgo live lanes; W17_REQUIRE_LIVE_MIGRATOR=1
+// Gated on W17_PG_DSN like the other live lanes; W17_REQUIRE_LIVE_MIGRATOR=1
 // turns an unwired run into a failure instead of a skip.
 
 import (

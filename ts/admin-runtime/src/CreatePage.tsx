@@ -79,7 +79,7 @@ export function CreatePage({ page, whoami, slots, onBack, onCreated }: CreatePag
         // Optional-chained: the page's detail is nullable (a list-only
         // page has none), and the create route already refuses to mount
         // this component without one — but the type has to be honest
-        // rather than assert (T2-6 pass #9, B9-1).
+        // rather than assert.
         request: page.detail?.create_request_ref,
         response: page.detail?.create_response_ref,
       });

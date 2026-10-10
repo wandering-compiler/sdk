@@ -2,7 +2,7 @@
  * Which HTTP wire the console speaks, and the codecs it needs to speak it.
  *
  * The admin surface has negotiated JSON and binary protobuf in both directions
- * since it moved onto the REST encoder (`docs/specs/admin/architecture.md`), so
+ * since it moved onto the REST encoder, so
  * this is only about what the SPA ASKS for. Protobuf is the default: the
  * console is a first-party client of a schema it was generated from, and there
  * is no third party to keep the wire readable for.
