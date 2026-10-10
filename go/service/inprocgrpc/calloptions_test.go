@@ -12,7 +12,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/inprocgrpc"
 )
 
-// TestConn_Invoke_HonoursHeaderAndTrailerCallOptions pins C-F4. Invoke used
+// TestConn_Invoke_HonoursHeaderAndTrailerCallOptions: Invoke used
 // to take `_ ...grpc.CallOption` and drop every option on the floor, so
 // grpc.Header(&md) came back nil no matter what the handler set — silently,
 // with no error anywhere.

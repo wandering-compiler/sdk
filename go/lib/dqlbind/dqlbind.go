@@ -60,8 +60,8 @@ import (
 // generator catches that mismatch upstream". Both halves were
 // false: walker.emitLiteral inlines DQL string literals
 // verbatim, the DQL lexer admits `?` inside them, no generator
-// check counts placeholders against bindings, and T1-4 pass #11
-// live-proved the consequence — `WHERE note = 'why?' AND b IN
+// check counts placeholders against bindings, and a live run
+// proved the consequence — `WHERE note = 'why?' AND b IN
 // (:l1) AND c IN (:l2)` expanded the two lists onto each other's
 // placeholders with a matching arg count, and real SQLite
 // returned the wrong row with no error.
@@ -195,16 +195,16 @@ func ExpandValuesQM(sql string, tupleSize, n int) string {
 // function. Three scanners in this package answer some form of "where is
 // the n-th X in the emitted SQL", and each one used to re-derive the walk
 // for itself; only findValuesTuple ever learned that a string literal is
-// not code (Q47-dql-1). The other two shipped blind, and T1-4 pass #11
-// found what that costs once the walker started INLINING DQL string
-// literals verbatim into the emitted SQL (walker.emitLiteral,
+// not code. The other two shipped blind, and this is what that cost once
+// the walker started INLINING DQL string literals verbatim into the
+// emitted SQL (walker.emitLiteral,
 // LITERAL_KIND_STRING):
 //
-//   - C-F6: a `?` inside a literal (`WHERE note = 'why?'`) shifted every
+//   - a `?` inside a literal (`WHERE note = 'why?'`) shifted every
 //     [ExpandIn] occurrence count on MySQL / SQLite. Live-proven: two IN
 //     lists expanded onto each other's placeholders, arg count still
 //     matched, and real SQLite returned a DIFFERENT ROW. No error.
-//   - VC-N1: a `$<digit>` inside a literal (`note = 'fee $2 extra'`) was
+//   - a `$<digit>` inside a literal (`note = 'fee $2 extra'`) was
 //     renumbered by renumberPG into every cloned VALUES tuple, so a
 //     multi-row INSERT STORED a different string in rows 2..n. No error.
 //
@@ -252,7 +252,7 @@ func scanSQL(sql string, fn func(i int, c byte, code bool) bool) {
 // matcher. Returns ok=false when no VALUES tuple is found.
 //
 // Both halves run over [scanSQL]'s code bytes: parens inside a string
-// literal are not tuple boundaries (Q47-dql-1 — `'a)b'`), and neither is
+// literal are not tuple boundaries (`'a)b'`), and neither is
 // a `VALUES (` written inside one.
 func findValuesTuple(sql string) (start, end int, ok bool) {
 	const marker = "VALUES ("
@@ -294,7 +294,7 @@ func findValuesTuple(sql string) (start, end int, ok bool) {
 // (commas, identifiers, function calls) passes through
 // verbatim — INCLUDING a `$<digits>` inside a string literal,
 // which is data the statement stores, not a placeholder
-// (VC-N1; see [scanSQL]).
+// (see [scanSQL]).
 func renumberPG(tuple string, offset int) string {
 	var b strings.Builder
 	b.Grow(len(tuple))
@@ -328,7 +328,7 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 // PLACEHOLDER in `s` (1-indexed), or -1 if there are fewer than
 // `n`. A `?` inside a string literal is data, not a placeholder,
 // and is skipped — the driver does not bind it either, so this is
-// the same counting the driver does (C-F6; see [scanSQL]).
+// the same counting the driver does (see [scanSQL]).
 func nthPlaceholder(s string, n int) int {
 	if n < 1 {
 		return -1
@@ -489,7 +489,7 @@ func TimestampOrNull(ts *timestamppb.Timestamp) any {
 // preserving FIRST-occurrence order. Returns the input slice unchanged
 // (no allocation) when it holds no duplicates.
 //
-// T2-6 pass #8 (B-F11). `WHERE pk IN (:ids)` is one declaration with two
+// `WHERE pk IN (:ids)` is one declaration with two
 // emitted realisations: on a SQL connection it renders `= ANY($1)`, which
 // yields each matching row ONCE regardless of how many times its id appears
 // in the request; on a KV connection the emitter built one key per request

@@ -1,4 +1,4 @@
-// REV-149 — HTTP→gRPC metadata RENAMING + default-value seed
+// HTTP→gRPC metadata RENAMING + default-value seed
 // stamping. Sibling of [MetadataPropagationMiddleware] which
 // forwards headers verbatim under a lower-cased key. The
 // renaming middleware maps each HTTP header to a different
@@ -24,7 +24,7 @@
 //     which is why the parser emits an AUTO-INSTALLED rule such as
 //     Accept-Language → w17-language FIRST and the author's own
 //     entries after it)
-//   → handler-level metadata_bindings emit (REV-149 — per-endpoint,
+//   → handler-level metadata_bindings emit (per-endpoint,
 //     outranks all upstream values when fired; it is emitted inside
 //     the handler, so it can only ever append last)
 //   → default stamp, which writes ONLY a key nothing above wrote —

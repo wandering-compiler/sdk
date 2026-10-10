@@ -12,8 +12,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// T2-6 pass #5 D2: on the JSON leg a data frame and an error envelope were
-// both bare TEXT JSON objects with nothing to tell them apart, so the
+// On the JSON leg a data frame and an error envelope were both bare TEXT
+// JSON objects with nothing to tell them apart, so the
 // generated client decoded a rejection as the response — a refused
 // client-stream upload resolved as success. Frames now carry a
 // discriminator; nothing may be inferred from an object's shape, since two

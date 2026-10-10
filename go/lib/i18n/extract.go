@@ -282,7 +282,7 @@ func rawMsgstr(t *gotext.Translation) string {
 // orchestrator to write at a project-relative path. The
 // orchestrator interprets [Path] relative to the project
 // root + applies the "if not exists" semantic so translator
-// edits survive regens (REV-149).
+// edits survive regens.
 type DomainCatalogFile struct {
 	// Path is project-relative (e.g.
 	// "w17/languages/app/cs.po"). The orchestrator joins
@@ -301,7 +301,7 @@ type DomainCatalogFile struct {
 }
 
 // EmitDomainCatalogs assembles every `.po` body the project's
-// codegen seeds for one domain (REV-149). One entry per
+// codegen seeds for one domain. One entry per
 // language in `languages`; the EN entry carries the baseline
 // (msgstr=msgid), every other language is scaffolded.
 //

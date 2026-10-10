@@ -8,7 +8,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// T1-4 pass #11 — the quote-blind-scanner family.
+// The quote-blind-scanner family.
 //
 // Three helpers in this package scan emitted SQL byte by byte:
 // findValuesTuple, nthPlaceholder (ExpandIn) and renumberPG. Only the first
@@ -19,10 +19,10 @@ import (
 // `$<digit>` (PG) — silently, with the driver satisfied.
 //
 // These tests pin the RESULT, not the emitted text alone: which row a real
-// engine returns (C-F6) and which bytes the statement carries into every
-// cloned VALUES tuple (VC-N1).
+// engine returns and which bytes the statement carries into every
+// cloned VALUES tuple.
 
-// TestExpandIn_LiteralQuestionMark_C_F6 replays the exact codegen sequence
+// TestExpandIn_LiteralQuestionMark replays the exact codegen sequence
 // from buildExpandInPreamble (body.go): one ExpandIn call per array binding,
 // in DESCENDING binding order, over SQL that a MySQL / SQLite walker emitted
 // for
@@ -32,7 +32,7 @@ import (
 // The literal is inlined, so it produces NO binding: `b` is binding 1 and
 // `c` is binding 2. Counting `?` bytes blindly makes the literal's `?` the
 // first occurrence, so both expansions land one placeholder too early.
-func TestExpandIn_LiteralQuestionMark_C_F6(t *testing.T) {
+func TestExpandIn_LiteralQuestionMark(t *testing.T) {
 	const base = "SELECT id FROM t WHERE note = 'why?' AND b IN (?) AND c IN (?)"
 
 	cases := []struct {
@@ -136,13 +136,13 @@ func TestNthPlaceholder_SkipsLiterals(t *testing.T) {
 	}
 }
 
-// TestExpandValuesPG_LiteralDollarDigit_VC_N1 is the stored-data corruption:
+// TestExpandValuesPG_LiteralDollarDigit is the stored-data corruption:
 // a mixed multi-row splat (`INSERT … SET :items[*], note = 'fee $2 extra'`)
 // inlines the constant into the VALUES tuple. renumberPG shifted EVERY
 // `$<digits>` byte-run in the cloned tuple, including the one inside the
 // literal, so rows 2..n stored a DIFFERENT string than row 1 — with matching
 // arg counts and no driver error.
-func TestExpandValuesPG_LiteralDollarDigit_VC_N1(t *testing.T) {
+func TestExpandValuesPG_LiteralDollarDigit(t *testing.T) {
 	const in = "INSERT INTO tasks (owner, price, note) VALUES ($1, $2, 'fee $2 extra')"
 	const want = "INSERT INTO tasks (owner, price, note) VALUES ($1, $2, 'fee $2 extra'), " +
 		"($3, $4, 'fee $2 extra'), ($5, $6, 'fee $2 extra')"
@@ -174,7 +174,7 @@ func TestFindValuesTuple_MarkerInsideLiteral(t *testing.T) {
 	}
 }
 
-// TestExpandIn_LiveSQLite_C_F6 is the live half: a real SQLite engine, the
+// TestExpandIn_LiveSQLite_LiteralQuestionMark is the live half: a real SQLite engine, the
 // shipped expansion chain, and an assertion on WHICH ROW comes back — the
 // only assertion that catches this class, because the emitted SQL is
 // well-formed and the arg count matches either way.
@@ -187,7 +187,7 @@ func TestFindValuesTuple_MarkerInsideLiteral(t *testing.T) {
 //
 // Engine is modernc.org/sqlite (pure Go, in-process) — a real SQLite, no
 // container needed; the same driver the generated SQLite bundles link.
-func TestExpandIn_LiveSQLite_C_F6(t *testing.T) {
+func TestExpandIn_LiveSQLite_LiteralQuestionMark(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "c_f6.sqlite"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)

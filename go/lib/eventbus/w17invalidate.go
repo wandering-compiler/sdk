@@ -8,9 +8,8 @@ import (
 
 // W17InvalidateTopic is the reserved eventbus topic name the
 // gateway's /w17-events SSE route forwards as the project-wide
-// cache-invalidation signal (REV-140 / C4.4). Pinned by spec
-// — see docs/specs/gateway/w17-events-channel.md §Reserved
-// built-in topic.
+// cache-invalidation signal. Reserved: no project topic may
+// take this name.
 const W17InvalidateTopic = "w17.invalidate"
 
 // EmitInvalidate is the convenience wrapper around
@@ -23,7 +22,7 @@ const W17InvalidateTopic = "w17.invalidate"
 // based on whether the mutation's proto carries
 // (w17.touches_entities):
 //
-//  1. **Auto-emit (REV-145 / C4.6, preferred).** Annotate the
+//  1. **Auto-emit (preferred).** Annotate the
 //     mutation's proto method with `option (w17.touches_entities)
 //     = "Account";` (repeated for multi-entity mutations). The
 //     storage codegen pipeline walks the annotation at build time

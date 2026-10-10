@@ -12,7 +12,7 @@ import (
 
 // HandleW17Events is the SSE handler the gateway main mounts
 // at `<RestApi.prefix>/w17-events` (the reserved pub/sub
-// channel — see docs/specs/gateway/w17-events-channel.md).
+// channel).
 // One open connection per client; the topics-filter query
 // param selects which event topics the client cares about;
 // each inbound bus event lands as one SSE frame:

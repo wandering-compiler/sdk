@@ -21,8 +21,8 @@ import (
 // envelope with the developer's words in it, and that half was left behind when
 // the backend half was fixed: a consumer was still reading
 // `forbidden: missing permission tasks.TaskLookupQuery.CountTasksPerCategory`
-// in a browser, which is the report that started the whole thing
-// (docs/decisions/one-error-string-serves-two-audiences.md).
+// in a browser. One error string serves two audiences, and only one of
+// them is the developer.
 //
 // The rule is the same on both halves and it is stated once, here: a string
 // written for an operator goes to observability, and the client gets a `code`

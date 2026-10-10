@@ -99,8 +99,8 @@ func TestMarshalEntity_FlatScalars(t *testing.T) {
 		"payload":    base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0xff}),
 		"status":     "DONE",
 		"created_at": "2026-05-06T12:30:45.123Z",
-		// protojson's own spelling — fractional seconds in groups of three
-		// (C-F6). The float encoder wrote "1.5s"; the reader still takes that
+		// protojson's own spelling — fractional seconds in groups of three.
+		// The float encoder wrote "1.5s"; the reader still takes that
 		// form, so values already in Redis keep decoding.
 		"ttl": "1.500s",
 	}
@@ -376,7 +376,7 @@ func contains(haystack, needle string) bool {
 	return false
 }
 
-// T1-4 pass #12, C-F6. The Duration encoder went through
+// The Duration encoder once went through
 // `float64(d) / float64(time.Second)`, so the wire value stopped being the
 // declared value long before anything complained:
 //

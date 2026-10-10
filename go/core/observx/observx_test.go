@@ -201,7 +201,7 @@ func TestTracer_ReturnsNonNil(t *testing.T) {
 	}
 }
 
-// REV-033 Cat 5 sweep, F9 — OTEL_SERVICE_NAME overrides
+// OTEL_SERVICE_NAME overrides
 // Config.ServiceName.
 func TestMustInit_OTelServiceNameOverride(t *testing.T) {
 	resetForTest(t)
@@ -215,7 +215,7 @@ func TestMustInit_OTelServiceNameOverride(t *testing.T) {
 	}
 }
 
-// REV-033 Cat 5 sweep, F9 — empty OTEL_SERVICE_NAME keeps
+// An empty OTEL_SERVICE_NAME keeps
 // the Config value (no spurious blanks).
 func TestMustInit_OTelServiceNameEmptyKeepsConfig(t *testing.T) {
 	resetForTest(t)
@@ -229,7 +229,7 @@ func TestMustInit_OTelServiceNameEmptyKeepsConfig(t *testing.T) {
 	}
 }
 
-// REV-033 Cat 5 sweep, F3 — OTEL_EXPORTER_OTLP_ENDPOINT
+// OTEL_EXPORTER_OTLP_ENDPOINT
 // fallback when Config.OTelEndpoint is empty.
 func TestMustInit_OTelEndpointFallback(t *testing.T) {
 	resetForTest(t)
@@ -251,7 +251,7 @@ func TestMustInit_OTelEndpointFallback(t *testing.T) {
 	}
 }
 
-// REV-033 Cat 5 sweep, F3 — Config.OTelEndpoint wins over
+// Config.OTelEndpoint wins over
 // the SDK env (ops set both → branded W17 path takes
 // precedence; predictable for ops who set both deliberately).
 func TestMustInit_W17OTelEndpointWinsOverFallback(t *testing.T) {

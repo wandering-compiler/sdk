@@ -8,11 +8,11 @@ import (
 // This file formats NUMBERS. It deliberately never touches float64 on the
 // formatting path: every step is decimal-string arithmetic, because a value
 // that reaches an admin cell can be an int64 beyond 2^53 (quoted on the JSON
-// wire per docs/specs/gateway/json-dialect.md) or a decimal string, and
+// wire, as the gateway's JSON dialect does) or a decimal string, and
 // routing those through a float would round them silently.
 //
 // Two conventions are FIXED here because Go and TS must agree byte for byte
-// (docs/specs/i18n/formatting.md, "an explicit format table, not Intl"):
+// — an explicit format table, not Intl:
 //
 //   - rounding is HALF-UP away from zero: 2.345 → 2.35, -2.345 → -2.35.
 //     Not half-even. Pick one and pin it, since the platforms disagree.

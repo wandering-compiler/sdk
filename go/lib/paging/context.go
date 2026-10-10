@@ -8,7 +8,7 @@ import (
 
 // boundaryCtxKey is the typed context key carrying keyset
 // boundary values from the gateway handler down into the
-// storage method's emitted SQL. Mirrors the REV-147
+// storage method's emitted SQL. Mirrors the data-scope
 // RequestMetadata pattern: the gateway extracts boundaries
 // from the cursor, attaches them to ctx; storage codegen
 // reads them with FromContext and threads them as SQL

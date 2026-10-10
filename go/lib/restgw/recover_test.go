@@ -12,7 +12,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// REV-032 Cat 4 sweep, F9: panic in a downstream handler →
+// A panic in a downstream handler →
 // HTTP 500 + observx report + standard restgw envelope.
 // Panic value never leaks to the client (Phase C principle 2).
 func TestRecoverPanicMiddleware_CatchesPanic(t *testing.T) {

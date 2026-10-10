@@ -86,7 +86,7 @@ func TestRegister_UnicodeOrderingAndEquality(t *testing.T) {
 	}
 }
 
-// F7-A-4 / F8-D-4: Register also overrides SQLite's ASCII-only upper()/lower()
+// Register also overrides SQLite's ASCII-only upper()/lower()
 // with Unicode-aware versions, so `upper('café')` = 'CAFÉ' (not 'CAFé') on every
 // connection — the same fold the applier/snapshotter/runtime all now share.
 func TestRegister_UnicodeUpperLower(t *testing.T) {
@@ -174,7 +174,7 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-// B-F5. The fingerprint has to be stable within a build (or every connect
+// The fingerprint has to be stable within a build (or every connect
 // would look like drift) and has to actually depend on the ordering (or it
 // would certify nothing).
 func TestFingerprint_StableAndOrderingDerived(t *testing.T) {

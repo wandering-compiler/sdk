@@ -79,8 +79,7 @@ func applyVector(v formatVector) string {
 // INVARIANT: the shared golden vectors pass in Go. The SAME file is run by
 // sdk/ts/admin-runtime's valueformat.test.ts, which is what makes "the two
 // runtimes format a value identically" a checked property rather than a hope
-// (docs/specs/i18n/formatting.md — the reason the table is explicit instead of
-// delegated to Intl / x/text).
+// (the reason the table is explicit instead of delegated to Intl / x/text).
 func TestFormatGoldenVectors(t *testing.T) {
 	for _, v := range loadFormatVectors(t) {
 		t.Run(v.Name, func(t *testing.T) {

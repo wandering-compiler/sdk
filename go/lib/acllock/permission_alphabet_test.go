@@ -2,7 +2,7 @@ package acllock
 
 import "testing"
 
-// T2-5 pass #10 (D-F1). The package documents Lock.Permissions with cascade
+// The package documents Lock.Permissions with cascade
 // CODE keys ("tasks.Task#add") and describes IDByString as the translation an
 // auth backend uses for "typical JWT claim shape". Every lock the compiler
 // emits is keyed by enum VALUE NAMES — TASKS_TASK_ADD — because the allocation
@@ -11,10 +11,10 @@ import "testing"
 // The two alphabets are disjoint, so the documented call always misses. It
 // fails closed (no misgrant), but a legitimate grant is silently dropped, and
 // the external author has no way to see why: the code→name conversion lived
-// only in the private srcgo tree, so the public SDK described a translation it
+// only inside the compiler, so the public SDK described a translation it
 // gave no means to perform.
 //
-// Same shape as pass #9's A-F1, where acl_roles globs were matched against
+// Same shape as the earlier acl_roles defect, where globs were matched against
 // enum names while every documented glob was written as a code: not a bug in
 // the matcher, a mismatch between the alphabet the docs promise and the one
 // the artifact carries.

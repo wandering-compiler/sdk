@@ -2,9 +2,8 @@
 // dialect-agnostic ConstraintError so the cross-dialect Wrap
 // path (`lib/grpcerr.Wrap`) can look up author-supplied
 // validation_messages by either constraint name or
-// (table, kind, columns) tuple — see
-// `docs/decisions/db-error-classification-portability.md`
-// for the full rationale and empirical evidence.
+// (table, kind, columns) tuple. Not every driver reports a
+// constraint name, so the tuple is the portable fallback.
 //
 // One adapter per dialect (`ParsePg`, `ParseMySQL`,
 // `ParseSQLite`, future `ParseMSSQL`, `ParseOracle`); each

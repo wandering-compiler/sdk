@@ -102,14 +102,14 @@ func NoAuth() AuthFunc {
 	}
 }
 
-// (REV-146 — HasPermission moved to the acllock package. The
+// (HasPermission moved to the acllock package. The
 // gateway emit now calls `acllock.HasPermission(bits, id)`
 // against the bitset wire format. restgw stays focused on
 // HTTP-level helpers; bitset semantics live with the lock
 // owner.)
 
 // AuthScheme is the canonical credential-scheme name the
-// gateway's token-type router dispatches on (REV-146).
+// gateway's token-type router dispatches on.
 // Matches the names declared in `w17pb.TokenType` minus the
 // "TOKEN_TYPE_" prefix; emitted code compares against these
 // strings to pick which auth method handles a request.
@@ -273,7 +273,7 @@ func withAuthUserData(ctx context.Context, userData []byte) context.Context {
 // through it can no longer corrupt another request's principal. That
 // used to be a doc-only contract over a SHARED backing array — two
 // browser tabs, REST and SSE, all read the same bytes — and nothing
-// enforced it (T3-7 pass #7, C-F8). Retaining it past the request is
+// enforced it. Retaining it past the request is
 // still pointless rather than dangerous: unmarshal what you need.
 func AuthUserDataFromContext(ctx context.Context) []byte {
 	v, _ := ctx.Value(authUserDataCtxKey{}).([]byte)
@@ -438,8 +438,7 @@ func CachedAuthFuncWithKeyHeaders(inner AuthFunc, ttl time.Duration, extraCredHe
 // so every credential the process ever saw and never saw again stayed
 // resident for the life of the process. Failed auths are not cached, so
 // anonymous stuffing cannot drive it — mintable VALID credentials can, and
-// per-session tokens and rotating API keys are exactly that (T3-7 pass #7,
-// C-F8).
+// per-session tokens and rotating API keys are exactly that.
 //
 // The number is a memory ceiling, not a tuning knob: an entry is a ~64-byte
 // key plus one marshaled AuthResp (a few hundred bytes to ~1 KB), so this
@@ -571,7 +570,7 @@ func (c *authCache) evict() {
 // whose auth method trusts a header beyond this set extend it via
 // [CachedAuthFuncWithKeyHeaders] / `<PREFIX>_AUTH_CACHE_CRED_HEADERS`.
 //
-// [CredentialHeader] (REV-162) is in the set because a URL-carried
+// [CredentialHeader] is in the set because a URL-carried
 // credential is a credential like any other — the gateway extracts it
 // from the path/query and injects it into this slot before the auth
 // call, so keying on it is what keeps two capability links from sharing

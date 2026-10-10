@@ -15,13 +15,12 @@ import (
 
 // Memory is the single-instance in-memory implementation of
 // [Registry] — the W17DistributedTransaction backing the
-// `tx_id → *sql.Tx` map for one storage binary. Per
-// `docs/archive/iteration-2-dql.md` D-iter2-dql-11, this is the
+// `tx_id → *sql.Tx` map for one storage binary. This is the
 // default deployment shape for small-to-mid-sized projects:
 // one storage binary per domain → no cross-binary `conn_id`
 // routing axis required.
 //
-// Per `docs/archive/iteration-2-multidb.md` §M2-D, Memory holds one
+// Memory holds one
 // `*sql.DB` per declared connection (keyed by connection_name
 // from `(w17.module).connection.name`). [Begin] dispatches
 // against the named DB; [LookupTx] enforces that adoption only
@@ -104,8 +103,8 @@ type txEntry struct {
 	// transaction change level. [Memory.IsolationFor] reports it so
 	// a method that DECLARES `(w17.db.method).tx_isolation` can
 	// refuse to adopt a transaction that cannot satisfy the
-	// declaration instead of silently running weaker (T3-7 pass #9
-	// D-F7). `sql.LevelDefault` means the caller pinned nothing, so
+	// declaration instead of silently running weaker.
+	// `sql.LevelDefault` means the caller pinned nothing, so
 	// the level is whatever the driver chose — unknown here, and
 	// therefore never strong enough for a declared level.
 	iso sql.IsolationLevel
@@ -174,8 +173,7 @@ func WithFinishWait(d time.Duration) MemoryOption {
 // itself.
 //
 // `ConnectionName` is the user-facing connection identifier —
-// the `name` field on `(w17.module).connection`. Q1 of
-// `docs/archive/iteration-2-multidb.md` restricts each domain to at
+// the `name` field on `(w17.module).connection`. Each domain has at
 // most one connection per dialect, so a single name picks one
 // dialect uniquely.
 //
@@ -476,7 +474,7 @@ func (m *Memory) RollbackCaused(ctx context.Context, txID, cause string) error {
 // transaction). AdoptTx propagates the mismatch error to the
 // generator, which renders it as `codes.InvalidArgument`.
 //
-// The lease is the T3-7 pass #7 C-F3 gate: the returned tx runs
+// The lease is the one-adopter-at-a-time gate: the returned tx runs
 // on ONE backend connection, so two handlers issuing sequences
 // of statements on it interleave inside a single PostgreSQL
 // transaction, and a locked query holding an open `*sql.Rows`
@@ -621,7 +619,7 @@ func (m *Memory) OnCommit(txID string, fn func()) bool {
 // take pops the entry for txID and returns it, waiting first
 // for any outstanding adoption lease to be released.
 //
-// The wait is the T3-7 pass #7 C-F2 gate. `database/sql`'s
+// The wait is the no-split-method gate. `database/sql`'s
 // close-mutex only holds off the statement IN FLIGHT, not a
 // handler that intends more statements, so a finisher that
 // takes the entry between statement N and N+1 of an adopted

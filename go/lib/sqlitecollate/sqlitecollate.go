@@ -2,19 +2,19 @@
 // emits on SQLite string columns (`COLLATE W17_UNICODE`) so SQLite orders and
 // compares text by the Unicode Collation Algorithm — accent- and
 // case-SENSITIVE, like MySQL's utf8mb4_0900_as_cs — instead of BINARY byte
-// order (F7-A-5 / WOB3).
+// order.
 //
 // It does NOT make SQLite order like PostgreSQL, and the earlier wording here
-// claiming it did was measured false (T1-4 pass #11, D-F10). SQLite and MySQL
+// claiming it did was measured false. SQLite and MySQL
 // both implement the UCA and agree exactly; PostgreSQL orders by the collation
 // its DATABASE WAS CREATED WITH, which the compiler does not choose — a stock
 // glibc `en_US.utf8` database sorts `ab` before `A-B` where the UCA sorts
 // `A-B` first, and a `C`-locale (or musl-image) database sorts by byte value
-// again. What DOES hold on all three is the alignment WOB3 needs:
-// accent+case-sensitive comparison, so `'Foo' != 'foo'` and `'a' != 'á'`
-// everywhere. See docs/decisions/mysql-canonical-comparison-and-null-order.md
-// (amendment 2026-08-07) for the three-way measurement and why generated DDL
-// was deliberately left alone; srcgo/tests/dialectdiff executes it.
+// again. What DOES hold on all three is the alignment the canonical order
+// needs: accent+case-sensitive comparison, so `'Foo' != 'foo'` and
+// `'a' != 'á'` everywhere. A three-way measurement across the engines established this,
+// and generated DDL was deliberately left alone; a cross-dialect test harness
+// executes it.
 //
 // SQLite's built-in BINARY collation sorts by raw byte value, so every
 // uppercase letter precedes every lowercase one ('Z' < 'a') and accented
@@ -90,7 +90,7 @@ var once sync.Once
 // Register installs the W17_UNICODE collation AND Unicode-aware upper()/lower()
 // on every modernc.org/sqlite connection opened after the call, so SQLite's
 // text ordering, case-folding and case-insensitive comparisons all match the
-// canonical PostgreSQL dialect (F7-A-5 collation + F7-A-4 upper/lower). SQLite's
+// canonical PostgreSQL dialect (collation + upper/lower). SQLite's
 // built-in upper()/lower() only fold ASCII, so upper('café')='CAFé' where PG
 // yields 'CAFÉ' — the registered UDFs override the builtins with Go's Unicode
 // simple case mapping (strings.ToUpper/ToLower). Deterministic (same input →
@@ -100,7 +100,7 @@ var once sync.Once
 // a sync.Once guards it) and safe to call from multiple init paths — the
 // migration applier, the dev-DB snapshotter, and every generated storage binary
 // all call it before opening a connection, so an expression index / generated
-// column / query folds text identically whichever process computes it (F8-D-4).
+// column / query folds text identically whichever process computes it.
 func Register() {
 	once.Do(func() {
 		moderncsqlite.MustRegisterCollationUtf8(Name, Compare)

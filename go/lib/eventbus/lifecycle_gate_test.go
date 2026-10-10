@@ -35,7 +35,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/eventbus"
 )
 
-// INVARIANT (B-F6): after Close returns, the bus hands out no more
+// INVARIANT: after Close returns, the bus hands out no more
 // subscribers — on a WARM channel too, where the cached stream/group makes
 // the whole call local. A handle minted after Close's snapshot is registered
 // with nobody to drain it and bound to a connection that is gone.
@@ -68,7 +68,7 @@ func TestNatsBus_SubscriberAfterCloseRefused_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (B-F6), Redis half: identical rule, and here the warm path is
+// INVARIANT, Redis half: identical rule, and here the warm path is
 // entirely local — ensureGroup short-circuits on the bus's groups cache,
 // which Close never clears.
 func TestRedisBus_SubscriberAfterCloseRefused_Embedded(t *testing.T) {
@@ -97,7 +97,7 @@ func TestRedisBus_SubscriberAfterCloseRefused_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (B-F3): a Subscribe that begins after Drain must not leave a
+// INVARIANT: a Subscribe that begins after Drain must not leave a
 // consumer running. Drain's snapshot is taken before the handle is appended,
 // so a late Subscribe would hand back success while its consumer belongs to
 // nobody — and on NATS its deliveries then die silently: the consume callback
@@ -148,7 +148,7 @@ func TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (B-F4), the Redis half of the same rule. The Redis subscriber had
+// INVARIANT, the Redis half of the same rule. The Redis subscriber had
 // no draining gate at all: a late Subscribe appends its cancel func to a slice
 // Drain has already emptied, so the two loops it spawns can never be
 // cancelled — after Close they spin on the 200ms error backoff for the life of
@@ -196,7 +196,7 @@ func TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (B-F9): the in-flight guard belongs to the CONSUMER IDENTITY
+// INVARIANT: the in-flight guard belongs to the CONSUMER IDENTITY
 // (stream + group + consumer name), not to the subscriber object. Two
 // subscribers minted from one bus for one channel share a PEL identity, so the
 // second one's claim loop must not reclaim, dead-letter and XACK a message the
