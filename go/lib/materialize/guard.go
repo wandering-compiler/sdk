@@ -1,6 +1,6 @@
 // Package materialize provides runtime safety primitives for the
 // query optimizer's app-side materialization paths (LateMaterialize
-// / Pipeline — see docs/specs/storage/bounded-materialization.md).
+// / Pipeline).
 //
 // When the optimizer decomposes a JOIN-bearing SELECT into a
 // narrow-then-fetch chain, it materializes the intermediate ID set
@@ -70,8 +70,7 @@ func (g *Guard) Add(n uint64) error {
 		return status.Errorf(codes.ResourceExhausted,
 			"query materialized %d intermediate rows, exceeding the %d-row ceiling "+
 				"(materialize.max_intermediate_rows / query_memory_budget_bytes); "+
-				"narrow the filter or raise the ceiling — see "+
-				"docs/specs/storage/bounded-materialization.md",
+				"narrow the filter or raise the ceiling",
 			total, g.limit)
 	}
 	return nil

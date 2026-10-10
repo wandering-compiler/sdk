@@ -77,7 +77,7 @@ func RequestIDFromContext(ctx context.Context) string {
 // RequestIDMiddleware threads a request ID through every
 // request reaching `next`. See package doc.
 //
-// REV-032 Cat 4 sweep: generated REST gateways use
+// Generated REST gateways use
 // [ObservabilityMiddleware] (in otel.go) instead of stacking
 // this middleware separately — that combined wrap also tags
 // the OTel span with the request_id attribute in one ctx

@@ -284,7 +284,7 @@ func decodeField(fd protoreflect.FieldDescriptor, raw string) (protoreflect.Valu
 // protojson and unwrapping the JSON string, so the two layouts of this one
 // capability cannot say different things about the same value.
 //
-// T1-4 pass #12, C-F6. The previous encoder computed
+// The previous encoder computed
 // `float64(d.AsDuration()) / float64(time.Second)`, and both hops lose:
 //
 //   - float64 carries 53 significand bits, so a duration past ~104 days lands

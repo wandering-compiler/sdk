@@ -37,7 +37,7 @@ func TestWSAuth_HeaderOnly_Passthrough(t *testing.T) {
 // redeems, recorded Authorization is replayed as a header.
 //
 // The replay lands on the CALLER'S request, not on a private clone.
-// That was the reverse until T2-6 pass #9 (B9-9): a ticket is one-shot,
+// That used to be the reverse: a ticket is one-shot,
 // so a stream re-auth probe re-running this function against the
 // handler's request found only the spent `?ticket=`, failed, and tore
 // down a stream nobody had revoked. The request is the only carrier the

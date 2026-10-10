@@ -16,7 +16,7 @@ import "strings"
 // One rule, one list. The gateway parser refuses these prefixes in a declared
 // `metadata_binding` / `metadata_propagation`, and the gateway wire path strips
 // them; a surface that let one through would be the hole in a fence three other
-// surfaces maintain (C8-F8, T2-6 pass #8).
+// surfaces maintain.
 func IsGatewayOwnedKey(key string) bool {
 	k := strings.ToLower(strings.TrimSpace(key))
 	for _, p := range gatewayOwnedPrefixes {

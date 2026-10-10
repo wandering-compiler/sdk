@@ -8,12 +8,12 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// T2-6 pass #5 B1: an MCP tool must be able to require MORE than one
+// An MCP tool must be able to require MORE than one
 // permission, so the transport can enforce REST's full endpoint+model
 // gate. With a single id the model perm was silently dropped and a
 // token carrying only the endpoint perm could read the model through
-// MCP while REST answered 403 (docs/decisions/rpc-transport-enforces-acl.md
-// makes the same argument for the RPC transport, Q57-gateway-1).
+// MCP while REST answered 403 (the same transport-parity argument holds
+// for the RPC transport).
 
 func TestSetToolPerms_CallRequiresEveryPerm(t *testing.T) {
 	s := NewServer("t", "1", nil)

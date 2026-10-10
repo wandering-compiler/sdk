@@ -225,7 +225,7 @@ func NewTicketIssuer(cfg TicketIssuerConfig) http.Handler {
 // the POST issuer at path on r. Returns the store so main.go
 // can hand it to NewWSAuth + Close it on shutdown. Takes
 // chi.Router so it composes with the rest of the gateway's
-// route tree (REV-031 Phase C-6 fix-3 chi migration).
+// route tree.
 func MountTicketIssuer(r chi.Router, path string, principal func(*http.Request) (map[string]string, error)) *MemoryTicketStore {
 	store := NewMemoryTicketStore()
 	r.Method(http.MethodPost, path, NewTicketIssuer(TicketIssuerConfig{

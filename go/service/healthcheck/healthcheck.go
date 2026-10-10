@@ -119,7 +119,7 @@ type Options struct {
 	// Before it existed, a business, admin or gateway binary given
 	// `--help` or `migrate status` started its server and sat there — a
 	// deploy step gating on it waited forever, and a reader concluded the
-	// binary ignored its arguments (a consumer, 2026-10-01).
+	// binary ignored its arguments.
 	Final bool
 }
 

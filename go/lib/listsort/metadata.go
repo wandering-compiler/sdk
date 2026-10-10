@@ -10,7 +10,7 @@
 // `__sort_by` bind local. Absent / malformed header → 0 = "no explicit
 // sort", so the list keeps its DQL-declared default order.
 //
-// Index encoding (shared with srcgo/domains/storage/generate/sort.go):
+// Index encoding (shared with the storage generator that emits it):
 //
 //	0        → no explicit sort (default order / tiebreak)
 //	2*i + 1  → sortable column i, ASCending

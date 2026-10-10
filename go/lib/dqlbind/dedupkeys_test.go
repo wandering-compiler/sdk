@@ -6,7 +6,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/dqlbind"
 )
 
-// T2-6 pass #8, B-F11 — the KV multi-fetch emitters route their key list
+// The KV multi-fetch emitters route their key list
 // through DedupKeys so `WHERE pk IN (:ids)` answers with the same
 // multiplicity on Redis as `= ANY($1)` does on SQL: each matching entity
 // once, however many times the caller repeated its id.

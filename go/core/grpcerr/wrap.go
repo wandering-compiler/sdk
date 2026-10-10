@@ -60,8 +60,7 @@ type ConstraintInfo struct {
 // generated handler's Wrap call so the lookup is one map
 // hit on the failure path (zero cost on happy path).
 //
-// Dual-indexed per the portability decision (see
-// `docs/decisions/db-error-classification-portability.md`):
+// Dual-indexed because drivers differ in what they report:
 //
 //   - ByName covers PG (structured field), MySQL, MSSQL,
 //     Oracle, SQLite-CHECK — every dialect that exposes
@@ -125,9 +124,8 @@ const (
 )
 
 // Wrap is the canonical entry point for translating a DB
-// error into a gRPC status. Replaces the old PgError path
-// (REV-026 Phase A) with portable, structured-detail-aware
-// emit (REV-031 Phase C-3).
+// error into a gRPC status. Replaces the old PgError-only
+// path with portable, structured-detail-aware emit.
 //
 // Precedence (first match wins):
 //
@@ -407,13 +405,13 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// Transient classes BEFORE constraint parsing — a serialization
 	// failure or deadlock (40001 / 40P01) is not a constraint
 	// violation, and codes.Aborted is the gRPC code for it.
-	// Preserves the REV-026 Phase A PgError classification so the
-	// mapping didn't regress when codegen swapped PgError → Wrap.
+	// Preserves the earlier PgError classification so the mapping
+	// didn't regress when codegen swapped PgError → Wrap.
 	//
 	// "Retryable" here names the CONDITION, not a mechanism: nothing
 	// in this repo retries it, and that is deliberate, not a gap
-	// (T3-7 pass #9 D-F7 — this comment used to promise "the gox
-	// retry layer", which does not exist and never did). The channel
+	// (this comment used to promise "the gox retry layer", which
+	// does not exist and never did). The channel
 	// retry policy every w17 client installs
 	// (`lib/grpcclient.DefaultServiceConfig`) retries UNAVAILABLE and
 	// nothing else, pinned by
@@ -470,8 +468,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		// User-facing message stays generic; raw err goes
 		// to lib/observx (Sentry + OTel active span both get
 		// tagged with service metadata + trace_id; stderr
-		// fallback when neither exporter is configured) —
-		// REV-031 Phase C-6.
+		// fallback when neither exporter is configured).
 		observx.ReportError(ctx, fmt.Errorf("%s: %w", method, err))
 		return forCaller(ctx, codes.Internal, method, "internal error", CodeInternal, UserMsgid(codes.Internal), nil)
 	}
@@ -531,18 +528,15 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	//
 	// The message is a MSGID, resolved here rather than shipped verbatim.
 	// Stage-1 validation (the emitted per-field checks) has resolved its
-	// messages at runtime through `i18n.T(ctx, …)` since REV-149 P1.5, and
+	// messages at runtime through `i18n.T(ctx, …)`, and
 	// the constraint registry's strings come out of the SAME catalog
 	// (`lib/validation`.defaults) — they are extracted into the domain's
 	// `.po` files alongside them. Writing them as Go literals meant one
 	// declaration answered a Czech caller in Czech from the request-shape
-	// check and in English from the database constraint, for the same rule
-	// (T2-6 pass #10, D10-5). `i18n.T` falls back to the bare msgid, so a
-	// project with no catalog reads exactly as it did before.
-	//
-	// `docs/specs/runtime/error-envelope.md` still describes the wire as
-	// "English defaults"; that text predates P1.5 by ten days and was
-	// already half-false. It is corrected alongside this.
+	// check and in English from the database constraint, for the same rule.
+	// `i18n.T` falls back to the bare msgid, so a project with no catalog
+	// reads exactly as it did before — the wire carries English defaults
+	// only where no translation exists.
 	//
 	// `{constraint}` and `{table}` are the placeholders a table-level
 	// validation message may use (w17/db.proto, TableValidationMessage). They
@@ -729,8 +723,8 @@ func isRetryable(err error, d Dialect) bool {
 // Stage-1 path's InvalidArgument shape so both stages
 // produce one consistent client experience.
 //
-// Earlier (REV-026 Phase A) PgError split: UNIQUE/EXCLUSION
-// → AlreadyExists, FK → FailedPrecondition. C-3 collapses
+// The earlier PgError split: UNIQUE/EXCLUSION
+// → AlreadyExists, FK → FailedPrecondition. Wrap collapses
 // these into InvalidArgument because the structured detail
 // (`code: UNIQUE_VIOLATION` etc.) carries the discrimination;
 // the gRPC top-level code can stay uniform across the

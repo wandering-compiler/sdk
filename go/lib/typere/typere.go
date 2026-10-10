@@ -117,7 +117,7 @@ var MAC = regexp.MustCompile(`^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$`)
 // `NUMERIC(precision, scale)` column — the request-side enforcement of
 // `(w17.field) = {type: DECIMAL, precision: P, scale: S}`.
 //
-// T2-6 pass #8 (B-F5). The declaration promised a refusal ("Refused when …
+// The declaration promised a refusal ("Refused when …
 // the value carries more digits than the column may hold") that nothing
 // enforced, and the promise cannot be moved to the DDL: PostgreSQL coerces a
 // value to the column type BEFORE evaluating constraints, so a

@@ -9,7 +9,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// REV-032 Cat 4 sweep, F1: ObservabilityMiddleware combines
+// ObservabilityMiddleware combines
 // otelhttp wrap + RequestID + span attribute. The
 // "request_id on span" property is observable only when an
 // SDK tracer is wired (otherwise span.IsRecording is false);

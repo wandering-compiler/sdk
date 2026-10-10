@@ -193,7 +193,7 @@ func TestStreamReauthIntervalFromEnv(t *testing.T) {
 // default 300s with no transparent reconnect, and a raw EventSource
 // reconnect replays the consumed ticket into a permanent 401.
 //
-// T2-6 pass #9, B9-9. The stream must survive as long as the credential the
+// The stream must survive as long as the credential the
 // ticket STOOD FOR is still good — which is what the watchdog is for.
 func TestWatchStreamAuth_TicketStreamSurvivesTheTick(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
@@ -241,10 +241,10 @@ func TestWatchStreamAuth_TicketStreamSurvivesTheTick(t *testing.T) {
 	}
 }
 
-// TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick — B9-9's fix, in the
-// mode where it did not reach.
+// TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick — the ticket-promotion
+// fix, in the mode where it did not reach.
 //
-// T2-6 pass #10, C10-6. Pass #9 promoted the redeemed credential onto the
+// The first fix promoted the redeemed credential onto the
 // caller's request so a stream's re-auth probe would find it instead of a
 // spent ticket. It only helped when `header` was ALSO an accepted mode: with
 // `Modes: ["ticket"]` — documented, and the mode a browser-only surface

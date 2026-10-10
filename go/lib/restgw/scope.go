@@ -1,4 +1,4 @@
-// Data-scope runtime helpers (REV-147). The gateway router
+// Data-scope runtime helpers. The gateway router
 // extracts each entry from `AuthResp.scopes` after Authenticate
 // succeeds and threads it into outgoing gRPC metadata under
 // `ScopeKey(name)`. Storage handlers then read the value back
@@ -18,7 +18,7 @@ import (
 )
 
 // scopeKeyPrefix is the gRPC metadata key prefix the gateway
-// writes per scope. Matches the REV-147 spec contract:
+// writes per scope. Matches the data-scope contract:
 // `x-w17-scope-<scope_name>` with the scope name preserved
 // verbatim (snake_case from the annotation; gRPC metadata
 // accepts underscores).
@@ -47,7 +47,7 @@ func ScopeKey(name string) string {
 }
 
 // WriteMissingScope writes the canonical 403 envelope for
-// the REV-147 fail-closed runtime check. Generated storage
+// the fail-closed data-scope runtime check. Generated storage
 // handlers call this when a required scope's metadata key
 // isn't present on the incoming gRPC context — i.e. the
 // caller authenticated but the auth backend didn't populate
@@ -61,7 +61,7 @@ func ScopeKey(name string) string {
 //
 // This is a thin specialization over `WriteForbidden(w,
 // reason)` so the error envelope shape stays consistent
-// across the REV-146 permission check + REV-147 scope check
+// across the permission check + scope check
 // (same code, same status, just a different message).
 func WriteMissingScope(w http.ResponseWriter, name string) {
 	WriteError(w, http.StatusForbidden, "PERMISSION_DENIED",

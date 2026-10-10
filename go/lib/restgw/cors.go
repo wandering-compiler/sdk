@@ -226,8 +226,7 @@ func CORSConfigFromEnv(prefix string, lookup func(string) string) CORSConfig {
 		AllowedHeaders:   splitCSV(lookup(prefix + "_CORS_HEADERS")),
 		AllowCredentials: parseBool(lookup(prefix + "_CORS_ALLOW_CREDENTIALS")),
 		// Default 600s (10 min) — production-idiomatic per
-		// MDN + Mozilla best-practice (REV-032 Cat 4 sweep,
-		// F13). Without an explicit Access-Control-Max-Age
+		// MDN + Mozilla best-practice. Without an explicit Access-Control-Max-Age
 		// header browsers fall back to ~5s, which spams
 		// preflight on every API call from SPAs. Operators
 		// who want the browser default back set

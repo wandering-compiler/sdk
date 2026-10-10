@@ -1,4 +1,4 @@
-// HTTP-side panic recovery (REV-032 Cat 4 sweep, F9). Mirrors
+// HTTP-side panic recovery. Mirrors
 // the gRPC `lib/grpcerr.RecoverPanic` discipline at the
 // gateway's top middleware layer: any panic in a downstream
 // middleware OR handler converts to HTTP 500 with the standard

@@ -61,9 +61,8 @@ const CurrentVersion = 1
 // permission as `<module>.<Model>#<action>` or
 // `<module>.<Service>.<Method>`, but the allocation crosses a proto enum on
 // its way to disk, where a code cannot be an identifier — so what is stored
-// is `TASKS_TASK_ADD`, not `tasks.Task#add`. This doc claimed the code form
-// until T2-5 pass #10, which made the documented IDByString lookup miss every
-// time. Use [PermissionKey] to convert, or pass either form to [IDByString].
+// is `TASKS_TASK_ADD`, not `tasks.Task#add`. This doc once claimed the code
+// form, which made the documented IDByString lookup miss every time. Use [PermissionKey] to convert, or pass either form to [IDByString].
 //
 // Reserved holds IDs that were once allocated but are no longer
 // in use (a perm was removed from the cascade). Monotonic — once

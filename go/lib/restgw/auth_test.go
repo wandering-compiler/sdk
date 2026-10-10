@@ -22,12 +22,12 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// (REV-146 — HasPermission tests live with the lock package
+// (HasPermission tests live with the lock package
 // at acllock's TestHasPermission. The
 // bitset shape is acllock's concern; restgw stays focused on
 // HTTP-level helpers.)
 
-// REV-146: ClassifyAuthScheme reads the Authorization scheme
+// ClassifyAuthScheme reads the Authorization scheme
 // case-insensitively. No header / unrecognised scheme falls
 // through to AuthSchemeNone so the token-type router lands on
 // the ANY catch-all (when configured) or returns 401.
@@ -594,8 +594,8 @@ func TestAuth_AuthCacheCredHeadersFromEnv(t *testing.T) {
 	}
 }
 
-// TestAuth_CachedAuthFunc_HitsDoNotShareABackingArray — INVARIANT (T3-7 pass
-// #7, C-F8): every caller gets identity bytes it owns. The cache used to hand
+// TestAuth_CachedAuthFunc_HitsDoNotShareABackingArray — INVARIANT: every
+// caller gets identity bytes it owns. The cache used to hand
 // the SAME backing array to every hit on a key AND to store the inner
 // AuthFunc's own slice, under a read-only contract stated in a doc comment and
 // enforced by nothing — so one consumer writing through the slice it was given

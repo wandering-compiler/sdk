@@ -1,4 +1,4 @@
-// REST → gRPC outgoing-metadata propagation (REV-020). The
+// REST → gRPC outgoing-metadata propagation. The
 // generated gateway wraps its mux with this middleware when the
 // REST registry declares `metadata_propagation`. For every
 // configured header the middleware reads the incoming request
@@ -9,7 +9,7 @@
 //
 // Scoped at the api level — replaces the per-method
 // `(w17.http_required_headers) → AppendToOutgoingContext` emit
-// the gateway used pre-REV-020. Required-ness, format checks,
+// the gateway used before. Required-ness, format checks,
 // and per-method consumption of header values now live on
 // `(w17.field)` annotations + explicit `fields[]` HEADER
 // bindings (handler-side decode into the request msg).

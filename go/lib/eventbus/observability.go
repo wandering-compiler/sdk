@@ -59,8 +59,7 @@ type Observer interface {
 // "observed via runtime metrics, not propagated". The only sink
 // Dispatch has is OnEmitFailure, so with NopObserver a lost
 // event left no trace anywhere — and the generated main gives a
-// project no seam to supply an Observer of its own (T2-6 pass
-// #9, D9-3). A project that has measured that it cannot afford
+// project no seam to supply an Observer of its own. A project that has measured that it cannot afford
 // the logging still sets this explicitly.
 type NopObserver struct{}
 

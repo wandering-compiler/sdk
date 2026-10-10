@@ -15,9 +15,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// T2-6 pass #5 D3 — restgw-sec-3 says a transport error's text can carry
-// internal topology and must not reach the client, but it only guarded the
-// NON-status branch. grpc-go reports a failed dial as a STATUS error
+// A transport error's text can carry internal topology and must not reach
+// the client, but the scrub only guarded the NON-status branch. grpc-go reports a failed dial as a STATUS error
 // (picker_wrapper.go wraps the balancer's last error in
 // status.Error(codes.Unavailable, err.Error())), so real transport failures
 // took the other branch and their message went out verbatim — backend host

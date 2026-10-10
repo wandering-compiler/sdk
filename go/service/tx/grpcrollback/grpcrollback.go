@@ -8,8 +8,7 @@
 //	registry := txregistry.NewMemory(map[string]*sql.DB{...})
 //	srv := grpc.NewServer(grpc.UnaryInterceptor(grpcrollback.Interceptor(registry)))
 //
-// Per `docs/archive/iteration-2-dql.md` D-iter2-dql-4 + the 2026-05-03
-// revision: auto-rollback is cross-cutting middleware, not a
+// Auto-rollback is cross-cutting middleware, not a
 // per-handler generator output. The interceptor wraps EVERY
 // unary handler on the binary's gRPC server (Layer-1 storage
 // handlers today; any Layer-2 handler the developer adds in
@@ -64,7 +63,7 @@ import (
 // the registry's wait for any handler still holding the tx, so
 // the auto-rollback of a FAILED sibling can never close the
 // transaction between two statements of one that is still
-// running (T3-7 pass #7 C-F2).
+// running.
 type TxRoller interface {
 	Rollback(ctx context.Context, txID string) error
 }

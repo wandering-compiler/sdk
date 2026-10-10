@@ -10,7 +10,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// REV-149 — MetadataRenameMiddleware + MetadataDefaultStampMiddleware.
+// MetadataRenameMiddleware + MetadataDefaultStampMiddleware.
 
 func TestMetadataRenameMiddleware_AppendsRenamedKey(t *testing.T) {
 	rules := []restgw.HeaderRenameRule{

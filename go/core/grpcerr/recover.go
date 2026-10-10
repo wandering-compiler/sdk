@@ -71,7 +71,7 @@ func RecoverPump(ctx context.Context, label string, errc chan<- error) {
 }
 
 // RecoverPanic is a deferred-call helper for generated gRPC
-// handlers (REV-031 Phase C-4 + C-6, 2026-05-09). Every
+// handlers. Every
 // generated handler emits:
 //
 //	func (s *X) Method(ctx context.Context, ...) (..., __err error) {

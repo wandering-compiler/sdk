@@ -1,8 +1,7 @@
 // Package txregistry provides the interface generated storage
 // handlers use to adopt a caller-supplied transaction. It is the
-// runtime hook for the spec's distributed-tx model
-// (`docs/archive/iteration-2-dql.md` §"Single-connection mutations" +
-// `docs/archive/iteration-2-multidb.md` §M2-D for connection routing):
+// runtime hook for the distributed-tx model (single-connection
+// mutations, routed by connection name):
 //
 //	caller → W17DistributedTransaction.Begin({connection_name}) → returns (conn_id, tx_id)
 //	caller → ServiceA.MethodFoo(req, metadata={w17-tx-id})
@@ -45,7 +44,7 @@ const HeaderName = "w17-tx-id"
 
 // DBOrTx is the subset of `database/sql` methods both `*sql.DB`
 // and `*sql.Tx` satisfy — the shape generated query-with-lock
-// handlers (REV-046) use to switch between the pool and an
+// handlers use to switch between the pool and an
 // adopted tx without re-templating the per-row scan body. When
 // the handler adopts a caller-supplied tx (`w17-tx-id` metadata
 // resolves on this connection), `conn` is the `*sql.Tx`; when no
@@ -59,8 +58,8 @@ const HeaderName = "w17-tx-id"
 // templates emit (QueryRowContext, QueryContext, ExecContext).
 // ExecContext is unused by query-only methods today; it lands
 // to keep the type usable from intermediate-op bodies that
-// share the conn (out of scope for REV-046 v1 but cheap to
-// reserve).
+// share the conn (out of scope for query-only methods but cheap
+// to reserve).
 type DBOrTx interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -100,8 +99,7 @@ type ReleaseFunc func()
 // (Commit / Rollback) may not close a tx while a lease is
 // outstanding — otherwise it lands between two statements of a
 // running handler, making statement 1 durable and statement 2
-// fail with `sql.ErrTxDone` while the method reports failure
-// (T3-7 pass #7 C-F2/C-F3).
+// fail with `sql.ErrTxDone` while the method reports failure.
 //
 // The connection_name parameter is the calling method's
 // connection (from `(w17.module).connection.name`).
@@ -166,7 +164,7 @@ var ErrTxBusy = errors.New("txregistry: tx_id is in use by another caller")
 //     (ErrTxBusy). The generator surfaces this to the client as
 //     `codes.InvalidArgument`. Falling through to a fresh tx
 //     here would split the caller's logical transaction with no
-//     error at all — see D-F4.
+//     error at all — see [ErrUnknownTxID].
 //
 // The third return is always non-nil, so the generated preamble
 // can `defer release()` right after the error check without
@@ -202,8 +200,8 @@ func AdoptTx(ctx context.Context, reg Registry, connectionName string) (*sql.Tx,
 		// it. Opening a fresh one instead makes the method commit
 		// independently of the transaction it was told to be part
 		// of — the caller's Rollback then rolls back an empty tx
-		// and the write survives, with no error anywhere (T2-6
-		// pass #8 D-F4, silent arm). The interesting cause is an
+		// and the write survives, with no error anywhere. The
+		// interesting cause is an
 		// id minted by ANOTHER bundle's registry, which is
 		// indistinguishable from a stale one here and needs the
 		// same answer.
@@ -235,7 +233,7 @@ type IsolationReporter interface {
 // the method cannot fix this from where it stands. The two honest
 // answers are "honour the declaration" and "refuse"; the third —
 // running weaker than declared, silently — is exactly the defect this
-// error exists to end (T3-7 pass #9 D-F7). The caller's remedy is to
+// error exists to end. The caller's remedy is to
 // pin the level on `W17DistributedTransaction.Begin`
 // (`BeginRequest.isolation`).
 var ErrIsolationTooWeak = errors.New("txregistry: open transaction is weaker than the method's declared tx_isolation")
@@ -335,7 +333,7 @@ const (
 	// that transaction is no longer in the registry: it was committed or
 	// rolled back concurrently, in the window between the handler's last
 	// statement and this call. The work must be thrown away. Running it
-	// (the pre-T3-7-pass-#7 behaviour, which could not tell this state
+	// (the behaviour before the adoption lease, which could not tell this state
 	// from EmitNow) announces a write that a concurrent rollback has
 	// already discarded — the phantom event the whole defer machinery
 	// exists to prevent.
