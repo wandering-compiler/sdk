@@ -6,7 +6,7 @@ import "google/protobuf/descriptor.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// REV-089 (2026-05-14) — event-bus annotation vocabulary.
+// Event-bus annotation vocabulary.
 //
 // This file owns the proto surface for the eventbus domain's
 // emit side: how a message becomes an event, how an RPC declares
@@ -40,28 +40,24 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 //                       or a subscriber loopback does not reach a
 //                       gateway, so it does not re-emit. It is
 //                       bound to the external intent, an "intent"
-//                       event (typically frontend-facing). See
-//                       docs/specs/eventbus/emit-gateway.md.
+//                       event (typically frontend-facing).
 //
 // An event may be wired to at most ONE emit annotation across the
 // domain (server OR gateway, one site). The parser refuses a
 // second emit of the same event — multi-source emission is
 // modelled by funnelling every trigger through the single method
-// that owns the state change. See emit-gateway.md §uniqueness.
+// that owns the state change.
 //
-// Dotted-form `(w17.event.emit)` in the ADR is rendered here as
+// Dotted-form `(w17.event.emit)` in the design is rendered here as
 // the snake_case field name `event_emit` for parity with the
 // existing `(w17.rest_api)` / `(w17.event_subscribers)` pattern;
-// the semantics are identical to the ADR's intent.
+// the semantics are identical to the design's intent.
 //
-// Driven by `srcgo/domains/eventbus/parser`: every loaded
+// Driven by the eventbus parser: every loaded
 // `.proto` is scanned for `(w17.event)`-tagged messages, the
 // resulting EventRegistry resolves `(w17.event_emit).event`
 // refs, and the codegen pipeline emits per-RPC emit interceptors
 // + the domain's `<Domain>EventEnvelope`.
-//
-// Design: docs/decisions/eventbus-redesign.md +
-// docs/specs/eventbus/emit.md + .../channels-config.md.
 
 extend google.protobuf.MessageOptions {
   // (w17.event) — registers the annotated message as an event
@@ -69,7 +65,7 @@ extend google.protobuf.MessageOptions {
   // `channel` (must exist in the domain's `(w17.module).channels[]`)
   // and `topic` (filter key — subscribers glob-match against it).
   // Per-event retry override is optional; resolves through the
-  // four-tier cascade documented in channels-config.md.
+  // four-tier cascade documented on `Event.retry`.
   Event event = 50130;
 }
 
@@ -79,7 +75,7 @@ extend google.protobuf.MethodOptions {
   // against the enclosing domain's EventRegistry (cross-domain
   // refs are a parse-time diag). Payload mapping uses the same
   // `$request.*` / `$response.*` / literal-string syntax as
-  // REV-020's `(w17.rest_api).fields[]`.
+  // `(w17.rest_api).fields[]`.
   //
   // Emit is generated as a server-side interceptor + in-process
   // wrapper, so it fires on every path that reaches the handler.
@@ -97,7 +93,6 @@ extend google.protobuf.MethodOptions {
   //
   // The same event MUST NOT also carry `event_emit` (or a second
   // `event_emit_gateway`): an event has exactly one emit site.
-  // See docs/specs/eventbus/emit-gateway.md.
   EmitConfig event_emit_gateway = 50133;
 }
 
@@ -166,7 +161,7 @@ message Event {
   // public/internal distinction only governs stream surfacing.
   bool public = 4;
 
-  // REV-090 — optional FE delivery-reliability policy. When set,
+  // Optional FE delivery-reliability policy. When set,
   // the generated FE client polls `delivery.fallback.query`,
   // diffs the result across polls, and synthesizes THIS event on
   // the browser pub/sub surface (`client.events.X.subscribe`) in
@@ -176,7 +171,7 @@ message Event {
   // → the event stays best-effort (push-only).
   //
   // FE-only: BE / MCP durable consumers already get at-least-once
-  // from the bus. See docs/specs/eventbus/delivery-fallback.md.
+  // from the bus.
   EventDelivery delivery = 5;
 }
 
@@ -226,7 +221,7 @@ message EventDelivery {
 // by polling a domain-local query and diffing its result. Reuses
 // PayloadMapping + the emit payload-mapping engine, adding the
 // `$entity.*` (the diffed row) and `$principal.*` (the caller)
-// roots. See docs/specs/eventbus/delivery-fallback.md.
+// roots.
 message EventFallback {
   // Domain-local RPC whose response lists the entities to diff.
   // "<Service>.<Method>" — resolved against the enclosing domain
@@ -294,7 +289,7 @@ enum DiffKind {
 // fail the RPC (the response has already been sent).
 message EmitConfig {
   // Event ref — `<file>.<MessageName>` or
-  // `<module>.<file>.<MessageName>`, matching the REV-015 ref
+  // `<module>.<file>.<MessageName>`, matching the ref
   // shape used by REST registry method refs. Plain
   // `<MessageName>` is accepted iff unambiguous within the
   // enclosing domain's event index.
@@ -313,7 +308,7 @@ message EmitConfig {
 // PayloadMapping — declarative field-to-source mapping for the
 // emit interceptor's payload construction.
 //
-// Source-expression syntax mirrors REV-020's
+// Source-expression syntax mirrors the
 // `(w17.rest_api).fields[].ref` engine:
 //
 //   "$request.<field>"        — top-level scalar from the RPC

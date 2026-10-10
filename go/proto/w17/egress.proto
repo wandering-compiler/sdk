@@ -18,8 +18,7 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // runtime reads them; it never reads the OpenAPI document.
 //
 // The proto stays in w17's naming (snake_case fields, PascalCase messages);
-// these options carry the upstream's. Design and phases:
-// docs/todos/egress-rest-client.md.
+// these options carry the upstream's.
 
 extend google.protobuf.FileOptions {
   // (w17.egress_client) — marks the file as a generated egress client and

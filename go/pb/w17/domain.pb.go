@@ -4,8 +4,7 @@
 // 	protoc        v5.29.3
 // source: w17/domain.proto
 
-// Domain-level configuration option (Phase D of the plugin-system
-// implementation plan — `docs/specs/plugins/implementation-plan.md`).
+// Domain-level configuration option.
 //
 // `(w17.domain)` is the cascade sentinel for DOMAIN-scoped settings
 // — operations that apply uniformly across every module in a
@@ -20,8 +19,8 @@
 //   - `(w17.domain)` carries DOMAIN-ONLY settings that have no
 //     module-level analog. Plugin activations are deliberately
 //     domain-scoped (per-domain activation lets the same plugin
-//     materialize as independent slots in multiple domains —
-//     see docs/specs/plugins/activation.md). Loader rejects it
+//     materialize as independent slots in multiple domains).
+//     Loader rejects it
 //     anywhere outside `proto/domains/<domain>/w17.proto`.
 //
 // Why a separate option (rather than rolling into `Module`):
@@ -58,8 +57,6 @@ type Domain struct {
 	// module in this domain. Same plugin may be activated under
 	// different domains with different `registered_as` values —
 	// each activation is independent.
-	//
-	// Spec: docs/specs/plugins/activation.md.
 	Plugins []*PluginActivation `protobuf:"bytes,1,rep,name=plugins,proto3" json:"plugins,omitempty"`
 	// Shared modules this domain persists. A shared module
 	// (proto/shared/[<groups…>/]<module>/) holds types that belong to no
@@ -70,8 +67,6 @@ type Domain struct {
 	// message, a payload). The data is per domain: two domains that
 	// register one module have two tables of one shape, each with its own
 	// rows.
-	//
-	// Decision: docs/decisions/shared-models-one-type-persisted-where-registered.md.
 	Register      []*SharedRegistration `protobuf:"bytes,2,rep,name=register,proto3" json:"register,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -198,8 +193,7 @@ type PluginActivation struct {
 	// Does NOT rename the plugin's proto package — the wire
 	// identity (derived from `plugin.yaml.name` as
 	// `w17.contrib.<name>`) is stable across activations.
-	// `registered_as` is the PLACEMENT-layer rename only (see
-	// docs/specs/plugins/activation.md §"Naming + paths").
+	// `registered_as` is the PLACEMENT-layer rename only.
 	RegisteredAs string `protobuf:"bytes,2,opt,name=registered_as,json=registeredAs,proto3" json:"registered_as,omitempty"`
 	// Connection alias → project connection name. Every alias
 	// declared in `plugin.yaml.connections` MUST appear as a key
@@ -210,8 +204,6 @@ type PluginActivation struct {
 	//
 	// Empty when the plugin's `connections:` list is empty
 	// (plugin binds tables to the project's default connection).
-	// Spec: docs/specs/plugins/activation.md §"Connection
-	// binding via aliases".
 	Connections map[string]string `protobuf:"bytes,3,rep,name=connections,proto3" json:"connections,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Channel alias → project channel name. Every alias declared
 	// in `plugin.yaml.channels` MUST appear as a key here; every
@@ -221,8 +213,7 @@ type PluginActivation struct {
 	// event proto with the mapped value before IR build.
 	//
 	// Empty when the plugin's `channels:` list is empty (plugin
-	// emits no events). Spec: docs/specs/plugins/activation.md
-	// §"Channel binding via aliases".
+	// emits no events).
 	Channels map[string]string `protobuf:"bytes,4,rep,name=channels,proto3" json:"channels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Optional configuration for plugins shipping a turnkey
 	// AuthService.Authenticate RPC. The plugin codegen reads
@@ -231,9 +222,6 @@ type PluginActivation struct {
 	// Plugins that don't ship an AuthService ignore the field;
 	// the orchestrator applies defaults (Authorization / Bearer)
 	// when the activation omits it.
-	//
-	// Spec: docs/specs/plugins/activation.md §"Turnkey auth
-	// configuration"; Phase F2 of the auth+acl track.
 	AuthInput *AuthInput `protobuf:"bytes,5,opt,name=auth_input,json=authInput,proto3" json:"auth_input,omitempty"`
 	// Feature-tag set this activation enables (Phase G2). Wrapper
 	// semantics distinguish three states proto3's bare repeated
@@ -251,8 +239,6 @@ type PluginActivation struct {
 	// methods / messages) whose `(w17.contrib.plugin_feature*)`
 	// tag isn't in the resolved set — untagged entities always
 	// emit.
-	//
-	// Spec: docs/specs/plugins/feature-tags.md.
 	Features *PluginFeatureSet `protobuf:"bytes,6,opt,name=features,proto3" json:"features,omitempty"`
 	// Per-surface controls for the plugin's ADMIN preset. The admin
 	// surface (overview widgets, contributed pages, auth auto-wire) is
@@ -265,10 +251,7 @@ type PluginActivation struct {
 	// `presets.mcp` are OFF by default and opted in from the CONSUMING
 	// surface's own registry (`(w17.rest_api).include` /
 	// `(w17.mcp_api).include`), so the registry stays the single source
-	// of truth for what is exposed. See
-	// docs/decisions/plugin-surfaces-opt-in.md.
-	//
-	// Spec: docs/specs/plugins/presets.md.
+	// of truth for what is exposed.
 	Presets       *PresetControls `protobuf:"bytes,7,opt,name=presets,proto3" json:"presets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -356,8 +339,7 @@ func (x *PluginActivation) GetPresets() *PresetControls {
 // PresetControls is the per-surface control for a plugin activation's
 // presets. Only the admin surface is controlled here (default-on,
 // opt-out); REST/MCP publication is opt-in from the consuming
-// registry — see PluginActivation.presets. Spec:
-// docs/specs/plugins/presets.md.
+// registry — see PluginActivation.presets.
 type PresetControls struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Admin         *PresetSurface         `protobuf:"bytes,3,opt,name=admin,proto3" json:"admin,omitempty"`

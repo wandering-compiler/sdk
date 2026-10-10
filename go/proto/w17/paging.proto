@@ -6,16 +6,13 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// REV-148 (2026-05-19) — cursor-paged REST endpoints.
+// Cursor-paged REST endpoints.
 //
 // The frontend-visible shape (Paging) and the wire-opaque
 // state shape (PageCursor) for cursor-style pagination on
 // REST endpoints. Generated REST handlers populate `Paging`
 // in the response message; `PageCursor` is the base64-url-
 // safe value carried in the `?cursor=…` query parameter.
-//
-// Spec: docs/specs/gateway/cursor-paging.md
-// ADR:  docs/decisions/cursor-paging.md
 
 // Paging is the frontend-visible response envelope for a
 // cursor-paged endpoint. The author declares a `w17.Paging
@@ -62,7 +59,7 @@ message PageCursor {
   // Serialized original request proto, opaque to this layer.
   // On resume the gateway deserializes these bytes back into
   // the storage method's request message and re-stamps scope
-  // fields (REV-147) before calling storage. This is how
+  // fields (data scopes) before calling storage. This is how
   // filters stay invariant across a pagination session: the
   // client cannot accidentally diverge mid-pagination.
   bytes request = 1;

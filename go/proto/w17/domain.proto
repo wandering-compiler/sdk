@@ -1,7 +1,6 @@
 syntax = "proto3";
 
-// Domain-level configuration option (Phase D of the plugin-system
-// implementation plan — `docs/specs/plugins/implementation-plan.md`).
+// Domain-level configuration option.
 //
 // `(w17.domain)` is the cascade sentinel for DOMAIN-scoped settings
 // — operations that apply uniformly across every module in a
@@ -16,8 +15,8 @@ syntax = "proto3";
 //   - `(w17.domain)` carries DOMAIN-ONLY settings that have no
 //     module-level analog. Plugin activations are deliberately
 //     domain-scoped (per-domain activation lets the same plugin
-//     materialize as independent slots in multiple domains —
-//     see docs/specs/plugins/activation.md). Loader rejects it
+//     materialize as independent slots in multiple domains).
+//     Loader rejects it
 //     anywhere outside `proto/domains/<domain>/w17.proto`.
 //
 // Why a separate option (rather than rolling into `Module`):
@@ -48,8 +47,6 @@ message Domain {
   // module in this domain. Same plugin may be activated under
   // different domains with different `registered_as` values —
   // each activation is independent.
-  //
-  // Spec: docs/specs/plugins/activation.md.
   repeated PluginActivation plugins = 1;
 
   // Shared modules this domain persists. A shared module
@@ -61,8 +58,6 @@ message Domain {
   // message, a payload). The data is per domain: two domains that
   // register one module have two tables of one shape, each with its own
   // rows.
-  //
-  // Decision: docs/decisions/shared-models-one-type-persisted-where-registered.md.
   repeated SharedRegistration register = 2;
 }
 
@@ -95,8 +90,7 @@ message PluginActivation {
   // Does NOT rename the plugin's proto package — the wire
   // identity (derived from `plugin.yaml.name` as
   // `w17.contrib.<name>`) is stable across activations.
-  // `registered_as` is the PLACEMENT-layer rename only (see
-  // docs/specs/plugins/activation.md §"Naming + paths").
+  // `registered_as` is the PLACEMENT-layer rename only.
   string registered_as = 2;
 
   // Connection alias → project connection name. Every alias
@@ -108,8 +102,6 @@ message PluginActivation {
   //
   // Empty when the plugin's `connections:` list is empty
   // (plugin binds tables to the project's default connection).
-  // Spec: docs/specs/plugins/activation.md §"Connection
-  // binding via aliases".
   map<string, string> connections = 3;
 
   // Channel alias → project channel name. Every alias declared
@@ -120,8 +112,7 @@ message PluginActivation {
   // event proto with the mapped value before IR build.
   //
   // Empty when the plugin's `channels:` list is empty (plugin
-  // emits no events). Spec: docs/specs/plugins/activation.md
-  // §"Channel binding via aliases".
+  // emits no events).
   map<string, string> channels = 4;
 
   // Optional configuration for plugins shipping a turnkey
@@ -131,9 +122,6 @@ message PluginActivation {
   // Plugins that don't ship an AuthService ignore the field;
   // the orchestrator applies defaults (Authorization / Bearer)
   // when the activation omits it.
-  //
-  // Spec: docs/specs/plugins/activation.md §"Turnkey auth
-  // configuration"; Phase F2 of the auth+acl track.
   AuthInput auth_input = 5;
 
   // Feature-tag set this activation enables (Phase G2). Wrapper
@@ -152,8 +140,6 @@ message PluginActivation {
   // methods / messages) whose `(w17.contrib.plugin_feature*)`
   // tag isn't in the resolved set — untagged entities always
   // emit.
-  //
-  // Spec: docs/specs/plugins/feature-tags.md.
   PluginFeatureSet features = 6;
 
   // Per-surface controls for the plugin's ADMIN preset. The admin
@@ -167,18 +153,14 @@ message PluginActivation {
   // `presets.mcp` are OFF by default and opted in from the CONSUMING
   // surface's own registry (`(w17.rest_api).include` /
   // `(w17.mcp_api).include`), so the registry stays the single source
-  // of truth for what is exposed. See
-  // docs/decisions/plugin-surfaces-opt-in.md.
-  //
-  // Spec: docs/specs/plugins/presets.md.
+  // of truth for what is exposed.
   PresetControls presets = 7;
 }
 
 // PresetControls is the per-surface control for a plugin activation's
 // presets. Only the admin surface is controlled here (default-on,
 // opt-out); REST/MCP publication is opt-in from the consuming
-// registry — see PluginActivation.presets. Spec:
-// docs/specs/plugins/presets.md.
+// registry — see PluginActivation.presets.
 message PresetControls {
   reserved 1, 2;                // was: rest, mcp (now opt-in via registry include)
   reserved "rest", "mcp";
