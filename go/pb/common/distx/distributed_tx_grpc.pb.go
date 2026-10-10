@@ -29,8 +29,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // W17DistributedTransaction is the distributed-transaction
-// coordination surface every w17 storage binary registers per
-// `docs/archive/iteration-2-dql.md` §"W17DistributedTransaction".
+// coordination surface every w17 storage binary registers.
 //
 // A caller drives a logical multi-RPC transaction by:
 //
@@ -110,8 +109,7 @@ func (c *w17DistributedTransactionClient) Rollback(ctx context.Context, in *Roll
 // for forward compatibility.
 //
 // W17DistributedTransaction is the distributed-transaction
-// coordination surface every w17 storage binary registers per
-// `docs/archive/iteration-2-dql.md` §"W17DistributedTransaction".
+// coordination surface every w17 storage binary registers.
 //
 // A caller drives a logical multi-RPC transaction by:
 //

@@ -4,7 +4,7 @@
 // client imports ONLY this irpb-free shape, never the IR-laden
 // `w17.migrator.plan.Plan`.
 //
-// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §8.1):
+// Public-split boundary:
 // the dev DB lifecycle plans server-side (the engine.Plan diff engine is a
 // COMPILER concern) and applies client-side. The server flattens its typed
 // `planpb.Plan` — whose `Migration.connection` is a `w17.common.ir.Connection`

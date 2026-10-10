@@ -4282,7 +4282,7 @@ func (x *EditLockResponse) GetNotes() []string {
 }
 
 // PlaceGenerateRequest — the console's placement call for a GenerateProject
-// run on the codegen cluster (docs/specs/console/codegen-on-the-cluster.md).
+// run on the codegen cluster.
 //
 // Unary and SHORT on purpose: the console is the single entry point and holds
 // no long-lived connection. A run is placed with `start`; while no worker is
@@ -5346,8 +5346,8 @@ type LockView struct {
 	// `srcgo` by default). The client needs it to NAME the path a domain's
 	// hand-written facade belongs at; it cannot read the lock itself, and the
 	// default is only right for a project that took the default. A consumer
-	// whose tree is `w17src/` was told by `domain add` to write into `srcgo/`,
-	// a directory their project does not have.
+	// whose tree is `w17src/` was told by `domain add` to write into the default
+	// `srcgo` directory, which their project does not have.
 	GenDir string `protobuf:"bytes,19,opt,name=gen_dir,json=genDir,proto3" json:"gen_dir,omitempty"`
 	// deploy_targets are the OPTIONAL deploy targets the lock declares
 	// (generated_code.deploy_targets[].target). Docker is always emitted and is
@@ -5362,7 +5362,7 @@ type LockView struct {
 	// It exists because that fallback is the CLIENT's floor, and the code comes
 	// from the CONSOLE: after a deploy, a client from the day before accepted a
 	// pin the freshly generated code could not build against, codegen exited 0,
-	// and the build image reported `undefined:` (a consumer, 2026-10-01).
+	// and the build image reported `undefined:`.
 	SdkFloor string `protobuf:"bytes,22,opt,name=sdk_floor,json=sdkFloor,proto3" json:"sdk_floor,omitempty"`
 	// infra is the project's declared infrastructure (absent = none
 	// declared): w17/infra.yaml (DescribeLockRequest.infra), or the lock's own
@@ -6544,7 +6544,7 @@ type GenerateClientRequest struct {
 	// Lock is the signed `w17/lock.yaml` content — the generator reads
 	// generated_code.clients[] (frameworks / languages / output roots).
 	Lock []byte `protobuf:"bytes,2,opt,name=lock,proto3" json:"lock,omitempty"`
-	// GoModule is the consumer's srcgo/go.mod module line — needed when the
+	// GoModule is the consumer's go.mod module line — needed when the
 	// project declares plugin activations (placeholder expansion), since the
 	// server stages only protos (not the project go.mod).
 	GoModule string `protobuf:"bytes,3,opt,name=go_module,json=goModule,proto3" json:"go_module,omitempty"`
@@ -6624,7 +6624,7 @@ type VerifyRequest struct {
 	// (w17.lock.acl.proto / w17.lock.events.proto) the check compares
 	// against.
 	Files []*ProtoFile `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
-	// GoModule is the consumer's srcgo/go.mod module line — needed by ACL/
+	// GoModule is the consumer's go.mod module line — needed by ACL/
 	// eventbus verification when the project declares plugin activations
 	// (placeholder expansion), since the server stages only protos.
 	GoModule      string `protobuf:"bytes,2,opt,name=go_module,json=goModule,proto3" json:"go_module,omitempty"`
@@ -6886,7 +6886,7 @@ type GenerateProjectMapRequest struct {
 	GoModule string                 `protobuf:"bytes,2,opt,name=go_module,json=goModule,proto3" json:"go_module,omitempty"`
 	PbRoot   string                 `protobuf:"bytes,3,opt,name=pb_root,json=pbRoot,proto3" json:"pb_root,omitempty"`
 	// GenFiles are the generated Go files (relative paths under the gen dir,
-	// e.g. `srcgo/domains/<d>/...go`) the map's go/parser reads for
+	// e.g. `<gen>/domains/<d>/...go`) the map's go/parser reads for
 	// cross-domain grpc-client edges. Optional — omitted = proto-only map.
 	GenFiles      []*ProtoFile `protobuf:"bytes,4,rep,name=gen_files,json=genFiles,proto3" json:"gen_files,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -6986,7 +6986,7 @@ type GenerateBusinessRequest struct {
 	// their grpcerr.ForUser sentences are translated in this process — but
 	// the bundle never registered a catalog, so every one stayed in its
 	// msgid whatever the request's locale. The storage tier had the same gap
-	// and closed it under REV-149; this tier was missed.
+	// and closed it earlier; this tier was missed.
 	LanguagesDir  string `protobuf:"bytes,10,opt,name=languages_dir,json=languagesDir,proto3" json:"languages_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -7235,7 +7235,7 @@ func (x *BusinessEnv) GetSecret() bool {
 type GenerateAclRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Files []*ProtoFile           `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
-	// GoModule is the consumer's srcgo/go.mod module line. The client sends
+	// GoModule is the consumer's go.mod module line. The client sends
 	// it because the server stages only protos (not the project go.mod), and
 	// plugin-activation placeholder expansion needs the module path.
 	GoModule      string `protobuf:"bytes,2,opt,name=go_module,json=goModule,proto3" json:"go_module,omitempty"`
@@ -9072,7 +9072,7 @@ type ObservedStore struct {
 	// (INSERT then refused it, 22P02, behind a sync that said converged), a
 	// removal or reorder bypassed the refusal the stored base raises, and a
 	// dropped enum column left its type behind so re-adding it collided
-	// (42710) — T1-1 pass #49 A49-1 / A49-14 / D49-4.
+	// (42710).
 	//
 	// A column is tied to its type by SPELLING: `type` below is exactly what
 	// `format_type` answers for the type, which is what a column of that type
@@ -9222,7 +9222,7 @@ type ObservedIndex struct {
 	// The whole CREATE INDEX statement, as `pg_get_indexdef` renders it.
 	// The client parses nothing; the console restates a leftover index from
 	// it and compares it, normalised, against the declared index's rendering
-	// (raw indexes since pass #48 F17, structured ones since pass #49 A49-4).
+	// (raw and structured indexes alike).
 	Definition    string `protobuf:"bytes,3,opt,name=definition,proto3" json:"definition,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9304,15 +9304,15 @@ type ObservedForeignKey struct {
 	// OWNER's schema (`REFERENCES "owner"."u"` for a key into `other.u`), and
 	// two schemas holding same-named tables made the drop ordering resolve
 	// every unqualified target to every same-named table — an acyclic database
-	// refused as an "FK cycle" (pass #49 B49-12 / B49-15). Empty means NOT
+	// refused as an "FK cycle". Empty means NOT
 	// REPORTED (an old client): the server keeps today's owner-namespace
 	// fallback — absent is not a value.
 	TargetSchema string `protobuf:"bytes,6,opt,name=target_schema,json=targetSchema,proto3" json:"target_schema,omitempty"`
 	// EVERY referenced column, in the key's order (`confkey`), paired
 	// position by position with `columns`. `target_column` stays the first of
 	// them for old servers. Carried because a composite key restated from
-	// its first column alone is a different, narrower constraint (pass #49
-	// B49-12 / A49-10). Empty means NOT REPORTED (an old client): the server
+	// its first column alone is a different, narrower constraint. Empty
+	// means NOT REPORTED (an old client): the server
 	// keeps today's first-column behaviour.
 	TargetColumns []string `protobuf:"bytes,7,rep,name=target_columns,json=targetColumns,proto3" json:"target_columns,omitempty"`
 	// The columns the key's ON DELETE SET NULL / SET DEFAULT is limited to
@@ -9468,7 +9468,7 @@ type ObservedTable struct {
 	// The full definition of every CHECK constraint, by name, exactly as
 	// `pg_get_constraintdef` renders it. It lets a constraint the schema does
 	// not declare be planned for a DROP under its real identity, with a DOWN
-	// that can re-create it. Since pass #49 (M4) the console also reads a
+	// that can re-create it. The console also reads a
 	// declared length / range / regex check's facts back out of it and
 	// compares a raw check's normalised body, so an authored body edit
 	// reaches the database. Absent (old client) means leftover checks are not
@@ -9479,11 +9479,11 @@ type ObservedTable struct {
 	// hand-made table can say `CONSTRAINT my_pk PRIMARY KEY`, and a renamed
 	// table keeps its old `<old>_pkey`. A key change that DROPs a derived
 	// name then no-ops and the ADD PRIMARY KEY fails with "multiple primary
-	// keys" (42P16, pass #49 B49-6). Empty means NOT REPORTED (an old client,
+	// keys" (42P16). Empty means NOT REPORTED (an old client,
 	// or a table with no key): the server keeps deriving `<table>_pkey`.
 	PrimaryKeyName string `protobuf:"bytes,10,opt,name=primary_key_name,json=primaryKeyName,proto3" json:"primary_key_name,omitempty"`
 	// The table's UNIQUE constraints (`pg_constraint.contype = 'u'`): name
-	// and columns. Invisible before T1-1 pass #49 B49-10 — the index read
+	// and columns. Invisible before this field — the index read
 	// skips constraint-backed indexes and the constraint read took only FKs
 	// and checks — so the UNIQUE (scope, ref) a scope-preserving FK needs on
 	// its parent could never be compared, added or dropped on the live base.
@@ -9771,8 +9771,8 @@ type ObservedColumn struct {
 	// The column is GENERATED (`attgenerated <> ”`) — default_expr then holds
 	// the GENERATION expression, which lives in the same catalogue slot a
 	// DEFAULT does. Without this flag the reconstruction read the expression
-	// as a phantom default and planned a `DROP DEFAULT` that cannot apply
-	// (pass #48 F35). Absent (an older client) means UNKNOWN, not false: the
+	// as a phantom default and planned a `DROP DEFAULT` that cannot apply.
+	// Absent (an older client) means UNKNOWN, not false: the
 	// server keeps a declared-generated column converged when a non-empty
 	// default_expr arrives flag-less.
 	Generated bool `protobuf:"varint,5,opt,name=generated,proto3" json:"generated,omitempty"`
@@ -10151,8 +10151,8 @@ type GenerateRequest struct {
 	// (one map entry per language) and don't need a proto
 	// change.
 	//
-	// Example: `[{language: "go", output_root: "srcgo/pb"}]`
-	// produces Go stubs under `srcgo/pb/<source-rel-path>.pb.go`
+	// Example: `[{language: "go", output_root: "gen/pb"}]`
+	// produces Go stubs under `gen/pb/<source-rel-path>.pb.go`
 	// (path mirrors the input proto layout 1:1 via buf's
 	// `paths=source_relative`).
 	StubTargets []*StubTarget `protobuf:"bytes,6,rep,name=stub_targets,json=stubTargets,proto3" json:"stub_targets,omitempty"`
@@ -10163,7 +10163,7 @@ type GenerateRequest struct {
 	// bundle.
 	GatewayTargets []*GatewayTarget `protobuf:"bytes,7,rep,name=gateway_targets,json=gatewayTargets,proto3" json:"gateway_targets,omitempty"`
 	// AdminTargets drives the per-binary admin bundle emit
-	// (REV-150). Optional: empty list skips admin emit even when
+	// Optional: empty list skips admin emit even when
 	// proto files carry `(w17.admin_api)`. One target produces
 	// one admin bundle (Go binary + embedded React SPA).
 	AdminTargets []*AdminTarget `protobuf:"bytes,10,rep,name=admin_targets,json=adminTargets,proto3" json:"admin_targets,omitempty"`
@@ -10193,8 +10193,6 @@ type GenerateRequest struct {
 	// named entry from the domain-level connection registry.
 	// Empty = pre-A4 behaviour (omitted-connection files emit
 	// on the nil-bucket single-DB path).
-	//
-	// Spec: docs/specs/console/default-connection.md.
 	DefaultConnection string `protobuf:"bytes,12,opt,name=default_connection,json=defaultConnection,proto3" json:"default_connection,omitempty"`
 	// Languages declares the BCP-47 tags the consumer wants
 	// gettext .po catalogs scaffolded for. The server harvests
@@ -10219,8 +10217,7 @@ type GenerateRequest struct {
 	// `deploy/prod/secrets-<backend>.yaml` manifest that populates
 	// the `<domain>-storage-secrets` k8s Secret the Deployment
 	// references. Empty/plain/sops emit no extra manifest. Drawn
-	// from `lk.GetSecrets().GetBackend()`. Spec:
-	// docs/specs/secrets/production-secrets.md.
+	// from `lk.GetSecrets().GetBackend()`.
 	SecretsBackend string `protobuf:"bytes,15,opt,name=secrets_backend,json=secretsBackend,proto3" json:"secrets_backend,omitempty"`
 	// Replicas is the per-service PROD replica count (storage gRPC
 	// proxy feature), keyed by deployable bundle name
@@ -10233,8 +10230,7 @@ type GenerateRequest struct {
 	// proxy so clients dial it unchanged. Absent / <= 1 = single replica,
 	// output byte-identical to pre-feature. Folded tiers (a storage
 	// component absorbed into a `<domain>-server`) can't carry a count > 1
-	// — lock.Validate rejects that upstream. See
-	// docs/specs/storage/grpc-proxy.md.
+	// — lock.Validate rejects that upstream.
 	Replicas map[string]int32 `protobuf:"bytes,16,rep,name=replicas,proto3" json:"replicas,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	// FormatOverrides is the project's locale-aware formatting remap,
 	// flattened from the lock's `formats` map (`lock.EffectiveFormats`).
@@ -10245,7 +10241,7 @@ type GenerateRequest struct {
 	// The server rebuilds the nested shape before handing it to a
 	// generator, so the wire order carries no meaning — but the client
 	// sends it sorted anyway, so two identical projects produce
-	// byte-identical requests. Spec: docs/specs/i18n/formatting.md.
+	// byte-identical requests.
 	FormatOverrides []*FormatOverrideEntry `protobuf:"bytes,17,rep,name=format_overrides,json=formatOverrides,proto3" json:"format_overrides,omitempty"`
 	// AdminLanguages declares the BCP-47 tags the ADMIN's own gettext
 	// catalogs cover, from the lock's `admin_languages` (which inherits
@@ -10674,10 +10670,10 @@ type DepVersions struct {
 	// RPCs). Storage bundles never see these requires.
 	OtelGrpc       string `protobuf:"bytes,8,opt,name=otel_grpc,json=otelGrpc,proto3" json:"otel_grpc,omitempty"`                   // go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
 	CoderWebsocket string `protobuf:"bytes,9,opt,name=coder_websocket,json=coderWebsocket,proto3" json:"coder_websocket,omitempty"` // github.com/coder/websocket
-	GoChi          string `protobuf:"bytes,10,opt,name=go_chi,json=goChi,proto3" json:"go_chi,omitempty"`                           // github.com/go-chi/chi/v5 — REV-031 Phase C-6 fix-3
+	GoChi          string `protobuf:"bytes,10,opt,name=go_chi,json=goChi,proto3" json:"go_chi,omitempty"`                           // github.com/go-chi/chi/v5
 	// Eventbus-flavoured storage bundles only — main.go opens a
 	// NATS dispatcher when (w17.event_emit) annotations exist
-	// on the domain's RPCs (REV-125).
+	// on the domain's RPCs.
 	NatsGo string `protobuf:"bytes,11,opt,name=nats_go,json=natsGo,proto3" json:"nats_go,omitempty"` // github.com/nats-io/nats.go
 	// MCP-flavoured gateway bundles only — the gateway's src/mcp
 	// package imports mcp-go directly (tool registration + the
@@ -10691,7 +10687,7 @@ type DepVersions struct {
 	// own go.mod omits. A consumer building the bundle outside a
 	// workspace got `imports … from implicitly required module`.
 	//
-	// Pin source is sdk/go/go.mod, not srcgo/go.mod: the generated
+	// Pin source is sdk/go/go.mod, not the project's go.mod: the generated
 	// code pairs mcp-go with sdk/go/lib/mcp, so the version that
 	// must agree is the SDK's.
 	McpGo string `protobuf:"bytes,12,opt,name=mcp_go,json=mcpGo,proto3" json:"mcp_go,omitempty"` // github.com/mark3labs/mcp-go
@@ -10869,7 +10865,7 @@ type GatewayTarget struct {
 	// business/facade tier, naming convention
 	// `<domain>-gateway`).
 	Domain string `protobuf:"bytes,4,opt,name=domain,proto3" json:"domain,omitempty"`
-	// I18nDir (REV-149) is the codegen-baked default for the
+	// I18nDir is the codegen-baked default for the
 	// `<EnvPrefix>_I18N_DIR` env var on the generated main.go.
 	// Typically a relative escape from the bundle root to the
 	// project's shared catalog tree
@@ -11140,7 +11136,7 @@ func (x *GatewayTarget) GetHasStandaloneBusiness() bool {
 
 // AdminTarget drives the per-binary admin bundle emit
 // (the compiler's admin generator). Mirror of GatewayTarget for
-// admin-flavoured bundles (REV-150). One target = one
+// admin-flavoured bundles. One target = one
 // `<output_dir>/` admin bundle (Go binary + embedded React SPA).
 // Empty list (no targets) skips admin emit even when proto
 // files carry `(w17.admin_api)`.
@@ -11172,7 +11168,7 @@ type AdminTarget struct {
 	// during local development. Required.
 	AdminRuntimeNpmSpec string `protobuf:"bytes,5,opt,name=admin_runtime_npm_spec,json=adminRuntimeNpmSpec,proto3" json:"admin_runtime_npm_spec,omitempty"`
 	// ClientNpmSpec is the dependency specifier for the
-	// project's already-generated REV-141 TS client. Either a
+	// project's already-generated TS client. Either a
 	// registry pin or a `file:` path. Required.
 	ClientNpmSpec string `protobuf:"bytes,6,opt,name=client_npm_spec,json=clientNpmSpec,proto3" json:"client_npm_spec,omitempty"`
 	// AdminRuntimePath is the project-root-relative path the
@@ -11209,7 +11205,7 @@ type AdminTarget struct {
 	// Wire is the admin SPA's HTTP wire — "pb" (default) or "json", from
 	// the lock's `admin_wire`. The admin surface negotiates both
 	// server-side either way; this is what the generated console asks
-	// for. See docs/specs/admin/architecture.md.
+	// for.
 	Wire          string `protobuf:"bytes,12,opt,name=wire,proto3" json:"wire,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -11343,7 +11339,7 @@ type StubTarget struct {
 	// unsupported values with the supported set listed.
 	Language string `protobuf:"bytes,1,opt,name=language,proto3" json:"language,omitempty"`
 	// OutputRoot is the consumer-side relative path under which
-	// generated stubs land (e.g. "srcgo/pb" for Go, "srcpy/pb"
+	// generated stubs land (e.g. "gen/pb" for Go, "srcpy/pb"
 	// for Python). Each generated file's relative_path is
 	// `<output_root>/<source-rel-path>.<lang-suffix>` — the
 	// proto directory layout maps 1:1 onto the stub layout.
@@ -11757,7 +11753,7 @@ type GeneratedFile struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	RelativePath string                 `protobuf:"bytes,1,opt,name=relative_path,json=relativePath,proto3" json:"relative_path,omitempty"`
 	Contents     []byte                 `protobuf:"bytes,2,opt,name=contents,proto3" json:"contents,omitempty"`
-	// if_missing requests generate-if-missing semantics (REV-153):
+	// if_missing requests generate-if-missing semantics:
 	// the CLI writes this file only when it does not already exist on
 	// disk, never overwriting a hand-edited copy. Default false =
 	// overwrite (the behaviour every other generated file relies on).

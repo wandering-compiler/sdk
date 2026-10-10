@@ -78,7 +78,7 @@ message SetHeadReq {
   string id               = 1;
   string head_snapshot_id = 2;
   // expected_head_snapshot_id — compare-and-set on the head the caller READ
-  // (T3-7 D-F1). Empty string = "expected unset". Two merges that both read
+  // Empty string = "expected unset". Two merges that both read
   // the same trunk head used to both land, and the loser's review stayed
   // recorded MERGED while trunk pointed elsewhere; now the second one is
   // refused with NotFound.

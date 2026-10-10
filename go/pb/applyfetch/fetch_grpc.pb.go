@@ -5,14 +5,13 @@
 // irpb-free shape, never the IR-laden compiler registry pb
 // (MigrationRegistry) package.
 //
-// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §4/§8.1
-// + the w17migrate-absorption): the prod apply path moves into w17ctl, which
+// Public-split boundary: the prod apply path lives in w17ctl, which
 // must do ZERO crypto. The console (which signed every migration body via the
 // registry's signer) VERIFIES the signature server-side, and serves the bodies
 // VERBATIM — decoration and all. The client executes them as they arrive; it
 // holds no signing/verifier key and no decorate/registrypb dependency.
 //
-// Two claims in this header were false until T2-5 pass #14 (D14-6), and both
+// Two claims this header used to make were false, and both
 // matter to anyone writing a second fetch server or a second apply client:
 //
 //   - "STRIPS the decoration here, returning clean SQL". It does not, and the
@@ -20,7 +19,7 @@
 //     no client-side strip needed"). Stripping would break the client's
 //     content-hash check outright, because the digest is over the STORED,
 //     decorated bodies.
-//   - "applies them online". Apply is OFFLINE (D-iter3-6) — this same file
+//   - "applies them online". Apply is OFFLINE — this same file
 //     says so twenty lines down, at prev_content_sha256 and supersedes, and
 //     that offline-ness is the entire premise of the chain-anchoring those
 //     fields exist for. FETCH is the single online step.

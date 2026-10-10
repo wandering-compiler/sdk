@@ -5,8 +5,7 @@ package w17.common.distx;
 option go_package = "github.com/wandering-compiler/sdk/go/pb/common/distx;distxpb";
 
 // W17DistributedTransaction is the distributed-transaction
-// coordination surface every w17 storage binary registers per
-// `docs/archive/iteration-2-dql.md` §"W17DistributedTransaction".
+// coordination surface every w17 storage binary registers.
 //
 // A caller drives a logical multi-RPC transaction by:
 //
@@ -60,7 +59,7 @@ message BeginRequest {
   // long-living `context.WithoutCancel(grpcCtx)` semantics
   // documented on Begin's doc-comment.
   //
-  // Two-tier model (`docs/archive/iteration-2-multidb.md` §M2-F):
+  // Two-tier model:
   //   - Tier 1 = `(w17.db.method).timeout_ms` — per-method
   //     deadline applied to the storage handler's own ctx;
   //     bounds individual statement work.
@@ -83,7 +82,7 @@ message BeginRequest {
   // field, such a method's declaration was silently dropped:
   // the generated preamble applied the declared level only on
   // its own fresh-tx branch, and the distributed-tx branch ran
-  // at whatever the driver default was (T3-7 pass #9 D-F7). The
+  // at whatever the driver default was. The
   // caller now states the level up front, and a method whose
   // declaration the open transaction cannot satisfy REFUSES to
   // adopt it (`txregistry.ErrIsolationTooWeak`) rather than

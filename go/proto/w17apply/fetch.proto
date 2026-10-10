@@ -5,14 +5,13 @@
 // irpb-free shape, never the IR-laden compiler registry pb
 // (MigrationRegistry) package.
 //
-// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §4/§8.1
-// + the w17migrate-absorption): the prod apply path moves into w17ctl, which
+// Public-split boundary: the prod apply path lives in w17ctl, which
 // must do ZERO crypto. The console (which signed every migration body via the
 // registry's signer) VERIFIES the signature server-side, and serves the bodies
 // VERBATIM — decoration and all. The client executes them as they arrive; it
 // holds no signing/verifier key and no decorate/registrypb dependency.
 //
-// Two claims in this header were false until T2-5 pass #14 (D14-6), and both
+// Two claims this header used to make were false, and both
 // matter to anyone writing a second fetch server or a second apply client:
 //
 //   - "STRIPS the decoration here, returning clean SQL". It does not, and the
@@ -20,7 +19,7 @@
 //     no client-side strip needed"). Stripping would break the client's
 //     content-hash check outright, because the digest is over the STORED,
 //     decorated bodies.
-//   - "applies them online". Apply is OFFLINE (D-iter3-6) — this same file
+//   - "applies them online". Apply is OFFLINE — this same file
 //     says so twenty lines down, at prev_content_sha256 and supersedes, and
 //     that offline-ness is the entire premise of the chain-anchoring those
 //     fields exist for. FETCH is the single online step.
@@ -70,8 +69,7 @@ message FetchMigrationsResponse {
 
 // Migration is one connection's apply payload, flattened from the registry's
 // IR-laden `registrypb.Migration` to its irpb-free string fields. The up/down
-// bodies are the STORED ones, decoration included — see the file header
-// (T2-5 pass #14, D14-6).
+// bodies are the STORED ones, decoration included — see the file header.
 message Migration {
   string id = 1;
   string connection = 2;
@@ -92,7 +90,7 @@ message Migration {
   // this migration's own content_sha256 (migrate.ContentHash), not a field
   // sitting beside it.
   //
-  // Why the chain exists (T2-5 B11-1): the signed lock pins ONE hash, the
+  // Why the chain exists: the signed lock pins ONE hash, the
   // target migration's. Everything applied on the way to that target carried
   // only its own self-hash — recomputable by anyone holding the artifact
   // directory, which under this project's own deploy split (CI bakes the
@@ -228,7 +226,7 @@ message FetchFixtureSeedResponse {
   // domain's rows into the first domain's database, failing with
   // `relation "auth_role" does not exist` when the table happened not to be
   // there, and silently writing into the wrong store when a same-named table
-  // was (a consumer, reported twice — it blocked their CI on an older release).
+  // was.
   //
   // Empty from a console that predates this field, and from a fixture whose
   // domain resolves to no connection. The client treats empty as "unknown"

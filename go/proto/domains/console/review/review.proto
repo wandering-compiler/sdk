@@ -86,7 +86,7 @@ message SetReviewDecisionReq {
   Review.Status status = 2;
   string decided_by = 3;
   // expected_status — transition guard on the status the caller READ
-  // (T3-7 D-F3). An approve and a merge racing on one review used to be
+  // An approve and a merge racing on one review used to be
   // last-writer-wins with both callers told they succeeded.
   Review.Status expected_status = 4;
 }
@@ -108,7 +108,7 @@ message CreateEnvResp { string id = 1; }
 message SetEnvModeReq { string id = 1; Environment.Mode mode = 2; }
 message SetEnvModeResp {}
 // expected_deployed_snapshot_id — compare-and-set on the baseline the prod
-// compat gate diffs against (T3-7 D-F1). Empty string = "expected never
+// compat gate diffs against. Empty string = "expected never
 // deployed".
 message SetEnvDeployedReq {
   string id                   = 1;
