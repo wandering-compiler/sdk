@@ -176,7 +176,7 @@ type PageCursor struct {
 	// Serialized original request proto, opaque to this layer.
 	// On resume the gateway deserializes these bytes back into
 	// the storage method's request message and re-stamps scope
-	// fields (REV-147) before calling storage. This is how
+	// fields (data scopes) before calling storage. This is how
 	// filters stay invariant across a pagination session: the
 	// client cannot accidentally diverge mid-pagination.
 	Request []byte `protobuf:"bytes,1,opt,name=request,proto3" json:"request,omitempty"`

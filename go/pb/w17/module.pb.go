@@ -4,7 +4,7 @@
 // 	protoc        v5.29.3
 // source: w17/module.proto
 
-// Module / domain general configuration (REV-006, 2026-05-06).
+// Module / domain general configuration.
 //
 // `(w17.module)` is the top-level config option for a module
 // (per-`<module>/w17.proto`) or a domain (per-`<domain>/w17.proto`).
@@ -269,12 +269,12 @@ func (Capability) EnumDescriptor() ([]byte, []int) {
 	return file_w17_module_proto_rawDescGZIP(), []int{2}
 }
 
-// REV-089 — Transport enumerates the supported event-bus
+// Transport enumerates the supported event-bus
 // adapters. Adding a transport is an additive proto change +
 // matching event-bus runtime adapter. Today's
 // set covers durable-broker (NATS), durable-streams (Redis
 // Streams), and same-binary in-process (MEMORY); KAFKA, SQS,
-// and others are explicitly parked per the ADR.
+// and others are explicitly parked.
 //
 // Values are prefixed with `TRANSPORT_` per proto3's flat enum-
 // value scope — bare `NATS` would collide with `Dialect.NATS`
@@ -296,8 +296,7 @@ const (
 	// TRANSPORT_MEMORY — direct in-process goroutine + bufconn
 	// loopback. Best-effort by design; no persistence, no
 	// cross-process. Compiler refuses MEMORY channels whose
-	// subscriber surface generates a separate binary
-	// (in-memory-transport.md).
+	// subscriber surface generates a separate binary.
 	Transport_TRANSPORT_MEMORY Transport = 3
 )
 
@@ -382,17 +381,15 @@ type Module struct {
 	// NAME with a divergent dialect / version / used_capability /
 	// encoding / query_memory_budget_bytes is what gets rejected —
 	// the name is the identity of a physical DB target within the
-	// domain (D26, revised 2026-04-26 in
-	// docs/decisions/multi-connection-per-domain.md; the earlier
-	// (dialect, version) bucket key collapsed two same-dialect
-	// connections into one migration).
+	// domain (an earlier (dialect, version) bucket key collapsed
+	// two same-dialect connections into one migration).
 	//
 	// Cascade: when set at domain level, every module + file
 	// under that domain inherits it; module-level + file-level
 	// overrides take precedence per the standard cascade.
 	Connection *Connection `protobuf:"bytes,3,opt,name=connection,proto3" json:"connection,omitempty"`
-	// REV-089 — declared event-bus channels for the enclosing
-	// scope. Channel name is unique per domain (parallels D26's
+	// Declared event-bus channels for the enclosing
+	// scope. Channel name is unique per domain (parallels the
 	// connection-name uniqueness). Events reference a channel by
 	// name via `(w17.event).channel`; subscriber registrations
 	// reference it via `(w17.event_subscribers).subscriptions[].channel`.
@@ -406,7 +403,7 @@ type Module struct {
 	// Empty list = domain has no event surface; no subscriber
 	// binary is generated.
 	Channels []*Channel `protobuf:"bytes,4,rep,name=channels,proto3" json:"channels,omitempty"`
-	// REV-089 — domain-wide defaults for event delivery. Today
+	// Domain-wide defaults for event delivery. Today
 	// only `retry` is carried; future fields (observability,
 	// tracing, etc.) land here. The retry cascade is documented
 	// in `Event.retry`.
@@ -535,7 +532,7 @@ func (x *Module) GetBuildContextExcludes() []string {
 // dialect + capability + version triple is what the emitter
 // dispatches on.
 //
-// D26 rule: the NAME identifies the physical target. Two files
+// The NAME identifies the physical target. Two files
 // may redeclare the same name only when every axis agrees
 // (dialect, version, used_capability, encoding,
 // query_memory_budget_bytes) — that is the legitimate
@@ -559,7 +556,7 @@ type Connection struct {
 	// default + only encoding apply supports in v1 / v2.1.
 	Encoding StorageEncoding `protobuf:"varint,5,opt,name=encoding,proto3,enum=w17.StorageEncoding" json:"encoding,omitempty"`
 	// Per-query memory budget the optimizer respects when picking
-	// execution strategy (REV-055 Fáze 1a). Bytes.
+	// execution strategy. Bytes.
 	//
 	// This is OUR logical budget for a single query against this
 	// connection — NOT the underlying DB's `work_mem` /
@@ -666,13 +663,13 @@ func (x *Connection) GetQueryMemoryBudgetBytes() uint64 {
 	return 0
 }
 
-// REV-089 — Channel declares one event-bus transport binding.
+// Channel declares one event-bus transport binding.
 //
-// Channel name is the addressable identity (parallel to D26's
+// Channel name is the addressable identity (parallel to the
 // connection-name rule): events emit by name, subscribers
 // consume by name, env vars supply the per-channel DSN via
-// `W17_QUEUE_<NAME>` (parity with `W17_TARGET_<CONN>` per
-// `feedback_sensitive_data_env_only`). The transport choice is
+// `W17_QUEUE_<NAME>` (parity with `W17_TARGET_<CONN>`: sensitive
+// data such as a DSN travels only in the environment). The transport choice is
 // a deploy concern, not a logical-routing concern; topic +
 // filter (declared on the event annotation + subscriber tuple)
 // is the right knob for "which subscriber cares about this
@@ -706,9 +703,8 @@ type Channel struct {
 	// "drop on full" (the emit-side never blocks). Positive
 	// means "block briefly (≤100ms) then drop". Ignored for
 	// non-MEMORY transports (parse-time diag if set on NATS /
-	// REDIS_STREAMS). Backpressure semantics + cross-process
-	// refusal rules are documented in
-	// `docs/specs/eventbus/in-memory-transport.md`.
+	// REDIS_STREAMS). Cross-process refusal rules: see
+	// `TRANSPORT_MEMORY`.
 	BufferSize    int32 `protobuf:"varint,5,opt,name=buffer_size,json=bufferSize,proto3" json:"buffer_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -779,7 +775,7 @@ func (x *Channel) GetBufferSize() int32 {
 	return 0
 }
 
-// REV-089 — EventDefaults carries domain-wide fallbacks that
+// EventDefaults carries domain-wide fallbacks that
 // apply to every channel + event under the domain when not
 // overridden at a more specific tier. Today's only field is
 // `retry`; the message exists for future expansion (e.g.
@@ -792,7 +788,7 @@ type EventDefaults struct {
 	// merge: a field unset here falls through to the framework
 	// hard default.
 	Retry *RetryPolicy `protobuf:"bytes,1,opt,name=retry,proto3" json:"retry,omitempty"`
-	// REV-090 — domain-default FE delivery thresholds
+	// Domain-default FE delivery thresholds
 	// (expected / max / give_up). Tier 2 in the three-tier timing
 	// cascade documented on `Event.delivery`: per-event override ->
 	// this domain default -> framework hard default
@@ -864,14 +860,13 @@ var file_w17_module_proto_extTypes = []protoimpl.ExtensionInfo{
 var (
 	// (w17.module) — module/domain-level configuration option.
 	//
-	// CONVENTION (REV-008): it belongs in a `w17.proto` sentinel at
+	// CONVENTION: it belongs in a `w17.proto` sentinel at
 	// domain or module root, not in regular type / service files.
 	// The convention is NOT enforced — the loader reads the option
 	// wherever it finds it, and a regular file's own option is the
 	// most-specific tier of the cascade above. Enforcement stays
 	// deferred because the fixtures + shipped examples still declare
-	// it file-level (docs/decisions/module-options-vocab-cleanup.md
-	// §Consequences); adding the reject is a sweep, not a one-liner.
+	// it file-level; adding the reject is a sweep, not a one-liner.
 	//
 	// One sub-field DOES enforce its scope: `channels[]` /
 	// `event_defaults` are lifted only from the DOMAIN-ROOT

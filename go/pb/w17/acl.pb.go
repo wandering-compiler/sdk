@@ -47,8 +47,7 @@ const (
 	//
 	// Mutually exclusive with `first_user` / `default`: both are
 	// SIGNUP-time hooks, and joining an organization is not signing up.
-	// Creating memberships is deliberately left to the project (see
-	// docs/specs/plugins/auth-cli-login-and-orgs.md), so the project
+	// Creating memberships is deliberately left to the project, so the project
 	// assigns the joining member's role from its own handler. Codegen
 	// refuses the combination rather than assigning nothing and letting
 	// the author discover it from an empty permission set.
@@ -115,7 +114,7 @@ type AclRole struct {
 	// obvious way to write a two-word key and it is refused — by codegen now,
 	// and before that only by the database at apply time, which meant in CI or
 	// in production. This line says so because it did not, while the line above
-	// said it about `name` (a consumer, 2026-09-23).
+	// said it about `name`.
 	//
 	// The seeded Role row's primary key is derived from this, not from
 	// `name`. That distinction is the whole reason it exists: with the PK
@@ -397,7 +396,7 @@ var (
 	// put the option on one file to close three invite endpoints and
 	// closed their whole sign-in flow with it: `SessionService.Authorize`
 	// and `Logout` live in a SIBLING file of the same directory, and
-	// both started refusing with no role able to open them (a consumer).
+	// both started refusing with no role able to open them.
 	//
 	// So: put it on the sentinel when you mean the module or domain, and
 	// when you mean a narrower set, reach for `(w17.acl_service)` or the
@@ -446,8 +445,6 @@ var (
 	// rows.
 	//
 	// Like the permission ids above, this catalogue is per DOMAIN.
-	//
-	// Spec: docs/specs/plugins/auth-tokens-and-roles.md §5.
 	//
 	// repeated w17.AclRole acl_roles = 50155;
 	E_AclRoles = &file_w17_acl_proto_extTypes[2]

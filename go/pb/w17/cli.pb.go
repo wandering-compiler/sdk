@@ -202,8 +202,7 @@ var (
 	// CLI surface registry. A sentinel carrying the surface's
 	// identity + binary metadata; the per-method `(w17.cli)` picks
 	// do the wiring. The file declares ZERO messages, like
-	// `(w17.rest_api)` (REV-017), `(w17.mcp_api)` (REV-018) and
-	// `(w17.rpc_api)` (REV-152).
+	// `(w17.rest_api)`, `(w17.mcp_api)` and `(w17.rpc_api)`.
 	//
 	// One CLI surface per domain; two files in one domain carrying
 	// `(w17.cli_api)` is a hard error.

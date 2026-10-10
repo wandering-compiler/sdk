@@ -7,9 +7,9 @@ import "w17/event.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// REV-089 (2026-05-14) — subscriber-registry sentinel surface.
+// Subscriber-registry sentinel surface.
 //
-// Mirrors `(w17.rest_api)` shape (REV-017): a file-level option
+// Mirrors `(w17.rest_api)` shape: a file-level option
 // that turns a `.proto` file into a registry, with zero message
 // declarations of its own. Each domain may carry one or more
 // `subscribers*.proto` sentinel files; the loader recognises the
@@ -35,13 +35,10 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // `<X>`'s event index. The enforcing diag steers authors toward
 // gRPC calls for cross-domain reactions.
 //
-// Driven by `srcgo/domains/eventbus/parser`: subscriber sentinel
+// Driven by the eventbus parser: subscriber sentinel
 // files participate in the same parser pass as the emit-side
 // scan; resolved subscriptions feed the subscriber-binary
 // codegen.
-//
-// Design: docs/decisions/eventbus-redesign.md +
-// docs/specs/eventbus/subscribers-registry.md.
 
 extend google.protobuf.FileOptions {
   // (w17.event_subscribers) — file-level option declaring this

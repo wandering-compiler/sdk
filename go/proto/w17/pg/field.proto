@@ -9,8 +9,9 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/pg;pgpb";
 // (w17.pg.field) — Postgres-specific per-field options. Lives in its own
 // proto namespace so the core (w17.field) stays dialect-agnostic. The PG
 // emitter reads this extension; emitters for other dialects ignore it (or
-// error if non-empty flags are set — per-emitter call). See
-// docs/archive/iteration-1.md D9 for the dialect-extension pattern.
+// error if non-empty flags are set — per-emitter call). This is the
+// dialect-extension pattern: one extension per dialect, read only by
+// that dialect's emitter.
 //
 // As of D13 (2026-04-21) the curated jsonb / inet / tsvector flags were
 // lifted to core Type values (`type: JSON`, `type: IP`, `type: TSEARCH`)

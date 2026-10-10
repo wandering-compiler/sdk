@@ -347,7 +347,7 @@ type AdminApi struct {
 	// write nothing here: activating the auth plugin auto-wires
 	// login_method + user_lookup via its admin preset (presetinject).
 	// Set an explicit block only to point at non-plugin methods.
-	// (Authorization — per-endpoint ACL, REV-146 — is layered on top;
+	// (Authorization — per-endpoint ACL — is layered on top;
 	// a superadmin/wildcard role grants the whole catalogue.)
 	Auth *AdminAuth `protobuf:"bytes,3,opt,name=auth,proto3" json:"auth,omitempty"`
 	// Path (relative to the project root) to a developer-owned
@@ -507,7 +507,7 @@ func (x *AdminApi) GetOverview() *AdminOverview {
 //	  → delegates to `user_lookup` (returns identity + perms + scopes)
 //	every other admin endpoint
 //	  → middleware calls `user_lookup`, threads perms + scopes into
-//	    gRPC metadata, REV-146 / REV-147 enforce as usual
+//	    gRPC metadata, ACL + data scopes enforce as usual
 type AdminAuth struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Reference to the gRPC method that authenticates a caller.
@@ -526,8 +526,8 @@ type AdminAuth struct {
 	// the caller's identity + permissions + scopes. Called by
 	// the admin middleware on every request (cached for the
 	// request's lifetime). Response must carry
-	// `repeated string permissions` (REV-146) and `map<string,
-	// string> scopes` (REV-147) when those features are active.
+	// `repeated string permissions` (ACL) and `map<string,
+	// string> scopes` (data scopes) when those features are active.
 	// Required.
 	UserLookup string `protobuf:"bytes,2,opt,name=user_lookup,json=userLookup,proto3" json:"user_lookup,omitempty"`
 	// (RETIRED — the codegen REFUSES a non-empty value.) A bootstrap
@@ -862,7 +862,7 @@ func (x *AdminPage) GetInlines() []*AdminInline {
 type AdminList struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Storage method ref, "<module>.<Service>.<Method>". Must
-	// return `repeated <item>` (or a paged carrier per REV-148),
+	// return `repeated <item>` (or a cursor-paged carrier),
 	// where `<item>` is the list's RESPONSE-ITEM message. `<item>`
 	// is validated for shape only — it is NEVER compared to
 	// `AdminPage.model`, so it may be a read-only PROJECTION message
@@ -1040,7 +1040,7 @@ type AdminColumn struct {
 	// row's title, which is text, so there is no value left for a
 	// number or date format to act on. Refused rather than ignored:
 	// a format that silently does nothing is a bug the author cannot
-	// see. Spec: docs/specs/i18n/formatting.md.
+	// see.
 	Format        string `protobuf:"bytes,6,opt,name=format,proto3" json:"format,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1216,7 +1216,7 @@ type AdminDetail struct {
 	// (`x-w17-user`, as the gateway does), and with no DQL to read, the
 	// mass-assignment guards on `fields` / `readonly_fields` read the
 	// method's REQUEST: every field but the URL-stamped key is one a direct
-	// call sets. See docs/specs/admin/pages.md §Binding a Service method.
+	// call sets.
 	Update string `protobuf:"bytes,2,opt,name=update,proto3" json:"update,omitempty"`
 	// Storage method ref — delete. Optional; absent = no
 	// delete button on the detail view.
@@ -2167,9 +2167,9 @@ var (
 // Extension fields to descriptorpb.MethodOptions.
 var (
 	// (w17.admin_bypass_acl) — admin endpoint opts out of the
-	// ACL gate (REV-146). Equivalent to declaring the method
+	// ACL gate. Equivalent to declaring the method
 	// exempt from permission checks; the gateway still threads
-	// scopes (REV-147) unless those are also bypassed via
+	// data scopes unless those are also bypassed via
 	// `(w17.db.bypass_scope)` on the storage side.
 	//
 	// Use sparingly — admin endpoints that need bypass typically

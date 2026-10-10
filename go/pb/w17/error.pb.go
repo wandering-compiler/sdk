@@ -4,7 +4,7 @@
 // 	protoc        v5.29.3
 // source: w17/error.proto
 
-// w17.ErrorDetail — REV-031 (Phase C, 2026-05-09) — the canonical
+// w17.ErrorDetail — the canonical
 // structured payload every wandering-compiler-generated handler
 // attaches to gRPC `status.WithDetails(...)` for failed RPCs.
 //

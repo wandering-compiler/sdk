@@ -122,8 +122,7 @@ const (
 	// Choices = every permission value-name allocated in the
 	// activating domain's `acl.lock.proto` enum (the
 	// `AclPermission` enum's value names). Source of truth is
-	// the per-domain ACL cascade + monotonic allocator (see
-	// docs/specs/gateway/acl-permissions.md). Carrier must be
+	// the per-domain ACL cascade + monotonic allocator. Carrier must be
 	// STRING. Empty lock → CHECK (false) + diag.Warn.
 	AutoChoices_ACL_PERMISSIONS AutoChoices = 1
 	// Choices = every permission NUMERIC ID allocated in the
@@ -198,7 +197,7 @@ const (
 	ValidationType_VALIDATION_UUID        ValidationType = 8  // UUID shape reject
 	ValidationType_VALIDATION_IP          ValidationType = 9  // net.ParseIP reject
 	ValidationType_VALIDATION_MAC_ADDRESS ValidationType = 10 // MAC pattern reject
-	// T2-6 pass #8 (B-F6). `(w17.field).json = true` declares that DQL may
+	// `(w17.field).json = true` declares that DQL may
 	// navigate INTO the value, and the read emitters cast the column
 	// `::jsonb` to do it — including in a LIST arm's WHERE, which evaluates
 	// the cast across every row. The write path bound raw text behind only a
@@ -222,8 +221,8 @@ const (
 	ValidationType_VALIDATION_PATH_EXTENSION ValidationType = 40 // file path extension not in allow-list
 	// DB-side constraint rules — author opts a constraint failure into
 	// user-class validation by setting an override message; without
-	// override the constraint failure stays internal-class (REV-026
-	// PgError → Internal + Sentry).
+	// override the constraint failure stays internal-class (PgError →
+	// Internal + Sentry).
 	ValidationType_VALIDATION_UNIQUE           ValidationType = 50 // PG SQLSTATE 23505
 	ValidationType_VALIDATION_FK_VIOLATION     ValidationType = 51 // PG SQLSTATE 23503
 	ValidationType_VALIDATION_NOT_NULL         ValidationType = 52 // PG SQLSTATE 23502
@@ -321,18 +320,17 @@ func (ValidationType) EnumDescriptor() ([]byte, []int) {
 }
 
 // Type — semantic subtype refining the proto carrier into a SQL column type
-// and a default constraint set. Authoritative carrier × Type table is in
-// docs/archive/iteration-1.md D2 + the "Preset Bundles" reference. Each Type is a
+// and a default constraint set. Each Type is a
 // preset that carries a cross-dialect storage choice, auto-synthesised
 // CHECKs, required/default side-data, and compatibility rules with
 // (w17.field).default_* variants.
 //
-// Convention exception (REV-014, 2026-05-06): the zero value is `AUTO`
+// Convention exception: the zero value is `AUTO`
 // (not `*_UNSPECIFIED` per the proto3 norm). DSL ergonomics outweigh the
 // wire-format convention here — `(w17.field)` is a build-time annotation
 // consumed only by the wandering-compiler, never by third parties, and
 // the AUTO-as-default reading lets `[(w17.field) = {}]` mean "DB column,
-// infer carrier from proto kind". See REV-014 in docs/design-review-202605.md.
+// infer carrier from proto kind".
 type Type int32
 
 const (
@@ -363,7 +361,7 @@ const (
 	//
 	// AUTO is the default when (w17.field) is present without `type:`
 	// (`[(w17.field) = {}]`). Column-membership is a MODEL-level rule,
-	// NOT keyed on `(w17.field)` presence (REV-014): on a
+	// NOT keyed on `(w17.field)` presence: on a
 	// `(w17.db.table)`-marked message EVERY proto field is a DB column
 	// by default. `(w17.field)` only *configures* the column
 	// (type/pk/unique/validation) — it does not create or gate it. To
@@ -412,7 +410,7 @@ const (
 	// verbatim — it already carries bucket_path and sub-bucket. The reader
 	// is READ-ONLY on purpose: the gateway derives keys and is the
 	// connection's only writer, so a second writer would be a second key
-	// layout. See docs/specs/bundles/business-service.md.
+	// layout.
 	//
 	// Required companion config: `(w17.field).upload` submessage with
 	// connection / bucket_path / sub-bucketing knobs. The parser
@@ -427,8 +425,8 @@ const (
 	// (`$argon2id$v=19$m=65536,t=3,p=4$<salt>$<digest>` or similar),
 	// and shapes the surfaces around it accordingly.
 	//
-	// IT DOES NOT HASH. Hashing is plugin-owned (2026-05-25 rip-out of
-	// REV-151's auto-hash track): storage codegen binds whatever bytes
+	// IT DOES NOT HASH. Hashing is plugin-owned (an earlier auto-hash in
+	// storage codegen was removed): storage codegen binds whatever bytes
 	// the caller sent, verbatim. The auth plugin's handler calls
 	// `passwordhash.Settings.Hash` before its mutation, and verifies
 	// via `Verify` / `VerifyAndRotate`. A hand-written handler on a
@@ -450,7 +448,7 @@ const (
 	// NOT hidden from REST JSON responses — an RPC whose response
 	// message carries the column serialises the hash like any other
 	// string. Keep it off the response message if you don't want it on
-	// the wire. Spec: docs/specs/storage/password-field.md.
+	// the wire.
 	Type_PASSWORD Type = 66
 	// SECRET — an opaque secret stored EXACTLY as issued: an OAuth client
 	// secret, an API token, a webhook signing key. Not a password.
@@ -554,7 +552,7 @@ const (
 	//
 	// ⚠️ This paragraph used to say max_len was VALIDATION, checked before
 	// encryption. It is not, and the compiler refuses it — a contract that
-	// described a behaviour nobody implemented (caught in review on PR #16).
+	// described a behaviour nobody implemented.
 	//
 	// It is refused rather than repurposed because the two readings both fail.
 	// As a column fact it is the WIDTH the migrator diffs, so a declared number
@@ -578,8 +576,6 @@ const (
 	// its key version, so rotation needs no flag day. A service with a
 	// CRYPTED_SECRET column and no key REFUSES TO BOOT rather than starting and
 	// failing on the first read.
-	//
-	// Spec: docs/specs/storage/crypted-secret-field.md.
 	Type_CRYPTED_SECRET Type = 68
 	// Numeric carriers (carrier: int32 / int64 / double — see D2 table)
 	Type_NUMBER     Type = 10
@@ -761,8 +757,7 @@ const (
 	//
 	// Generic w17 primitive — not auth-specific. Use for any
 	// column needing an opaque random token: API keys, signed-
-	// URL nonces, invite codes, bearer tokens, etc. The plugin
-	// redesign 2026-05-22 ADR has the rationale.
+	// URL nonces, invite codes, bearer tokens, etc.
 	AutoDefault_CRYPTO_RANDOM AutoDefault = 50
 )
 
@@ -1023,7 +1018,7 @@ type Field struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Semantic subtype. OPTIONAL everywhere — unset is `AUTO`, which
 	// infers the subtype from the proto carrier (see Type.AUTO below for
-	// the full mapping; REV-014). Set it when the inferred default isn't
+	// the full mapping). Set it when the inferred default isn't
 	// the one you want (a `string` infers TEXT, so CHAR / SLUG / UUID /
 	// EMAIL / … are opt-in).
 	//
@@ -1158,7 +1153,7 @@ type Field struct {
 	// A consumer's `ACCOUNT_TYPE_UNKNOWN = 0` is a legitimate answer in a
 	// published contract; without this they stored "unknown" as NULL — which
 	// round-trips to the proto zero and works, and needs a comment defending
-	// it every time somebody reads the model (a consumer).
+	// it every time somebody reads the model.
 	//
 	// Only meaningful on an enum-typed field. It does not rename the value or
 	// change the wire: it says the column's admitted set includes 0.
@@ -1177,7 +1172,7 @@ type Field struct {
 	// the integer-like default, not an error), and rejects both fields for
 	// non-DECIMAL types.
 	//
-	// ENFORCEMENT (T2-6 pass #8, B-F5): the REQUEST side. The generated
+	// ENFORCEMENT: the REQUEST side. The generated
 	// validation block refuses any value the column could not store exactly
 	// (VALIDATION_DECIMAL_PRECISION → `DECIMAL_PRECISION_VIOLATION`), where
 	// "exactly" is value-preservation, not digit-counting: `19.900` fits
@@ -1285,7 +1280,7 @@ type Field struct {
 	// without aliases skip the transform entirely.
 	RestAlias string `protobuf:"bytes,26,opt,name=rest_alias,json=restAlias,proto3" json:"rest_alias,omitempty"`
 	// related_name renames the reverse DQL accessor on the FK
-	// target model (REV-016, Django-inspired). Only meaningful on
+	// target model (Django-inspired). Only meaningful on
 	// a field whose `(w17.db.column).fk` references another
 	// model — on any other field the value is ignored.
 	//
@@ -1329,14 +1324,14 @@ type Field struct {
 	// connection name + base bucket path + sub-bucketing knobs the
 	// gateway uses to produce the final storage handle on POST.
 	Upload *Upload `protobuf:"bytes,28,opt,name=upload,proto3" json:"upload,omitempty"`
-	// REV-031 (Phase C, 2026-05-09) — author-side validation message
+	// Author-side validation message
 	// overrides per rule type. Each entry is `{type, message}`; the
 	// emitter uses the override when present, falls back to the
 	// Django-style default catalog (lib/validation/defaults.go).
 	// Messages support `{placeholder}` substitution at generate time
 	// for static rule params (`{max}`, `{min}`, `{regex}`,
 	// `{precision}`, `{scale}`, `{choices}`); the actual offending
-	// value is appended at runtime per REV-028 (`(got %v)`).
+	// value is appended at runtime (`(got %v)`).
 	//
 	// Per-field is the home for single-column rules (max_len, regex,
 	// unique on this column). Multi-column constraints (composite
@@ -1349,7 +1344,7 @@ type Field struct {
 	// Duplicate type entries on the same field are a parse error
 	// (ambiguous which message wins).
 	ValidationMessages []*ValidationMessage `protobuf:"bytes,29,rep,name=validation_messages,json=validationMessages,proto3" json:"validation_messages,omitempty"`
-	// REV-137 — declare this column as JSON-typed for DQL chain
+	// Declare this column as JSON-typed for DQL chain
 	// navigation. When true, DQL's dotted-chain syntax treats segments
 	// after this column as JSON path keys (rather than attempting FK
 	// resolution); per-dialect emit renders them via the dialect's
@@ -1361,7 +1356,7 @@ type Field struct {
 	// annotation is a SCHEMA-LEVEL signal that the value's contents
 	// are accessible through DQL's chain grammar.
 	//
-	// ENFORCEMENT (T2-6 pass #8, B-F6): both sides, because the read
+	// ENFORCEMENT: both sides, because the read
 	// side casts unconditionally. The migrator emits a JSON validity
 	// CHECK on the column (PG `IS JSON`, MySQL `JSON_VALID`, SQLite
 	// `json_valid`) and the generated validation block refuses a
@@ -1387,10 +1382,10 @@ type Field struct {
 	//	}];
 	//	// DQL: `WHERE u.profile.contact.email = :email`
 	//
-	// Per the `dql-json-access` decision: chain navigation reads
-	// ship in REV-137; the function catalog (CONTAINS / EXISTS /
-	// JSON_LENGTH / …) lands in REV-139; dotted-key escape syntax
-	// (`u.profile."contact.email"`) lands in REV-138.
+	// Chain navigation reads are one part of DQL's JSON access; the
+	// function catalog (CONTAINS / EXISTS / JSON_LENGTH / …) and the
+	// dotted-key escape syntax (`u.profile."contact.email"`) are the
+	// others.
 	Json bool `protobuf:"varint,30,opt,name=json,proto3" json:"json,omitempty"`
 	// Computed choices — fills the CHECK IN (...) list at codegen
 	// time from a project-internal lock file instead of an enum FQN.
@@ -1451,7 +1446,7 @@ type Field struct {
 	// The filter set is closed and its names are public contract; the
 	// parser rejects an unknown filter at codegen time. Currency is
 	// out of scope (no symbol, no per-currency decimals) — MONEY is a
-	// 2-decimal number. Spec: docs/specs/i18n/formatting.md.
+	// 2-decimal number.
 	Format string `protobuf:"bytes,32,opt,name=format,proto3" json:"format,omitempty"`
 	// --- GEOMETRY / GEOGRAPHY parameters (db_type GEOMETRY / GEOGRAPHY only) ---
 	//
@@ -1790,7 +1785,7 @@ func (*Field_DefaultDouble) isField_Default() {}
 func (*Field_DefaultAuto) isField_Default() {}
 
 // ValidationMessage — one author override for one rule type on one
-// field. REV-031 (Phase C, 2026-05-09).
+// field.
 //
 // `message` supports static `{placeholder}` substitution at generate
 // time. Available placeholders per type:
@@ -1808,7 +1803,7 @@ func (*Field_DefaultAuto) isField_Default() {}
 //	unique / fk /     (no placeholders — value comes at runtime)
 //	not_null / check
 //
-// Runtime appends `(got <value>)` per REV-028 — no placeholder for
+// Runtime appends `(got <value>)` — no placeholder for
 // the actual offending value; the emitter wires it.
 type ValidationMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2096,10 +2091,9 @@ var file_w17_field_proto_extTypes = []protoimpl.ExtensionInfo{
 // Extension fields to descriptorpb.FieldOptions.
 var (
 	// Field declares the DB / data semantics of a proto field. Previously split
-	// across (w17.field) + (w17.validate) — merged 2026-04-20 (the split was
+	// across (w17.field) + (w17.validate) — merged because the split was
 	// artificial: max_len appeared on both, CHECK-vs-app enforcement is a target
-	// concern, not a source concern). See docs/archive/iteration-1.md D7 and
-	// docs/archive/iteration-1-m1-rev.md.
+	// concern, not a source concern.
 	//
 	// Usage:
 	//
