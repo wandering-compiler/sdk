@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+// Console auth — CLIENT wire contract for w17ctl login (gRPC, one endpoint).
+//
+// Plain-protobuf mirror of console-app's GENERATED auth service messages
+// (the `auth` plugin, compiled into package `console.auth`), wire-compatible
+// with the server: same package, same message names + field numbers as the
+// staged auth service/query protos. w17ctl calls `AuthService.SignIn`
+// (unauthenticated — it mints the bearer) + `ListMyOrgs` (with the freshly
+// minted bearer) over the console rpc gateway; the AuthServiceClient itself
+// comes from the generated `w17.lock.rpc.proto` stub (M-mapped to this
+// package). This mirror only carries the message types w17ctl needs.
+//
+// Only the fields the console-app build actually compiles are mirrored: the
+// `two_factor` (mfa_required/challenge_id) + `devices` (device_trust_token)
+// SignInResp fields are gated OFF in the console build, so they are omitted
+// here — adding them later stays wire-compatible (field numbers preserved).
+package console.auth;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/consoleapi/auth;authpb";
+
+// SignInReq / SignInResp — email+password sign-in (mints the bearer).
+message SignInReq {
+  string email    = 1;
+  string password = 2;
+}
+message SignInResp {
+  string user_id = 1;
+  string token   = 2;
+}
+
+// CliTokenReq / CliTokenResp — PKCE authorization-code redeem (cli_login).
+// Kept for completeness (the auth rpc group exposes it as a public method);
+// the redesigned w17ctl login uses SignIn, not this.
+message CliTokenReq {
+  string code          = 1;
+  string code_verifier = 2;
+}
+message CliTokenResp {
+  string token   = 1;
+  string user_id = 2;
+}
+
+// ListMyOrgsReq / ListMyOrgsResp — the bearer-authenticated caller's orgs
+// (org_membership). Called with the token minted by SignIn.
+message ListMyOrgsReq {}
+message ListMyOrgsResp {
+  repeated UserOrg orgs = 1;
+}
+
+// UserOrg — one org-membership row. Declared in the auth query proto on the
+// server (console.auth); mirrored here in the same package so ListMyOrgsResp
+// resolves it locally.
+message UserOrg {
+  string org_id = 1;
+  string slug   = 2;
+  string name   = 3;
+  string kind   = 4; // private | company
+  string role   = 5; // owner | admin | member
+}

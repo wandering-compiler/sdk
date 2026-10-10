@@ -245,7 +245,7 @@ function readTotal(resp: Record<string, unknown>, pagingField: string): unknown 
 //
 //   - CountBadge passes `w17.Paging.total`, a uint64 that arrives as a
 //     decimal STRING like every other 64-bit field (it was briefly the
-//     dialect's one number carve-out; T2-6 pass #6 removed it, partly
+//     dialect's one number carve-out, removed partly
 //     BECAUSE of the narrowing described below);
 //   - StatWidget passes whatever field a project declared, so an int64
 //     arrives as the decimal STRING protojson and the generated codecs

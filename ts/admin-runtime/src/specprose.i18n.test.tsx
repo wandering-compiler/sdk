@@ -21,12 +21,12 @@ const { apiGet } = await import("./api");
 // has to reach the translator at render time, or the translator's work sits in
 // the catalog and is never shown.
 //
-// Eight of them didn't (T2-6 pass #7, A1). The sharpest proof was inside one
+// Eight of them once didn't. The sharpest proof was inside one
 // component: DetailPage renders `t(fs.title)` in its accordion branch and
 // `{fs.title}` raw in the flat branch — the same value, from the same map,
 // picked by whether a NEIGHBOURING fieldset happens to be collapsible.
 //
-// These are RENDER tests on purpose. The vocab gate added in pass #6 scans
+// These are RENDER tests on purpose. The vocab gate in vocab.test.ts scans
 // source lines for untranslated prose and skips any line containing `{}()<>`,
 // so `{widget.title}` is invisible to it by construction — no amount of
 // widening a line scanner sees this class. Asking the rendered DOM whether a

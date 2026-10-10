@@ -14,7 +14,7 @@ func regexExpect(t *testing.T, pattern string, actual string, captures map[strin
 		map[string]any{"xml": actual}, sc)
 }
 
-// A consumer's ISDOC round trip (2026-10-04): `${rt_number}` in a regex
+// An ISDOC round trip: `${rt_number}` in a regex
 // pattern was matched as those literal characters while the same token in a
 // plain expect was interpolated. It is now interpolated like everywhere else.
 func TestRegexPatternInterpolatesCaptures(t *testing.T) {
@@ -59,8 +59,9 @@ func TestRegexPatternWithAnUnboundCaptureIsAnError(t *testing.T) {
 }
 
 // An escaped `$` keeps meaning the characters — both spellings a regex
-// author uses for a literal `${x}`, `\${x}` among them (review of #208: it
-// was taken as a token, with the backslash left in front of the value).
+// author uses for a literal `${x}`, `\${x}` among them (the second
+// spelling was once taken as a token, with the backslash left in front
+// of the value).
 func TestRegexPatternEscapedDollarBraceIsLiteral(t *testing.T) {
 	for _, pat := range []string{`^\$\{x\}$`, `^\${x}$`} {
 		if err := regexExpect(t, pat, "${x}", map[string]any{"x": "d42"}); err != nil {
@@ -70,8 +71,8 @@ func TestRegexPatternEscapedDollarBraceIsLiteral(t *testing.T) {
 }
 
 // A JSON number decodes as float64; fmt.Sprint wrote 1234567 as
-// 1.234567e+06, so a captured numeric id never matched in a pattern (review
-// of #208). Integral numbers print as integers, others without an exponent.
+// 1.234567e+06, so a captured numeric id never matched in a pattern.
+// Integral numbers print as integers, others without an exponent.
 func TestRegexPatternWithANumericCapture(t *testing.T) {
 	if err := regexExpect(t, "<ID>${id}</ID>", "<ID>1234567</ID>", map[string]any{"id": float64(1234567)}); err != nil {
 		t.Fatalf("a numeric capture did not match its own text: %v", err)

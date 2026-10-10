@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "The admin SPA's own CHROME vocabulary — every string the runtime renders that does not come from the project's schema. It is data rather than a code scan because the compiler has to seed the admin's .po with it, and a Go-side extractor over TypeScript would be a parser nobody wants to own. This file is the canonical copy; `make sync-admin-vocab` mirrors it into the admin emitter and `make check-admin-vocab` fails on drift. A vitest test asserts every t(\"…\") literal in src/ appears here, so a string added to a component cannot silently go untranslated. Spec: docs/specs/i18n/formatting.md.",
+  "comment": "The admin SPA's own CHROME vocabulary — every string the runtime renders that does not come from the project's schema. It is data rather than a code scan because the compiler has to seed the admin's .po with it, and a Go-side extractor over TypeScript would be a parser nobody wants to own. This file is the canonical copy; `make sync-admin-vocab` mirrors it into the admin emitter and `make check-admin-vocab` fails on drift. A vitest test asserts every t(\"…\") literal in src/ appears here, so a string added to a component cannot silently go untranslated.",
   "msgids": [
     "Add {name}",
     "Apply",

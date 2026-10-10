@@ -1,6 +1,6 @@
 /**
- * Locale-aware CELL formatting — the ADMIN's half of
- * docs/specs/i18n/formatting.md.
+ * Locale-aware CELL formatting — the ADMIN's half of locale-aware value
+ * formatting.
  *
  * The formatting itself is not admin-specific and lives one module down:
  * valueFormat.ts owns the frozen table and the formatters, slotFormat.ts owns

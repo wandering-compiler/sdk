@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+// Console v2 — review/approval/environment STORAGE wire contract (client side).
+//
+// Plain-protobuf mirror of console-app's generated review-module storage
+// services, wire-compatible with the server (same package, service +
+// method names, field numbers). w17ctl calls these directly; the review
+// lifecycle + prod-mode compat gate are client-side orchestration. Same
+// hand-mirror seam as the initiatives contract (GAPS.md G2).
+package console.review;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/consoleapi/review;reviewpb";
+
+import "google/protobuf/timestamp.proto";
+
+message Review {
+  string id               = 1;
+  string project_id       = 2;
+  string initiative_id    = 3;
+  string base_snapshot_id = 4;
+  string head_snapshot_id = 5;
+  Status status           = 6;
+  string author           = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp decided_at = 9;
+  string decided_by       = 10;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    DRAFT              = 1;
+    OPEN               = 2;
+    APPROVED           = 3;
+    MERGED             = 4;
+    CLOSED             = 5;
+  }
+}
+
+message Approval {
+  string id        = 1;
+  string review_id = 2;
+  string actor     = 3;
+  Decision decision = 4;
+  google.protobuf.Timestamp at = 5;
+
+  enum Decision {
+    DECISION_UNSPECIFIED = 0;
+    APPROVE              = 1;
+    REQUEST_CHANGES      = 2;
+  }
+}
+
+message Environment {
+  string id                   = 1;
+  string project_id           = 2;
+  string name                 = 3;
+  Mode   mode                 = 4;
+  string deployed_snapshot_id = 5;
+  google.protobuf.Timestamp deployed_at = 6;
+
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    DEV              = 1;
+    PROD             = 2;
+  }
+}
+
+message GetReviewReq { string id = 1; }
+message ListReviewsReq { string initiative_id = 1; }
+message ListReviewsResp { repeated Review rows = 1; }
+message ListApprovalsReq { string review_id = 1; }
+message ListApprovalsResp { repeated Approval rows = 1; }
+message FindEnvReq { string project_id = 1; string name = 2; }
+message ListEnvironmentsReq { string project_id = 1; }
+message ListEnvironmentsResp { repeated Environment rows = 1; }
+
+message CreateReviewReq {
+  string project_id       = 1;
+  string initiative_id    = 2;
+  string base_snapshot_id = 3;
+  string head_snapshot_id = 4;
+  string author           = 5;
+}
+message CreateReviewResp { string id = 1; }
+message SetReviewDecisionReq {
+  string id         = 1;
+  Review.Status status = 2;
+  string decided_by = 3;
+  // expected_status — transition guard on the status the caller READ
+  // (T3-7 D-F3). An approve and a merge racing on one review used to be
+  // last-writer-wins with both callers told they succeeded.
+  Review.Status expected_status = 4;
+}
+message SetReviewDecisionResp {
+  Review.Status status = 1;
+}
+message InsertApprovalReq {
+  string review_id = 1;
+  string actor     = 2;
+  Approval.Decision decision = 3;
+}
+message InsertApprovalResp { string id = 1; }
+message CreateEnvReq {
+  string project_id = 1;
+  string name       = 2;
+  Environment.Mode mode = 3;
+}
+message CreateEnvResp { string id = 1; }
+message SetEnvModeReq { string id = 1; Environment.Mode mode = 2; }
+message SetEnvModeResp {}
+// expected_deployed_snapshot_id — compare-and-set on the baseline the prod
+// compat gate diffs against (T3-7 D-F1). Empty string = "expected never
+// deployed".
+message SetEnvDeployedReq {
+  string id                   = 1;
+  string deployed_snapshot_id = 2;
+  string expected_deployed_snapshot_id = 3;
+}
+message SetEnvDeployedResp {
+  string deployed_snapshot_id = 1;
+}
+
+service ReviewQuery {
+  rpc Get(GetReviewReq) returns (Review);
+  rpc ListByInitiative(ListReviewsReq) returns (ListReviewsResp);
+}
+service ApprovalQuery {
+  rpc ListByReview(ListApprovalsReq) returns (ListApprovalsResp);
+}
+service EnvironmentQuery {
+  rpc Find(FindEnvReq) returns (ListEnvironmentsResp);
+  rpc List(ListEnvironmentsReq) returns (ListEnvironmentsResp);
+}
+service ReviewMutation {
+  rpc Create(CreateReviewReq) returns (CreateReviewResp);
+  rpc SetDecision(SetReviewDecisionReq) returns (SetReviewDecisionResp);
+}
+service ApprovalMutation {
+  rpc Insert(InsertApprovalReq) returns (InsertApprovalResp);
+}
+service EnvironmentMutation {
+  rpc Create(CreateEnvReq) returns (CreateEnvResp);
+  rpc SetMode(SetEnvModeReq) returns (SetEnvModeResp);
+  rpc SetDeployed(SetEnvDeployedReq) returns (SetEnvDeployedResp);
+}

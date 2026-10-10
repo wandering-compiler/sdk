@@ -11,14 +11,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// T1-1 pass #49 B49-8 — the one-member arm (F8b) could not read Postgres's
+// The one-member arm of the membership-check reader could not read Postgres's
 // rendering of a VARCHAR column: the left side comes back CAST,
 // `(((v1)::text = 'draft'::text))` (measured on postgres:14/16/18), not a
 // bare identifier. The member set then read as "not a membership check", the
 // declared check was carried, and an author's second choice never planned the
 // ReplaceCheck — the database kept refusing it (23514) behind a converged
 // sync.
-func TestP49_B49_8_OneMemberOnVarcharIsAMembershipCheck(t *testing.T) {
+func TestOneMemberOnVarcharIsAMembershipCheck(t *testing.T) {
 	cases := []struct {
 		def  string
 		want []string
@@ -86,10 +86,10 @@ func liveConn(t *testing.T) *pgx.Conn {
 	return conn
 }
 
-// T1-1 pass #49 A49-1 / A49-14 / D49-4 — the observation carries every
+// The observation carries every
 // native enum type with its labels in SORT order, spelled the way a column
 // of it reports its type, so the console can tie the two together.
-func TestP49_A49_1_ObservePostgresReportsEnumLabels(t *testing.T) {
+func TestObservePostgresReportsEnumLabels(t *testing.T) {
 	conn := liveConn(t)
 	ctx := context.Background()
 	for _, stmt := range []string{
@@ -134,10 +134,10 @@ func TestP49_A49_1_ObservePostgresReportsEnumLabels(t *testing.T) {
 	}
 }
 
-// T1-1 pass #49 B49-10 — UNIQUE constraints are observed (name + columns in
+// UNIQUE constraints are observed (name + columns in
 // key order), and a table's UniquesRead says they were read even when it
 // holds none; a unique INDEX (not a constraint) stays an index.
-func TestP49_B49_10_ObservePostgresReportsUniques(t *testing.T) {
+func TestObservePostgresReportsUniques(t *testing.T) {
 	conn := liveConn(t)
 	ctx := context.Background()
 	for _, stmt := range []string{

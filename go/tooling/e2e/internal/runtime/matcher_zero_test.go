@@ -9,8 +9,8 @@ import (
 //
 // It used to be refused: `capture` claimed the whole mapping, so `matcher`
 // came back as a stray key and the message named the two keys capture
-// accepts. That reads as "capture cannot check", and a consumer concluded the
-// two had to be split (2026-09-05) — which puts the assertion somewhere
+// accepts. That reads as "capture cannot check", and an author concludes the
+// two have to be split — which puts the assertion somewhere
 // other than where it belongs, or drops it.
 func TestDecodeMatcher_CaptureCombinesWithAnyMatcher(t *testing.T) {
 	m, err := DecodeMatcher(map[string]any{"matcher": "not_empty", "capture": "doc_id"})

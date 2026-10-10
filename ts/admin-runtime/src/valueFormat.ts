@@ -1,5 +1,5 @@
-// Locale-aware VALUE formatting — numbers, dates, times
-// (docs/specs/i18n/formatting.md). The gettext track localizes
+// Locale-aware VALUE formatting — numbers, dates, times.
+// The gettext track localizes
 // strings; this localizes the values next to them, so a Czech
 // admin stops rendering `1234.5` and `2026-07-26T14:03:00Z`.
 //
@@ -19,8 +19,8 @@
 // hyphen-minus which a value rounding to zero loses.
 //
 // Numbers never pass through a JS number on the formatting path:
-// an int64 arrives as a decimal STRING on the JSON wire (per
-// docs/specs/gateway/json-dialect.md) and can exceed 2^53, so
+// an int64 arrives as a decimal STRING on the JSON wire (the
+// gateway's JSON dialect) and can exceed 2^53, so
 // every step below is string arithmetic. `decimalString` is the
 // one adapter in, for a MONEY field that really is a double.
 

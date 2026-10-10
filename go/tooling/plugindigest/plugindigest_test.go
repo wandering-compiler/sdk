@@ -339,7 +339,7 @@ func TestADevProjectInsideThePluginDoesNotMoveTheDigest(t *testing.T) {
 	write(t, dir, map[string]string{
 		".w17dev/w17/lock.yaml":                   "project: plugindev\n",
 		".w17dev/proto/domains/app/w17.proto":     "syntax = \"proto3\";\n",
-		".w17dev/srcgo/gen/pb/models.pb.go":       "package pb\n",
+		".w17dev/gen/pb/models.pb.go":             "package pb\n",
 		".w17dev/w17/services/app-storage/go.mod": "module example.com/x\n",
 	})
 	after, err := Of(dir)

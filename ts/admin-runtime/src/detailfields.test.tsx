@@ -85,7 +85,7 @@ describe("a PASSWORD field on an editable form", () => {
     expect(screen.queryByDisplayValue(/^\$2b\$/), "the hash is on the page").toBeNull();
   });
 
-  // "Empty submit = don't change" (REV-151). The field is registered, so it IS in the
+  // "Empty submit = don't change". The field is registered, so it IS in the
   // form's values — and the PATCH must therefore carry it as the empty string the
   // operator left, not be silently dropped or filled from the read.
   it("submits the empty string when it was left alone", async () => {
@@ -197,7 +197,7 @@ describe("when the row cannot be shown at all", () => {
 
 // SECRET / CRYPTED_SECRET are the OTHER half of the masking rule, and they are not the
 // same question as the password. The generator keeps all three out of an admin's default
-// list columns and detail fields (`masked` in srcgo/domains/gateway/admin/spec_gen.go);
+// list columns and detail fields (its `masked` set);
 // these tests are what happens when an author names one explicitly anyway.
 //
 // CRYPTED_SECRET is the one that was missing from that generator predicate AND from the

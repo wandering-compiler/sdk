@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -311,5 +312,42 @@ func TestRun_ContextCancelled(t *testing.T) {
 	plan := Plan{Concurrency: 2, TotalRequests: 1000, Mode: ModePool, Timeout: time.Second}
 	if _, err := Run(ctx, "cancel", plan, nil, []Op{workOp(false)}, nil, nil, lc); err != nil {
 		t.Fatalf("cancelled run should still report: %v", err)
+	}
+}
+
+// A load op's headers interpolate per request like its input: a per-request
+// Idempotency-Key went out verbatim before, so every request of the run
+// carried `load-${worker}-${seq}` and an idempotent endpoint deduplicated
+// the whole load into one write.
+func TestFireOp_HeadersInterpolatePerRequest(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.Header.Get("Idempotency-Key")]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	lc := NewLoadCaller(srv.URL, 1, time.Second)
+	op := Op{
+		Endpoint: runner.Endpoint{Ref: "x.Svc.M", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/work"},
+		Input:    map[string]any{"a": 1},
+		Headers:  map[string]string{"Idempotency-Key": "load-${worker}-${seq}"},
+		Label:    "w",
+	}
+	plan := Plan{Concurrency: 2, TotalRequests: 6, Mode: ModePool, Timeout: time.Second}
+	if _, err := Run(context.Background(), "hdr", plan, nil, []Op{op}, nil, nil, lc); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 6 {
+		t.Errorf("want 6 distinct header values, one per request; got %v", seen)
+	}
+	for k := range seen {
+		if strings.Contains(k, "${") {
+			t.Errorf("a header went out uninterpolated: %q", k)
+		}
 	}
 }
