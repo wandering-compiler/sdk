@@ -33,7 +33,7 @@ afterEach(() => {
   clearNavigatorLanguage();
 });
 
-// docs/specs/i18n/formatting.md — a detail view formats the same value the
+// A detail view formats the same value the
 // list formats, but ONLY where that value is display-only. The distinction is
 // the whole design: an editable field's value round-trips through the form and
 // back out on save, so formatting it would PATCH a string the user never typed.

@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// TestCountMatcher_RefusesAPredicateEveryCountSatisfies — reported by a consumer,
-// 2026-09-07.
+// TestCountMatcher_RefusesAPredicateEveryCountSatisfies.
 //
 // A count is never negative, so `{matcher: count, op: '>=', value: 0}` holds
 // for every possible response: an empty list passes, a full one passes, and
@@ -14,12 +13,12 @@ import (
 // has no elements.
 //
 // That spelling used to be the generated default for a list endpoint.
-// `8141e3ef9` replaced it with the `unwritten` placeholder, which fixes what
+// The generator now writes the `unwritten` placeholder instead, which fixes what
 // the SCAFFOLD writes — but a skeleton is generate-if-missing, so every file
 // created before that keeps it, and nothing stops an author typing it today.
 //
-// a consumer found 28 in their own suite. Tightening them to `>= 1` turned two
-// green cases red, and both were asserting on a field the response does not
+// In one real suite, tightening such cases to `>= 1` turned two green
+// cases red, and both were asserting on a field the response does not
 // have: an admin page had been repointed at a projection whose list is
 // `items`, while the case still named `memberships`. Neither could ever have
 // failed, so neither ever reported the drift.

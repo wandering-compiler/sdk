@@ -4,9 +4,9 @@
 #   make pb        regenerate go/pb from go/proto
 #   make check-pb  fail when the committed go/pb is not what make pb writes
 #
-# go/pb/consoleapi/rpc is the exception: the console's own API lock generates
-# it, so it has no source here — the platform refreshes it with a pull request
-# when the console's API changes. make pb leaves it alone.
+# go/pb/consoleapi/rpc is the exception: the console's own API definition
+# generates it, so it has no source here — the console's maintainers refresh it
+# with a pull request when that API changes. make pb leaves it alone.
 
 PROTOC_IMAGE ?= w17-sdk-protoc:29.3
 MOD := github.com/wandering-compiler/sdk/go/pb

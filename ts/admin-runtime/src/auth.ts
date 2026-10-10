@@ -48,10 +48,10 @@ export function authHeader(): string | undefined {
 // returns true only when `required` is also empty (a user with
 // no perms can only see fully-open endpoints).
 //
-// Used by REV-150 iter-3 perm-aware hiding. The backend
+// Used by permission-aware hiding. The backend
 // handler still enforces independently — this drives UX
 // only; a malicious client that bypasses the SPA still hits
-// the server's permission gate (P21).
+// the server's permission gate.
 export function hasAllPermissions(
   userPerms: number[] | undefined | null,
   required: number[] | undefined | null,

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { formatSlotValue, formatTemplateValue } from "./slotFormat";
 import type { FormatContext, FormatSlot, FormatTemplate } from "./slotFormat";
 
-// docs/specs/i18n/formatting.md — the TRANSLATOR seam of template application.
+// The TRANSLATOR seam of template application.
 // The rest of the module's behaviour is exercised through the admin's
 // re-export in cellformat.test.ts; what only exists here is the optional
 // `translate`, which the generated web client passes and the admin does not.

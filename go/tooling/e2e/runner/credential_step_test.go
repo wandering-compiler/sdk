@@ -11,7 +11,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/internal/runtime"
 )
 
-// capabilityLinkServer fakes a gateway hosting one REV-162 capability-link
+// capabilityLinkServer fakes a gateway hosting one capability-link
 // endpoint. It records whether the caller sent an Authorization header,
 // which is the whole point of these tests: a capability link is opened by
 // someone with no session, and a case that quietly carried a bearer token
@@ -49,9 +49,9 @@ func credentialStep(target string) (Step, Caller) {
 }
 
 // A capability-link step must run in a scenario that never signed anyone
-// in. Before REV-162 the runner demanded `auth.token` for any endpoint
-// with AuthRequired, so this scenario could not be expressed at all — the
-// step failed before reaching the gateway.
+// in. A runner that demands `auth.token` for any endpoint with
+// AuthRequired could not express this scenario at all — the step would
+// fail before reaching the gateway.
 func TestRunStep_CapabilityLink_NeedsNoUpstreamAuth(t *testing.T) {
 	srv, sawAuth := capabilityLinkServer(t)
 	step, caller := credentialStep(srv.URL)

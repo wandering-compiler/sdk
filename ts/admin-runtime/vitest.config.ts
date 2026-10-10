@@ -2,9 +2,9 @@ import { defineConfig } from "vitest/config";
 
 // Test config for the hand-written admin-runtime logic tier.
 //
-// `jsdom` gives auth.ts a real `window.localStorage`. Coverage is the
-// JS mirror of srcgo/coverage-gate.sh: v8 provider, thresholds gate the
-// suite (per docs/test-coverage.md — FLOOR 70 / TARGET 90).
+// `jsdom` gives auth.ts a real `window.localStorage`. Coverage mirrors
+// the Go coverage gate: v8 provider, thresholds gate the suite
+// (FLOOR 70 / TARGET 90).
 //
 // SCOPE: coverage.include is the pure-logic surface plus the components
 // that now HAVE render tests (@testing-library/react, `.test.tsx`).
@@ -19,8 +19,7 @@ import { defineConfig } from "vitest/config";
 // WHERE EACH COMPONENT ACTUALLY STANDS, re-measured 2026-09-29. The 2026-09-28
 // figures this block used to carry were wrong in four rows, and the cause was the
 // instrument: `src/vocab.test.ts` read the sources as `?raw`, which is a MODULE whose
-// coverage entry collides with the real one on the same path. See that file's comment
-// and docs/decisions/which-components-belong-in-the-gate.md.
+// coverage entry collides with the real one on the same path. See that file's comment.
 //
 //                        stmts        branch       funcs
 //   bootstrap.tsx        32/32         1/1          1/1     <- 0/32 until 2026-09-29; IN the gate now
@@ -135,8 +134,7 @@ export default defineConfig({
       // What this buys, twice over:
       //
       //   - the aggregate could absorb one file going dark, and did — CreatePage.tsx sat
-      //     at "100%" for a day with its 100 statements uncounted
-      //     (docs/decisions/which-components-belong-in-the-gate.md). A per-file
+      //     at "100%" for a day with its 100 statements uncounted. A per-file
       //     threshold cannot be carried by its neighbours;
       //   - the admission rule at the top of this block stops being advice. "Add a
       //     component once its BEHAVIOUR is covered" was enforced by nothing: the

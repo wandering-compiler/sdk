@@ -2,8 +2,8 @@
 // left nav (declared pages) + content area (List / Detail
 // view per route state).
 //
-// REV-150 P33: navigation moved from in-memory `View` state to
-// URL hash routing. The hash is the source of truth; the view
+// Navigation uses URL hash routing rather than in-memory `View`
+// state. The hash is the source of truth; the view
 // is derived from it on every change. Three forms:
 //   "#/"                              → overview / first page
 //   "#/overview"                      → overview (explicit)
@@ -85,7 +85,7 @@ export function App({ spec, slots }: AppProps) {
   );
 
   const allPages = Object.values(spec.pages);
-  // Visible-page filter (REV-150 perm-aware hiding). A page
+  // Visible-page filter (permission-aware hiding). A page
   // lands in the nav only when the user has the perms required
   // by its list endpoint — pages with no list (rare) OR no
   // required_permissions fall through visible. The detail page
@@ -488,8 +488,7 @@ export function parseHash(hash: string, spec: AdminSpec): View | null {
   // detail) has `detail: null`, and DetailPage dereferences
   // page.detail.read_endpoint unconditionally — so a hand-typed or
   // stale-linked #/detail/<page>/<id> crashed the view. The sibling
-  // `create` branch below has had this guard all along; this one did not
-  // (T2-6 pass #9, B9-1).
+  // `create` branch below has had this guard all along; this one did not.
   if (parts.length === 3 && parts[0] === "detail") {
     const p = spec.pages[parts[1]];
     return p?.detail ? { kind: "detail", pageName: parts[1], rowId: parts[2] } : null;

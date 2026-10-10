@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 
 import vocab from "./vocab.json";
 
-// docs/specs/i18n/formatting.md — the admin's CHROME vocabulary.
+// The admin's CHROME vocabulary.
 //
 // `vocab.json` is what the compiler seeds the admin's `.po` with, so a string
 // a component renders through `t()` but nobody listed there has no msgid in
@@ -36,9 +36,8 @@ const MSGIDS: string[] = (vocab as { msgids: string[] }).msgids;
 //
 // The cold entry is one statement spanning line 1, columns 0-6347 — the string
 // literal. So the one .tsx component deliberately admitted to `coverage.include`
-// (docs/decisions/which-components-belong-in-the-gate.md) was the one file the
-// gate did not measure, and it reported 100% while being uncounted: "uncounted
-// reads as covered", the artefact that decision record already names.
+// was the one file the gate did not measure, and it reported 100% while being
+// uncounted: "uncounted reads as covered".
 //
 // Reading the files creates no module for them, so there is nothing to collide
 // with. `types/node-fs.d.ts` says why the two signatures are declared locally
@@ -121,7 +120,7 @@ describe("the chrome vocabulary", () => {
     expect(nested, "no file from a subdirectory — the walk stopped at src/").not.toEqual([]);
   });
 
-  // The OTHER direction, and the one that was missing (T2-6 pass #6, A-F1).
+  // The OTHER direction, and the one that was missing at first.
   //
   // The test above proves every t("…") is listed. It says nothing about prose
   // that never reaches t() at all — and that is how `Save`, `Delete`,

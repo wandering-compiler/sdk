@@ -1,5 +1,5 @@
 /**
- * Template application — the runtime half of docs/specs/i18n/formatting.md,
+ * Template application — the runtime half of locale-aware value formatting,
  * one layer above valueFormat.ts.
  *
  * valueFormat.ts owns the frozen table and the formatters. This module owns
@@ -11,7 +11,7 @@
  * It is deliberately FREE of React and of anything admin-shaped, because it is
  * mirrored verbatim into the generated web client (the client emitter embeds
  * this file and valueFormat.ts rather than carrying a third implementation of
- * the same arithmetic — see srcgo/domains/client/emit/typescript/format.go).
+ * the same arithmetic).
  * The admin's own React context lives next door in cellFormat.ts, which
  * re-exports everything here so admin code has one import to reach for.
  */
@@ -93,7 +93,7 @@ const NUMERIC: Record<string, boolean> = { number: true, decimal: true, percent:
  *
  * A template with a `datetime` / `date` / `time` slot needs the RAW value: its
  * formatter parses a timestamp, and a value squeezed through a numeric coercion
- * first arrives as "0" (T2-6 pass #7, A2). A template with no slots at all is
+ * first arrives as "0". A template with no slots at all is
  * pure literal text and needs nothing coerced either.
  */
 export function templateIsNumeric(tmpl: FormatTemplate | undefined): boolean {

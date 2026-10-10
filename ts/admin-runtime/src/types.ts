@@ -4,7 +4,7 @@ import type { WireCodecs } from "./wire";
 import type { FormatOverrides } from "./valueFormat";
 
 // Spec types — mirror the JSON shape emitted by the Go-side
-// admin codegen (srcgo/domains/gateway/admin/spec_gen.go). Bump
+// admin codegen. Bump
 // SPEC_SCHEMA_VERSION in lockstep with the Go-side SchemaVersion
 // constant whenever the shape changes in a backwards-incompatible
 // way.
@@ -225,7 +225,7 @@ export function globalNavItemSlotKey(): string {
 }
 
 // WidgetRenderer alias kept for backwards compatibility with
-// the P16 type export; new code uses SlotComponent.
+// an earlier type export; new code uses SlotComponent.
 export type WidgetRenderer = SlotComponent;
 
 export interface AdminNavGroup {
@@ -265,8 +265,7 @@ export interface AdminPageSpec {
   // `json:"detail"` with no omitempty, so a page with no detail — a
   // model with no single-column identity, which cannot have one —
   // serialises as a literal `null`. Declaring it non-nullable made tsc
-  // blind to exactly that page, and every consumer dereferenced it
-  // (T2-6 pass #9, B9-1).
+  // blind to exactly that page, and every consumer dereferenced it.
   detail: AdminDetailSpec | null;
   actions?: Record<string, AdminActionSpec>;
   inlines?: AdminInlineSpec[];
@@ -341,7 +340,7 @@ export interface AdminListSpec {
    * emitter has always produced these and the catalog harvest has always sent
    * their labels to translators; the runtime simply never read them, so an
    * enum filter was a free-text box and the operator had to guess the wire
-   * token (T2-6 pass #7, A3).
+   * token.
    */
   filter_choices?: Record<string, AdminChoicesSpec>;
   // ColumnChoices maps a rendered column name to the enum catalogue
@@ -355,7 +354,7 @@ export interface AdminListSpec {
   // runtime never sees template syntax: it fills the slot through the
   // formatter and substitutes into the msgid. Only columns that
   // resolve to a format appear — text, ids and enums render raw
-  // through displayString. See docs/specs/i18n/formatting.md.
+  // through displayString.
   column_formats?: Record<string, FormatTemplate>;
   // The message ref this endpoint's RESPONSE carries, naming its codec
   // in the generated `codecs.js`. Absent = this call stays on JSON,
@@ -363,8 +362,8 @@ export interface AdminListSpec {
   response_ref?: string;
   // Cascade-stamped permission IDs required to invoke the list
   // method. SPA hides the page from nav when whoami's
-  // permission_ids don't include all of these (REV-150 iter-3).
-  // UX hint only — backend handler still enforces (P21).
+  // permission_ids don't include all of these.
+  // UX hint only — backend handler still enforces.
   required_permissions?: number[];
   // Cursor/keyset pagination descriptor. Present iff the backing
   // list method is paged — the SPA then renders a cursor pager
@@ -503,7 +502,7 @@ export interface AdminDetailSpec {
   // edit form when read perms missing (no point editing what
   // you can't see), the submit button when update perms
   // missing, and the Delete button when delete perms missing
-  // (REV-150 iter-3). Backend still enforces.
+  // Backend still enforces.
   required_permissions_read?: number[];
   required_permissions_update?: number[];
   required_permissions_delete?: number[];
@@ -516,8 +515,7 @@ export interface AdminDetailSpec {
   //
   // Applied where the value is DISPLAY-ONLY and nowhere else: an
   // editable field's value round-trips through the form, and a
-  // grouped "1 234,50" would be PATCHed back as garbage. See
-  // docs/specs/i18n/formatting.md.
+  // grouped "1 234,50" would be PATCHed back as garbage.
   field_formats?: Record<string, FormatTemplate>;
   // Codec refs per operation. See AdminListSpec.response_ref.
   read_response_ref?: string;

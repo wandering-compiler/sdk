@@ -24,7 +24,7 @@ import {
 // (format_vectors_test.go over testdata/format_vectors.json, kept identical by
 // `make sync-i18n-formats`). Every case passing on both sides is what makes
 // "Go and TS format a value identically" a checked property rather than a hope
-// — see docs/specs/i18n/formatting.md, "an explicit format table, not Intl".
+// — which is why the format table is explicit data, not Intl.
 
 interface Vector {
   name: string;

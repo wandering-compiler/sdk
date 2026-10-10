@@ -1,5 +1,5 @@
 // ActionModal — bulk-action UI for an admin list page. Closes
-// the P8 actions loop on the runtime side: every LIST-target
+// the admin actions loop on the runtime side: every LIST-target
 // action declared in admin_spec.json renders as a button above
 // the list; click opens a Mantine modal collecting the action's
 // declared extras + posts to the action endpoint.

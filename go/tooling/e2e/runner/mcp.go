@@ -109,9 +109,9 @@ func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
 		// The URL is IN the message on purpose. A 404 here means the
 		// endpoint is wrong, and the two ways it can be wrong — REST port
 		// instead of MCP, or the transport path missing — are
-		// indistinguishable without seeing what was dialled. a consumer hit
-		// this on 2026-09-01 and had to infer the port from elsewhere,
-		// because this line named a status and no address.
+		// indistinguishable without seeing what was dialled. A message that
+		// names only a status leaves the caller inferring the port from
+		// elsewhere.
 		return "", fmt.Errorf("mcp initialize against %s: status %d: %s (the MCP transport is its own listener, "+
 			"default :8081, and serves on /mcp — a REST port or a missing path both answer 404 here)",
 			c.Endpoint, resp.StatusCode, truncate(raw, 256))
@@ -198,7 +198,7 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 		// answered". The consequence was total: NO MCP case could assert a
 		// refusal at all, because no code ever reached the matcher. It went
 		// unnoticed because no example published the gateway's MCP port, so
-		// no MCP scenario had ever run (2026-08-31).
+		// no MCP scenario had ever run.
 		if code, msg, ok := grpcStatusFromMCPError(out.Error.Message); ok {
 			return nil, &CallError{
 				Op:      "mcp " + ep.Ref,

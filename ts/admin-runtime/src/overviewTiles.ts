@@ -2,7 +2,7 @@
 // the admin declares no custom overview widgets. A tile per nav group
 // lists the group's pages as quick-links; a page whose list method is
 // PAGED also shows a row count, because a paged list already computes
-// COUNT(*) for its pager total (REV-148) — so the number is free. An
+// COUNT(*) for its pager total — so the number is free. An
 // unpaged list carries no cheap total, so it shows just the link (no
 // number). No pg_class estimate, no synthesized count query: the tile
 // reuses exactly what the paged list endpoint already returns.

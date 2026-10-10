@@ -545,7 +545,7 @@ describe("usablePageSizes", () => {
 describe("pagerIsVisible", () => {
   // total is a decimal STRING, like every 64-bit field in the dialect — the
   // helper takes a number for readability and converts, which also documents
-  // that pagerIsVisible must not compare strings (T2-6 pass #6).
+  // that pagerIsVisible must not compare strings.
   const env = (over: Partial<{ total: number; next_cursor: string; previous_cursor: string }>) => ({
     total: String(over.total ?? 0),
     next_cursor: over.next_cursor ?? "",
