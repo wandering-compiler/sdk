@@ -6,8 +6,7 @@
 // never the compiler's IR-laden private pb (the MigrationRegistry, IR,
 // fixtures, and migration-plan packages).
 //
-// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §8,
-// Block 3): the client never handles the STRUCTURE of the IR, the migration
+// Public-split boundary: the client never handles the STRUCTURE of the IR, the migration
 // plan, the review findings, or a fixture body. It ships OPAQUE bytes (the
 // compiled-IR blob from CompileIR; a fixture's raw JSON) and gets back flat
 // string fields. The server (which owns the registry state + the migrator
@@ -537,8 +536,7 @@ type PushSchemaRequest struct {
 	// initiative id (a UUID), which the client resolves the same way
 	// `w17ctl initiative current` does: from the current git branch.
 	//
-	// This is the bridge freeze-a-CR needs (see
-	// docs/decisions/squash-supersede-and-adopt.md). The registry already records one revision per push; stamping the
+	// This is the bridge freezing a change request for a squash needs. The registry already records one revision per push; stamping the
 	// initiative onto that row is what makes "which migrations belong to change
 	// request X" answerable, and a range with EDGES is the only kind a squash
 	// may act on — a date window or a push count would quietly collapse another

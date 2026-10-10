@@ -229,8 +229,7 @@ type CodegenServiceClient interface {
 	// the wrong module path and show up as a compile error in generated code.
 	GenerateProject(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GenerateProjectRequest, GeneratedOp], error)
 	// SignAclLock signs an ACL permission lock a codegen WORKER computed. A
-	// worker holds no signing key (docs/specs/console/codegen-on-the-cluster.md
-	// §5): it returns each changed lock unsigned, as a GeneratedOp.sign, and the
+	// worker holds no signing key: it returns each changed lock unsigned, as a GeneratedOp.sign, and the
 	// client asks the console — which checks the caller may generate the
 	// project, verifies the prior lock's signature and refuses an allocation
 	// that breaks its lineage — before writing it. The console compiles nothing.
@@ -243,7 +242,7 @@ type CodegenServiceClient interface {
 	VerifyAcl(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	VerifyEventbus(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	// GenerateEgressClient turns an OpenAPI document into a signed egress
-	// client (docs/todos/egress-rest-client.md): the client fetched or read
+	// client: the client fetched or read
 	// the document, the console selects the operations, converts them to the
 	// client's `<name>.proto`, writes its `client.yaml` and signs the set.
 	// The client writes the files where the response says, plus the document
@@ -1037,8 +1036,7 @@ type CodegenServiceServer interface {
 	// the wrong module path and show up as a compile error in generated code.
 	GenerateProject(grpc.BidiStreamingServer[GenerateProjectRequest, GeneratedOp]) error
 	// SignAclLock signs an ACL permission lock a codegen WORKER computed. A
-	// worker holds no signing key (docs/specs/console/codegen-on-the-cluster.md
-	// §5): it returns each changed lock unsigned, as a GeneratedOp.sign, and the
+	// worker holds no signing key: it returns each changed lock unsigned, as a GeneratedOp.sign, and the
 	// client asks the console — which checks the caller may generate the
 	// project, verifies the prior lock's signature and refuses an allocation
 	// that breaks its lineage — before writing it. The console compiles nothing.
@@ -1051,7 +1049,7 @@ type CodegenServiceServer interface {
 	VerifyAcl(context.Context, *VerifyRequest) (*VerifyResult, error)
 	VerifyEventbus(context.Context, *VerifyRequest) (*VerifyResult, error)
 	// GenerateEgressClient turns an OpenAPI document into a signed egress
-	// client (docs/todos/egress-rest-client.md): the client fetched or read
+	// client: the client fetched or read
 	// the document, the console selects the operations, converts them to the
 	// client's `<name>.proto`, writes its `client.yaml` and signs the set.
 	// The client writes the files where the response says, plus the document

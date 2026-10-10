@@ -197,8 +197,7 @@ service CodegenService {
   }
 
   // SignAclLock signs an ACL permission lock a codegen WORKER computed. A
-  // worker holds no signing key (docs/specs/console/codegen-on-the-cluster.md
-  // §5): it returns each changed lock unsigned, as a GeneratedOp.sign, and the
+  // worker holds no signing key: it returns each changed lock unsigned, as a GeneratedOp.sign, and the
   // client asks the console — which checks the caller may generate the
   // project, verifies the prior lock's signature and refuses an allocation
   // that breaks its lineage — before writing it. The console compiles nothing.
@@ -213,7 +212,7 @@ service CodegenService {
   rpc VerifyEventbus(VerifyRequest) returns (VerifyResult);
 
   // GenerateEgressClient turns an OpenAPI document into a signed egress
-  // client (docs/todos/egress-rest-client.md): the client fetched or read
+  // client: the client fetched or read
   // the document, the console selects the operations, converts them to the
   // client's `<name>.proto`, writes its `client.yaml` and signs the set.
   // The client writes the files where the response says, plus the document
@@ -1121,7 +1120,7 @@ message EditLockResponse {
 }
 
 // PlaceGenerateRequest — the console's placement call for a GenerateProject
-// run on the codegen cluster (docs/specs/console/codegen-on-the-cluster.md).
+// run on the codegen cluster.
 //
 // Unary and SHORT on purpose: the console is the single entry point and holds
 // no long-lived connection. A run is placed with `start`; while no worker is
@@ -1385,8 +1384,8 @@ message LockView {
   // `srcgo` by default). The client needs it to NAME the path a domain's
   // hand-written facade belongs at; it cannot read the lock itself, and the
   // default is only right for a project that took the default. A consumer
-  // whose tree is `w17src/` was told by `domain add` to write into `srcgo/`,
-  // a directory their project does not have.
+  // whose tree is `w17src/` was told by `domain add` to write into the default
+  // `srcgo` directory, which their project does not have.
   string gen_dir = 19;
   // deploy_targets are the OPTIONAL deploy targets the lock declares
   // (generated_code.deploy_targets[].target). Docker is always emitted and is
@@ -1402,7 +1401,7 @@ message LockView {
   // It exists because that fallback is the CLIENT's floor, and the code comes
   // from the CONSOLE: after a deploy, a client from the day before accepted a
   // pin the freshly generated code could not build against, codegen exited 0,
-  // and the build image reported `undefined:` (a consumer, 2026-10-01).
+  // and the build image reported `undefined:`.
   string sdk_floor = 22;
 
   // infra is the project's declared infrastructure (absent = none
@@ -1574,7 +1573,7 @@ message GenerateClientRequest {
   // Lock is the signed `w17/lock.yaml` content — the generator reads
   // generated_code.clients[] (frameworks / languages / output roots).
   bytes lock = 2;
-  // GoModule is the consumer's srcgo/go.mod module line — needed when the
+  // GoModule is the consumer's go.mod module line — needed when the
   // project declares plugin activations (placeholder expansion), since the
   // server stages only protos (not the project go.mod).
   string go_module = 3;
@@ -1594,7 +1593,7 @@ message VerifyRequest {
   // (w17.lock.acl.proto / w17.lock.events.proto) the check compares
   // against.
   repeated ProtoFile files = 1;
-  // GoModule is the consumer's srcgo/go.mod module line — needed by ACL/
+  // GoModule is the consumer's go.mod module line — needed by ACL/
   // eventbus verification when the project declares plugin activations
   // (placeholder expansion), since the server stages only protos.
   string go_module = 2;
@@ -1640,7 +1639,7 @@ message GenerateProjectMapRequest {
   string go_module = 2;
   string pb_root = 3;
   // GenFiles are the generated Go files (relative paths under the gen dir,
-  // e.g. `srcgo/domains/<d>/...go`) the map's go/parser reads for
+  // e.g. `<gen>/domains/<d>/...go`) the map's go/parser reads for
   // cross-domain grpc-client edges. Optional — omitted = proto-only map.
   repeated ProtoFile gen_files = 4;
 }
@@ -1681,7 +1680,7 @@ message GenerateBusinessRequest {
   // their grpcerr.ForUser sentences are translated in this process — but
   // the bundle never registered a catalog, so every one stayed in its
   // msgid whatever the request's locale. The storage tier had the same gap
-  // and closed it under REV-149; this tier was missed.
+  // and closed it earlier; this tier was missed.
   string languages_dir = 10;
 }
 
@@ -1705,7 +1704,7 @@ message BusinessEnv {
 
 message GenerateAclRequest {
   repeated ProtoFile files = 1;
-  // GoModule is the consumer's srcgo/go.mod module line. The client sends
+  // GoModule is the consumer's go.mod module line. The client sends
   // it because the server stages only protos (not the project go.mod), and
   // plugin-activation placeholder expansion needs the module path.
   string go_module = 2;
@@ -2186,7 +2185,7 @@ message ObservedStore {
   // (INSERT then refused it, 22P02, behind a sync that said converged), a
   // removal or reorder bypassed the refusal the stored base raises, and a
   // dropped enum column left its type behind so re-adding it collided
-  // (42710) — T1-1 pass #49 A49-1 / A49-14 / D49-4.
+  // (42710).
   //
   // A column is tied to its type by SPELLING: `type` below is exactly what
   // `format_type` answers for the type, which is what a column of that type
@@ -2221,7 +2220,7 @@ message ObservedIndex {
   // The whole CREATE INDEX statement, as `pg_get_indexdef` renders it.
   // The client parses nothing; the console restates a leftover index from
   // it and compares it, normalised, against the declared index's rendering
-  // (raw indexes since pass #48 F17, structured ones since pass #49 A49-4).
+  // (raw and structured indexes alike).
   string definition = 3;
 }
 
@@ -2251,7 +2250,7 @@ message ObservedForeignKey {
   // OWNER's schema (`REFERENCES "owner"."u"` for a key into `other.u`), and
   // two schemas holding same-named tables made the drop ordering resolve
   // every unqualified target to every same-named table — an acyclic database
-  // refused as an "FK cycle" (pass #49 B49-12 / B49-15). Empty means NOT
+  // refused as an "FK cycle". Empty means NOT
   // REPORTED (an old client): the server keeps today's owner-namespace
   // fallback — absent is not a value.
   string target_schema = 6;
@@ -2259,8 +2258,8 @@ message ObservedForeignKey {
   // EVERY referenced column, in the key's order (`confkey`), paired
   // position by position with `columns`. `target_column` stays the first of
   // them for old servers. Carried because a composite key restated from
-  // its first column alone is a different, narrower constraint (pass #49
-  // B49-12 / A49-10). Empty means NOT REPORTED (an old client): the server
+  // its first column alone is a different, narrower constraint. Empty
+  // means NOT REPORTED (an old client): the server
   // keeps today's first-column behaviour.
   repeated string target_columns = 7;
 
@@ -2328,7 +2327,7 @@ message ObservedTable {
   // The full definition of every CHECK constraint, by name, exactly as
   // `pg_get_constraintdef` renders it. It lets a constraint the schema does
   // not declare be planned for a DROP under its real identity, with a DOWN
-  // that can re-create it. Since pass #49 (M4) the console also reads a
+  // that can re-create it. The console also reads a
   // declared length / range / regex check's facts back out of it and
   // compares a raw check's normalised body, so an authored body edit
   // reaches the database. Absent (old client) means leftover checks are not
@@ -2340,12 +2339,12 @@ message ObservedTable {
   // hand-made table can say `CONSTRAINT my_pk PRIMARY KEY`, and a renamed
   // table keeps its old `<old>_pkey`. A key change that DROPs a derived
   // name then no-ops and the ADD PRIMARY KEY fails with "multiple primary
-  // keys" (42P16, pass #49 B49-6). Empty means NOT REPORTED (an old client,
+  // keys" (42P16). Empty means NOT REPORTED (an old client,
   // or a table with no key): the server keeps deriving `<table>_pkey`.
   string primary_key_name = 10;
 
   // The table's UNIQUE constraints (`pg_constraint.contype = 'u'`): name
-  // and columns. Invisible before T1-1 pass #49 B49-10 — the index read
+  // and columns. Invisible before this field — the index read
   // skips constraint-backed indexes and the constraint read took only FKs
   // and checks — so the UNIQUE (scope, ref) a scope-preserving FK needs on
   // its parent could never be compared, added or dropped on the live base.
@@ -2398,8 +2397,8 @@ message ObservedColumn {
   // The column is GENERATED (`attgenerated <> ''`) — default_expr then holds
   // the GENERATION expression, which lives in the same catalogue slot a
   // DEFAULT does. Without this flag the reconstruction read the expression
-  // as a phantom default and planned a `DROP DEFAULT` that cannot apply
-  // (pass #48 F35). Absent (an older client) means UNKNOWN, not false: the
+  // as a phantom default and planned a `DROP DEFAULT` that cannot apply.
+  // Absent (an older client) means UNKNOWN, not false: the
   // server keeps a declared-generated column converged when a non-empty
   // default_expr arrives flag-less.
   bool generated = 5;
@@ -2542,8 +2541,8 @@ message GenerateRequest {
   // (one map entry per language) and don't need a proto
   // change.
   //
-  // Example: `[{language: "go", output_root: "srcgo/pb"}]`
-  // produces Go stubs under `srcgo/pb/<source-rel-path>.pb.go`
+  // Example: `[{language: "go", output_root: "gen/pb"}]`
+  // produces Go stubs under `gen/pb/<source-rel-path>.pb.go`
   // (path mirrors the input proto layout 1:1 via buf's
   // `paths=source_relative`).
   repeated StubTarget stub_targets = 6;
@@ -2556,7 +2555,7 @@ message GenerateRequest {
   repeated GatewayTarget gateway_targets = 7;
 
   // AdminTargets drives the per-binary admin bundle emit
-  // (REV-150). Optional: empty list skips admin emit even when
+  // Optional: empty list skips admin emit even when
   // proto files carry `(w17.admin_api)`. One target produces
   // one admin bundle (Go binary + embedded React SPA).
   repeated AdminTarget admin_targets = 10;
@@ -2589,8 +2588,6 @@ message GenerateRequest {
   // named entry from the domain-level connection registry.
   // Empty = pre-A4 behaviour (omitted-connection files emit
   // on the nil-bucket single-DB path).
-  //
-  // Spec: docs/specs/console/default-connection.md.
   string default_connection = 12;
 
   // Languages declares the BCP-47 tags the consumer wants
@@ -2618,8 +2615,7 @@ message GenerateRequest {
   // `deploy/prod/secrets-<backend>.yaml` manifest that populates
   // the `<domain>-storage-secrets` k8s Secret the Deployment
   // references. Empty/plain/sops emit no extra manifest. Drawn
-  // from `lk.GetSecrets().GetBackend()`. Spec:
-  // docs/specs/secrets/production-secrets.md.
+  // from `lk.GetSecrets().GetBackend()`.
   string secrets_backend = 15;
 
   // Replicas is the per-service PROD replica count (storage gRPC
@@ -2633,8 +2629,7 @@ message GenerateRequest {
   // proxy so clients dial it unchanged. Absent / <= 1 = single replica,
   // output byte-identical to pre-feature. Folded tiers (a storage
   // component absorbed into a `<domain>-server`) can't carry a count > 1
-  // — lock.Validate rejects that upstream. See
-  // docs/specs/storage/grpc-proxy.md.
+  // — lock.Validate rejects that upstream.
   map<string, int32> replicas = 16;
 
   // FormatOverrides is the project's locale-aware formatting remap,
@@ -2646,7 +2641,7 @@ message GenerateRequest {
   // The server rebuilds the nested shape before handing it to a
   // generator, so the wire order carries no meaning — but the client
   // sends it sorted anyway, so two identical projects produce
-  // byte-identical requests. Spec: docs/specs/i18n/formatting.md.
+  // byte-identical requests.
   repeated FormatOverrideEntry format_overrides = 17;
 
   // AdminLanguages declares the BCP-47 tags the ADMIN's own gettext
@@ -2782,7 +2777,7 @@ message DepVersions {
   string go_mysql = 4;        // github.com/go-sql-driver/mysql
   string modernc_sqlite = 5;  // modernc.org/sqlite
   string go_redis = 6;        // github.com/redis/go-redis/v9
-  // field 7 reserved (was: gox / github.com/mrs1lentcz/gox). The
+  // field 7 reserved (was: gox, an external helper module). The
   // project migrated off gox into sdk/go/*; no go.mod template ever
   // rendered this pin.
   reserved 7;
@@ -2793,10 +2788,10 @@ message DepVersions {
   // RPCs). Storage bundles never see these requires.
   string otel_grpc = 8;       // go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
   string coder_websocket = 9; // github.com/coder/websocket
-  string go_chi = 10;         // github.com/go-chi/chi/v5 — REV-031 Phase C-6 fix-3
+  string go_chi = 10;         // github.com/go-chi/chi/v5
   // Eventbus-flavoured storage bundles only — main.go opens a
   // NATS dispatcher when (w17.event_emit) annotations exist
-  // on the domain's RPCs (REV-125).
+  // on the domain's RPCs.
   string nats_go = 11;        // github.com/nats-io/nats.go
   // MCP-flavoured gateway bundles only — the gateway's src/mcp
   // package imports mcp-go directly (tool registration + the
@@ -2810,7 +2805,7 @@ message DepVersions {
   // own go.mod omits. A consumer building the bundle outside a
   // workspace got `imports … from implicitly required module`.
   //
-  // Pin source is sdk/go/go.mod, not srcgo/go.mod: the generated
+  // Pin source is sdk/go/go.mod, not the project's go.mod: the generated
   // code pairs mcp-go with sdk/go/lib/mcp, so the version that
   // must agree is the SDK's.
   string mcp_go = 12;         // github.com/mark3labs/mcp-go
@@ -2876,7 +2871,7 @@ message GatewayTarget {
   // `<domain>-gateway`).
   string domain = 4;
 
-  // I18nDir (REV-149) is the codegen-baked default for the
+  // I18nDir is the codegen-baked default for the
   // `<EnvPrefix>_I18N_DIR` env var on the generated main.go.
   // Typically a relative escape from the bundle root to the
   // project's shared catalog tree
@@ -2981,7 +2976,7 @@ message GatewayTarget {
   // line. Only used when absorb_eventbus.
   string absorbed_eventbus_replace_path = 17;
 
-  // Field 18 (emit_ctl) retired (REV-153 simplification): the standalone
+  // Field 18 (emit_ctl) retired: the standalone
   // `<domain>-ctl` is now emitted purely from the proto surface (a
   // `(w17.cli_api)` with rpc-exposed picks), like the in-bundle
   // `<domain>-cli` and the REST gateway — no lock opt-in.
@@ -3009,7 +3004,7 @@ message GatewayTarget {
 
 // AdminTarget drives the per-binary admin bundle emit
 // (the compiler's admin generator). Mirror of GatewayTarget for
-// admin-flavoured bundles (REV-150). One target = one
+// admin-flavoured bundles. One target = one
 // `<output_dir>/` admin bundle (Go binary + embedded React SPA).
 // Empty list (no targets) skips admin emit even when proto
 // files carry `(w17.admin_api)`.
@@ -3045,7 +3040,7 @@ message AdminTarget {
   string admin_runtime_npm_spec = 5;
 
   // ClientNpmSpec is the dependency specifier for the
-  // project's already-generated REV-141 TS client. Either a
+  // project's already-generated TS client. Either a
   // registry pin or a `file:` path. Required.
   string client_npm_spec = 6;
 
@@ -3088,7 +3083,7 @@ message AdminTarget {
   // Wire is the admin SPA's HTTP wire — "pb" (default) or "json", from
   // the lock's `admin_wire`. The admin surface negotiates both
   // server-side either way; this is what the generated console asks
-  // for. See docs/specs/admin/architecture.md.
+  // for.
   string wire = 12;
 }
 
@@ -3106,7 +3101,7 @@ message StubTarget {
   string language = 1;
 
   // OutputRoot is the consumer-side relative path under which
-  // generated stubs land (e.g. "srcgo/pb" for Go, "srcpy/pb"
+  // generated stubs land (e.g. "gen/pb" for Go, "srcpy/pb"
   // for Python). Each generated file's relative_path is
   // `<output_root>/<source-rel-path>.<lang-suffix>` — the
   // proto directory layout maps 1:1 onto the stub layout.
@@ -3208,7 +3203,7 @@ message GeneratedFile {
   string relative_path = 1;
   bytes contents = 2;
 
-  // if_missing requests generate-if-missing semantics (REV-153):
+  // if_missing requests generate-if-missing semantics:
   // the CLI writes this file only when it does not already exist on
   // disk, never overwriting a hand-edited copy. Default false =
   // overwrite (the behaviour every other generated file relies on).

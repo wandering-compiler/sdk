@@ -98,7 +98,7 @@ type BeginRequest struct {
 	// long-living `context.WithoutCancel(grpcCtx)` semantics
 	// documented on Begin's doc-comment.
 	//
-	// Two-tier model (`docs/archive/iteration-2-multidb.md` §M2-F):
+	// Two-tier model:
 	//   - Tier 1 = `(w17.db.method).timeout_ms` — per-method
 	//     deadline applied to the storage handler's own ctx;
 	//     bounds individual statement work.
@@ -120,7 +120,7 @@ type BeginRequest struct {
 	// field, such a method's declaration was silently dropped:
 	// the generated preamble applied the declared level only on
 	// its own fresh-tx branch, and the distributed-tx branch ran
-	// at whatever the driver default was (T3-7 pass #9 D-F7). The
+	// at whatever the driver default was. The
 	// caller now states the level up front, and a method whose
 	// declaration the open transaction cannot satisfy REFUSES to
 	// adopt it (`txregistry.ErrIsolationTooWeak`) rather than

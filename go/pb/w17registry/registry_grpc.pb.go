@@ -6,8 +6,7 @@
 // never the compiler's IR-laden private pb (the MigrationRegistry, IR,
 // fixtures, and migration-plan packages).
 //
-// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §8,
-// Block 3): the client never handles the STRUCTURE of the IR, the migration
+// Public-split boundary: the client never handles the STRUCTURE of the IR, the migration
 // plan, the review findings, or a fixture body. It ships OPAQUE bytes (the
 // compiled-IR blob from CompileIR; a fixture's raw JSON) and gets back flat
 // string fields. The server (which owns the registry state + the migrator
@@ -105,8 +104,8 @@ type ProjectRegistryClient interface {
 	ReleaseProjectToOrg(ctx context.Context, in *ReleaseProjectToOrgRequest, opts ...grpc.CallOption) (*ReleaseProjectToOrgResponse, error)
 	ClaimProject(ctx context.Context, in *ClaimProjectRequest, opts ...grpc.CallOption) (*ClaimProjectResponse, error)
 	// ResetHistory collapses a project's migration history so a fresh baseline
-	// can be derived from the current schema — the FORGETTING half of recreate
-	// (docs/decisions/lifecycle-processes-decomposition.md). It does not derive the new
+	// can be derived from the current schema — the FORGETTING half of recreate.
+	// It does not derive the new
 	// baseline: that is PushSchema taking its bootstrap (create) path, which is
 	// already what a project's first push does. So `w17ctl migrate reset` is
 	// ResetHistory(DISCARD) followed by the ordinary push, not a second code
@@ -120,8 +119,7 @@ type ProjectRegistryClient interface {
 	// public mirror is the private RPC's shape unchanged.
 	ResetHistory(ctx context.Context, in *ResetHistoryRequest, opts ...grpc.CallOption) (*ResetHistoryResponse, error)
 	// VerifyHistory answers whether a project's recorded migration history
-	// reproduces its stored schema — the clean-gate
-	// (docs/decisions/lifecycle-processes-decomposition.md).
+	// reproduces its stored schema — the clean-gate.
 	//
 	// The predicate existed server-side from the day revisions landed, and had
 	// no client surface at all: it ran only as UpdateSchema's own drift guard,
@@ -309,8 +307,8 @@ type ProjectRegistryServer interface {
 	ReleaseProjectToOrg(context.Context, *ReleaseProjectToOrgRequest) (*ReleaseProjectToOrgResponse, error)
 	ClaimProject(context.Context, *ClaimProjectRequest) (*ClaimProjectResponse, error)
 	// ResetHistory collapses a project's migration history so a fresh baseline
-	// can be derived from the current schema — the FORGETTING half of recreate
-	// (docs/decisions/lifecycle-processes-decomposition.md). It does not derive the new
+	// can be derived from the current schema — the FORGETTING half of recreate.
+	// It does not derive the new
 	// baseline: that is PushSchema taking its bootstrap (create) path, which is
 	// already what a project's first push does. So `w17ctl migrate reset` is
 	// ResetHistory(DISCARD) followed by the ordinary push, not a second code
@@ -324,8 +322,7 @@ type ProjectRegistryServer interface {
 	// public mirror is the private RPC's shape unchanged.
 	ResetHistory(context.Context, *ResetHistoryRequest) (*ResetHistoryResponse, error)
 	// VerifyHistory answers whether a project's recorded migration history
-	// reproduces its stored schema — the clean-gate
-	// (docs/decisions/lifecycle-processes-decomposition.md).
+	// reproduces its stored schema — the clean-gate.
 	//
 	// The predicate existed server-side from the day revisions landed, and had
 	// no client surface at all: it ran only as UpdateSchema's own drift guard,

@@ -6,8 +6,7 @@
 // never the compiler's IR-laden private pb (the MigrationRegistry, IR,
 // fixtures, and migration-plan packages).
 //
-// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §8,
-// Block 3): the client never handles the STRUCTURE of the IR, the migration
+// Public-split boundary: the client never handles the STRUCTURE of the IR, the migration
 // plan, the review findings, or a fixture body. It ships OPAQUE bytes (the
 // compiled-IR blob from CompileIR; a fixture's raw JSON) and gets back flat
 // string fields. The server (which owns the registry state + the migrator
@@ -79,8 +78,8 @@ service ProjectRegistry {
   rpc ClaimProject(ClaimProjectRequest) returns (ClaimProjectResponse);
 
   // ResetHistory collapses a project's migration history so a fresh baseline
-  // can be derived from the current schema — the FORGETTING half of recreate
-  // (docs/decisions/lifecycle-processes-decomposition.md). It does not derive the new
+  // can be derived from the current schema — the FORGETTING half of recreate.
+  // It does not derive the new
   // baseline: that is PushSchema taking its bootstrap (create) path, which is
   // already what a project's first push does. So `w17ctl migrate reset` is
   // ResetHistory(DISCARD) followed by the ordinary push, not a second code
@@ -95,8 +94,7 @@ service ProjectRegistry {
   rpc ResetHistory(ResetHistoryRequest) returns (ResetHistoryResponse);
 
   // VerifyHistory answers whether a project's recorded migration history
-  // reproduces its stored schema — the clean-gate
-  // (docs/decisions/lifecycle-processes-decomposition.md).
+  // reproduces its stored schema — the clean-gate.
   //
   // The predicate existed server-side from the day revisions landed, and had
   // no client surface at all: it ran only as UpdateSchema's own drift guard,
@@ -217,8 +215,7 @@ message PushSchemaRequest {
   // initiative id (a UUID), which the client resolves the same way
   // `w17ctl initiative current` does: from the current git branch.
   //
-  // This is the bridge freeze-a-CR needs (see
-  // docs/decisions/squash-supersede-and-adopt.md). The registry already records one revision per push; stamping the
+  // This is the bridge freezing a change request for a squash needs. The registry already records one revision per push; stamping the
   // initiative onto that row is what makes "which migrations belong to change
   // request X" answerable, and a range with EDGES is the only kind a squash
   // may act on — a date window or a push count would quietly collapse another
