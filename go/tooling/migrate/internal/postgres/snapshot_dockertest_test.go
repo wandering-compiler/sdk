@@ -17,8 +17,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"
 )
 
-// TestSnapshotter_RoundTrip is the S1 verify
-// (`docs/specs/storage/dev-db-lifecycle.md`): dump → wipe → restore →
+// TestSnapshotter_RoundTrip verifies the dev-snapshot round trip:
+// dump → wipe → restore →
 // fingerprint equal against a throwaway PG.
 //
 // Gated by `//go:build dockertest` (needs docker) and additionally

@@ -31,7 +31,7 @@ import (
 // are routing pins the console writes for the deploy path to read, and the
 // bodies they point at are native SQL the console lowered long before.
 //
-// It does NOT verify the lock's signature — no client-side crypto (D4). It
+// It does NOT verify the lock's signature — no client-side crypto. It
 // reads routing fields off a file the deployment already trusts enough to
 // hand its database credentials to.
 

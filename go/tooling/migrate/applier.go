@@ -3,10 +3,9 @@
 // record loop, but is dialect-neutral: per-target execution is
 // delegated to an `Applier` whose concrete implementations
 // (PG / MySQL / SQLite over `database/sql`; Redis / NATS / S3
-// over per-dialect SDKs) live in `internal/` — all six shipped; this said
-// they were still to "land in Phase E" until T2-5 pass #14 (D14-14).
+// over per-dialect SDKs) live in `internal/` — all six are shipped.
 //
-// D30 adapter pattern: orchestration (this package) is pure
+// Adapter pattern: orchestration (this package) is pure
 // orchestration. No I/O beyond what the Client + Applier +
 // lock-package perform; no dialect-aware logic. Concrete
 // per-dialect packages (`migrate/internal/postgres`,
@@ -56,7 +55,7 @@ type Applier interface {
 	Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 
 	// AppliedHead returns the id of the most recently applied
-	// migration on the target (D27 `w17_migrations`). Empty string
+	// migration on the target (`w17_migrations`). Empty string
 	// = nothing applied yet (fresh DB / connection). Used by the
 	// offline orchestrator (D-iter3-7) as the lower bound when
 	// computing pending = filesystem ∩ (id > head, id ≤ target).
@@ -132,7 +131,7 @@ type ResumableApplier interface {
 
 // Wiper is an optional Applier capability: drop ALL of the store's
 // user data + schema, leaving it empty — the dev DB lifecycle's
-// fresh-build primitive (docs/specs/storage/dev-db-lifecycle.md S7).
+// fresh-build primitive.
 // It is deliberately narrow: it wipes only the connected store (not
 // other docker volumes), in-place over the live connection (no
 // container teardown / readiness dance). Destructive by definition —

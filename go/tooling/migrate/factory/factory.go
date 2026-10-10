@@ -21,7 +21,7 @@ import (
 
 // TargetSpec is one parsed `--target` flag. The CLI accepts the
 // form `<connection>=<dsn>` (repeatable). Connection name maps to
-// the schema-declared connection (D26); dsn carries the
+// the schema-declared connection; dsn carries the
 // per-dialect connection string (postgres://…, redis://…, …).
 type TargetSpec struct {
 	Connection string

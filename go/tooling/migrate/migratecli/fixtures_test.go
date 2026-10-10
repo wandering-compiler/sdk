@@ -133,7 +133,7 @@ func TestFixturesApply_DefaultRunLeavesNamedGroupsAlone(t *testing.T) {
 
 // `--group .` is the natural way to write "no group" and reads as such. It
 // once produced the registry key `./acl-roles`, matched nothing, and surfaced
-// as a NotFound naming a key nobody wrote (a consumer, 2026-09-04).
+// as a NotFound naming a key nobody wrote.
 func TestFixturesApply_DotMeansTheDefaultGroup(t *testing.T) {
 	rec := &recordingSeeder{}
 	withSeeder(t, rec)

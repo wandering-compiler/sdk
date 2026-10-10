@@ -7,14 +7,13 @@ import (
 	applyplanpb "github.com/wandering-compiler/sdk/go/pb/applyplan"
 )
 
-// TestDevApplySQL_RecordsTheBaselineInsideTheSchemaTransaction — T3-7 pass
-// #14, `D14-4`.
+// TestDevApplySQL_RecordsTheBaselineInsideTheSchemaTransaction.
 //
 // Building a schema from scratch writes an applied-ledger BASELINE so the
 // next `migrate apply` knows the database already holds everything up to
 // that point. The two have to land together: a schema with no baseline is
 // silently treated as "already at that state" by `storeHasSchema`, which
-// green-skips it forever (D14-8), so the crash window between them is not
+// green-skips it forever, so the crash window between them is not
 // a retry away from being fixed — it is permanent and silent.
 //
 // The code appended the baseline AFTER the schema body. The existing test
@@ -47,7 +46,7 @@ func TestDevApplySQL_RecordsTheBaselineInsideTheSchemaTransaction(t *testing.T) 
 		t.Errorf("the baseline is written AFTER the schema transaction commits.\n\n%s\n\n"+
 			"A crash between the COMMIT and the baseline leaves a built schema with an empty "+
 			"ledger — and `storeHasSchema` then green-skips that database forever, so it is "+
-			"not a state a retry recovers from (T3-7 pass #14, D14-4).", got)
+			"not a state a retry recovers from.", got)
 	}
 }
 
@@ -68,14 +67,13 @@ func TestDevApplySQL_LeavesAnUnwrappedBodyAlone(t *testing.T) {
 	}
 }
 
-// TestDevApplySQL_PostTxAndBaselineShareTheEnvelope — T3-7 pass #15,
-// `C15-9` / `B15-5`. Two defects in pass #14's fix, both measured by a
-// verifier against the real function.
+// TestDevApplySQL_PostTxAndBaselineShareTheEnvelope. Two defects in the
+// first fix for the test above, both measured against the real function.
 //
 // **The post-tx half landed outside.** Splicing only the baseline before the
 // final COMMIT put the ledger row INSIDE the transaction and left the
 // post-tx statements after it — so a crash between them commits "this
-// schema is built" with the tail missing. That is the same tear D14-4 closed,
+// schema is built" with the tail missing. That is the same tear the test above closes,
 // pointing the other way, produced by the fix for it.
 //
 // In THIS path the post-tx body is safe to run inside a transaction: it has
@@ -124,7 +122,7 @@ func TestDevApplySQL_IgnoresACommitInsideALiteral(t *testing.T) {
 		// comment, which is the ordinary place for one. A substring search
 		// finds THAT and splices the ledger row into the comment, where it
 		// never executes: the schema commits and the baseline silently does
-		// not, which is D14-4's exact state reached through the fix for it.
+		// not, which is the torn-baseline state reached through the fix for it.
 		UpSql: "BEGIN;\n\nCREATE TABLE t (id INT PRIMARY KEY);\n\nCOMMIT;\n" +
 			"-- rerun this file if the COMMIT; above failed\n",
 		BaselineSql: "INSERT INTO w17_migrations (timestamp) VALUES ('20260101T000000Z');",

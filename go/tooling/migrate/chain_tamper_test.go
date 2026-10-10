@@ -14,13 +14,12 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/stub"
 )
 
-// T2-5 pass #12 — the three gaps the chain (B11-1) left open.
+// The three gaps the content-hash chain first left open.
 //
-// B11-1 brought the migration BODIES under a hash the signed lock transitively
-// pins. It did not bring everything that decides WHAT EXECUTES under it, and it
-// was wired into the forward apply path only. Three lanes of pass #12 converged
-// on that, and each of the scenarios below was reproduced by measurement before
-// any of this was written:
+// The chain brought the migration BODIES under a hash the signed lock
+// transitively pins. It did not bring everything that decides WHAT EXECUTES
+// under it, and it was wired into the forward apply path only. Each of the
+// scenarios below was reproduced by measurement before any of this was written:
 //
 //   - `supersedes` + `adopt_sql` ride outside the hash AND outside the console's
 //     ed25519 signature (which covers id/direction/project/connection/up/post).
@@ -30,8 +29,8 @@ import (
 //   - `PlanRollback` never walks the chain, so the destructive sibling of apply
 //     still selects by id range.
 //
-// The corridor is the one B11-1 measured: CI bakes the fetch output, the deploy
-// host applies offline against those files (docs/decisions/deploy-client-architecture.md).
+// The corridor is the one the chain was built against: CI bakes the fetch
+// output, the deploy host applies offline against those files.
 
 // mutateOnDisk rewrites one migration artifact in place, applying `edit` to the
 // decoded message and writing it back WITHOUT recomputing content_sha256 —
@@ -67,7 +66,7 @@ func mutateOnDisk(t *testing.T, dir, conn, id string, edit func(*applyfetchpb.Mi
 	}
 }
 
-// F1 (B12-1 ≡ D12-1, CRITICAL) — tampering `supersedes` + `adopt_sql` on an
+// Tampering `supersedes` + `adopt_sql` on an
 // INTERMEDIATE migration turns it into an adopt: the attacker's SQL executes as
 // that migration and the real up_sql never runs. Measured before the fix:
 // exit 0, applier saw the GRANT, `CREATE TABLE b();` never ran.
@@ -101,7 +100,7 @@ func TestRun_TamperedAdoptFieldsAreRefused(t *testing.T) {
 	}
 }
 
-// F1, third leg — `supersedes` on its own, with adopt_sql left exactly as the
+// The same attack, third leg — `supersedes` on its own, with adopt_sql left exactly as the
 // console issued it. No attacker SQL runs here; the migration's real DDL is
 // simply skipped and a legitimate-looking ledger row is written in its place.
 // That is the quieter half of the finding and the one an operator would never
@@ -136,7 +135,7 @@ func TestRun_TamperedSupersedesAloneIsRefused(t *testing.T) {
 	}
 }
 
-// F1, second leg — the residual attack that survives covering `supersedes`
+// The same attack, second leg — the residual attack that survives covering `supersedes`
 // alone: a GENUINE squash baseline, whose supersedes legitimately names the
 // database's head, with only its `adopt_sql` rewritten. Nothing here needs
 // forging; the artefact is exactly what the console issued apart from the one
@@ -172,7 +171,7 @@ func TestRun_TamperedAdoptSqlAloneIsRefused(t *testing.T) {
 	}
 }
 
-// F3 (B12-2 ≡ D12-3, HIGH) — `id` is the cutoff the pending filter uses, so
+// `id` is the cutoff the pending filter uses, so
 // relabelling an intermediate below the applied head drops its DDL while the
 // deploy reports success. Note this evades the missing-predecessor refusal that
 // DELETING the file would trip: the body, hash and prev stay intact, so the
@@ -202,7 +201,7 @@ func TestPlan_RelabelledIdIsRefused(t *testing.T) {
 	}
 }
 
-// F2 (A12-1 ≡ C12-1 ≡ D12-2, HIGH) — the destructive sibling. Apply refuses an
+// The destructive sibling. Apply refuses an
 // inserted off-chain migration (TestPlan_InsertedMigrationIsNotOnTheChain);
 // rollback ran its down_sql. Same file, same directory, opposite verdict.
 func TestRunRollback_OffChainMigrationIsNotRolledBack(t *testing.T) {
@@ -244,7 +243,7 @@ func TestRunRollback_OffChainMigrationIsNotRolledBack(t *testing.T) {
 
 // selfConsistent stamps the artifact with the production content hash, so the
 // file is valid under whatever rules are currently in force. Written as one
-// helper because the hash's inputs are exactly what this pass changes: a test
+// helper because the hash's inputs are exactly what these tests change: a test
 // that hard-codes them measures yesterday's contract.
 func selfConsistent(m *applyfetchpb.Migration) {
 	m.ContentSha256 = migrate.ContentHash(

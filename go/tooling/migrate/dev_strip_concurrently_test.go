@@ -7,8 +7,7 @@ import (
 	applyplanpb "github.com/wandering-compiler/sdk/go/pb/applyplan"
 )
 
-// T2-5 pass #12 (F11, A12-12, LOW) — the dev CONCURRENTLY strip was
-// content-blind.
+// The dev CONCURRENTLY strip used to be content-blind.
 //
 // `post_tx` is where authored raw bodies live, and "the author owns what they
 // persist" is a standing owner decision — so a tool silently rewriting their
