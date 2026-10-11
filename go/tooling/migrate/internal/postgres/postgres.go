@@ -103,19 +103,28 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 func (a *Applier) IsPostgres() bool { return true }
 
 func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
-	// Q52: bootstrap the post_tx_complete column on pre-existing
-	// trackers before the filtered query, then exclude incomplete
-	// (post_tx_complete=false) rows from the head. A partially-applied
-	// skirt migration must NOT count as the head — that keeps it in the
-	// orchestrator's pending set so Run resumes its post-tx phase
-	// instead of skipping it forever (leaving an INVALID index).
-	if err := a.ensurePhaseColumn(ctx); err != nil {
-		return "", fmt.Errorf("postgres AppliedHead: ensure phase column: %w", err)
+	// Exclude incomplete (post_tx_complete=false) rows from the
+	// head. A partially-applied skirt migration must NOT count as the
+	// head — that keeps it in the orchestrator's pending set so Run
+	// resumes its post-tx phase instead of skipping it forever (leaving
+	// an INVALID index).
+	//
+	// READ-ONLY. `status` and every plan come through here, so this must
+	// not change the ledger: a ledger that predates the column is read
+	// as it is (every row it holds is complete — see ensurePhaseColumn),
+	// and the column is added only on the apply path. An ALTER here made
+	// a status probe need ALTER privilege, mutate the ledger, and take an
+	// ACCESS EXCLUSIVE lock that queues behind an in-flight migration.
+	hasPhase, err := a.hasPhaseColumn(ctx)
+	if err != nil {
+		return "", fmt.Errorf("postgres AppliedHead: %w", err)
+	}
+	query := `SELECT COALESCE(to_char(MAX(timestamp) AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"'), '') FROM w17_migrations`
+	if hasPhase {
+		query += ` WHERE post_tx_complete`
 	}
 	var head string
-	err := a.conn.QueryRow(ctx,
-		`SELECT COALESCE(to_char(MAX(timestamp) AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"'), '') FROM w17_migrations WHERE post_tx_complete`,
-	).Scan(&head)
+	err = a.conn.QueryRow(ctx, query).Scan(&head)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		// 42P01 = undefined_table — fresh DB; the next applied
@@ -126,6 +135,27 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("postgres AppliedHead: %w", err)
 	}
 	return head, nil
+}
+
+// hasPhaseColumn reports whether the ledger carries the
+// `post_tx_complete` column, from the catalogue, without touching the
+// ledger. A missing ledger answers false (the caller's query then reports
+// the fresh database as it always has). The table is resolved through the
+// session's search_path, exactly as the unqualified queries resolve it.
+func (a *Applier) hasPhaseColumn(ctx context.Context) (bool, error) {
+	if a.phaseColEnsured {
+		return true, nil
+	}
+	var has bool
+	err := a.conn.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_attribute
+		   WHERE attrelid = to_regclass('w17_migrations')
+		     AND attname = 'post_tx_complete' AND NOT attisdropped)`,
+	).Scan(&has)
+	if err != nil {
+		return false, fmt.Errorf("read the ledger's columns: %w", err)
+	}
+	return has, nil
 }
 
 // ensurePhaseColumn idempotently adds the Q52 `post_tx_complete`
@@ -163,15 +193,22 @@ func (a *Applier) ensurePhaseColumn(ctx context.Context) error {
 // missing row reads as PhaseFresh (not an error) so a fresh DB / a
 // not-yet-applied migration flows through the normal Apply path.
 func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase, error) {
-	if err := a.ensurePhaseColumn(ctx); err != nil {
-		return migrate.PhaseFresh, fmt.Errorf("postgres MigrationPhase: ensure phase column: %w", err)
+	// Read-only for the same reason as AppliedHead: a ledger without the
+	// column holds only complete rows.
+	hasPhase, err := a.hasPhaseColumn(ctx)
+	if err != nil {
+		return migrate.PhaseFresh, fmt.Errorf("postgres MigrationPhase: %w", err)
+	}
+	completeExpr := "post_tx_complete"
+	if !hasPhase {
+		completeExpr = "true"
 	}
 	var complete bool
 	// Canonicalise the stored TIMESTAMPTZ back to the migration id
 	// string exactly as AppliedHead does, so equality matches the id
 	// the registry stamped (avoids tz/precision round-trip ambiguity).
-	err := a.conn.QueryRow(ctx,
-		`SELECT post_tx_complete FROM w17_migrations
+	err = a.conn.QueryRow(ctx,
+		`SELECT `+completeExpr+` FROM w17_migrations
 		   WHERE to_char(timestamp AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"') = $1`,
 		id).Scan(&complete)
 	if err != nil {
@@ -209,6 +246,11 @@ func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase,
 // (no client-side prepared-statement caching, which would also
 // reject CONCURRENTLY).
 func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
+	// The one place a legacy ledger is upgraded: this body is about to
+	// write a ledger row that may name the column.
+	if err := a.ensurePhaseColumn(ctx); err != nil {
+		return fmt.Errorf("postgres apply: ensure phase column: %w", err)
+	}
 	if _, err := a.conn.Exec(ctx, m.GetUpSql(), pgx.QueryExecModeSimpleProtocol); err != nil {
 		return fmt.Errorf("postgres apply up_sql: %w", err)
 	}
