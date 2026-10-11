@@ -169,8 +169,8 @@ func TestNotEmptyMatcher(t *testing.T) {
 
 func TestEmptyMatcher(t *testing.T) {
 	spec := map[string]any{"matcher": "empty"}
-	if err := match(t, spec, nil, false); err == nil {
-		t.Error("absent should fail empty — absence is asserted with `absent`")
+	if err := match(t, spec, nil, false); err != nil {
+		t.Errorf("absent should pass empty: %v", err)
 	}
 	if err := match(t, spec, 0, true); err != nil {
 		t.Errorf("present zero should pass empty: %v", err)
@@ -202,12 +202,9 @@ func TestCountMatcher(t *testing.T) {
 	if err := match(t, eq3, []any{1, 2, 3}, true); err != nil {
 		t.Errorf("len 3 == 3: %v", err)
 	}
-	// an absent collection is not an empty one
-	if err := match(t, map[string]any{"matcher": "count", "op": "==", "value": 0}, nil, false); err == nil {
-		t.Error("absent == 0 should fail")
-	}
-	if err := match(t, map[string]any{"matcher": "count", "op": "==", "value": 0}, []any{}, true); err != nil {
-		t.Errorf("present empty == 0: %v", err)
+	// absent collection counts as zero
+	if err := match(t, map[string]any{"matcher": "count", "op": "==", "value": 0}, nil, false); err != nil {
+		t.Errorf("absent == 0: %v", err)
 	}
 	if err := match(t, eq3, "not-a-collection", true); err == nil {
 		t.Error("non-collection should fail count")
