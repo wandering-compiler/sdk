@@ -14,11 +14,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/getsentry/sentry-go"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
+	"github.com/wandering-compiler/sdk/go/tooling/pathguard"
 )
 
 // ConnTarget pins one connection's apply ceiling — the lock's
@@ -1313,12 +1315,27 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if m.GetConnection() == "" {
 		return fmt.Errorf("WriteMigration: empty connection_name on %s", m.GetId())
 	}
+	// Both names arrive from the console and become path segments below.
+	// Neither is covered by the content hash, so a value shaped like a path
+	// would otherwise decide where on disk the artifact lands.
+	if err := checkArtifactSegment("connection", m.GetConnection()); err != nil {
+		return fmt.Errorf("WriteMigration: %w", err)
+	}
+	if err := checkArtifactSegment("migration id", m.GetId()); err != nil {
+		return fmt.Errorf("WriteMigration: %w", err)
+	}
 	if !ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256()) {
 		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s) — the artifact does not hash to its own digest under this compiler's formula or the one that predates required-extension binding. Unlike the load-side check this one reads a FRESH fetch, so re-fetching cannot help: the console and this client disagree about the artifact, which is either a console-side mutation or wire tampering",
 			m.GetId(), m.GetContentSha256(),
 			ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()))
 	}
-	dir := filepath.Join(root, m.GetConnection())
+	// The segment check above is the refusal; the containment check is the
+	// backstop, so a future change to what a segment may hold cannot reopen
+	// an escape from root.
+	dir, err := pathguard.Join(root, m.GetConnection())
+	if err != nil {
+		return fmt.Errorf("WriteMigration: connection %q: %w", m.GetConnection(), err)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -1326,14 +1343,36 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", m.GetId(), err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, m.GetId()+".json"), jsonBuf, 0o644); err != nil {
-		return err
+	files := []struct {
+		ext  string
+		body []byte
+	}{
+		{".json", jsonBuf},
+		{".up.sql", []byte(m.GetUpSql())},
+		{".down.sql", []byte(m.GetDownSql())},
 	}
-	if err := os.WriteFile(filepath.Join(dir, m.GetId()+".up.sql"), []byte(m.GetUpSql()), 0o644); err != nil {
-		return err
+	for _, f := range files {
+		p, err := pathguard.Join(dir, m.GetId()+f.ext)
+		if err != nil {
+			return fmt.Errorf("WriteMigration: migration id %q: %w", m.GetId(), err)
+		}
+		if err := os.WriteFile(p, f.body, 0o644); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, m.GetId()+".down.sql"), []byte(m.GetDownSql()), 0o644); err != nil {
-		return err
+	return nil
+}
+
+// checkArtifactSegment refuses a connection name or migration id that is not a
+// single plain path segment. The on-disk layout is `<root>/<connection>/<id>.json`
+// and the loader reads exactly one directory level, so a value containing a
+// separator, a `.`/`..` segment or a control character is never a legitimate
+// name — only a way to place a file somewhere other than that layout.
+func checkArtifactSegment(kind, v string) error {
+	if v == "" || v == "." || v == ".." ||
+		strings.ContainsAny(v, `/\:`) ||
+		strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return fmt.Errorf("%s %q is not a plain name (it must be one path segment with no separators, `.`/`..` or control characters)", kind, v)
 	}
 	return nil
 }
