@@ -313,22 +313,29 @@ func (ContentDisposition) EnumDescriptor() ([]byte, []int) {
 type PublicLimit int32
 
 const (
-	// Every request takes a token, success or not. The default.
-	PublicLimit_PUBLIC_LIMIT_EVERY_REQUEST PublicLimit = 0
+	// Not declared: every request takes a token, unless the endpoint republishes
+	// a plugin method whose preset marks it FAILED_ONLY, which it then inherits.
+	// The default.
+	PublicLimit_PUBLIC_LIMIT_UNSPECIFIED PublicLimit = 0
 	// Only a request answered with a 4xx/5xx takes a token; admission still
 	// checks that one is left.
 	PublicLimit_PUBLIC_LIMIT_FAILED_ONLY PublicLimit = 1
+	// Every request takes a token, success or not, whatever a plugin preset
+	// says about the same method. The way to decline the inherited mode.
+	PublicLimit_PUBLIC_LIMIT_EVERY_REQUEST PublicLimit = 2
 )
 
 // Enum value maps for PublicLimit.
 var (
 	PublicLimit_name = map[int32]string{
-		0: "PUBLIC_LIMIT_EVERY_REQUEST",
+		0: "PUBLIC_LIMIT_UNSPECIFIED",
 		1: "PUBLIC_LIMIT_FAILED_ONLY",
+		2: "PUBLIC_LIMIT_EVERY_REQUEST",
 	}
 	PublicLimit_value = map[string]int32{
-		"PUBLIC_LIMIT_EVERY_REQUEST": 0,
+		"PUBLIC_LIMIT_UNSPECIFIED":   0,
 		"PUBLIC_LIMIT_FAILED_ONLY":   1,
+		"PUBLIC_LIMIT_EVERY_REQUEST": 2,
 	}
 )
 
@@ -1553,9 +1560,9 @@ type RestEndpoint struct {
 	// that requires a credential is refused at parse time; nothing applies
 	// when the gateway's limit is off.
 	//
-	// The default charges EVERY request: the limit then bounds how often one
-	// address may call the method at all, which is what a method that does
-	// something on SUCCESS needs. Registration creates an account and sends
+	// Undeclared, an endpoint charges EVERY request: the limit then bounds
+	// how often one address may call the method at all, which is what a
+	// method that does something on SUCCESS needs. Registration creates an account and sends
 	// a mail; a password-reset request sends one and answers success either
 	// way, so it never fails at all. Charging only failures left both
 	// unbounded (a consumer measured 45 registrations in a row from one
@@ -1568,6 +1575,9 @@ type RestEndpoint struct {
 	// must say so: it is an ordinary exclude_auth endpoint. Only a method
 	// listed in `RestApi.auth_methods` — the RPC that checks a presented
 	// token, when it is also published — is FAILED_ONLY without saying so.
+	// So is an endpoint that republishes a plugin method its preset marks
+	// FAILED_ONLY (the same ref, declared here instead of through `include`);
+	// PUBLIC_LIMIT_EVERY_REQUEST declines that.
 	PublicLimit   PublicLimit `protobuf:"varint,20,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1719,7 +1729,7 @@ func (x *RestEndpoint) GetPublicLimit() PublicLimit {
 	if x != nil {
 		return x.PublicLimit
 	}
-	return PublicLimit_PUBLIC_LIMIT_EVERY_REQUEST
+	return PublicLimit_PUBLIC_LIMIT_UNSPECIFIED
 }
 
 // MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata
@@ -2477,10 +2487,11 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x12ContentDisposition\x12#\n" +
 	"\x1fCONTENT_DISPOSITION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aCONTENT_DISPOSITION_INLINE\x10\x01\x12\"\n" +
-	"\x1eCONTENT_DISPOSITION_ATTACHMENT\x10\x02*K\n" +
-	"\vPublicLimit\x12\x1e\n" +
-	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x00\x12\x1c\n" +
-	"\x18PUBLIC_LIMIT_FAILED_ONLY\x10\x01*\\\n" +
+	"\x1eCONTENT_DISPOSITION_ATTACHMENT\x10\x02*i\n" +
+	"\vPublicLimit\x12\x1c\n" +
+	"\x18PUBLIC_LIMIT_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18PUBLIC_LIMIT_FAILED_ONLY\x10\x01\x12\x1e\n" +
+	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x02*\\\n" +
 	"\n" +
 	"HttpMethod\x12\x1b\n" +
 	"\x17HTTP_METHOD_UNSPECIFIED\x10\x00\x12\a\n" +

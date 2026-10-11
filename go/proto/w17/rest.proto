@@ -743,9 +743,9 @@ message RestEndpoint {
   // that requires a credential is refused at parse time; nothing applies
   // when the gateway's limit is off.
   //
-  // The default charges EVERY request: the limit then bounds how often one
-  // address may call the method at all, which is what a method that does
-  // something on SUCCESS needs. Registration creates an account and sends
+  // Undeclared, an endpoint charges EVERY request: the limit then bounds
+  // how often one address may call the method at all, which is what a
+  // method that does something on SUCCESS needs. Registration creates an account and sends
   // a mail; a password-reset request sends one and answers success either
   // way, so it never fails at all. Charging only failures left both
   // unbounded (a consumer measured 45 registrations in a row from one
@@ -758,6 +758,9 @@ message RestEndpoint {
   // must say so: it is an ordinary exclude_auth endpoint. Only a method
   // listed in `RestApi.auth_methods` — the RPC that checks a presented
   // token, when it is also published — is FAILED_ONLY without saying so.
+  // So is an endpoint that republishes a plugin method its preset marks
+  // FAILED_ONLY (the same ref, declared here instead of through `include`);
+  // PUBLIC_LIMIT_EVERY_REQUEST declines that.
   PublicLimit public_limit = 20;
 }
 
@@ -1075,11 +1078,16 @@ enum ContentDisposition {
 // PublicLimit — how a method that takes no credential charges the gateway's
 // per-address rate limit. See RestEndpoint.public_limit.
 enum PublicLimit {
-  // Every request takes a token, success or not. The default.
-  PUBLIC_LIMIT_EVERY_REQUEST = 0;
+  // Not declared: every request takes a token, unless the endpoint republishes
+  // a plugin method whose preset marks it FAILED_ONLY, which it then inherits.
+  // The default.
+  PUBLIC_LIMIT_UNSPECIFIED = 0;
   // Only a request answered with a 4xx/5xx takes a token; admission still
   // checks that one is left.
   PUBLIC_LIMIT_FAILED_ONLY = 1;
+  // Every request takes a token, success or not, whatever a plugin preset
+  // says about the same method. The way to decline the inherited mode.
+  PUBLIC_LIMIT_EVERY_REQUEST = 2;
 }
 
 // HttpMethod enumerates the HTTP verbs the gateway emits.
