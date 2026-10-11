@@ -2,6 +2,7 @@ package restgw_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -101,7 +102,8 @@ func TestHandleW17Events_HeartbeatEvery(t *testing.T) {
 }
 
 // TestHandleW17Events_NoSource — passing nil EventSource
-// returns 500 with a clear diag, never opens SSE headers.
+// returns a 500 INTERNAL envelope and never opens SSE headers; the
+// wiring mistake goes to the operator, not the client.
 func TestHandleW17Events_NoSource(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/w17-events", nil)
 	rec := httptest.NewRecorder()
@@ -111,26 +113,55 @@ func TestHandleW17Events_NoSource(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "no event source") {
-		t.Errorf("body should mention missing source; got: %q", rec.Body.String())
-	}
+	assertEnvelope(t, rec, "INTERNAL", "no event source")
 }
 
-// TestHandleW17Events_SubscribeError — source.Subscribe
-// returning an error surfaces as 502 with the error text,
-// no SSE headers.
+// TestHandleW17Events_SubscribeError — source.Subscribe returning an
+// error answers 503 UNAVAILABLE in the JSON error envelope, with no SSE
+// headers and none of the broker's error text: it names channels and
+// carries broker internals, which are the operator's to read.
 func TestHandleW17Events_SubscribeError(t *testing.T) {
-	source := &failingSource{err: "topic catalog unavailable"}
+	source := &failingSource{err: `eventbus source: subscribe on channel "billing-internal": nats: authorization violation`}
 	req := httptest.NewRequest(http.MethodGet, "/v1/w17-events?topics=X", nil)
 	rec := httptest.NewRecorder()
 
 	restgw.HandleW17Events(rec, req, source, 0)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("status = %d, want 502", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "topic catalog unavailable") {
-		t.Errorf("body should carry the subscribe error; got: %q", rec.Body.String())
+	if ct := rec.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("SSE headers went out before the refusal (Content-Type %q)", ct)
+	}
+	assertEnvelope(t, rec, "UNAVAILABLE", "billing-internal", "nats", "authorization violation", "subscribe")
+}
+
+// assertEnvelope checks a response is the standard JSON error envelope with
+// the given code, and that none of the leaks appear anywhere in the body.
+func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, code string, leaks ...string) {
+	t.Helper()
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want the JSON error envelope", ct)
+	}
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("body is not the JSON error envelope: %v\n%s", err, rec.Body.String())
+	}
+	if env.Error.Code != code {
+		t.Errorf("code = %q, want %q", env.Error.Code, code)
+	}
+	if env.Error.Message == "" {
+		t.Error("envelope has no message")
+	}
+	for _, leak := range leaks {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("body leaks internal detail %q: %s", leak, rec.Body.String())
+		}
 	}
 }
 

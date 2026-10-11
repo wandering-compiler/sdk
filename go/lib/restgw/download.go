@@ -6,7 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wandering-compiler/sdk/go/core/observx"
+	"google.golang.org/grpc/codes"
+
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
 )
 
@@ -104,17 +105,20 @@ func NewDownloadConfig(prefix string, fields []DownloadField, cacheControl strin
 func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeRefusalStatus(r.Context(), w, http.StatusMethodNotAllowed, codes.Unimplemented, "")
 		return
 	}
+	// Every refusal from this handler is the standard JSON error
+	// envelope, the same shape a client parses from any other route.
+	notFound := func() { writeRefusalStatus(r.Context(), w, http.StatusNotFound, codes.NotFound, "") }
 	prefix := cfg.URLPrefix + "/"
 	if !strings.HasPrefix(r.URL.Path, prefix) {
-		http.NotFound(w, r)
+		notFound()
 		return
 	}
 	remainder := r.URL.Path[len(prefix):]
 	if remainder == "" {
-		http.NotFound(w, r)
+		notFound()
 		return
 	}
 	// Reject path traversal before it reaches the driver. chi does not
@@ -123,13 +127,13 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 	// remainder like `avatars/../../../etc/passwd` would otherwise escape
 	// the bucket root. 404 (not 403) keeps the existing no-leak posture.
 	if hasDotSegment(remainder) {
-		http.NotFound(w, r)
+		notFound()
 		return
 	}
 
 	field, key, ok := matchBucket(cfg.Fields, remainder)
 	if !ok {
-		http.NotFound(w, r)
+		notFound()
 		return
 	}
 
@@ -137,23 +141,21 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 	info, err := field.Driver.Stat(ctx, key)
 	if err != nil {
 		if errors.Is(err, kvfs.ErrNotFound) {
-			http.NotFound(w, r)
+			notFound()
 			return
 		}
 		// Don't reflect the driver error (can carry FS paths / backing-
-		// store internals) — log it and return a generic 500 (restgw-sec-3).
-		observx.ReportError(ctx, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		// store internals) — the operator gets it, the client a generic 500.
+		WriteInternal(ctx, w, "download: stat: "+err.Error())
 		return
 	}
 	body, err := field.Driver.OpenSeekable(ctx, key)
 	if err != nil {
 		if errors.Is(err, kvfs.ErrNotFound) {
-			http.NotFound(w, r)
+			notFound()
 			return
 		}
-		observx.ReportError(ctx, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		WriteInternal(ctx, w, "download: open: "+err.Error())
 		return
 	}
 	defer func() { _ = body.Close() }()

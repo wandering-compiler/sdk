@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 )
 
@@ -41,13 +43,22 @@ import (
 //   - Loop: select { event in → write frame; heartbeat tick →
 //     ping; ctx done → return; channel closed → return }.
 //
-// **Error reporting:** subscribe errors return a 502 before
-// any SSE headers go out. Mid-stream errors are logged but
-// don't propagate to the client (SSE has no error envelope
-// shape; the connection just ends).
+// **Error reporting:** a subscribe failure answers 503
+// `UNAVAILABLE` in the standard JSON error envelope before any
+// SSE headers go out; the broker's error text goes to the
+// operator only. Mid-stream errors are logged but don't
+// propagate to the client (SSE has no error envelope shape;
+// the connection just ends).
+//
+// **Re-authentication:** the generated route runs this handler
+// on the context of [WatchStreamAuth]. A refused credential
+// cancels that context and ends the stream; with
+// [EventbusEventSource], a principal whose labels changed since
+// connect (a removed membership) is disconnected too, so it
+// reconnects under its current entitlement.
 func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource, heartbeat time.Duration) {
 	if source == nil {
-		http.Error(w, "w17-events: no event source bound", http.StatusInternalServerError)
+		WriteInternal(r.Context(), w, "w17-events: no event source bound")
 		return
 	}
 	topics := parseTopicsParam(r.URL.Query().Get("topics"))
@@ -67,7 +78,10 @@ func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource,
 
 	ch, err := source.Subscribe(ctx, topics, userData)
 	if err != nil {
-		http.Error(w, "w17-events: subscribe: "+err.Error(), http.StatusBadGateway)
+		// The subscribe error names broker channels and carries the
+		// broker's own text: the operator's to read, not the browser's.
+		// The client gets the envelope every other refusal uses.
+		WriteRefusal(ctx, w, codes.Unavailable, "w17-events: subscribe: "+err.Error())
 		return
 	}
 

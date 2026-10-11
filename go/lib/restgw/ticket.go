@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"google.golang.org/grpc/codes"
 )
 
 // ErrTicketInvalid is returned when the ticket is unknown,
@@ -292,26 +293,29 @@ func NewTicketIssuer(cfg TicketIssuerConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeRefusalStatus(r.Context(), w, http.StatusMethodNotAllowed, codes.Unimplemented, "")
 			return
 		}
+		// Every refusal below is the standard JSON error envelope, like
+		// any other answer from this gateway, so a client that parses
+		// errors one way keeps working on this route.
 		labels, err := cfg.Principal(r)
 		if err != nil {
 			if errors.Is(err, ErrWSAuthTicketHeaderTooLarge) {
-				http.Error(w, "credential too large", http.StatusRequestHeaderFieldsTooLarge)
+				writeRefusalStatus(r.Context(), w, http.StatusRequestHeaderFieldsTooLarge, codes.InvalidArgument, "ticket issuer: "+err.Error())
 				return
 			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			WriteRefusal(r.Context(), w, codes.Unauthenticated, "ticket issuer: "+err.Error())
 			return
 		}
 		ticket, err := cfg.Store.Issue(r.Context(), labels, cfg.TTL)
 		if err != nil {
 			if errors.Is(err, ErrTicketStoreFull) {
 				w.Header().Set("Retry-After", "1")
-				http.Error(w, "try again later", http.StatusServiceUnavailable)
+				WriteRefusal(r.Context(), w, codes.Unavailable, "ticket issuer: "+err.Error())
 				return
 			}
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			WriteInternal(r.Context(), w, "ticket issuer: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

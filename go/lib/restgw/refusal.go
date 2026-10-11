@@ -56,6 +56,21 @@ func WriteRefusal(ctx context.Context, w http.ResponseWriter, c codes.Code, oper
 	WriteError(w, HTTPStatusFromGRPCCode(c), GRPCCodeName(c), i18n.T(ctx, grpcerr.UserMsgid(c), nil))
 }
 
+// writeRefusalStatus is WriteRefusal for the answers whose HTTP status is
+// not the one the code maps to — 405 and 431 have no gRPC code of their own.
+// The envelope still carries the closest canonical code, so a client that
+// dispatches on `code` keeps working, and the status keeps the HTTP meaning
+// (an `Allow` header, a header-size refusal) intact.
+//
+// An empty operator string reports nothing: a 404 for a file that is not
+// there or a wrong method is ordinary traffic, not something to log.
+func writeRefusalStatus(ctx context.Context, w http.ResponseWriter, httpStatus int, c codes.Code, operator string) {
+	if operator != "" {
+		reportByCode(ctx, c, status.Error(c, operator))
+	}
+	WriteError(w, httpStatus, GRPCCodeName(c), i18n.T(ctx, grpcerr.UserMsgid(c), nil))
+}
+
 // WriteBadInput reports one named input the gateway could not read.
 //
 // The client gets INVALID_ARGUMENT, the code's sentence, and a `details` entry
