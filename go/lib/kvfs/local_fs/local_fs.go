@@ -265,9 +265,9 @@ func (d *Driver) Delete(_ context.Context, key string) error {
 //
 //   - O_TRUNC on the final path exposes an EMPTY, then
 //     partial, body to every concurrent reader for the whole
-//     duration of the copy. Keys are content-addressed, so a
-//     re-upload of bytes that already exist targets a LIVE
-//     object other rows reference.
+//     duration of the copy. The driver stores whatever key
+//     it is given, so a put over an existing key targets a
+//     LIVE object other rows may reference.
 //   - unlinking `dst` when the copy fails DESTROYS that live
 //     object: a disk-full mid-copy would 404 every row
 //     pointing at the key, and only the uploader is told

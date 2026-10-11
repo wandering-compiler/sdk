@@ -18,7 +18,9 @@
 //      (ErrUploadTooLarge) — a tighter, per-field bound than
 //      the body-level MaxBytesReader, which only caps the sum.
 //   3. Validates the extension against the allowlist.
-//   4. Computes the hash-derived sub-bucket path.
+//   4. Names the object: the content hash plus a per-upload
+//      random suffix (see objectKeyFor), then derives the
+//      hash-based sub-bucket path from that name.
 //   5. Atomically moves the tmp file to its final location
 //      via the driver's PutFromTempFile primitive.
 //   6. Returns the resolved storage handle for the gateway
@@ -34,6 +36,8 @@ package restgw
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -153,7 +157,12 @@ func ProcessFilePart(ctx context.Context, r *http.Request, cfg FilePartConfig) (
 		return "", err
 	}
 
-	finalKey := kvfs.BuildKey(cfg.BucketPath, hash, cfg.ExpectedObjects, cfg.MaxPerBucket)
+	objectKey, err := objectKeyFor(hash)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	finalKey := kvfs.BuildKey(cfg.BucketPath, objectKey, cfg.ExpectedObjects, cfg.MaxPerBucket)
 	handle, err := cfg.Driver.PutFromTempFile(ctx, finalKey, tmpPath)
 	if err != nil {
 		_ = os.Remove(tmpPath)
@@ -170,6 +179,29 @@ func ProcessFilePart(ctx context.Context, r *http.Request, cfg FilePartConfig) (
 	// expected case.
 	_ = os.Remove(tmpPath)
 	return handle, nil
+}
+
+// objectKeyFor names the stored object for one upload: the sha256 of the
+// body followed by a random 128-bit suffix.
+//
+// Every upload gets its OWN object, even when its bytes match an object that
+// already exists. A purely content-derived key made identical uploads share
+// one object, and nothing tracks how many rows reference it: a request that
+// failed after its upload rolled back (RollbackUploads → Delete) the object a
+// different, committed request still pointed at, and an application deleting
+// the file of one row removed it for every other row with the same content.
+// Per-upload keys make "delete what this request stored" mean exactly that,
+// including for two identical uploads in flight at once. The cost is that
+// identical bodies are stored once per upload instead of once in total.
+//
+// The hash prefix keeps the key traceable to its content; the suffix is what
+// makes it unique.
+func objectKeyFor(hash string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("restgw: object key nonce: %w", err)
+	}
+	return hash + "-" + hex.EncodeToString(nonce[:]), nil
 }
 
 // resolveStagingDir decides where the streaming write lands.
@@ -330,6 +362,11 @@ type UploadedObject struct {
 // referenced the object at that point, so a later failure used to leave
 // bytes in the bucket that no row points at, permanently: no GC, no sweep
 // and no orphan posture exists anywhere in the stack.
+//
+// Only objects the failed request itself created are passed here, and
+// ProcessFilePart gives every upload its own key (objectKeyFor), so a
+// rollback can never remove an object another request stored — even one with
+// identical bytes, committed earlier or still in flight.
 //
 // Best-effort by design. The request has already failed; an undeletable
 // orphan must not turn a 400 into a 500. Delete is idempotent on a missing
