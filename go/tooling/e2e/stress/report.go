@@ -98,10 +98,16 @@ func successPct(r *Report) float64 {
 // Check evaluates the plan's thresholds against the report and returns a
 // non-nil error listing every breached dimension (so a single run reports
 // all failures at once). Returns nil when t is nil (report-only) or all
-// gates pass.
+// gates pass. A run that measured no requests fails any thresholds: every
+// latency and error figure of an empty measurement is zero, so it would
+// otherwise pass each gate without having tested anything.
 func (r *Report) Check(t *Thresholds) error {
 	if t == nil {
 		return nil
+	}
+	if r.Requests == 0 {
+		return fmt.Errorf("stress thresholds not met: no requests were measured, so no threshold was tested " +
+			"(check the load phase reached the server, and that warm-up does not cover the whole run)")
 	}
 	var breaches []string
 	gate := func(name string, limit, got time.Duration) {
@@ -113,7 +119,7 @@ func (r *Report) Check(t *Thresholds) error {
 	gate("p95", t.P95, r.P95)
 	gate("p99", t.P99, r.P99)
 	gate("max", t.Max, r.Max)
-	if t.ErrorRate > 0 && r.ErrorRate() > t.ErrorRate {
+	if (t.ErrorRate > 0 || t.ErrorRateSet) && r.ErrorRate() > t.ErrorRate {
 		breaches = append(breaches, fmt.Sprintf("error_rate %.4f > %.4f", r.ErrorRate(), t.ErrorRate))
 	}
 	if t.MinThroughput > 0 && r.Throughput < t.MinThroughput {
