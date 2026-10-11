@@ -135,6 +135,7 @@ func TestEventContextReaders_NoMetadata(t *testing.T) {
 func TestMetadataFromContext_DropsTheTransactionHeader(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		"w17-tx-id", "tx-42",
+		"w17-conn-id", "conn-3",
 		"traceparent", "00-abc-def-01",
 		"x-w17-scope-org_id", "org-7",
 	))
@@ -145,6 +146,10 @@ func TestMetadataFromContext_DropsTheTransactionHeader(t *testing.T) {
 		t.Errorf("the envelope carries w17-tx-id=%q: dispatch replays this map into the "+
 			"subscriber, so the subscriber adopts a transaction that was settled before "+
 			"the event was ever delivered", got)
+	}
+	if got, ok := md["w17-conn-id"]; ok {
+		t.Errorf("the envelope carries w17-conn-id=%q: the subscriber's storage calls would be "+
+			"routed to the connection of a transaction that is already settled", got)
 	}
 	// Everything an event legitimately carries across must survive: dropping
 	// the whole map instead of the reserved keys would take tracing and the
