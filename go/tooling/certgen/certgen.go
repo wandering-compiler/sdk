@@ -18,7 +18,9 @@
 // **Idempotent by construction.** [EnsureCerts] only writes files
 // that don't already exist, so re-running `init` (or `w17ctl
 // certs`) never clobbers a CA an operator has already distributed
-// trust for, nor a leaf a sidecar is already serving.
+// trust for. The one exception is a leaf that can no longer serve —
+// not signed by the current CA, missing a requested name, expired —
+// which is re-signed in place; a leaf that still serves is kept.
 package certgen
 
 import (
@@ -34,6 +36,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -70,7 +73,9 @@ const devCertValidity = 10 * 365 * 24 * time.Hour
 // (ca.crt/ca.key) and a server leaf (server.crt/server.key) the
 // CA signed, carrying sans as its SubjectAltNames. It writes only
 // the files that are missing: an existing CA is reused to sign a
-// missing leaf, and a complete set is left untouched. dir is
+// missing leaf, an existing leaf that no longer chains to the CA,
+// lacks a requested SAN or has expired is re-minted, and a complete,
+// current set is left untouched. dir is
 // created (0700) when absent. Returns the list of files it
 // actually wrote so the caller can report what changed.
 //
@@ -184,14 +189,31 @@ func ensureCA(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey, [
 	return cert, key, []string{certPath, keyPath}, nil
 }
 
-// ensureLeaf writes a CA-signed server leaf when it's missing.
-// Returns the paths written (empty when the leaf already exists).
+// ensureLeaf writes a CA-signed server leaf when it's missing, or
+// replaces one that no longer serves: signed by a CA other than the
+// current one, missing a requested SAN, outside its validity window, or
+// paired with a key that is not its own. Returns the paths written
+// (empty when the existing leaf is still good).
+//
+// Re-minting the LEAF is safe where re-minting the CA is not: trust is
+// distributed for the CA, and a leaf it signs is accepted wherever the
+// old one was. Keeping a stale leaf, by contrast, reports "nothing to do"
+// and leaves every TLS dial failing with no hint from here.
 func ensureLeaf(dir string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, sans []string) ([]string, error) {
 	certPath := filepath.Join(dir, serverCertFile)
 	keyPath := filepath.Join(dir, serverKeyFile)
 	certThere, keyThere := fileExists(certPath), fileExists(keyPath)
 	if certThere && keyThere {
-		return nil, nil
+		cert, key, err := loadCert(certPath, keyPath)
+		if err != nil {
+			// Unreadable is not stale: refuse rather than overwrite
+			// material we cannot inspect.
+			return nil, fmt.Errorf("certgen: reuse leaf: %w — delete %q + %q to re-mint", err, certPath, keyPath)
+		}
+		if leafStaleReason(cert, key, caCert, sans, time.Now()) == "" {
+			return nil, nil
+		}
+		return mintLeaf(certPath, keyPath, caCert, caKey, sans)
 	}
 	// No-clobber invariant (mirrors ensureCA, Q17-certgen-1): only mint a
 	// fresh leaf when NEITHER half is present. If exactly one of server.crt /
@@ -206,7 +228,39 @@ func ensureLeaf(dir string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, s
 			"certgen: leaf half-present: %q exists but its pair %q is missing — refusing to overwrite (restore the missing file or remove both to re-mint)",
 			present, missing)
 	}
+	return mintLeaf(certPath, keyPath, caCert, caKey, sans)
+}
 
+// leafStaleReason reports why an existing leaf cannot be kept, or "" when
+// it can: it must chain to caCert, cover every SAN a fresh leaf would
+// carry, be inside its validity window, and match its key.
+func leafStaleReason(cert *x509.Certificate, key *ecdsa.PrivateKey, caCert *x509.Certificate, sans []string, now time.Time) string {
+	if err := cert.CheckSignatureFrom(caCert); err != nil {
+		return "not signed by the current CA"
+	}
+	if now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
+		return "outside its validity window"
+	}
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !key.PublicKey.Equal(pub) {
+		return "key does not match the certificate"
+	}
+	dns, ips := splitSANs(sans)
+	for _, d := range dns {
+		if !slices.Contains(cert.DNSNames, d) {
+			return fmt.Sprintf("missing SAN %q", d)
+		}
+	}
+	for _, ip := range ips {
+		if !slices.ContainsFunc(cert.IPAddresses, ip.Equal) {
+			return fmt.Sprintf("missing SAN %s", ip)
+		}
+	}
+	return ""
+}
+
+// mintLeaf signs a fresh server leaf with the CA and writes the pair.
+func mintLeaf(certPath, keyPath string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, sans []string) ([]string, error) {
 	dns, ips := splitSANs(sans)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
