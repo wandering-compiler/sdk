@@ -69,7 +69,9 @@ type statFailingDriver struct {
 	err error
 }
 
-func (d statFailingDriver) Stat(context.Context, string) (kvfs.Info, error) { return kvfs.Info{}, d.err }
+func (d statFailingDriver) Stat(context.Context, string) (kvfs.Info, error) {
+	return kvfs.Info{}, d.err
+}
 
 func TestServeDownload_ErrorsAreTheEnvelope(t *testing.T) {
 	_, cfg := newTestDownload(t)
