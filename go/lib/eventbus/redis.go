@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -169,9 +171,45 @@ func redisPELKey(channel, group, consumer, msgID string) string {
 	return channel + "\x00" + group + "\x00" + consumer + "\x00" + msgID
 }
 
+// redisConnectTimeout bounds the connection check NewRedisBus performs.
+const redisConnectTimeout = 10 * time.Second
+
 // NewRedisBus validates options + opens the Redis connection
-// eagerly. DSN failures surface here.
+// eagerly: a PING must succeed before the bus is returned, so an
+// unreachable broker, a wrong address or rejected credentials
+// surface at construction rather than at the first emit. (The
+// go-redis client itself dials lazily; without the check a
+// publish-only process learned of the outage only when it
+// emitted.)
 func NewRedisBus(opts RedisBusOptions) (*RedisBus, error) {
+	b, err := newRedisBus(opts)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), redisConnectTimeout)
+	defer cancel()
+	if err := b.client.Ping(ctx).Err(); err != nil {
+		_ = b.client.Close()
+		return nil, fmt.Errorf("redis connect %s: %w", redactDSN(opts.DSN), err)
+	}
+	return b, nil
+}
+
+// redactDSN removes the password from a DSN quoted in an error.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.User == nil {
+		return dsn
+	}
+	if _, has := u.User.Password(); has {
+		u.User = url.UserPassword(u.User.Username(), "xxxxx")
+	}
+	return u.String()
+}
+
+// newRedisBus validates options and builds the bus without contacting
+// the broker.
+func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	if opts.DSN == "" {
 		return nil, errors.New("RedisBusOptions: DSN is empty")
 	}
@@ -600,6 +638,7 @@ func (s *redisSubscriber) Drain(ctx context.Context) error {
 func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 	defer s.wg.Done()
 	bgCtx := context.WithoutCancel(ctx)
+	var failure redisLoopFailure
 	for {
 		if ctx.Err() != nil {
 			return
@@ -619,9 +658,14 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 				Count:    s.bus.opts.ReadBatch,
 			}).Result()
 			if err != nil {
-				if errors.Is(err, goredis.Nil) || ctx.Err() != nil {
+				if ctx.Err() != nil {
 					return
 				}
+				if errors.Is(err, goredis.Nil) {
+					failure.recovered("consume", s.channel, s.group)
+					return
+				}
+				failure.report("consume", s.channel, s.group, err)
 				if isNoGroupErr(err) {
 					// The consumer group vanished under us — a Redis-as-cache
 					// FLUSHALL or a restart of a non-persistent Redis drops the
@@ -635,11 +679,12 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 				// Transient Redis hiccup (broker down, NOGROUP just handled,
 				// etc.); back off briefly so a hard-down broker doesn't pin a
 				// CPU core re-issuing the failing read in a tight loop, then
-				// retry next iteration. Phase E7 (observability) wires real
-				// logging here.
+				// retry next iteration. The failure was reported above —
+				// once per outage, not once per retry.
 				sleepCtx(ctx, redisErrBackoff)
 				return
 			}
+			failure.recovered("consume", s.channel, s.group)
 			// Mark the WHOLE batch in flight BEFORE dispatching any of it.
 			// XREADGROUP put every one of these in the pending list at read
 			// time, but they are handled one at a time — so a sibling waiting
@@ -695,6 +740,7 @@ func (s *redisSubscription) claimLoop(ctx context.Context, h HandlerFunc) {
 	ticker := time.NewTicker(ackWait)
 	defer ticker.Stop()
 	bgCtx := context.WithoutCancel(ctx)
+	var failure redisLoopFailure
 	for {
 		select {
 		case <-ctx.Done():
@@ -702,15 +748,49 @@ func (s *redisSubscription) claimLoop(ctx context.Context, h HandlerFunc) {
 		case <-ticker.C:
 			func() {
 				defer recoverLoopTick(ctx, "eventbus redis claimLoop")
-				s.claimPending(bgCtx, h, maxDeliver, ackWait)
+				err := s.claimPending(bgCtx, h, maxDeliver, ackWait)
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					failure.report("pending scan", s.channel, s.group, err)
+					return
+				}
+				failure.recovered("pending scan", s.channel, s.group)
 			}()
 		}
 	}
 }
 
+// redisLoopFailure turns a loop's per-iteration errors into one report per
+// outage: the first failure is reported (log + error reporter, as the NATS
+// adapter reports its consume errors) and the return to health is logged,
+// while the retries in between — five a second against a down broker —
+// stay quiet. Owned by one loop goroutine; not safe for concurrent use.
+type redisLoopFailure struct {
+	failing bool
+}
+
+func (f *redisLoopFailure) report(stage, channel, group string, err error) {
+	if f.failing {
+		return
+	}
+	f.failing = true
+	reportBusFailure("redis "+stage, channel, group, err)
+}
+
+func (f *redisLoopFailure) recovered(stage, channel, group string) {
+	if !f.failing {
+		return
+	}
+	f.failing = false
+	log.Printf("eventbus redis %s recovered: channel=%s group=%s", stage, channel, group)
+}
+
 // claimPending walks the PEL once. Entries past MaxDeliver
-// go to DLQ; others get XCLAIM'd + replayed.
-func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration) {
+// go to DLQ; others get XCLAIM'd + replayed. Returns the XPENDING
+// error, the one failure that stops the walk.
+func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration) error {
 	pendings, err := s.bus.client.XPendingExt(ctx, &goredis.XPendingExtArgs{
 		Stream: s.channel,
 		Group:  s.group,
@@ -720,7 +800,7 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 		Count:  100,
 	}).Result()
 	if err != nil {
-		return
+		return err
 	}
 	for _, p := range pendings {
 		// Skip a message this consumer is still processing BEFORE the
@@ -773,6 +853,7 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 			release()
 		}
 	}
+	return nil
 }
 
 // retryFor returns the effective (MaxDeliver, AckWait) for

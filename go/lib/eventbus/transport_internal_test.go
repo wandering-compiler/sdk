@@ -33,10 +33,11 @@ func (c *countObserver) OnDrop(string, string, string)          { c.drop.Add(1) 
 
 // deadRedisBus builds a RedisBus whose client points at a refused
 // port with retries disabled + a short dial timeout, so every
-// command fails near-instantly down its error branch.
+// command fails near-instantly down its error branch. Built without
+// NewRedisBus's connection check, which would refuse it.
 func deadRedisBus(t *testing.T, obs Observer) *RedisBus {
 	t.Helper()
-	bus, err := NewRedisBus(RedisBusOptions{
+	bus, err := newRedisBus(RedisBusOptions{
 		DSN:               "redis://127.0.0.1:6399?max_retries=-1&dial_timeout=200ms",
 		GroupPrefix:       "users-subscribers",
 		ConsumerName:      "replica-1",
