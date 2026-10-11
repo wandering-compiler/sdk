@@ -265,14 +265,17 @@ func scopeMeaning(scope string) string {
 }
 
 // bucket is one client's token bucket. Its tokens are guarded by its own
-// mutex so that callers keyed differently never contend; seen belongs to the
-// Limiter and is guarded by Limiter.mu.
+// mutex so that callers keyed differently never contend; key, seen and the
+// recency links belong to the Limiter and are guarded by Limiter.mu.
 type bucket struct {
 	mu     sync.Mutex
 	tokens float64
 	last   time.Time
 
-	seen time.Time
+	key   string
+	seen  time.Time
+	newer *bucket // towards the most recently seen
+	older *bucket // towards the least recently seen
 }
 
 // refillLocked advances the bucket to now. Caller holds b.mu.
@@ -319,7 +322,11 @@ type Limiter struct {
 	perSec  float64
 	mu      sync.Mutex
 	buckets map[string]*bucket
-	now     func() time.Time // swapped in tests
+	// newest and oldest are the ends of the recency list every bucket is on,
+	// so eviction takes the least recently seen key without looking at any
+	// other.
+	newest, oldest *bucket
+	now            func() time.Time // swapped in tests
 
 	// collapsedAt and untrustedAt throttle the deployment warnings: each
 	// condition fires on every request for as long as the deployment is
@@ -541,39 +548,81 @@ func (l *Limiter) bucketFor(key string) *bucket {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	b, ok := l.buckets[key]
-	if !ok {
+	if ok {
+		l.unlinkLocked(b)
+	} else {
 		// A fresh bucket starts FULL, so the limit never penalises a caller's
 		// first request — it bounds sustained rate, not arrival.
-		b = &bucket{tokens: float64(l.cfg.Burst), last: now}
+		b = &bucket{tokens: float64(l.cfg.Burst), last: now, key: key}
 		l.buckets[key] = b
-		if len(l.buckets) > l.cfg.MaxKeys {
-			l.evictLocked(now)
-		}
 	}
 	b.seen = now
+	l.pushNewestLocked(b)
+	if !ok {
+		l.evictLocked(now)
+	}
 	return b
 }
 
-// evictLocked drops idle buckets, then oldest-first if that was not enough.
-// Caller holds l.mu.
+// evictSweep bounds how many idle buckets one new key retires beyond what
+// the ceiling requires. Each bucket is retired at most once, so the work
+// stays constant per request however many keys there are.
+const evictSweep = 2
+
+// evictLocked retires buckets from the least recently seen end: idle ones
+// (a few per call, so the map shrinks back once a burst of clients is gone),
+// then as many as the ceiling requires. The least recently seen bucket is
+// the idle one if any is, so idle keys always go before live ones.
+//
+// This used to scan the whole map — once for idle keys, then once more per
+// key it had to remove — under the mutex every request takes, so a stream of
+// never-seen addresses cost two full scans each. It also stamped the new
+// bucket's time only after evicting, so the newcomer looked oldest and was
+// the one removed: at the ceiling, each request from a new address got a
+// full bucket of its own. Caller holds l.mu.
 func (l *Limiter) evictLocked(now time.Time) {
-	for k, b := range l.buckets {
-		if now.Sub(b.seen) > l.cfg.TTL {
-			delete(l.buckets, k)
+	for i := 0; i < evictSweep; i++ {
+		b := l.oldest
+		if b == nil || b == l.newest || now.Sub(b.seen) <= l.cfg.TTL {
+			break
 		}
+		l.removeLocked(b)
 	}
-	for len(l.buckets) > l.cfg.MaxKeys {
-		var oldestKey string
-		var oldest time.Time
-		for k, b := range l.buckets {
-			if oldestKey == "" || b.seen.Before(oldest) {
-				oldestKey, oldest = k, b.seen
-			}
-		}
-		if oldestKey == "" {
-			return
-		}
-		delete(l.buckets, oldestKey)
+	for len(l.buckets) > l.cfg.MaxKeys && l.oldest != nil && l.oldest != l.newest {
+		l.removeLocked(l.oldest)
+	}
+}
+
+func (l *Limiter) removeLocked(b *bucket) {
+	l.unlinkLocked(b)
+	delete(l.buckets, b.key)
+}
+
+// unlinkLocked takes b off the recency list. Caller holds l.mu.
+func (l *Limiter) unlinkLocked(b *bucket) {
+	if b.newer != nil {
+		b.newer.older = b.older
+	} else if l.newest == b {
+		l.newest = b.older
+	}
+	if b.older != nil {
+		b.older.newer = b.newer
+	} else if l.oldest == b {
+		l.oldest = b.newer
+	}
+	b.newer, b.older = nil, nil
+}
+
+// pushNewestLocked puts an unlinked b at the most recently seen end. Caller
+// holds l.mu.
+func (l *Limiter) pushNewestLocked(b *bucket) {
+	b.older = l.newest
+	if l.newest != nil {
+		l.newest.newer = b
+	}
+	l.newest = b
+	if l.oldest == nil {
+		l.oldest = b
 	}
 }
 
