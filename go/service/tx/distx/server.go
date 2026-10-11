@@ -168,7 +168,8 @@ func isolationLevel(i distxpb.Isolation) sql.IsolationLevel {
 }
 
 // Commit finalises the tx for tx_id. NotFound when the id
-// doesn't resolve.
+// doesn't resolve, Aborted when a rollback of it is already pending
+// (a call inside it failed while a sibling still held it).
 //
 // ctx bounds the registry's wait for a storage handler that
 // adopted this tx and is still running: closing the tx between
@@ -186,6 +187,12 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 			// leave the caller with a symptom.
 			return nil, status.Errorf(codes.NotFound, "commit: %v", err)
 		}
+		if errors.Is(err, txregistry.ErrTxDoomed) {
+			// A call inside the transaction failed and its rollback is
+			// pending (or just ran here). Not retryable: the transaction
+			// can only roll back.
+			return nil, status.Errorf(codes.Aborted, "commit: %v", err)
+		}
 		if errors.Is(err, txregistry.ErrTxBusy) {
 			return nil, status.Errorf(codes.FailedPrecondition, "commit: %v", err)
 		}
@@ -195,12 +202,19 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 }
 
 // Rollback discards the tx for tx_id. NotFound when the id
-// doesn't resolve, FailedPrecondition when an adopted handler
-// is still running on it (see [Server.Commit]).
+// doesn't resolve. When an adopted handler is still running on it
+// the rollback is deferred to that handler's release and the call
+// succeeds: the transaction is already doomed and cannot commit.
 func (s *Server) Rollback(ctx context.Context, req *distxpb.RollbackRequest) (*distxpb.RollbackResponse, error) {
 	if err := s.registry.Rollback(ctx, req.GetTxId()); err != nil {
 		if errors.Is(err, txregistry.ErrUnknownTxID) {
 			return nil, status.Errorf(codes.NotFound, "rollback: %v", err)
+		}
+		if errors.Is(err, txregistry.ErrTxDoomed) {
+			// The rollback is decided and runs the moment the handler
+			// still holding the transaction releases it; nothing is left
+			// for the caller to retry.
+			return &distxpb.RollbackResponse{}, nil
 		}
 		if errors.Is(err, txregistry.ErrTxBusy) {
 			return nil, status.Errorf(codes.FailedPrecondition, "rollback: %v", err)

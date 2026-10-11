@@ -38,10 +38,13 @@ import (
 // deployment-shape constraint surfaced in the architecture
 // doc, the operator owns the choice.
 //
-// Multi-instance scale-out lives in a separate Rust grpcproxy
-// (parked, see D-iter2-dql-11). Until that lands, deploy
-// single-instance OR accept that `tx_id` adoption silently
-// falls back to per-method fresh-tx (the slice 6H default).
+// Memory holds its transactions in process memory, so one
+// instance per domain is the deployment shape. Several replicas
+// need a routing proxy in front that pins every call of a
+// transaction to the replica that opened it (`w17-conn-id`).
+// Without one, a call that lands on another replica carries an id
+// that replica does not hold and fails with [ErrUnknownTxID] — it
+// never runs in a fresh transaction of its own (see [AdoptTx]).
 //
 // Memory is safe for concurrent use across goroutines —
 // gRPC handlers servicing Begin / Commit / Rollback / storage
@@ -135,6 +138,23 @@ type txEntry struct {
 	adopters  int
 	idle      chan struct{}
 	finishers int
+
+	// doomed is set the moment a rollback is asked for — before that
+	// rollback waits for the lease — and is never cleared. A doomed
+	// transaction can no longer commit or be adopted; it is rolled
+	// back by whichever gets to it first: the rollback that doomed it,
+	// a Commit that finds it idle, the release of the last lease (see
+	// [Memory.release]) or the timeout watcher.
+	//
+	// The flag is what keeps "a failed participant discards the
+	// transaction" true when the rollback itself cannot run yet. Before
+	// it existed, a rollback that gave up waiting (a sibling held the
+	// lease, its context was done) left the entry live and unmarked,
+	// and the coordinator's later Commit succeeded over a failed call.
+	//
+	// doomCause is the outcome recorded once the entry is drained.
+	doomed    bool
+	doomCause string
 }
 
 // DefaultFinishWait bounds two symmetric waits: a Commit /
@@ -379,9 +399,16 @@ func (m *Memory) watchTimeout(ctx context.Context, txID string) {
 // issuing statements (see [Memory.take]); [ErrTxBusy] when that
 // wait runs out, with the transaction left open and retryable.
 func (m *Memory) Commit(ctx context.Context, txID string) error {
-	entry, err := m.take(ctx, txID, "the transaction was committed")
+	entry, err := m.take(ctx, txID, "the transaction was committed", true)
 	if err != nil {
 		return err
+	}
+	if entry.doomed {
+		// A rollback was asked for while a handler held the lease; the
+		// entry reached us idle before the deferred rollback ran. Run it
+		// now instead of committing.
+		m.rollbackDrained(ctx, txID, entry)
+		return doomedError(txID, entry.doomCause)
 	}
 	// Release the WithTimeout goroutine (if Tier 2 timeout was
 	// set on Begin) before doing the actual Commit — Commit
@@ -404,10 +431,84 @@ func (m *Memory) Commit(ctx context.Context, txID string) error {
 	// exactly this moment. Runs outside the registry lock so a callback
 	// may re-enter the registry, and after the entry was taken, so a
 	// late OnCommit for this id correctly reports "unknown".
-	for _, fn := range entry.onCommit {
-		fn()
+	//
+	// Each callback runs under its own recover. The transaction IS
+	// committed whatever a callback does: a panic escaping here would
+	// skip every later callback (other methods' events) and reach the
+	// coordinator as a failed Commit for a write that landed. The
+	// in-process path (txscope) recovers per hook for the same reason.
+	for i, fn := range entry.onCommit {
+		if p := runHook(fn); p != nil {
+			observx.ReportError(context.WithoutCancel(ctx), fmt.Errorf(
+				"txregistry: after-commit work #%d of committed transaction %s panicked: %v\n%s",
+				i+1, txID, p.value, p.stack))
+		}
 	}
 	return nil
+}
+
+// hookPanic is what [runHook] recovered.
+type hookPanic struct {
+	value any
+	stack []byte
+}
+
+// runHook runs one after-commit callback and returns what it panicked
+// with, or nil.
+func runHook(fn func()) (p *hookPanic) {
+	defer func() {
+		if r := recover(); r != nil {
+			p = &hookPanic{value: r, stack: debug.Stack()}
+		}
+	}()
+	fn()
+	return nil
+}
+
+// doomedError is what a Commit or an adoption gets for a transaction a
+// rollback was already asked for.
+func doomedError(txID, cause string) error {
+	return fmt.Errorf("%w %q: %s", ErrTxDoomed, txID, cause)
+}
+
+// rollbackDrained rolls back an entry that was already removed from
+// the registry for being doomed. A failure is reported rather than
+// returned: the caller that drained it did not ask for this rollback,
+// and the only thing it could do — release the connection — the driver
+// has already done or will do on its own.
+func (m *Memory) rollbackDrained(ctx context.Context, txID string, entry txEntry) {
+	if entry.cancel != nil {
+		defer entry.cancel()
+	}
+	if err := entry.tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		observx.ReportError(context.WithoutCancel(ctx), fmt.Errorf(
+			"txregistry: rollback of doomed transaction %s: %w", txID, err))
+	}
+}
+
+// doomLocked marks txID as doomed with `outcome` as the reason it will be
+// gone. The first reason wins: it names what actually discarded the
+// transaction. Caller must hold m.mu.
+func (m *Memory) doomLocked(txID, outcome string) {
+	entry, ok := m.txs[txID]
+	if !ok || entry.doomed {
+		return
+	}
+	entry.doomed = true
+	entry.doomCause = outcome
+	m.txs[txID] = entry
+}
+
+// drainIfDoomedLocked removes a doomed entry that nobody is using or
+// waiting on any more, returning it for [Memory.rollbackDrained]. Caller
+// must hold m.mu.
+func (m *Memory) drainIfDoomedLocked(txID string, entry txEntry) (txEntry, bool) {
+	if !entry.doomed || entry.adopters > 0 || entry.finishers > 0 {
+		return txEntry{}, false
+	}
+	delete(m.txs, txID)
+	m.noteOutcomeLocked(txID, entry.doomCause)
+	return entry, true
 }
 
 // Rollback releases the tx for txID without committing.
@@ -440,13 +541,33 @@ func (m *Memory) Rollback(ctx context.Context, txID string) error {
 //
 // An empty `cause` means the holder asked for this directly and needs
 // no explanation.
+//
+// The transaction is DOOMED before the wait for an outstanding lease
+// begins: from then on it cannot commit or be adopted, whether or not
+// the wait succeeds. When the wait gives up (ctx done, finish-wait
+// expired) the error wraps [ErrTxDoomed] as well as [ErrTxBusy], and the
+// rollback runs as soon as the last lease is released.
 func (m *Memory) RollbackCaused(ctx context.Context, txID, cause string) error {
 	outcome := "the transaction was rolled back"
 	if cause != "" {
 		outcome = "the transaction was rolled back: " + cause
 	}
-	entry, err := m.take(ctx, txID, outcome)
+	// Doomed BEFORE waiting for the lease. Whatever happens to the wait
+	// — the caller's context ends, the finish-wait runs out — the
+	// transaction can no longer commit: asking for a rollback is a
+	// decision, and a decision that could be lost to a timing detail
+	// would let a transaction with a failed participant commit.
+	m.mu.Lock()
+	m.doomLocked(txID, outcome)
+	m.mu.Unlock()
+	entry, err := m.take(ctx, txID, outcome, false)
 	if err != nil {
+		if errors.Is(err, ErrTxBusy) {
+			// Not "left exactly as it was" (the ErrTxBusy contract for a
+			// Commit): the rollback is merely deferred to the moment the
+			// running handler releases its lease.
+			return fmt.Errorf("%w %q: rollback deferred until the running handler releases it: %w", ErrTxDoomed, txID, err)
+		}
 		return err
 	}
 	if entry.cancel != nil {
@@ -506,6 +627,13 @@ func (m *Memory) LookupTx(ctx context.Context, txID, connectionName string) (*sq
 			m.mu.Unlock()
 			return nil, noopRelease, fmt.Errorf("%w: tx_id opened on %q, method on %q", ErrConnectionMismatch, entry.connName, connectionName)
 		}
+		if entry.doomed {
+			// A rollback was asked for and is waiting for the current
+			// holder. New work must not join a transaction that can only
+			// be rolled back.
+			m.mu.Unlock()
+			return nil, noopRelease, doomedError(txID, entry.doomCause)
+		}
 		if entry.finishers > 0 {
 			// A Commit / Rollback is waiting its turn. Joining the
 			// queue behind it would only earn an ErrUnknownTxID once
@@ -564,9 +692,15 @@ func (m *Memory) release(txID string) {
 		idle, entry.idle = entry.idle, nil
 	}
 	m.txs[txID] = entry
+	// The rollback that doomed this transaction gave up waiting for this
+	// lease; nobody else is queued to finish it, so it ends here.
+	drained, ok := m.drainIfDoomedLocked(txID, entry)
 	m.mu.Unlock()
 	if idle != nil {
 		close(idle)
+	}
+	if ok {
+		m.rollbackDrained(context.Background(), txID, drained)
 	}
 }
 
@@ -633,12 +767,16 @@ func (m *Memory) OnCommit(txID string, fn func()) bool {
 // `finishing` is published before parking so no new adopter can
 // queue ahead and starve the finisher.
 //
+// `commit` marks the caller as a Commit: a doomed entry is refused
+// without waiting (it can never commit), and one found idle is returned
+// with `doomed` set for the caller to roll back instead.
+//
 // `outcome` is recorded against the id in the same critical section
 // that removes it, so a racing Commit / LookupTx that misses the entry
 // by a hair still gets told what happened to it rather than a bare
 // "unknown". The finisher refines it afterwards if the underlying
 // Commit / Rollback then fails.
-func (m *Memory) take(ctx context.Context, txID, outcome string) (txEntry, error) {
+func (m *Memory) take(ctx context.Context, txID, outcome string, commit bool) (txEntry, error) {
 	var timeout <-chan time.Time
 	var timer *time.Timer
 	announced := false
@@ -665,10 +803,22 @@ func (m *Memory) take(ctx context.Context, txID, outcome string) (txEntry, error
 		}
 		if entry.adopters == 0 {
 			delete(m.txs, txID)
-			m.noteOutcomeLocked(txID, outcome)
+			if entry.doomed {
+				// Whoever finishes a doomed entry rolls it back, so the
+				// recorded outcome is the doom's, not the caller's.
+				m.noteOutcomeLocked(txID, entry.doomCause)
+			} else {
+				m.noteOutcomeLocked(txID, outcome)
+			}
 			m.mu.Unlock()
 			announced = false
 			return entry, nil
+		}
+		if commit && entry.doomed {
+			// No point waiting for the holder: the answer is already
+			// known, and the rollback runs when the lease is released.
+			m.mu.Unlock()
+			return txEntry{}, doomedError(txID, entry.doomCause)
 		}
 		if !announced {
 			entry.finishers++
@@ -698,13 +848,20 @@ func (m *Memory) take(ctx context.Context, txID, outcome string) (txEntry, error
 // it.
 func (m *Memory) withdrawFinisher(txID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	entry, ok := m.txs[txID]
 	if !ok || entry.finishers == 0 {
+		m.mu.Unlock()
 		return
 	}
 	entry.finishers--
 	m.txs[txID] = entry
+	// A doomed entry whose last waiting finisher just gave up, after the
+	// lease was released in the meantime: nobody else will finish it.
+	drained, ok := m.drainIfDoomedLocked(txID, entry)
+	m.mu.Unlock()
+	if ok {
+		m.rollbackDrained(context.Background(), txID, drained)
+	}
 }
 
 // knownConnections returns the registered connection names in

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -32,6 +33,13 @@ var ErrRollbackOnly = errors.New("distx: a nested part of this transaction rolle
 // request is impossible and ignoring it is a silent downgrade.
 var ErrNestedMismatch = errors.New("distx: cannot join the transaction already open on this context")
 
+// ErrHandleFinished is returned by a second Commit or Rollback on a root
+// [TxHandle] whose transaction already ended through it. The message says
+// which way it ended. Without it, a second call reached the server, which
+// no longer holds the id, and answered NotFound — indistinguishable from a
+// transaction that was lost.
+var ErrHandleFinished = errors.New("distx: this transaction handle was already used")
+
 // ConnIDHeader is the gRPC metadata header carrying the storage
 // proxy's routing token. The Rust storage proxy (srcrs/storage-
 // proxy, see CONN_ID_HEADER in src/router.rs) mints an opaque
@@ -55,6 +63,9 @@ const ConnIDHeader = "w17-conn-id"
 // caller passes a fresh context.
 //
 // A TxHandle is single-use: drive exactly one Commit OR one Rollback.
+// Once one of them succeeded, every further Commit or Rollback on a root
+// handle returns [ErrHandleFinished] without an RPC. A failed attempt
+// does not use the handle up, so a retryable failure can be retried.
 type TxHandle struct {
 	client distxpb.W17DistributedTransactionClient
 	txID   string
@@ -72,6 +83,24 @@ type TxHandle struct {
 	// open on ctx and JOINED it. Its Commit is a no-op (the root commits)
 	// and its Rollback marks the root rollback-only.
 	joined bool
+
+	// mu serialises a root handle's Commit / Rollback, and `ended`
+	// records how the transaction ended through this handle ("" while
+	// it is open).
+	mu    sync.Mutex
+	ended string
+}
+
+// begin claims the handle for one finishing call. It returns the unlock
+// function, or ErrHandleFinished when the handle is already used up.
+func (h *TxHandle) begin() (func(), error) {
+	h.mu.Lock()
+	if h.ended != "" {
+		ended := h.ended
+		h.mu.Unlock()
+		return nil, fmt.Errorf("%w: transaction %s was already %s", ErrHandleFinished, h.txID, ended)
+	}
+	return h.mu.Unlock, nil
 }
 
 // rootKey carries the ROOT handle on a transaction's context, so a nested
@@ -183,15 +212,27 @@ func (h *TxHandle) Commit(ctx context.Context) error {
 	if h.joined {
 		return nil
 	}
+	unlock, err := h.begin()
+	if err != nil {
+		return err
+	}
 	if h.scope != nil && h.scope.RollbackOnly() {
+		defer unlock()
 		h.scope.Discarded()
 		_, rerr := h.client.Rollback(h.attach(context.WithoutCancel(ctx)), &distxpb.RollbackRequest{TxId: h.txID})
 		if rerr != nil {
 			return errors.Join(ErrRollbackOnly, fmt.Errorf("the rollback also failed: %w", rerr))
 		}
+		h.ended = "rolled back"
 		return ErrRollbackOnly
 	}
-	_, err := h.client.Commit(h.attach(ctx), &distxpb.CommitRequest{TxId: h.txID})
+	_, err = h.client.Commit(h.attach(ctx), &distxpb.CommitRequest{TxId: h.txID})
+	if err == nil {
+		h.ended = "committed"
+	}
+	// The parked work below may itself reach for this handle; it runs
+	// with the handle released.
+	unlock()
 	if h.scope == nil {
 		return err
 	}
@@ -231,10 +272,18 @@ func (h *TxHandle) Rollback(ctx context.Context) error {
 		}
 		return nil
 	}
+	unlock, err := h.begin()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if h.scope != nil {
 		h.scope.Discarded()
 	}
-	_, err := h.client.Rollback(h.attach(context.WithoutCancel(ctx)), &distxpb.RollbackRequest{TxId: h.txID})
+	_, err = h.client.Rollback(h.attach(context.WithoutCancel(ctx)), &distxpb.RollbackRequest{TxId: h.txID})
+	if err == nil {
+		h.ended = "rolled back"
+	}
 	return err
 }
 
