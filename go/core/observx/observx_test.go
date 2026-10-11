@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -21,11 +22,17 @@ func resetForTest(t *testing.T) {
 	t.Helper()
 	mu.Lock()
 	tracerProvider = nil
+	meterProvider = nil
 	otlpExporter = nil
 	sentryEnabled = false
 	debugEvents = false
 	cfg = Config{}
 	mu.Unlock()
+	for _, l := range limiters {
+		l.mu.Lock()
+		l.tokens, l.last, l.suppressed, l.now = l.burst, time.Time{}, 0, time.Now
+		l.mu.Unlock()
+	}
 	otel.SetTracerProvider(sdktrace.NewTracerProvider()) // reset to a clean noop-equivalent
 }
 

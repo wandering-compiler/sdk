@@ -63,11 +63,12 @@ func TestRun_GracefulShutdown(t *testing.T) {
 	done := make(chan error, 1)
 
 	cfg := Config{
-		Addr:             "127.0.0.1:0",
-		Reflection:       true,
-		HealthServer:     DefaultHealthServer(),
-		RegisterServices: func(*grpc.Server) error { return nil },
-		OnShutdown:       func() { close(shutdownRan) },
+		Addr:                      "127.0.0.1:0",
+		Reflection:                true,
+		ReflectionUnauthenticated: true,
+		HealthServer:              DefaultHealthServer(),
+		RegisterServices:          func(*grpc.Server) error { return nil },
+		OnShutdown:                func() { close(shutdownRan) },
 	}
 	go func() { done <- Run(ctx, cfg) }()
 

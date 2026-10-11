@@ -18,13 +18,16 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 )
@@ -43,8 +46,23 @@ type Config struct {
 	// Addr is the TCP address to listen on (e.g. ":50051").
 	Addr string
 
-	// Reflection enables the gRPC server reflection service.
+	// Reflection enables the gRPC server reflection service, which
+	// lists every service and message schema the server carries. The
+	// service-level authentication of the generated handlers does not
+	// cover it, so it is refused at start unless ReflectionAuth guards
+	// it or ReflectionUnauthenticated states that anyone who reaches
+	// the port may enumerate the API.
 	Reflection bool
+
+	// ReflectionAuth, when set, runs on every reflection stream before
+	// it is served; a non-nil error refuses the stream (a gRPC status
+	// error is returned as is, anything else as Unauthenticated).
+	ReflectionAuth func(ctx context.Context) error
+
+	// ReflectionUnauthenticated serves reflection without
+	// authentication. Only for a listener that untrusted callers cannot
+	// reach (local development); logged as a warning at start.
+	ReflectionUnauthenticated bool
 
 	// HealthServer, when set, is registered on the gRPC server.
 	// The caller retains full control over service statuses.
@@ -89,6 +107,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.RegisterServices == nil {
 		return fmt.Errorf("server: RegisterServices is required")
 	}
+	if cfg.Reflection && cfg.ReflectionAuth == nil && !cfg.ReflectionUnauthenticated {
+		return fmt.Errorf("server: Reflection lists every service and message schema without authentication; set ReflectionAuth to guard it, or ReflectionUnauthenticated to serve it to anyone who reaches %s", cfg.Addr)
+	}
 
 	listener, err := listen("tcp", cfg.Addr)
 	if err != nil {
@@ -107,7 +128,12 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	if cfg.Reflection {
-		reflection.Register(srv)
+		if cfg.ReflectionAuth == nil {
+			log.Printf("server: gRPC reflection on %s is served WITHOUT authentication (ReflectionUnauthenticated)", cfg.Addr)
+			reflection.Register(srv)
+		} else {
+			reflection.Register(guardedRegistrar{srv: srv, auth: cfg.ReflectionAuth})
+		}
 	}
 	if cfg.HealthServer != nil {
 		grpc_health_v1.RegisterHealthServer(srv, cfg.HealthServer)
@@ -176,4 +202,56 @@ func markNotServing(hs *health.Server) {
 // had a fallback at all.
 func gracefulStop(srv *grpc.Server, timeout time.Duration) {
 	lifecycle.StopGRPC(srv, timeout)
+}
+
+// guardedRegistrar registers services with auth run ahead of every
+// handler. It is what reflection is registered through when
+// [Config.ReflectionAuth] is set, so both reflection versions are guarded.
+type guardedRegistrar struct {
+	srv  *grpc.Server
+	auth func(context.Context) error
+}
+
+func (g guardedRegistrar) GetServiceInfo() map[string]grpc.ServiceInfo {
+	return g.srv.GetServiceInfo()
+}
+
+func (g guardedRegistrar) RegisterService(desc *grpc.ServiceDesc, impl any) {
+	guarded := *desc
+	guarded.Methods = make([]grpc.MethodDesc, len(desc.Methods))
+	for i, m := range desc.Methods {
+		h := m.Handler
+		m.Handler = func(srv any, ctx context.Context, dec func(any) error, icpt grpc.UnaryServerInterceptor) (any, error) {
+			if err := g.check(ctx); err != nil {
+				return nil, err
+			}
+			return h(srv, ctx, dec, icpt)
+		}
+		guarded.Methods[i] = m
+	}
+	guarded.Streams = make([]grpc.StreamDesc, len(desc.Streams))
+	for i, sd := range desc.Streams {
+		h := sd.Handler
+		sd.Handler = func(srv any, stream grpc.ServerStream) error {
+			if err := g.check(stream.Context()); err != nil {
+				return err
+			}
+			return h(srv, stream)
+		}
+		guarded.Streams[i] = sd
+	}
+	g.srv.RegisterService(&guarded, impl)
+}
+
+// check runs auth and maps a refusal onto a gRPC status. A plain error's
+// text is not sent to the caller.
+func (g guardedRegistrar) check(ctx context.Context) error {
+	err := g.auth(ctx)
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Err()
+	}
+	return status.Error(codes.Unauthenticated, "reflection: unauthenticated")
 }

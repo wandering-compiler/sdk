@@ -44,6 +44,12 @@ import (
 // No-op when no panic in flight.
 func RecoverPanicMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Outermost, so this is where the request gets its own
+		// error-tracker scope: breadcrumbs recorded while serving it
+		// stay with it.
+		if ctx := observx.WithRequestScope(r.Context()); ctx != r.Context() {
+			r = r.WithContext(ctx)
+		}
 		defer func() {
 			rec := recover()
 			if rec == nil {
