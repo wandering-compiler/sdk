@@ -1,0 +1,266 @@
+// PUBLIC APPLY CONTRACT — the flattened, server-verified migration set the
+// thin client (w17ctl's own module) fetches from the console
+// and applies to its target stores. Homed under the dedicated `w17apply/`
+// namespace (next to dev_plan.proto) so the public client imports ONLY this
+// irpb-free shape, never the IR-laden compiler registry pb
+// (MigrationRegistry) package.
+//
+// Public-split boundary (docs/specs/w17ctl/public-split-architecture.md §4/§8.1
+// + the w17migrate-absorption): the prod apply path moves into w17ctl, which
+// must do ZERO crypto. The console (which signed every migration body via the
+// registry's signer) VERIFIES the signature server-side, and serves the bodies
+// VERBATIM — decoration and all. The client executes them as they arrive; it
+// holds no signing/verifier key and no decorate/registrypb dependency.
+//
+// Two claims in this header were false until T2-5 pass #14 (D14-6), and both
+// matter to anyone writing a second fetch server or a second apply client:
+//
+//   - "STRIPS the decoration here, returning clean SQL". It does not, and the
+//     server's own code says why ("the client executes the bodies verbatim —
+//     no client-side strip needed"). Stripping would break the client's
+//     content-hash check outright, because the digest is over the STORED,
+//     decorated bodies.
+//   - "applies them online". Apply is OFFLINE (D-iter3-6) — this same file
+//     says so twenty lines down, at prev_content_sha256 and supersedes, and
+//     that offline-ness is the entire premise of the chain-anchoring those
+//     fields exist for. FETCH is the single online step.
+//
+// Local integrity of the fetched set is a plain content_sha256 check (hashing,
+// not crypto) — and since the client verifies no signature, it is the only
+// integrity control on this side.
+syntax = "proto3";
+
+package w17.apply;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/applyfetch;applyfetchpb";
+
+// MigrationFetch is the console-served, irpb-free face of the MigrationRegistry
+// the apply client needs: list each connection's pending migrations up to its
+// pinned target, server-verified, bodies served verbatim. (The full
+// MigrationRegistry — CreateSchema/UpdateSchema/etc., IR-typed — stays private.)
+service MigrationFetch {
+  // FetchMigrations returns, per requested connection, every migration up to
+  // (and including) its up_to_migration_id, with the signature verified
+  // SERVER-side; the bodies themselves are served exactly as stored, decoration
+  // included, because the content hash the client checks covers those bytes.
+  // Migrations come back in apply order (ascending id) across all requested
+  // connections.
+  rpc FetchMigrations(FetchMigrationsRequest) returns (FetchMigrationsResponse);
+}
+
+message FetchMigrationsRequest {
+  // ProjectID is the registry project key (the lock's project_id).
+  string project_id = 1;
+  // Targets enumerate the connections to fetch + each one's pinned ceiling
+  // (the lock connection's target_migration_id). The client reads these from
+  // its local lock; connections with no pinned target are simply omitted.
+  repeated Target targets = 2;
+}
+
+message Target {
+  string connection = 1;
+  string up_to_migration_id = 2;
+}
+
+message FetchMigrationsResponse {
+  repeated Migration migrations = 1;
+}
+
+// Migration is one connection's apply payload, flattened from the registry's
+// IR-laden `registrypb.Migration` to its irpb-free string fields. The up/down
+// bodies are the STORED ones, decoration included — see the file header
+// (T2-5 pass #14, D14-6).
+message Migration {
+  string id = 1;
+  string connection = 2;
+  // up_sql / down_sql — the transactional bodies (BEGIN…COMMIT wrapped for
+  // transactional dialects), decoration stripped.
+  string up_sql = 3;
+  string down_sql = 4;
+  // up_post_tx / down_pre_tx — the non-transactional skirts (CONCURRENTLY
+  // index builds etc.). Empty for the common case.
+  string up_post_tx = 5;
+  string down_pre_tx = 6;
+  // content_sha256 — the registry's content hash, for a keyless local
+  // integrity check of the fetched set (corruption detection) AND the link
+  // that anchors this migration to the signed lock (see prev_content_sha256).
+  string content_sha256 = 7;
+  // prev_content_sha256 chains this migration to its predecessor on the same
+  // connection: it is the predecessor's content_sha256, and it is an INPUT to
+  // this migration's own content_sha256 (migrate.ContentHash), not a field
+  // sitting beside it.
+  //
+  // Why the chain exists (T2-5 B11-1): the signed lock pins ONE hash, the
+  // target migration's. Everything applied on the way to that target carried
+  // only its own self-hash — recomputable by anyone holding the artifact
+  // directory, which under this project's own deploy split (CI bakes the
+  // fetch output, the deploy host applies offline) is a directory that
+  // really travels. Measured before the fix: a tampered intermediate
+  // migration executed verbatim, exit 0. Chaining makes the target's pinned
+  // hash cover every predecessor transitively, so the lock did not have to
+  // grow a per-migration list and its signed shape is unchanged.
+  //
+  // Empty = chain root: the first migration on a connection, or a squash
+  // baseline (which supersedes the history behind it and starts the live
+  // chain over). Apply walks BACK from the pinned target through these links
+  // and applies what the walk reaches — a migration on disk that no link
+  // points at is not on the chain and is never executed.
+  string prev_content_sha256 = 10;
+  // supersedes lists the migration ids this one REPLACES — non-empty only
+  // on a squash baseline. It has to travel WITH the artifact because apply
+  // is offline (D-iter3-6): the client cannot ask the console at apply time
+  // whether the baseline it is holding is equivalent to work the target
+  // database already did.
+  //
+  // The apply path reads it as: if this database's applied head is one of
+  // these ids, the baseline is already satisfied — record it and run no
+  // DDL. Without the list, a squashed project's next deploy would run a
+  // full CREATE against tables that already exist.
+  repeated string supersedes = 8;
+  // adopt_sql records this migration in the applied ledger without running
+  // its body — see supersedes. Rendered server-side by the dialect's own
+  // renderer; the client just executes it, exactly as it executes up_sql.
+  string adopt_sql = 9;
+
+  // adopt_preflight_sql — the statement an ADOPT must pass before it
+  // records this migration without running it: dialect-rendered SQL that
+  // FAILS unless every object the migration introduces already exists.
+  //
+  // The squash adopt above needs none: its licence is the applied head,
+  // which the target reports. Bringing an EXISTING database under
+  // management has no such fact, so the check has to be asked OF the
+  // database, and the console renders the asking because the client
+  // speaks no dialect.
+  //
+  // EMPTY MEANS REFUSE, not "no check needed" — a dialect that cannot
+  // express the question renders empty, and so does a migration that
+  // introduces nothing.
+  string adopt_preflight_sql = 11;
+
+  // manifest_json — the plan Manifest as protojson, carried so apply can
+  // CHECK what the schema declares it needs before it writes anything.
+  //
+  // It is here because `required_extensions` was a constraint that did
+  // nothing. An author declared it, the compiler aggregated it into the
+  // manifest, the console stored the manifest — and nobody ever read it. Not
+  // because the check was skipped, but because the manifest stopped at the
+  // console: it rides `registry.Migration`, and this apply-facing message,
+  // the only one the client ever sees, did not carry it. The whole apparatus
+  // existed except the last hop.
+  //
+  // What that cost: migrations deliberately carry no CREATE EXTENSION —
+  // provisioning is the deploying platform's step — so an unprovisioned
+  // target failed in the MIDDLE of a migration, on a raw Postgres error,
+  // with part of the schema already written.
+  //
+  // JSON rather than the typed message on purpose. planpb is private and the
+  // client may not import it (public-split); shipping the bytes lets the
+  // client read the one repeated string it needs without learning the
+  // compiler's types. A client that cannot parse it simply has nothing to
+  // check — an additive field must never turn into a refused apply.
+  string manifest_json = 12;
+}
+
+// FixtureFetch is the console-served, irpb-free face of fixture seeding: it
+// renders a stored fixture (schema-aware: table/column resolution, FK load
+// order, value binding) into ready-to-run parameterized upserts. The thin
+// client (w17ctl `fixtures apply`) just executes them against its local store
+// — it holds no schema, no fixtures logic, and never interpolates a value into
+// SQL (the args ride as structpb.Value, bound parameterized client-side).
+service FixtureFetch {
+  // FetchFixtureSeed renders the named fixture (project + domain + name) into
+  // ordered SeedStmts. INVALID_ARGUMENT for missing ids; NOT_FOUND when the
+  // schema or fixture isn't stored; INTERNAL on a render error.
+  rpc FetchFixtureSeed(FetchFixtureSeedRequest) returns (FetchFixtureSeedResponse);
+
+  // FetchFixtureFiles returns every stored fixture (optionally scoped to one
+  // domain) as its editable canonical JSON — the authoring-side download
+  // (w17ctl `fixtures fetch`). The server encodes the stored Fixture IR to
+  // JSON; the client writes one `<domain>/<name>.json` per file. No schema or
+  // fixtures package needed client-side — just the bytes.
+  rpc FetchFixtureFiles(FetchFixtureFilesRequest) returns (FetchFixtureFilesResponse);
+
+  // RenderFixtureSeed renders a LOCAL fixture (the dev `stack build` reconcile
+  // seed path) into ordered SeedStmts. Stateless: the client uploads the
+  // compiled IR (opaque bytes) + the raw fixture JSON + its domain; the server
+  // decodes both, filters the schema to the domain, and renders the same
+  // schema-aware parameterized upserts FetchFixtureSeed serves for STORED
+  // fixtures — so the dev seed needs no console/fixtures + irpb client-side, it
+  // just executes the returned statements against its local store. (Distinct
+  // from FetchFixtureSeed, which looks the fixture up in the registry by name.)
+  rpc RenderFixtureSeed(RenderFixtureSeedRequest) returns (FetchFixtureSeedResponse);
+}
+
+message RenderFixtureSeedRequest {
+  // ir is the opaque compiled-IR blob (the bytes CompileIR returned) — the
+  // server decodes it with its own irpb.Schema, the client never does.
+  bytes ir = 1;
+  string domain = 2;
+  // json is the local fixture's raw canonical JSON body.
+  bytes json = 3;
+}
+
+message FetchFixtureSeedRequest {
+  string project_id = 1;
+  string domain = 2;
+  // name is the fixture name (the registry key within the domain).
+  string name = 3;
+}
+
+message FetchFixtureSeedResponse {
+  // statements run in order (FK targets before referrers), each in the same
+  // transaction client-side.
+  repeated SeedStmt statements = 1;
+
+  // connection names the store these statements belong to — the `name` of the
+  // (w17.module).connection the rendered domain is scoped to.
+  //
+  // Sent because the client CANNOT work it out. It uploads the IR as opaque
+  // bytes and never decodes it, so which store a domain lives on is knowable
+  // only here, where the schema is already filtered to that domain
+  // (ir.Schema.connection.name).
+  //
+  // Without it the dev seed applied EVERY domain's fixtures over one
+  // connection — `firstPostgresDSN`, which is whichever postgres target came
+  // first. A project with two postgres stores therefore seeded the second
+  // domain's rows into the first domain's database, failing with
+  // `relation "auth_role" does not exist` when the table happened not to be
+  // there, and silently writing into the wrong store when a same-named table
+  // was (a consumer, reported twice — it blocked their CI on an older release).
+  //
+  // Empty from a console that predates this field, and from a fixture whose
+  // domain resolves to no connection. The client treats empty as "unknown"
+  // and says so rather than guessing — an old console keeps today's behaviour
+  // with a warning, instead of changing what it does under the operator.
+  string connection = 2;
+}
+
+// SeedStmt is one parameterized upsert: a SQL string with $1..$N placeholders
+// and the ordered, pre-bound argument values. The client binds each arg
+// (structpb.Value → its scalar / JSON-string form) straight into a
+// parameterized Exec — values are NEVER interpolated into the SQL text.
+message SeedStmt {
+  string sql = 1;
+  repeated google.protobuf.Value args = 2;
+}
+
+message FetchFixtureFilesRequest {
+  string project_id = 1;
+  // domain scopes the download; empty = every domain's fixtures.
+  string domain = 2;
+}
+
+message FetchFixtureFilesResponse {
+  repeated FixtureFile files = 1;
+}
+
+// FixtureFile is one stored fixture as editable JSON (the server-encoded
+// canonical form), plus its identity + a row-count hint.
+message FixtureFile {
+  string domain = 1;
+  string name = 2;
+  bytes json = 3;
+  int32 row_count = 4;
+}

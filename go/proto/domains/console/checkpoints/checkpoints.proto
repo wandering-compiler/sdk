@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+// Console v2 — dev-checkpoint STORAGE wire contract (client side).
+//
+// Plain-protobuf mirror of console-app's GENERATED storage services
+// (CheckpointQuery/Mutation), wire-compatible with the server (same
+// package `console.checkpoints`, same service + method names + field
+// numbers). w17ctl calls these storage services DIRECTLY — there is no
+// hand-written facade tier.
+//
+// A Checkpoint is the dev DB lifecycle's base-of-next-diff
+// (docs/specs/storage/dev-db-lifecycle.md §Concepts): the last IR w17
+// built into a developer's local stores for one (project, user,
+// initiative). `stack build` reads it as the diff base, applies
+// checkpoint→current-IR directly to the local stores, then advances it.
+// It is NOT a Snapshot — snapshots are immutable pushed states; a
+// checkpoint is a single mutable row per (project, user, initiative),
+// upserted on every build. Keyed by initiative NAME (not id) so a
+// brand-new branch with no materialized initiative still has a
+// checkpoint slot (empty until the first build).
+package console.checkpoints;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/consoleapi/checkpoints;checkpointspb";
+
+import "google/protobuf/timestamp.proto";
+
+message Checkpoint {
+  string id               = 1;
+  string project_id       = 2;
+  // user_id — the developer the checkpoint belongs to. Per-user
+  // isolation: two devs on the same branch keep independent local DB
+  // state, so independent checkpoints (the unique key includes it).
+  string user_id          = 3;
+  // initiative — the initiative / git-branch name (main/master →
+  // "trunk"), matching w17ctl's git-sync resolution.
+  string initiative       = 4;
+  // ir_schema — the last-built IR (irpb.Schema bytes) this checkpoint
+  // pins; the base of the next dev diff-apply.
+  bytes  ir_schema        = 5;
+  string lock_hash        = 6;
+  string compiler_version = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message GetCheckpointReq {
+  string project_id = 1;
+  string user_id    = 2;
+  string initiative = 3;
+}
+
+// Find-shaped: 0 or 1 rows. Absence (brand-new initiative) is an empty
+// result, not a NotFound — the build path reads it without treating
+// "no checkpoint yet" as an error (the diff base is then empty IR).
+message GetCheckpointResp {
+  repeated Checkpoint rows = 1;
+}
+
+message AdvanceCheckpointReq {
+  string project_id       = 1;
+  string user_id          = 2;
+  string initiative       = 3;
+  bytes  ir_schema        = 4;
+  string lock_hash        = 5;
+  string compiler_version = 6;
+}
+
+message AdvanceCheckpointResp {
+  string id = 1;
+}
+
+service CheckpointQuery {
+  // Get — the (project_id, user_id, initiative) lookup. Unique index
+  // guarantees ≤1 row.
+  rpc Get(GetCheckpointReq) returns (GetCheckpointResp);
+}
+
+service CheckpointMutation {
+  // Advance — upsert the checkpoint for (project, user, initiative) to
+  // a new IR. One atomic UPSERT on the unique key: insert on first
+  // build, update ir_schema + provenance + updated_at thereafter.
+  rpc Advance(AdvanceCheckpointReq) returns (AdvanceCheckpointResp);
+}
