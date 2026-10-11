@@ -45,7 +45,36 @@ func EnsureStamp(ctx context.Context, db *sql.DB) error {
 		}
 		return nil
 	}
+	if stored == legacyFingerprint() {
+		return upgradeStamp(ctx, db)
+	}
 	return compareStamp(stored)
+}
+
+// upgradeStamp moves a database built under the plain UCA comparison (same
+// Unicode tables, no byte tie-break) to this build's. Its indexes hold
+// strings the old comparison ranked equal in arbitrary relative order, which
+// the current one orders by bytes, so they are rebuilt — REINDEX of every
+// index using the collation — and the stamp is rewritten, in one
+// transaction. The rebuild cannot fail on uniqueness: the current
+// comparison calls strictly fewer pairs equal.
+func upgradeStamp(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("collation stamp: upgrade: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `REINDEX `+Name); err != nil {
+		return fmt.Errorf("collation stamp: upgrade: rebuild indexes using %s: %w", Name, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE `+StampTable+` SET fingerprint = ? WHERE id = 1`, Fingerprint()); err != nil {
+		return fmt.Errorf("collation stamp: upgrade: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("collation stamp: upgrade: %w", err)
+	}
+	return nil
 }
 
 // VerifyStamp reports a mismatch between this binary's collator and the one
@@ -53,6 +82,10 @@ func EnsureStamp(ctx context.Context, db *sql.DB) error {
 // service binary at connect — which is where a mismatch turns into wrong
 // answers: an index sorted by one collator and searched by another silently
 // misses rows.
+//
+// A stamp from a build that compared without the byte tie-break (see
+// [Compare]) is reported as a mismatch here; the migration applier's
+// [EnsureStamp] is what rebuilds such a database's indexes and restamps it.
 //
 // An ABSENT stamp is not an error. A database that predates stamping, or
 // one no migration has touched, has nothing to disagree with, and refusing
