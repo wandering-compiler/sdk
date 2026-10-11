@@ -14,6 +14,13 @@ import (
 // sees the work already done.
 var ErrLockHeld = errors.New("apply: another apply run holds the target run-lock")
 
+// ErrLockLost reports that a run lock this run took is no longer provably its
+// own: a refresh found another owner, the lease ran out without a refresh, the
+// lock session ended, or release found the lock gone. Anything written after
+// that point may have raced another run, so the run stops before its next
+// write and a release that finds the lock lost fails the run.
+var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run")
+
 // RunLockCapable is an optional Applier capability: take a
 // cross-process advisory lock that serialises concurrent apply runs
 // against the same target.
@@ -64,4 +71,22 @@ type RunLockCapable interface {
 // it once, in a deferred cleanup).
 type RunLock interface {
 	Release(ctx context.Context) error
+}
+
+// CheckedRunLock is a RunLock that can tell whether it is still held.
+//
+// The orchestrator checks it before every migration and treats a failure as
+// fatal: a holder that lost its lock (a heartbeat that could not refresh, a
+// network partition, a long pause past the lease) must not go on writing
+// while another run may have taken over. Release of such a lock returns an
+// error wrapping ErrLockLost when the lock was lost at any point, so the
+// run's result says so too.
+//
+// Optional so that existing RunLock implementations keep compiling; one that
+// does not implement it is never checked mid-run.
+type CheckedRunLock interface {
+	RunLock
+	// Check returns nil while the lock is provably held by this run and an
+	// error wrapping ErrLockLost once it is not.
+	Check(ctx context.Context) error
 }

@@ -202,12 +202,26 @@ func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb
 // inherently single-threaded (Redis SCAN holds a server-side
 // cursor); fan-out happens after each batch so workers run
 // concurrently with the next SCAN page.
+//
+// SCAN may return a key more than once (Redis guarantees every key
+// present for the whole scan is returned AT LEAST once — a rehash
+// mid-scan repeats some). Harmless for the schema ops, which are
+// idempotent per key, but a TRANSFORM_FIELD script need not be
+// (`price = price * 1.1`), and a repeated key would be transformed
+// twice in one run. So the producer hands each key to the workers
+// once per op. Only for TRANSFORM_FIELD: the set grows with the
+// keyspace, and the other ops do not need it.
 func (a *Applier) runDataOp(ctx context.Context, op datamigrate.Operation, opIdx, parallel int, codec *datamigrate.ProtoCodec, vms map[int]*datamigrate.TransformVM) error {
 	if parallel < 1 {
 		parallel = 1
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	keys := make(chan string, parallel*4)
+
+	var seen map[string]struct{}
+	if op.Op == datamigrate.OpTransformField {
+		seen = map[string]struct{}{}
+	}
 
 	g.Go(func() error {
 		defer close(keys)
@@ -218,6 +232,12 @@ func (a *Applier) runDataOp(ctx context.Context, op datamigrate.Operation, opIdx
 				return fmt.Errorf("scan %s: %w", op.Keyspace, err)
 			}
 			for _, k := range batch {
+				if seen != nil {
+					if _, dup := seen[k]; dup {
+						continue
+					}
+					seen[k] = struct{}{}
+				}
 				select {
 				case keys <- k:
 				case <-gctx.Done():
@@ -285,6 +305,9 @@ func (a *Applier) applyOpToKey(ctx context.Context, op datamigrate.Operation, ke
 	if !changed {
 		return nil
 	}
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 
 	// KeepTTL (KEEPTTL flag) preserves any expiry the key already
 	// carried — a plain SET would silently make a TTL'd key
@@ -313,6 +336,9 @@ func (a *Applier) opAlreadyComplete(ctx context.Context, cursorKey string, index
 // side-channel. HSET is fire-and-forget — Redis returns "1 new
 // field" or "0 already existed", both fine.
 func (a *Applier) markOpComplete(ctx context.Context, cursorKey string, index int) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	field := strconv.Itoa(index)
 	return a.client.HSet(ctx, cursorKey, field, "complete").Err()
 }
@@ -348,6 +374,9 @@ func (a *Applier) guardTransformResume(ctx context.Context, cursorKey string, in
 	if started {
 		return fmt.Errorf("op[%d] TRANSFORM_FIELD on %s was interrupted mid-op: a non-idempotent Starlark transform cannot be safely resumed at op granularity (it would re-apply to keys already mutated before the interruption). Verify/restore the keyspace, then `HDEL %s %s` to force a re-run", index, op.Keyspace, cursorKey, field)
 	}
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	if err := a.client.HSet(ctx, cursorKey, field, "started").Err(); err != nil {
 		return fmt.Errorf("cursor start-marker write op[%d]: %w", index, err)
 	}
@@ -367,6 +396,9 @@ func (a *Applier) clearCursor(ctx context.Context, cursorKey string) error {
 // does for non-YAML bodies, only it lives in the apply tool
 // instead of being baked into the migration body.
 func (a *Applier) recordMigrationApplied(ctx context.Context, m *applyfetchpb.Migration) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	hash := sha256.Sum256([]byte(m.GetUpSql()))
 	return a.client.HSet(ctx, "w17:migrations", m.GetId(), hex.EncodeToString(hash[:])).Err()
 }
@@ -374,6 +406,9 @@ func (a *Applier) recordMigrationApplied(ctx context.Context, m *applyfetchpb.Mi
 // recordMigrationRolledBack erases the bookkeeping row.
 // HDEL is idempotent — safe to call on already-removed entries.
 func (a *Applier) recordMigrationRolledBack(ctx context.Context, m *applyfetchpb.Migration) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	return a.client.HDel(ctx, "w17:migrations", m.GetId()).Err()
 }
 

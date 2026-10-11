@@ -31,6 +31,10 @@ type faultFake struct {
 	exists  bool
 	counter int
 
+	// modified is the store-clock time of the last write, reported as
+	// Last-Modified (Date comes from net/http's real clock).
+	modified time.Time
+
 	failCreatePut int // status for PUT If-None-Match:*
 	failMatchPut  int // status for PUT If-Match:<etag>
 	failGet       int // status for GET
@@ -82,6 +86,7 @@ func (f *faultFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.exists = true
 		f.counter++
 		f.etag = fmt.Sprintf("%q", fmt.Sprintf("v%d", f.counter))
+		f.modified = time.Now()
 		w.Header().Set("ETag", f.etag)
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
@@ -94,6 +99,9 @@ func (f *faultFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("ETag", f.etag)
+		if !f.modified.IsZero() {
+			w.Header().Set("Last-Modified", f.modified.UTC().Format(http.TimeFormat))
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(f.body)
 	case http.MethodDelete:
@@ -139,9 +147,11 @@ func fixedClock() func() time.Time {
 	return func() time.Time { return t }
 }
 
-// staleLockBody is a valid lock object whose heartbeat is long past, so
-// any realistic clock sees it as abandoned (drives the takeover arm).
+// staleLockBody is a valid lock object; seeded with staleModified as its
+// store-side Last-Modified, it is long abandoned (drives the takeover arm).
 const staleLockBody = `{"owner":"old","acquired_at":100,"heartbeat_at":100}`
+
+var staleModified = time.Unix(100, 0)
 
 // TestS3RunLock_FirstPutServerError pins the create-PUT non-precondition
 // arm: a 500 on the initial If-None-Match:* create surfaces as a wrapped
@@ -200,7 +210,7 @@ func TestS3RunLock_CorruptLockBody(t *testing.T) {
 // concurrent taker won the race — so this caller backs off with
 // ErrLockHeld rather than clobbering the winner.
 func TestS3RunLock_TakeoverCASLoser(t *testing.T) {
-	f := &faultFake{exists: true, etag: `"seed"`, body: []byte(staleLockBody), failMatchPut: http.StatusPreconditionFailed}
+	f := &faultFake{exists: true, etag: `"seed"`, body: []byte(staleLockBody), modified: staleModified, failMatchPut: http.StatusPreconditionFailed}
 	a := faultApplier(t, f, fixedClock(), 10*time.Minute, time.Hour)
 	_, err := a.AcquireRunLock(context.Background())
 	if !errors.Is(err, migrate.ErrLockHeld) {
@@ -211,7 +221,7 @@ func TestS3RunLock_TakeoverCASLoser(t *testing.T) {
 // TestS3RunLock_TakeoverServerError pins the stale-takeover non-precondition
 // arm: a 500 on the If-Match swap surfaces as a wrapped takeover error.
 func TestS3RunLock_TakeoverServerError(t *testing.T) {
-	f := &faultFake{exists: true, etag: `"seed"`, body: []byte(staleLockBody), failMatchPut: http.StatusInternalServerError}
+	f := &faultFake{exists: true, etag: `"seed"`, body: []byte(staleLockBody), modified: staleModified, failMatchPut: http.StatusInternalServerError}
 	a := faultApplier(t, f, fixedClock(), 10*time.Minute, time.Hour)
 	_, err := a.AcquireRunLock(context.Background())
 	if err == nil || errors.Is(err, migrate.ErrLockHeld) ||
@@ -267,5 +277,23 @@ func TestS3RunLock_DefaultBeatInterval(t *testing.T) {
 	}
 	if err := l.Release(context.Background()); err != nil {
 		t.Fatalf("release: %v", err)
+	}
+}
+
+// A store that does not report when the lock was last written gives no
+// basis for judging it stale on its own clock; acquisition refuses with a
+// remedy rather than fall back to comparing this host's clock with a time
+// another host wrote.
+func TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness(t *testing.T) {
+	f := &faultFake{exists: true, etag: `"seed"`, body: []byte(staleLockBody)} // no Last-Modified
+	a := faultApplier(t, f, fixedClock(), 10*time.Minute, time.Hour)
+	_, err := a.AcquireRunLock(context.Background())
+	if err == nil || errors.Is(err, migrate.ErrLockHeld) || !strings.Contains(err.Error(), "delete") {
+		t.Fatalf("AcquireRunLock = %v, want a refusal naming the manual remedy", err)
+	}
+	var writes int
+	f.set(func(ff *faultFake) { writes = ff.counter })
+	if writes != 0 {
+		t.Fatal("a lock whose age cannot be judged must not be taken over")
 	}
 }

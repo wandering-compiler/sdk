@@ -361,7 +361,7 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 // Run does NOT update the lock — lock is read-only at apply time
 // (D-iter3-7). Run does NOT contact console — apply is offline
 // (D-iter3-6); audit / RecordApplied happen out-of-band.
-func Run(ctx context.Context, cfg Config) error {
+func Run(ctx context.Context, cfg Config) (err error) {
 	out := cfg.Out
 	if out == nil {
 		out = io.Discard
@@ -398,7 +398,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// non-transactional target; closeAll releases the locks then closes
 	// the drivers.
 	ac := newRunApplierCache(cfg.ApplierFor, out)
-	defer ac.closeAll()
+	defer func() { err = joinRelease(err, ac.closeAll()) }()
 
 	// Before ANYTHING is written: does the target hold what the schema says it
 	// needs? `required_extensions` used to be a declaration nobody read — see
@@ -434,11 +434,22 @@ func Run(ctx context.Context, cfg Config) error {
 	// `ac.get` takes the lock.
 	headUnderLock := map[string]string{}
 
+	// What the closing line reports. Only work this run actually did is
+	// counted as applied: a migration skipped because a concurrent run got
+	// there first is somebody else's success, and folding it into "N
+	// applied" told an operator this run had done work it had not.
+	var applied, adopted, faked, skipped int
+
 	for _, p := range pending {
 		fmt.Fprintf(out, "apply: %s :: %s\n", p.Connection, p.Migration.GetId())
 
 		applier, err := ac.get(ctx, p.Connection)
 		if err != nil {
+			return err
+		}
+		// Before every write, not once per run: a lock lost while the
+		// previous migration ran must stop the next one from starting.
+		if err := ac.checkHeld(ctx, p.Connection); err != nil {
 			return err
 		}
 
@@ -475,6 +486,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if head != "" && p.Migration.GetId() <= head {
 			fmt.Fprintf(out, "apply: %s :: %s already applied by a concurrent run (head %s) — skipping\n",
 				p.Connection, p.Migration.GetId(), head)
+			skipped++
 			continue
 		}
 
@@ -492,6 +504,7 @@ func Run(ctx context.Context, cfg Config) error {
 			if err := applyFake(ctx, applier, p, out, logger, started); err != nil {
 				return err
 			}
+			faked++
 			continue
 		}
 		if p.Adopt {
@@ -533,6 +546,7 @@ func Run(ctx context.Context, cfg Config) error {
 			fmt.Fprintf(out, "apply: %s :: %s adopted (supersedes %d migration(s) through %s, all applied here; no DDL run)\n",
 				p.Connection, p.Migration.GetId(), len(p.Migration.GetSupersedes()), lastSuperseded(p.Migration))
 			logMigration(logger, "adopt", p.Connection, p.Migration, time.Since(started), nil)
+			adopted++
 			continue
 		}
 		// Drift gate BEFORE the body runs: the state the migration was
@@ -553,9 +567,27 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 		logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), nil)
+		applied++
 	}
-	fmt.Fprintf(out, "apply: %d migration(s) applied\n", len(pending))
+	fmt.Fprintln(out, closingLine(applied, adopted, faked, skipped))
 	return nil
+}
+
+// closingLine is the run's one-line summary. "N migration(s) applied" stays
+// the lead so existing log searches keep matching; every other outcome is
+// named separately and only when it happened.
+func closingLine(applied, adopted, faked, skipped int) string {
+	line := fmt.Sprintf("apply: %d migration(s) applied", applied)
+	if adopted > 0 {
+		line += fmt.Sprintf(", %d adopted (no DDL run)", adopted)
+	}
+	if faked > 0 {
+		line += fmt.Sprintf(", %d recorded without running (--fake)", faked)
+	}
+	if skipped > 0 {
+		line += fmt.Sprintf(", %d skipped (already applied by a concurrent run)", skipped)
+	}
+	return line
 }
 
 // applyFake records one pending migration without running its body, guarded by
@@ -732,17 +764,68 @@ func (c *runApplierCache) get(ctx context.Context, conn string) (Applier, error)
 	return a, nil
 }
 
+// checkHeld fails when the run lock taken for conn is no longer this run's.
+//
+// Only a lock that can answer (CheckedRunLock) is asked; a connection with no
+// run lock, or one whose lock cannot tell, passes. The error names the
+// connection and wraps ErrLockLost, so a caller can tell "stopped because
+// another run may be writing" from an ordinary migration failure.
+func (c *runApplierCache) checkHeld(ctx context.Context, conn string) error {
+	l, ok := c.locks[conn]
+	if !ok {
+		return nil
+	}
+	cl, ok := l.(CheckedRunLock)
+	if !ok {
+		return nil
+	}
+	if err := cl.Check(ctx); err != nil {
+		return fmt.Errorf("connection %s: stopping before the next write — %w", conn, err)
+	}
+	return nil
+}
+
 // closeAll releases every held run-lock (before closing, so the lock's final
 // conditional write still has a live client) then closes every cached applier.
-func (c *runApplierCache) closeAll() {
-	for conn, l := range c.locks {
-		if err := l.Release(context.Background()); err != nil {
+//
+// A release that reports the lock LOST is returned, not logged: it means some
+// part of the run was not protected by the lock, and a run that reports
+// success over that is the failure the lock exists to prevent. Any other
+// release failure (the store went away at the very end) leaves a lock that
+// expires on its own, and stays a warning.
+func (c *runApplierCache) closeAll() error {
+	var lost []error
+	conns := make([]string, 0, len(c.locks))
+	for conn := range c.locks {
+		conns = append(conns, conn)
+	}
+	sort.Strings(conns)
+	for _, conn := range conns {
+		if err := c.locks[conn].Release(context.Background()); err != nil {
+			if errors.Is(err, ErrLockLost) {
+				lost = append(lost, fmt.Errorf("connection %s: %w", conn, err))
+				continue
+			}
 			fmt.Fprintf(c.out, "migrate: warning: releasing run-lock for %s: %v\n", conn, err)
 		}
 	}
 	for _, a := range c.cache {
 		_ = a.Close()
 	}
+	return errors.Join(lost...)
+}
+
+// joinRelease folds the release outcome into the run's result: a run that
+// failed keeps its own error first, and a lost lock fails a run that would
+// otherwise have succeeded.
+func joinRelease(runErr, releaseErr error) error {
+	if releaseErr == nil {
+		return runErr
+	}
+	if runErr == nil {
+		return releaseErr
+	}
+	return errors.Join(runErr, releaseErr)
 }
 
 // logMigration emits one structured line per migration. Status =
@@ -1037,7 +1120,7 @@ func sortedTargets(in []ConnTarget) ([]ConnTarget, error) {
 // Mid-list failure aborts loud; the DB-side `w17_migrations`
 // reflects the partial-rollback state on next deploy. Lock is
 // read-only at rollback time (matches Apply posture).
-func RunRollback(ctx context.Context, cfg RollbackConfig) error {
+func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 	out := cfg.Out
 	if out == nil {
 		out = io.Discard
@@ -1072,7 +1155,7 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 	}
 
 	ac := newRunApplierCache(cfg.ApplierFor, out)
-	defer ac.closeAll()
+	defer func() { err = joinRelease(err, ac.closeAll()) }()
 
 	logger := newLogger(out, cfg.LogFormat)
 
@@ -1093,6 +1176,9 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 
 		applier, err := ac.get(ctx, p.Connection)
 		if err != nil {
+			return err
+		}
+		if err := ac.checkHeld(ctx, p.Connection); err != nil {
 			return err
 		}
 

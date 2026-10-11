@@ -11,7 +11,10 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
-var _ migrate.RunLockCapable = (*Applier)(nil)
+var (
+	_ migrate.RunLockCapable = (*Applier)(nil)
+	_ migrate.CheckedRunLock = (*runLock)(nil)
+)
 
 // runLockPrefix is what an operator sees in
 // `performance_schema.metadata_locks`; `runLockNameFor` appends the schema.
@@ -176,14 +179,31 @@ func (l *runLock) Release(ctx context.Context) error {
 	var released sql.NullInt64
 	err := l.conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", l.name).Scan(&released)
 	if err == nil && (!released.Valid || released.Int64 != 1) {
-		err = fmt.Errorf("mysql run lock: %s was no longer held by this session at release "+
+		err = fmt.Errorf("mysql run lock: %w: %s was no longer held by this session at release "+
 			"(RELEASE_LOCK answered %s) — the lock session was reaped or killed, so part of "+
-			"this run was not protected by it", l.name, nullIntString(released))
+			"this run was not protected by it", migrate.ErrLockLost, l.name, nullIntString(released))
 	}
 	if cErr := l.conn.Close(); err == nil {
 		err = cErr
 	}
 	return err
+}
+
+// Check implements migrate.CheckedRunLock by asking the server whether the
+// lock is still held by THIS session. The session can be killed or reaped
+// mid-run, which releases the lock server-side without telling anyone; the
+// orchestrator asks before every migration so a run stops before writing
+// under a lock another run may now hold.
+func (l *runLock) Check(ctx context.Context) error {
+	var mine sql.NullInt64
+	err := l.conn.QueryRowContext(ctx, "SELECT IS_USED_LOCK(?) = CONNECTION_ID()", l.name).Scan(&mine)
+	if err != nil {
+		return fmt.Errorf("mysql run lock: %w: the lock session could not be asked whether it still holds %s: %v", migrate.ErrLockLost, l.name, err)
+	}
+	if !mine.Valid || mine.Int64 != 1 {
+		return fmt.Errorf("mysql run lock: %w: %s is no longer held by this run's session", migrate.ErrLockLost, l.name)
+	}
+	return nil
 }
 
 func nullIntString(v sql.NullInt64) string {

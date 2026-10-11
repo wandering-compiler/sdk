@@ -19,7 +19,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sync"
 	"time"
+
+	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
 // Shared tunables. TTL is a lock's lifetime without a refresh;
@@ -54,12 +57,82 @@ func OwnerID() string {
 	return fmt.Sprintf("%s:%d:%s", host, os.Getpid(), hex.EncodeToString(b[:]))
 }
 
+// Lease answers "is this lock still provably ours?" without a round trip, so
+// an applier can ask before every write.
+//
+// It is measured on THIS process's monotonic clock, from the moment a
+// successful acquire or refresh was SENT: the store started the lock's
+// lifetime no earlier than that, so the lease ends no later than the lock
+// does. A safety margin is taken off on top, so a lease that is about to run
+// out counts as gone rather than racing the takeover. Wall-clock time and
+// other hosts' clocks play no part.
+//
+// A refresh that finds another owner marks the lease lost for good: once
+// somebody else has held the lock, nothing this process writes afterwards is
+// protected, whatever later refreshes report.
+type Lease struct {
+	mu       sync.Mutex
+	length   time.Duration
+	deadline time.Time
+	lost     error
+	now      func() time.Time
+}
+
+// NewLease starts a lease of the given length at sentAt, the moment the
+// acquiring request was sent.
+func NewLease(length time.Duration, sentAt time.Time) *Lease {
+	l := &Lease{length: length, now: time.Now}
+	l.deadline = l.deadlineFrom(sentAt)
+	return l
+}
+
+// deadlineFrom keeps a fifth of the length back as margin.
+func (l *Lease) deadlineFrom(sentAt time.Time) time.Time {
+	return sentAt.Add(l.length - l.length/5)
+}
+
+// Renewed extends the lease after a refresh, sent at sentAt, succeeded.
+// A lease already lost stays lost.
+func (l *Lease) Renewed(sentAt time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lost != nil {
+		return
+	}
+	if d := l.deadlineFrom(sentAt); d.After(l.deadline) {
+		l.deadline = d
+	}
+}
+
+// Lose marks the lease lost with the reason; the first reason wins.
+func (l *Lease) Lose(reason error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lost == nil {
+		l.lost = fmt.Errorf("%w: %v", migrate.ErrLockLost, reason)
+	}
+}
+
+// Check returns nil while the lease holds and an error wrapping
+// migrate.ErrLockLost once it does not.
+func (l *Lease) Check() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lost != nil {
+		return l.lost
+	}
+	if !l.now().Before(l.deadline) {
+		return fmt.Errorf("%w: no successful refresh within the lock's lifetime, so another run may have taken it over", migrate.ErrLockLost)
+	}
+	return nil
+}
+
 // Beater periodically refreshes a held lock until Stop. Start one
 // per acquired lock; Stop it (idempotent) on release. It never fires
 // immediately — the lock was just taken — and a refresh error is
-// handed to onErr (a lost lock is serious, but the next conditional
-// write the applier makes will fail loudly on its own, so the beater
-// only reports; it doesn't abort).
+// handed to onErr. The beater itself does not abort anything: the
+// applier asks the lock's Lease before every write, and that is where
+// a lost lock stops the run.
 type Beater struct {
 	stop chan struct{}
 	done chan struct{}

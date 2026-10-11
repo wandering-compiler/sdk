@@ -271,6 +271,9 @@ func (a *Applier) applyOpToObject(ctx context.Context, cli *awss3.Client, op dat
 	if !changed {
 		return nil
 	}
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 
 	// Carry the original object's metadata onto the rewrite. A
 	// PutObject with only Bucket/Key/Body would reset the object to
@@ -396,6 +399,9 @@ func (a *Applier) loadCursor(ctx context.Context, cli *awss3.Client, key string)
 // saveCursor PUTs the cursor JSON. Called after each op's
 // completion so an interrupted run resumes from the next op.
 func (a *Applier) saveCursor(ctx context.Context, cli *awss3.Client, key string, c *dataCursor) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	body, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("encode cursor JSON: %w", err)
@@ -412,6 +418,9 @@ func (a *Applier) saveCursor(ctx context.Context, cli *awss3.Client, key string,
 // the bookkeeping write succeeds. NoSuchKey is tolerated
 // (idempotent re-run path: cursor was already cleaned up).
 func (a *Applier) deleteCursor(ctx context.Context, cli *awss3.Client, key string) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	_, err := cli.DeleteObject(ctx, &awss3.DeleteObjectInput{
 		Bucket: aws.String(a.bucket),
 		Key:    aws.String(key),
@@ -428,6 +437,9 @@ func (a *Applier) deleteCursor(ctx context.Context, cli *awss3.Client, key strin
 // directly via PutObject because YAML bodies skip
 // applied.Wrap on the registry side.
 func (a *Applier) recordMigrationApplied(ctx context.Context, cli *awss3.Client, m *applyfetchpb.Migration) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	hash := sha256.Sum256([]byte(m.GetUpSql()))
 	envelope := fmt.Sprintf(`{"timestamp":"%s","content_sha256":"%s"}`,
 		m.GetId(), hex.EncodeToString(hash[:]))
@@ -444,6 +456,9 @@ func (a *Applier) recordMigrationApplied(ctx context.Context, cli *awss3.Client,
 // NoSuchKey is tolerated (already removed = idempotent
 // rollback).
 func (a *Applier) recordMigrationRolledBack(ctx context.Context, cli *awss3.Client, m *applyfetchpb.Migration) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	key := trackerPrefix + m.GetId() + ".json"
 	_, err := cli.DeleteObject(ctx, &awss3.DeleteObjectInput{
 		Bucket: aws.String(a.bucket),

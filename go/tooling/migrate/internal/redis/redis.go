@@ -57,6 +57,11 @@ type Applier struct {
 	// heartbeat / TTL paths without real-time waits.
 	lockTTL  time.Duration
 	lockBeat time.Duration
+
+	// held is the run lock this applier took, if any. Every write asks
+	// it first (stillHeld), so a run that lost its lock stops before
+	// the next write instead of racing whoever took it over.
+	held *redisRunLock
 }
 
 var _ migrate.Applier = (*Applier)(nil)
@@ -219,6 +224,9 @@ func (a *Applier) run(ctx context.Context, script string) error {
 // missing field returns redis.Nil from the client, which is the
 // expected "nothing to delete" path.
 func (a *Applier) do(ctx context.Context, argv []string) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	args := make([]any, len(argv))
 	for i, s := range argv {
 		args[i] = s
