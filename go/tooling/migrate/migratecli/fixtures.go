@@ -39,7 +39,13 @@ var newApplierFor = func(specs []factory.TargetSpec) migrate.ApplierFor {
 // runFixtures implements `<binary> fixtures apply`.
 func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer) error {
 	if len(args) == 0 || args[0] != "apply" {
-		return fmt.Errorf("fixtures: the only subcommand is `apply`\n\n%s", usage)
+		// The FIXTURES usage: the migrate one lists verbs this command
+		// does not have, and sends the reader to the wrong page.
+		got := ""
+		if len(args) > 0 {
+			got = fmt.Sprintf(" (got %q)", args[0])
+		}
+		return fmt.Errorf("fixtures: the only subcommand is `apply`%s\n\n%s", got, fixturesUsage)
 	}
 	f, err := parseFlags("fixtures apply", args[1:], out)
 	if err != nil {
@@ -52,6 +58,9 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	targets := ownedTargets(lk.ConnTargets(), opts.Connections)
 	if len(targets) == 0 {
 		return fmt.Errorf("fixtures: none of this bundle's connections appear in %s", f.lock)
+	}
+	if err := refuseSharedDSNVariable("fixtures", targets); err != nil {
+		return err
 	}
 	specs, withoutDSN := seedSpecs(targets, opts.getenv())
 
