@@ -11,7 +11,7 @@ import "strings"
 // is keyed by the enum VALUE NAME instead — `tasks.Task#view` is stored as
 // `TASKS_TASK_VIEW`.
 //
-// Until T2-5 pass #10 this conversion existed only inside the compiler, while
+// This conversion once existed only inside the compiler, while
 // the public package documented the code form as the key and offered
 // IDByString for "typical JWT claim shape". The two alphabets are disjoint, so
 // the documented lookup always missed — fail-closed, but a legitimate grant

@@ -67,8 +67,7 @@ type NatsBusOptions struct {
 	// ChannelRetries overrides DefaultMaxDeliver +
 	// DefaultAckWait per-channel. Channel name -> retry
 	// override. Channels missing from the map use the
-	// Default* values. Codegen-generated wiring (per
-	// docs/archive/eventbus-extensions-plan.md P2.2) fills this from
+	// Default* values. Codegen-generated wiring fills this from
 	// the parser's per-event ResolvedRetry rolled up to
 	// channel granularity.
 	ChannelRetries map[string]ChannelRetry
@@ -191,7 +190,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		// Without it, nats.go ran the disconnect and closed handlers below on
 		// every ordinary shutdown — SIGTERM on a retired blue/green colour —
 		// and each one put "connection closed permanently" into Sentry and
-		// "connection LOST" into the log (a consumer, 2026-10-02): one false
+		// "connection LOST" into the log: one false
 		// error per eventbus bundle per deploy, burying the real outage.
 		//
 		// The decision is made where the close is CAUSED, not where a callback

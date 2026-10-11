@@ -6,7 +6,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/typere"
 )
 
-// T2-6 pass #8, B-F5 — `(w17.field) = {type: DECIMAL, precision: 10,
+// `(w17.field) = {type: DECIMAL, precision: 10,
 // scale: 2}` promised a refusal ("Refused when … the fee carries more digits
 // than the column may hold") that nothing enforced. A DDL CHECK cannot
 // enforce it: PostgreSQL coerces the literal to the column type BEFORE

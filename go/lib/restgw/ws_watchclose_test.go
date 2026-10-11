@@ -21,8 +21,8 @@ type wsWriteOnlyResult struct {
 	writeErr      error
 }
 
-// TestWSWatchClientClose_GracefulCloseReleasesTheStream pins the invariant
-// C-F5 filed: a WRITE-ONLY WebSocket handler — the shape the generated
+// TestWSWatchClientClose_GracefulCloseReleasesTheStream pins the invariant:
+// a WRITE-ONLY WebSocket handler — the shape the generated
 // server-stream-over-WS branch has — must notice a client that closes
 // GRACEFULLY and cancel the context its backend gRPC stream runs on.
 //

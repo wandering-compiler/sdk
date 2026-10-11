@@ -13,8 +13,7 @@ import (
 // FetchBatches splits ids into windows of batchSize and runs fn for
 // each window, concatenating the per-window results in window order.
 // It is the runtime backing for the bounded-parallel LateMaterialize
-// fetch (docs/specs/storage/bounded-materialization.md,
-// `materialize.max_parallel`).
+// fetch (`materialize.max_parallel`).
 //
 // Concurrency is bounded by `maxParallel`, further clamped to the
 // connection pool's headroom (see [effectiveParallel]) so a single

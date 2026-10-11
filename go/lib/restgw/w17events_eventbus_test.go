@@ -76,8 +76,8 @@ func TestEventbusEventSource_ForwardsMatchingTopic(t *testing.T) {
 // TestEventbusEventSource_MultiChannelComposesSources — a hub
 // configured with several channels opens ONE bus subscriber per
 // channel and composes them into a single SSE surface: an event
-// on ANY of the domain's channels reaches the client (T2-6 pass
-// #2 multi-channel hub).
+// on ANY of the domain's channels reaches the client (the
+// multi-channel hub).
 func TestEventbusEventSource_MultiChannelComposesSources(t *testing.T) {
 	bus := eventbus.NewMemoryBus()
 	cf := &countingFactory{inner: bus}

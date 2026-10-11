@@ -12,8 +12,8 @@ package acllock
 //
 // Wire model: `AuthResp.permission_ids` carries the deduped
 // list of granted permission numeric IDs. No bitset packing —
-// the slice IS the wire shape (see
-// docs/specs/plugins/auth.md §"Permission wire format").
+// the slice IS the wire shape the auth plugin contract
+// defines.
 func HasPermission(ids []int32, id int32) bool {
 	for _, granted := range ids {
 		if granted == id {
@@ -114,7 +114,7 @@ func GrantAll(lock *Lock) []int32 {
 // Accepts EITHER alphabet: the enum value name a lock is keyed by
 // (TASKS_TASK_VIEW) or the cascade code an author writes and a claim usually
 // carries (tasks.Task#view). Locks are keyed by the former because the
-// allocation crosses a proto enum; before T2-5 pass #10 only that form
+// allocation crosses a proto enum; originally only that form
 // resolved, while the package documented the latter — so the documented call
 // silently found nothing. Falling back through PermissionKey costs one
 // conversion on the miss path and cannot create a match that was not

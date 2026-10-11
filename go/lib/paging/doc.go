@@ -1,5 +1,5 @@
 // Package paging owns the runtime side of cursor-style REST
-// pagination (REV-148).
+// pagination.
 //
 // Three layers compose the feature:
 //
@@ -20,7 +20,4 @@
 // receive `InvalidArgument: cursor_expired` when their cursor
 // was emitted by an incompatible build and must refetch from
 // page one.
-//
-// Spec: docs/specs/gateway/cursor-paging.md
-// ADR:  docs/decisions/cursor-paging.md
 package paging

@@ -4,12 +4,10 @@
 // the compiled custom JSON parser the user roadmap calls
 // out for performance optimisation.
 //
-// Its shape was ADAPTED from an external library in 2026-05
-// ("zkopirovat … rozsirovat"), which is why the two once
-// looked alike. Nothing external is imported: that library
-// is not a dependency of this package, of the compiler, or
-// of anything the compiler emits — see the warning in
-// docs/conventions-global/go.md.
+// Its shape was ADAPTED from an external library, which is
+// why the two once looked alike. Nothing external is imported:
+// that library is not a dependency of this package, of the
+// compiler, or of anything the compiler emits.
 //
 // The generator emits Go that imports this package directly;
 // every cross-cutting runtime concern shared by every
@@ -64,7 +62,7 @@ var (
 // were ("flip the var at process startup"). Two things make that
 // false. The settings ARE the w17 JSON dialect — snake_case names,
 // enum values as integers, 64-bit ints as strings
-// (docs/specs/gateway/json-dialect.md §2a) — so changing them means
+// (the w17 JSON dialect) — so changing them means
 // leaving the dialect every client, every published schema and every
 // sibling surface was generated against. And a flip would only
 // half-apply anyway: [MarshalProtoAppend] consults the generated
@@ -72,7 +70,7 @@ var (
 // the settings in at generation time, so a message with a registered
 // codec would keep the old shape while one without it changed —
 // the same endpoint answering two ways depending on whether codegen
-// happened to emit a codec for that type (T2-6 pass #9, A9-5).
+// happened to emit a codec for that type.
 //
 // The vars stay exported because generated code and the helpers below
 // read them. Changing their VALUES is a compiler-level decision: the
@@ -424,7 +422,7 @@ func WriteResponseFiltered(w http.ResponseWriter, status int, msg proto.Message,
 // can highlight every offending field at once instead of
 // fixing-then-resubmitting one error at a time.
 //
-// Shape mirrors the gRPC `*w17.ErrorDetail` (REV-031 Phase C-6)
+// Shape mirrors the gRPC `*w17.ErrorDetail`
 // so REST + gRPC clients see one consistent envelope shape:
 //
 //	{"field": "email", "code": "INVALID_EMAIL",

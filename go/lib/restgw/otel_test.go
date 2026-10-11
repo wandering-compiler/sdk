@@ -8,7 +8,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// REV-031 Phase C-6: OTel boot moved to lib/observx; restgw
+// OTel boot moved to lib/observx; restgw
 // keeps only the HTTP-side surface — middleware wrap +
 // /metrics listener. The OTelConfig / OTelConfigFromEnv /
 // InitOTel surface is gone.

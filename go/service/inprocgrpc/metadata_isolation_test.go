@@ -130,7 +130,7 @@ func keys(md metadata.MD) []string {
 	return out
 }
 
-// TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver pins C-F6. The
+// TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver: the
 // in-process bridge flips the caller's OUTGOING metadata to INCOMING but
 // never clears the outgoing side, so a handler reached in-process still
 // carries the ORIGINAL caller's outgoing metadata — and any nested

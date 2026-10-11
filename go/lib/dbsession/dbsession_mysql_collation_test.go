@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// T1-4 pass #12, B-F2. The MySQL collation pin lived in the DEV DSN only
+// The MySQL collation pin lived in the DEV DSN only
 // (`composeDSN`), while the session contract every process shares — the one an
 // operator-supplied DSN goes through — carried sql_mode and parseTime and not
 // this. go-sql-driver's default handshake collation is `utf8mb4_general_ci`,
@@ -13,7 +13,7 @@ import (
 // answered case-INSENSITIVELY in production: `'Foo' = 'foo'` → 1 there, 0 here,
 // live-proven on mysql 8.4.10.
 //
-// The flagship scenario the report led with — `ORDER BY CAST(x AS CHAR)` — does
+// The obvious suspect — `ORDER BY CAST(x AS CHAR)` — does
 // NOT diverge: the MySQL emitter appends `COLLATE utf8mb4_0900_as_cs` to every
 // character-result cast, and DDL `COLLATE` anchors column comparisons. What
 // survives is the comparison no column anchors: literal↔literal and

@@ -13,7 +13,7 @@
 // DESTINATION directory and renames it over the key. It never
 // writes into the final path and never unlinks it on failure
 // — a previously published object survives a failed put
-// untouched (T3-7 pass #9, C-F4).
+// untouched.
 //
 // Sub-bucket directories materialise lazily — Put's
 // MkdirAll covers any missing parent directories on the way
@@ -157,7 +157,7 @@ const objectMode = 0o644 // #nosec G302 -- public blob store, deliberately world
 // is a runtime env value the gateway resolves at boot, so the only
 // component that knows it is the driver itself. Advertising it here lets
 // the upload handler get the placement right for every deployment,
-// including every project already generated (T3-7 pass #9, C-F4).
+// including every project already generated.
 //
 // The directory is dot-prefixed so it never collides with a key built by
 // [kvfs.BuildKey] and stays out of the way of an operator listing the

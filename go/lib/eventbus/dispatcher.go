@@ -6,7 +6,7 @@
 // into. Phase 10 ships concrete implementations
 // (in-memory bufconn, NATS, Redis Streams).
 //
-// Per spec docs/specs/eventbus/emit.md, emit semantics are
+// Emit semantics are
 // fire-and-forget on RPC return: the interceptor builds the
 // event payload, wraps it in the envelope, and hands it to
 // the bus; failures inside the bus do NOT fail the RPC (the

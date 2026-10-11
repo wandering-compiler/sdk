@@ -76,7 +76,7 @@ type FilePartConfig struct {
 	// falls back to os.TempDir(), which on a containerised
 	// deployment is a DIFFERENT filesystem from a mounted
 	// bucket volume and therefore takes the driver's
-	// cross-device copy path (T3-7 pass #9, C-F4).
+	// cross-device copy path.
 	TmpDir string
 
 	// BucketPath is the per-field base path (e.g. "/avatars",
@@ -329,7 +329,7 @@ type UploadedObject struct {
 // before it calls the backend — every one of which can still fail. Nothing
 // referenced the object at that point, so a later failure used to leave
 // bytes in the bucket that no row points at, permanently: no GC, no sweep
-// and no orphan posture exists anywhere in the stack (T2-6 pass #9, D9-2).
+// and no orphan posture exists anywhere in the stack.
 //
 // Best-effort by design. The request has already failed; an undeletable
 // orphan must not turn a 400 into a 500. Delete is idempotent on a missing

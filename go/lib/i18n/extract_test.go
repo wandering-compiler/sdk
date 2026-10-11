@@ -92,7 +92,7 @@ func TestScaffoldPO_AllMsgstrEmpty(t *testing.T) {
 // File entries, en uses baseline (msgstr=msgid), cs is
 // scaffolded (empty msgstr). Path layout is
 // `<languagesDir>/<domain>/<lang>.po` flat (no inner
-// `languages/` subdir, REV-149 P1.8).
+// `languages/` subdir).
 func TestEmitDomainCatalogs_PerLanguageOutput(t *testing.T) {
 	files, err := i18n.EmitDomainCatalogs("app", "w17/languages",
 		[]string{"en", "cs"},

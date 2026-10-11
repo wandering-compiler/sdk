@@ -6,8 +6,8 @@
 // instance via [txregistry.AdoptTx] when they see a
 // `w17-tx-id` gRPC metadata header.
 //
-// Single-instance default per `docs/archive/iteration-2-dql.md`
-// D-iter2-dql-11. Multi-instance routing (the `conn_id` axis)
+// Single-instance by default: one storage binary per domain.
+// Multi-instance routing (the `conn_id` axis)
 // is parked behind a future Rust grpcproxy daemon; this server
 // returns an empty conn_id and ignores it on every call.
 package distx
@@ -95,12 +95,11 @@ func NewServer(reg *txregistry.Memory, opts ...Option) *Server {
 
 // Begin opens a fresh transaction on the named connection's
 // *sql.DB and returns the assigned tx_id. conn_id stays empty
-// — single-instance, no cross-binary routing axis (see
-// D-iter2-dql-11).
+// — single-instance, no cross-binary routing axis.
 //
 // `req.GetConnectionName()` selects which `*sql.DB` the tx
 // opens on (multi-dialect domains hold one per declared
-// connection — `docs/archive/iteration-2-multidb.md` §M2-D). Empty /
+// connection). Empty /
 // unknown connection name → `codes.InvalidArgument` with the
 // registered names listed for diagnostic.
 //
@@ -122,8 +121,8 @@ func (s *Server) Begin(ctx context.Context, req *distxpb.BeginRequest) (*distxpb
 	// transaction change level, and a storage method called INSIDE this
 	// tx cannot open one. Leaving it unset is what silently voided a
 	// method's declared `tx_isolation` on the adopted path — the
-	// declaration only ever reached the method's own fresh-tx branch
-	// (T3-7 pass #9 D-F7). Unspecified keeps the driver default.
+	// declaration only ever reached the method's own fresh-tx branch.
+	// Unspecified keeps the driver default.
 	if iso := isolationLevel(req.GetIsolation()); iso != sql.LevelDefault {
 		opts.TxOptions = &sql.TxOptions{Isolation: iso}
 	}
@@ -173,8 +172,8 @@ func isolationLevel(i distxpb.Isolation) sql.IsolationLevel {
 //
 // ctx bounds the registry's wait for a storage handler that
 // adopted this tx and is still running: closing the tx between
-// two of its statements would commit half a method (T3-7 pass
-// #7 C-F2). When that wait runs out the tx stays open and the
+// two of its statements would commit half a method. When that
+// wait runs out the tx stays open and the
 // caller gets `FailedPrecondition` — a retryable "not yet",
 // distinct from `NotFound`'s "never / no longer".
 func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distxpb.CommitResponse, error) {

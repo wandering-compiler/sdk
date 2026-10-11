@@ -8,8 +8,7 @@ import (
 
 // This file formats DATES and TIMES against the frozen table's patterns.
 //
-// Everything renders in UTC (docs/specs/i18n/formatting.md — per-user time
-// zones are parked), so a value carrying an offset is converted first:
+// Everything renders in UTC (per-user time zones are not supported yet), so a value carrying an offset is converted first:
 // `2026-07-26T23:30:00+02:00` is 21:30 UTC and renders as such.
 //
 // The token vocabulary is CLOSED and shared with the TS mirror:

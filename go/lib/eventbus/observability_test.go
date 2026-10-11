@@ -308,7 +308,7 @@ func timeoutCtx(t *testing.T, d time.Duration) context.Context {
 // TestDefaultObserver_EmitFailureLeavesATrace — the promise four documents
 // make must be true of the bus a generated main actually builds.
 //
-// T2-6 pass #9, D9-3. `docs/specs/eventbus/emit.md` says emit failures are
+// The eventbus emit contract says emit failures are
 // "logged + counted in observability metrics", and uses that as its
 // justification for not failing the RPC; `dispatcher.go`'s header says it
 // again; and every emitted helper comments that failures are "observed via

@@ -155,8 +155,7 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 	// accepted mode: with `Modes: ["ticket"]` the re-auth probe carried the
 	// credential and the wrapper walked straight past it into the ticket
 	// branch, replayed the spent one-shot ticket, and tore the stream down
-	// — the exact B9-9 outage, surviving in a documented mode
-	// (T2-6 pass #10, C10-6).
+	// — the same spent-ticket outage, surviving in a documented mode.
 	//
 	// A nonce rather than a fixed header name because the alternative —
 	// trusting any Authorization header in ticket-only mode — would let a
@@ -207,7 +206,7 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 			// principal was never revoked — every bearer'd
 			// browser WS dying at the first tick, and an
 			// EventSource reconnect replaying the consumed
-			// ticket into a permanent 401 (T2-6 pass #9, B9-9).
+			// ticket into a permanent 401.
 			//
 			// Promoting the ticket to the credential it stood
 			// for is what makes the two features compose: the

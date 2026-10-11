@@ -108,7 +108,7 @@ func (r *replicaBus) received(budget time.Duration) (string, bool) {
 	}
 }
 
-// INVARIANT (B-F2): an SSE hub is a FAN-OUT consumer. Two replicas of one
+// INVARIANT: an SSE hub is a FAN-OUT consumer. Two replicas of one
 // surface, wired exactly alike, must BOTH receive every event — each holds a
 // different set of browser connections, so a message that reaches only one of
 // them is silently missed by the other's clients (including w17.invalidate →
@@ -191,7 +191,7 @@ func TestRedisBus_DeliveryMode_ReplicaFanOut_Embedded(t *testing.T) {
 	})
 }
 
-// INVARIANT (B-F7): the two adapters agree on where a fresh subscriber starts
+// INVARIANT: the two adapters agree on where a fresh subscriber starts
 // reading, and the start position follows the DELIVERY MODE:
 //
 //   - a work queue starts at the retained backlog, so a surface deployed after

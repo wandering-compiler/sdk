@@ -10,7 +10,7 @@ import (
 )
 
 // TestStripReservedHeadersMiddleware_ForgedCredentialNeverReachesHandler is
-// the load-bearing test of REV-162.
+// the load-bearing test of URL-carried credentials.
 //
 // The reserved slot is what tells the auth router "this request carries a
 // URL-extracted credential, dispatch it to the URL_TOKEN backend". If a

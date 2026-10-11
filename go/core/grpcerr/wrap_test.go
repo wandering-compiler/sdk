@@ -167,7 +167,7 @@ func TestWrap_PgConstraint_FillsTheConstraintAndTablePlaceholders(t *testing.T) 
 // INVARIANT: a mapped violation's status MESSAGE names the field and says
 // what is wrong with it — it does not merely classify the failure.
 //
-// a consumer, 2026-08-30: omitting `customer_id` answered
+// Omitting `customer_id` used to answer
 // `DocumentMutation.CreateDocument: not_null violation`. That sentence
 // names no column, no request field, and spends its only noun on a
 // database concept the caller cannot see — callers address fields. The
@@ -352,7 +352,7 @@ func TestWrap_SQLite_FK_SingleFKTableWithMultiFKElsewhere_NoAttribution(t *testi
 }
 
 func TestWrap_InternalErrorRoutesViaErrorx(t *testing.T) {
-	// REV-031 Phase C-5 — unrecognised driver errors land as
+	// Unrecognised driver errors land as
 	// Internal + go through gox/errorx for Sentry-aware
 	// routing. In tests (no reporter configured), errorx
 	// falls back to log.Printf — capture it.

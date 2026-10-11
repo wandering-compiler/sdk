@@ -11,8 +11,7 @@ import (
 // FormatLocaleMetadataKey carries the per-request FORMAT locale — which is not
 // the UI language. A Czech user running an English UI still wants
 // `26.07.2026`: browsers separate the two (Accept-Language vs OS regional
-// settings) and so does Django, so w17 does too
-// (docs/specs/i18n/formatting.md §3).
+// settings) and so does Django, so w17 does too.
 //
 // Lowercase ASCII per the gRPC convention, same last-write-wins precedence
 // chain as [LanguageMetadataKey] (default stamp → header rename →

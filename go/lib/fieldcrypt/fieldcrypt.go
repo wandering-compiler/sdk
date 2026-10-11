@@ -17,7 +17,7 @@
 // Deterministic mode leaks equality. On a high-entropy secret that is nothing;
 // on a low-entropy column it is a frequency table. The schema decides, because
 // the schema is where somebody already wrote down that they need to compare
-// the values — see docs/specs/storage/crypted-secret-field.md.
+// the values.
 //
 // # The stored form
 //

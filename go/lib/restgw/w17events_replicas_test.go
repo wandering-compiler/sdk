@@ -1,6 +1,6 @@
 package restgw_test
 
-// Replica pin for the shared SSE hub (B-F2).
+// Replica pin for the shared SSE hub.
 //
 // A gateway is deployed as N pods; every pod runs the SAME code and computes
 // the SAME bus options, and each pod holds a DIFFERENT set of browser
@@ -12,7 +12,7 @@ package restgw_test
 // broker, with the option shape the generated gateway's serve.go builds, so it
 // fails if either the adapter or the generated wiring stops giving each
 // replica its own consumer identity. The generator side is pinned separately
-// (srcgo/domains/gateway/generator).
+// (in the gateway generator's tests).
 
 import (
 	"context"
@@ -62,7 +62,7 @@ func startHubReplica(t *testing.T, dsn, channel, topic string) *hubReplica {
 	return &hubReplica{bus: bus, frames: frames}
 }
 
-// INVARIANT (B-F2): with two hub replicas on one channel, ONE published event
+// INVARIANT: with two hub replicas on one channel, ONE published event
 // reaches the connected client of BOTH. Competing-consumer delivery — one
 // durable / one consumer group shared by every replica — gives it to exactly
 // one of them, so roughly half of all events vanish at N=2, nondeterministic

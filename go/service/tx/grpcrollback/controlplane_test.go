@@ -56,7 +56,7 @@ func TestInterceptor_DoesNotRollBackOnAFailedControlPlaneCall(t *testing.T) {
 		// service is ever renamed this test must stop agreeing with it —
 		// and duplicated literals would rename in lockstep with nothing,
 		// leaving both the filter and its pin green while the real method
-		// names moved (T3-7 pass #11, C11-5).
+		// names moved.
 		distxpb.W17DistributedTransaction_Commit_FullMethodName,
 		distxpb.W17DistributedTransaction_Begin_FullMethodName,
 		distxpb.W17DistributedTransaction_Rollback_FullMethodName,

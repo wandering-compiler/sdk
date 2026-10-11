@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// The T3-7 pass #7 (C-F8) guards for the auth cache's SIZE.
+// The guards for the auth cache's SIZE.
 //
 // The cache had no sweeper and no cap: an entry was reclaimed only when a
 // later `get` on the SAME key found it expired. Anonymous stuffing could not

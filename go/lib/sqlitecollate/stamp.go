@@ -22,7 +22,7 @@ const StampTable = "w17_collation"
 // For the WRITE side — the migration applier — because applying DDL under
 // a foreign collator is the act that builds a mismatched index.
 //
-// T1-4 pass #12, B-F5. [Fingerprint] explains why a mismatch is possible
+// [Fingerprint] explains why a mismatch is possible
 // at all; the short version is that the guarantee this package advertises
 // holds within one BUILD, and the applier, the dev-DB snapshotter and each
 // generated runtime are separate binaries.

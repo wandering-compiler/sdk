@@ -7,8 +7,7 @@ import (
 	"strings"
 )
 
-// formats.json is the FROZEN per-locale format table
-// (docs/specs/i18n/formatting.md §1). It is reference data, not project
+// formats.json is the FROZEN per-locale format table. It is reference data, not project
 // configuration: a project cannot redefine what "Czech number formatting"
 // means, the same way it cannot redefine what MAX_LEN_VIOLATION means. What a
 // project can do is remap a (language, kind) pair onto another locale's row —
@@ -153,8 +152,7 @@ func HasFormatLocale(locale string) bool {
 	return ok
 }
 
-// ResolveFormats returns the row a locale formats with, walking the chain from
-// docs/specs/i18n/formatting.md §2:
+// ResolveFormats returns the row a locale formats with, walking this chain:
 //
 //  1. the locale itself (`cs` → the cs row, `pt-BR` → the pt-BR row if one exists)
 //  2. its base language (`pt-BR` → `pt`)

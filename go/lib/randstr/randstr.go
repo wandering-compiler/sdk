@@ -23,8 +23,6 @@
 //   - 48 random bytes → 64 base64url characters before truncation,
 //     384 bits of entropy. Matches the modern industry default for
 //     opaque bearer tokens (Stripe, GitHub PAT, …).
-//
-// Spec: docs/decisions/plugin-redesign-2026-05-22.md §CRYPTO_RANDOM.
 package randstr
 
 import (

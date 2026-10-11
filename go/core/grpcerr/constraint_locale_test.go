@@ -11,12 +11,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestWrap_LocalizesTheConstraintMessage — T2-6 pass #10, D10-5.
-//
-// One declaration, one catalog, two answers. The emitted Stage-1 checks
-// (request-shape validation) have resolved their messages at runtime
-// through `i18n.T(ctx, msgid)` since REV-149 P1.5; the constraint registry
-// that answers the SAME rule when the database enforces it emitted the
+// TestWrap_LocalizesTheConstraintMessage — one declaration, one catalog,
+// two answers. The emitted Stage-1 checks (request-shape validation)
+// resolve their messages at runtime through `i18n.T(ctx, msgid)`; the
+// constraint registry that answers the SAME rule when the database enforces it emitted the
 // same catalog's strings as Go literals and shipped them raw. The msgid is
 // extracted into the domain's `.po` alongside the Stage-1 one — the
 // committed `examples/e2e-project/w17/languages/app/cs.po` carries
@@ -24,8 +22,7 @@ import (
 // paths ignored it. A Czech caller who omitted a required field got Czech
 // from the request-shape check and English from the NOT NULL.
 //
-// Since d40970b36 the message is also composed into the HEADLINE status
-// text, which is what a REST gateway surfaces and what a human reads
+// The message is also composed into the HEADLINE status text, which is what a REST gateway surfaces and what a human reads
 // first, so both are asserted.
 func TestWrap_LocalizesTheConstraintMessage(t *testing.T) {
 	i18n.Reset()
