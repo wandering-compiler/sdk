@@ -58,6 +58,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -76,10 +77,28 @@ const EnvKeys = "W17_FIELD_KEYS"
 
 // DevKeys is the keyring every generated .env.defaults carries, so the local
 // stack boots with nothing to set up. It is PUBLIC — the key is sha256 of a
-// fixed sentence — and protects nothing: the generated boot refuses it outside
-// W17_ENV=dev, the infra renderers replace it with CHANGE_ME, and `w17ctl
-// secrets seal` refuses it. A deployment's own: NewKeySpec.
+// fixed sentence — and protects nothing: [FromEnv] (and so [Init]) refuses a
+// keyring holding it unless W17_ENV=dev, the infra renderers replace it with
+// CHANGE_ME, and `w17ctl secrets seal` refuses it. A deployment's own:
+// NewKeySpec.
 const DevKeys = "1:EjeJTfdvxIRaZpA9Jx6z4RZ9ZL9yhQxalMwx0kHtsD4="
+
+// EnvEnvironment names the deployment environment; [DevEnvironment] is the
+// one value under which [FromEnv] accepts [DevKeys].
+const (
+	EnvEnvironment = "W17_ENV"
+	DevEnvironment = "dev"
+)
+
+// ErrDevKeys is returned by [FromEnv] for a keyring that holds the public
+// development key outside the development environment.
+var ErrDevKeys = errors.New("fieldcrypt: the keyring holds the public development key")
+
+// devKey is DevKeys' raw key: sha256 of a published sentence.
+var devKey = func() []byte {
+	sum := sha256.Sum256([]byte("w17 public development field key - never a secret"))
+	return sum[:]
+}()
 
 // NewKeySpec returns spec with a fresh random key appended as the next
 // version — `1:<key>` for an empty spec. New randomised values are then
@@ -137,6 +156,8 @@ type Keyring struct {
 	// under: the lowest one held, so adding a key never changes it.
 	deterministic int
 	keys          map[int]*keyset
+	// devKey records that one of the versions is the public DevKeys key.
+	devKey bool
 }
 
 type keyset struct {
@@ -160,8 +181,22 @@ type keyset struct {
 // rather than start and fail on the first read — an error hours later on a
 // machine nobody is watching is the same outage with the cause removed. This
 // function returns an error; calling it during start-up is the contract.
+//
+// A keyring that holds the public [DevKeys] key, under any version, is
+// refused unless W17_ENV is "dev": values encrypted with it are readable by
+// anyone, so a deployment that inherited the development default must not
+// start. This was documented as the generated boot's job and nothing did it,
+// so a host that called Init itself booted on the public key.
 func FromEnv() (*Keyring, error) {
-	return Parse(os.Getenv(EnvKeys))
+	kr, err := Parse(os.Getenv(EnvKeys))
+	if err != nil {
+		return nil, err
+	}
+	if kr.devKey && os.Getenv(EnvEnvironment) != DevEnvironment {
+		return nil, fmt.Errorf("%w: it is public, so values encrypted with it protect nothing; it is accepted only with %s=%s — "+
+			"generate a deployment key (fieldcrypt.NewKeySpec, or `w17ctl secrets`) and set %s to it", ErrDevKeys, EnvEnvironment, DevEnvironment, EnvKeys)
+	}
+	return kr, nil
 }
 
 // Parse builds a keyring from the W17_FIELD_KEYS syntax.
@@ -198,6 +233,9 @@ func Parse(spec string) (*Keyring, error) {
 			return nil, fmt.Errorf("fieldcrypt: %s version %d: %w", EnvKeys, ver, err)
 		}
 		kr.keys[ver] = ks
+		if subtle.ConstantTimeCompare(raw, devKey) == 1 {
+			kr.devKey = true
+		}
 		if ver > kr.current {
 			kr.current = ver
 		}
