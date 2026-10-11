@@ -204,8 +204,10 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 		return nil, fmt.Errorf("migrate.Plan: ApplierFor is nil")
 	}
 
-	targets := append([]ConnTarget(nil), cfg.Targets...)
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Connection < targets[j].Connection })
+	targets, err := sortedTargets(cfg.Targets)
+	if err != nil {
+		return nil, fmt.Errorf("migrate.Plan: %w", err)
+	}
 
 	var out []Pending
 	for _, ct := range targets {
@@ -789,15 +791,38 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 		return nil, fmt.Errorf("migrate.PlanRollback: ApplierFor is nil")
 	}
 
-	targets := append([]ConnTarget(nil), cfg.Targets...)
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Connection < targets[j].Connection })
+	targets, err := sortedTargets(cfg.Targets)
+	if err != nil {
+		return nil, fmt.Errorf("migrate.PlanRollback: %w", err)
+	}
 
-	var out []Pending
+	// Every connection's artifacts are loaded up front so the rollback
+	// target can be checked against all of them before anything is opened.
+	migsByConn := make(map[string][]*applyfetchpb.Migration, len(targets))
+	toKnown := cfg.ToMigrationID == ""
 	for _, ct := range targets {
 		diskMigs, err := loadConnectionMigrations(migFS, ct.Connection)
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: %w", ct.Connection, err)
 		}
+		migsByConn[ct.Connection] = diskMigs
+		for _, m := range diskMigs {
+			if m.GetId() == cfg.ToMigrationID {
+				toKnown = true
+			}
+		}
+	}
+	// The cut is a lexical comparison, so an id that names no migration still
+	// selects a range — and a typo that sorts low selects everything. A
+	// destructive command does not get to guess what was meant.
+	if !toKnown {
+		return nil, fmt.Errorf("migrate.PlanRollback: rollback target %q is not the id of any migration on the connections being rolled back — refusing, because every applied migration that sorts above it would be rolled back. Pass the id of the migration to keep (as listed under the migrations directory), or an explicit empty target to roll back everything",
+			cfg.ToMigrationID)
+	}
+
+	var out []Pending
+	for _, ct := range targets {
+		diskMigs := migsByConn[ct.Connection]
 		// ROLLBACK-UNPINNED — a connection declared in the lock but never pushed
 		// has no migrations on disk (the w17ctl DSN resolver skips it too), so
 		// there is nothing to roll back. Skip BEFORE opening an applier, otherwise
@@ -973,6 +998,21 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 		}
 	}
 	return out, nil
+}
+
+// sortedTargets returns the targets in connection-name order, refusing a
+// connection named more than once. Each entry is planned on its own, so a
+// duplicate would plan — and apply or roll back — the same chain twice; with
+// two different pins it is also ambiguous which one is meant.
+func sortedTargets(in []ConnTarget) ([]ConnTarget, error) {
+	targets := append([]ConnTarget(nil), in...)
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Connection < targets[j].Connection })
+	for i := 1; i < len(targets); i++ {
+		if targets[i].Connection == targets[i-1].Connection {
+			return nil, fmt.Errorf("connection %q is listed more than once in the lock — each connection must appear exactly once, or its migrations would be planned once per entry", targets[i].Connection)
+		}
+	}
+	return targets, nil
 }
 
 // RunRollback plans + rolls back. Inverse-apply equivalent of
