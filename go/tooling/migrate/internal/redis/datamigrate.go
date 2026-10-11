@@ -138,8 +138,8 @@ func buildTransformVMs(mig *datamigrate.Migration) (map[int]*datamigrate.Transfo
 //     emit/redis) — same execution machinery as forward; the
 //     bookkeeping write is replaced by HDEL.
 //   - A `# w17:irreversible:` comment block (REMOVE_FIELD in
-//     forward direction has no inverse). Refused: the operator
-//     must explicitly `--allow-irreversible` to skip.
+//     forward direction has no inverse). Refused, with no
+//     override: a rollback target must keep it applied.
 //
 // Cursor side-channel uses dataRollbackCursorPrefix so a
 // partial rollback resumes against its own state, independent
@@ -147,7 +147,7 @@ func buildTransformVMs(mig *datamigrate.Migration) (map[int]*datamigrate.Transfo
 func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb.Migration) error {
 	body := m.GetDownSql()
 	if isIrreversibleMarkerBody(body) {
-		return errors.New("redis rollbackYAMLDataMigration: down body is irreversible (REMOVE_FIELD has no inverse) — refused without --allow-irreversible")
+		return irreversibleRollback(m.GetId())
 	}
 	mig, err := datamigrate.Unmarshal([]byte(body))
 	if err != nil {
@@ -400,4 +400,12 @@ func isIrreversibleMarkerBody(body string) bool {
 		}
 	}
 	return false
+}
+
+// irreversibleRollback is the refusal for a data migration whose forward
+// operation has no inverse. There is no override that rolls it back anyway —
+// skipping the body would drop the ledger row while the data stays changed —
+// so the message names the one way through: keep the migration applied.
+func irreversibleRollback(id string) error {
+	return fmt.Errorf("redis rollbackYAMLDataMigration: migration %s cannot be rolled back — its down body is irreversible (the forward operation has no inverse). Keep it applied: pass a rollback target (--to) at or above %s", id, id)
 }

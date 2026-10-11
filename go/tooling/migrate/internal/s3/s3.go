@@ -173,7 +173,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // Phase E: YAML data migration bodies dispatch through
 // rollbackYAMLDataMigration. The down body is either an
 // auto-derived YAML inverse or a `# w17:irreversible:` comment
-// block — the latter refuses without --allow-irreversible.
+// block — the latter is refused (no override).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if datamigrate.LooksLikeYAML([]byte(m.GetUpSql())) {
 		return a.rollbackYAMLDataMigration(ctx, m)

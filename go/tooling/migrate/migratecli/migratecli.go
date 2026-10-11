@@ -308,7 +308,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
 	fs.BoolVar(&f.fake, "fake", false, "apply only: RECORD each pending migration without running it — for a database that already holds what they describe. Each is checked against the database first and refused if it does not match")
 	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that are older than the fixtures beside them (the deliberate override — a stale render seeds yesterday's rows)")
-	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
+	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "fixtures only: succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
 	fs.BoolVar(&f.exitCode, "exit-code", false, "status only: exit non-zero while anything is pending (for a deploy that can read an exit code, not the output)")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
@@ -331,6 +331,15 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 			f.toSet = true
 		}
 	})
+	// Read only by `fixtures apply`. Elsewhere it would be accepted and do
+	// nothing, and its name promises the one thing apply, status and
+	// rollback deliberately never do: carry on without a DSN.
+	if f.allowNoDSN && name != "fixtures apply" {
+		return f, fmt.Errorf("migrate %s: --allow-no-dsn applies only to `fixtures apply`\n"+
+			"  why: only seeding has a do-nothing mode for a missing DSN; `migrate %s` would silently ignore the flag (apply, status and rollback need the DSN of every connection the lock pins)\n"+
+			"  fix: drop --allow-no-dsn",
+			name, name)
+	}
 	return f, nil
 }
 

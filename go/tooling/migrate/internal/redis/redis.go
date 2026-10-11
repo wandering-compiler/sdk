@@ -139,7 +139,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // dispatch through rollbackYAMLDataMigration. The down body is
 // either an auto-derived YAML inverse (RENAME swap, ADD
 // reverses to REMOVE) or a `# w17:irreversible:` comment block
-// — the latter refuses without --allow-irreversible.
+// — the latter is refused (no override).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if datamigrate.LooksLikeYAML([]byte(m.GetUpSql())) {
 		return a.rollbackYAMLDataMigration(ctx, m)
