@@ -56,11 +56,35 @@ func contextMD(ctx context.Context) (metadata.MD, bool) {
 }
 
 // MetadataFromContext snapshots the originating RPC's gRPC metadata into a
-// flat string→string map for `Event.Metadata`. Multi-value headers collapse
-// to their first value — every header the runtime stack actually cares
-// about (W3C traceparent / tracestate, baggage, scope tunnels, custom
-// routing keys) is single-valued in practice; widening to repeated values
-// is a proto schema change away if a real case shows up.
+// flat string→string map for `Event.Metadata`.
+//
+// What is carried: everything an event legitimately needs on the far side —
+// the gateway-stamped principal and scopes (`x-w17-*`), broadcast labels
+// (`w17-label-*`), locale (`w17-language`, `w17-format-locale`), trace and
+// correlation context (`traceparent`, `tracestate`, `baggage`,
+// `x-request-id`) and any custom header the API declares for propagation.
+//
+// What is not: transport-internal keys and credentials ([ReservedMetadataKey]).
+// The map is persisted with the event — in the broker stream and in the
+// dead-letter stream, possibly for a long time — and replayed into every
+// subscriber's context, so a request credential copied here would outlive the
+// request and reach code that was never its audience. Subscribers do not
+// authenticate with the caller's credential: the gateway-verified principal
+// travels in the `x-w17-*` keys.
+//
+// Multi-value keys collapse to ONE value, chosen the way that key's reader on
+// the subscriber side chooses, so the emitter and every subscriber interpret
+// the same request identically:
+//
+//   - the gateway-owned namespaces (`x-w17-*`, `w17-label-*`) keep the FIRST
+//     value, as [principal.UserID], [principal.Scope] and [LabelsFromContext]
+//     read them (the gateway sets them single-valued anyway);
+//   - every other key keeps the LAST value — the metadata convention where a
+//     declared binding is appended after any value an earlier layer wrote, and
+//     the one the locale readers (`i18n.LocaleFromContext`,
+//     `i18n.FormatLocaleFromContext`) follow. Keeping the first value here
+//     rendered a subscriber's messages in a different language than the
+//     emitter's.
 //
 // Returns nil when ctx carries no metadata on either side (an emit
 // triggered outside an RPC scope). Subscriber dispatch treats nil and
@@ -76,11 +100,13 @@ func MetadataFromContext(ctx context.Context) map[string]string {
 	}
 	flat := make(map[string]string, len(md))
 	for k, vs := range md {
-		if ReservedMetadataKey(k) {
+		if len(vs) == 0 || ReservedMetadataKey(k) {
 			continue
 		}
-		if len(vs) > 0 {
+		if principal.IsGatewayOwnedKey(k) {
 			flat[k] = vs[0]
+		} else {
+			flat[k] = vs[len(vs)-1]
 		}
 	}
 	return flat
@@ -108,11 +134,80 @@ var reservedMetadataKeys = map[string]bool{
 	"w17-tx-id": true,
 }
 
-// ReservedMetadataKey reports whether a metadata key is transport-internal
-// and must be stripped from an event envelope. Exported so the drift test
-// that owns the key's real definition can check this list against it.
+// credentialHeaders are request headers that carry a credential by
+// definition, matched by exact (lower-case) name.
+var credentialHeaders = map[string]bool{
+	"authorization":       true,
+	"proxy-authorization": true,
+	"cookie":              true,
+	"set-cookie":          true,
+	// The gateway's own slot for a credential lifted out of a URL; it is
+	// in the gateway-owned namespace, so it is named here explicitly rather
+	// than caught by the segment rule below.
+	"x-w17-credential": true,
+}
+
+// credentialNameSegments flag a header as credential-bearing when any
+// `-`/`_`-separated segment of its name is one of them: `x-api-key`,
+// `x-auth-token`, `x-amz-security-token`, `x-session-id`, `x-csrf-token`,
+// `x-client-secret`. Whole segments, not substrings, so ordinary names that
+// merely contain the letters (`x-author-id`) keep travelling.
+var credentialNameSegments = map[string]bool{
+	"auth":          true,
+	"authorization": true,
+	"apikey":        true,
+	"cookie":        true,
+	"credential":    true,
+	"credentials":   true,
+	"jwt":           true,
+	"passwd":        true,
+	"password":      true,
+	"secret":        true,
+	"session":       true,
+	"token":         true,
+}
+
+// grpcGatewayHeaderPrefix is the prefix grpc-gateway puts on the permanent
+// HTTP headers it forwards (`grpcgateway-cookie`); the name behind it is
+// classified like the bare header.
+const grpcGatewayHeaderPrefix = "grpcgateway-"
+
+// isCredentialKey reports whether a metadata key carries a request
+// credential. The gateway-owned namespaces never do — they hold the verified
+// principal, scopes and labels a subscriber needs — so they are exempt from
+// the segment rule even when a declared scope or label name happens to
+// contain a flagged word; only the exact names above apply to them.
+func isCredentialKey(k string) bool {
+	k = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(k)), grpcGatewayHeaderPrefix)
+	if credentialHeaders[k] {
+		return true
+	}
+	if principal.IsGatewayOwnedKey(k) {
+		return false
+	}
+	segs := strings.FieldsFunc(k, func(r rune) bool { return r == '-' || r == '_' || r == '.' })
+	for i, seg := range segs {
+		if credentialNameSegments[seg] {
+			return true
+		}
+		if seg == "api" && i+1 < len(segs) && segs[i+1] == "key" {
+			return true
+		}
+	}
+	return false
+}
+
+// ReservedMetadataKey reports whether a metadata key must be stripped from an
+// event envelope: a transport-internal key (`w17-tx-id`) or a request
+// credential (`authorization`, `cookie`, `x-api-key`, `*-token`, …).
+//
+// Generated subscriber dispatch applies the same predicate when it replays
+// `Event.Metadata` into the handler's context, so envelopes persisted before
+// a key was added here are filtered on delivery too. Exported also so the
+// drift test that owns the transaction key's real definition can check this
+// list against it.
 func ReservedMetadataKey(k string) bool {
-	return reservedMetadataKeys[strings.ToLower(k)]
+	return reservedMetadataKeys[strings.ToLower(k)] || isCredentialKey(k)
 }
 
 // LabelsFromContext extracts the originating request's broadcast labels —

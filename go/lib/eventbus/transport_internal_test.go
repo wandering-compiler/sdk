@@ -33,10 +33,11 @@ func (c *countObserver) OnDrop(string, string, string)          { c.drop.Add(1) 
 
 // deadRedisBus builds a RedisBus whose client points at a refused
 // port with retries disabled + a short dial timeout, so every
-// command fails near-instantly down its error branch.
+// command fails near-instantly down its error branch. Built without
+// NewRedisBus's connection check, which would refuse it.
 func deadRedisBus(t *testing.T, obs Observer) *RedisBus {
 	t.Helper()
-	bus, err := NewRedisBus(RedisBusOptions{
+	bus, err := newRedisBus(RedisBusOptions{
 		DSN:               "redis://127.0.0.1:6399?max_retries=-1&dial_timeout=200ms",
 		GroupPrefix:       "users-subscribers",
 		ConsumerName:      "replica-1",
@@ -139,7 +140,7 @@ func TestRedisSubscriber_ProcessMessage_Success(t *testing.T) {
 	sub := &redisSubscriber{bus: bus, channel: "default", group: "g"}
 
 	var gotTopic, gotPayload string
-	sub.processMessage(context.Background(),
+	sub.subscription(sub.group, "**").processMessage(context.Background(),
 		func(_ context.Context, topic string, raw []byte) error {
 			gotTopic, gotPayload = topic, string(raw)
 			return nil
@@ -163,7 +164,7 @@ func TestRedisSubscriber_ProcessMessage_Failure(t *testing.T) {
 	bus := deadRedisBus(t, obs)
 	sub := &redisSubscriber{bus: bus, channel: "default", group: "g"}
 
-	sub.processMessage(context.Background(),
+	sub.subscription(sub.group, "**").processMessage(context.Background(),
 		func(context.Context, string, []byte) error { return context.Canceled },
 		"1-0",
 		map[string]any{redisFieldTopic: "user.created", redisFieldPayload: "body"},
@@ -183,7 +184,7 @@ func TestRedisSubscriber_ProcessMessage_MissingFields(t *testing.T) {
 
 	var gotTopic string
 	var gotLen int
-	sub.processMessage(context.Background(),
+	sub.subscription(sub.group, "**").processMessage(context.Background(),
 		func(_ context.Context, topic string, raw []byte) error {
 			gotTopic, gotLen = topic, len(raw)
 			return nil
@@ -211,7 +212,7 @@ func TestRedisSubscriber_RouteToDLQ_BrokerDown_NoSilentDrop(t *testing.T) {
 	bus := deadRedisBus(t, obs)
 	sub := &redisSubscriber{bus: bus, channel: "default", group: "g"}
 
-	sub.routeToDLQ(context.Background(), "1-0")
+	sub.subscription(sub.group, "**").routeToDLQ(context.Background(), "1-0")
 	if obs.drop.Load() != 0 {
 		t.Errorf("OnDrop fired %d times, want 0 — the DLQ write never happened, so the message must not be reported as dropped", obs.drop.Load())
 	}
@@ -226,7 +227,7 @@ func TestRedisSubscriber_ClaimPending_PendingError(t *testing.T) {
 	bus := deadRedisBus(t, &countObserver{})
 	sub := &redisSubscriber{bus: bus, channel: "default", group: "g"}
 	// Must not panic / block; just exercises the error-return path.
-	sub.claimPending(context.Background(), func(context.Context, string, []byte) error { return nil }, 2, 20*time.Millisecond)
+	sub.subscription(sub.group, "**").claimPending(context.Background(), func(context.Context, string, []byte) error { return nil }, 2, 20*time.Millisecond)
 }
 
 // ensureGroup short-circuits when the (channel, group) pair is

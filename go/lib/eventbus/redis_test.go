@@ -7,9 +7,14 @@ package eventbus
 
 import (
 	"context"
+	"log"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 func TestNewRedisBus_EmptyDSN(t *testing.T) {
@@ -51,7 +56,7 @@ func TestNewRedisBus_DefaultsApplied(t *testing.T) {
 	// NewRedisBus time; we inspect via the bus's stored
 	// opts.
 	bus, err := NewRedisBus(RedisBusOptions{
-		DSN:          "redis://localhost:6379",
+		DSN:          "redis://" + miniredis.RunT(t).Addr(),
 		GroupPrefix:  "users",
 		ConsumerName: "test-replica",
 		// MaxDeliver / AckWait / ReadBatch deliberately zero.
@@ -75,7 +80,7 @@ func TestNewRedisBus_ConsumerNameDefaultsToHostname(t *testing.T) {
 	// When ConsumerName is empty, NewRedisBus falls back to
 	// os.Hostname() (or "w17-subscriber" on hostname error).
 	bus, err := NewRedisBus(RedisBusOptions{
-		DSN:         "redis://localhost:6379",
+		DSN:         "redis://" + miniredis.RunT(t).Addr(),
 		GroupPrefix: "users",
 	})
 	if err != nil {
@@ -119,4 +124,101 @@ func TestRedisFieldNames(t *testing.T) {
 	if redisFieldPayload != "payload" {
 		t.Errorf("redisFieldPayload = %q, want %q", redisFieldPayload, "payload")
 	}
+}
+
+// NewRedisBus is documented to connect up front. Against a broker that is
+// not there it must fail at construction, not hand back a bus whose first
+// emit discovers the outage.
+func TestNewRedisBus_UnreachableBrokerFails(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // nothing listens on addr now
+
+	bus, err := NewRedisBus(RedisBusOptions{
+		DSN:         "redis://:hunter2@" + addr + "?dial_timeout=500ms",
+		GroupPrefix: "users",
+	})
+	if err == nil {
+		_ = bus.Close(context.Background())
+		t.Fatal("NewRedisBus against an unreachable broker returned a bus and no error")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("connection error quotes the DSN password: %v", err)
+	}
+}
+
+// The consume and pending-scan loops must report a broker failure (once per
+// outage, not once per 200ms retry) and log when it clears.
+func TestRedisSubscriber_LoopFailuresAreReported(t *testing.T) {
+	var buf syncBuffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	mr := miniredis.RunT(t)
+	bus, err := NewRedisBus(RedisBusOptions{
+		DSN:            "redis://" + mr.Addr() + "?max_retries=-1&dial_timeout=200ms",
+		GroupPrefix:    "loopfail",
+		ConsumerName:   "r1",
+		DefaultAckWait: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewRedisBus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close(context.Background()) })
+	sub, err := bus.Subscriber(context.Background(), "ch")
+	if err != nil {
+		t.Fatalf("Subscriber: %v", err)
+	}
+	if err := sub.Subscribe(context.Background(), "**", func(context.Context, string, []byte) error { return nil }); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	mr.SetError("ERR simulated outage")
+	time.Sleep(1200 * time.Millisecond) // several 200ms consume retries, many 50ms scans
+	mr.SetError("")
+	time.Sleep(1500 * time.Millisecond) // XREADGROUP blocks up to 1s
+
+	out := buf.String()
+	for _, stage := range []string{"redis consume", "redis pending scan"} {
+		// reportBusFailure writes one log line (plus the error reporter's
+		// own, prefixed "error: "); count the log line.
+		n := 0
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "eventbus "+stage+" failed") && !strings.Contains(line, "error: eventbus") {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%q failure reported %d times, want once per outage; log:\n%s", stage, n, out)
+		}
+		if !strings.Contains(out, "eventbus "+stage+" recovered") {
+			t.Errorf("%q recovery not logged; log:\n%s", stage, out)
+		}
+	}
+	if !strings.Contains(out, "simulated outage") {
+		t.Errorf("reported failure does not carry the broker error; log:\n%s", out)
+	}
+}
+
+// syncBuffer is a goroutine-safe log sink: the loops under test write from
+// their own goroutines while the test reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
