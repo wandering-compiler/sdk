@@ -33,8 +33,9 @@ func TestTLSDialOption_SwitchOn_TLS(t *testing.T) {
 	}
 }
 
-// The switch accepts the documented truthy spellings and treats
-// everything else (including junk) as off.
+// InternalTLSEnabled answers true only for the documented truthy
+// spellings. Junk answers false here; CheckInternalTLS is what refuses it
+// before any helper acts on the switch.
 func TestInternalTLSEnabled_Spellings(t *testing.T) {
 	on := []string{"on", "ON", "true", "True", "1", "yes", " on "}
 	for _, v := range on {

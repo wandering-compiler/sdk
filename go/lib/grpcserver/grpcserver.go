@@ -25,7 +25,10 @@
 //     wire" case needs no client certs while a zero-trust boundary can
 //     still demand them.
 //
-// **Bootstrap pattern (generated `main.go`):**
+// **Bootstrap pattern.** service/runtime's GRPCComponent (and so
+// runtime.Serve) applies this option itself from the process
+// environment; a caller still appending it there is harmless. A
+// hand-built *grpc.Server wires it like this:
 //
 //	opt, enabled, err := grpcserver.TLSServerOption(os.Getenv)
 //	if err != nil {
@@ -68,8 +71,10 @@ const EnvInternalTLSClientCA = "W17_INTERNAL_TLS_CLIENT_CA"
 // TLSServerOption returns the `grpc.ServerOption` carrying the
 // listener's TLS posture from the stack-wide switch:
 //
-//	W17_INTERNAL_TLS            — off (unset / not truthy) → no TLS
-//	                              option (plain h2c). "on" → serve TLS.
+//	W17_INTERNAL_TLS            — off (unset / "off") → no TLS option
+//	                              (plain h2c). "on" → serve TLS.
+//	                              "terminated" → plain (TLS ends at the
+//	                              platform). Anything else → error.
 //	W17_INTERNAL_TLS_CERT       — path to this service's leaf cert (PEM).
 //	W17_INTERNAL_TLS_KEY        — path to this service's leaf key  (PEM).
 //	                              Both required when the switch is on.
@@ -78,10 +83,15 @@ const EnvInternalTLSClientCA = "W17_INTERNAL_TLS_CLIENT_CA"
 //
 // Returns (option, true, nil) when TLS is enabled, (nil, false, nil)
 // when the switch is off (the default, or a nil lookup), and
-// (nil, false, err) on misconfiguration (missing cert/key pair,
-// unreadable CA, etc.) so a bad posture fails fast at bootstrap
+// (nil, false, err) on misconfiguration (an unrecognised switch value,
+// missing cert/key pair, unreadable CA, etc.) so a bad posture fails fast at bootstrap
 // instead of at the first handshake.
 func TLSServerOption(lookup LookupFunc) (grpc.ServerOption, bool, error) {
+	if lookup != nil {
+		if err := grpcclient.CheckInternalTLS(lookup(grpcclient.EnvInternalTLS)); err != nil {
+			return nil, false, err
+		}
+	}
 	if lookup == nil || !grpcclient.InternalTLSEnabled(lookup(grpcclient.EnvInternalTLS)) {
 		return nil, false, nil
 	}

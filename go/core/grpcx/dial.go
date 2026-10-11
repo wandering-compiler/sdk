@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"log"
 	"os"
 	"time"
 
@@ -136,8 +137,19 @@ func forwardPrincipalStreamInterceptor(ctx context.Context, desc *grpc.StreamDes
 //
 // It answers for a DIALER, so "terminated" (the platform terminates TLS in
 // front of the server) counts as on.
+//
+// An unrecognised value (see [grpcclient.CheckInternalTLS]) answers true
+// and is logged: this helper has no error channel, and dialing TLS fails
+// closed and visibly, where reading the typo as off would send the mesh's
+// traffic in plaintext. The servers the stack runs refuse the same value at
+// start.
 func InternalTLSEnabled() bool {
-	return grpcclient.InternalTLSDial(os.Getenv(grpcclient.EnvInternalTLS))
+	v := os.Getenv(grpcclient.EnvInternalTLS)
+	if err := grpcclient.CheckInternalTLS(v); err != nil {
+		log.Printf("grpcx: %v; dialing TLS", err)
+		return true
+	}
+	return grpcclient.InternalTLSDial(v)
 }
 
 // clientTLSConfig builds the client tls.Config from the stack-wide

@@ -339,7 +339,11 @@ func noEnv(string) string { return "" }
 func dialOptions(getenv func(string) string) ([]grpc.DialOption, error) {
 	// The probe dials THIS container's own listener, so it follows the
 	// SERVER's posture: under "terminated" the listener is plaintext even
-	// though every outgoing dial is TLS.
+	// though every outgoing dial is TLS. An unrecognised switch value is
+	// refused here as the listener refuses it, rather than read as off.
+	if err := grpcclient.CheckInternalTLS(getenv(grpcclient.EnvInternalTLS)); err != nil {
+		return nil, err
+	}
 	if !grpcclient.InternalTLSEnabled(getenv(grpcclient.EnvInternalTLS)) {
 		// The helper's own off arm, with the switch read as the listener reads it.
 		off, err := grpcclient.TLSDialOption(func(k string) string {

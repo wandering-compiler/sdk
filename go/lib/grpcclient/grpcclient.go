@@ -123,7 +123,11 @@ type LookupFunc func(string) string
 // deliberately no per-service knob to forget.
 const (
 	// EnvInternalTLS is the stack-wide switch. "on"/"true"/"1"/"yes"
-	// turns internal TLS on; unset or anything else = off (default).
+	// turns internal TLS on; "terminated" means the platform terminates
+	// it in front of every service; unset or "off"/"false"/"0"/"no" is
+	// off (the default). Any other value is a misconfiguration that
+	// [CheckInternalTLS] reports, and that the dial and listen helpers
+	// refuse rather than read as off.
 	EnvInternalTLS = "W17_INTERNAL_TLS"
 	// EnvInternalTLSCA is the CA bundle a CLIENT uses to verify the
 	// server leaf (RootCAs). Unset = system trust roots (prod PKI).
@@ -138,12 +142,40 @@ const (
 // InternalTLSEnabled reports whether the stack-wide internal-TLS
 // switch ([EnvInternalTLS]) is on — whether a w17 SERVER listens with TLS.
 // Shared spelling so the client and [grpcserver] agree on what "on" means.
+//
+// It answers false for a value it does not recognise; callers that act on
+// the switch call [CheckInternalTLS] first so a typo is refused instead of
+// silently meaning plaintext.
 func InternalTLSEnabled(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "on", "true", "1", "yes":
 		return true
 	}
 	return false
+}
+
+// internalTLSOff reports whether v is one of the explicit "off" spellings
+// (or unset).
+func internalTLSOff(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "off", "false", "0", "no":
+		return true
+	}
+	return false
+}
+
+// CheckInternalTLS returns an error when v, the value of [EnvInternalTLS],
+// is not one of the recognised spellings. The switch decides whether the
+// whole internal mesh is encrypted, so a value nobody meant ("enabled",
+// "required", a stray character) must not quietly fall through to
+// plaintext on every side. The error names the variable, the value and
+// every accepted spelling.
+func CheckInternalTLS(v string) error {
+	if InternalTLSEnabled(v) || InternalTLSTerminated(v) || internalTLSOff(v) {
+		return nil
+	}
+	return fmt.Errorf("%s=%q is not a recognised value; accepted: on|true|1|yes (TLS), terminated (TLS ends at the platform; servers listen plain), off|false|0|no or unset (plaintext)",
+		EnvInternalTLS, v)
 }
 
 // InternalTLSTerminated is the switch's third value, "terminated": the
@@ -199,7 +231,7 @@ func Dial(addr string, lookup LookupFunc, opts ...grpc.DialOption) (*grpc.Client
 // TLS posture, driven by the STACK-WIDE switch (not a per-service
 // knob):
 //
-//	W17_INTERNAL_TLS        — off (unset / not truthy) → plain h2c.
+//	W17_INTERNAL_TLS        — off (unset / "off") → plain h2c.
 //	                          "on" → dial TLS, verifying the server.
 //	                          "terminated" → dial TLS (system roots) to a
 //	                          server whose platform terminates TLS in
@@ -227,11 +259,17 @@ func Dial(addr string, lookup LookupFunc, opts ...grpc.DialOption) (*grpc.Client
 // absorbed tiers in-process, never touches the wire, and so stays
 // plaintext regardless of the switch.
 //
-// Errors when env vars are partially set (mTLS cert without key,
+// Errors when the switch holds an unrecognised value (see
+// [CheckInternalTLS]) or env vars are partially set (mTLS cert without key,
 // unreadable CA, etc.) so misconfiguration surfaces at startup instead
 // of at dial-time. Exposed separately from [Dial] for callers that own
 // their full DialOption list and just need the TLS slot.
 func TLSDialOption(lookup LookupFunc) (grpc.DialOption, error) {
+	if lookup != nil {
+		if err := CheckInternalTLS(lookup(EnvInternalTLS)); err != nil {
+			return nil, err
+		}
+	}
 	if lookup == nil || !InternalTLSDial(lookup(EnvInternalTLS)) {
 		// Switch off (default): plain h2c. The internal mesh is trusted
 		// / infra-secured; plaintext between services is intended here.
