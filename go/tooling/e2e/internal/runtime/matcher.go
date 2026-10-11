@@ -167,6 +167,8 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		return notEmptyMatcher{}, nil
 	case "empty":
 		return emptyMatcher{}, nil
+	case "absent":
+		return absentMatcher{}, nil
 	case "eq":
 		return exactMatcher{expected: m["value"]}, nil
 	case "regex":
@@ -208,10 +210,10 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		if why := vacuousCount(op, val); why != "" {
 			return nil, fmt.Errorf("count: `op: %q, value: %v` %s — an assertion that cannot fail is worse "+
 				"than one nobody wrote, because it looks finished. Say what you mean instead: "+
-				"`{matcher: count, op: '>= 1'}`-style if the list must contain something, or "+
-				"`{matcher: count, op: '== 0'}`-style if being EMPTY is the point (a deletion proved from the "+
-				"other side, a filter that must match nothing). A vacuous count also hides an assertion on a "+
-				"response field that does not exist", op, val, why)
+				"`{matcher: count, op: '>=', value: 1}` if the list must contain something, or "+
+				"`{matcher: absent}` if having NOTHING there is the point (a deletion proved from the "+
+				"other side, a filter that must match nothing — proto3 JSON omits an empty list). A vacuous "+
+				"count also hides an assertion on a response field that does not exist", op, val, why)
 		}
 		return countMatcher{op: op, value: val}, nil
 	case "num":
@@ -241,7 +243,7 @@ func DecodeMatcher(spec any) (Matcher, error) {
 // would bury the real problem.
 func strayKeysForKind(m map[string]any, kind string) error {
 	switch kind {
-	case "unwritten", "not_empty", "empty":
+	case "unwritten", "not_empty", "empty", "absent":
 		return rejectStrayKeys(m, "matcher")
 	case "eq":
 		return rejectStrayKeys(m, "matcher", "value")
@@ -290,7 +292,12 @@ func (m exactMatcher) Match(actual any, present bool, scope *Scope) error {
 	if err != nil {
 		return err
 	}
-	if !present && exp != nil {
+	if !present && exp == nil {
+		// `field: null` read as "absent" by accident: nil equalled the
+		// missing value, so it also passed for a misspelt field.
+		return fmt.Errorf("expected null, field absent — %s", absentHint)
+	}
+	if !present {
 		if isProto3Default(exp) {
 			// The assertion is RIGHT and cannot pass, so the message has
 			// to name the fix rather than the symptom.
@@ -342,14 +349,42 @@ func (notEmptyMatcher) Match(actual any, present bool, _ *Scope) error {
 	return nil
 }
 
+// emptyMatcher asserts a PRESENT field holding its zero value. An absent
+// field fails: a response without the field also has no field under a
+// misspelt name, and "empty" passing for both made a typo read as a
+// finished assertion. Absence is asserted by saying so — absentMatcher.
 type emptyMatcher struct{}
 
 func (emptyMatcher) Match(actual any, present bool, _ *Scope) error {
-	if present && !isZero(actual) {
+	if !present {
+		return fmt.Errorf("expected empty, field absent — %s", absentHint)
+	}
+	if !isZero(actual) {
 		return fmt.Errorf("expected empty, got %v", actual)
 	}
 	return nil
 }
+
+// absentMatcher asserts that the response does not carry the field at all.
+// It is the explicit spelling of what `empty` and `count == 0` used to
+// accept implicitly — and the only one of the three that passes for a
+// field that is not there, so a case that relies on absence says so.
+type absentMatcher struct{}
+
+func (absentMatcher) Match(actual any, present bool, _ *Scope) error {
+	if present {
+		return fmt.Errorf("expected the field to be absent, got %v", actual)
+	}
+	return nil
+}
+
+// absentHint is the shared explanation for a collection or emptiness
+// assertion that met a missing field.
+const absentHint = "proto3 JSON omits an empty list, a zero scalar and an unset message, " +
+	"so a response with nothing in this field does not carry it at all — and neither does a " +
+	"response asked for a field under the wrong name.\n" +
+	"  fix: if the name is right and nothing being there is the point, assert " +
+	"`{matcher: absent}`; otherwise check the field name"
 
 // regexMatcher: re is compiled at decode when the pattern has no `${…}`;
 // otherwise it is compiled per match from the interpolated pattern.
@@ -396,8 +431,9 @@ type countMatcher struct {
 
 func (m countMatcher) Match(actual any, present bool, _ *Scope) error {
 	if !present {
-		// absent collection counts as zero
-		return compareNum("count", 0, m.op, m.value)
+		// Counting a missing field as zero made `== 0` pass for a field
+		// the response does not have under that name at all.
+		return fmt.Errorf("count %s %v: field absent — %s", m.op, m.value, absentHint)
 	}
 	n, ok := collectionLen(actual)
 	if !ok {
@@ -414,6 +450,14 @@ type captureMatcher struct {
 }
 
 func (m captureMatcher) Match(actual any, present bool, scope *Scope) error {
+	if !present {
+		// Binding the absence as nil passed here and failed somewhere
+		// else, later and misleadingly: a later step interpolated it as
+		// "<nil>" — an auth token captured this way rode every following
+		// call as `Bearer <nil>`, and each refusal those calls expected
+		// then passed on a sign-in that never returned a token.
+		return fmt.Errorf("capture %q: field absent — there is no value to bind", m.varName)
+	}
 	if scope != nil {
 		scope.Capture(m.varName, actual)
 	}
@@ -635,7 +679,7 @@ type distinctMatcher struct {
 
 func (m distinctMatcher) Match(actual any, present bool, _ *Scope) error {
 	if !present {
-		return compareNum("distinct "+m.field, 0, m.op, m.value)
+		return fmt.Errorf("distinct %s: list field absent — %s", m.field, absentHint)
 	}
 	rv := reflect.ValueOf(actual)
 	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
@@ -670,18 +714,29 @@ func (m distinctMatcher) Match(actual any, present bool, _ *Scope) error {
 // of them a list endpoint that answered nothing for a fortnight while its
 // case stayed green.
 //
-// Writing a deliberately weak assertion is still available — `{matcher:
-// count, op: ">=", value: 0}` typed by hand does exactly what it used to.
-// The difference is that it is then a choice recorded in the author's file,
-// not a default they never saw.
+// Checking nothing on purpose is still available, and is a choice recorded
+// in the author's file rather than a default they never saw: drop the key,
+// and the step asserts only that the call was answered rather than refused.
+// The advice below must stay a spec DecodeMatcher accepts — it once
+// recommended the very count that decode refuses as vacuous.
 type unwrittenMatcher struct{}
+
+// unwrittenAdvice are the replacement specs the placeholder's failure
+// suggests, as an author would type them. Kept as data so a test can hold
+// each one to DecodeMatcher.
+var unwrittenAdvice = []string{
+	"{matcher: count, op: '>=', value: 1}",
+	"{matcher: eq, value: Ada}",
+	"{matcher: not_empty}",
+	"{matcher: absent}",
+}
 
 func (unwrittenMatcher) Match(actual any, present bool, _ *Scope) error {
 	return fmt.Errorf("this assertion is still the generated placeholder — the step ran and its response was not checked\n"+
 		"  got: %v (present=%v)\n"+
 		"  fix: replace `{matcher: unwritten}` with what the response must actually contain "+
-		"(`{matcher: count, op: '==', value: N}`, `{matcher: eq, value: ...}`, …). "+
-		"To accept anything on purpose, say so: `{matcher: count, op: '>=', value: 0}`", actual, present)
+		"(%s, …). To check nothing about this field on purpose, delete the key: the step then "+
+		"asserts only that the call was answered, not refused", actual, present, "`"+strings.Join(unwrittenAdvice, "`, `")+"`")
 }
 
 // isProto3Default reports whether the expected value is one that proto3
@@ -703,11 +758,10 @@ func isProto3Default(exp any) bool {
 // vacuousCount reports why a count predicate holds for every possible
 // response, or "" when it can fail.
 //
-// A count is a length: never negative, and absent from the response means
-// zero rather than an error. So `>= 0` is not a weak assertion, it is no
-// assertion — it passes for an empty list, a full one, and a field the
-// response does not contain at all. That last case is the one that bites:
-// it makes a case green while it names something that is not there.
+// A count is a length: never negative. So `>= 0` is not a weak assertion,
+// it is no assertion — it passes for an empty list and a full one, and
+// before an absent field failed every count it also passed for a field the
+// response does not contain at all.
 //
 // This is decided at DECODE time, so the case does not run — the same
 // posture the `unwritten` placeholder takes. Running and passing is exactly
@@ -717,7 +771,7 @@ func vacuousCount(op string, v float64) string {
 	case ">=", "!=", ">":
 		// `>= 0` and `!= -1` and `> -1` are all "every count".
 		if (op == ">=" && v <= 0) || (op != ">=" && v < 0) {
-			return "holds for every possible count, including a field the response does not contain"
+			return "holds for every possible count"
 		}
 	case "<", "<=", "==":
 		// `< 0` and `== -1` are the mirror: nothing can satisfy them. Not

@@ -120,6 +120,11 @@ func regexTokens(pattern string) [][]int {
 	return out
 }
 
+// Text renders a resolved value as the text a request carries — the same
+// rendering interpolation uses, so an id travels identically whether it is
+// embedded in a string, bound into a URL path, or sent as a form field.
+func Text(v any) string { return textOf(v) }
+
 // textOf renders a resolved value for substitution into a string. A JSON
 // number decodes as float64, and fmt.Sprint writes 1234567 as 1.234567e+06 —
 // so a captured id embedded in `<ID>${id}</ID>` would never match. Integral

@@ -370,9 +370,13 @@ func TestExactMatcherAbsentVsNil(t *testing.T) {
 	if err := match(t, "want", nil, false); err == nil {
 		t.Error("absent field with non-nil expected should fail")
 	}
-	// expected nil and absent → passes (looseEqual nil==nil after expand)
-	if err := match(t, nil, nil, false); err != nil {
-		t.Errorf("nil expected + absent should pass: %v", err)
+	// expected nil and absent → fails: null is not absence, and reading it
+	// as absence also passed for a misspelt field. `absent` says it.
+	if err := match(t, nil, nil, false); err == nil || !strings.Contains(err.Error(), "matcher: absent") {
+		t.Errorf("nil expected + absent should fail and name `absent`: %v", err)
+	}
+	if err := match(t, nil, nil, true); err != nil {
+		t.Errorf("nil expected + present null should pass: %v", err)
 	}
 	// expected interpolation fails (unresolved capture) → error from Expand
 	if err := match(t, "${nope}", "x", true); err == nil {
