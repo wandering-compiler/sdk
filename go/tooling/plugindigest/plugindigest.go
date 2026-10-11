@@ -150,17 +150,14 @@ func Check(s string) error {
 // executable bit, and its content. Paths are sorted, so the walk order of the
 // filesystem cannot change the answer.
 //
-// Not covered: directories (git cannot carry an empty one, so treating it as
-// significant would make the digest depend on something the transport drops),
-// and timestamps, ownership and the non-exec permission bits (none survive a
-// clone intact).
+// Not covered: the skipped locations above (see Uncovered and Prune for what a
+// consumer does about content found there), directories (git cannot carry an
+// empty one, so treating it as significant would make the digest depend on
+// something the transport drops), and timestamps, ownership and the non-exec
+// permission bits (none survive a clone intact).
 func Of(dir string) (string, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return "", fmt.Errorf("plugin digest: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("plugin digest: %s is not a directory", dir)
+	if err := isDir(dir); err != nil {
+		return "", err
 	}
 
 	type entry struct {
@@ -169,7 +166,7 @@ func Of(dir string) (string, error) {
 	}
 	var files []entry
 
-	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -235,6 +232,125 @@ func Of(dir string) (string, error) {
 		writeField(h, string(body))
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// regenerated reports whether a directory is one the digest skips because its
+// content is produced by a toolchain rather than written by the author:
+// `src/gen`, and `node_modules` and `.w17dev` at any depth. `.git` is skipped
+// too but is not among them — it is the clone's metadata, never compiled or
+// served, and pruning it would take a working tree's history with it.
+func regenerated(dir, p string, name string) bool {
+	if p == dir {
+		return false
+	}
+	if name != ".git" && skipDirs[name] {
+		return true
+	}
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && skipPaths[filepath.ToSlash(rel)]
+}
+
+// Uncovered lists the files under dir that Of does NOT cover and that a
+// consumer could still compile, load or serve: everything inside the
+// regenerated locations (`src/gen`, `node_modules`, `.w17dev`). Paths are
+// slash-separated, relative to dir, and sorted. Clone metadata (`.git`), the
+// root `plugin.sig` and `.DS_Store` files are not listed — nothing compiles
+// them.
+//
+// The digest leaves those locations out because their content is regenerated
+// from covered input, and covering it would make every codegen run break the
+// pin. The flip side is that a signature says nothing about a file placed
+// there by anything else — a hand-written `src/gen/x.go` that regeneration does
+// not overwrite is compiled under a valid pin. Uncovered names such files so a
+// consumer can refuse a fetched tree that carries any; Prune removes them.
+func Uncovered(dir string) ([]string, error) {
+	if err := isDir(dir); err != nil {
+		return nil, err
+	}
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() || !regenerated(dir, p, d.Name()) {
+			return nil
+		}
+		werr := filepath.WalkDir(p, func(q string, e fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if e.IsDir() {
+				if q != p && e.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if skipFiles[e.Name()] {
+				return nil
+			}
+			rel, rerr := filepath.Rel(dir, q)
+			if rerr != nil {
+				return rerr
+			}
+			out = append(out, filepath.ToSlash(rel))
+			return nil
+		})
+		if werr != nil {
+			return werr
+		}
+		return filepath.SkipDir
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plugin digest: %w", err)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// Prune removes every regenerated location from dir — `src/gen`, and every
+// `node_modules` and `.w17dev` — so the tree holds only what Of covers (plus
+// `.git` and the root `plugin.sig`, which nothing compiles).
+//
+// Run it on a fetched tree before anything regenerates into it or compiles
+// it: what the toolchain then writes into those locations is derived from
+// covered input, and nothing that arrived with the tree survives there
+// unsigned. Of returns the same digest before and after, by construction.
+// Symlinks are removed, never followed.
+func Prune(dir string) error {
+	if err := isDir(dir); err != nil {
+		return err
+	}
+	var doomed []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && regenerated(dir, p, d.Name()) {
+			doomed = append(doomed, p)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("plugin digest: %w", err)
+	}
+	for _, p := range doomed {
+		if err := os.RemoveAll(p); err != nil {
+			return fmt.Errorf("plugin digest: prune %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+func isDir(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("plugin digest: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("plugin digest: %s is not a directory", dir)
+	}
+	return nil
 }
 
 // writeField appends one length-prefixed field. The prefix is what makes the
