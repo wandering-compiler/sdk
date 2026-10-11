@@ -6,7 +6,16 @@
 // Wiring (per-binary, in `genmain/main.tmpl`):
 //
 //	registry := txregistry.NewMemory(map[string]*sql.DB{...})
-//	srv := grpc.NewServer(grpc.UnaryInterceptor(grpcrollback.Interceptor(registry)))
+//	cfg := runtime.Config{
+//	    // ...
+//	    UnaryInterceptors: []grpc.UnaryServerInterceptor{grpcrollback.Interceptor(registry)},
+//	}
+//
+// On a hand-built *grpc.Server, chain it with grpc.ChainUnaryInterceptor
+// rather than the singular grpc.UnaryInterceptor: the singular slot runs
+// ahead of every chained interceptor, so it would sit outside a recovery
+// interceptor installed in the chain (and service/runtime reserves that
+// slot for its recovery net).
 //
 // Auto-rollback is cross-cutting middleware, not a
 // per-handler generator output. The interceptor wraps EVERY

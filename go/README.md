@@ -37,6 +37,14 @@ err := runtime.Serve(ctx, runtime.Config{
 })
 ```
 
+`Serve` returns `nil` after a clean SIGINT/SIGTERM stop and an error only when
+something failed. The listener follows the stack-wide internal TLS switch
+(`W17_INTERNAL_TLS` + `W17_INTERNAL_TLS_CERT` / `_KEY`, see `lib/grpcserver`);
+a misconfigured or unrecognised switch value fails the start instead of
+listening in plaintext. Add interceptors through `UnaryInterceptors` (or
+`grpc.ChainUnaryInterceptor` in `ServerOptions`) so they run inside the
+recovery net; the singular `grpc.UnaryInterceptor` option is refused.
+
 ---
 
 ## Package map — organised by audience
