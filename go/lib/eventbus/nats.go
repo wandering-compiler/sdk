@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	natsgo "github.com/nats-io/nats.go"
@@ -284,12 +285,32 @@ func (b *NatsBus) Dispatch(ctx context.Context, channel, topic string, envelope 
 		return err
 	}
 	subject := natsSubject(channel, topic)
-	if _, err = b.js.Publish(pubCtx, subject, raw); err != nil {
+	_, err = b.js.Publish(pubCtx, subject, raw)
+	if err != nil && natsStreamMissing(err) {
+		// The stream cache says the stream exists, but no stream answered:
+		// the broker lost it (recreated without persistent storage, or the
+		// stream was deleted). Without this every later emit on the channel
+		// failed until the process restarted. Forget the cached entry,
+		// re-create the stream and publish once more.
+		b.forgetStream(channel)
+		if err = b.ensureStream(pubCtx, channel); err == nil {
+			_, err = b.js.Publish(pubCtx, subject, raw)
+		}
+	}
+	if err != nil {
 		b.opts.Observer.OnEmitFailure(channel, topic, err)
 		return err
 	}
 	b.opts.Observer.OnEmitSuccess(channel, topic)
 	return nil
+}
+
+// natsStreamMissing reports whether a publish failed because no stream
+// captured the subject.
+func natsStreamMissing(err error) bool {
+	return errors.Is(err, jetstream.ErrNoStreamResponse) ||
+		errors.Is(err, jetstream.ErrStreamNotFound) ||
+		errors.Is(err, natsgo.ErrNoResponders)
 }
 
 // Subscriber returns a per-channel Subscriber bound to this
@@ -640,11 +661,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 
 	maxDeliver, ackWait := resolveChannelRetry(s.bus.opts.ChannelRetries, s.channel, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait)
 
-	consumer, err := s.bus.js.CreateOrUpdateConsumer(ctx, s.channel,
-		natsConsumerConfig(s.bus.opts.Delivery, consumerName, s.channel, maxDeliver, ackWait))
-	if err != nil {
-		return fmt.Errorf("nats consumer %q: %w", consumerName, err)
-	}
+	consumerCfg := natsConsumerConfig(s.bus.opts.Delivery, consumerName, s.channel, maxDeliver, ackWait)
 
 	// A dedicated DLQ stream receives poison messages past MaxDeliver so
 	// they're never silently dropped (R-bus-3 — parity with the Redis
@@ -664,7 +681,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 
 	prefix := s.channel + "."
 	bgCtx := context.WithoutCancel(ctx)
-	cctx, err := consumer.Consume(func(msg jetstream.Msg) {
+	onMsg := func(msg jetstream.Msg) {
 		// Same belt the Redis loops wear. The handler itself is
 		// recover-wrapped, but everything AROUND it here — the observer
 		// callbacks, the DLQ routing, the client plumbing — is not, and
@@ -771,27 +788,49 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		}
 		s.bus.opts.Observer.OnDeliverSuccess(s.channel, topic)
 		_ = msg.Ack()
-	},
-		// THE CONSUME LOOP'S OWN FAILURES, which are otherwise discarded.
-		//
-		// Consume retries internally and reports what it hit here. With no
-		// handler the errors go nowhere, and the loudest case is the one a
-		// consumer reported: their broker was RECREATED, not restarted, so its
-		// JetStream state went with it. The client reconnected to a server that
-		// had never heard of this consumer, every pull failed, and the process
-		// logged nothing at all — delivery simply stopped.
-		//
-		// This does not re-create the consumer. It ends the silence, which is
-		// the part that cost half an hour; a subscriber that cannot pull is
-		// visible now instead of merely idle.
-		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, cerr error) {
-			reportBusFailure("consume", s.channel, consumerName, cerr)
-		}),
-	)
-	if err != nil {
-		return fmt.Errorf("nats consume: %w", err)
 	}
-	handle.cctx = cctx
+
+	// startConsume creates (or re-creates) the consumer and starts pulling
+	// from it. Used once here and again by recoverConsumer when the broker
+	// has lost the consumer.
+	var startConsume func(context.Context) (jetstream.ConsumeContext, error)
+	var recovering atomic.Bool
+	// THE CONSUME LOOP'S OWN FAILURES, which are otherwise discarded.
+	//
+	// Consume retries internally and reports what it hit here. With no
+	// handler the errors go nowhere, and the loudest case is a broker that
+	// was RECREATED, not restarted, so its JetStream state went with it: the
+	// client reconnects to a server that has never heard of this consumer,
+	// every pull fails, and delivery simply stops.
+	//
+	// Reported, and — when the error says the consumer may be gone — handed
+	// to recoverConsumer, which re-creates the stream and the consumer and
+	// restarts the pull loop. One recovery at a time per subscription.
+	errHandler := jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, cerr error) {
+		reportBusFailure("consume", s.channel, consumerName, cerr)
+		if !natsConsumerMaybeLost(cerr) || !recovering.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			defer recovering.Store(false)
+			s.recoverConsumer(bgCtx, handle, consumerName, errors.Is(cerr, jetstream.ErrConsumerDeleted), startConsume)
+		}()
+	})
+	startConsume = func(ctx context.Context) (jetstream.ConsumeContext, error) {
+		consumer, err := s.bus.js.CreateOrUpdateConsumer(ctx, s.channel, consumerCfg)
+		if err != nil {
+			return nil, fmt.Errorf("nats consumer %q: %w", consumerName, err)
+		}
+		cctx, err := consumer.Consume(onMsg, errHandler)
+		if err != nil {
+			return nil, fmt.Errorf("nats consume: %w", err)
+		}
+		return cctx, nil
+	}
+	cctx, err := startConsume(ctx)
+	if err != nil {
+		return err
+	}
 
 	// The MAX_DELIVERIES advisory subject is identical across every
 	// replica running this consumer (it keys on the consumer name). A
@@ -812,7 +851,6 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		cctx.Stop()
 		return fmt.Errorf("nats advisory subscribe %q: %w", advSubject, err)
 	}
-	handle.advisorySub = advSub
 
 	// Register the handle atomically with the draining check. Drain snapshots
 	// s.handles and stops only what it found, so an append landing after that
@@ -822,7 +860,12 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 	// gated on the same draining flag, so the poison message reaches neither
 	// the handler nor the DLQ nor OnDrop. Losing the race means WE tear the
 	// consumer down and report the refusal.
+	//
+	// The handle's fields are written under the same lock: recoverConsumer
+	// swaps cctx under it, and only on a registered handle.
 	s.mu.Lock()
+	handle.cctx = cctx
+	handle.advisorySub = advSub
 	if s.draining {
 		s.mu.Unlock()
 		stopConsumeHandle(handle)
@@ -831,6 +874,110 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 	s.handles = append(s.handles, handle)
 	s.mu.Unlock()
 	return nil
+}
+
+// natsConsumerMaybeLost reports whether a consume-loop error can mean the
+// broker no longer has this consumer: deleted with its stream, unknown to
+// a recreated server (pulls then find no responder), or silent long enough
+// to miss heartbeats. A transient cause is told apart by recoverConsumer,
+// which checks the consumer before re-creating anything.
+func natsConsumerMaybeLost(err error) bool {
+	return errors.Is(err, jetstream.ErrConsumerDeleted) ||
+		errors.Is(err, jetstream.ErrConsumerNotFound) ||
+		errors.Is(err, jetstream.ErrStreamNotFound) ||
+		errors.Is(err, jetstream.ErrNoHeartbeat) ||
+		errors.Is(err, natsgo.ErrNoResponders)
+}
+
+// natsRecoverBackoff spaces the attempts to re-create a lost consumer while
+// the broker is still unreachable.
+const natsRecoverBackoff = time.Second
+
+// recoverConsumer re-establishes a subscription whose consumer the broker
+// lost — a server recreated without persistent storage, or the stream
+// deleted under a live process. Without it the consume loop stopped (or
+// pulled from nothing) for the rest of the process's life.
+//
+// Unless the loop already reported the consumer deleted (which also stops
+// the loop), the consumer is looked up first: if it still exists the error
+// was transient and nothing is touched. Otherwise the cached stream entries
+// are dropped, the stream, dead-letter stream and claim bucket re-ensured,
+// and the consumer re-created with a fresh pull loop swapped into the
+// handle — retried until it succeeds or the subscriber drains.
+func (s *natsSubscriber) recoverConsumer(ctx context.Context, handle *natsConsumeHandle, consumerName string, stopped bool,
+	start func(context.Context) (jetstream.ConsumeContext, error)) {
+	for attempt := 0; ; attempt++ {
+		if s.isDraining() || s.bus.isClosed() {
+			return
+		}
+		if attempt > 0 {
+			sleepCtx(ctx, natsRecoverBackoff)
+		}
+		opCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if !stopped {
+			_, err := s.bus.js.Consumer(opCtx, s.channel, consumerName)
+			if err == nil {
+				cancel()
+				return
+			}
+			if !errors.Is(err, jetstream.ErrConsumerNotFound) && !errors.Is(err, jetstream.ErrStreamNotFound) {
+				// Cannot tell (broker unreachable): the loop reports again
+				// and a later error retries the check.
+				cancel()
+				return
+			}
+		}
+		cctx, err := s.bus.reensureChannel(opCtx, s.channel, start)
+		cancel()
+		if err != nil {
+			reportBusFailure("consumer recreate", s.channel, consumerName, err)
+			continue
+		}
+		s.mu.Lock()
+		if s.draining || handle.cctx == nil {
+			// Drain has begun (or the handle was never registered): the new
+			// loop belongs to nobody, so stop it here.
+			s.mu.Unlock()
+			cctx.Stop()
+			return
+		}
+		old := handle.cctx
+		handle.cctx = cctx
+		s.mu.Unlock()
+		old.Stop()
+		log.Printf("eventbus nats: consumer %q on channel %q re-created after the broker lost it", consumerName, s.channel)
+		return
+	}
+}
+
+// reensureChannel drops the cached state for channel's streams and claim
+// bucket, re-creates them on the broker, and runs start to re-create the
+// consumer.
+func (b *NatsBus) reensureChannel(ctx context.Context, channel string,
+	start func(context.Context) (jetstream.ConsumeContext, error)) (jetstream.ConsumeContext, error) {
+	b.forgetStream(channel)
+	b.forgetStream(natsDLQStreamName(channel))
+	b.mu.Lock()
+	b.claims = nil
+	b.mu.Unlock()
+	if err := b.ensureStream(ctx, channel); err != nil {
+		return nil, err
+	}
+	if err := b.ensureDLQStream(ctx, channel); err != nil {
+		return nil, err
+	}
+	if _, err := b.ensureDLQClaims(ctx); err != nil {
+		return nil, err
+	}
+	return start(ctx)
+}
+
+// forgetStream drops a stream from the bus's "already created" cache, so the
+// next ensureStream re-issues the create against the broker.
+func (b *NatsBus) forgetStream(name string) {
+	b.mu.Lock()
+	delete(b.streams, name)
+	b.mu.Unlock()
 }
 
 // isDraining reports whether Drain has begun on this subscriber. The
