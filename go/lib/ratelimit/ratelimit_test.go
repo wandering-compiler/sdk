@@ -476,3 +476,46 @@ func TestAllowChargeableRequest_ChargesOnlyFailures(t *testing.T) {
 		t.Error("nil limiter must allow")
 	}
 }
+
+// The scope is in the variable's name; a transport's own variables override
+// the scope's for that transport only; unset, the default (ON) applies.
+func TestFromEnvScope(t *testing.T) {
+	t.Setenv("GW_PUBLIC_RATELIMIT_PER_MINUTE", "40")
+	t.Setenv("GW_PUBLIC_RATELIMIT_RPC_PER_MINUTE", "0")
+	t.Setenv("GW_PUBLIC_RATELIMIT_REST_BURST", "4")
+	rest, rpc := FromEnvScope("GW", "PUBLIC", "REST"), FromEnvScope("GW", "PUBLIC", "RPC")
+	if rest.PerMinute != 40 || rest.Burst != 4 {
+		t.Errorf("REST = %v/min burst %d, want the scope's 40 and its own burst 4", rest.PerMinute, rest.Burst)
+	}
+	if rpc.PerMinute != 0 || rpc.Burst != DefaultBurst {
+		t.Errorf("RPC = %v/min burst %d, want its own 0 and the default burst", rpc.PerMinute, rpc.Burst)
+	}
+	if New(rpc) != nil {
+		t.Error("an RPC limiter switched off still limits")
+	}
+	if New(rest) == nil {
+		t.Error("the REST limiter was switched off with the RPC one")
+	}
+	if d := FromEnvScope("OTHER", "PUBLIC", "REST"); d.PerMinute != DefaultPerMinute {
+		t.Errorf("nothing set: %v/min, want the default %v (ON)", d.PerMinute, float64(DefaultPerMinute))
+	}
+}
+
+// The bare `<PREFIX>_RATELIMIT_*` the variables had before still works when
+// the scoped name is unset, and the scoped name wins when both are set.
+func TestFromEnvScope_TheOldNameStillWorks(t *testing.T) {
+	t.Setenv("OLD_RATELIMIT_PER_MINUTE", "0")
+	if c := FromEnvScope("OLD", "PUBLIC", "REST"); c.PerMinute != 0 {
+		t.Errorf("old name ignored: %v/min, want 0", c.PerMinute)
+	}
+	t.Setenv("OLD_RATELIMIT_BURST", "3")
+	t.Setenv("OLD_RATELIMIT_TRUSTED_PROXIES", "192.0.2.0/24")
+	if c := FromEnvScope("OLD", "PUBLIC", ""); c.Burst != 3 || len(c.TrustedProxies) != 1 || c.TrustedProxies[0].String() != "192.0.2.0/24" {
+		t.Errorf("old BURST / TRUSTED_PROXIES ignored: burst %d, proxies %v", c.Burst, c.TrustedProxies)
+	}
+	t.Setenv("BOTH_RATELIMIT_PER_MINUTE", "0")
+	t.Setenv("BOTH_PUBLIC_RATELIMIT_PER_MINUTE", "12")
+	if c := FromEnvScope("BOTH", "PUBLIC", ""); c.PerMinute != 12 {
+		t.Errorf("both set: %v/min, want the scoped 12", c.PerMinute)
+	}
+}

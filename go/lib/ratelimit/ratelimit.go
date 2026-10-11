@@ -76,23 +76,48 @@ type Config struct {
 // switched on is one that is off everywhere it was never thought about, and
 // the surfaces this guards are exactly the ones nobody revisits.
 func FromEnv(prefix string) Config {
-	cfg := Config{
+	cfg, _ := fromEnvNamed(prefix+"_RATELIMIT", "")
+	return cfg
+}
+
+// fromEnvNamed resolves `<base>_PER_MINUTE`, `_BURST` and `_TRUSTED_PROXIES`.
+// A variable unset under base is read under legacy (when given), with a
+// warning that names the new spelling. perMinuteFrom is the variable that
+// set PerMinute, empty when the default stands.
+func fromEnvNamed(base, legacy string) (cfg Config, perMinuteFrom string) {
+	cfg = Config{
 		PerMinute: DefaultPerMinute,
 		Burst:     DefaultBurst,
 		TTL:       DefaultTTL,
 		MaxKeys:   DefaultMaxKeys,
 	}
-	if v := strings.TrimSpace(os.Getenv(prefix + "_RATELIMIT_PER_MINUTE")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.PerMinute = f
+	lookup := func(suffix string) (string, string) {
+		if v := strings.TrimSpace(os.Getenv(base + suffix)); v != "" {
+			return v, base + suffix
+		}
+		if legacy == "" {
+			return "", ""
+		}
+		v := strings.TrimSpace(os.Getenv(legacy + suffix))
+		if v == "" {
+			return "", ""
+		}
+		if _, warned := legacyWarned.LoadOrStore(legacy+suffix, true); !warned {
+			log.Printf("ratelimit: %s is the old name of %s — it still works; rename it", legacy+suffix, base+suffix)
+		}
+		return v, legacy + suffix
+	}
+	if v, from := lookup("_PER_MINUTE"); v != "" {
+		if f, ok := parsePerMinute(v); ok {
+			cfg.PerMinute, perMinuteFrom = f, from
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv(prefix + "_RATELIMIT_BURST")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+	if v, _ := lookup("_BURST"); v != "" {
+		if n, ok := parseBurst(v); ok {
 			cfg.Burst = n
 		}
 	}
-	raw := strings.TrimSpace(os.Getenv(prefix + "_RATELIMIT_TRUSTED_PROXIES"))
+	raw, _ := lookup("_TRUSTED_PROXIES")
 	if raw == "" {
 		// The gateway is reached through a terminator on the same container
 		// network; these are the ranges that terminator can occupy. A public
@@ -105,7 +130,77 @@ func FromEnv(prefix string) Config {
 			cfg.TrustedProxies = append(cfg.TrustedProxies, pfx)
 		}
 	}
+	return cfg, perMinuteFrom
+}
+
+// parsePerMinute and parseBurst are the one parse of each value, whichever
+// variable it came from; ok is false for an empty or malformed value, which
+// leaves the previous one standing.
+func parsePerMinute(v string) (float64, bool) {
+	f, err := strconv.ParseFloat(v, 64)
+	return f, err == nil
+}
+
+func parseBurst(v string) (int, bool) {
+	n, err := strconv.Atoi(v)
+	return n, err == nil && n > 0
+}
+
+// offLogged and legacyWarned hold what [FromEnvScope] has already reported,
+// so each line is printed once: a surface builds more than one limiter from
+// the same variables.
+var offLogged, legacyWarned sync.Map
+
+// FromEnvScope reads the limiter of one SCOPE of a surface — what it limits
+// is in the variable's name:
+//
+//	<PREFIX>_<SCOPE>_RATELIMIT_PER_MINUTE      float, <=0 disables  (default 30)
+//	<PREFIX>_<SCOPE>_RATELIMIT_BURST           int                  (default 10)
+//	<PREFIX>_<SCOPE>_RATELIMIT_TRUSTED_PROXIES CIDRs                (default private + loopback)
+//
+// The gateway's scope is PUBLIC, the methods that take no credential (a
+// sign-in, a registration, a reset request, a code check) and nothing else:
+// an authenticated call is not limited here. The admin's is LOGIN. A bare
+// `<PREFIX>_RATELIMIT_*`, the name these had before, is still read when the
+// scoped one is unset, with a warning.
+//
+// transport, when not empty, narrows it to one transport of a surface that
+// serves several (REST and the gRPC rpc transport share a gateway):
+// `<PREFIX>_<SCOPE>_RATELIMIT_<TRANSPORT>_PER_MINUTE` / `_BURST` override the
+// scope's values for that transport alone, so one can be switched off — a
+// conscious decision, made in the environment — while the other stays
+// limited. Unset means ON at the defaults. A limiter that ends up off says
+// so once, at start, naming the variable that switched it off.
+func FromEnvScope(prefix, scope, transport string) Config {
+	base := prefix + "_" + scope + "_RATELIMIT"
+	cfg, from := fromEnvNamed(base, prefix+"_RATELIMIT")
+	name := base
+	if transport != "" {
+		name = base + "_" + transport
+		if f, ok := parsePerMinute(strings.TrimSpace(os.Getenv(name + "_PER_MINUTE"))); ok {
+			cfg.PerMinute, from = f, name+"_PER_MINUTE"
+		}
+		if n, ok := parseBurst(strings.TrimSpace(os.Getenv(name + "_BURST"))); ok {
+			cfg.Burst = n
+		}
+	}
+	if cfg.PerMinute <= 0 {
+		if _, logged := offLogged.LoadOrStore(name, true); !logged {
+			log.Printf("ratelimit: %s is OFF (%s=%v) — %s", name, from, cfg.PerMinute, scopeMeaning(scope))
+		}
+	}
 	return cfg
+}
+
+// scopeMeaning says, in the OFF line, what is now unlimited.
+func scopeMeaning(scope string) string {
+	switch scope {
+	case "PUBLIC":
+		return "the methods that take no credential (sign-in, registration, reset, codes) are not limited per address"
+	case "LOGIN":
+		return "the sign-in is not limited per address"
+	}
+	return "nothing is limited per address"
 }
 
 type bucket struct {
