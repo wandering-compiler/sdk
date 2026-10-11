@@ -195,9 +195,8 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	if opts.DefaultAckWait == 0 {
 		opts.DefaultAckWait = 30 * time.Second
 	}
-	if opts.Observer == nil {
-		opts.Observer = DefaultObserver{}
-	}
+	// Nil -> DefaultObserver; every callback made panic-safe.
+	opts.Observer = guardObserver(opts.Observer)
 	if opts.InstanceID == "" {
 		opts.InstanceID = newInstanceID()
 	} else {

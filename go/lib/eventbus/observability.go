@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
@@ -32,6 +33,9 @@ import (
 //	                    MaxBlockTimeout exceeded) or DLQ
 //	                    routing past MaxDeliver
 //	                    (RedisBus claim loop).
+//
+// A panic in a callback is recovered and reported by the bus; it
+// never reaches the emitting caller or a consume loop.
 //
 // All callbacks run on the hot path; implementations should
 // be O(1) — typically a counter increment or a structured-log
@@ -156,4 +160,74 @@ func reportBusFailure(stage, channel, topic string, err error) {
 	wrapped := fmt.Errorf("eventbus %s failed: channel=%s topic=%s: %w", stage, channel, topic, err)
 	log.Print(wrapped)
 	observx.ReportError(context.Background(), wrapped)
+}
+
+// guardedObserver recovers a panic raised by the Observer it wraps.
+//
+// Callbacks run inline: OnEmitSuccess / OnEmitFailure on the goroutine
+// that called Dispatch (the emitting RPC), the delivery callbacks inside
+// the consume loops and detached fan-out goroutines. A panicking metrics
+// backend must cost the observation, never the emit — Dispatch has
+// already published (or already decided to fail) by the time the
+// callback runs, so propagating the panic would crash the caller over a
+// counter and, on a broker, report an event that WAS sent as lost.
+//
+// The recovered panic is reported to observx and the log directly, not
+// through the Observer, which is the thing that just failed.
+type guardedObserver struct{ inner Observer }
+
+// guardObserver wraps o so every callback is panic-safe. Idempotent.
+func guardObserver(o Observer) Observer {
+	if o == nil {
+		o = DefaultObserver{}
+	}
+	if g, ok := o.(guardedObserver); ok {
+		return g
+	}
+	return guardedObserver{inner: o}
+}
+
+func recoverObserverPanic(callback, channel, topic string) {
+	if r := recover(); r != nil {
+		err := fmt.Errorf("PANIC eventbus observer %s: channel=%s topic=%s: %v\n%s", callback, channel, topic, r, debug.Stack())
+		log.Print(err)
+		observx.ReportError(context.Background(), err)
+	}
+}
+
+func (g guardedObserver) OnEmitSuccess(channel, topic string) {
+	defer recoverObserverPanic("OnEmitSuccess", channel, topic)
+	g.inner.OnEmitSuccess(channel, topic)
+}
+
+func (g guardedObserver) OnEmitFailure(channel, topic string, err error) {
+	defer recoverObserverPanic("OnEmitFailure", channel, topic)
+	g.inner.OnEmitFailure(channel, topic, err)
+}
+
+func (g guardedObserver) OnDeliverSuccess(channel, topic string) {
+	defer recoverObserverPanic("OnDeliverSuccess", channel, topic)
+	g.inner.OnDeliverSuccess(channel, topic)
+}
+
+func (g guardedObserver) OnDeliverFailure(channel, topic string, err error) {
+	defer recoverObserverPanic("OnDeliverFailure", channel, topic)
+	g.inner.OnDeliverFailure(channel, topic, err)
+}
+
+func (g guardedObserver) OnDrop(channel, topic, reason string) {
+	defer recoverObserverPanic("OnDrop", channel, topic)
+	g.inner.OnDrop(channel, topic, reason)
+}
+
+// OnDeliverComplete forwards only when the wrapped Observer implements
+// ObserverWithLatency, so wrapping does not change which observers see
+// the latency hook.
+func (g guardedObserver) OnDeliverComplete(channel, topic string, duration time.Duration) {
+	olat, ok := g.inner.(ObserverWithLatency)
+	if !ok {
+		return
+	}
+	defer recoverObserverPanic("OnDeliverComplete", channel, topic)
+	olat.OnDeliverComplete(channel, topic, duration)
 }
