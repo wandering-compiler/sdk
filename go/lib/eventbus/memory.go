@@ -58,9 +58,9 @@ type MemoryBusOptions struct {
 //
 // The bus is the loopback that backs `TRANSPORT_MEMORY` channels:
 // emit-side serialises the envelope, spawns one goroutine per
-// matching handler, each handler runs with a context detached
-// from the emitting RPC's cancellation (trace headers carry
-// forward, ctx cancellation does not). Drain blocks on a
+// matching handler, each handler runs with a context built from
+// its subscription, never from the emitting request (see
+// Dispatch). Drain blocks on a
 // process-global WaitGroup until in-flight goroutines finish
 // or the drain ctx expires.
 //
@@ -116,6 +116,10 @@ type MemoryBus struct {
 type registeredHandler struct {
 	topicFilter string
 	fn          HandlerFunc
+	// ctx is the context every invocation runs with: the Subscribe call's
+	// context, detached from its cancellation — what the broker adapters
+	// hand their handlers too. See Dispatch for why it is not the emitter's.
+	ctx context.Context
 }
 
 // NewMemoryBus returns a ready bus with the legacy unbounded
@@ -183,7 +187,23 @@ func (m *MemoryBus) Drops() map[string]int64 {
 // proto.Marshal failure (typically a programmer mistake
 // passing an invalid envelope) and [ErrBusDraining] once the
 // bus has been drained.
+//
+// Channel and topic are checked against the rules every transport shares
+// ([ValidateChannel], [ValidateTopic]) and refused with the same error a
+// broker adapter returns, so a name that would fail on NATS fails here too.
+//
+// Handlers do NOT run with the emitter's context. A broker delivery reaches
+// its handler with the subscriber's own context, carrying only what the
+// envelope carries; handing the in-memory handler the emitting request's
+// context instead leaked that request's values into it — its incoming
+// metadata (principal, scopes, transaction id), its deadlines' parents, its
+// transaction scope — so a handler behaved differently in-process than across
+// a broker. What an event carries to its subscribers is the envelope.
 func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelope proto.Message) error {
+	if err := validateEmit(channel, topic); err != nil {
+		m.observer.OnEmitFailure(channel, topic, err)
+		return err
+	}
 	raw, err := proto.Marshal(envelope)
 	if err != nil {
 		m.observer.OnEmitFailure(channel, topic, err)
@@ -211,13 +231,6 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 	defer m.dispatchWG.Done()
 	m.observer.OnEmitSuccess(channel, topic)
 
-	// Detach from the emit ctx so handlers outlive the
-	// originating RPC's cancellation. Trace + baggage carry
-	// forward; cancellation does not — standard Go 1.21+
-	// idiom for fire-and-forget background work that should
-	// retain observability lineage.
-	bgCtx := context.WithoutCancel(ctx)
-
 	sem := m.semaphoreFor(channel)
 	for _, h := range snapshot {
 		if !MatchGlob(h.topicFilter, topic) {
@@ -233,9 +246,9 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 				// is recover-wrapped, the observer callbacks around it are
 				// not, and this goroutine is detached — a panic here takes
 				// the process down with nothing to catch it.
-				defer recoverLoopTick(bgCtx, "eventbus memory fan-out")
+				defer recoverLoopTick(h.ctx, "eventbus memory fan-out")
 				start := time.Now()
-				err := h.fn(bgCtx, topic, raw)
+				err := h.fn(h.ctx, topic, raw)
 				reportDeliverLatency(m.observer, channel, topic, time.Since(start))
 				if err != nil {
 					m.observer.OnDeliverFailure(channel, topic, err)
@@ -260,10 +273,10 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 				// is recover-wrapped, the observer callbacks around it are
 				// not, and this goroutine is detached — a panic here takes
 				// the process down with nothing to catch it.
-				defer recoverLoopTick(bgCtx, "eventbus memory fan-out")
+				defer recoverLoopTick(h.ctx, "eventbus memory fan-out")
 				defer func() { <-sem }()
 				start := time.Now()
-				err := h.fn(bgCtx, topic, raw)
+				err := h.fn(h.ctx, topic, raw)
 				reportDeliverLatency(m.observer, channel, topic, time.Since(start))
 				if err != nil {
 					m.observer.OnDeliverFailure(channel, topic, err)
@@ -310,7 +323,12 @@ func (m *MemoryBus) recordDrop(channel string) {
 // bus. SubscriberFactory contract — generated code calls
 // `factory.Subscriber(ctx, "<channel>")` once per channel at
 // boot.
+//
+// The channel must satisfy [ValidateChannel], as on every transport.
 func (m *MemoryBus) Subscriber(_ context.Context, channel string) (Subscriber, error) {
+	if err := ValidateChannel(channel); err != nil {
+		return nil, err
+	}
 	return &memorySubscriber{bus: m, channel: channel}, nil
 }
 
@@ -322,7 +340,11 @@ func (m *MemoryBus) Subscriber(_ context.Context, channel string) (Subscriber, e
 // checked under the same lock hold as the append: drain is bus-wide and
 // stops every later emit, so a handler registered after it would never be
 // called — the broker adapters refuse the same late registration.
-func (m *MemoryBus) register(channel, topicFilter string, h HandlerFunc) error {
+func (m *MemoryBus) register(ctx context.Context, channel, topicFilter string, h HandlerFunc) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithoutCancel(ctx)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.draining {
@@ -331,6 +353,7 @@ func (m *MemoryBus) register(channel, topicFilter string, h HandlerFunc) error {
 	m.handlers[channel] = append(m.handlers[channel], registeredHandler{
 		topicFilter: topicFilter,
 		fn:          h,
+		ctx:         ctx,
 	})
 	return nil
 }
@@ -382,8 +405,12 @@ type memorySubscriber struct {
 // failure is [ErrSubscriberDraining]: the bus has been drained
 // (drain is bus-wide, so draining any subscriber of this bus
 // counts) and the handler could never be invoked.
-func (s *memorySubscriber) Subscribe(_ context.Context, topicFilter string, h HandlerFunc) error {
-	return s.bus.register(s.channel, topicFilter, recoverHandler(h))
+//
+// Every invocation of h runs with ctx detached from its cancellation —
+// the same context a broker adapter hands its handlers — not with the
+// context of the request that emitted the event.
+func (s *memorySubscriber) Subscribe(ctx context.Context, topicFilter string, h HandlerFunc) error {
+	return s.bus.register(ctx, s.channel, topicFilter, recoverHandler(h))
 }
 
 // Drain blocks until every in-flight Dispatch goroutine
