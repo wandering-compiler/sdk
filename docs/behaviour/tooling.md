@@ -61,7 +61,7 @@ generated e2e test → runner.RunScenario(steps, callers, opts)
 | T26 | Stress | `go/tooling/e2e/stress/` — `engine.go`, `report.go` — `Check` |
 | T27 | Dev PKI | `go/tooling/certgen/certgen.go` — `EnsureCerts` |
 | T28 | Path guard | `go/tooling/pathguard/pathguard.go` — `Join`, `Contains`, `ValidateRel` |
-| T29 | Plugin digest | `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check` |
+| T29 | Plugin digest | `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`, `Uncovered`, `Prune` |
 
 ## T1. Command dispatch of built-in roots
 
@@ -138,14 +138,16 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 **Purpose.** Report pending migrations and change nothing.
 
 **Configuration.** The flags of `migrate apply`, plus `--exit-code` (pending migrations give a
-non-zero exit). Timeout 5 minutes.
+non-zero exit). Timeout 5 minutes. On Postgres the applied head and the migration phase are read
+from the catalogue; a ledger without the post-transaction phase column is read as all-complete,
+and the column is added only on the apply path.
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
 | T3.1 | `--exit-code` MUST turn pending migrations into a non-zero exit. | `TestReportStatus_ExitCode` |
-| T3.2 | `status` MUST NOT write to the database, alter the ledger, or take locks that block on an in-flight migration. | no test |
+| T3.2 | `status` MUST NOT write to the database, alter the ledger, or take locks that block on an in-flight migration. | `TestAppliedHead_IsReadOnlyOnALegacyLedger_Live` (Postgres, live; other dialects not asserted) |
 
 ## T4. Artefact fetch (`migrate fetch`, `--fetch`)
 
@@ -214,7 +216,7 @@ contacted.
 | `--fixtures DIR` | `w17/fixtures` | — |
 | `--fetch` | off | — |
 | `--group` | default group | `.` and a trailing `/` normalise to the default group |
-| `--domain`, `--connection` | none | `--connection` required when two connections can seed |
+| `--domain`, `--connection` | none | `--connection` required when two connections can seed; only Postgres connections can seed |
 | `--dry-run` | off | — |
 | `--allow-stale` | off | accepts a render older than its fixture |
 | `--allow-no-dsn` | off | accepts a run with no DSN anywhere; accepted by `fixtures apply` only (T2.10) |
@@ -228,8 +230,9 @@ contacted.
 | T6.3 | A render older than its fixture MUST be refused unless `--allow-stale`. | `TestFixturesApply_RefusesARenderOlderThanItsFixture` |
 | T6.4 | No DSN anywhere MUST be an error unless `--allow-no-dsn`. | `TestFixturesApply_NoDSNAnywhereIsAnError` |
 | T6.5 | Two seedable connections MUST require `--connection`. | `TestFixturesApply_TwoSeedableConnectionsMustBeDisambiguated` |
-| T6.6 | Only connections whose applier can seed MUST be nominated as seed candidates. | no test |
+| T6.6 | Only connections whose applier can seed MUST be nominated as seed candidates; the candidate rule MUST stay in step with the appliers that implement seeding. | `TestSeedCandidate_MatchesSeedCapable`, `TestFixturesApply_StoresThatCannotSeedAreNotCandidates`, `TestFixturesApply_AKVConnectionIsNotACandidate` |
 | T6.7 | An unknown `fixtures` subcommand MUST print the fixtures usage. | no test |
+| T6.8 | A bundle whose only candidate store cannot seed MUST be refused with a message that fixtures seed into Postgres only, before the store is opened; an explicit `--connection` naming such a store MUST be refused. | `TestFixturesApply_OnlyAStoreThatCannotSeedIsRefusedClearly`, `TestFixturesApply_ExplicitConnectionThatCannotSeedIsRefused` |
 
 **Deliberate limits.**
 - Groups are a naming convention, not a safety gate; nothing refuses seeding a production store.
@@ -330,11 +333,17 @@ is adopted (recorded through `adopt_sql`, no DDL).
    `--fake`).
 4. Per migration: the applier is cached per connection and the run lock taken at first open;
    the head is re-read under the lock once per connection, and ids at or below it are skipped as
-   applied by a concurrent run.
+   applied by a concurrent run. A run lock that can report whether it is still held
+   (`migrate.CheckedRunLock`) is checked before every migration, in apply and in rollback; a lost
+   lock stops the run with an error wrapping `migrate.ErrLockLost` that names the connection.
 5. `--fake` → fake apply (T12); adopt → `adopt_sql`; otherwise drift gate (T13), then apply or
    resume the post-transaction half.
 6. A failure aborts the run, logs one structured line, and is reported to the error tracker when
    one is initialised.
+7. The closing line reads `apply: N migration(s) applied`, followed by the adopted,
+   `--fake`-recorded and skipped counts, each shown only when non-zero.
+8. Releasing the run lock: a release that finds the lock lost fails the run with
+   `ErrLockLost`; any other release failure is a warning, because that lock expires on its own.
 
 **Guarantees.**
 
@@ -348,8 +357,9 @@ is adopted (recorded through `adopt_sql`, no DDL).
 | T11.6 | A second run against a store with a run lock MUST fail fast with "run-lock held", never wait. | `TestRun_LockHeldAbortsFailFast` |
 | T11.7 | On Postgres, a migration whose in-transaction half committed but whose post-transaction half did not MUST resume only the post-transaction half. | `TestRun_ResumesPendingSkirt`, `TestPreFingerprint_DoesNotWedgeAResume` |
 | T11.8 | A migration MUST NOT be applied twice within one run. | no test |
-| T11.9 | The run MUST NOT report success for work not done; the closing count MUST include only migrations actually applied. | no test |
-| T11.10 | Losing the run lock during a run MUST fail the run. | no test |
+| T11.9 | The run MUST NOT report success for work not done; the closing count MUST include only migrations this run applied, and report adopted, fake-recorded and skipped migrations separately. | `TestRun_ClosingLineCountsOnlyWhatThisRunApplied` |
+| T11.10 | Losing the run lock during a run MUST fail the run before the next migration, in apply and in rollback, with an error wrapping `ErrLockLost`. | `TestRun_LostRunLockStopsBeforeTheNextMigration`, `TestRunRollback_LostRunLockStopsBeforeTheNextMigration` |
+| T11.11 | A release that finds the run lock lost MUST fail the run; any other release failure MUST stay a warning. | `TestRun_ReleaseOfALostLockFailsTheRun`, `TestRun_OrdinaryReleaseFailureStaysAWarning` |
 
 ## T12. Fake apply
 
@@ -390,7 +400,7 @@ fingerprint capability (Redis, NATS, S3); the fingerprint is empty.
 | ID | Guarantee | Test |
 |---|---|---|
 | T13.1 | A fingerprint read error MUST refuse, never count as agreement. | `TestPreFingerprint_ReadFailureIsNotAgreement` |
-| T13.2 | A real expectation that differs from the target MUST refuse the migration. | no test |
+| T13.2 | A real expectation that differs from the target MUST refuse the migration. | `TestPreFingerprint_StillRefusesRealDrift` |
 
 **Deliberate limits.**
 - The fingerprint covers tables and columns only (see T18); index, constraint and non-default
@@ -422,12 +432,21 @@ the dialect defines.
 
 **Purpose.** One applier per store kind. Run locks: Postgres serialises on the ledger primary key, plus an advisory lock with a phase re-check for the post-transaction half; MySQL takes `GET_LOCK` on a dedicated session, per schema; SQLite relies on the ledger primary key; Redis uses `SET NX` on `w17:migrate:runlock` (TTL 5 min, heartbeat 60 s); S3 uses a conditional PUT of `w17-migrate-runlock.json`, stale after 3 min.
 
+Redis, S3 and MySQL locks implement `migrate.CheckedRunLock`. Redis and S3 keep a lease on the
+local monotonic clock, counted from when the last successful acquire or refresh was sent, with a
+margin held back; a refresh that finds another owner marks the lease lost for good. Their
+appliers check the lease before every write: each command line, each per-key data-migration
+write, cursor writes and the ledger write. MySQL `Check` asks the server whether its lock session
+still holds the lock. S3 judges staleness only on the store's clock (the lock object's
+`Last-Modified` against the response `Date`); a store that reports neither is refused with a
+manual remedy. Postgres, SQLite and NATS have no checked run lock.
+
 | Capability | Postgres | MySQL | SQLite | Redis | NATS | S3 |
 |---|---|---|---|---|---|---|
 | Apply | body's own `BEGIN…COMMIT`, one simple-protocol exec | body through the pool; DDL commits implicitly | one dedicated connection, `foreign_keys=ON` | commands line by line | commands line by line | commands line by line |
 | Post-transaction resume | yes | no (warned at run time) | no (warned) | — | — | — |
 | Fingerprint / Observe | yes / yes | yes / no | yes / no | schemaless | schemaless | schemaless |
-| Seed | yes | no | no | no | no | no |
+| Seed | yes (the only seed candidate) | no | no | no | no | no |
 | Ledger | `w17_migrations` | `w17_migrations` | `w17_migrations` | hash `w17:migrations` | KV bucket `w17-migrations` | objects `w17-migrations/<id>.json` |
 
 **Guarantees.**
@@ -436,7 +455,7 @@ the dialect defines.
 |---|---|---|
 | T15.1 | Redis and S3 run locks MUST be mutually exclusive. | `TestRunLock_MutualExclusion`, `TestS3RunLock_MutualExclusion` |
 | T15.2 | A stale lock MUST be taken over; a refreshed lock MUST NOT be. | `TestRunLock_StaleTakeoverViaTTL`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp`, `TestS3RunLock_RefreshPreventsTakeover` |
-| T15.3 | Release MUST be owner-checked. | `TestRunLock_ReleaseIsOwnerChecked`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp` |
+| T15.3 | Release MUST be owner-checked; a release that finds the lock held by another owner MUST return an error wrapping `ErrLockLost`. | `TestRunLock_ReleaseIsOwnerChecked`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp` (Redis and S3; MySQL not asserted) |
 | T15.4 | The MySQL run lock MUST survive an idle server `wait_timeout`. | `TestRunLock_SurvivesAnIdleServerTimeout` (`dockertest`) |
 | T15.5 | SQLite foreign-key violations after a table rebuild MUST be caught. | `TestApply_RebuildFKViolation_Caught` |
 | T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | no test |
@@ -445,9 +464,15 @@ the dialect defines.
 | T15.9 | A command line the applier does not recognise MUST fail the migration, not be skipped. | no test |
 | T15.10 | Wipe MUST return the store to the empty state, including namespaces created by schema prep, and MUST NOT change session settings that outlive it. | no test |
 | T15.11 | NATS DSN user info is not used. | `TestDSNToServer_DropsUserInfo` |
+| T15.12 | A Redis or S3 run lock whose lease is no longer provably held (a refresh found another owner, or the lease ran out without a refresh) MUST report itself lost for good, and the applier MUST stop before its next write. | `TestRunLock_RefreshOfATakenOverLockReportsItLost`, `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestLease_HoldsUntilItsMarginThenRunsOut`, `TestLease_LostStaysLost`, `TestLease_RenewalExtendsFromWhenTheRefreshWasSent` |
+| T15.13 | The S3 run lock MUST judge staleness on the store's clock only, so a taker whose local clock runs ahead cannot take over a live lock; a store that reports no time MUST be refused, never judged on the local clock. | `TestS3RunLock_ClockSkewedTakerCannotTakeOverALiveLock`, `TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness` |
+| T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | no test |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.
+- A lease bounds how long a lost Redis or S3 lock can go unnoticed; it is not a fencing token,
+  so the store does not refuse a write from a holder that stalled between its check and its write.
+- The S3 run lock needs a store that sends `Last-Modified` and `Date`.
 - Redis wipe is `FLUSHDB` on the logical database.
 
 ## T16. Data migrations
@@ -475,10 +500,10 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 | T16.2 | An op-granularity cursor MUST resume after a crash. | `TestApply_YAMLResumability_Live` |
 | T16.3 | An interrupted `TRANSFORM_FIELD` MUST be refused on resume, not re-run. | `TestApply_YAMLTransformResumeRefused_Live` |
 | T16.4 | Key TTL and S3 object metadata MUST be preserved. | `TestApply_YAMLPreservesTTL_Live`, `TestApply_YAMLPreservesObjectMetadata` |
-| T16.5 | `RENAME_FIELD` MUST NOT overwrite a differing destination. | no test |
+| T16.5 | `RENAME_FIELD` MUST NOT overwrite a differing destination; a destination already holding the same value is benign. | `TestJSONApplyOp_RenameField_ClobberRefused`, `TestJSONApplyOp_RenameField_SameValueDestination_Benign`, `TestProtoCodec_RenameField_RefusesClobber` |
 | T16.6 | Inverse ops MUST be derived; `REMOVE_FIELD` and `TRANSFORM_FIELD` MUST be irreversible. | `TestInverseOperations_*`, `TestRollback_YAMLIrreversibleRefused` |
 | T16.7 | A stored value that is not a JSON object MUST be refused with an error. | no test |
-| T16.8 | Each key MUST be transformed at most once per run. | no test |
+| T16.8 | A `TRANSFORM_FIELD` op MUST hand each key to its workers at most once per run, even when the store's scan returns a key more than once. | `TestApply_YAMLTransformAppliesOncePerKeyDespiteScanRepeats` (Redis; S3 not asserted) |
 | T16.9 | Refusal messages MUST name only flags that exist; the irreversible-rollback refusal names the migration and a rollback target (`--to`) that keeps it applied. | `TestRollback_YAMLIrreversibleRefused` (Redis and S3) |
 | T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | no test |
 | T16.11 | A stored JSON `null` MUST be treated like an empty value: every op is a no-op on it and none panics. | `TestJSONApplyOp_NullValueIsANoOp` |
@@ -545,8 +570,8 @@ parser enforces this; streams are checked again at run time.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T19.1 | The first failing step MUST abort the scenario. | no test |
-| T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | no test |
+| T19.1 | The first failing step MUST abort the scenario. | `TestRunScenario_FailAborts` |
+| T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | `TestExpectStream_AStreamStepAssertingNothingFails`, `TestExpectStream_ACredentialIsRefused` (`expect_transport_error` on a stream not asserted) |
 
 ## T20. E2E auth token threading
 
@@ -636,7 +661,8 @@ absent field fails and binds nothing.
 | T22.6 | `count == 0`, `empty`, `distinct` and `eq null` MUST accept an absent field as empty. | `TestCountMatcher`, `TestEmptyMatcher`, `TestExactMatcherAbsentVsNil` (`distinct` not asserted) |
 | T22.7 | Matchers within one `expect` MUST evaluate in a deterministic order, and a capture used by a sibling matcher MUST resolve. | no test |
 | T22.8 | Every spec the matcher messages suggest (the `unwritten` placeholder, the vacuous-count refusal) MUST be one that decode accepts. | `TestMatcherAdvice_Decodes` |
-| T22.9 | `regex` MUST stringify numbers the way interpolation does (no exponent). | no test |
+| T22.9 | `regex` MUST stringify a numeric response value the way interpolation does (no exponent) before matching it. | no test |
+| T22.10 | A numeric capture interpolated into a `regex` pattern MUST be written the way interpolation writes it (no exponent) and quoted as a literal. | `TestRegexPatternWithANumericCapture`, `TestRegexPatternQuotesTheCapturedValue` |
 
 **Deliberate limits.**
 - The runner cannot tell a misspelt `expect` key from an omitted empty field. The code generator refuses a misspelt key against the response schema.
@@ -741,7 +767,7 @@ time. Teardown failure is non-fatal. The report gives p50/p95/p99/max and checks
 
 **Purpose.** Mint a development CA (`ca.crt`, `ca.key`) and server leaf (`server.crt`,
 `server.key`) in a directory, idempotently. A leaf that no longer chains to the CA, covers the
-requested names or is valid is re-minted.
+requested names, carries both server and client usage, or is valid is re-minted.
 
 **Configuration.** ECDSA P-256; 128-bit positive serials; 10-year validity; CA with
 `MaxPathLenZero` and KeyUsage CertSign|CRLSign; leaf with ServerAuth and ClientAuth and SANs = the
@@ -757,7 +783,7 @@ directory `0700` with a `.gitignore` ignoring everything.
 | T27.3 | A reused CA MUST be a valid, unexpired signing CA whose key matches. | `TestValidateReusableCA` |
 | T27.4 | Concurrent runs MUST produce a consistent pair (serialised by `flock` on unix). | `TestEnsureCerts_ConcurrentMint_ConsistentPair` |
 | T27.5 | Serials MUST never be zero. | `TestRandSerialFrom_NeverZero` |
-| T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window or does not match its key. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired` (key mismatch not asserted) |
+| T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window, does not match its key, or lacks ServerAuth or ClientAuth extended key usage. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired`, `TestEnsureLeaf_ReMintedWithoutClientAuth` (key mismatch and missing ServerAuth not asserted) |
 | T27.7 | An unreadable leaf MUST be refused, not overwritten. | `TestEnsureLeaf_UnreadableIsRefused` |
 
 **Deliberate limits.**
@@ -784,12 +810,17 @@ directory `0700` with a `.gitignore` ignoring everything.
 
 ## T29. Plugin digest
 
-**Code.** `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`
+**Code.** `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`, `Uncovered`, `Prune`
 
 **Purpose.** The canonical digest of a plugin tree, pinned in the lock and bound by the plugin
 signature. Length-prefixed, versioned, over sorted paths; covers each regular file's path,
 executable bit and content. Skipped: directories named `.git`, `node_modules`, `.w17dev` at any
 depth; the path `src/gen`; files named `.DS_Store`; the root `plugin.sig` only.
+
+`Uncovered(dir)` lists, sorted and slash-separated, every file inside the regenerated locations
+(`src/gen`, `node_modules`, `.w17dev`), which the digest does not cover. `Prune(dir)` removes
+those locations without following symlinks, so a fetched tree holds only covered content plus
+`.git` and the root `plugin.sig`. Neither changes the digest value.
 
 **Guarantees.**
 
@@ -799,6 +830,14 @@ depth; the path `src/gen`; files named `.DS_Store`; the root `plugin.sig` only.
 | T29.2 | The executable bit MUST be covered. | `TestOf_ExecutableBitIsCovered` |
 | T29.3 | Regenerated code under `src/gen` MUST NOT change the digest. | `TestOf_IgnoresRegeneratedPb` |
 | T29.4 | Only the root `plugin.sig` MUST be excluded; a signature file below the root MUST be covered. | `TestSignatureFileIsNotPartOfTheDigest`, `TestASignatureFileBelowTheRootIsStillCovered` |
-| T29.5 | Symlinks and other non-regular files MUST be refused. | no test |
-| T29.6 | `Check` MUST require 64 lower-case hex characters. | no test |
-| T29.7 | Every file a consumer compiles or loads from a plugin tree MUST be covered by the digest or regenerated from covered input. | no test |
+| T29.5 | Symlinks and other non-regular files MUST be refused. | `TestOf_RefusesASymlink` (other non-regular files not asserted) |
+| T29.6 | `Check` MUST require 64 lower-case hex characters. | `TestCheck_RequiresLowerCaseHexOfTheRightLength` |
+| T29.7 | After `Prune`, every file in a plugin tree MUST be covered by the digest, so whatever is compiled or loaded from it is covered or regenerated from covered input. | `TestPrune_LeavesOnlyCoveredContent` |
+| T29.8 | `Uncovered` MUST name every file the digest does not cover in a regenerated location. | `TestUncovered_NamesEveryFileOutsideTheDigest` |
+| T29.9 | `Prune` MUST NOT follow a symlink out of the tree, and MUST leave the digest unchanged. | `TestPrune_DoesNotFollowSymlinks`, `TestPrune_LeavesOnlyCoveredContent` |
+
+**Deliberate limits.**
+- The digest value does not change with `Uncovered` and `Prune`, so existing pins stay valid. The
+  SDK does not call either on its own: a consumer that fetches a plugin tree must call `Prune`
+  (or refuse a tree for which `Uncovered` is non-empty) before anything regenerates into the tree
+  or compiles it. Code generated for a consumer must use this API for T29.7 to hold there.

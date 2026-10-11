@@ -45,9 +45,13 @@ it, so all of them open the database the same way.
 
 | Dialect | Pins | Applier rule |
 |---|---|---|
-| SQLite | `_pragma=case_sensitive_like(1)`, `_pragma=foreign_keys(1)`, `_time_format=sqlite` | appends any pin whose exact text is absent |
-| MySQL | `sql_mode=REPLACE(@@sql_mode,'NO_BACKSLASH_ESCAPES','')`, `parseTime=true`, `collation=utf8mb4_0900_as_cs` | appends a pin unless the operator already set that parameter |
-| PostgreSQL | `standard_conforming_strings=on`, `search_path=public` | as MySQL; URL (`postgres://…?k=v`) and keyword (`host=… user=…`) forms |
+| SQLite | `_pragma=case_sensitive_like(1)`, `_pragma=foreign_keys(1)`, `_time_format=sqlite` | appends a pin unless the DSN already runs that pragma (keyed by the pragma's name, whatever its spelling: `foreign_keys(0)`, `foreign_keys=0`, `main.foreign_keys = off`) or sets `_time_format` |
+| MySQL | `sql_mode=REPLACE(@@sql_mode,'NO_BACKSLASH_ESCAPES','')`, `parseTime=true`, `collation=utf8mb4_0900_as_cs` | appends a pin unless the operator already set that parameter; parameters are read from the list after the first `?` that follows the last `/` (the database name), as the driver reads them |
+| PostgreSQL | `standard_conforming_strings=on`, `search_path=public` | as MySQL; URL form (`postgres://…?k=v`, query plus `-c k=v` entries in `options`, encoded or not) and libpq keyword form (`host=… user=…`, quoted values honoured) |
+
+The DSN is parsed the way its driver parses it, never searched as text. An operator's value is
+kept on every dialect. When it differs from the pin, one warning per process and parameter is
+logged, naming the dialect, the parameter and the pinned value, never the DSN.
 
 **Shares.** The "applier and runtime must agree" contract with D12; the migration tooling; generated DSN builders.
 
@@ -55,15 +59,16 @@ it, so all of them open the database the same way.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| D1.1 | Applying a pin list twice MUST be idempotent. | no test |
+| D1.1 | Applying a pin list twice MUST be idempotent. | `TestApply_IsIdempotent` |
 | D1.2 | MySQL: a parameter the operator named MUST keep the operator's value. | `TestApplyMySQLDSNParams_KeepsAnOperatorCollation` |
 | D1.3 | MySQL: a bare DSN MUST receive every pin, including the collation. | `TestMySQLDSNParams_PinsCollation`, `TestApplyMySQLDSNParams_AddsCollationToABareDSN` |
-| D1.4 | PostgreSQL: a parameter the operator named MUST keep the operator's value, in URL and keyword form. | no test |
-| D1.5 | The applier MUST recognise an operator parameter by its name, not by matching text elsewhere in the DSN. | no test |
-| D1.6 | SQLite: foreign keys MUST be enforced, LIKE MUST be case-sensitive, and `time.Time` MUST be stored in a format SQLite date functions parse. | no test |
+| D1.4 | PostgreSQL: a parameter the operator named MUST keep the operator's value, in URL and keyword form, including a `search_path` set through `options`. | `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplyPGDSNParams_SearchPathInOptionsIsKept` |
+| D1.5 | The applier MUST recognise an operator parameter by its name, not by matching text elsewhere in the DSN (a password, a database name). | `TestApply_NameInsideAPasswordDoesNotSuppressThePin`, `TestApplyMySQLDSNParams_QuestionMarkInPasswordDoesNotStartTheQuery` |
+| D1.6 | SQLite: on a DSN that does not set them, foreign keys MUST be enforced, LIKE MUST be case-sensitive, and `time.Time` MUST be stored in a format SQLite date functions parse. | `TestApplySQLitePragmas_LiveConnection`, `TestApplySQLitePragmas_PinsABareDSN` |
 | D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | no test (needs a MySQL server) |
 | D1.8 | PostgreSQL: single-quote-doubling escaping MUST stay correct and bare table names MUST resolve in `public`. | no test (needs a PostgreSQL server) |
-| D1.9 | The helpers MUST NOT log the DSN; they only return strings. | no test |
+| D1.9 | The helpers MUST NOT log the DSN. A kept operator value that differs from the pin MUST be logged once per process and parameter, naming the parameter only. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` |
+| D1.10 | SQLite: a pragma the operator set MUST keep the operator's value on the live connection, whatever its spelling; an equal value spelled differently is not a difference. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged`, `TestApplySQLitePragmas_LiveConnection` |
 
 ## D2. Wait for the database at boot
 
@@ -118,9 +123,13 @@ its own per-method transaction when no header is present.
 | D3.7 | A nil client or nil function MUST be an error. | `TestRunRefusesNils` |
 | D3.8 | The function MUST NOT be called when Begin fails. | `TestRunDoesNotCallTheFunctionWhenBeginFails` |
 | D3.9 | A root `TxHandle` MUST be single use: after a successful Commit or Rollback, a further call returns `ErrHandleFinished` naming how the transaction ended, without an RPC. A failed attempt does not use the handle up. | `TestTxHandle_SecondFinishSaysTheTransactionAlreadyEnded` (failed-attempt retry not asserted) |
+| D3.10 | A Commit that fails in transport (Unavailable, DeadlineExceeded, Canceled) MUST be settled with a Rollback on a detached context. When the Rollback succeeds, the caller gets an ordinary failure saying the transaction was rolled back. | `TestCommit_ATransportFailureBeforeTheCommitIsSettledByRollingBack` |
+| D3.11 | When that Rollback fails too, Commit MUST return `ErrCommitOutcomeUnknown` wrapping the transport error (its status code kept), MUST NOT run the parked after-commit work, and MUST report the ambiguity through `observx` with the transaction id and the amount of work not run. | `TestCommit_AnUnsettledTransportFailureIsReportedAsUnknown` |
+| D3.12 | Any other commit failure (a coordinator answer such as Aborted or NotFound, or a non-status error) MUST NOT be settled by a Rollback or reported as unknown; it is an ordinary commit failure. | `TestCommit_ARefusalIsNotSettled` |
 
 **Deliberate limits.**
 - No automatic retry on serialization failures or deadlocks; such errors surface to the caller, and inside a distributed transaction they discard it (D7).
+- No outcome-query RPC. When a commit's outcome cannot be settled (`ErrCommitOutcomeUnknown`), the write may or may not have landed; the caller decides whether to re-read or retry, and the after-commit work for it is not run (at-most-once).
 
 ## D4. Nested transactions
 
@@ -208,7 +217,7 @@ its own per-method transaction when no header is present.
 | D6.4 | Nothing MUST be announced for a rolled-back or cancelled root, or for a commit the server refused. | `TestEmit_NothingIsAnnouncedForARolledBackTransaction`, `TestEmit_ACancelledRootAnnouncesNothing`, `TestEmit_ACommitTheServerRefusesDropsTheParkedWork` |
 
 **Deliberate limits.**
-- Publication after commit is at-most-once: there is no transactional outbox, so a crash between the database commit and the publish loses the event.
+- Publication after commit is at-most-once: there is no transactional outbox, so a crash between the database commit and the publish loses the event. A commit whose outcome is unknown (D3.11) runs none of its parked work.
 
 ## D7. Auto-rollback interceptor
 
@@ -245,8 +254,9 @@ the registry dooms the transaction before waiting (D5.12).
 
 | Function | Behaviour |
 |---|---|
-| `ExpandIn(sql, occurrence, n)` | MySQL/SQLite: replaces the n-th `?` placeholder with `?, ?, …`; `n == 0` → `NULL`; `n == 1` → unchanged; missing occurrence → unchanged (the driver reports the argument mismatch). Callers expand in descending binding order. PostgreSQL uses `= ANY($n)` instead. |
+| `ExpandIn(sql, occurrence, n)` | MySQL/SQLite: replaces the n-th `?` placeholder with `?, ?, …`; `n == 0` → `EmptyList` (`SELECT NULL FROM (SELECT 1) AS w17_empty_list WHERE 1 = 0`); `n == 1` → unchanged; missing occurrence → unchanged (the driver reports the argument mismatch). Callers expand in descending binding order. PostgreSQL uses `= ANY($n)` instead. |
 | `ExpandValuesPG`, `ExpandValuesQM` | Multi-row INSERT: clone the single `VALUES (…)` tuple `n` times; PostgreSQL renumbers `$k`. |
+| `ExpandInChecked`, `ExpandValuesQMChecked`, `ExpandValuesPGChecked` | As the unchecked forms, but refuse with `ErrTooManyValues`, before building the statement, when the expanded statement would carry more than `MaxPlaceholders` (32766, SQLite's limit) bind parameters, counting placeholders already in the SQL. |
 | `scanSQL` | The one byte scanner: single-quoted literals (with `''` escapes) are data, never placeholders. |
 | `Arr`, `Bytes` | nil repeated/bytes → non-nil empty, so NOT NULL array/bytea columns store empty, not NULL. |
 | `NullIfEmpty` | `""` or empty `[]byte` → SQL NULL. |
@@ -260,7 +270,10 @@ the registry dooms the transaction before waiting (D5.12).
 |---|---|---|
 | D8.1 | Placeholder counting MUST ignore string literals; a `?` or `$k` inside a literal is never expanded or renumbered. | `TestNthPlaceholder`, `literalscan_test.go`, `TestExpandIn_LiveSQLite_LiteralQuestionMark` |
 | D8.2 | Literal bytes MUST be copied verbatim into every cloned VALUES tuple. | `TestExpandValuesPG`, `TestExpandValuesQM` |
-| D8.3 | The helpers MUST insert only `?`, `$k`, `NULL`, `, ` and copies of the input, never caller data; all values travel as bind parameters. | `TestExpandIn`, `TestExpandValuesPG`, `TestExpandValuesQM` |
+| D8.3 | The helpers MUST insert only `?`, `$k`, `EmptyList`, `, ` and copies of the input, never caller data; all values travel as bind parameters. | `TestExpandIn`, `TestExpandValuesPG`, `TestExpandValuesQM` |
+| D8.9 | An empty list MUST match nothing under `IN` and exclude nothing under `NOT IN` and `NOT (… IN …)`, for every row including NULLs in other columns. | `TestExpandIn_EmptyListMeansNoneOfThese` |
+| D8.10 | The checked expansions MUST refuse, with `ErrTooManyValues`, a statement that would bind more than `MaxPlaceholders` values, and accept one at the limit. | `TestExpandInChecked_RefusesPastTheBindLimit` |
+| D8.11 | `grpcerr.Wrap` MUST map `ErrTooManyValues`, and each driver's own too-many-parameters error, to InvalidArgument with detail code `TOO_MANY_VALUES`, not to Internal. | `TestWrap_TooManyBindValuesIsTheCallersFault` |
 | D8.4 | KV multi-fetch multiplicity MUST equal SQL's. | `TestDedupKeys` |
 | D8.5 | `NullIfEmpty` and `TimestampOrNull` MUST bind NULL for empty values. | `TestNullIfEmpty`, `TestTimestampOrNull` |
 | D8.6 | `Arr` and `Bytes` MUST NOT bind NULL into NOT NULL array or bytea columns. | no test |
@@ -269,7 +282,7 @@ the registry dooms the transaction before waiting (D5.12).
 
 **Deliberate limits.**
 - The scanner understands only single-quoted literals; it relies on the emitter never producing double-quoted strings, dollar-quoted bodies, comments or backslash-escaped quotes.
-- The list length is not capped here; request validation upstream bounds it.
+- The unchecked expansions do not cap the list length. The SDK guarantee in D8.10 holds only where the caller uses the `…Checked` forms, so generated storage code must call them; without them a list past the driver's bind limit still reaches the driver, and `grpcerr.Wrap` reports the driver's refusal as InvalidArgument (D8.11).
 
 ## D9. Cursor (keyset) paging, limit, totals
 
@@ -282,7 +295,10 @@ the registry dooms the transaction before waiting (D5.12).
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `<PREFIX>_CURSOR_SECRET` | unset → random per-boot key and a warning; cursors then do not survive a restart or validate across replicas (decode fails closed with `ErrCursorMalformed`) | HMAC key is SHA-256 of the secret |
-| `ClampLimit(requested, def, max)` | `0` → `def` | above `max` (when `max > 0`) → `max` |
+| `CallerKey(key, caller...)` | — | derives a per-caller key (HMAC of the deployment key over the length-prefixed caller parts); passed to `EncodeCursor` and `DecodeCursor` in place of the deployment key |
+| `ClampLimit(requested, def, max)` | `0` → `def` | above `max` → `max`; `max == 0` or above `MaxLimit` → `MaxLimit` |
+| `MaxLimit` | 10000 | the largest page any paged query returns; an endpoint declaring a larger maximum gets pages of `MaxLimit` rows and its cursors walk the rest |
+| `LimitFromIncomingMD` | absent, malformed or `0` → absent | above `MaxLimit` → `MaxLimit` |
 | metadata keys | `x-w17-paging-boundaries`, `x-w17-paging-limit`, `x-w17-paging-total` | — |
 
 **Wire format.** `base64url(PageCursor) "." base64url(HMAC-SHA256)`. `PageCursor` carries the
@@ -294,21 +310,23 @@ serialized request, boundary values, total, direction, schema version and sort s
 |---|---|---|
 | D9.1 | A forged or tampered cursor MUST be rejected by a constant-time MAC check before any of its bytes reach the request. | `TestDecodeCursor_RejectsForgedCursor`, `TestDecodeCursor_RejectsTamperedPayload` |
 | D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `cursor_test.go` (schema-version rejection) |
-| D9.3 | On resume the request MUST be replaced by the minted one; filters cannot change mid-session and the cursor's sort selector is authoritative. | no test |
+| D9.3 | On resume the request MUST be replaced by the minted one; filters cannot change mid-session and the cursor's sort selector is authoritative. | `TestDecodeCursor_ResumeReplacesTheRequest`, `TestEncodeDecode_SortSelectorRoundtrip` |
 | D9.4 | An empty boundary oneof MUST be rejected as malformed on both the cursor and metadata paths, without panicking. | `metadata_test.go`, `TestScalarOf_*` |
 | D9.5 | `uint64` keys above `MaxInt64` MUST round-trip without sign wrap. | `keyset_uint64_test.go` |
 | D9.6 | COUNT(*) MUST run on the first page only; resumed pages reuse the total cached in the signed cursor. | `metadata_test.go` |
 | D9.7 | Empty boundaries MUST produce an empty token (no next/previous link). | `cursor_test.go` |
 | D9.8 | Paging metadata MUST NOT be forwarded hop-to-hop by the principal relay. | no test in this package (see the principal relay tests) |
-| D9.9 | The limit MUST be clamped to the configured maximum. | `TestClampLimit` |
+| D9.9 | The limit MUST be clamped to the configured maximum, and never above `MaxLimit` even when the endpoint declares no maximum. | `TestClampLimit` |
 | D9.10 | Each resumed page MUST re-apply authorization and data scopes from the caller's verified identity, never from request fields carried in the cursor. | no test |
-| D9.11 | No caller MUST receive an unbounded result set. | no test |
+| D9.11 | No caller MUST receive an unbounded result set: the storage side clamps the `x-w17-paging-limit` header to `MaxLimit` and treats `0` as absent, whoever sent it. | `TestLimitFromIncomingMD_ClampsToMaxLimit`, `TestClampLimit` |
 | D9.12 | Keyset pages MUST stay stable under concurrent inserts (requires a unique ORDER BY tiebreak, emitted by the generator). | no test |
 | D9.13 | The cursor secret MUST be read from the environment. | `TestCursorKeyFromEnv` |
+| D9.14 | A cursor encoded under `CallerKey(key, parts…)` MUST decode only under the same key and caller parts; for any other caller it fails as `ErrCursorMalformed`. | `TestCallerKey_ACursorDoesNotDecodeForAnotherCaller` |
 
 **Deliberate limits.**
 - Cursors are integrity-protected, not confidential: list request fields are visible to anyone who sees the URL.
 - Cursors carry no expiry; they stay valid until the key or schema changes, and the cached total can be stale.
+- The SDK binds a cursor to a caller only when the code that encodes and decodes it passes `CallerKey`; generated gateway code must use it for D9.14 to hold. Binding is a second line: D9.10 still requires authorization and scopes from the verified identity on every page.
 
 ## D10. Admin column sort selector
 
@@ -352,12 +370,13 @@ index in metadata `x-w17-sort-by`: `0` default, `2i+1` ascending, `2i+2` descend
 | D11.3 | The first error, or a recovered worker panic, MUST cancel the shared context, stop launching and discard partial results. | `TestFetchBatches_ErrorAborts`, `TestFetchBatches_ParallelPanicBecomesError` |
 | D11.4 | Parent cancellation MUST surface as an error, never as a partial result. | `TestFetchBatches_PreCancelledContextNoLaunch` |
 | D11.5 | A single call MUST NOT take the whole pool (one connection is reserved). | `TestEffectiveParallel*` |
-| D11.6 | Inside a transaction, fetch windows MUST run sequentially on that transaction. | no test |
+| D11.6 | Inside a transaction, fetch windows MUST run sequentially on that transaction: when the request carries `w17-tx-id` or the context is marked with `WithinTx`. | `TestFetchBatches_InsideATransactionRunsSequentially` |
 
 **Deliberate limits.**
 - The ceiling counts rows, not bytes.
 - Pool headroom is per call; many concurrent requests can still use the whole pool between them.
 - Narrow and fetch are separate statements; on separate pooled connections they see different snapshots.
+- A transaction the caller opened itself (a locked query on its own `*sql.Tx`) is invisible to the package; D11.6 holds for it only when the caller marks the context with `WithinTx`, so generated locked-query code must do so.
 
 ## D12. SQLite Unicode collation and stamp
 
@@ -378,10 +397,12 @@ Stamp table: `w17_collation`.
 | D12.2 | Comparisons MUST be safe for concurrent use. | no test |
 | D12.3 | A database built with different Unicode tables MUST be reported with both fingerprints and a fix; an unstamped database is accepted. | no test in this package (exercised by the SQLite migration driver) |
 | D12.4 | The fingerprint MUST derive from behaviour, not from a module version. | `TestFingerprint_StableAndOrderingDerived` |
-| D12.5 | Equality and UNIQUE behaviour for canonically equivalent (NFC/NFD) strings and for strings differing only in ignorable characters MUST match PostgreSQL's deterministic collations. | no test |
+| D12.5 | Equality and UNIQUE behaviour for canonically equivalent (NFC/NFD) strings and for strings differing only in ignorable characters MUST match PostgreSQL's deterministic collations: ties under UCA are broken by bytes. | `TestCompare_EqualityIsDeterministic` |
+| D12.6 | `EnsureStamp` MUST recognise a database stamped by the comparison without the byte tie-break (same Unicode tables), rebuild every index using the collation and restamp it in one transaction; `VerifyStamp` MUST report such a database as a mismatch until then. | `TestEnsureStamp_UpgradesAPlainUCADatabase`, `TestLegacyFingerprint_IsThePlainUCABuildsStamp` (`VerifyStamp` side not asserted) |
 
 **Deliberate limits.**
 - SQLite does not order like PostgreSQL, which follows the database locale.
+- MySQL `utf8mb4_0900_as_cs` still treats canonically equivalent and ignorable-character look-alikes as equal; D12.5 aligns SQLite with PostgreSQL, not with MySQL.
 - `EnsureStamp` is check-then-insert without a transaction; two appliers on a fresh database at once can collide on the stamp row.
 
 ## D13. Blob store for uploads
@@ -405,7 +426,7 @@ Stamp table: `w17_collation`.
 | D13.2 | A failed cross-device publish MUST NOT truncate or delete an existing object. | `TestPutFromTempFile_CrossFS_CopyErrorPreservesPublishedObject` |
 | D13.3 | Keys resolving outside the root MUST be refused: reads report `ErrNotFound`, writes and deletes error. | `TestLocalFS_PathTraversalContained` |
 | D13.4 | A key MUST NOT reach outside the root through a symlink. | no test |
-| D13.5 | An empty key or `.` MUST be refused on read and delete paths. | no test |
+| D13.5 | A key that names the bucket root (empty, `.`, `a/..`) or a directory MUST NOT be treated as an object: Open, OpenSeekable and Stat return `ErrNotFound`, and Delete refuses it. | `TestLocalFS_RootAndDirectoryKeysAreNotObjects` |
 | D13.6 | Delete MUST be idempotent; Open, Stat and OpenSeekable of a missing key MUST return `ErrNotFound`. | `local_fs_test.go`, `memory/*_test.go` |
 | D13.7 | Keys MUST NOT carry a leading `/`, so upload and download paths agree across drivers. | `kvfs_test.go` |
 | D13.8 | The published mode MUST NOT depend on which publish branch ran. | `TestPutFromTempFile_PublishedModeIsBranchIndependent` |
@@ -430,10 +451,12 @@ Stamp table: `w17_collation`.
 | D14.2 | Unset presence-bearing fields MUST be omitted so that null and zero stay distinct across a round trip. | `TestMarshalEntity_Proto3OptionalPresence` |
 | D14.3 | Repeated, map, nested (non-WKT) and group fields MUST be refused on marshal and unmarshal. | refusal tests in `kvhash_test.go`, `kvhash_extra_test.go` |
 | D14.4 | Durations MUST round-trip exactly across the `durationpb` range; an out-of-range Duration is refused on write. | `TestKvHash_Duration*` |
-| D14.5 | A value that could not be read back (such as a Timestamp outside the RFC 3339 range) MUST be refused on write. | no test |
-| D14.6 | Clearing an optional field on update MUST remove the stored value. | no test |
+| D14.5 | A value that could not be read back (a Timestamp outside years 0001–9999 or with invalid nanos) MUST be refused on write. | `TestMarshalEntity_RefusesATimestampThatCannotBeReadBack` |
+| D14.6 | `ClearedFields` MUST name every unset presence-bearing field `MarshalEntity` omits, so a writer that HDELs them in the same MULTI as its HSET removes the stored value of a cleared field. | `TestClearedFields_AnUpdateThatClearsAFieldRemovesIt` |
 
-**Deliberate limits.** Missing hash fields read as proto defaults; unknown hash fields are ignored.
+**Deliberate limits.**
+- Missing hash fields read as proto defaults; unknown hash fields are ignored.
+- `MarshalEntity` output written with HSET merges into an existing hash. A write that replaces an entity must DEL the key first or HDEL the `ClearedFields` in the same MULTI/EXEC; the codec does neither itself, so the generated writer must.
 
 ## D15. Redis eviction check
 
@@ -463,7 +486,8 @@ Stamp table: `w17_collation`.
 |---|---|---|
 | `W17_FIELD_KEYS=1:<b64 32 bytes>,2:<…>` | highest version encrypts randomised values, lowest version (`Keyring.DeterministicVersion`) encrypts deterministic values, all versions decrypt | empty → error; versions must be positive and unique; keys exactly 32 bytes (std, raw or URL base64) |
 | `Init()` | installs the process keyring at boot | an error must fail the boot; shared helpers used before `Init` return a clear error |
-| `DevKeys` | a fixed development keyring | development only |
+| `DevKeys` | a fixed, public development keyring | `FromEnv` (and so `Init`) returns `ErrDevKeys` when any version of the keyring is the development key and `W17_ENV` is not `dev`; `Parse` does not check |
+| `W17_ENV` | unset | only `dev` admits the development key |
 
 **Construction.** HKDF-SHA256 derives an AES-256-GCM key and a separate MAC key from each
 configured key. Randomised mode uses a 96-bit random nonce; deterministic mode derives the
@@ -480,12 +504,13 @@ nonce from an HMAC of the plaintext, truncated to 96 bits. Stored form: `w17c.<v
 | D16.5 | Deterministic values MUST be written under the lowest key version, so adding a key (in any listing order) leaves the ciphertext of a plaintext unchanged and equality lookups and UNIQUE enforcement keep working. | `TestDeterministic_StableAcrossRotation` |
 | D16.6 | Error messages MUST NOT include plaintext or key material. | `TestDecrypt_*` |
 | D16.7 | A missing or malformed keyring MUST fail the boot, not the first query. | `TestParse_*`, `shared_test.go` |
-| D16.8 | `DevKeys` MUST be refused outside development. | no test |
+| D16.8 | `DevKeys` MUST be refused outside development: `FromEnv` and `Init` return `ErrDevKeys` unless `W17_ENV=dev`. | `TestInit_RefusesTheDevelopmentKeyOutsideDev` |
 | D16.9 | Dropping the lowest key MUST move deterministic writes to the next lowest version, which `DeterministicVersion` names so a re-encryption can target it. | `TestDeterministic_DroppingTheLowestKeyMovesToTheNext` |
 
 **Deliberate limits.**
 - No protection against a compromised application host, which holds both data and key.
 - Deterministic mode reveals equality of values by design.
+- No associated data: an encrypted value is not bound to the row or column it is stored in. Adding it would change the stored format.
 - Deterministic columns cannot be re-keyed gradually. They move to a new key only when the lowest key is dropped; before that, every deterministic value has to be rewritten under the version that becomes the lowest, as a maintenance step with writes to those columns stopped, not a background job.
 - The deterministic nonce is a 96-bit truncated HMAC: two different plaintexts share a nonce with the probability of a 96-bit collision (around 2^48 distinct values under one key before it becomes likely).
 

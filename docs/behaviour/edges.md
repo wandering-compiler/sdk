@@ -30,7 +30,7 @@ http.Server
                          │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
                          │      → WriteResponse / WriteGRPCErrorCtx
                          ├─ SSE / WS handlers: [AdmitPublicStream] → auth → WatchStreamAuth
-                         ├─ /w17-events: RequireAuth(NewWSAuth(...)) → HandleW17Events
+                         ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
                          ├─ ticket issuer (POST): NewTicketIssuer
                          └─ downloads: auth → ServeDownload
 ```
@@ -81,7 +81,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 
 ## E1. Request decoding and wire-format negotiation
 
-**Code.** `go/lib/restgw/json.go` — `DecodeRequest`, `DecodeRequestRewrite`, `WriteResponse`, `WriteResponseFiltered`, `MaxRequestBodyBytes`; `go/lib/restgw/negotiate.go` — response format selection.
+**Code.** `go/lib/restgw/json.go` — `DecodeRequest`, `DecodeRequestRewrite`, `WriteResponse`, `WriteResponseFiltered`, `MaxRequestBodyBytes`, `addVary`; `go/lib/restgw/negotiate.go` — response format selection.
 
 **Purpose.** Reads a request body into a proto message, choosing JSON or binary protobuf from
 `Content-Type`, and writes responses in the format the `Accept` header prefers.
@@ -93,7 +93,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | `MaxRequestBodyBytes` (package var) | 10 MiB | Process-global, not synchronised: set before serving |
 | `Content-Type` | JSON | `application/protobuf` or `application/x-protobuf` → binary; anything else or absent → JSON |
 | `Accept` | JSON | q-values, specificity and order decide; no recognised entry → JSON; `*/*` and `application/*` count as JSON |
-| `WriteResponse(w, status, msg, r)` | — | `r` optional; without it the response is always JSON |
+| `WriteResponse(w, status, msg, r)` | — | `r` optional; without it the response is always JSON and carries no `Vary: Accept` |
 | `WriteResponseFiltered(..., omitFields, r)` | — | Clears the named top-level fields on a clone |
 | `DecodeRequestRewrite(r, msg, fn)` | — | Raw-JSON key rewrite before decode, JSON only |
 
@@ -113,6 +113,7 @@ writers.
 | E1.7 | `WriteResponseFiltered` MUST NOT mutate the caller's message | no test (`TestWriteResponseFiltered_ClearsNamedFields` checks output only) |
 | E1.8 | A JSON key rewrite hook MUST NOT be called for protobuf or empty bodies | `TestDecodeRequestRewrite` |
 | E1.9 | Decode errors MUST NOT reach the client as decoder prose; callers route them through `WriteInvalidRequest` (E4) | no test |
+| E1.10 | A negotiated response (a request passed to `WriteResponse`) MUST carry `Vary: Accept`, whichever format won, so a shared cache never serves one format to a request for the other | `TestWriteResponse_NegotiatedResponseVariesOnAccept` |
 
 **Deliberate limits.**
 - The protobuf input path skips alias and oneof normalisation (binary keys on field numbers).
@@ -121,7 +122,7 @@ writers.
 
 ## E2. The w17 JSON dialect
 
-**Code.** `go/lib/restgw/json.go` — `Marshaller`, `Unmarshaller`; `go/lib/restgw/aliases.go` — alias rewrite; `go/lib/restgw/jsoncodec.go`, `jsoncodec_wkt.go` — `RegisterJSONMarshaler`, `MarshalProtoAppend`.
+**Code.** `go/lib/restgw/json.go` — `Marshaller`, `Unmarshaller`; `go/lib/restgw/aliases.go` — alias rewrite; `go/lib/protojsonx/oneof.go` — `DecodeTree`; `go/lib/restgw/jsoncodec.go`, `jsoncodec_wkt.go` — `RegisterJSONMarshaler`, `MarshalProtoAppend`.
 
 **Purpose.** One JSON shape for every surface: proto field names, enum numbers, 64-bit
 integers as strings, zero values omitted, oneofs collapsed (E29), optional per-field
@@ -148,12 +149,14 @@ the alias rewrite. SSE and WS writers use `MarshalProtoAppend`.
 | E2.4 | A body giving the same field under both alias and canonical name MUST be refused | `TestUnmarshalProto_AliasAndCanonicalCollision_Rejected` |
 | E2.5 | A registered generated marshaler MUST be preferred over protojson | `TestMarshalProto_PrefersRegisteredMarshaler` |
 | E2.6 | Invalid UTF-8 in a string field MUST be a marshal error, not mangled output | `TestMarshalProto_InvalidUTF8Errors` |
-| E2.7 | Decoding MUST NOT lose numeric precision on input | no test |
+| E2.7 | Decoding MUST NOT lose numeric precision on input: a 64-bit integer sent as a JSON number keeps its value on every message, including messages reshaped for a oneof or a `rest_alias` | `TestUnmarshalProto_KeepsSixtyFourBitNumbersExact`, `TestDecodeRequest_KeepsSixtyFourBitNumbersExact`, `TestRestoreAliasesOnRequestJSON_KeepsNumbersExact` |
 | E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message | no test (per-type codec tests only) |
 
 **Deliberate limits.**
 - The reflective alias and oneof rewrite re-encodes through `encoding/json`, which HTML-escapes
   `<`, `>` and `&`; the fast path does not. The JSON value is the same, the bytes differ.
+- The reshape decodes with `UseNumber` (`protojsonx.DecodeTree`) and only renames keys; numbers
+  are carried as their original text.
 
 ---
 
@@ -185,7 +188,7 @@ tool errors from it.
 | E3.4 | A non-status error (dial failure, transport) MUST become a generic 500 "internal error" without backend addresses | `TestWriteGRPCError_DialFailureDoesNotLeakBackendAddress`, `TestWriteGRPCError_PlainErr` |
 | E3.5 | Field-level `ErrorDetail`s MUST be forwarded as `details[]` | `TestWriteGRPCError_ForwardsFieldViolationDetails` |
 | E3.6 | A nil error MUST still produce a valid 500 envelope | `TestWriteGRPCError_NilErr` |
-| E3.7 | A client error MUST NOT be reported as a server fault; reports MUST carry the request's trace context | no test |
+| E3.7 | A client error MUST NOT be reported as a server fault: `WriteGRPCErrorCtx` classifies by code as the SSE and WS writers do, refusals going to the non-exception channel and faults to the exception channel; reports MUST carry the request's trace context | `TestWriteGRPCErrorCtx_ReportsByCodeOnTheRequestsTrace` |
 
 **Deliberate limits.**
 - Request-level and field-level detail messages written by a backend are shown verbatim; the
@@ -195,15 +198,17 @@ tool errors from it.
 
 ## E4. Gateway-own refusals
 
-**Code.** `go/lib/restgw/refusal.go` — `WriteRefusal`, `WriteBadInput`, `WriteInvalidRequest`, `WriteInternal`, `PreflightSentence`, `ClientSentence`, `Vocabulary`; `go/lib/restgw/auth.go` — `WriteForbidden(Ctx)`, `WriteUnauthorized(Ctx)`; `go/lib/restgw/scope.go` — `WriteMissingScope`.
+**Code.** `go/lib/restgw/refusal.go` — `WriteRefusal`, `WriteBadInput`, `WriteInvalidRequest`, `WriteInternal`, `PreflightSentence`, `ClientSentence`, `Vocabulary`; `go/lib/restgw/auth.go` — `WriteForbidden(Ctx)`, `WriteUnauthorized(Ctx)`; `go/lib/restgw/scope.go` — `WriteMissingScope(Ctx)`; `go/lib/restgw/upload.go` — `WriteUploadErrorCtx`, `MsgidUploadMissing`, `MsgidUploadTooLarge`, `MsgidUploadBadType`; `go/lib/restgw/publiclimit.go` — `WriteTooManyRequestsCtx`.
 
 **Purpose.** Refusals decided by the gateway itself (missing permission, unreadable path
 parameter, malformed body, no auth method for a scheme) follow the same two-audience rule as E3:
 the operator string goes to observability, the client gets a code and a catalog sentence.
 
-**Configuration.** None.
+**Configuration.** None. The `...Ctx` writers translate with the request locale; the
+context-free ones keep their signatures and answer in the source locale.
 
-**Shares.** `grpcerr.UserMsgid`, `grpcerr.CodeMissingPermission`; `observx.ReportRefusal`
+**Shares.** `grpcerr.UserMsgid`, `grpcerr.CodeMissingPermission`; `Vocabulary()` (harvests the
+upload msgids); `observx.ReportRefusal`
 (non-exception channel) versus `ReportError` (server faults).
 
 **Guarantees.**
@@ -215,7 +220,7 @@ the operator string goes to observability, the client gets a code and a catalog 
 | E4.3 | `WriteBadInput` MUST name the caller-facing field in `details[].field` with code `INVALID_VALUE`, never the parser's prose | `TestWriteBadInput` |
 | E4.4 | Refusals MUST reach the operator channel with no environment knob set | `TestWriteRefusal_ReachesTheOperatorWithNoKnobSet` |
 | E4.5 | Gateway pre-flight validation and backend InvalidArgument MUST produce the same sentence | `preflight_sentence_test.go` (all four tests) |
-| E4.6 | Every gateway-written envelope MUST carry a catalog sentence, never an operator or configuration string | no test |
+| E4.6 | Every gateway-written envelope MUST carry a catalog sentence, never an operator or configuration string (a scope name, the extension allowlist, a size limit); the detail goes to the operator channel | `TestWriteMissingScopeCtx_NameReachesTheOperatorOnly`, `TestWriteMissingScope`, `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestVocabulary_CarriesTheUploadSentences`, `TestAdmitPublic_RefusalIsTheCatalogSentence`, `TestWriteBrowserRedirect_RefusalIsTheCatalogSentence`, `TestTicketIssuer_ErrorsAreTheEnvelope`, `TestServeDownload_ErrorsAreTheEnvelope` |
 
 ---
 
@@ -403,7 +408,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `<PREFIX>_REQUEST_ID_HEADER` | `X-Request-ID` | — |
-| `<PREFIX>_REQUEST_ID_DISABLED` | false | `true` disables the id |
+| `<PREFIX>_REQUEST_ID_DISABLED` | false | `true` (any case) disables the id; any other value leaves it on |
 | `<PREFIX>_METRICS_PORT` | unset → no listener | A bind failure is logged and metrics are off |
 
 **Guarantees.**
@@ -412,8 +417,13 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 |---|---|---|
 | E11.1 | A client id MUST be used only if it is 1–128 characters of `[A-Za-z0-9-_.:]`; otherwise it is replaced | `TestObservabilityMiddleware_RejectsMalformedRequestID_*` |
 | E11.2 | The chosen id MUST be echoed in the response header | `TestObservabilityMiddleware_EchoesIncomingID`, `TestRequestIDMiddleware_PropagatesIncoming` |
-| E11.3 | Disabled MUST mean no header written and no context value | `TestObservabilityMiddleware_DisabledSkipsRequestID` |
+| E11.3 | Disabled MUST mean no response header written and no context value; the request is passed on with its headers as received (the span is still created) | `TestObservabilityMiddleware_DisabledSkipsRequestID` (response header and context value; the unchanged request header has no test) |
 | E11.4 | A metrics listener failure MUST NOT fail startup | `TestMountMetricsListener_UnsetAndBindError` |
+| E11.5 | The request handed on MUST carry the chosen id as the only value of the request-id header, so header propagation (E10) forwards the validated or generated id, never the raw client value; the caller's header map MUST NOT be modified | `TestObservabilityMiddleware_BackendReceivesTheValidatedID` |
+
+**Deliberate limits.**
+- With the id disabled the gateway neither validates nor rewrites the request-id header; the
+  fronting layer that injects ids owns its value, and header propagation forwards it as received.
 
 ---
 
@@ -443,6 +453,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 | E12.2 | Only exact origin matches MUST be echoed | `TestCORSMiddleware_SimpleRequest_DisallowedOrigin`, `TestMatchOrigin` |
 | E12.3 | A preflight (OPTIONS + `Access-Control-Request-Method`) MUST answer 204 without calling `next`; a plain OPTIONS MUST pass through | `TestCORSMiddleware_Preflight`, `TestCORSMiddleware_PlainOptions_NotSwallowed` |
 | E12.4 | The org header MUST be in the default allowed headers | `TestPreflightAdvertisesOrgScopeHeaderByDefault` |
+| E12.5 | Every response the middleware handles MUST carry `Vary: Origin`: with no `Origin`, a disallowed one, a match, and preflights | `TestCORSMiddleware_EveryResponseVariesOnOrigin` |
 
 **Deliberate limits.**
 - Disallowed origins are still served; the browser enforces CORS.
@@ -455,8 +466,9 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 
 **Code.** `go/lib/restgw/recover.go` — `RecoverPanicMiddleware`, `RecoverWSPump`.
 
-**Purpose.** Converts a handler panic into a 500 envelope and an observability report, and
-protects WS pump goroutines.
+**Purpose.** Converts a handler panic into a 500 envelope and an observability report, gives
+each request its own error-reporting scope (`observx.WithRequestScope`), and protects WS pump
+goroutines.
 
 **Guarantees.**
 
@@ -465,6 +477,7 @@ protects WS pump goroutines.
 | E13.1 | A panic MUST become 500 `INTERNAL` / "internal error"; the panic value MUST NOT appear in the body | `TestRecoverPanicMiddleware_CatchesPanic` |
 | E13.2 | `http.ErrAbortHandler` MUST be re-panicked | `TestRecoverPanicMiddleware_RepanicsAbortHandler` |
 | E13.3 | A pump panic MUST close the socket with `StatusInternalError` instead of crashing the process | `TestRecoverWSPump_NilContextFallback` (partial: nil-context arm only) |
+| E13.4 | Each request MUST run with its own reporting scope, so breadcrumbs recorded by one request never reach another request's report | no test at this layer (the scope itself: `TestRequestScope_KeepsBreadcrumbsPerRequest` in `go/core/observx`) |
 
 **Deliberate limits.**
 - A panic after headers were sent (for example mid-SSE) appends a JSON envelope to the stream.
@@ -515,6 +528,8 @@ close detection for write-only sockets.
 |---|---|---|
 | Subprotocol | JSON | `w17.pb` → protobuf, `w17.json` → JSON |
 | Write timeout | from `<PREFIX>_STREAM_WRITE_TIMEOUT_SECONDS` (E14) | — |
+| `MaxWebSocketMessageBytes` (package var) | 0 → same as `MaxRequestBodyBytes` (10 MiB) | Zero or negative → `MaxRequestBodyBytes`; process-global, set before serving |
+| Close reason | the client sentence | Cut on a UTF-8 boundary with an ellipsis to fit the 123-byte close-frame limit |
 
 **Guarantees.**
 
@@ -526,6 +541,8 @@ close detection for write-only sockets.
 | E15.4 | A graceful client close on a write-only socket MUST cancel the stream context | `TestWSWatchClientClose_GracefulCloseReleasesTheStream` |
 | E15.5 | Error frames MUST forward `details[]` and close the socket | `TestWSWriteGRPCError_ForwardsFieldViolations` |
 | E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used | `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
+| E15.7 | One inbound message MUST be accepted up to `MaxWebSocketMessageBytes`, by default the REST body cap, so a frame that is a valid REST body is a valid stream message | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable` |
+| E15.8 | An error close MUST always send a close frame (1008 for a refusal): the close reason is cut to fit and stays valid UTF-8, and the full sentence arrives in the error frame | `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly`, `TestWSCloseReason_FitsAndStaysValidUTF8` |
 
 **Deliberate limits.**
 - Cross-origin browser clients are refused by the library's same-origin check.
@@ -550,8 +567,8 @@ for a one-shot ticket and pass `?ticket=`.
 | `WithMaxTickets(n)` | `DefaultMaxTickets` = 10 000 outstanding tickets | `n <= 0` keeps the default |
 | `WithMaxTicketBytes(n)` | `DefaultMaxTicketBytes` = 16 MiB (ticket id, label keys and values, plus a fixed per-entry overhead) | `n <= 0` keeps the default |
 | `MaxTicketAuthorizationBytes` | 8 KiB, fixed | A longer `Authorization` value is refused by `WSAuthTicketPrincipal` with `ErrWSAuthTicketHeaderTooLarge` |
-| Issuer method | POST | Anything else → 405 with `Allow` |
-| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431; full store → 503 with `Retry-After: 1`; any other store failure → 500 |
+| Issuer method | POST | Anything else → 405 with `Allow`, code `UNIMPLEMENTED` |
+| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431 with code `INVALID_ARGUMENT`; full store → 503 with `Retry-After: 1`; any other store failure → 500. Every refusal is the JSON error envelope (E3) |
 
 **Shares.** E5 (`RequireAuth`), E17 (the promoted header keeps re-auth working), E6 (the
 promotion marker header forces a cache bypass on probes).
@@ -569,6 +586,7 @@ promotion marker header forces a cache bypass on probes).
 | E16.7 | The default store MUST NOT grow memory without bound: outstanding tickets and the bytes they hold are both capped, and a redeemed or expired ticket frees its share | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_ByteBudget`, `TestTicketStore_RedeemFreesCapacity`, `TestMemoryTicketStore_FullStoreSweepsExpired` |
 | E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
 | E16.9 | An `Authorization` value longer than `MaxTicketAuthorizationBytes` MUST be answered 431 and store nothing; a value at the limit is accepted | `TestTicketIssuer_OversizedAuthorization` |
+| E16.10 | Every issuer refusal MUST be the JSON error envelope with a catalog sentence; the detail goes to observability | `TestTicketIssuer_ErrorsAreTheEnvelope` |
 
 **Deliberate limits.**
 - `MemoryTicketStore` is per process: issuer and redeemer must be the same replica.
@@ -586,7 +604,11 @@ promotion marker header forces a cache bypass on probes).
 **Code.** `go/lib/restgw/stream_reauth.go` — `WatchStreamAuth`.
 
 **Purpose.** Re-runs the surface auth function against the stream's original request every
-interval and cancels the stream context when auth starts failing.
+interval and cancels the stream context when auth definitely refuses. A definite refusal is
+`UNAUTHENTICATED` or `PERMISSION_DENIED` from the auth method, or the ticket sentinels
+`ErrTicketInvalid` / `ErrWSAuthNoTicket`. Any other result (a timeout, `UNAVAILABLE`, a non-status
+error) is "no verdict". After each answered probe the watchdog publishes the latest verdict on
+the stream context, which the `w17-events` hub reads (E18).
 
 **Configuration.**
 
@@ -594,6 +616,8 @@ interval and cancels the stream context when auth starts failing.
 |---|---|---|
 | `<PREFIX>_STREAM_REAUTH_SECONDS` | 5 min | Unparseable → 5 min; `<= 0` → off |
 | Probe timeout | 10 s | Fixed |
+| Retry after "no verdict" | 5 s, growing up to the interval | Fixed |
+| Report of "no verdict" | exception channel, at most once per minute per process | Fixed |
 | `authFn == nil` or `r == nil` | — | Off |
 
 **Shares.** E6 (a cached verdict delays revocation), E7, E16, E18.
@@ -602,12 +626,19 @@ interval and cancels the stream context when auth starts failing.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E17.1 | A failing re-auth MUST cancel the returned context | `TestWatchStreamAuth_CancelsWhenAuthStartsFailing` |
+| E17.1 | A definite refusal MUST cancel the returned context | `TestWatchStreamAuth_CancelsWhenAuthStartsFailing`, `TestWatchStreamAuth_DefiniteRefusalsCancel` |
 | E17.2 | A probe that times out MUST NOT be treated as revocation | `TestWatchStreamAuth_ProbeTimeoutIsNotARevocation` |
 | E17.3 | The probe MUST be independent of the stream's own cancellation | `TestWatchStreamAuth_ProbeDoesNotInheritStreamCancellation` |
 | E17.4 | Disabled MUST return the input context and a no-op stop | `TestWatchStreamAuth_DisabledIsAPassThrough`, `TestWatchStreamAuth_NilAuthIsAPassThrough` |
-| E17.5 | The watchdog goroutine MUST exit when the stream ends (stop or parent cancel) | no test |
-| E17.6 | An auth-backend outage of any kind MUST NOT disconnect every stream | no test |
+| E17.5 | The watchdog goroutine MUST exit when the stream ends (stop or parent cancel) | `TestWatchStreamAuth_EndsWithTheStream` |
+| E17.6 | An auth-backend outage of any kind MUST NOT disconnect every stream: only a definite refusal revokes | `TestWatchStreamAuth_FastBackendFailureIsNotARevocation`, `TestW17Events_AuthOutageKeepsTheStream` |
+| E17.7 | A probe without a verdict MUST be reported (throttled to one report per minute per process) and retried with a backoff from 5 s up to the interval | `TestReportUnansweredReauth_ReportedAndThrottled`, `TestStreamReauthRetryDelay` |
+| E17.8 | A revocation during an outage MUST take effect at the first answer after the backend recovers | `TestWatchStreamAuth_RevocationLandsAfterTheOutage` |
+
+**Deliberate limits.**
+- An auth function revokes only by returning `UNAUTHENTICATED` or `PERMISSION_DENIED` (or a
+  ticket sentinel); a plain error is read as "no verdict". Generated auth functions return those
+  codes; a hand-written one must too.
 
 ---
 
@@ -626,6 +657,7 @@ label isolation.
 | Heartbeat argument | 30 s | `<= 0` → 30 s |
 | Per-write deadline | 30 s | Fixed |
 | Per-client queue | 64 frames | A full queue drops frames |
+| Subscribe failure | 503 `UNAVAILABLE` | JSON error envelope, sent before any SSE header |
 | Channels, transcode, principal-labels functions | from generated main | — |
 
 **Shares.** `go/lib/eventbus` subscribers; E5 and E16 (`RequireAuth` and tickets);
@@ -642,14 +674,23 @@ label isolation.
 | E18.5 | A slow client MAY lose frames but MUST NOT block other clients | no test |
 | E18.6 | The handler MUST return on client disconnect, on drain, and on a write error or deadline | `w17events_drain_test.go` (both), `TestHandleW17Events_CtxCancelEndsHandler` (partial: no stalled-client case) |
 | E18.7 | Every replica MUST receive every event | `w17events_replicas_test.go` |
-| E18.8 | A subscribe failure MUST NOT reveal internal detail to the client | no test |
-| E18.9 | A revoked credential or removed membership MUST stop delivery on an open connection | no test |
+| E18.8 | A subscribe failure MUST NOT reveal internal detail to the client: it answers 503 `UNAVAILABLE` in the envelope, without broker channel names or broker error text | `TestHandleW17Events_SubscribeError`, `TestHandleW17Events_NoSource` |
+| E18.9 | A revoked credential or removed membership MUST stop delivery on an open connection: under the re-auth watchdog (E17), a refusal ends the stream, and `EventbusEventSource` ends a client whose labels, derived again from the latest verdict, differ from those at connect | `TestW17Events_RevokedCredentialEndsTheStream`, `TestW17Events_ChangedMembershipEndsTheStream` |
+| E18.10 | A verdict with the same labels MUST keep the stream, even when the auth response bytes differ | `TestW17Events_SameLabelsKeepTheStream` |
+| E18.11 | An envelope the hub cannot transcode MUST be logged with channel, topic and cause and reported; the event is dropped | `TestEventbusEventSource_TranscodeErrorIsLogged` |
+
+**Deliberate limits.**
+- E18.9 holds only when the route runs `HandleW17Events` on the context `WatchStreamAuth`
+  returns; generated code must mount it that way.
+- Only `EventbusEventSource` acts on changed labels; a custom `EventSource` sees revocation only.
+- A client ended for changed labels reconnects and is admitted on its current principal; frames
+  are never filtered by a mix of old and new labels.
 
 ---
 
 ## E19. Public-method rate-limit adapters
 
-**Code.** `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `WriteTooManyRequests`.
+**Code.** `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `WriteTooManyRequests`, `WriteTooManyRequestsCtx`.
 
 **Purpose.** Applies the per-client limiter (E26) to REST methods excluded from auth: a unary
 method holds a token while it runs and keeps it charged only on failure (status ≥ 400, or nothing
@@ -666,7 +707,7 @@ written); streams are charged on every open.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E19.1 | A drained bucket MUST answer 429 `RESOURCE_EXHAUSTED` before the handler runs | `TestAdmitPublic_ChargesFailuresPerClient` |
+| E19.1 | A drained bucket MUST answer 429 `RESOURCE_EXHAUSTED` before the handler runs, with the catalog sentence in the request's locale | `TestAdmitPublic_ChargesFailuresPerClient`, `TestAdmitPublic_RefusalIsTheCatalogSentence` |
 | E19.2 | Only responses with status ≥ 400, and handlers that wrote nothing, MUST stay charged; a success (including an implicit 200) MUST return its token | `TestAdmitPublic_ImplicitOKAndUnwrap`, `TestAdmitPublic_SuccessReturnsItsToken`, `TestAdmitPublic_NothingWrittenIsCharged` |
 | E19.3 | Each stream open MUST be charged; the writer MUST NOT be wrapped (flush and hijack keep working) | `TestAdmitPublicStream_ChargesEveryStream` |
 | E19.4 | Concurrent requests MUST NOT exceed the configured budget: each request in flight holds its own token | `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
@@ -675,7 +716,7 @@ written); streams are charged on every open.
 
 ## E20. Multipart uploads
 
-**Code.** `go/lib/restgw/upload.go` — `ProcessFilePart`, `FilePartConfig`, `WriteUploadError`, `RollbackUploads`.
+**Code.** `go/lib/restgw/upload.go` — `ProcessFilePart`, `FilePartConfig`, `WriteUploadError`, `WriteUploadErrorCtx`, `RollbackUploads`.
 
 **Purpose.** Streams one multipart part to a staging file with a per-file size cap and an
 extension allowlist, publishes it to a KV driver under a key of its own (the body's sha256 plus a
@@ -706,7 +747,7 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 | E20.6 | `RollbackUploads` MUST be best-effort and idempotent | no test |
 | E20.7 | An unbounded request body MUST NOT be spilled to disk (relies on the generated `MaxBytesReader`) | no test |
 | E20.8 | Rollback MUST NOT delete an object another request references, including one with identical bytes that committed earlier or is still in flight | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
-| E20.9 | Upload refusals MUST NOT show developer prose or configuration to the client | no test |
+| E20.9 | Upload refusals MUST NOT show developer prose or configuration to the client: each sentinel answers one of the upload msgids (`MsgidUploadMissing`, `MsgidUploadTooLarge`, `MsgidUploadBadType`), and the allowlist and size limit go to the operator channel | `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestVocabulary_CarriesTheUploadSentences` |
 
 **Deliberate limits.**
 - Content is not sniffed; only the filename extension is checked.
@@ -734,6 +775,7 @@ disableRange)`.
 | E21.4 | Driver errors MUST become a generic, logged 500 | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors` |
 | E21.5 | URLs from `BuildDownloadURL` MUST resolve through `ServeDownload` | `TestDownloadURLRoundTrip` |
 | E21.6 | Only GET and HEAD MUST be served | `TestServeDownload_DELETE_405`, `TestServeDownload_HEAD` |
+| E21.7 | Every refusal, 404 included, MUST be the JSON error envelope; the detail goes to observability | `TestServeDownload_ErrorsAreTheEnvelope` |
 
 **Deliberate limits.**
 - Authorization is per endpoint, not per object.
@@ -764,13 +806,20 @@ the URL fragment, never the query.
 
 **Code.** `go/lib/restgw/pagination.go`.
 
-**Purpose.** Builds `Link: <…>; rel="next"|"prev"` headers from the current URL.
+**Purpose.** Builds `Link: <…>; rel="next"|"prev"` headers from the current URL, as
+origin-relative references (`</path?cursor=…>`, RFC 8288 §3.2).
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E23.1 | Existing query parameters MUST be kept and `cursor` replaced | `pagination_test.go` (all) |
+| E23.1 | Existing query parameters MUST be kept and `cursor` replaced | `pagination_test.go` (all), `TestNextPageURL` |
+| E23.2 | Link targets MUST be origin-relative: `Host`, `X-Forwarded-Proto` and the connection's TLS state MUST NOT shape them | `TestSetNextPageLink_IgnoresCallerSuppliedOrigin`, `TestSetNextPageLink_IgnoresXForwardedProto`, `TestSetNextPageLink_TLSStaysRelative`, `TestSetNextPageLink_BasicHeader` |
+| E23.3 | A link target MUST stay on the origin whatever the path: a leading `//` is written as `/.//` and a backslash is percent-encoded | `TestSetNextPageLink_PathNeverReadsAsAHost` |
+
+**Deliberate limits.**
+- Clients resolve the reference against the request URL (as browsers and RFC 8288 clients do);
+  a client that needs an absolute URL builds it itself.
 
 ---
 
@@ -821,7 +870,7 @@ is bounded without a global cap.
 | `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | none: every caller is keyed by its connection's address | Comma-separated CIDRs or bare addresses; `private` adds the loopback and RFC 1918 ranges (combinable with CIDRs); `none` states the default; any other entry is logged once and skipped. List exactly the hops that terminate HTTP and append to `X-Forwarded-For` |
 | `FromEnvScope(prefix, scope, transport)` | `<PREFIX>_<SCOPE>_RATELIMIT_*` | The unscoped `<PREFIX>_RATELIMIT_*` form is read with a one-time warning; `_<TRANSPORT>_PER_MINUTE` / `_BURST` override per transport; an off limiter is logged once |
 | `TTL` | 10 min | Struct field only |
-| `MaxKeys` | 10 000 | Struct field only |
+| `MaxKeys` | 10 000 | Struct field only; reaching it evicts the least recently seen bucket |
 | Malformed `PER_MINUTE` / `BURST` | — | Ignored silently; the previous value stands |
 
 **Shares.** E19 (REST adapters); the gRPC transport through `Allow(ctx)` (`peer` and
@@ -836,12 +885,12 @@ is bounded without a global cap.
 | E26.3 | `X-Forwarded-For` MUST be believed only from a configured proxy and read right-to-left, taking the first untrusted hop; a hop that is not an address MUST end the walk; an IPv4-mapped peer MUST match IPv4 prefixes | `TestForwardedIgnoredFromUntrustedPeer`, `TestForwardedPicksRightmostUntrusted`, `TestRequestKey_ForwardedRules`, `TestForwardedUnparseableHopStopsTheWalk`, `TestTrustedProxyMatchesMappedPeer` |
 | E26.4 | IPv6 MUST be bucketed per /64 | `TestLimiter_IPv6BucketsByPrefixNotByAddress` |
 | E26.5 | A trusted peer that forwarded no address MUST log a collapse warning (at most hourly) and keep limiting | `TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket` |
-| E26.6 | The key count MUST stay ≤ `MaxKeys`; idle keys are evicted first, then the oldest | `TestEvictionRespectsMaxKeys` |
+| E26.6 | The key count MUST stay ≤ `MaxKeys`; eviction MUST remove the least recently seen bucket (an idle one whenever one exists) and never the bucket just created | `TestEvictionRespectsMaxKeys`, `TestLimiter_EvictsTheLeastRecentlySeen`, `TestLimiter_EvictsIdleKeysFirst` |
 | E26.7 | `AllowChargeable` MUST take the token at admission and give it back when the call's context ends without `charge`; `charge` MUST be idempotent; a nil limiter admits | `TestAllowChargeable_ChargesOnlyFailures`, `TestAllowChargeable_ChargeIsIdempotentAndNilSafe`, `TestAllowChargeable_RefundFollowsTheContext`, `TestAllowChargeableRequest_ChargesOnlyFailures` |
 | E26.8 | An unparseable peer MUST share one `unknown` bucket | `TestUnknownPeerSharesOneBucket` |
 | E26.9 | A client MUST NOT be able to choose its own bucket: with the default configuration a forwarded header is ignored, whatever the peer's range | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestForwardedIgnoredFromUntrustedPeer` |
 | E26.10 | Concurrency MUST NOT multiply the per-client budget: every attempt in flight holds its own token | `TestChargeable_ConcurrentFailuresStayWithinTheBudget`, `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
-| E26.11 | The limiter MUST NOT become a CPU sink under a stream of fresh keys | no test |
+| E26.11 | The limiter MUST NOT become a CPU sink under a stream of fresh keys: eviction at the ceiling is constant time (buckets sit on a recency list) | `TestLimiter_FreshKeysAtTheCeilingStayCheap` (with `BenchmarkLimiter_FreshKeyAtTheCeiling`, `BenchmarkLimiter_KnownKey`) |
 | E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback and private ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
 | E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored` (the hourly throttle has no test) |
 | E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
@@ -888,6 +937,9 @@ unary gRPC call using the w17 JSON dialect.
 | E27.6 | Tool and auth errors MUST NOT return backend or developer prose to the client: no backend status message, auth-backend text, resolver error or decode detail | `TestCallUnary_BackendErrorIsSanitised`, `TestCallUnary_AuthBackendErrorIsSanitised`, `TestCallUnary_NonStatusErrorIsInternal`, `TestCallUnary_DecodeError`, `TestCallUnary_GateResolverError` |
 | E27.7 | The HTTP transport MUST NOT read unbounded request bodies: a declared length over the cap MUST be refused with 413 before the handler runs, and an undeclared body MUST stop at the cap | `TestLimitBody`, `TestMaxBodyBytes_DefaultAndOverrides`, `TestServeStreamableHTTP_RefusesOversizedBody` |
 | E27.8 | Every `CallUnary` error MUST be a gRPC status carrying the code, the sentence a REST client reads for the same failure, and its field details; a non-status error MUST read as `INTERNAL` | `TestCallUnary_BackendErrorIsSanitised`, `TestCallUnary_PermissionDeniedIsAStatus`, `TestCallUnary_NonStatusErrorIsInternal` |
+| E27.9 | Tool arguments MUST keep 64-bit integers exact over HTTP and stdio: the raw arguments are captured before the MCP library decodes them and handed to `CallUnary`; a refused call leaves no captured arguments behind | `TestServeStreamableHTTP_ToolArgumentsKeepSixtyFourBitNumbers`, `TestHandleMessage_ScopedContextKeepsSixtyFourBitNumbers`, `TestHandleMessage_RefusedCallLeavesNoCapture` |
+| E27.10 | A backend error MUST be reported by code as E3.7: refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
+| E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | no test at this layer (the scope itself: `TestRequestScope_KeepsBreadcrumbsPerRequest` in `go/core/observx`) |
 
 **Deliberate limits.**
 - Unary tools only.
@@ -934,7 +986,7 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 
 ## E29. Oneof collapse and expand
 
-**Code.** `go/lib/protojsonx/oneof.go` — `CollapseOneofs`, `ExpandOneofs`.
+**Code.** `go/lib/protojsonx/oneof.go` — `CollapseOneofs`, `ExpandOneofs`, `DecodeTree`.
 
 **Purpose.** The dialect's oneof shape: one key per genuine oneof, message arms tagged with
 `w17_discriminator`, scalar arms bare; expanded back before decode.
@@ -948,7 +1000,8 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 | E29.3 | Ambiguous bare values MUST be left unresolved (protojson then decides) | `TestExpand_Ambiguities` |
 | E29.4 | snake_case and lowerCamel oneof keys MUST both be accepted | `TestExpand_CamelCaseOneofKey`, `TestExpand_SnakeCaseOneofKey` |
 | E29.5 | Malformed JSON MUST pass through unchanged so protojson reports it | `TestExpand_NonObjectAndMalformed` |
-| E29.6 | Reshaping MUST NOT change any value | no test |
+| E29.6 | Reshaping MUST NOT change any value: numbers are decoded with `UseNumber` and written back as their original text | `TestExpand_KeepsNumbersExact`, `TestCollapse_KeepsNumbersExact`, `TestMarshalProto_ReshapedResponseKeepsValues` |
+| E29.7 | `DecodeTree` MUST refuse trailing data after the JSON value | `TestDecodeTree_RejectsTrailingData` |
 
 **Deliberate limits.**
 - At most one bare arm per JSON primitive kind.
@@ -959,7 +1012,7 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 
 ## E30. Client dial
 
-**Code.** `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption`, `InternalTLSEnabled`, `DefaultServiceConfig`.
+**Code.** `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption`, `ClientTLSConfig`, `InternalTLSEnabled`, `DefaultServiceConfig`.
 
 **Purpose.** One dial path for gateway → backend: the stack-wide TLS posture, OTel client spans,
 retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
@@ -969,8 +1022,8 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `W17_INTERNAL_TLS` | plaintext h2c | `on/true/1/yes` → TLS; `terminated` → TLS against system roots; `off/false/0/no` → plaintext; any other value → error at dial construction |
-| `W17_INTERNAL_TLS_CA` | system roots | Unreadable or no PEM → error |
-| `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error |
+| `W17_INTERNAL_TLS_CA` | system roots | Unreadable or no PEM → error; ignored in `terminated` mode, with a warning naming it |
+| `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error; ignored in `terminated` mode, with a warning naming them |
 | Retry | 3 attempts, 0.1 s → 1 s backoff, `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | — |
 | Keepalive | 30 s / 10 s, permit without stream | — |
 | Caller `opts` | appended last | Override earlier options |
@@ -986,6 +1039,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | E30.4 | Dial MUST be non-blocking | `TestDial_NonBlocking` |
 | E30.5 | Keepalive MUST pair with the server's enforcement policy | `TestDefaultClientKeepalive_PairsWithServerEnforcement` |
 | E30.6 | An unrecognised `W17_INTERNAL_TLS` value MUST be refused at dial construction, not read as plaintext | `TestTLSDialOption_UnrecognisedSwitchIsRefused` |
+| E30.7 | In `terminated` mode the client MUST verify against the system roots only, whatever the CA and client-pair variables say; with the switch off `ClientTLSConfig` MUST return no TLS config | `TestClientTLSConfig_TerminatedUsesSystemRootsOnly`, `TestClientTLSConfig_OffIsNil`, `TestInternalTLS_Terminated` |
 
 **Deliberate limits.**
 - No circuit breaker beyond retry throttling.
@@ -1002,15 +1056,17 @@ keepalive as E30, plus interceptors that copy the gateway's principal stamps (`x
 
 **Configuration.** `DialOpts(enabled bool)`. `InternalTLSEnabled()` reads `W17_INTERNAL_TLS`
 (`terminated` counts as on). It has no error channel: an unrecognised value is logged and
-answers true, so the dial fails closed over TLS. CA, cert and key come from the same variables as E30.
+answers true, so the dial fails closed over TLS. CA, cert and key come from the same variables as
+E30, and are ignored the same way in `terminated` mode.
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E31.1 | Principal stamps MUST be relayed; an explicit outgoing value MUST NOT be overwritten | `TestForwardPrincipalUnaryInterceptor` (partial: the stream interceptor has no test) |
+| E31.1 | Principal stamps MUST be relayed through `principal.ForwardToOutgoing` and other metadata MUST NOT be; when the incoming side carries a principal, the relayed set replaces any outgoing copy of it (I12) | `TestForwardPrincipalUnaryInterceptor`, `TestForwardToOutgoing_VerifiedPrincipalWins` (partial: the stream interceptor has no test) |
 | E31.2 | The retry config MUST parse and retry only `UNAVAILABLE` | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable` |
 | E31.3 | An unrecognised `W17_INTERNAL_TLS` value MUST make `InternalTLSEnabled` answer true (dial TLS), never plaintext | `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
+| E31.4 | In `terminated` mode `DialOpts` MUST verify against the system roots only, ignoring a private CA | `TestClientTLSConfig_TerminatedIgnoresPrivateCA` |
 
 ---
 
@@ -1019,7 +1075,10 @@ answers true, so the dial fails closed over TLS. CA, cert and key come from the 
 **Code.** `go/core/grpcx/pool.go` — `Pool`, `Connect`, `ConnectScaled`, `Reconnect`, `EnableHealthWatch`, `Close`, `ScalingConfig`.
 
 **Purpose.** Caches client connections by address, with optional load-scaled connections per
-address and an optional health watch that replaces failed connections.
+address and an optional health watch. A pooled connection is replaced only once it is shut
+down; a connection in `TransientFailure` is kept and its backoff reset, because it heals itself
+when the backend returns. `Reconnect` resets the backoff, moves the channel out of idle and
+returns the same connection unless it was closed.
 
 **Configuration.**
 
@@ -1038,7 +1097,7 @@ address and an optional health watch that replaces failed connections.
 | E32.2 | `ConnectScaled` MUST pick the least-loaded connection and grow only when all are full, up to `MaxConns` | `TestPool_ConnectScaled_*` |
 | E32.3 | After `Close`, every operation MUST fail and the health goroutine MUST stop | `TestPool_Connect_AfterClose`, `TestPool_Close_StopsHealthWatch`, `TestPool_EnableHealthWatch_AfterCloseIsNoop` |
 | E32.4 | Concurrent use MUST be race-free | `TestPool_ConcurrentAccess`, `TestPool_Reconnect_Concurrent` |
-| E32.5 | The pool MUST NOT close a connection a caller still holds | no test |
+| E32.5 | The pool MUST NOT close a connection a caller still holds: neither the health watch nor `Reconnect` closes a connection in `TransientFailure`; only a shut-down connection is replaced | `TestPool_HealthWatch_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_ReplacesAClosedConnection` |
 
 **Deliberate limits.**
 - `Release` must be called exactly once per `ConnectScaled`; nothing detects a missed release.
@@ -1099,7 +1158,7 @@ code.
 | E34.2 | Numbers MUST be decoded exactly (no float64 round trip), quoted numbers accepted, and huge exponents or lengths rejected without big-number work | `TestNumbers`, `TestNumbers_HugeExponentsAreCheap`, `TestNumbers_TinyAndZero` |
 | E34.3 | Decode MUST replace, never merge | `TestUnmarshal_Replaces` |
 | E34.4 | Unknown enum strings and union tags MUST be reported as issues, not errors | `TestUnmarshal_Lenience` |
-| E34.5 | Trailing data after the JSON value MUST be an error | no test |
+| E34.5 | Trailing data after the JSON value MUST be an error | `TestUnmarshal_Refusals` |
 
 **Deliberate limits.**
 - No input size cap: the caller bounds the response body.

@@ -14,13 +14,13 @@ Packages: `go/service/bootstrap`, `go/service/runtime`, `go/service/internal/ser
 main
  └─ bootstrap.Run / RunGraceful(parent ctx, observx.Config, [resources], components...)
      ├─ observx.MustInit            (once per process; error → Run returns it, nothing started)
-     ├─ signal.NotifyContext(SIGINT, SIGTERM) → shared ctx
+     ├─ SIGINT / SIGTERM / SIGHUP → cancel shared ctx; a second one during the drain → exit status 1
      ├─ goroutine per Component  ── first to return cancels shared ctx
      │    └─ runtime.GRPCComponent → internal/server.Run
-     │          listen → grpc.NewServer(opts) → RegisterServices → reflection? → health
+     │          listen → grpc.NewServer(opts) → RegisterServices → reflection (guarded, S10)? → health
      │          serve … ctx.Done → health NOT_SERVING → lifecycle.StopGRPC(bounded) → OnShutdown (cfg.Shutdowns, 30s) → nil
-     ├─ wait for every component
-     ├─ resources[i](ctx 30s)        (RunGraceful only, in order; errors reported)
+     ├─ wait for every component      ┐ bounded together by W17_SHUTDOWN_DEADLINE_SECONDS (20s)
+     ├─ resources[i](ctx 30s)         ┘ (RunGraceful only, in order; errors reported)
      └─ observx.Shutdown(5s)
 ```
 
@@ -32,6 +32,7 @@ gRPC server options built by `runtime.GRPCComponent`, in order:
 4. `grpcserver.TLSServerOption` from the process environment, when the internal-TLS switch is on (S17).
 5. `grpc.UnaryInterceptor(recovery)` and `grpc.StreamInterceptor(recoveryStream)` — grpc-go's singular
    interceptor slot, which it always runs ahead of every chained interceptor, so recovery is outermost.
+   Recovery also gives each request its own error-tracker scope (S8, S20).
 6. `grpc.ChainUnaryInterceptor(cfg.UnaryInterceptors...)` — when the slice is non-empty.
 7. `cfg.ServerOptions...` — appended last; a singular interceptor option here is refused at start.
 
@@ -75,8 +76,7 @@ concurrently on one shared context. The first to return, for any reason, stops t
 | `parent context.Context` | — | cancelling it stops every component |
 | `obs observx.Config` | see S19 | an init error is returned before any component starts |
 | `comps ...Component` | — | zero components → returns `nil` at once |
-
-No options, environment variables or flags of its own.
+| `W17_SHUTDOWN_DEADLINE_SECONDS` (environment, `bootstrap.EnvShutdownDeadline`) | 20s (`bootstrap.DefaultShutdownDeadline`) | read once at start; `0` or negative → no bound; not a whole number → logged, default applies |
 
 **Shares.** Process-global observability state (S19). The shared context is the parent of
 every component's context.
@@ -89,31 +89,39 @@ every component's context.
 | S1.2 | Cancelling `parent` MUST make every component return; Run returns `nil` when every component returned `nil`. | `TestRun_CtxCancel_StopsAllComponents` |
 | S1.3 | When one component returns an error, the shared context MUST be cancelled, siblings drain, and Run returns the first non-nil error. | `TestRun_ComponentError_DrainsSiblingAndReturnsErr` |
 | S1.4 | A component that returns `nil` early MUST also cancel its siblings. | no test |
-| S1.5 | Run MUST NOT return while any component goroutine is still running. | covered implicitly by the tests above |
+| S1.5 | Run MUST NOT return while any component goroutine is still running, except when the shutdown deadline (S1.9) has passed. | covered implicitly by the tests above; `TestRun_ShutdownDeadlineZeroIsUnbounded` |
 | S1.6 | Observability MUST be flushed, bounded at 5s, after components and resources finish, including when a component failed at boot. | no test |
 | S1.7 | With no components, Run MUST return `nil` at once. | `TestRun_NoComponents_ReturnsNil` |
 | S1.8 | Error reporting MUST NOT deadlock: each component reports at most once into a buffer sized to the component count. | holds by construction; no test |
+| S1.9 | From the moment shutdown starts (the shared context is cancelled for any reason), the component drain and the resource teardown together MUST finish within the shutdown deadline; on overrun Run returns an error naming `W17_SHUTDOWN_DEADLINE_SECONDS` without waiting for the components, the error is reported through `observx.ReportError`, and the teardown context is cancelled. | `TestRun_ShutdownDeadlineBoundsAStuckComponent`, `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` |
+| S1.10 | On overrun, a component error reported before the deadline MUST be returned together with the deadline error. | `TestRun_ShutdownDeadlineKeepsTheComponentError` |
+| S1.11 | A deadline of `0` MUST remove the bound; an unparseable value MUST be logged and the default applied. | `TestRun_ShutdownDeadlineZeroIsUnbounded` (unparseable value not covered) |
+| S1.12 | The default deadline plus the 5s observability flush MUST end before a 30s orchestrator grace period. | `TestDefaultShutdownDeadline_FitsTheCommonGracePeriod` |
 
 **Deliberate limits.**
 - "First exit stops all": a component with nothing to do must block on `<-ctx.Done()` rather than return.
 - No restart policy.
-- Every component must return once its context is cancelled; the supervisor waits for all of them.
+- Every component must return once its context is cancelled; the supervisor waits for all of them until the shutdown deadline, and not after it.
+- After a deadline overrun, the stuck components keep running until the process exits; the caller of Run is expected to exit.
+- Each component's own drain bound (for a gRPC component, `runtime.Config.ShutdownTimeout`, default 10s) must be below the deadline, or the deadline cuts it short. Under a grace period shorter than 25s the deadline must be lowered.
 
 ## S2. OS signal handling
 
 **Code.** `go/service/bootstrap/bootstrap.go` — `RunGraceful`
 
-**Purpose.** One process-wide SIGINT/SIGTERM handler that cancels the shared context.
-Components do not install their own.
+**Purpose.** One process-wide SIGINT/SIGTERM/SIGHUP handler that cancels the shared context.
+Components do not install their own. A second signal during the drain ends the process at once.
 
-**Configuration.** None. The handled signals are fixed: SIGINT and SIGTERM.
+**Configuration.** None. The handled signals are fixed: SIGINT, SIGTERM and SIGHUP. SIGQUIT
+keeps Go's default behaviour (goroutine dump and exit).
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S2.1 | SIGINT or SIGTERM MUST cancel the shared context exactly once. | no test |
+| S2.1 | The first SIGINT, SIGTERM or SIGHUP MUST cancel the shared context exactly once. | `TestRun_SecondSignalExitsImmediately` (first SIGTERM starts the drain; SIGINT and SIGHUP not covered) |
 | S2.2 | After `RunGraceful` returns, the signal registration MUST be removed. | no test |
+| S2.3 | A second SIGINT, SIGTERM or SIGHUP during the drain MUST exit the process at once with status 1, whether or not a shutdown deadline is set. | `TestRun_SecondSignalExitsImmediately` (real SIGTERM to a child process; SIGINT and SIGHUP not covered) |
 
 **Deliberate limits.**
 - That components do not install their own signal handler is a convention; nothing enforces it.
@@ -146,7 +154,7 @@ after every transport has drained, so in-flight requests keep their pools.
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `resources []func(context.Context) error` | none | run in slice order on one fresh 30s context; `nil` entries are skipped |
+| `resources []func(context.Context) error` | none | run in slice order on one fresh 30s context, which is cancelled early when the shutdown deadline (S1.9) passes; `nil` entries are skipped |
 
 **Guarantees.**
 
@@ -156,7 +164,7 @@ after every transport has drained, so in-flight requests keep their pools.
 | S4.2 | Closers MUST run in caller-defined order. | `TestRunGraceful_ResourcesCloseAfterComponentsDrain` |
 | S4.3 | `nil` closers MUST be skipped. | `TestRunGraceful_NilResourceSkipped` |
 | S4.4 | Closers MUST run even when a component failed. | no test |
-| S4.5 | The whole phase MUST be bounded by 30s, provided each closer honours its context. | no test |
+| S4.5 | The whole phase MUST be bounded by 30s and by the shutdown deadline (S1.9), whose passing cancels the closers' context; Run returns at the deadline even when a closer ignores its context. | `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` (30s bound not covered) |
 | S4.6 | A resource MUST NOT be closed while a request still uses it. | no test |
 | S4.7 | A closer's error MUST be reported through `observx.ReportError`; later closers still run and Run's result stays the components' verdict. | `TestRunGraceful_ResourceCloserErrorIsReported` |
 
@@ -179,10 +187,13 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | `ServiceVersion`, `Environment` | empty is passed through | — |
 | `SentryDSN` | empty = error tracker off | a bad DSN makes init fail |
 | `OTelEndpoint` | empty → `OTEL_EXPORTER_OTLP_ENDPOINT`; still empty → no trace export | — |
-| `SampleRate` | `0` → 1.0 | — |
+| `OTelTLS` | empty → `W17_OTEL_TLS`; still empty → follows `W17_INTERNAL_TLS` (S19) | an unrecognised value makes init fail |
+| `SampleRate` | `0` → 1.0 | outside 0..1 or NaN → init fails and `Serve` returns the error |
 | `EnableMetrics` | false | — |
 | `Addr` | required | empty → `server: address is required`; a bad address fails at listen and is returned |
-| `Reflection` | false | — |
+| `Reflection` | false | true without `ReflectionAuth` or `ReflectionUnauthenticated` → start-up error naming both (S10) |
+| `ReflectionAuth` | nil | runs on every reflection stream (S10) |
+| `ReflectionUnauthenticated` | false | true → reflection served without authentication, logged at start |
 | `ShutdownTimeout` | `0` → 10s | negative (`lifecycle.Unbounded`) → no bound |
 | `UnaryInterceptors` | none | — |
 | `ServerOptions` | none; appended last | a singular `grpc.UnaryInterceptor` / `grpc.StreamInterceptor` → start-up error (S6) |
@@ -199,7 +210,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | S5.1 | The component MUST serve until the context is cancelled, then stop within `ShutdownTimeout`. | `TestGRPCComponent_ServesAndDrains` (stop asserted; bound not asserted) |
 | S5.2 | `Shutdowns` MUST run after the server has stopped, in order, with nil entries skipped. | `TestGRPCComponent_ServesAndDrains`, `TestGRPCComponent_ShutdownHookErrorIsReported` |
 | S5.3 | With no `Shutdowns`, nothing runs. | `TestGRPCComponent_NoShutdowns` |
-| S5.4 | `ObservxConfig()` MUST copy every observability field. | `TestObservxConfig_Projection` |
+| S5.4 | `ObservxConfig()` MUST copy every observability field, including `OTelTLS`. | `TestObservxConfig_Projection` |
 | S5.5 | `Serve` MUST run one component under the supervisor and return on context cancel. | `TestServe_StandaloneLifecycle` |
 | S5.6 | A clean, context-driven stop MUST return `nil` (the `Component` contract) from `GRPCComponent`, `Serve` and `bootstrap.Run` with a gRPC component. | `TestGRPCComponent_CleanStopReturnsNil` |
 | S5.7 | A shutdown that has to force-stop (S12) MUST still run `Shutdowns`. | no test |
@@ -209,6 +220,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | S5.11 | With the internal-TLS switch on, the listener MUST serve TLS and MUST NOT serve a plaintext client. | `TestGRPCComponent_ServesInternalTLS` |
 | S5.12 | A misconfigured switch (on without certificate and key, or an unrecognised value) MUST fail the start with an error naming `W17_INTERNAL_TLS`. | `TestGRPCComponent_InternalTLSMisconfigurationFailsStart` |
 | S5.13 | `ShutdownTimeout` `0` MUST mean 10s and a negative value MUST mean unbounded, so the opt-out from S14 stays unbounded. | `TestShutdownTimeout_EnvOptOutStaysUnbounded` |
+| S5.14 | `Reflection`, `ReflectionAuth` and `ReflectionUnauthenticated` MUST reach the server, so an unguarded `Reflection: true` fails the component's start (S10.2). | `TestGRPCComponent_UnguardedReflectionIsRefused` |
 
 ## S6. Interceptor and server-option order
 
@@ -269,6 +281,7 @@ client settings are paired so pings are never rejected as `too_many_pings`.
 | S8.3 | Value and stack MUST be reported through `observx.ReportError` with the method name. | no test |
 | S8.4 | A non-panicking call MUST pass through unchanged. | `TestRecoveryUnaryInterceptor_PassThrough` |
 | S8.5 | A stream panic on the handler's goroutine MUST return `Internal`. | `TestRecoveryStreamInterceptor_RecoversPanic` |
+| S8.6 | Every unary and stream request MUST run with its own error-tracker scope (`observx.WithRequestScope`), so breadcrumbs recorded while serving it are attached only to its own events (S20.7). | `TestRecoveryInterceptors_GiveEachRequestItsOwnScope` |
 
 **Deliberate limits.**
 - Panics on goroutines the handler spawns are not caught (documented in the source).
@@ -280,12 +293,14 @@ client settings are paired so pings are never rejected as `too_many_pings`.
 **Purpose.** Listen, build the server, register services, optionally add reflection and
 health, serve, and stop on context cancel.
 
-**Configuration.** `Addr` (required), `Reflection`, `HealthServer` (nil = no health
-service), `ShutdownTimeout` (0 = unbounded at this layer; S5 maps 0 to 10s),
-`ServerOptions`, `RegisterServices` (required), `OnShutdown`.
+**Configuration.** `Addr` (required), `Reflection`, `ReflectionAuth`,
+`ReflectionUnauthenticated` (S10), `HealthServer` (nil = no health service),
+`ShutdownTimeout` (0 = unbounded at this layer; S5 maps 0 to 10s), `ServerOptions`,
+`RegisterServices` (required), `OnShutdown`.
 
-Order: `net.Listen("tcp", Addr)` → `grpc.NewServer` → `RegisterServices` → reflection →
-health → `Serve` in a goroutine → wait for context or a serve error.
+Order: validate (including the reflection guard) → `net.Listen("tcp", Addr)` →
+`grpc.NewServer` → `RegisterServices` → reflection → health → `Serve` in a goroutine →
+wait for context or a serve error.
 
 **Guarantees.**
 
@@ -308,14 +323,32 @@ health → `Serve` in a goroutine → wait for context or a serve error.
 
 **Code.** `go/service/internal/server/server.go` — `Run`
 
-**Purpose.** Registers the gRPC reflection service when `Reflection` is true.
+**Purpose.** Registers the gRPC reflection service (v1 and v1alpha) when `Reflection` is
+true. Reflection lists every service and message schema, so it is served only behind a
+guard or after an explicit statement that it may be served to anyone.
+
+**Configuration.**
+
+| Field | Default | Invalid or edge values |
+|---|---|---|
+| `Reflection` | false | true needs one of the two fields below; with neither, `Run` returns an error naming both, before listening |
+| `ReflectionAuth func(ctx) error` | nil | runs on every reflection stream; a plain error → `Unauthenticated` with a fixed message; a gRPC status error → passed through |
+| `ReflectionUnauthenticated` | false | true → reflection served without authentication; logged at start. Ignored when `ReflectionAuth` is set |
+
+The same three fields exist on `runtime.Config` (S5).
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S10.1 | Reflection MUST be registered only when the flag is set. | no test |
-| S10.2 | Reflection MUST NOT be reachable by untrusted callers without authentication. | no test |
+| S10.1 | Reflection MUST be registered only when the flag is set. | `TestRun_ReflectionRegisteredOnlyWhenSet` |
+| S10.2 | Reflection MUST NOT be reachable by untrusted callers without authentication: `Reflection: true` with neither `ReflectionAuth` nor `ReflectionUnauthenticated` MUST be refused at start, before listening. | `TestRun_UnguardedReflectionIsRefused`, `TestGRPCComponent_UnguardedReflectionIsRefused` |
+| S10.3 | With `ReflectionAuth` set, the guard MUST run on every reflection stream of both v1 and v1alpha before any answer. | `TestRun_ReflectionAuthGuardsBothVersions` |
+| S10.4 | A plain error from the guard MUST become `Unauthenticated` without its text reaching the caller; a gRPC status error MUST pass through unchanged. | `TestRun_ReflectionAuthGuardsBothVersions`, `TestRun_ReflectionAuthStatusPassesThrough` |
+| S10.5 | `ReflectionUnauthenticated` MUST serve reflection and be logged at start. | `TestRun_ReflectionRegisteredOnlyWhenSet` (log line not asserted) |
+
+**Deliberate limits.**
+- The SDK enforces that a guard or an explicit opt-in exists; it does not choose the guard. A generated or hand-written `main` that enables reflection must pass `ReflectionAuth` (or `ReflectionUnauthenticated`) itself.
 
 ## S11. gRPC health service
 
@@ -447,7 +480,8 @@ loopback, and exits non-zero naming the failed ones.
 | listen address | — | wildcard (`""`, `0.0.0.0`, `::`) → `127.0.0.1`; an explicit host is kept; port `0` or empty → error |
 
 Under mutual TLS the gRPC check presents this node's leaf as its client certificate, so the
-leaf needs the ClientAuth extended key usage.
+leaf needs the ClientAuth extended key usage. When `W17_INTERNAL_TLS_CLIENT_CA` is set and the
+leaf lacks it, the check fails before dialing with an error that names the cause and the fix.
 
 **Guarantees.**
 
@@ -462,12 +496,13 @@ leaf needs the ClientAuth extended key usage.
 | S16.7 | Address forms MUST be mapped as listed. | `TestRun_ListenAddressForms` |
 | S16.8 | Under internal TLS the gRPC check MUST verify the chain against the configured CA, naming the server by the leaf's first DNS SAN (else IP SAN), and MUST NOT skip verification. | `TestRun_GRPCUnderInternalTLS` |
 | S16.9 | `PublicGRPC` MUST be plaintext even with the switch on. | `TestRun_GRPCUnderInternalTLS` |
-| S16.10 | Under `terminated` the gRPC check MUST dial plaintext, as the listener does. | no test |
-| S16.11 | Under mutual TLS the check MUST present this node's leaf as its client certificate. | no test |
+| S16.10 | Under `terminated` the gRPC check MUST dial plaintext, as the listener does. | `TestRun_GRPCUnderTerminatedIsPlaintext` |
+| S16.11 | Under mutual TLS the check MUST present this node's leaf as its client certificate. | `TestRun_GRPCUnderMutualTLS` |
 | S16.12 | `Dispatch` with `Final=false` MUST pass every non-`health` word through; with `Final=true` it owns the command table. | `TestDispatch_OtherWordsFallThrough`, `TestDispatch_FinalOwnsTheCommandTable` |
 | S16.13 | Redirects MUST NOT be followed, and the body read MUST be capped at 4 KiB. | no test |
 | S16.14 | MUST NOT consult a database. | holds by construction; no test |
 | S16.15 | An unrecognised `W17_INTERNAL_TLS` value MUST fail the check with an error naming it, as the listener refuses it. | `TestRun_GRPCUnrecognisedTLSSwitchFails` |
+| S16.16 | Under mutual TLS, a leaf whose extended key usage lacks ClientAuth MUST fail the check before dialing, with an error naming the missing usage and how to reissue the leaf. | `TestRun_GRPCUnderMutualTLS_ServerOnlyLeafIsDiagnosed` |
 
 ## S17. Internal-mesh TLS, server side
 
@@ -505,7 +540,7 @@ variables with S16 and S18.
 
 ## S18. Internal-mesh TLS, client side, and dial defaults
 
-**Code.** `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption`, `InternalTLSEnabled`, default service config
+**Code.** `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption`, `ClientTLSConfig`, `InternalTLSEnabled`, default service config
 
 **Purpose.** One dial path: TLS posture from the same switch, OpenTelemetry propagation, a
 retry service config, and keepalive.
@@ -514,9 +549,9 @@ retry service config, and keepalive.
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `W17_INTERNAL_TLS` | plaintext (h2c) | `on`-family → TLS; `terminated` → TLS against system roots; `off`-family → plaintext; any other value → error from `TLSDialOption` and `Dial` |
-| `W17_INTERNAL_TLS_CA` | system roots | unreadable or no PEM → error |
-| `W17_INTERNAL_TLS_CERT` / `W17_INTERNAL_TLS_KEY` | no client certificate | both set → presented for mTLS; only one set → error |
+| `W17_INTERNAL_TLS` | plaintext (h2c) | `on`-family → TLS; `terminated` → TLS against system roots only; `off`-family → plaintext; any other value → error from `TLSDialOption`, `ClientTLSConfig` and `Dial` |
+| `W17_INTERNAL_TLS_CA` | system roots | unreadable or no PEM → error; ignored under `terminated`, with a warning |
+| `W17_INTERNAL_TLS_CERT` / `W17_INTERNAL_TLS_KEY` | no client certificate | both set → presented for mTLS; only one set → error; ignored under `terminated`, with a warning |
 | `lookup` | `os.Getenv` in `Dial` | nil passed directly to `TLSDialOption` → plaintext |
 | retry | `UNAVAILABLE` only, 3 attempts, backoff 0.1s–1s, throttling 100 tokens at ratio 0.1 | — |
 | caller `opts` | appended last | for single-valued options the last one wins |
@@ -533,8 +568,9 @@ retry service config, and keepalive.
 | S18.6 | Real handshakes: a custom CA verifies, an untrusted server fails, mTLS succeeds, a client without a certificate is rejected. | `TestBackendDial_*` (4 tests) |
 | S18.7 | Retry MUST cover only `UNAVAILABLE` and MUST be throttled; codes where the server may already have applied a write MUST NOT be retried. | `TestDefaultServiceConfig_*` (3 tests) |
 | S18.8 | No path MUST skip certificate verification. | holds by inspection; no test |
-| S18.9 | In `terminated` mode the client MUST verify against system roots. | no test |
+| S18.9 | In `terminated` mode the client MUST verify against the system roots only: `W17_INTERNAL_TLS_CA` and the client pair MUST be ignored, and a warning MUST name the ignored variables. | `TestClientTLSConfig_TerminatedUsesSystemRootsOnly`, `TestInternalTLS_Terminated` |
 | S18.10 | An unrecognised switch value MUST be refused at dial construction with an error naming the variable, the value and the accepted spellings. | `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestCheckInternalTLS` |
+| S18.11 | `ClientTLSConfig` MUST return no configuration when the switch is off, and otherwise the same configuration `TLSDialOption` dials with, so other clients (the telemetry exporter, S19) share one posture. | `TestClientTLSConfig_OffIsNil`, `TestClientTLSConfig_TerminatedUsesSystemRootsOnly` |
 
 ## S19. Observability bootstrap
 
@@ -549,15 +585,18 @@ Prometheus meter provider, and W3C propagation.
 |---|---|
 | `ServiceName` | required; overridden by `OTEL_SERVICE_NAME` when that is non-empty |
 | `OTelEndpoint` | falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`; 10s construction context |
-| `SampleRate` | `0` → 1.0 |
+| `OTelTLS` / `W17_OTEL_TLS` | empty → follow the internal mesh: TLS exactly when a w17 client dials TLS (`W17_INTERNAL_TLS` on or `terminated`), with the same CA and client pair (system roots under `terminated`); plaintext when the switch is off. `on` / `true` / `1` / `yes` → TLS whatever the switch says. `off` / `false` / `0` / `no` → plaintext, logged when the mesh is on. Any other value → init error |
+| `SampleRate` | `0` → 1.0; parent-based: a request that carries its caller's sampling decision keeps it, the rate applies to traces this service starts. Outside 0..1 or NaN → init error |
 | `SentryDSN` | on when non-empty; traces sample rate fixed at 0.2 |
 | `EnableMetrics` | Prometheus reader on the global meter provider |
 | `ConfigAttrs` | non-secret, non-empty values → resource attribute `w17.config.<lower(key)>`; secret entries dropped |
 | `W17_OBSERVX_DEBUG` | `1` / `true` / `yes` / `on` turns on `ReportEvent`; read at init only |
 
 **Shares.** Package globals (tracer, exporter, meter provider, tracker flag, debug flag,
-config) plus the OpenTelemetry globals (tracer provider, propagator, meter provider) and
-the global Sentry hub. Every component in the process sees the same state.
+config, log budgets) plus the OpenTelemetry globals (tracer provider, propagator, meter
+provider) and the global Sentry hub. Every component in the process sees the same state.
+The export transport reads the internal-mesh variables through `grpcclient.ClientTLSConfig`
+(S18).
 
 **Guarantees.**
 
@@ -572,18 +611,28 @@ the global Sentry hub. Every component in the process sees the same state.
 | S19.7 | `Shutdown` MUST be safe with nothing initialised. | `TestShutdown_NilSafe` |
 | S19.8 | Secret config attributes MUST NOT be exported. | `TestConfigResourceAttrsExcludeSecrets` |
 | S19.9 | `Tracer()` MUST never return nil. | `TestTracer_ReturnsNonNil` |
-| S19.10 | After `Shutdown` or a failed init, the global providers MUST NOT point at shut-down instances. | no test |
-| S19.11 | Telemetry export MUST follow the deployment's transport-security posture. | no test |
+| S19.10 | After `Shutdown` or a failed init, the global tracer and meter providers MUST NOT point at shut-down instances: each is reset to a no-op provider when it is still the one observx installed. | `TestShutdown_ResetsGlobalProviders`, `TestMustInit_FailureResetsGlobalProviders` |
+| S19.11 | Telemetry export MUST follow the deployment's transport-security posture: TLS whenever the internal-mesh switch is on, plaintext only when the switch is off or the operator opts out explicitly. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut` (`terminated` not covered) |
+| S19.12 | `OTelTLS=on` MUST force TLS with the switch off; an explicit opt-out while the mesh is on MUST be logged; an unrecognised value MUST fail init with an error naming `W17_OTEL_TLS`. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut`, `TestMustInit_RejectsUnknownOTelTLS` |
+| S19.13 | Sampling MUST be parent-based: an incoming sampling decision is kept whatever the local rate. | `TestSampler_HonoursTheParentDecision` |
+| S19.14 | A `SampleRate` outside 0..1, or NaN, MUST fail init instead of being clamped or ignored. | `TestMustInit_RejectsSampleRateOutsideZeroToOne` |
 
 **Deliberate limits.**
 - An exporter that is down at start is not an error: OTLP over gRPC connects lazily, and the batcher drops spans later.
 
 ## S20. Error, event and refusal reporting
 
-**Code.** `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal`
+**Code.** `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal`, `WithRequestScope`
 
 **Purpose.** Three channels: faults (span error plus error-tracker issue), debug events
-(gated by `W17_OBSERVX_DEBUG`), and refusals (always logged, never an issue).
+(gated by `W17_OBSERVX_DEBUG`), and refusals (always recorded, never an issue).
+`WithRequestScope` gives a request its own error-tracker hub, so breadcrumbs stay with the
+request that recorded them.
+
+**Configuration.** Log budgets, fixed: the refusal line and the error and debug stderr
+fallbacks each have a budget of a burst of 50 lines, then 10 lines per second. Lines over
+the budget are counted; the count is logged with the next line written on that channel and
+at `Shutdown`.
 
 **Guarantees.**
 
@@ -591,12 +640,17 @@ the global Sentry hub. Every component in the process sees the same state.
 |---|---|---|
 | S20.1 | A nil error MUST be a no-op on all three. | `TestReportError_NilNoOp` (`ReportEvent` / `ReportRefusal` not covered) |
 | S20.2 | `ReportError` MUST mark the active span as failed and record the error. | `TestReportError_AttachesToActiveOTelSpan` |
-| S20.3 | Without the error tracker, `ReportError` MUST log to stderr with CR/LF escaped. | `TestReportError_StderrFallback` (escaping not covered) |
+| S20.3 | Without the error tracker, `ReportError` MUST log to stderr with CR/LF escaped, within the log budget (S20.8). | `TestReportError_StderrFallback` (escaping not covered) |
 | S20.4 | With the error tracker, the event MUST carry service, trace_id and span_id tags. | `TestReportError_SentryPath` |
 | S20.5 | `ReportEvent` MUST be a no-op unless the debug knob is on; when on it adds a span event and never sets error status. | `TestReportEvent_OffByDefault_NoOp`, `TestReportEvent_DebugKnob_StderrFallback`, `TestReportEvent_SpanEvent_NoErrorStatus`, `TestReportEvent_SentryBreadcrumb` |
-| S20.6 | `ReportRefusal` MUST always log, add a span event, never set error status and never raise an issue. | no test |
-| S20.7 | One request's breadcrumbs MUST NOT be attached to another request's event. | no test |
-| S20.8 | Log volume from client-driven refusals MUST be bounded. | no test |
+| S20.6 | `ReportRefusal` MUST always record (span event, and a log line within the log budget), never set error status and never raise an issue. | `TestReportRefusal_RecordsWithoutRaising` |
+| S20.7 | One request's breadcrumbs MUST NOT be attached to another request's event: breadcrumbs are recorded only on the hub the request's context carries (none without one), and `ReportError` without a request hub MUST drop the shared hub's breadcrumbs. | `TestReportError_DoesNotCarryAnotherRequestsBreadcrumbs`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
+| S20.8 | Log volume from client-driven refusals, and from the error and debug fallbacks, MUST be bounded per channel; suppressed lines MUST be counted and the count logged with the next written line and at `Shutdown`. | `TestReportRefusal_LogVolumeIsBounded`, `TestShutdown_ReportsPendingSuppressedLines` |
+| S20.9 | `WithRequestScope` on a context that already carries a hub MUST return it unchanged, so a nested entry point (an in-process call) stays in its caller's request. | no test |
+
+**Deliberate limits.**
+- A request whose entry point did not call `WithRequestScope` records no breadcrumbs. The SDK's entry points call it (the gRPC recovery interceptors, the REST recovery middleware, MCP tool calls); a hand-written entry point must call it too.
+- Without the error tracker, `WithRequestScope` returns the context unchanged.
 
 ## S21. In-process gRPC bridge
 

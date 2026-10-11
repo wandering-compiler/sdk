@@ -11,11 +11,11 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 
 | ID | Feature | Code |
 |---|---|---|
-| I1 | Dispatcher contract (emit side) | `go/lib/eventbus/dispatcher.go` — `Dispatcher.Dispatch` |
+| I1 | Dispatcher contract (emit side) | `go/lib/eventbus/dispatcher.go` — `Dispatcher.Dispatch`; `go/lib/eventbus/names.go` — `ValidateChannel`, `ValidateTopic` |
 | I2 | Subscriber contract | `go/lib/eventbus/subscriber.go` — `SubscriberFactory`, `Subscribe`, `Drain`, `MatchGlob`, `recoverHandler` |
 | I3 | Delivery modes (queue and fan-out) | `go/lib/eventbus/subscriber.go` — `DeliveryMode`, `DeliveryQueue`, `DeliveryFanOut` |
 | I4 | In-memory transport | `go/lib/eventbus/memory.go` — `MemoryBus`, `MemoryBusOptions` |
-| I5 | NATS JetStream transport | `go/lib/eventbus/nats.go` — `NatsBus`, `NatsBusOptions`; `go/lib/eventbus/retry.go` — `ChannelRetry` |
+| I5 | NATS JetStream transport | `go/lib/eventbus/nats.go` — `NatsBus`, `NatsBusOptions`; `go/lib/eventbus/retry.go` — `ChannelRetry`; `go/lib/eventbus/retention.go` — `StreamRetention` |
 | I6 | Redis Streams transport | `go/lib/eventbus/redis.go` — `RedisBus`, `RedisBusOptions` |
 | I7 | Bus observability | `go/lib/eventbus/observability.go` — `Observer`, `ObserverWithLatency`, `DefaultObserver`, `NopObserver` |
 | I8 | Event context: metadata, labels, invalidate | `go/lib/eventbus/eventctx.go` — `MetadataFromContext`, `LabelsFromContext`; `go/lib/eventbus/w17invalidate.go` — `EmitInvalidate` |
@@ -24,7 +24,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I11 | Principal, gateway side | `go/lib/principal/gateway.go` — `SanitizeGatewayMD`, `WithGatewayMD`; `go/lib/principal/reserved.go` — `IsGatewayOwnedKey` |
 | I12 | Principal relay | `go/lib/principal/principal.go` — `ForwardToOutgoing` |
 | I13 | Permission lock and checks | `go/lib/acllock/allocator.go` — `Allocate`; `go/lib/acllock/bits.go` — `HasPermission`, `HasAnyPermission`, `HasAllPermissions`, `HasAllPermissionsStrict`, `GrantAll`, `IDByString` |
-| I14 | Message catalogs and translation | `go/lib/i18n/i18n.go` — `Register`, `RegisterFS`, `SetDefaultLanguage`, `T`, `LocaleFromContext` |
+| I14 | Message catalogs and translation | `go/lib/i18n/i18n.go` — `Register`, `RegisterCatalog`, `RegisterFS`, `SetDefaultLanguage`, `T`, `LocaleFromContext`; `go/lib/i18n/pocheck.go` — `ValidatePO` |
 | I15 | Number and date formatting | `go/lib/i18n/formats.go`, `formatnum.go`, `formatdate.go`, `formatlocale.go` — `FormatLocaleFromContext` |
 | I16 | Catalog tooling | `go/lib/i18n/extract.go`, `harvest.go` — `MarshalPO`, `MergePO`, `HarvestEnumLabels` |
 | I17 | Shared value validators | `go/lib/typere/typere.go` — `UUID`, `Slug`, `URL`, `MAC`, `ValidEmail`, `FitsDecimal` |
@@ -34,13 +34,19 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 
 ## I1. Dispatcher contract (emit side)
 
-**Code.** `go/lib/eventbus/dispatcher.go` — `Dispatcher.Dispatch(ctx, channel, topic, envelope)`
+**Code.** `go/lib/eventbus/dispatcher.go` — `Dispatcher.Dispatch(ctx, channel, topic, envelope)`; `go/lib/eventbus/names.go` — `ValidateChannel`, `ValidateTopic`, `ErrInvalidChannel`, `ErrInvalidTopic`
 
 **Purpose.** The one call every generated emit helper makes. Emit is
 fire-and-forget: the RPC has already answered, and generated helpers discard the
 returned error.
 
 **Configuration.** None on the interface; each transport has its own options (I4–I6).
+One name rule holds on every transport, the in-memory one included:
+
+| Name | Rule | Invalid values |
+|---|---|---|
+| Channel | 1–200 characters of `A–Z a–z 0–9 _ -` (`ValidateChannel`) | refused with `ErrInvalidChannel` at `Subscriber`, at `Dispatch`, and for the keys of `ChannelRetries` at construction |
+| Topic | `.`-separated non-empty segments without whitespace, control characters, `*` or `>` (`ValidateTopic`) | refused with `ErrInvalidTopic` at `Dispatch`; an empty topic is invalid |
 
 **Shares.** Every transport; the `Observer` (I7), which is the only record of a
 failure; the commit hook in `go/service/tx/txregistry/txregistry.go`, which runs
@@ -51,16 +57,18 @@ the emit after the database commit.
 | ID | Guarantee | Test |
 |---|---|---|
 | I1.1 | A marshal or publish failure MUST be returned to the caller and reported to the configured Observer. | `TestRedisBus_DispatchError` |
-| I1.2 | The publish MUST be detached from the request's cancellation (`context.WithoutCancel`); trace values carry forward. | `TestNatsBus_DispatchDetachesCanceledCtx_Embedded`, `TestRedisBus_DispatchDetachesCanceledCtx_Embedded`, `TestMemoryBus_ContextDetached` |
+| I1.2 | The publish MUST be detached from the request's cancellation (`context.WithoutCancel`), so an emit after the RPC answered still goes out; on the broker transports it is bounded by `PublishTimeout` instead (I5.15, I6.10). | `TestNatsBus_DispatchDetachesCanceledCtx_Embedded`, `TestRedisBus_DispatchDetachesCanceledCtx_Embedded`, `TestMemoryBus_ContextDetached` |
 | I1.3 | The default Observer MUST log every emit failure, delivery failure and drop with channel and topic, and report it to the error reporter. Successes are silent. | `TestDefaultObserver_EmitFailureLeavesATrace`, `TestMemoryBus_ObserverNilDefaults` |
 | I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | `TestMemoryBus_DispatchAfterDrainIsRefused` (in-memory transport after drain only) |
-| I1.5 | An empty topic MUST behave the same on every transport (accepted everywhere or refused everywhere). | no test |
+| I1.5 | An empty topic MUST be refused on every transport with `ErrInvalidTopic` and reported through `OnEmitFailure`. | `TestDispatch_EmptyTopicRefusedOnEveryTransport` |
+| I1.6 | A channel or topic that breaks the name rule MUST be refused identically on every transport, before any broker call, at both `Subscriber` and `Dispatch`; the names generated surfaces use MUST stay valid. | `TestChannelNameRefusedOnEveryTransport` |
 
 **Deliberate limits.**
 - No transactional outbox. The event is published after the commit by the
   committing goroutine; a crash or broker outage between commit and publish loses
   it (producer side is at-most-once). The Observer line is the only record.
-- Publishing runs on the committing goroutine, so a slow broker adds to commit latency.
+- Publishing runs on the committing goroutine, so a slow broker adds to commit latency, at most
+  `PublishTimeout` per event on the broker transports.
 
 ---
 
@@ -126,7 +134,10 @@ empty topic.
 
 **Purpose.** In-process loopback for memory-transport channels; implements both
 `Dispatcher` and `SubscriberFactory`. Dispatch marshals, snapshots matching
-handlers and runs one goroutine per matching handler per event.
+handlers and runs one goroutine per matching handler per event. Each handler runs
+with the context its `Subscribe` call was given, detached from its cancellation, as
+a broker delivery would; the emitter's context reaches no handler, so a subscriber
+sees only what the envelope carries.
 
 **Configuration.**
 
@@ -148,8 +159,8 @@ handlers and runs one goroutine per matching handler per event.
 | I4.6 | Bounded channels MUST accept under capacity, drop after `BlockTimeout`, and be isolated per channel; unbounded is the default. | `TestMemoryBus_BufferUnboundedDefaults`, `TestMemoryBus_BufferDropsAfterTimeout`, `TestMemoryBus_BufferAcceptsUnderCapacity`, `TestMemoryBus_BufferPerChannelIsolation` |
 | I4.7 | A Dispatch after Drain MUST return `ErrBusDraining` and fire `OnEmitFailure`; `OnEmitSuccess` fires only once the fan-out is admitted. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
 | I4.8 | `Subscribe` after Drain MUST return `ErrSubscriberDraining`, checked under the same lock as the registration. | `TestMemoryBus_SubscribeAfterDrainIsRefused` |
-| I4.9 | Drain MUST apply to the whole bus: after it, Dispatch on every channel is refused. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
-| I4.10 | A handler MUST NOT inherit the emitter's transaction id or other request-scoped incoming metadata beyond what the event carries. | no test |
+| I4.9 | Drain of any subscriber MUST apply to the whole bus: after it, `Dispatch` on every channel, including channels the drained subscriber never served, is refused with `ErrBusDraining`. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
+| I4.10 | A handler MUST run with its subscription's context and MUST NOT see the emitter's context values or its incoming or outgoing metadata (transaction id, principal, scopes). | `TestMemoryBus_HandlerContextIsNotTheEmitters` |
 
 **Deliberate limits.**
 - No ordering between events: each delivery is an independent goroutine.
@@ -166,17 +177,23 @@ handlers and runs one goroutine per matching handler per event.
 **Purpose.** Broker transport with at-least-once delivery and a dead-letter
 stream. Channel → stream `<channel>` with subjects `<channel>.>`; topic → subject
 `<channel>.<topic>`; consumer name `<DurablePrefix>-<channel>[-<filter>][-<InstanceID>]`.
+In the filter part letters and digits are kept, `.` becomes `_`, and every other
+byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other byte →
+`-xHH`), so distinct filters always get distinct consumers.
 
 **Configuration.**
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `DSN` | required | must start with `nats://` or `tls://` |
-| `DurablePrefix` | required | prefixes every consumer name |
+| `DurablePrefix` | required | prefixes every consumer name; letters, digits, `_` and `-` only, refused at construction otherwise |
 | `Delivery`, `InstanceID` | see I3 | — |
 | `DefaultMaxDeliver` | 0 → 3 | negative passed to JetStream unchanged |
 | `DefaultAckWait` | 0 → 30 s | negative passed to JetStream unchanged |
-| `ChannelRetries map[channel]ChannelRetry` | none | a zero field inherits the default |
+| `ChannelRetries map[channel]ChannelRetry` | none | a zero field inherits the default; a key that breaks the channel rule is refused at construction |
+| `PublishTimeout` | 0 → 2 s (`DefaultPublishTimeout`) | one bound over the stream check, the publish and the acknowledgement |
+| `Retention StreamRetention{MaxAge, MaxMsgs}` | `MaxAge` 0 → 7 days (`DefaultStreamMaxAge`), no count limit | negative `MaxAge` → no age limit; `MaxMsgs <= 0` → no count limit. Applied to every channel stream the bus ensures, oldest discarded first |
+| `DLQRetention StreamRetention` | `MaxAge` 0 → 30 days (`DefaultDLQMaxAge`), no count limit | as `Retention`, for every dead-letter stream |
 | `Observer` | `DefaultObserver` | nil → default |
 
 **Behaviour.**
@@ -197,7 +214,8 @@ stream. Channel → stream `<channel>` with subjects `<channel>.>`; topic → su
   and claim bucket are re-ensured, the consumer re-created and a new pull loop swapped into the
   subscription under the subscriber lock. Recovery retries until it succeeds or the subscriber drains.
 - Broker down later: the client reconnects and logs each state change; when it
-  gives up, a "closed for good" line is logged and an error reported.
+  gives up, a "closed for good" line is logged and an error reported, and every later
+  `Dispatch` fails at once with `ErrConnectionClosed` through `OnEmitFailure`.
 
 **Guarantees.**
 
@@ -213,14 +231,20 @@ stream. Channel → stream `<channel>` with subjects `<channel>.>`; topic → su
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
 | I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | no test |
 | I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
-| I5.11 | Behaviour after the client stops reconnecting MUST be defined and observable. | no test |
-| I5.12 | Channel and topic names MUST be valid on every transport or be refused before use. | no test |
-| I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names. | `TestTopicFilter_Nats_Embedded` (through delivery; names not asserted) |
+| I5.11 | After the client stops reconnecting, the bus MUST log a "closed for good" line, report an error, and fail every later `Dispatch` at once through `OnEmitFailure`. | no test |
+| I5.12 | Channel and topic names MUST be valid on every transport or be refused before use; `DurablePrefix` and the keys of `ChannelRetries` MUST be checked at construction. | `TestChannelNameRefusedOnEveryTransport`, `TestDispatch_EmptyTopicRefusedOnEveryTransport`, `TestBusConstruction_RefusesInvalidNames` |
+| I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names; a plain dotted filter keeps its name. | `TestSanitizeDurableSuffix_Injective`, `TestSanitizeDurableSuffix`, `TestTopicFilter_Nats_Embedded` |
+| I5.14 | Every channel stream and dead-letter stream the bus ensures MUST carry the configured retention limits, or the defaults when none are configured. | `TestNatsBus_StreamRetention_Embedded` |
+| I5.15 | During a broker outage one `Dispatch` MUST fail within `PublishTimeout` rather than hold the committing goroutine for the client's own timeout. | `TestNatsBus_PublishTimeoutBoundsOutage_Embedded` |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
 - No `InProgress` heartbeat: a handler that runs past `AckWait` can execute concurrently with its redelivery. Handlers must be idempotent.
-- Retention limits are not set by the SDK; the operator configures them on the broker.
+- Retention is set by the SDK, not by the operator: every time the bus ensures a stream it
+  writes the configured limits (or the defaults), replacing limits set on the broker by other
+  means. Set `MaxAge: -1` for no age limit.
+- Retention removes messages regardless of whether a consumer has read them; a consumer that is
+  down longer than `MaxAge` loses the older backlog.
 
 ---
 
@@ -236,8 +260,10 @@ A claim loop runs every `AckWait`, re-claims pending entries idle at least
 `MaxDeliver`, copies to the DLQ and acks. Each subscription's topic filter is applied with
 `MatchGlob`; a non-matching entry is acknowledged without invoking the handler. The catch-all
 filter (`**` or empty) reads through the channel's group; a narrower filter reads through a group
-of its own (`<group>-<filter>`), so that acknowledgement never takes an entry from a sibling
-subscription it matches. `NewRedisBus` PINGs the broker, bounded by a timeout, before returning.
+of its own (`<group>-<filter>`, with the filter escaped as in I5), so that acknowledgement never
+takes an entry from a sibling subscription it matches. `NewRedisBus` PINGs the broker, bounded by
+a timeout, before returning. Each append trims its stream to the retention limits: age with
+`MINID ~`, count with `MAXLEN ~`.
 
 **Configuration.**
 
@@ -251,6 +277,8 @@ subscription it matches. `NewRedisBus` PINGs the broker, bounded by a timeout, b
 | `DefaultAckWait` | 0 → 30 s | — |
 | `ReadBatch` | 0 → 10 | — |
 | `ChannelRetries`, `Observer` | as I5 | — |
+| `PublishTimeout` | 0 → 2 s (`DefaultPublishTimeout`) | bounds one `XADD` and its reply |
+| `Retention`, `DLQRetention` | as I5 (7 days and 30 days, no count limit) | applied on each append to the channel stream and to `<channel>.dlq` |
 
 **Guarantees.**
 
@@ -264,11 +292,15 @@ subscription it matches. `NewRedisBus` PINGs the broker, bounded by a timeout, b
 | I6.6 | Consume-loop and pending-scan errors MUST be logged and reported once per outage, and the recovery logged. | `TestRedisSubscriber_LoopFailuresAreReported` |
 | I6.7 | `ReadBatch` and pending pages larger than 100 entries MUST be handled without loss. | no test |
 | I6.8 | A narrower topic filter MUST read through its own consumer group, so an entry it skips still reaches a sibling subscription on the same channel whose filter matches it. | `TestTopicFilter_Redis_Embedded` |
+| I6.9 | Each append MUST trim the stream to the configured age and count limits, or to the default age when none are configured. | `TestRedisBus_StreamRetention_Embedded` (channel streams; dead-letter stream: no test) |
+| I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | no test |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.
 - A failed read backs off 200 ms.
-- Streams are appended without `MAXLEN`; retention is the operator's.
+- Trimming is approximate and happens on append: a stream can hold somewhat more than its limits,
+  and an idle stream keeps entries past their age until the next append. With both an age and a
+  count limit, the count trim is a best-effort second command.
 
 ---
 
@@ -364,7 +396,7 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.3 | Every replica MUST receive every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent`, `go/lib/restgw/w17events_replicas_test.go` |
 | I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `go/lib/restgw/w17events_ensureopen_test.go`, `go/lib/restgw/w17events_eventbus_test.go` (partial open) |
 | I9.5 | Streams MUST end on client disconnect or server drain. | `TestW17EventsEndsOnDrain`, `go/lib/restgw/w17events_drain_test.go` |
-| I9.6 | A transcode error MUST be logged and the event dropped (skipped for that client set). | `go/lib/restgw/w17events_eventbus_test.go` (transcode skip; logging: no test) |
+| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `go/lib/restgw/w17events_eventbus_test.go` (transcode skip) |
 | I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | no test |
 | I9.8 | A write to a stalled client MUST end within the write deadline. | no test |
 | I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | no test |
@@ -428,10 +460,15 @@ selector, deliberately outside the namespace.
 
 **Code.** `go/lib/principal/principal.go` — `ForwardToOutgoing`
 
-**Purpose.** Copies exactly `x-w17-user`, `x-w17-scope-*` and `w17-label-*` from
-incoming to outgoing metadata for the next gRPC hop. Keys already set on the
-outgoing side win. Paging, tracing, locale and transaction metadata are deliberately
-not relayed.
+**Purpose.** Relays exactly `x-w17-user`, `x-w17-scope-*` and `w17-label-*` from
+incoming to outgoing metadata for the next gRPC hop. It is installed on every
+inter-tier dial and on the in-process path. When the incoming side carries any of
+these keys, the verified principal wins: the outgoing copy of the whole relayed set
+is replaced, so an outgoing value for a relayed key is overwritten and a relayed key
+present only on the outgoing side is dropped. Every other outgoing key is kept.
+Paging, tracing, locale and transaction metadata are deliberately not relayed. A
+context with no incoming principal (the gateway, which stamps the outgoing side
+directly, or an unauthenticated call) is returned unchanged.
 
 **Guarantees.**
 
@@ -439,8 +476,14 @@ not relayed.
 |---|---|---|
 | I12.1 | The principal, scopes and labels MUST survive any number of hops. | `TestForwardToOutgoing_RelaysPrincipal`, `TestForwardToOutgoing_RelaysBroadcastLabels`, `TestForwardToOutgoing_SecondHopKeepsTheLabel` |
 | I12.2 | Non-principal metadata MUST NOT be relayed. | `TestForwardToOutgoing_ExcludesNonPrincipal` |
-| I12.3 | Explicit outgoing values MUST be kept and not duplicated; the call MUST be idempotent. | `TestForwardToOutgoing_PreservesExplicitOutgoing` |
-| I12.4 | No incoming metadata MUST leave the context unchanged. | `TestForwardToOutgoing_NoIncomingIsNoop` |
+| I12.3 | With an incoming principal, the relayed set MUST replace the outgoing copy (overwritten values, outgoing-only relayed keys dropped) while other outgoing keys are kept; values MUST NOT be duplicated and the call MUST be idempotent. | `TestForwardToOutgoing_VerifiedPrincipalWins` |
+| I12.4 | A context without an incoming principal MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched` |
+
+**Deliberate limits.**
+- Calling a downstream tier as a different principal is an explicit act: drop the incoming
+  principal first (for example with `metadata.NewIncomingContext(ctx, nil)`) and stamp the
+  outgoing side directly.
+- The relayed envelope is unsigned; the trust boundary is the one stated in I10.
 
 ---
 
@@ -489,10 +532,17 @@ params)` translates for the request's locale and substitutes `{name}` placeholde
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `Register(lang, po)` | — | empty `lang` → no-op; malformed `.po` parsed best-effort |
-| `RegisterFS(fs)` | — | language = file base name |
-| `SetDefaultLanguage` | `en` | empty ignored |
+| `RegisterCatalog(lang, po) error` | — | empty `lang` → no-op; returns syntax problems (with line numbers) and conflicting translations; a malformed `.po` is still registered best-effort |
+| `Register(lang, po)` | — | as `RegisterCatalog`, but logs the problems instead of returning them |
+| `RegisterFS(fs)` | — | language = file base name; returns the problems joined per file path, and `ErrNoCatalogs` for a tree with no `.po` file |
+| Same language registered twice | — | the catalogs are merged; a conflicting translation keeps the first one and is reported |
+| `SetDefaultLanguage` | `en` | empty ignored; a second, different value is logged and takes effect |
+| Catalog tag | — | matched regardless of case and `_`/`-` spelling, for catalogs and for the default language (`pt_BR.po` serves `pt-BR`) |
 | Locale | last `w17-language` value, incoming before outgoing, else default | parsed as Accept-Language: each tag, then its base language, else the default catalog |
+
+**Lookup.** For each message `T` looks in the negotiated catalog, then in the
+default-language catalog, then returns the msgid. An empty `msgstr` counts as
+untranslated. Substitution is one left-to-right pass over the translated text.
 
 **Shares.** Catalogs and the default language are process-global.
 
@@ -504,10 +554,11 @@ params)` translates for the request's locale and substitutes `{name}` placeholde
 | I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing. | `go/lib/i18n/i18n_test.go` (multi-value, region to base, last value wins, outgoing metadata, incoming beats outgoing) |
 | I14.3 | Unknown placeholders MUST survive verbatim; an empty msgid MUST return "" so the `.po` header never leaks. | `go/lib/i18n/i18n_test.go` (unknown placeholder, empty msgid) |
 | I14.4 | Concurrent use MUST be safe. | `go/lib/i18n/i18n_extra_test.go` |
-| I14.5 | A msgid missing from the requested catalog MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | no test |
-| I14.6 | Substitution MUST be deterministic and MUST NOT expand placeholder tokens inside parameter values. | no test |
-| I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`). | no test |
-| I14.8 | A malformed or missing catalog SHOULD be reportable at boot. | no test |
+| I14.5 | A msgid missing from the requested catalog, or present with an empty `msgstr`, MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | `TestT_FallbackIsPerMessage`, `TestT_EmptyMsgstrFallsThrough` |
+| I14.6 | Substitution MUST be deterministic and MUST NOT expand placeholder tokens inside parameter values. | `TestSubstitute_DeterministicSinglePass`, `TestSubstitute_BraceEdges` |
+| I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`). | `TestCatalogTag_UnderscoreAndCaseInsensitive` |
+| I14.8 | A malformed catalog, and a catalog tree without any `.po` file, MUST be reported at registration: `ValidatePO` and `RegisterCatalog` return the problems with line numbers, `RegisterFS` joins them per file path and adds `ErrNoCatalogs`. | `TestValidatePO`, `TestRegisterFS_ReportsMalformedCatalog`, `TestRegisterFS_NoCatalogIsReported` |
+| I14.9 | Registering a language twice MUST merge the catalogs; a conflicting translation MUST keep the first one and be reported. | `TestRegisterCatalog_MergesAndReportsConflicts` |
 
 ---
 
@@ -517,8 +568,8 @@ params)` translates for the request's locale and substitutes `{name}` placeholde
 
 **Purpose.** A frozen per-locale table embedded from `formats.json`, resolved locale
 → base language → `en` with case and `_` normalisation, with per-kind project
-overrides. `FormatLocaleFromContext` uses the last `w17-format-locale`, else
-`LocaleFromContext`; Accept-Language lists are negotiated.
+overrides. `FormatLocaleFromContext` uses the last `w17-format-locale` value, incoming
+before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 **Guarantees.**
 
@@ -528,7 +579,7 @@ overrides. `FormatLocaleFromContext` uses the last `w17-format-locale`, else
 | I15.2 | Dates MUST render in UTC with a closed token vocabulary; unparseable input MUST be returned unchanged. | `TestFormatGoldenVectors` |
 | I15.3 | The table MUST be complete; the resolution chain and overrides MUST apply. | `go/lib/i18n/format_test.go` |
 | I15.4 | Format-locale fallback and negotiation MUST apply. | `go/lib/i18n/format_test.go` |
-| I15.5 | An explicit format locale MUST be honoured on both incoming and outgoing metadata. | no test |
+| I15.5 | An explicit format locale MUST be honoured on both incoming and outgoing metadata. | `TestFormatLocaleFromContext_OutgoingMetadata` |
 
 ---
 
