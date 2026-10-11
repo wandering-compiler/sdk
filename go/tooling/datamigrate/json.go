@@ -17,8 +17,8 @@ import (
 //
 //   - `raw` is the existing value bytes from the KV store
 //     (Redis GET / S3 GetObject). Empty bytes (zero-length
-//     value) short-circuit to (nil, false, nil) — there's
-//     nothing to mutate.
+//     value) and a stored JSON `null` short-circuit to
+//     (nil, false, nil) — there's nothing to mutate.
 //   - `op` is the parsed Operation. Caller is responsible for
 //     filtering by Keyspace before calling — JSONApplyOp
 //     trusts the op already applies to this key.
@@ -58,6 +58,13 @@ func JSONApplyOp(raw []byte, op Operation) ([]byte, bool, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&doc); err != nil {
 		return nil, false, fmt.Errorf("decode JSON: %w", err)
+	}
+	// A stored JSON `null` decodes into a nil map without error. It holds no
+	// fields, so like an empty value there is nothing to mutate — and writing
+	// a default into the nil map would panic in the worker goroutine and take
+	// the whole process down mid-operation.
+	if doc == nil {
+		return nil, false, nil
 	}
 
 	changed := false
