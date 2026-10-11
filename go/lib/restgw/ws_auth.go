@@ -78,6 +78,17 @@ var ErrWSAuthNoTicket = errors.New("restgw: ticket required but not supplied")
 // record, so issuing a ticket would produce an unusable one.
 var ErrWSAuthTicketNoHeader = errors.New("restgw: ticket issuer requires Authorization header")
 
+// ErrWSAuthTicketHeaderTooLarge is returned by WSAuthTicketPrincipal when the
+// Authorization header exceeds MaxTicketAuthorizationBytes.
+var ErrWSAuthTicketHeaderTooLarge = errors.New("restgw: ticket issuer Authorization header too large")
+
+// MaxTicketAuthorizationBytes caps the Authorization value
+// WSAuthTicketPrincipal records into a ticket. The issuer stores the value
+// before it is validated, so its size is attacker-chosen up to the server's
+// header limit (1 MiB by default); 8 KiB is well above any bearer token or
+// signed session in practical use.
+const MaxTicketAuthorizationBytes = 8 << 10
+
 // WSAuthTicketPrincipal is the canonical Principal for
 // NewTicketIssuer when paired with NewWSAuth: records the
 // incoming Authorization header into the ticket's labels so
@@ -86,11 +97,16 @@ var ErrWSAuthTicketNoHeader = errors.New("restgw: ticket issuer requires Authori
 // happens at redeem time via the wrapped AuthFunc, so this
 // Principal deliberately does NOT call the upstream auth
 // service — the issuer is a thin "trade your header for a
-// ticket" trampoline.
+// ticket" trampoline. Because nothing is validated here, the
+// recorded value is capped (MaxTicketAuthorizationBytes) and the
+// default store is bounded (NewMemoryTicketStore).
 func WSAuthTicketPrincipal(r *http.Request) (map[string]string, error) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		return nil, ErrWSAuthTicketNoHeader
+	}
+	if len(auth) > MaxTicketAuthorizationBytes {
+		return nil, ErrWSAuthTicketHeaderTooLarge
 	}
 	return map[string]string{WSAuthTicketHeaderLabel: auth}, nil
 }
