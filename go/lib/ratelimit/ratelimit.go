@@ -15,6 +15,18 @@
 // Deliberately NOT a global cap. One bucket for the whole surface means one
 // attacker starves every real user, which converts a credential-stuffing
 // attempt into an outage. Buckets are per client address.
+//
+// # Behind a proxy
+//
+// By default the client address is the address of the connection, and
+// X-Forwarded-For is ignored. A process reached through an HTTP terminator
+// (a reverse proxy, an ingress, a cloud load balancer working at HTTP) must
+// list that terminator in `<...>_RATELIMIT_TRUSTED_PROXIES`, or every client
+// shares the terminator's bucket — the limiter warns when it sees a forwarded
+// header from a private-range peer it does not trust. List only hops that
+// append the address they received the request from; a hop that forwards
+// the client's header untouched must not be trusted, because the client
+// would then choose its own bucket. See [FromEnv] and [Config.TrustedProxies].
 package ratelimit
 
 import (
@@ -28,7 +40,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/time/rate"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
@@ -51,6 +62,22 @@ const (
 	DefaultMaxKeys = 10000
 )
 
+// TrustPrivateRanges is the value of `<...>_RATELIMIT_TRUSTED_PROXIES` that
+// trusts the loopback ranges and the RFC 1918 private IPv4 ranges
+// (127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16). It may be
+// combined with CIDRs: `private,192.0.2.0/24`.
+//
+// It is opt-in because it is only correct when EVERY hop that can reach the
+// process from a private address appends the client's address to
+// X-Forwarded-For. A hop that forwards the connection without appending (an
+// L4/TCP load balancer, a container runtime's port proxy, a sidecar) passes
+// the client's own header through unchanged, and the limiter would then key
+// each request by whatever address the client wrote there.
+const TrustPrivateRanges = "private"
+
+// privateRanges is what [TrustPrivateRanges] expands to.
+var privateRanges = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+
 // Config is the resolved limiter configuration. PerMinute <= 0 disables the
 // limiter entirely.
 type Config struct {
@@ -60,9 +87,14 @@ type Config struct {
 	MaxKeys   int
 
 	// TrustedProxies are the peers whose X-Forwarded-For may be believed.
-	// Empty means believe nobody, and every caller then buckets under the
-	// address of whatever terminates TLS in front — which is one bucket for
-	// the world, i.e. the global cap this package exists not to be.
+	// List exactly the hops that terminate HTTP in front of this process and
+	// APPEND the address they received the request from; nothing else.
+	//
+	// Empty (the default) means believe nobody: every caller is keyed by the
+	// address of its own connection. Behind a terminator that is the
+	// terminator's address, i.e. one bucket for every client — the process
+	// logs a warning when it sees a forwarded header from a private-range
+	// peer it does not trust, naming the variable to set.
 	TrustedProxies []netip.Prefix
 }
 
@@ -70,7 +102,13 @@ type Config struct {
 //
 //	<PREFIX>_RATELIMIT_PER_MINUTE      float, <=0 disables      (default 30)
 //	<PREFIX>_RATELIMIT_BURST           int                      (default 10)
-//	<PREFIX>_RATELIMIT_TRUSTED_PROXIES comma-separated CIDRs    (default private + loopback)
+//	<PREFIX>_RATELIMIT_TRUSTED_PROXIES comma-separated CIDRs    (default none)
+//
+// TRUSTED_PROXIES lists the proxies whose X-Forwarded-For is believed; see
+// [Config.TrustedProxies]. The keyword [TrustPrivateRanges] (`private`)
+// trusts every loopback and private range, as earlier versions did by
+// default; use it only when every hop in those ranges appends its own entry.
+// `none` states the default explicitly.
 //
 // Unset means ON at the defaults, not off. A protection that must be
 // switched on is one that is off everywhere it was never thought about, and
@@ -117,20 +155,43 @@ func fromEnvNamed(base, legacy string) (cfg Config, perMinuteFrom string) {
 			cfg.Burst = n
 		}
 	}
-	raw, _ := lookup("_TRUSTED_PROXIES")
-	if raw == "" {
-		// The gateway is reached through a terminator on the same container
-		// network; these are the ranges that terminator can occupy. A public
-		// address is never in here, so a direct caller can never talk its way
-		// into another bucket by sending a header.
-		raw = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-	}
+	raw, from := lookup("_TRUSTED_PROXIES")
+	cfg.TrustedProxies = parseTrustedProxies(raw, from)
+	return cfg, perMinuteFrom
+}
+
+// parseTrustedProxies reads a TRUSTED_PROXIES value: comma-separated CIDRs or
+// bare addresses, plus the keywords `private` and `none`. An entry that is
+// none of those is reported and skipped — the limiter then trusts LESS than
+// intended, which fails towards one shared bucket rather than towards
+// believing a forged header.
+func parseTrustedProxies(raw, from string) []netip.Prefix {
+	var out []netip.Prefix
 	for _, p := range strings.Split(raw, ",") {
-		if pfx, err := netip.ParsePrefix(strings.TrimSpace(p)); err == nil {
-			cfg.TrustedProxies = append(cfg.TrustedProxies, pfx)
+		p = strings.TrimSpace(p)
+		switch strings.ToLower(p) {
+		case "", "none":
+			continue
+		case TrustPrivateRanges:
+			for _, r := range privateRanges {
+				out = append(out, netip.MustParsePrefix(r))
+			}
+			continue
+		}
+		if pfx, err := netip.ParsePrefix(p); err == nil {
+			out = append(out, pfx.Masked())
+			continue
+		}
+		if a, err := netip.ParseAddr(p); err == nil {
+			a = a.Unmap()
+			out = append(out, netip.PrefixFrom(a, a.BitLen()))
+			continue
+		}
+		if _, warned := legacyWarned.LoadOrStore("bad:"+from+"="+p, true); !warned {
+			log.Printf("ratelimit: %s: %q is not a CIDR, an address, %q or \"none\" — ignored", from, p, TrustPrivateRanges)
 		}
 	}
-	return cfg, perMinuteFrom
+	return out
 }
 
 // parsePerMinute and parseBurst are the one parse of each value, whichever
@@ -156,7 +217,7 @@ var offLogged, legacyWarned sync.Map
 //
 //	<PREFIX>_<SCOPE>_RATELIMIT_PER_MINUTE      float, <=0 disables  (default 30)
 //	<PREFIX>_<SCOPE>_RATELIMIT_BURST           int                  (default 10)
-//	<PREFIX>_<SCOPE>_RATELIMIT_TRUSTED_PROXIES CIDRs                (default private + loopback)
+//	<PREFIX>_<SCOPE>_RATELIMIT_TRUSTED_PROXIES CIDRs                (default none; see [FromEnv])
 //
 // The gateway's scope is PUBLIC, the methods that take no credential (a
 // sign-in, a registration, a reset request, a code check) and nothing else:
@@ -203,9 +264,50 @@ func scopeMeaning(scope string) string {
 	return "nothing is limited per address"
 }
 
+// bucket is one client's token bucket. Its tokens are guarded by its own
+// mutex so that callers keyed differently never contend; seen belongs to the
+// Limiter and is guarded by Limiter.mu.
 type bucket struct {
-	lim  *rate.Limiter
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+
 	seen time.Time
+}
+
+// refillLocked advances the bucket to now. Caller holds b.mu.
+func (b *bucket) refillLocked(now time.Time, perSec float64, burst int) {
+	if now.After(b.last) {
+		b.tokens += now.Sub(b.last).Seconds() * perSec
+		b.last = now
+	}
+	if max := float64(burst); b.tokens > max {
+		b.tokens = max
+	}
+}
+
+// take spends one token if one is there, atomically: the check and the
+// spend cannot be separated by another caller.
+func (b *bucket) take(now time.Time, perSec float64, burst int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(now, perSec, burst)
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+// give returns one token, never past the burst.
+func (b *bucket) give(now time.Time, perSec float64, burst int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(now, perSec, burst)
+	b.tokens++
+	if max := float64(burst); b.tokens > max {
+		b.tokens = max
+	}
 }
 
 // Limiter hands out one token bucket per client address.
@@ -214,15 +316,16 @@ type bucket struct {
 // needs no branch at the call site.
 type Limiter struct {
 	cfg     Config
-	perSec  rate.Limit
+	perSec  float64
 	mu      sync.Mutex
 	buckets map[string]*bucket
 	now     func() time.Time // swapped in tests
 
-	// collapsedAt throttles the warning on [Limiter.warnCollapsed]: the
+	// collapsedAt and untrustedAt throttle the deployment warnings: each
 	// condition fires on every request for as long as the deployment is
 	// wrong, and a line printed per request is a line nobody reads.
 	collapsedAt time.Time
+	untrustedAt time.Time
 }
 
 // New builds a Limiter, or returns nil when the config disables it.
@@ -241,42 +344,56 @@ func New(cfg Config) *Limiter {
 	}
 	return &Limiter{
 		cfg:     cfg,
-		perSec:  rate.Limit(cfg.PerMinute / 60.0),
+		perSec:  cfg.PerMinute / 60.0,
 		buckets: make(map[string]*bucket),
 		now:     time.Now,
 	}
 }
 
-// Allow reports whether the caller behind ctx may proceed.
+// Allow reports whether the caller behind ctx may proceed, spending one
+// token when it may.
 func (l *Limiter) Allow(ctx context.Context) bool {
 	if l == nil {
 		return true
 	}
-	key, resolved := l.clientKey(ctx)
-	if !resolved {
-		l.warnCollapsed()
-	}
-	return l.allowKey(key)
+	return l.allowKey(l.resolve(l.clientKey(ctx)))
 }
 
-// warnCollapsed reports the deployment fault described on [Limiter.clientKey]
-// — once, and then at most once an hour, because it fires on every request
-// while it lasts and a message that floods is a message nobody reads.
+// resolve reports what keyFor found wrong with the deployment, if anything,
+// and passes the key through.
+func (l *Limiter) resolve(key string, st keyState) string {
+	switch st {
+	case keyCollapsed:
+		l.warnCollapsed()
+	case keyUntrustedForwarder:
+		l.warnUntrustedForwarder()
+	}
+	return key
+}
+
+// throttled reports whether a warning last printed at *at may print again,
+// and if so records now. It is printed once, then at most once an hour.
+func (l *Limiter) throttled(at *time.Time) bool {
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !at.IsZero() && now.Sub(*at) < time.Hour {
+		return true
+	}
+	*at = now
+	return false
+}
+
+// warnCollapsed reports the deployment fault described on [Limiter.clientKey].
 //
 // It does NOT disable the limit. Turning the protection off on a
 // misconfiguration would swap a visible outage for a silent hole, and this
 // package's whole reason for defaulting ON is that the surfaces it guards are
 // the ones nobody revisits. The operator gets told; the brake stays on.
 func (l *Limiter) warnCollapsed() {
-	now := l.now()
-	l.mu.Lock()
-	if !l.collapsedAt.IsZero() && now.Sub(l.collapsedAt) < time.Hour {
-		l.mu.Unlock()
+	if l.throttled(&l.collapsedAt) {
 		return
 	}
-	l.collapsedAt = now
-	l.mu.Unlock()
-
 	log.Printf("ratelimit: the peer is a trusted proxy but forwarded no client address — " +
 		"every caller is now sharing ONE bucket, so any single client can exhaust it and " +
 		"lock everyone else out of the methods this limit protects. The real address is not " +
@@ -284,62 +401,142 @@ func (l *Limiter) warnCollapsed() {
 		"Terminate HTTP at the proxy (so it appends one), or enable PROXY protocol.")
 }
 
-// AllowChargeable is [Limiter.Allow] for a CREDENTIAL endpoint: it reports
-// whether an attempt may proceed WITHOUT spending a token, and returns the
-// function that spends one when the attempt turns out to have failed.
+// warnUntrustedForwarder reports a private-range peer that sent
+// X-Forwarded-For without being a configured proxy. That is what an
+// unconfigured deployment behind a terminator looks like: the header is
+// ignored, as it must be, and every client shares the terminator's bucket.
+func (l *Limiter) warnUntrustedForwarder() {
+	if l.throttled(&l.untrustedAt) {
+		return
+	}
+	log.Printf("ratelimit: a private-range peer sent X-Forwarded-For but is not a trusted proxy, " +
+		"so the header is ignored and every caller behind it shares ONE bucket. If that peer is " +
+		"your HTTP terminator and it appends the client address, list it in " +
+		"the limiter's _RATELIMIT_TRUSTED_PROXIES variable (CIDRs, or \"private\" when every private-range hop appends).")
+}
+
+// Reserve admits one attempt at a CREDENTIAL endpoint and spends its token
+// up front. done settles the attempt once its outcome is known: done(true)
+// (it failed) keeps the token spent, done(false) (it succeeded) gives it back.
+// ok=false means the caller's bucket is empty; nothing was spent and done is
+// a no-op.
 //
 // Rate-limiting a sign-in is about bounding guesses, not sign-ins. An
 // attacker needs thousands of WRONG attempts to be worth running, while a
 // legitimate caller — a script re-authenticating per request, an office
-// behind one NAT address, this project's own e2e harness — can make many
-// RIGHT ones in a burst and is not the thing being defended against.
-// Charging arrivals locked those callers out at the default while leaving
-// the attacker's budget untouched. Charging failures is also what makes a
-// tight default safe: the bucket then measures exactly the traffic that
-// matters.
+// behind one NAT address — can make many RIGHT ones in a burst and is not
+// the thing being defended against. So only failures stay charged.
 //
-// The admission check happens BEFORE the work, so a bucket already drained
-// by failures refuses without the credential store being touched at all.
-// `charge` is idempotent and safe to call from a defer; it is never called
-// automatically, because "which outcome counts" is the caller's decision
-// and hiding it would be the bug this shape exists to prevent.
+// The token is taken BEFORE the attempt runs, not after it fails: attempts in
+// flight at the same time each hold a token of their own, so the number of
+// attempts that can be outstanding — and therefore the number of guesses a
+// caller gets — never exceeds what the bucket holds, however many it sends
+// at once.
 //
-// A nil Limiter admits and returns a no-op charge.
+// done is idempotent, safe from a defer, and only the first call counts. A
+// done that is never called leaves the token spent. A nil Limiter admits and
+// returns a no-op done.
+func (l *Limiter) Reserve(ctx context.Context) (ok bool, done func(failed bool)) {
+	if l == nil {
+		return true, func(bool) {}
+	}
+	return l.reserve(l.resolve(l.clientKey(ctx)))
+}
+
+// ReserveRequest is [Limiter.Reserve] for an HTTP request (see
+// [Limiter.AllowRequest] for how the caller is resolved).
+func (l *Limiter) ReserveRequest(r *http.Request) (ok bool, done func(failed bool)) {
+	if l == nil {
+		return true, func(bool) {}
+	}
+	return l.reserve(l.resolve(l.requestKey(r)))
+}
+
+func (l *Limiter) reserve(key string) (bool, func(failed bool)) {
+	b := l.bucketFor(key)
+	if !b.take(l.now(), l.perSec, l.cfg.Burst) {
+		return false, func(bool) {}
+	}
+	var once sync.Once
+	return true, func(failed bool) {
+		once.Do(func() {
+			if !failed {
+				b.give(l.now(), l.perSec, l.cfg.Burst)
+			}
+		})
+	}
+}
+
+// AllowChargeable is the older form of [Limiter.Reserve], for callers that
+// signal a failure but not a success: it admits an attempt and returns the
+// function to call when the attempt failed.
 //
-// Two callers can observe the last token at once and both be admitted; the
-// loser is charged a token it did not have, which the bucket carries as a
-// deficit. That is the right direction to err for a limit whose false
-// positives lock out real users.
+// The token is spent at admission, for the reason Reserve gives — admitting
+// on a peek at the bucket and charging after the failure let every attempt
+// in flight through at once. Because a success is never signalled here, the
+// token is given back when ctx ends without charge having been called: for a
+// gRPC handler's or an HTTP request's context that is when the call has
+// completed. A context that is never cancelled never gives its token back, so
+// every attempt stays charged; prefer Reserve, which settles explicitly.
+//
+// charge is idempotent and safe to call from a defer. A charge that arrives
+// after the context already gave the token back takes one again when the
+// bucket has one. A nil Limiter admits and returns a no-op charge.
 func (l *Limiter) AllowChargeable(ctx context.Context) (allowed bool, charge func()) {
 	if l == nil {
 		return true, func() {}
 	}
-	key, resolved := l.clientKey(ctx)
-	if !resolved {
-		l.warnCollapsed()
-	}
-	return l.chargeable(key)
+	return l.chargeable(ctx, l.resolve(l.clientKey(ctx)))
 }
 
-func (l *Limiter) chargeable(key string) (bool, func()) {
-	lim := l.limiterFor(key)
-	now := l.now()
-	if lim.TokensAt(now) < 1 {
+// AllowChargeableRequest is [Limiter.AllowChargeable] for an HTTP request
+// (see [Limiter.AllowRequest] for how the caller is resolved); the token is
+// given back when r's context ends without a charge.
+func (l *Limiter) AllowChargeableRequest(r *http.Request) (allowed bool, charge func()) {
+	if l == nil {
+		return true, func() {}
+	}
+	return l.chargeable(r.Context(), l.resolve(l.requestKey(r)))
+}
+
+func (l *Limiter) chargeable(ctx context.Context, key string) (bool, func()) {
+	b := l.bucketFor(key)
+	if !b.take(l.now(), l.perSec, l.cfg.Burst) {
 		return false, func() {}
 	}
-	var once sync.Once
+	var (
+		mu       sync.Mutex
+		charged  bool
+		refunded bool
+	)
+	stop := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !charged && !refunded {
+			refunded = true
+			b.give(l.now(), l.perSec, l.cfg.Burst)
+		}
+	})
 	return true, func() {
-		once.Do(func() { lim.AllowN(l.now(), 1) })
+		mu.Lock()
+		defer mu.Unlock()
+		if charged {
+			return
+		}
+		charged = true
+		stop()
+		if refunded {
+			b.take(l.now(), l.perSec, l.cfg.Burst)
+		}
 	}
 }
 
 func (l *Limiter) allowKey(key string) bool {
-	// Outside the lock: rate.Limiter has its own.
-	return l.limiterFor(key).Allow()
+	return l.bucketFor(key).take(l.now(), l.perSec, l.cfg.Burst)
 }
 
-// limiterFor returns the per-key token bucket, creating it on first use.
-func (l *Limiter) limiterFor(key string) *rate.Limiter {
+// bucketFor returns the per-key token bucket, creating it on first use.
+func (l *Limiter) bucketFor(key string) *bucket {
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -347,14 +544,14 @@ func (l *Limiter) limiterFor(key string) *rate.Limiter {
 	if !ok {
 		// A fresh bucket starts FULL, so the limit never penalises a caller's
 		// first request — it bounds sustained rate, not arrival.
-		b = &bucket{lim: rate.NewLimiter(l.perSec, l.cfg.Burst)}
+		b = &bucket{tokens: float64(l.cfg.Burst), last: now}
 		l.buckets[key] = b
 		if len(l.buckets) > l.cfg.MaxKeys {
 			l.evictLocked(now)
 		}
 	}
 	b.seen = now
-	return b.lim
+	return b
 }
 
 // evictLocked drops idle buckets, then oldest-first if that was not enough.
@@ -380,40 +577,51 @@ func (l *Limiter) evictLocked(now time.Time) {
 	}
 }
 
+// keyState is what resolving a caller found about the deployment.
+type keyState int
+
+const (
+	// keyResolved: the key is the caller.
+	keyResolved keyState = iota
+	// keyCollapsed: a trusted proxy forwarded no usable address, so the key
+	// is the proxy's and every caller behind it shares it.
+	keyCollapsed
+	// keyUntrustedForwarder: a private-range peer that is not a configured
+	// proxy sent X-Forwarded-For. The header was ignored and the peer is the
+	// key — correct, but most likely a terminator nobody listed.
+	keyUntrustedForwarder
+)
+
 // ClientKey resolves the address to bucket ctx's caller under.
 //
-// The immediate peer is a TLS terminator, not the client, so its address
-// alone would put everyone in one bucket. X-Forwarded-For carries the real
-// one — but a header is client-supplied, so believing it unconditionally
-// lets any caller pick its own bucket and the limit stops meaning anything.
+// The immediate peer may be a TLS terminator rather than the client, and
+// X-Forwarded-For then carries the client's address — but the header is
+// client-supplied, so believing it unconditionally lets any caller pick its
+// own bucket and the limit stops meaning anything.
 //
-// So: believe the header only when the peer is a configured proxy, and read
-// it RIGHT to LEFT, taking the first address that is not itself a trusted
-// proxy. Left-to-right is the tempting version and it is the broken one —
+// So: believe the header only when the peer is a configured proxy
+// ([Config.TrustedProxies]), and read it RIGHT to LEFT, skipping addresses
+// that are themselves trusted proxies, and take the first one that is not.
+// That is the address the outermost trusted proxy received the request
+// from. Left-to-right is the tempting version and it is the broken one —
 // the leftmost entry is whatever the client sent before any proxy appended
-// to it, which is to say whatever the client made up.
+// to it.
 func (l *Limiter) ClientKey(ctx context.Context) string {
 	key, _ := l.clientKey(ctx)
 	return key
 }
 
-// clientKey is ClientKey plus the answer to "did we actually resolve a
-// caller, or is this everyone at once".
+// clientKey is ClientKey plus what it found about the deployment.
 //
-// The second return is false in exactly one situation: the peer IS a trusted
-// terminator — so a forwarded address is expected — and none arrived. Then
-// every caller on the surface buckets under the terminator's own address,
-// the per-client limit becomes one global cap, and any single client can
-// drain it and refuse everybody else's SignIn. That is the inversion of the
-// protection: the limiter stops being a brake on an attacker and becomes the
-// attacker's lever (hosted review 2026-08-30, HOST-A-3, measured — two
-// distinct clients keyed to one bucket and draining it refused a victim).
-//
-// It is a DEPLOYMENT fault, not a runtime state to paper over: an L4 (TCP)
-// load balancer forwards no X-Forwarded-For, so the real address never
+// keyCollapsed means the peer IS a trusted terminator — so a forwarded
+// address is expected — and none arrived. Then every caller on the surface
+// buckets under the terminator's own address, the per-client limit becomes
+// one global cap, and any single client can drain it and refuse everybody
+// else. It is a DEPLOYMENT fault, not a runtime state to paper over: an L4
+// (TCP) load balancer forwards no X-Forwarded-For, so the real address never
 // reaches the process. The fix is upstream — terminate HTTP at the proxy, or
 // enable PROXY protocol — which is why this reports rather than guesses.
-func (l *Limiter) clientKey(ctx context.Context) (string, bool) {
+func (l *Limiter) clientKey(ctx context.Context) (string, keyState) {
 	var forwarded []string
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		forwarded = md.Get("x-forwarded-for")
@@ -423,11 +631,15 @@ func (l *Limiter) clientKey(ctx context.Context) (string, bool) {
 
 // keyFor is the transport-free half of clientKey: the immediate peer and the
 // X-Forwarded-For values it sent, from gRPC metadata or an HTTP header alike.
-func (l *Limiter) keyFor(peerAddr netip.Addr, forwarded []string) (string, bool) {
+func (l *Limiter) keyFor(peerAddr netip.Addr, forwarded []string) (string, keyState) {
 	if !l.trusted(peerAddr) {
-		// The peer IS the client (no terminator in front, or an untrusted
-		// one whose header we correctly refuse to believe).
-		return addrKey(peerAddr), true
+		// The peer IS the client (no terminator in front, or one that is not
+		// configured, whose header must not be believed).
+		st := keyResolved
+		if hasForwarded(forwarded) && isPrivate(peerAddr) {
+			st = keyUntrustedForwarder
+		}
+		return addrKey(peerAddr), st
 	}
 
 	var hops []string
@@ -441,20 +653,40 @@ func (l *Limiter) keyFor(peerAddr netip.Addr, forwarded []string) (string, bool)
 	for i := len(hops) - 1; i >= 0; i-- {
 		ip, err := netip.ParseAddr(stripPort(hops[i]))
 		if err != nil {
-			continue
+			// A hop a trusted proxy wrote but that is not an address (an
+			// obfuscated identifier, "unknown"). Everything left of it is
+			// unverified, so stop rather than skip past it.
+			break
 		}
 		if !l.trusted(ip) {
-			return bucketForAddr(ip), true
+			return bucketForAddr(ip), keyResolved
 		}
 	}
 	// A trusted peer that forwarded nothing usable — the collapse.
-	return addrKey(peerAddr), false
+	return addrKey(peerAddr), keyCollapsed
+}
+
+func hasForwarded(forwarded []string) bool {
+	for _, v := range forwarded {
+		if strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isPrivate(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsValid() && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 func (l *Limiter) trusted(ip netip.Addr) bool {
 	if !ip.IsValid() {
 		return false
 	}
+	// A dual-stack listener reports an IPv4 peer as ::ffff:a.b.c.d, which an
+	// IPv4 prefix does not contain.
+	ip = ip.Unmap()
 	for _, p := range l.cfg.TrustedProxies {
 		if p.Contains(ip) {
 			return true
@@ -481,9 +713,7 @@ func addrKey(ip netip.Addr) string {
 // Every ordinary IPv6 assignment hands out a /64 or shorter, so "one address"
 // is not a unit of anything on that side of the wire: an attacker rotates
 // through 2^64 free buckets while a legitimate IPv4 caller is metered
-// normally. The limiter was strict against the callers it should not have
-// been strict about, and absent against the one it existed for
-// (hosted review 2026-08-30, HOST-A-4).
+// normally.
 //
 // /64 is the smallest block an operator is reliably assigned, so it is the
 // smallest unit that cannot be widened for free. Going shorter (/48) would
@@ -504,30 +734,13 @@ func bucketForAddr(ip netip.Addr) string {
 //
 // The context-based Allow cannot serve HTTP. An http.Request's context
 // carries neither a gRPC peer nor incoming metadata, so every request
-// resolved to the one fallback key and the per-client limit was a single
-// global bucket: one client could drain it and refuse everybody else.
+// would resolve to the one fallback key and the per-client limit would be a
+// single global bucket.
 func (l *Limiter) AllowRequest(r *http.Request) bool {
 	if l == nil {
 		return true
 	}
-	key, resolved := l.requestKey(r)
-	if !resolved {
-		l.warnCollapsed()
-	}
-	return l.allowKey(key)
-}
-
-// AllowChargeableRequest is [Limiter.AllowChargeable] for an HTTP request
-// (see [Limiter.AllowRequest] for how the caller is resolved).
-func (l *Limiter) AllowChargeableRequest(r *http.Request) (allowed bool, charge func()) {
-	if l == nil {
-		return true, func() {}
-	}
-	key, resolved := l.requestKey(r)
-	if !resolved {
-		l.warnCollapsed()
-	}
-	return l.chargeable(key)
+	return l.allowKey(l.resolve(l.requestKey(r)))
 }
 
 // RequestKey is [Limiter.ClientKey] for an HTTP request.
@@ -536,7 +749,7 @@ func (l *Limiter) RequestKey(r *http.Request) string {
 	return key
 }
 
-func (l *Limiter) requestKey(r *http.Request) (string, bool) {
+func (l *Limiter) requestKey(r *http.Request) (string, keyState) {
 	ip, err := netip.ParseAddr(stripPort(r.RemoteAddr))
 	if err != nil {
 		ip = netip.Addr{}
