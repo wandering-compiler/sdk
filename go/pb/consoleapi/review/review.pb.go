@@ -948,7 +948,7 @@ type SetReviewDecisionReq struct {
 	Status    Review_Status          `protobuf:"varint,2,opt,name=status,proto3,enum=console.review.Review_Status" json:"status,omitempty"`
 	DecidedBy string                 `protobuf:"bytes,3,opt,name=decided_by,json=decidedBy,proto3" json:"decided_by,omitempty"`
 	// expected_status — transition guard on the status the caller READ
-	// (T3-7 D-F3). An approve and a merge racing on one review used to be
+	// An approve and a merge racing on one review used to be
 	// last-writer-wins with both callers told they succeeded.
 	ExpectedStatus Review_Status `protobuf:"varint,4,opt,name=expected_status,json=expectedStatus,proto3,enum=console.review.Review_Status" json:"expected_status,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -1354,7 +1354,7 @@ func (*SetEnvModeResp) Descriptor() ([]byte, []int) {
 }
 
 // expected_deployed_snapshot_id — compare-and-set on the baseline the prod
-// compat gate diffs against (T3-7 D-F1). Empty string = "expected never
+// compat gate diffs against. Empty string = "expected never
 // deployed".
 type SetEnvDeployedReq struct {
 	state                      protoimpl.MessageState `protogen:"open.v1"`

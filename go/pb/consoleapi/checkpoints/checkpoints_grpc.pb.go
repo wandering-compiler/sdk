@@ -12,8 +12,7 @@
 // numbers). w17ctl calls these storage services DIRECTLY — there is no
 // hand-written facade tier.
 //
-// A Checkpoint is the dev DB lifecycle's base-of-next-diff
-// (docs/specs/storage/dev-db-lifecycle.md §Concepts): the last IR w17
+// A Checkpoint is the dev DB lifecycle's base-of-next-diff: the last IR w17
 // built into a developer's local stores for one (project, user,
 // initiative). `stack build` reads it as the diff base, applies
 // checkpoint→current-IR directly to the local stores, then advances it.
