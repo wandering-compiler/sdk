@@ -147,34 +147,45 @@ func WriteGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", "nil error")
 		return
 	}
-	st, ok := status.FromError(err)
-	if !ok {
-		// A non-status error (transport / dial / unexpected) — its text
-		// can carry internal topology (backend addrs, driver detail). Log
-		// it server-side and return a generic message rather than
-		// reflecting it to the client (restgw-sec-3).
-		observx.ReportError(context.Background(), err)
-		WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
-		return
-	}
-
 	// The operator's copy, always and regardless of outcome. It is the only
 	// place the method prefix and any backend prose is allowed to land.
 	observx.ReportError(context.Background(), err)
 
-	httpStatus := HTTPStatusFromGRPCCode(st.Code())
-	// B25-restgw-1: carry the backend's *w17.ErrorDetail field violations into
+	c, message, details := ClientError(ctx, err)
+	httpStatus := HTTPStatusFromGRPCCode(c)
+	if len(details) > 0 {
+		WriteErrorWithDetails(w, httpStatus, GRPCCodeName(c), message, details)
+		return
+	}
+	WriteError(w, httpStatus, GRPCCodeName(c), message)
+}
+
+// ClientError is the client-facing reading of a backend error: the gRPC code,
+// the sentence a person may see, and the field details — exactly what
+// [WriteGRPCErrorCtx] puts in the envelope, without writing it. It exists so a
+// transport that does not speak the HTTP envelope (the MCP proxy) applies the
+// same two-audience rule instead of forwarding `status.Message()`.
+//
+// It does not report err; the caller owns the operator's copy.
+//
+// A nil err or a non-status error (transport / dial / unexpected — its text
+// can carry backend addresses or driver detail) reads as INTERNAL with a
+// generic message.
+func ClientError(ctx context.Context, err error) (codes.Code, string, []FieldError) {
+	if err == nil {
+		return codes.Internal, "nil error", nil
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return codes.Internal, "internal error", nil
+	}
+	// Carry the backend's *w17.ErrorDetail field violations into
 	// the envelope. grpcerr.Wrap attaches them for DB constraint violations a
 	// gateway pre-flight can't catch (e.g. a UNIQUE email); dropping them leaves
 	// the client unable to map the failure to a form field.
 	details := fieldErrorsFromStatus(st)
-
-	code, message := clientFacing(ctx, st, details)
-	if len(details) > 0 {
-		WriteErrorWithDetails(w, httpStatus, code, message, details)
-		return
-	}
-	WriteError(w, httpStatus, code, message)
+	_, message := clientFacing(ctx, st, details)
+	return st.Code(), message, details
 }
 
 // reportByCode sends a failure down the channel that matches what it IS.

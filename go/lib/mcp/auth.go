@@ -25,11 +25,17 @@ import (
 // is populated when the runtime can extract that source for
 // the current request:
 //
-//   - Env: explicit map for tests; the DefaultAuthFunc falls
-//     back to os.Getenv when the map is nil/empty.
+//   - Env: the stdio identity (the prefix-scoped snapshot from
+//     SetAuthEnvPrefix); the DefaultAuthFunc falls back to
+//     os.Getenv when the map is nil/empty. Stdio only.
 //   - HTTPHeaders: populated by ServeStreamableHTTP for
 //     inbound HTTP requests via the unexported context key.
-//     Always nil in stdio mode.
+//     Always nil in stdio mode; never nil on HTTP.
+//
+// A non-nil HTTPHeaders marks an HTTP connection. On one, Env and
+// the process environment are NOT identity sources: the caller is
+// a remote client, not the operator who set the environment, so
+// [DefaultAuthFunc] and [CollectAuthHeaders] ignore them.
 //   - InitializeParams: reserved for the MCP `initialize`
 //     handshake's params object. Not yet populated; left in
 //     the struct so the MCPAuthFunc signature stays stable
@@ -59,6 +65,10 @@ type MCPAuthFunc func(ctx context.Context, conn ConnectionInfo) (metadata.MD, er
 //  1. ConnectionInfo.HTTPHeaders[key]            (HTTP transport)
 //  2. ConnectionInfo.InitializeParams[lowercase] (MCP initialize handshake)
 //  3. ConnectionInfo.Env[snake-uppercase form]   (stdio transport)
+//  4. the process environment, same form         (stdio transport)
+//
+// Steps 3 and 4 are skipped on an HTTP connection (non-nil
+// HTTPHeaders): an HTTP caller that sent no credential has none.
 //
 // Example: forward=["session_id"] with the env var
 // `SESSION_ID=abc` set produces metadata `session_id=abc`.
@@ -97,6 +107,10 @@ func lookup(conn ConnectionInfo, key string) string {
 			return v
 		}
 	}
+	if conn.HTTPHeaders != nil {
+		// HTTP: the request is the only identity source.
+		return ""
+	}
 	if conn.Env != nil {
 		if v := conn.Env[envKey(key)]; v != "" {
 			return v
@@ -119,6 +133,9 @@ func lookup(conn ConnectionInfo, key string) string {
 //
 //  1. Env             — stdio: the prefix-scoped process environment,
 //     SCREAMING_SNAKE-keyed (matching envKey), reversed to header form.
+//     Ignored on an HTTP connection (non-nil HTTPHeaders), so neither
+//     the operator's credential nor any other `<PREFIX>_*` variable
+//     reaches the auth backend on behalf of a remote caller.
 //  2. InitializeParams — the MCP `initialize` handshake (string values).
 //  3. HTTPHeaders     — HTTP transport (canonical, highest precedence).
 //
@@ -128,9 +145,11 @@ func lookup(conn ConnectionInfo, key string) string {
 // prefix by SetAuthEnvPrefix).
 func CollectAuthHeaders(conn ConnectionInfo) map[string]string {
 	out := map[string]string{}
-	for k, v := range conn.Env {
-		if v != "" {
-			out[headerFromEnvKey(k)] = v
+	if conn.HTTPHeaders == nil {
+		for k, v := range conn.Env {
+			if v != "" {
+				out[headerFromEnvKey(k)] = v
+			}
 		}
 	}
 	for k, v := range conn.InitializeParams {

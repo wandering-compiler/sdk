@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -25,8 +27,8 @@ func TestCallUnary_GateResolverError(t *testing.T) {
 	req.Params.Name = "danger"
 	_, err := s.CallUnary(context.Background(), req, &emptypb.Empty{},
 		func(context.Context, proto.Message) (proto.Message, error) { return &emptypb.Empty{}, nil })
-	if err == nil || !strings.Contains(err.Error(), "mcp auth") {
-		t.Fatalf("want wrapped auth error, got %v", err)
+	if err == nil || status.Code(err) != codes.Internal || strings.Contains(err.Error(), "resolver boom") {
+		t.Fatalf("want INTERNAL without the resolver's text, got %v", err)
 	}
 }
 
@@ -44,8 +46,8 @@ func TestCallUnary_DecodeError(t *testing.T) {
 			invoked = true
 			return &emptypb.Empty{}, nil
 		})
-	if err == nil || !strings.Contains(err.Error(), "decode arguments") {
-		t.Fatalf("want decode error, got %v", err)
+	if err == nil || status.Code(err) != codes.InvalidArgument || strings.Contains(err.Error(), "UInt32Value") {
+		t.Fatalf("want INVALID_ARGUMENT without decode detail, got %v", err)
 	}
 	if invoked {
 		t.Error("handler must not run when arguments fail to decode")
