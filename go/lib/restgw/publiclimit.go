@@ -10,23 +10,26 @@ import (
 // (exclude_auth) on the surface's per-client limiter. It answers 429 itself
 // and returns ok=false when the caller's bucket is drained; otherwise it
 // returns the writer the handler must write through and a done func to
-// defer, which charges the caller when the response was a failure (>= 400).
+// defer.
 //
-// Only failures are charged, for the reason [ratelimit.Limiter.AllowChargeable]
-// gives: the limit bounds guesses, and a legitimate client making many right
-// calls (an office behind one NAT address, a script signing in per request)
-// is not what it defends against. A nil limiter admits everything.
+// The caller's token is taken at admission and done gives it back when the
+// response was a success (< 400), so in the end only failures are charged,
+// for the reason [ratelimit.Limiter.Reserve] gives: the limit bounds guesses,
+// and a legitimate client making many right calls (an office behind one NAT
+// address, a script signing in per request) is not what it defends against.
+// Taking the token before the handler runs is what bounds requests that are
+// in flight together: each holds a token, so concurrency cannot multiply the
+// budget. A handler that wrote nothing at all (it panicked, say) is charged.
+// A nil limiter admits everything.
 func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (http.ResponseWriter, func(), bool) {
-	allowed, charge := l.AllowChargeableRequest(r)
+	allowed, settle := l.ReserveRequest(r)
 	if !allowed {
 		WriteTooManyRequests(w)
 		return w, func() {}, false
 	}
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	return rec, func() {
-		if rec.status >= http.StatusBadRequest {
-			charge()
-		}
+		settle(!rec.wroteHeader || rec.status >= http.StatusBadRequest)
 	}, true
 }
 

@@ -185,8 +185,10 @@ func TestFromEnvDefaultsAreOn(t *testing.T) {
 	if New(cfg) == nil {
 		t.Fatal("default config must build a live limiter")
 	}
-	if len(cfg.TrustedProxies) == 0 {
-		t.Fatal("default trusted proxies must be non-empty, or every caller shares one bucket")
+	// No proxy is trusted unless one is configured: a trusted range whose
+	// hops do not append to X-Forwarded-For lets the client pick its bucket.
+	if len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("default trusts %v; forwarded headers must be believed only from configured proxies", cfg.TrustedProxies)
 	}
 }
 
@@ -343,25 +345,28 @@ func TestLimiter_NoWarningWhenTheClientIsResolvable(t *testing.T) {
 // TestAllowChargeable_ChargesOnlyFailures — the limiter charges wrong
 // answers, not arrivals.
 //
-// The login limiter charged ARRIVALS. What it defends against is guessing,
-// and guessing means wrong answers — so a legitimate caller that
-// authenticates successfully in a burst (a script re-authenticating per
-// request, an office behind one NAT address, this project's own e2e
-// harness) was locked out at the default while an attacker's budget was
-// unchanged. Charging failures only is what makes a tight default safe.
+// What it defends against is guessing, and guessing means wrong answers — so
+// a legitimate caller that authenticates successfully in a burst (a script
+// re-authenticating per request, an office behind one NAT address) must not
+// be locked out. Each attempt holds a token while it runs; a call whose
+// context ends without a charge gets it back.
 func TestAllowChargeable_ChargesOnlyFailures(t *testing.T) {
 	lim := New(Config{PerMinute: 6, Burst: 3})
-	ctx := ctxFrom("203.0.113.9:1234")
+	lim.now = frozenClock()
 
-	// Far past the burst, every one SUCCEEDING: none may be charged.
+	// Far past the burst, every one SUCCEEDING: none may stay charged.
 	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancel(ctxFrom("203.0.113.9:1234"))
 		ok, _ := lim.AllowChargeable(ctx)
 		if !ok {
 			t.Fatalf("a successful caller was throttled after %d sign-ins — the bucket is counting arrivals, not failures", i)
 		}
+		cancel() // the call completed without a charge
+		waitTokens(t, lim, "203.0.113.9", 3)
 	}
 
 	// Now the same burst FAILING: that is what a guesser does.
+	ctx := ctxFrom("203.0.113.9:1234")
 	for i := 0; i < 3; i++ {
 		ok, charge := lim.AllowChargeable(ctx)
 		if !ok {
@@ -371,6 +376,34 @@ func TestAllowChargeable_ChargesOnlyFailures(t *testing.T) {
 	}
 	if ok, _ := lim.AllowChargeable(ctx); ok {
 		t.Error("the bucket never empties — failures are not being charged, so the limit protects nothing")
+	}
+}
+
+// frozenClock pins a limiter's clock so no token refills mid-test.
+func frozenClock() func() time.Time {
+	t0 := time.Unix(1_000_000, 0)
+	return func() time.Time { return t0 }
+}
+
+// tokens reads key's bucket without spending.
+func (l *Limiter) tokens(key string) float64 {
+	b := l.bucketFor(key)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(l.now(), l.perSec, l.cfg.Burst)
+	return b.tokens
+}
+
+// waitTokens waits for a refund made when a context ended, which runs on
+// its own goroutine.
+func waitTokens(t *testing.T, l *Limiter, key string, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for l.tokens(key) != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("bucket %s holds %v tokens, want %v", key, l.tokens(key), want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -450,12 +483,16 @@ func TestRequestKey_ForwardedRules(t *testing.T) {
 
 func TestAllowChargeableRequest_ChargesOnlyFailures(t *testing.T) {
 	l := New(Config{PerMinute: 6, Burst: 2})
-	r := reqFrom("203.0.113.9:1234")
+	l.now = frozenClock()
 	for i := 0; i < 20; i++ {
-		if ok, _ := l.AllowChargeableRequest(r); !ok {
+		ctx, cancel := context.WithCancel(context.Background())
+		if ok, _ := l.AllowChargeableRequest(reqFrom("203.0.113.9:1234").WithContext(ctx)); !ok {
 			t.Fatalf("a successful caller was throttled after %d requests", i)
 		}
+		cancel()
+		waitTokens(t, l, "203.0.113.9", 2)
 	}
+	r := reqFrom("203.0.113.9:1234")
 	for i := 0; i < 2; i++ {
 		_, charge := l.AllowChargeableRequest(r)
 		charge()
