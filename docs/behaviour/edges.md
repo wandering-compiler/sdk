@@ -159,7 +159,7 @@ the alias rewrite. SSE and WS writers use `MarshalProtoAppend`.
 
 ## E3. Error envelope and gRPC → HTTP mapping
 
-**Code.** `go/lib/restgw/errors.go` — `WriteGRPCError`, `WriteGRPCErrorCtx`, `HTTPStatusFromGRPCCode`; `go/lib/restgw/json.go` — envelope writer.
+**Code.** `go/lib/restgw/errors.go` — `WriteGRPCError`, `WriteGRPCErrorCtx`, `ClientError`, `HTTPStatusFromGRPCCode`; `go/lib/restgw/json.go` — envelope writer.
 
 **Purpose.** Every error leaves the gateway as
 `{"error":{"code":"<GRPC_CODE_NAME>","message":"<sentence>","details":[...]}}` with an HTTP
@@ -171,7 +171,9 @@ code's generic, translated sentence.
 (`go/lib/i18n`); context-free variants answer in the source locale.
 
 **Shares.** `grpcerr.UserMsgid` (E33), the single source of fallback sentences; SSE and WS error
-writers (E14, E15); refusal writers (E4); `observx` reporting.
+writers (E14, E15); refusal writers (E4); `observx` reporting. `ClientError` returns the code,
+sentence and field details the envelope carries without writing it; the MCP proxy (E27) builds its
+tool errors from it.
 
 **Guarantees.**
 
@@ -532,7 +534,7 @@ close detection for write-only sockets.
 
 ## E16. Browser stream auth: tickets
 
-**Code.** `go/lib/restgw/ws_auth.go` — `NewWSAuth`, `WSAuthConfig`, `WSAuthTicketPrincipal`; `go/lib/restgw/ticket.go` — `MemoryTicketStore`, `NewTicketIssuer`, `TicketIssuerConfig`.
+**Code.** `go/lib/restgw/ws_auth.go` — `NewWSAuth`, `WSAuthConfig`, `WSAuthTicketPrincipal`, `MaxTicketAuthorizationBytes`; `go/lib/restgw/ticket.go` — `MemoryTicketStore`, `NewMemoryTicketStore`, `WithMaxTickets`, `WithMaxTicketBytes`, `ErrTicketStoreFull`, `NewTicketIssuer`, `TicketIssuerConfig`.
 
 **Purpose.** Browsers cannot set `Authorization` on `EventSource` or `WebSocket`; they trade it
 for a one-shot ticket and pass `?ticket=`.
@@ -544,8 +546,12 @@ for a one-shot ticket and pass `?ticket=`.
 | `WSAuthConfig.Modes` | `header` | `ticket` or both; an unknown mode, nil `Inner`, or ticket mode without a store → panic at construction |
 | `TicketParam` | `ticket` | — |
 | `TicketIssuerConfig.TTL` | 30 s | — |
-| `MemoryTicketStore` janitor | every 60 s | — |
+| `MemoryTicketStore` janitor | every 60 s | A store at a limit also sweeps expired tickets itself before refusing |
+| `WithMaxTickets(n)` | `DefaultMaxTickets` = 10 000 outstanding tickets | `n <= 0` keeps the default |
+| `WithMaxTicketBytes(n)` | `DefaultMaxTicketBytes` = 16 MiB (ticket id, label keys and values, plus a fixed per-entry overhead) | `n <= 0` keeps the default |
+| `MaxTicketAuthorizationBytes` | 8 KiB, fixed | A longer `Authorization` value is refused by `WSAuthTicketPrincipal` with `ErrWSAuthTicketHeaderTooLarge` |
 | Issuer method | POST | Anything else → 405 with `Allow` |
+| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431; full store → 503 with `Retry-After: 1`; any other store failure → 500 |
 
 **Shares.** E5 (`RequireAuth`), E17 (the promoted header keeps re-auth working), E6 (the
 promotion marker header forces a cache bypass on probes).
@@ -558,14 +564,20 @@ promotion marker header forces a cache bypass on probes).
 | E16.2 | Ticket-only mode MUST refuse a request without a ticket even if it carries `Authorization` | `TestWSAuth_TicketOnly_NoTicket_FailsFast`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
 | E16.3 | In header-and-ticket mode a header MUST win | `TestWSAuth_HeaderAndTicket_HeaderWins` |
 | E16.4 | A redeemed ticket MUST be promoted to `Authorization` on the caller's request so later re-auth probes work, in both modes | `TestWatchStreamAuth_TicketStreamSurvivesTheTick`, `TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick` |
-| E16.5 | Issuer responses MUST be `no-store` with `Vary: Authorization, Cookie` | no test (`TestTicketIssuer_HappyPOST` checks status and body only) |
+| E16.5 | Issuer responses MUST be `no-store` with `Vary: Authorization, Cookie` | `TestTicketIssuer_HappyPOST` (`no-store`, and `Vary` present; its value has no test) |
 | E16.6 | A client MUST NOT be able to present the promotion marker (a per-instance 256-bit random value) | no test |
-| E16.7 | The ticket store MUST NOT grow memory without bound | no test |
+| E16.7 | The default store MUST NOT grow memory without bound: outstanding tickets and the bytes they hold are both capped, and a redeemed or expired ticket frees its share | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_ByteBudget`, `TestTicketStore_RedeemFreesCapacity`, `TestMemoryTicketStore_FullStoreSweepsExpired` |
+| E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
+| E16.9 | An `Authorization` value longer than `MaxTicketAuthorizationBytes` MUST be answered 431 and store nothing; a value at the limit is accepted | `TestTicketIssuer_OversizedAuthorization` |
 
 **Deliberate limits.**
 - `MemoryTicketStore` is per process: issuer and redeemer must be the same replica.
 - `WSAuthTicketPrincipal` records only `Authorization`; cookie-only sessions cannot obtain
   tickets.
+- The issuer does not validate the credential (redeem does), so tickets are minted for any
+  request that carries one; the store limits, not validation, bound what that costs.
+- A full store delays new tickets until redeems or the TTL free room; it does not make room by
+  evicting.
 
 ---
 
@@ -639,8 +651,9 @@ label isolation.
 
 **Code.** `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `WriteTooManyRequests`.
 
-**Purpose.** Applies the per-client limiter (E26) to REST methods excluded from auth: unary
-methods are charged only on failure (status ≥ 400), streams on every open.
+**Purpose.** Applies the per-client limiter (E26) to REST methods excluded from auth: a unary
+method holds a token while it runs and keeps it charged only on failure (status ≥ 400, or nothing
+written); streams are charged on every open.
 
 **Configuration.**
 
@@ -654,9 +667,9 @@ methods are charged only on failure (status ≥ 400), streams on every open.
 | ID | Guarantee | Test |
 |---|---|---|
 | E19.1 | A drained bucket MUST answer 429 `RESOURCE_EXHAUSTED` before the handler runs | `TestAdmitPublic_ChargesFailuresPerClient` |
-| E19.2 | Only responses with status ≥ 400 MUST be charged; an implicit 200 is not | `TestAdmitPublic_ImplicitOKAndUnwrap` |
+| E19.2 | Only responses with status ≥ 400, and handlers that wrote nothing, MUST stay charged; a success (including an implicit 200) MUST return its token | `TestAdmitPublic_ImplicitOKAndUnwrap`, `TestAdmitPublic_SuccessReturnsItsToken`, `TestAdmitPublic_NothingWrittenIsCharged` |
 | E19.3 | Each stream open MUST be charged; the writer MUST NOT be wrapped (flush and hijack keep working) | `TestAdmitPublicStream_ChargesEveryStream` |
-| E19.4 | Concurrent requests MUST NOT exceed the configured budget | no test |
+| E19.4 | Concurrent requests MUST NOT exceed the configured budget: each request in flight holds its own token | `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 
 ---
 
@@ -665,8 +678,8 @@ methods are charged only on failure (status ≥ 400), streams on every open.
 **Code.** `go/lib/restgw/upload.go` — `ProcessFilePart`, `FilePartConfig`, `WriteUploadError`, `RollbackUploads`.
 
 **Purpose.** Streams one multipart part to a staging file with a per-file size cap and an
-extension allowlist, publishes it to a KV driver under a content-hash key, and rolls back on a
-later failure.
+extension allowlist, publishes it to a KV driver under a key of its own (the body's sha256 plus a
+random 128-bit suffix), and rolls back on a later failure.
 
 **Configuration.**
 
@@ -687,16 +700,17 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 |---|---|---|
 | E20.1 | A part over `MaxSizeBytes` MUST be refused with `ErrUploadTooLarge` and its staging file removed | `TestProcessFilePart_TooLarge` |
 | E20.2 | A missing part MUST give `ErrFilePartMissing`; a wrong or absent extension `ErrUploadBadExt` | `TestProcessFilePart_MissingPart`, `TestProcessFilePart_BadExtension`, `TestProcessFilePart_NoExtensionRejected` |
-| E20.3 | The key MUST be derived from the content hash (same bytes → same key) | `TestProcessFilePart_HashStable` |
+| E20.3 | Every upload MUST be stored under its own object key, `<sha256>-<random 128-bit suffix>`; identical bodies MUST get distinct objects | `TestProcessFilePart_IdenticalBodiesGetDistinctObjects` |
 | E20.4 | The staging file MUST be removed after a copy-style publish | `TestProcessFilePart_RemovesTempFileOnCopyDriver` |
 | E20.5 | Non-sentinel errors MUST be logged and answered as a generic 500 | `TestWriteUploadError_MasksInternalError` |
 | E20.6 | `RollbackUploads` MUST be best-effort and idempotent | no test |
 | E20.7 | An unbounded request body MUST NOT be spilled to disk (relies on the generated `MaxBytesReader`) | no test |
-| E20.8 | Rollback MUST NOT delete an object another request references | no test |
+| E20.8 | Rollback MUST NOT delete an object another request references, including one with identical bytes that committed earlier or is still in flight | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
 | E20.9 | Upload refusals MUST NOT show developer prose or configuration to the client | no test |
 
 **Deliberate limits.**
 - Content is not sniffed; only the filename extension is checked.
+- Uploads are not deduplicated: identical bodies are stored once per upload.
 
 ---
 
@@ -793,7 +807,7 @@ the URL fragment, never the query.
 
 ## E26. Per-client rate limiter
 
-**Code.** `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`, `Allow`, `AllowChargeable`.
+**Code.** `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`, `Allow`, `Reserve`, `ReserveRequest`, `AllowChargeable`, `TrustPrivateRanges`.
 
 **Purpose.** A token bucket per client address for methods that take no credential, so guessing
 is bounded without a global cap.
@@ -804,11 +818,11 @@ is bounded without a global cap.
 |---|---|---|
 | `<PREFIX>_RATELIMIT_PER_MINUTE` | 30 | float; `<= 0` disables |
 | `<PREFIX>_RATELIMIT_BURST` | 10 | int > 0 |
-| `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | built-in list (`ratelimit.FromEnv`) | Malformed CIDRs are dropped; set it to exactly the proxies in front of the service |
+| `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | none: every caller is keyed by its connection's address | Comma-separated CIDRs or bare addresses; `private` adds the loopback and RFC 1918 ranges (combinable with CIDRs); `none` states the default; any other entry is logged once and skipped. List exactly the hops that terminate HTTP and append to `X-Forwarded-For` |
 | `FromEnvScope(prefix, scope, transport)` | `<PREFIX>_<SCOPE>_RATELIMIT_*` | The unscoped `<PREFIX>_RATELIMIT_*` form is read with a one-time warning; `_<TRANSPORT>_PER_MINUTE` / `_BURST` override per transport; an off limiter is logged once |
 | `TTL` | 10 min | Struct field only |
 | `MaxKeys` | 10 000 | Struct field only |
-| Malformed values | — | Ignored silently; the previous value stands |
+| Malformed `PER_MINUTE` / `BURST` | — | Ignored silently; the previous value stands |
 
 **Shares.** E19 (REST adapters); the gRPC transport through `Allow(ctx)` (`peer` and
 `x-forwarded-for` metadata); admin sign-in.
@@ -819,24 +833,31 @@ is bounded without a global cap.
 |---|---|---|
 | E26.1 | Unset environment MUST mean on, at the defaults | `TestFromEnvDefaultsAreOn` |
 | E26.2 | Burst then deny; keys MUST be independent | `TestBurstThenDeny`, `TestKeysAreIndependent` |
-| E26.3 | `X-Forwarded-For` MUST be believed only from a trusted peer and read right-to-left, taking the first untrusted hop | `TestForwardedIgnoredFromUntrustedPeer`, `TestForwardedPicksRightmostUntrusted`, `TestRequestKey_ForwardedRules` |
+| E26.3 | `X-Forwarded-For` MUST be believed only from a configured proxy and read right-to-left, taking the first untrusted hop; a hop that is not an address MUST end the walk; an IPv4-mapped peer MUST match IPv4 prefixes | `TestForwardedIgnoredFromUntrustedPeer`, `TestForwardedPicksRightmostUntrusted`, `TestRequestKey_ForwardedRules`, `TestForwardedUnparseableHopStopsTheWalk`, `TestTrustedProxyMatchesMappedPeer` |
 | E26.4 | IPv6 MUST be bucketed per /64 | `TestLimiter_IPv6BucketsByPrefixNotByAddress` |
 | E26.5 | A trusted peer that forwarded no address MUST log a collapse warning (at most hourly) and keep limiting | `TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket` |
 | E26.6 | The key count MUST stay ≤ `MaxKeys`; idle keys are evicted first, then the oldest | `TestEvictionRespectsMaxKeys` |
-| E26.7 | `AllowChargeable` MUST spend a token only when `charge` is called; `charge` MUST be idempotent; a nil limiter admits | `TestAllowChargeable_ChargesOnlyFailures`, `TestAllowChargeable_ChargeIsIdempotentAndNilSafe` |
+| E26.7 | `AllowChargeable` MUST take the token at admission and give it back when the call's context ends without `charge`; `charge` MUST be idempotent; a nil limiter admits | `TestAllowChargeable_ChargesOnlyFailures`, `TestAllowChargeable_ChargeIsIdempotentAndNilSafe`, `TestAllowChargeable_RefundFollowsTheContext`, `TestAllowChargeableRequest_ChargesOnlyFailures` |
 | E26.8 | An unparseable peer MUST share one `unknown` bucket | `TestUnknownPeerSharesOneBucket` |
-| E26.9 | A client MUST NOT be able to choose its own bucket | no test |
-| E26.10 | Concurrency MUST NOT multiply the per-client budget | no test |
+| E26.9 | A client MUST NOT be able to choose its own bucket: with the default configuration a forwarded header is ignored, whatever the peer's range | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestForwardedIgnoredFromUntrustedPeer` |
+| E26.10 | Concurrency MUST NOT multiply the per-client budget: every attempt in flight holds its own token | `TestChargeable_ConcurrentFailuresStayWithinTheBudget`, `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 | E26.11 | The limiter MUST NOT become a CPU sink under a stream of fresh keys | no test |
+| E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback and private ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
+| E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored` (the hourly throttle has no test) |
+| E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
 
 **Deliberate limits.**
 - The limiter is in-process: N replicas give N times the budget.
+- Behind a terminator that is not configured as a trusted proxy, every client shares the
+  terminator's bucket; the warning (E26.13) names the setting.
+- `AllowChargeable` cannot hear a success, so a call whose context never ends keeps its token
+  charged; `Reserve` settles explicitly.
 
 ---
 
 ## E27. MCP server and transports
 
-**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`.
+**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`.
 
 **Purpose.** Runs generated MCP tool proxies over stdio or streamable HTTP; each tool call is a
 unary gRPC call using the w17 JSON dialect.
@@ -850,8 +871,10 @@ unary gRPC call using the w17 JSON dialect.
 | Endpoint path | `/mcp` | Health at the `core/healthz` path |
 | `ReadHeaderTimeout` | 10 s | — |
 | Shutdown timeout | `W17_MCP_SHUTDOWN_TIMEOUT_SECONDS` via `lifecycle.ShutdownTimeoutFromEnv` | — |
+| Request body cap | `SetMaxRequestBodyBytes(n)`, else `W17_MCP_MAX_BODY_BYTES`, else 10 MiB (`DefaultMaxRequestBodyBytes`, the REST default) | `n <= 0` restores the default; a non-numeric or non-positive variable is ignored. A declared `Content-Length` over the cap → 413 with a JSON-RPC error; a body without one is cut at the cap |
 
-**Shares.** `protojsonx` (E29), `go/core/lifecycle` drain, `go/core/healthz`, `observx`.
+**Shares.** `protojsonx` (E29), `go/core/lifecycle` drain, `go/core/healthz`, `observx`;
+`restgw.ClientError` (E3) for tool errors.
 
 **Guarantees.**
 
@@ -862,8 +885,9 @@ unary gRPC call using the w17 JSON dialect.
 | E27.3 | Unknown argument fields MUST be ignored | `TestUnmarshalProto_EmptyAndDecode` |
 | E27.4 | The long-lived GET stream MUST end at shutdown start; POST and DELETE keep the drain budget | `serve_shutdown_test.go` (both) |
 | E27.5 | The health route MUST be answered outside MCP auth | `healthz_test.go` |
-| E27.6 | Tool and auth errors MUST NOT return backend or developer prose to the client | no test |
-| E27.7 | The HTTP transport MUST NOT read unbounded request bodies | no test |
+| E27.6 | Tool and auth errors MUST NOT return backend or developer prose to the client: no backend status message, auth-backend text, resolver error or decode detail | `TestCallUnary_BackendErrorIsSanitised`, `TestCallUnary_AuthBackendErrorIsSanitised`, `TestCallUnary_NonStatusErrorIsInternal`, `TestCallUnary_DecodeError`, `TestCallUnary_GateResolverError` |
+| E27.7 | The HTTP transport MUST NOT read unbounded request bodies: a declared length over the cap MUST be refused with 413 before the handler runs, and an undeclared body MUST stop at the cap | `TestLimitBody`, `TestMaxBodyBytes_DefaultAndOverrides`, `TestServeStreamableHTTP_RefusesOversizedBody` |
+| E27.8 | Every `CallUnary` error MUST be a gRPC status carrying the code, the sentence a REST client reads for the same failure, and its field details; a non-status error MUST read as `INTERNAL` | `TestCallUnary_BackendErrorIsSanitised`, `TestCallUnary_PermissionDeniedIsAStatus`, `TestCallUnary_NonStatusErrorIsInternal` |
 
 **Deliberate limits.**
 - Unary tools only.
@@ -882,8 +906,8 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `NewServer(name, version, auth)` | — | nil auth → empty metadata |
-| `DefaultAuthFunc(keys...)` | — | Resolves each key from the connection's identity; gateway-owned keys dropped |
-| `SetAuthEnvPrefix(prefix)` | — | Environment prefix for the stdio identity |
+| `DefaultAuthFunc(keys...)` | — | Resolves each key from the connection's identity; gateway-owned keys dropped. Falls back to the process environment on stdio only |
+| `SetAuthEnvPrefix(prefix)` | — | Environment prefix for the stdio identity; not attached to HTTP connections |
 | `SetPermResolver(r)` | nil → no gating | — |
 | `SetToolPerm(s)` | — | AND of all ids; `0` ignored |
 
@@ -897,11 +921,13 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 | E28.2 | `tools/call` MUST re-check permissions before decoding arguments or dialling | `TestCallUnary_Gate_DeniesWithoutPerm`, `TestCallUnary_Gate_DeniesBeforeDecode`, `TestSetToolPerms_CallRequiresEveryPerm` |
 | E28.3 | `x-w17-*` and `w17-label-*` keys MUST NOT be forwarded by `DefaultAuthFunc` | `TestDefaultAuthFunc_DropsGatewayOwnedNamespaces` |
 | E28.4 | HTTP headers MUST outrank the environment | `TestDefaultAuthFunc_HTTPWinsOverEnv`, `TestCollectAuthHeaders_Precedence` |
-| E28.5 | Over HTTP, a caller's identity MUST come from that request only, never from the process environment | no test |
-| E28.6 | Environment values unrelated to the configured auth keys MUST NOT be forwarded to the auth backend | no test |
+| E28.5 | Over HTTP, a caller's identity MUST come from that request only, never from the process environment; a caller that sends no credential has none | `TestConnInfo_HTTPCallerGetsNoEnvIdentity`, `TestDefaultAuthFunc_HTTPHasNoEnvFallback`, `TestServeStreamableHTTP_AnonymousCallerGetsNoEnvIdentity`, `TestCollectAuthHeaders_MergesAllSources` |
+| E28.6 | Over HTTP no environment value MUST be forwarded to the auth backend; on stdio only `<PREFIX>_*` variables are | `TestConnInfo_HTTPCallerGetsNoEnvIdentity`, `TestServeStreamableHTTP_AnonymousCallerGetsNoEnvIdentity`, `TestSetAuthEnvPrefix_ScopesAndStrips` |
 
 **Deliberate limits.**
 - With no resolver every tool is open, even when permissions are recorded.
+- On stdio every `<PREFIX>_*` variable is forwarded as a header; keep that prefix for identity
+  values only.
 - The resolver runs on every `tools/list` and every gated `tools/call`; there is no caching.
 
 ---

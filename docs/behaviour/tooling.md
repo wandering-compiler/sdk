@@ -39,15 +39,15 @@ generated e2e test → runner.RunScenario(steps, callers, opts)
 | T4 | Artefact fetch (`migrate fetch`, `--fetch`) | `go/tooling/migrate/migratecli/fetch.go` — `fetchMigrations`, `transportFor`, `consoleTLSConfig`, `bearerCreds`; `go/tooling/migrate/lockview.go` — `MigrationSetFS`; `go/tooling/migrate/orchestrator.go` — `WriteMigration` |
 | T5 | `migrate rollback` (CLI) | `go/tooling/migrate/migratecli/migratecli.go` |
 | T6 | `fixtures apply` | `go/tooling/migrate/migratecli/fixtures.go` — `Fixtures`, `refuseStaleRender`; `go/tooling/migrate/fixtureseed.go` |
-| T7 | Content hash | `go/tooling/migrate/content_hash.go` — `ContentHash`, `ContentHashMatches` |
+| T7 | Content hash | `go/tooling/migrate/content_hash.go` — `ContentHash`, `ContentHashWithPreflight`, `ContentHashMatches` |
 | T8 | Chain selection | `go/tooling/migrate/orchestrator.go` — `chainFromTarget` |
 | T9 | Artefact sources | `go/tooling/migrate/orchestrator.go` — `migrationsFSOf` |
 | T10 | Plan and squash adopt | `go/tooling/migrate/orchestrator.go` — `Plan` |
 | T11 | Apply run: ordering of side effects | `go/tooling/migrate/orchestrator.go` — `Run`, `runApplierCache`, `applyOrResume`; `go/tooling/migrate/extpreflight.go`; `go/tooling/migrate/schemaprep.go` |
-| T12 | Fake apply | `go/tooling/migrate/orchestrator.go` — `applyFake` |
+| T12 | Fake apply | `go/tooling/migrate/orchestrator.go` — `applyFake`; `go/tooling/migrate/content_hash.go` — `preflightBound` |
 | T13 | Drift gate | `go/tooling/migrate/pre_fingerprint.go` — `checkPreFingerprint` |
 | T14 | Rollback planning and execution | `go/tooling/migrate/orchestrator.go` — `PlanRollback`, `RunRollback` |
-| T15 | Dialect appliers and run locks | `go/tooling/migrate/internal/{postgres,mysql,sqlite,redis,nats,s3}/`; `go/tooling/migrate/factory/factory.go` — `FromTargets`, `SeedCandidate` |
+| T15 | Dialect appliers and run locks | `go/tooling/migrate/internal/{postgres,mysql,sqlite,redis,nats,s3}/`; `go/tooling/migrate/factory/factory.go` — `FromTargets`, `SeedCandidate`; `go/tooling/migrate/internal/dsnredact` |
 | T16 | Data migrations | `go/tooling/datamigrate/`; `go/tooling/migrate/internal/redis/datamigrate.go`; `go/tooling/migrate/internal/s3/datamigrate.go` |
 | T17 | Dev apply, store state, snapshots, render provenance | `go/tooling/migrate/dev_apply.go` — `DevApply`; `store_state.go` — `StoreSchemaStateOf`; `snapshot.go`; `renderprov.go` — `StaleRenders` |
 | T18 | Fingerprint and observation | `go/tooling/fingerprint/` — `Format`, `FingerprintHex`, `Observe` |
@@ -109,6 +109,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | `--fake` | off | see T12 |
 | `--log-format` | `text` | `text` or `json`; anything else refused |
 | `--parallel N` | the data migration's own setting | `<= 0` keeps the migration's own setting |
+| `--allow-no-dsn` | — | `fixtures apply` only; on `apply`, `status`, `rollback` and `fetch` refused with a message naming `fixtures apply` |
 | DSN | `W17_TARGET_<CONN>` (connection name upper-cased, `-` → `_`) | no flag accepts a DSN or a token |
 | Timeout | 30 minutes, fixed | — |
 
@@ -123,8 +124,9 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.5 | A bundle that matches no lock connection MUST fail instead of reporting "nothing pending". | `TestBuildConfig_NoMatchingConnectionIsAnError` |
 | T2.6 | Fetched artefacts MUST pass the same loader and hash check as artefacts on disk. | `TestMigrationSetFS_RefusesATamperedBody` |
 | T2.7 | Two distinct connections MUST NOT resolve to the same DSN variable. | no test |
-| T2.8 | A connection listed twice in the lock MUST be refused. | no test |
-| T2.9 | Every flag a verb accepts MUST take effect on that verb. | no test |
+| T2.8 | A connection listed twice in the lock MUST be refused by planning and rollback planning before any applier is used. | `TestRun_RefusesAConnectionListedTwice` |
+| T2.9 | Every flag a verb accepts MUST take effect on that verb. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` (`--allow-no-dsn` only) |
+| T2.10 | `--allow-no-dsn` on any verb other than `fixtures apply` MUST be refused with a message naming where it applies. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` |
 
 **Deliberate limits.**
 - Unpinned connections are warned about, not refused: a KV connection can stay unpinned for good.
@@ -173,7 +175,8 @@ contacted.
 | T4.1 | The default transport MUST be TLS with system roots. | no test |
 | T4.2 | The bearer MUST NOT be sent in clear by default. | no test |
 | T4.3 | An `Unauthenticated` reply MUST produce a message naming `W17_TOKEN`. | no test |
-| T4.4 | Fetched artefacts MUST be written only under `--migrations`. | no test |
+| T4.4 | Fetched artefacts MUST be written only under `--migrations`: a connection name or migration id that is not one plain path segment (no separator, `:`, `.`/`..` or control character) MUST be refused before anything is written, and every write MUST pass the path guard (T28). | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
+| T4.6 | An in-memory fetch (`--fetch`) MUST apply the same segment rule to connection names and ids as a fetch to disk. | `TestWriteMigration_RefusesPathShapedNames` |
 | T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | no test |
 
 ## T5. `migrate rollback` (CLI)
@@ -196,7 +199,7 @@ contacted.
 | T5.1 | Rollback without `--to` MUST be refused. | `TestRollback_RefusesWithoutTo` |
 | T5.2 | An explicit empty `--to` MUST be accepted. | `TestRollback_ExplicitEmptyToIsAccepted` |
 | T5.3 | `--dry-run` MUST print the pre-transaction half before the down SQL. | `TestRunRollback_DryRunPrintsPreTx` |
-| T5.4 | A non-empty `--to` that names no known migration MUST be refused. | no test |
+| T5.4 | A non-empty `--to` that is not the id of a migration on one of the connections being rolled back MUST be refused, planning nothing. | `TestPlanRollback_RefusesAnUnknownTarget` |
 
 ## T6. `fixtures apply`
 
@@ -214,7 +217,7 @@ contacted.
 | `--domain`, `--connection` | none | `--connection` required when two connections can seed |
 | `--dry-run` | off | — |
 | `--allow-stale` | off | accepts a render older than its fixture |
-| `--allow-no-dsn` | off | accepts a run with no DSN anywhere |
+| `--allow-no-dsn` | off | accepts a run with no DSN anywhere; accepted by `fixtures apply` only (T2.10) |
 
 **Guarantees.**
 
@@ -236,14 +239,17 @@ contacted.
 
 ## T7. Content hash
 
-**Code.** `go/tooling/migrate/content_hash.go` — `ContentHash`, `ContentHashMatches`
+**Code.** `go/tooling/migrate/content_hash.go` — `ContentHash`, `ContentHashWithPreflight`, `ContentHashMatches`
 
 **Purpose.** A keyless integrity hash shared by console and client. It covers `up_sql`,
-`up_post_tx`, `down_pre_tx`, `down_sql`, `prev`, `supersedes` (order-sensitive), `adopt_sql` and
+`up_post_tx`, `down_pre_tx`, `down_sql`, `prev`, `supersedes` (order-sensitive), `adopt_sql`,
+`adopt_preflight_sql` (an `adoptpre` segment, written only when the preflight is non-empty) and
 the sorted, deduplicated `required_extensions` projection of `manifest_json`. The encoding is
-length-prefixed and version-tagged (`v1` when none of prev, supersedes, adopt or extensions is
-set, `v2` otherwise). `ContentHashMatches` also accepts the digest from before extensions were
-bound.
+length-prefixed and version-tagged (`v1` when none of prev, supersedes, adopt, preflight or
+extensions is set, `v2` otherwise). `ContentHashWithPreflight` is the full formula; `ContentHash`
+is the same formula without a preflight, so a migration without one has the same digest under
+either. An artefact verifies against the full formula or the formulas accepted before (without
+the preflight, and without extensions); only `--fake` requires the preflight to be bound (T12).
 
 **Guarantees.**
 
@@ -252,7 +258,8 @@ bound.
 | T7.1 | Editing any hashed field of any chained artefact MUST be refused. | `TestPlan_TamperedIntermediateIsRefused`, `TestRun_TamperedAdoptFieldsAreRefused`, `TestRun_TamperedSupersedesAloneIsRefused`, `TestRun_TamperedAdoptSqlAloneIsRefused`, `TestPlan_DiskTamperedRefuses` |
 | T7.2 | The declared extension set MUST be bound by the hash. | `TestContentHash_BindsTheExtensionSet` |
 | T7.3 | Every artefact field MUST be either hashed or explicitly excused with a reason. | `TestContentHash_EveryMigrationFieldIsHashedOrExcused` |
-| T7.4 | Any artefact content that is executed or that changes what is executed MUST be covered by the integrity check. | no test |
+| T7.4 | Any artefact content that is executed or that changes what is executed MUST be covered by the integrity check before it runs. | `TestContentHash_EveryMigrationFieldIsHashedOrExcused`, `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced` |
+| T7.5 | A migration without a preflight MUST hash identically under `ContentHash` and `ContentHashWithPreflight`, and a non-empty preflight MUST move the digest. | `TestContentHashWithPreflight_EmptyPreflightKeepsTheDigest` |
 
 ## T8. Chain selection
 
@@ -346,20 +353,26 @@ is adopted (recorded through `adopt_sql`, no DDL).
 
 ## T12. Fake apply
 
-**Code.** `go/tooling/migrate/orchestrator.go` — `applyFake`
+**Code.** `go/tooling/migrate/orchestrator.go` — `applyFake`; `go/tooling/migrate/content_hash.go` — `preflightBound`
 
 **Purpose.** Bring an existing database under management: record each pending migration without
 running its body, guarded by `adopt_preflight_sql`. The drift gate is skipped; the preflight is
-the check.
+the check, and it runs only when the artefact's digest covers it (T7).
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
 | T12.1 | An empty preflight or empty `adopt_sql` MUST be refused. | no test |
-| T12.2 | Preflight and ledger write MUST run as one unit, so a failing check leaves no ledger row. | no test |
+| T12.2 | Preflight and ledger write MUST run as one unit, so a failing check leaves no ledger row. | `TestFake_BoundPreflightRuns` (one body, preflight first; a failing check on a real database has no test) |
 | T12.3 | `--fake` together with `--dry-run` MUST be refused. | no test |
 | T12.4 | A drift refusal MUST name the fake apply as the remedy. | `TestDriftRefusal_NamesTheFakeApply` |
+| T12.5 | A migration whose digest does not cover its preflight MUST be refused before anything executes; a replaced or stripped bound preflight MUST be refused as a content mismatch. | `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced`, `TestFake_BoundPreflightCannotBeStripped` |
+| T12.6 | A normal apply MUST NOT require the preflight to be bound, since it never runs it. | `TestApply_UnboundPreflightStillAppliesForReal` |
+
+**Deliberate limits.**
+- An artefact minted before the preflight was bound must be fetched again from a console that
+  binds it before it can be fake-applied; its normal apply is unaffected.
 
 ## T13. Drift gate
 
@@ -398,6 +411,7 @@ the dialect defines.
 | T14.1 | An in-range id not on the pinned chain MUST NOT be rolled back. | `TestRunRollback_OffChainMigrationIsNotRolledBack` |
 | T14.2 | The head re-read under the lock MUST equal the planned head, and refuse only when it actually moved. | `TestRollback_RefusesOnlyWhenTheHeadActuallyMoved`; `TestRunRollback_ReVerifiesTheHeadUnderTheLock` (source-text check) |
 | T14.3 | Irreversible data migrations MUST refuse to roll back. | `TestRollback_YAMLIrreversibleRefused` |
+| T14.4 | A connection listed more than once MUST be refused; a non-empty rollback target MUST name a migration on the connections being rolled back (T5.4). | `TestRun_RefusesAConnectionListedTwice`, `TestPlanRollback_RefusesAnUnknownTarget` |
 
 **Deliberate limits.**
 - Recovery from a partial rollback is the operator's.
@@ -427,7 +441,7 @@ the dialect defines.
 | T15.5 | SQLite foreign-key violations after a table rebuild MUST be caught. | `TestApply_RebuildFKViolation_Caught` |
 | T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | no test |
 | T15.7 | Postgres and MySQL apply, rollback, applied head, phase and the post-transaction advisory lock MUST behave as specified against a real database. | no test |
-| T15.8 | Errors MUST NOT contain credentials. | no test |
+| T15.8 | Errors MUST NOT contain credentials: a DSN named in an error (unknown scheme, unparseable URL, duplicate or empty `--target` entry) has its password and password-like parameters masked, and the error keeps its context. | `TestErrors_NeverPrintTheDSNPassword`, `TestString_MasksCredentials`, `TestErr_RedactsAURLError` |
 | T15.9 | A command line the applier does not recognise MUST fail the migration, not be skipped. | no test |
 | T15.10 | Wipe MUST return the store to the empty state, including namespaces created by schema prep, and MUST NOT change session settings that outlive it. | no test |
 | T15.11 | NATS DSN user info is not used. | `TestDSNToServer_DropsUserInfo` |
@@ -465,13 +479,16 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 | T16.6 | Inverse ops MUST be derived; `REMOVE_FIELD` and `TRANSFORM_FIELD` MUST be irreversible. | `TestInverseOperations_*`, `TestRollback_YAMLIrreversibleRefused` |
 | T16.7 | A stored value that is not a JSON object MUST be refused with an error. | no test |
 | T16.8 | Each key MUST be transformed at most once per run. | no test |
-| T16.9 | Refusal messages MUST name only flags that exist. | no test |
+| T16.9 | Refusal messages MUST name only flags that exist; the irreversible-rollback refusal names the migration and a rollback target (`--to`) that keeps it applied. | `TestRollback_YAMLIrreversibleRefused` (Redis and S3) |
 | T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | no test |
+| T16.11 | A stored JSON `null` MUST be treated like an empty value: every op is a no-op on it and none panics. | `TestJSONApplyOp_NullValueIsANoOp` |
 
 **Deliberate limits.**
 - Values are rewritten per key with GET then SET, not compare-and-set; run a data migration while
   no application writes that keyspace.
 - NATS has no data-migration path.
+- An irreversible data migration has no override flag; the way past it is a rollback target
+  that keeps it applied.
 
 ## T17. Dev apply, store state, snapshots, render provenance
 

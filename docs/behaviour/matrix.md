@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-122 interactions; 59 have no test, 11 more are covered only in part.
+122 interactions; 55 have no test, 34 more are covered only in part.
 
 ## Server × Server
 
@@ -67,22 +67,22 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Per-client rate limiter (E26) | Proxy in front of the gateway | The key is the rightmost untrusted `X-Forwarded-For` hop when the peer is trusted, else the peer; IPv6 per /64; a client MUST NOT be able to choose its bucket. | `TestForwardedPicksRightmostUntrusted`, `TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket` (partial: client-chosen keys have no test) |
+| Per-client rate limiter (E26) | Proxy in front of the gateway | The key is the rightmost untrusted `X-Forwarded-For` hop when the peer is a configured proxy (none by default), else the peer; IPv6 per /64; a client MUST NOT be able to choose its bucket. | `TestForwardedPicksRightmostUntrusted`, `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestForwardedUnparseableHopStopsTheWalk`, `TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket` |
 | Per-client rate limiter (E26) | SSE and WebSocket streams (E14, E15) | Public streams are charged once per open, not per frame; authenticated streams are not limited. | `TestAdmitPublicStream_ChargesEveryStream` (partial: no per-client concurrent-stream cap test) |
 | Authentication hook (E5) | Header → metadata propagation (E10) on auth-excluded routes | Public routes skip auth and carry no `x-w17-user`; no client header can reach the backend as a gateway-owned key. | no test |
-| Public-method rate-limit adapters (E19) | Auth outcome / handler status | A unary public method is charged on status ≥ 400; concurrent requests MUST NOT exceed the budget. | `TestAdmitPublic_ChargesFailuresPerClient` (partial: concurrency has no test) |
+| Public-method rate-limit adapters (E19) | Auth outcome / handler status | A unary public method stays charged on status ≥ 400 or when it wrote nothing, and a success returns its token; concurrent requests MUST NOT exceed the budget. | `TestAdmitPublic_ChargesFailuresPerClient`, `TestAdmitPublic_SuccessReturnsItsToken`, `TestAdmitPublic_NothingWrittenIsCharged`, `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 | Stream re-auth watchdog (E17) | `w17-events` channel (E18) and per-RPC streams (E14, E15) | Every authenticated stream is re-probed every interval; a revoked credential ends it; an auth-backend outage does not. | Re-auth unit tests (`TestWatchStreamAuth_*`); no test for the `w17-events` pairing |
 | CORS (E12) | WebSocket helpers (E15) | Browser access to WebSocket routes follows the documented same-origin rule, independent of the CORS allowlist. | no test |
 | Auth result cache (E6) | Stream re-auth watchdog (E17) | Revocation becomes visible within `max(reauth interval, TTL)`. | no test |
 | URL-carried credentials (E7) | Request tracing (E11), pagination links (E23), browser redirects (E22) | The credential reaches auth only through the reserved slot. | no test |
 | URL-carried credentials (E7) | Auth result cache (E6) | Distinct capability tokens never share a cache slot (the slot is a key header). | `TestAuth_CachedAuthFunc_DistinctHeadersDistinctSlots` (partial: no explicit two-token test) |
 | Organization from the path (E8) | Auth result cache (E6) | A request with `W17-Org` bypasses the cache, so every org-scoped call makes a full auth call. | `TestAuth_CachedAuthFunc_UnknownHeaderBypassesCache` (indirect) |
-| Browser stream tickets (E16) | Multiple gateway replicas | Issue and redeem happen on the same process (documented limit: per-process store). | no test |
-| Database error mapping (E33) | Model Context Protocol surface (E27) | Constraint and table names appear only in the operator message, never in a client-visible result. | no test |
+| Browser stream tickets (E16) | Multiple gateway replicas | Issue and redeem happen on the same process (documented limit: per-process store); each replica's store is bounded on its own. | no test |
+| Database error mapping (E33) | Model Context Protocol surface (E27) | Constraint and table names appear only in the operator message, never in a client-visible result. | `TestCallUnary_BackendErrorIsSanitised` |
 | Multipart uploads (E20) | Request body limits (E1, generated `MaxBytesReader`) | The per-file cap applies here and the request cap comes from generated code; an unbounded body is never spilled to disk. | no test |
-| Multipart uploads (E20) | Downloads (E21) | Both sides use the same key shape; authorization is per endpoint, not per object. | `TestDownloadURLRoundTrip` |
+| Multipart uploads (E20) | Downloads (E21) | Both sides use the same key shape (`<sha256>-<suffix>` under the hash-sharded bucket path); authorization is per endpoint, not per object. | `TestDownloadURLRoundTrip` |
 | JSON dialect (E2) | Oneof collapse and expand (E29) | Values decoded through the alias and oneof reshaping are exactly the values protojson would decode, on every surface (REST and MCP). | no test |
-| MCP server (E27) | MCP auth translation (E28) per transport | stdio uses the environment identity; HTTP uses request headers only. | no test |
+| MCP server (E27) | MCP auth translation (E28) per transport | stdio uses the environment identity; HTTP uses request headers only. | `TestConnInfo_HTTPCallerGetsNoEnvIdentity`, `TestDefaultAuthFunc_HTTPHasNoEnvFallback`, `TestServeStreamableHTTP_AnonymousCallerGetsNoEnvIdentity` |
 | HTTP panic recovery (E13) | Public-method rate limit (E19), SSE (E14) | A panic yields a 500 envelope and an operator report; a panicking public method is still charged. | no test |
 | Auth result cache (E6) | Browser stream tickets (E16) promotion | Probes after promotion keep working; the promotion marker forces a cache bypass. | `TestWatchStreamAuth_TicketStreamSurvivesTheTick` (behaviour, not cache) |
 | Connection pool health watch (E32) | Long-lived callers | Failed connections are replaced without closing a connection a caller still holds. | no test |
@@ -92,7 +92,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Multipart uploads (E20) | Blob store (D13) | Rolling back a failed request MUST NOT remove an object another request references. | no test |
+| Multipart uploads (E20) | Blob store (D13) | Rolling back a failed request MUST NOT remove an object another request references; every upload owns its own object. | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
 | Database error mapping (E33) | Database outage | A transient database failure is surfaced as retryable and not reported as a fault. | no test |
 | REST gateway limit | Cursor paging (D9) | The gateway clamps `?limit=` and forwards it; storage applies it; no caller receives an unbounded result. | `TestClampLimit` (gateway side) |
 | REST gateway auth and data scopes | Cursor paging (D9) | Each resumed page re-authorizes from the caller's verified identity; scopes come from metadata, not from request fields in the cursor. | no test |
@@ -186,12 +186,12 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Squash adopt (T10) | Rollback by another run while this one waits on the lock (T11) | A head that moved backward is refused. | `TestApply_RefusesWhenTheHeadMovedBACKWARD` |
 | Post-transaction resume (T11) | Crash between halves on each dialect (T15) | Postgres resumes only the post-transaction half; MySQL and SQLite warn at run time that the migration is not resumable. | `TestRun_ResumesPendingSkirt` (Postgres, stub applier) |
 | Drift gate (T13) | Console-emitted expectations | Every migration that carries a real expectation is compared; placeholders are skipped explicitly. | no test |
-| Drift gate (T13) | Fake apply (T12) | The gate is skipped and the adopt preflight is the check; only integrity-checked preflight content is executed. | no test |
+| Drift gate (T13) | Fake apply (T12) | The gate is skipped and the adopt preflight is the check; only integrity-checked preflight content is executed. | `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced` (the gate skip has no test) |
 | Extension preflight (T11) | Applier decorators | `Unwrap` reaches the Postgres applier through every decorator, or the run refuses. | `TestPreflightExtensions_SurvivesADecorator` |
 | Schema prep (T11) | Wipe (T15) | Wipe returns the store to empty, including namespaces schema prep created. | no test |
 | `apply --fetch` (T4) | Read-only container | No disk writes; the same hash check as artefacts on disk. | `TestMigrationSetFS_RefusesATamperedBody` |
-| `migrate fetch` (T4) | Path guard (T28) | Every fetched artefact lands under `--migrations`. | no test |
-| Lock file (T2) | Artefact chain (T7, T8) | The pinned hash anchors the chain; only chained, hash-matching artefacts execute. | `TestPlan_TargetHashMismatch`, `TestPlan_InsertedMigrationIsNotOnTheChain` |
+| `migrate fetch` (T4) | Path guard (T28) | Every fetched artefact lands under `--migrations`. | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
+| Lock file (T2) | Artefact chain (T7, T8) | The pinned hash anchors the chain; only chained, hash-matching artefacts execute; a connection listed twice is refused. | `TestPlan_TargetHashMismatch`, `TestPlan_InsertedMigrationIsNotOnTheChain`, `TestRun_RefusesAConnectionListedTwice` |
 | Apply timeout (T2) | Data migration (T16) | A migration cut by the timeout leaves a state a later run resumes or refuses with a clear remedy. | no test |
 | Fixtures (T6) | Dialect appliers (T15) | Only stores that can seed are offered as seed targets; the group is one transaction. | `TestFixturesApply_TheWholeGroupIsOneUnitOfWork` (Postgres) |
 | Fixtures (T6) | Migrations (T11) | Seeding runs after the schema exists; the stale-render check compares fixtures with their render. | `TestFixturesApply_RefusesARenderOlderThanItsFixture` |
