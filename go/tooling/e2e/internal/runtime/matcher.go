@@ -111,8 +111,8 @@ func DecodeMatcher(spec any) (Matcher, error) {
 			// line. This used to be refused: capture claimed the whole
 			// mapping, so `matcher` came back as a stray key and the
 			// message named the two keys capture accepts. That reads as
-			// "capture cannot check", and a consumer reasonably concluded the
-			// two had to be split onto separate lines (2026-09-05) — the
+			// "capture cannot check", and an author reasonably concludes the
+			// two have to be split onto separate lines — the
 			// assertion then lands somewhere other than where it belongs,
 			// or gets dropped.
 			//
@@ -210,8 +210,8 @@ func DecodeMatcher(spec any) (Matcher, error) {
 				"than one nobody wrote, because it looks finished. Say what you mean instead: "+
 				"`{matcher: count, op: '>= 1'}`-style if the list must contain something, or "+
 				"`{matcher: count, op: '== 0'}`-style if being EMPTY is the point (a deletion proved from the "+
-				"other side, a filter that must match nothing). Reported by a consumer 2026-09-07, who found 28 of "+
-				"these and two response fields that did not exist behind them", op, val, why)
+				"other side, a filter that must match nothing). A vacuous count also hides an assertion on a "+
+				"response field that does not exist", op, val, why)
 		}
 		return countMatcher{op: op, value: val}, nil
 	case "num":
@@ -297,9 +297,9 @@ func (m exactMatcher) Match(actual any, present bool, scope *Scope) error {
 			//
 			// proto3 JSON omits default values, so a field holding 0, ""
 			// or false is not on the wire at all — "zero" and "nothing"
-			// arrive identically. a consumer, 2026-09-05: `imported_count: 0`
-			// was the whole point of an empty-import test and could not be
-			// written, so the case moved to a NON-zero field, which makes
+			// arrive identically. When `imported_count: 0` is the whole
+			// point of an empty-import test, it cannot be written, and
+			// the case moves to a NON-zero field, which makes
 			// "is it assertable" the criterion for what a test proves.
 			//
 			// The cure is presence, not a softer matcher. Marking the
@@ -355,7 +355,7 @@ func (emptyMatcher) Match(actual any, present bool, _ *Scope) error {
 // otherwise it is compiled per match from the interpolated pattern.
 //
 // It used to compile the raw pattern only, so `${rt_number}` was matched as
-// those literal characters (a consumer, 2026-10-04). A whole-pattern token
+// those literal characters. A whole-pattern token
 // then failed loudly, but `(${expected}|.*)` or `.*${id}.*` would have PASSED
 // against anything — a vacuous assertion that reads correctly.
 type regexMatcher struct {
@@ -721,7 +721,7 @@ func vacuousCount(op string, v float64) string {
 		}
 	case "<", "<=", "==":
 		// `< 0` and `== -1` are the mirror: nothing can satisfy them. Not
-		// what this finding is about, but an assertion that can never pass
+		// what this check is about, but an assertion that can never pass
 		// is a different kind of never-tells-you-anything.
 		if (op == "<" && v <= 0) || (op != "<" && v < 0) {
 			return "cannot hold for any possible count, so the case can only ever fail"

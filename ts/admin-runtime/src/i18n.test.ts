@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { adminUiLanguage, makeTranslator, translatorFor } from "./i18n";
 import type { AdminCatalogs } from "./i18n";
 
-// docs/specs/i18n/formatting.md — the admin's gettext runtime.
+// The admin's gettext runtime.
 //
 // The lookup chain mirrors i18n.T on the server and `t` in the generated
 // client, so a string resolves the same way on every surface. What is

@@ -63,7 +63,7 @@ describe("OverviewPage STAT widget", () => {
     // is the useful part: making all four tests wait properly left the rate
     // unchanged, and moved the failures from instant to a timeout. Raising that
     // timeout to 8 s did not help either — so the grouped value is ABSENT, not
-    // late. See docs/todos/overviewstat-flakes-under-one-worker.
+    // late.
     await waitFor(() => {
       expect(screen.getByText("5")).toBeTruthy();
       expect(screen.getByText("399,400")).toBeTruthy();

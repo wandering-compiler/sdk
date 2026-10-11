@@ -75,7 +75,7 @@ describe("parseHash", () => {
   });
 });
 
-// T2-6 pass #9, B9-1. The detail route checked only that the page EXISTS,
+// The detail route once checked only that the page EXISTS,
 // while the sibling create route one branch below checked that the page
 // declares one. So a hand-typed or stale-bookmarked #/detail/<list-only
 // page>/<id> resolved, mounted DetailPage, and dereferenced a null detail

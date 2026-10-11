@@ -61,14 +61,14 @@ type ObservedTable struct {
 	// names an inline key `<table>_pkey`, but a hand-made table can name it
 	// anything and a renamed table keeps its old `<old>_pkey` — and a key
 	// change that drops a derived name that does not exist fails its ADD
-	// PRIMARY KEY with "multiple primary keys" (pass #49 B49-6). Empty for
+	// PRIMARY KEY with "multiple primary keys". Empty for
 	// a table with no key.
 	PrimaryKeyName string
 	// ForeignKeys are the table's FK constraints.
 	ForeignKeys []ObservedForeignKey
-	// Uniques are the table's UNIQUE constraints — invisible before pass #49
-	// B49-10, because the index read skips constraint-backed indexes and the
-	// constraint read took only FKs and checks. UniquesRead says they were
+	// Uniques are the table's UNIQUE constraints — they need their own
+	// read, because the index read skips constraint-backed indexes and the
+	// constraint read takes only FKs and checks. UniquesRead says they were
 	// READ: absent is not empty, and a reader that did not look must not be
 	// taken for a table that has none.
 	Uniques     []ObservedUnique
@@ -94,7 +94,7 @@ type ObservedTable struct {
 	// as `pg_get_constraintdef` renders it — the raw text; this reader
 	// interprets nothing. The console uses it to drop an undeclared
 	// constraint under its real identity with a DOWN that re-creates it, and
-	// (pass #49 M4) to read a declared check's bounds / pattern back as facts
+	// to read a declared check's bounds / pattern back as facts
 	// and to compare a raw check's normalised body.
 	CheckDefs map[string]string
 }
@@ -110,7 +110,7 @@ type ObservedForeignKey struct {
 	TargetTable string
 	// TargetSchema is the namespace the referenced table lives in. A
 	// table's identity is the pair: without it a key into `other.u` is
-	// indistinguishable from one into `public.u` (pass #49 B49-12 / B49-15).
+	// indistinguishable from one into `public.u`.
 	// Empty means not reported (an older reader).
 	TargetSchema string
 	// TargetColumn is the FIRST referenced column — kept for consumers that
@@ -340,8 +340,8 @@ func pgObserveIndexes(ctx context.Context, conn PgxQuerier, schema, table string
 }
 
 // pgObservePrimaryKey reads the primary key's columns, in key order, and
-// the name of the CONSTRAINT that owns the key's index (pass #49 B49-6: the
-// name is not derivable — see ObservedTable.PrimaryKeyName).
+// the name of the CONSTRAINT that owns the key's index (the name is not
+// derivable — see ObservedTable.PrimaryKeyName).
 func pgObservePrimaryKey(ctx context.Context, conn PgxQuerier, schema, table string) ([]string, string, error) {
 	rows, err := conn.Query(ctx, `
 		SELECT a.attname,
@@ -387,7 +387,7 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 	// varying(64)`, `numeric(12,2)`, `text[]`, `geography(Point,4326)` — which
 	// is the same thing the emitter renders, so the two can simply be
 	// compared.
-	// attgenerated / attidentity travel too (pass #48 F35): a GENERATED
+	// attgenerated / attidentity travel too: a GENERATED
 	// column stores its generation expression in pg_attrdef — the same slot
 	// a DEFAULT lives in — and an IDENTITY column has no pg_attrdef row at
 	// all. Without the two flags the one reads as a phantom default and the
@@ -633,7 +633,7 @@ func singleCheckMember(def string) ([]string, bool) {
 	// A VARCHAR (or CHAR) column comes back CAST on the left —
 	// `(((v1)::text = 'draft'::text))`, measured on postgres:14/16/18 — so
 	// the column is the parenthesised operand of a cast, not a bare
-	// identifier (pass #49 B49-8). Unwrapped only when what follows the
+	// identifier. Unwrapped only when what follows the
 	// paren is a cast and nothing else; whether what is INSIDE is a bare
 	// column is still decided below, so `(lower(v))::text` stays out.
 	if i := strings.Index(lhs, ")::"); i >= 0 && trimTrailingCast(lhs[i+1:]) == "" {

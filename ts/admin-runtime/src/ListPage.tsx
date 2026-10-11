@@ -283,7 +283,7 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
     !!page.detail?.create_endpoint &&
     hasAllPermissions(whoami?.permission_ids, page.detail?.required_permissions_create);
 
-  // Per-row action slot (REV-150 `<page>:list:row-action`).
+  // Per-row action slot (`<page>:list:row-action`).
   // When the consumer registers a component, a trailing
   // synthetic column renders it for every row with
   // { row, rowId, page, onSelectRow }.
@@ -316,7 +316,7 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
   // defaults it to the first column ON ITS OWN, so suppressing the
   // emitter's `detail_link_column` is not enough — two surfaces
   // independently turned the link on, and a list-only page linked into a
-  // null detail spec either way (T2-6 pass #9, B9-1).
+  // null detail spec either way.
   const linkCol = page.detail
     ? page.list?.detail_link_column || (page.list?.columns ?? [])[0]?.name || ""
     : "";
@@ -569,8 +569,8 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
 
 interface PageEnvelope {
   // A decimal STRING — w17.Paging.total is a uint64 and the dialect renders
-  // every 64-bit field that way (T2-6 pass #6 removed the number carve-out
-  // that made this field the exception). Convert at the edge that needs a
+  // every 64-bit field that way (a former number carve-out that made this
+  // field the exception was removed). Convert at the edge that needs a
   // number; never let an int64 pass through a JS number in general.
   total: string;
   next_cursor: string;
@@ -708,7 +708,7 @@ function CursorPager({
 // dialect, and the cursors as strings too. It was briefly the dialect's one
 // number carve-out; that exception broke this reader on the binary wire and
 // narrowed formatCount for its other caller, so it was removed rather than
-// propagated (T2-6 pass #6).
+// propagated.
 function readPageEnvelope(resp: ListResp, pagingField: string): PageEnvelope {
   const raw = resp[pagingField];
   const env = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};

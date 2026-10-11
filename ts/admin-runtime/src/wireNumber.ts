@@ -12,7 +12,7 @@
 //
 // There is no longer an exception. `w17.Paging.total` used to be one —
 // restgw unquoted it back into a JSON number — and that single carve-out
-// produced two independent bugs before it was removed (T2-6 pass #6): the pb
+// produced two independent bugs before it was removed: the pb
 // codec never inherited it, so admin lists reported 0 rows on the default
 // wire, and formatCount was narrowed to numbers-only for it, which broke
 // StatWidget's other caller. It was also never applied consistently inside

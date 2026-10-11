@@ -24,13 +24,13 @@ type Endpoint struct {
 	//
 	// Read together with CredentialInURL: authentication is three
 	// states, not two. Unauthenticated (`exclude_auth`) has both
-	// false; ordinary bearer auth has AuthRequired true; a REV-162
+	// false; ordinary bearer auth has AuthRequired true; a
 	// capability-link endpoint has BOTH true — it authenticates,
 	// but its credential is a path segment or query parameter, so
 	// the bearer injection must not happen.
 	AuthRequired bool
 
-	// CredentialInURL (REV-162) marks an endpoint whose credential
+	// CredentialInURL marks an endpoint whose credential
 	// travels in the URL rather than the Authorization header.
 	//
 	// The runner must NOT inject `auth.token` for these, and must

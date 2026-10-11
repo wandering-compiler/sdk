@@ -5,8 +5,8 @@ bits a generated service or a hand-written business binary needs, with **no
 dependency on the compiler internals**.
 
 Everything the compiler *generates* runs against this SDK; the compiler itself
-never leaks into it. That split is deliberate and load-bearing: the SDK ships to
-public repos, the compiler stays private.
+never leaks into it. That split is deliberate and load-bearing: a generated
+project depends on this SDK and nothing else from the toolchain.
 
 ## Philosophy — dev-help, not a framework
 
@@ -17,15 +17,30 @@ only when it saves you boilerplate. Import à la carte, never wholesale.
 ## Languages
 
 The SDK is organised **one directory per language**, each self-contained with its
-own package manager, versioning, and README:
+own package manager and versioning:
 
 | Language | Module / path | README |
 |---|---|---|
-| **Go** | `sdk/go` (`github.com/wandering-compiler/sdk/go`) | [`go/README.md`](go/README.md) |
+| **Go** | `go/` (`github.com/wandering-compiler/sdk/go`) | [`go/README.md`](go/README.md) |
+| **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`) | — |
 
-Only Go exists today. Additional client languages (the generated FE clients are
-emitted per project, not shipped here) get their own `sdk/<lang>/` directory + a
-language-specific README when they land.
+The TypeScript side holds one package today: `@w17/admin-runtime`, the React
+(Mantine) runtime behind a generated admin SPA. The scaffold the compiler emits
+imports `bootstrap` from it and hands it the embedded admin spec; list, detail,
+create, inline and overview pages are all rendered from that spec. Its tests run
+with `npm test` (vitest) inside `ts/admin-runtime/`.
+
+The generated front-end clients are emitted per project, not shipped here. A
+further language gets its own top-level directory and README when it lands.
+
+## Building and checking
+
+- `make pb` regenerates `go/pb` from the protos in `go/proto` (protoc pinned in
+  `tools/protoc`, run in Docker); `make check-pb` fails when the committed code
+  differs.
+- `scripts/check-leaks.sh [path…]` fails when a comment, test or file name
+  carries a reference that only makes sense inside the project that develops
+  the SDK, rather than the technical reason itself.
 
 ## What lives here vs. not
 

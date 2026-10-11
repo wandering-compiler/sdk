@@ -58,6 +58,9 @@ sdk/go/
 │   │                ReportError correlating Sentry ↔ trace. Configured by runtime.
 │   ├── grpcx/       gRPC client utilities: Pool + DialOpts (retry + keepalive
 │   │                service-config, the paired defaults).
+│   ├── healthz/     the liveness endpoint every HTTP listener answers, and the
+│   │                path the `<binary> health` probe asks.
+│   ├── lifecycle/   bounded shutdown: stop a server within the promised time.
 │   └── grpcerr/     DB-error → gRPC-status mapping (ConstraintInfo: unique / FK /
 │                    check → a typed, dialect-portable gRPC error). Generated
 │                    storage handlers emit against this.
@@ -68,20 +71,24 @@ sdk/go/
 │   │                gRPC lifecycle it composes lives in service/internal/server.
 │   ├── bootstrap/   the Component supervisor for composed `-server` binaries.
 │   │                RunGraceful drains the transport, THEN closes resources.
+│   ├── healthcheck/ the `health` subcommand a generated server binary mounts.
 │   ├── inprocgrpc/  in-process ClientConn so one `-server` folds its tiers
 │   │                (gateway → business → storage) without a network hop.
-│   ├── tx/          distributed transactions — the cohesive trio, used together:
+│   ├── tx/          distributed transactions — used together:
 │   │   ├── txregistry/    in-memory tx_id → *sql.Tx registry + AdoptTx + DBOrTx
 │   │   ├── grpcrollback/  interceptor that auto-rollbacks the caller's tx on error
-│   │   └── distx/         the W17DistributedTransaction gRPC server (NewServer)
+│   │   ├── distx/         the W17DistributedTransaction gRPC server (NewServer)
+│   │   └── txscope/       which transaction a context belongs to + its commit hooks
 │   └── secret/      redacting Secret[T] (String() → "***") + the env→age→plain
-│                    Resolver (seamless dev, encrypted-at-rest prod).
+│                    Resolver (seamless dev, encrypted-at-rest prod); sopsenv/
+│                    reads and writes sops-encrypted dotenv files.
 │
 ├── lib/        ← runtime helpers the compiler EMITS calls into. A generated
 │   │             bundle links these; a hand-written business layer almost never
 │   │             imports them directly (that surface is service/ above). Named
 │   │             by nature (libraries), not audience — their only consumer is
-│   │             the compiler's emitted code. See lib/README.md.
+│   │             the compiler's emitted code. The main ones are listed here;
+│   │             see lib/README.md for the rest.
 │   ├── eventbus/    the event-bus runtime (NATS / Redis Streams adapters, DLQ).
 │   ├── restgw/      the REST↔gRPC gateway runtime (JSON transcode, SSE/WS).
 │   ├── i18n/        translation runtime (gettext catalogs → localized strings).
@@ -111,8 +118,13 @@ sdk/go/
 │   │                when the internal-mesh TLS switch (W17_INTERNAL_TLS) is on.
 │   ├── e2e/         the harness the *generated* e2erunner test module compiles
 │   │                against (matchers, interpolation, the gRPC/REST/MCP caller).
-│   └── pathguard/   path-containment checks for untrusted relative paths (keeps a
-│                    staged file inside its project root).
+│   ├── pathguard/   path-containment checks for untrusted relative paths (keeps a
+│   │                staged file inside its project root).
+│   └── plugindigest/ the canonical content digest of a plugin tree (what a lock
+│                    pins beside the tag and commit).
+│
+├── proto/      ← the .proto sources of pb/ (`make pb` regenerates, `make check-pb`
+│                 gates); see proto/README.md.
 │
 └── pb/         ← proto vocabulary + shared wire types (the foundation everything
     │             else is generated against).
@@ -121,8 +133,9 @@ sdk/go/
     ├── common/distx/                        W17DistributedTransaction messages
     └── consoleapi / w17compiler / w17registry / applyplan / applyfetch
                                              the console-facing service contracts
-                                             (w17ctl talks to the console through
-                                             these; a plugin author never needs them).
+                                             (the w17ctl CLI talks to the console
+                                             through these; a plugin author never
+                                             needs them).
 ```
 
 ---

@@ -43,8 +43,7 @@
 // enforcement landed, and the stale version is the dangerous
 // direction: a reader who believes it treats a genuine drift
 // refusal as scaffolding and reaches for the check instead of
-// the drift (T3-7 pass #15, C15-3). See iteration-3.md
-// D-iter3-14.
+// the drift.
 package fingerprint
 
 import (
@@ -74,7 +73,7 @@ type Table struct {
 // Column carries the per-column attributes that go into the
 // fingerprint.
 //
-// Generated and Identity ride only the OBSERVATION (pass #48 F35): a
+// Generated and Identity ride only the OBSERVATION: a
 // GENERATED column stores its generation expression where a DEFAULT would sit
 // (pg_attrdef), and an IDENTITY column is a property with no default row at
 // all — read without these flags, the one is a phantom default and the other

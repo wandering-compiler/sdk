@@ -7,12 +7,10 @@ import { SPEC_SCHEMA_VERSION } from "./types";
 import { wireIsPB } from "./wire";
 import type { AdminSpec } from "./types";
 
-// bootstrap() is the SPA entry the generated `spa/src/main.tsx` calls, and until
-// 2026-09-29 NOTHING executed it: 0 of 32 statements, measured once the coverage
-// instrument stopped lying about this package
-// (docs/decisions/which-components-belong-in-the-gate.md). It was quoted in that
-// record as "the only component that meets the rule, at 100/100/100" while carrying
-// no test at all.
+// bootstrap() is the SPA entry the generated `spa/src/main.tsx` calls, and for a
+// long time NOTHING executed it: 0 of 32 statements, measured once the coverage
+// instrument stopped lying about this package. It had been reported as "the only
+// component that meets the rule, at 100/100/100" while carrying no test at all.
 //
 // The App shell is MOCKED. This file is about the three decisions bootstrap itself
 // makes — refuse a mismatched spec, resolve the wire before anything fetches, mount

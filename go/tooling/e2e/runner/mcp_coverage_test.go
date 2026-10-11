@@ -264,7 +264,7 @@ func looseFloatEq(v any, want int) bool {
 // An MCP tool error carrying a gRPC status is the SURFACE answering, and
 // has to reach `expect_error` as a code.
 //
-// Until 2026-08-31 it did not: every MCP failure arrived as a bare error,
+// It once did not: every MCP failure arrived as a bare error,
 // which matchCallError reports as "the call failed before the surface
 // answered". No MCP case could assert a refusal at all — and nobody found
 // out, because no example published the gateway's MCP port, so no MCP
@@ -311,7 +311,7 @@ func TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures(t *testing.
 // so existence does not leak) and answers `tool not found` at the
 // JSON-RPC layer, with no gRPC status for `expect_error` to match. That
 // the permissioned caller gets through was provable; that the tool is
-// hidden from everyone else was not (a consumer, 2026-09-01).
+// hidden from everyone else was not.
 func TestMatchTransportError(t *testing.T) {
 	want := &ExpectTransportError{Message: map[string]any{"matcher": "regex", "pattern": "tool not found"}}
 

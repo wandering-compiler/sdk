@@ -300,8 +300,8 @@ func TestSSEStreamCaller_ClosedStreamIsNotATimeout(t *testing.T) {
 const overloadedFrame = "event: error\ndata: " +
 	`{"error":{"code":"RESOURCE_EXHAUSTED","message":"Busy, try again.","details":[{"code":"PARSE_OVERLOADED","message":"Busy, try again."}]}}`
 
-// TestExpectStream_ErrorFrameIsTheRefusal — the case a consumer could not
-// write (2026-10-06). A refusal the BACKEND makes arrives after the gateway
+// TestExpectStream_ErrorFrameIsTheRefusal — a case that could not be
+// written before. A refusal the BACKEND makes arrives after the gateway
 // has sent `200 text/event-stream`, so it is an `event: error` frame; the
 // runner read the 200 as "the stream opened" and reported SUCCEEDED against
 // a server that had answered correctly.
