@@ -87,13 +87,24 @@ func FromTime(v time.Time) *w17pb.KeysetValue {
 //   - requested > max → max
 //   - otherwise → requested
 //
-// Both default and max come from the endpoint's PagedConfig.
+// Both default and max come from the endpoint's PagedConfig. A max of 0
+// (none declared) no longer means "any size": the result never exceeds
+// [MaxLimit], the ceiling storage applies as well.
 func ClampLimit(requested, def, max uint32) uint32 {
 	if requested == 0 {
 		requested = def
 	}
-	if max > 0 && requested > max {
+	if max == 0 || max > MaxLimit {
+		max = MaxLimit
+	}
+	if requested > max {
 		requested = max
 	}
 	return requested
 }
+
+// MaxLimit is the largest page any paged query returns, whatever the
+// endpoint declares or a caller asks for: no caller receives an unbounded
+// result set. An endpoint that declares a larger max_limit is served pages
+// of MaxLimit rows; its cursors keep walking the rest.
+const MaxLimit = 10000

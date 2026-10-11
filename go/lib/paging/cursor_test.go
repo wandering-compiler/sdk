@@ -369,11 +369,14 @@ func TestClampLimit(t *testing.T) {
 	cases := []struct {
 		req, def, max, want uint32
 	}{
-		{0, 20, 100, 20},    // requested zero → default
-		{50, 20, 100, 50},   // requested in range → requested
-		{150, 20, 100, 100}, // over max → clamped
-		{0, 50, 0, 50},      // max=0 → unlimited, but default applies
-		{500, 50, 0, 500},   // max=0 → unlimited
+		{0, 20, 100, 20},                     // requested zero → default
+		{50, 20, 100, 50},                    // requested in range → requested
+		{150, 20, 100, 100},                  // over max → clamped
+		{0, 50, 0, 50},                       // max=0 → no endpoint cap, default applies
+		{500, 50, 0, 500},                    // max=0 → no endpoint cap
+		{4000000000, 50, 0, paging.MaxLimit}, // ... but never past MaxLimit
+		{0, 4000000000, 0, paging.MaxLimit},  // a huge default too
+		{50000, 20, 100000, paging.MaxLimit}, // nor a declared max above it
 	}
 	for _, tc := range cases {
 		got := paging.ClampLimit(tc.req, tc.def, tc.max)

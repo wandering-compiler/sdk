@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -44,6 +45,37 @@ func CursorKeyFromEnv(prefix string, getenv func(string) string, logf func(strin
 		logf("paging: %s_CURSOR_SECRET unset — signing pagination cursors with a random per-boot key; cursors won't survive a restart or validate across replicas. Set %s_CURSOR_SECRET to a stable shared secret in production.", prefix, prefix)
 	}
 	return key
+}
+
+// CallerKey derives the key that binds a cursor to one caller: pass it to
+// [EncodeCursor] and [DecodeCursor] in place of the deployment key, with the
+// same caller parts on both sides — the verified principal's user id and the
+// data-scope values the request runs under, say.
+//
+// A cursor carries the minting request whole, and resuming it REPLACES the
+// caller's request with that one (see [DecodeCursor]). Signed with the
+// deployment key alone, a cursor that leaked — through a log, a referrer, a
+// shared link — therefore resumes the minter's exact request for whoever
+// presents it. Authorization and data scopes are re-applied on every page from
+// the presenting caller's own identity, never from request fields, and that
+// is what keeps such a replay inside the presenter's rows; the binding is the
+// second line, so a cursor minted for one caller does not decode for another
+// at all. It fails as [ErrCursorMalformed], the answer a forged cursor gets:
+// the client refetches page one.
+//
+// The parts are length-prefixed before they are MACed, so ("ab", "c") and
+// ("a", "bc") bind differently. No parts at all (an unauthenticated
+// endpoint) still yields a key distinct from the deployment key.
+func CallerKey(key []byte, caller ...string) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("w17 paging cursor caller\x00"))
+	var n [8]byte
+	for _, part := range caller {
+		binary.BigEndian.PutUint64(n[:], uint64(len(part)))
+		mac.Write(n[:])
+		mac.Write([]byte(part))
+	}
+	return mac.Sum(nil)
 }
 
 // cursorMAC computes the HMAC-SHA256 tag binding the cursor's

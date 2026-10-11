@@ -26,12 +26,10 @@ const BoundariesMDKey = "x-w17-paging-boundaries"
 // (no padding). Storage's emitted SQL uses it as the LIMIT
 // argument via the `__paging_limit` scope param.
 //
-// Absent header → storage applies the DQL's own LIMIT (if
-// the author wrote one) OR no LIMIT (returns every row); the
-// gateway only omits the header on first-page boot when the
-// PagedConfig has zero default_limit AND the request omits
-// the limit query parameter — a configuration that opts the
-// endpoint into "no clamp" semantics.
+// Absent header → storage applies the endpoint's default limit, baked
+// into the generated query. A present header is clamped to [MaxLimit]
+// on the storage side ([LimitFromIncomingMD]), so no header value makes
+// a page unbounded.
 const LimitMDKey = "x-w17-paging-limit"
 
 // TotalMDKey carries the cached row count from a resumed
@@ -148,9 +146,15 @@ func EncodeLimitMD(limit uint32) string {
 
 // LimitFromIncomingMD reads the gateway-clamped page size
 // from incoming gRPC metadata. Returns `(0, false)` when the
-// header is absent OR malformed — storage's emitted query
-// then falls back to its DQL-declared LIMIT (or no LIMIT at
-// all when the DQL omits one).
+// header is absent, malformed or zero — storage's emitted query
+// then falls back to its baked default.
+//
+// A present value is clamped to [MaxLimit]. Storage used to take the
+// header as given, and the header is only as trustworthy as whoever
+// reached the storage port: a direct gRPC caller, or a gateway endpoint
+// declared without a max_limit, could ask for any page size, and the
+// emitted LIMIT carried it. The gateway's own clamp still applies first
+// ([ClampLimit]); this is the ceiling that holds when it did not run.
 func LimitFromIncomingMD(ctx context.Context) (uint32, bool) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -161,8 +165,11 @@ func LimitFromIncomingMD(ctx context.Context) (uint32, bool) {
 		return 0, false
 	}
 	n, err := strconv.ParseUint(vals[0], 10, 32)
-	if err != nil {
+	if err != nil || n == 0 {
 		return 0, false
+	}
+	if n > MaxLimit {
+		n = MaxLimit
 	}
 	return uint32(n), true
 }
