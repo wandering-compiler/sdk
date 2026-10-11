@@ -212,13 +212,24 @@ func fireOp(ws *runtime.Scope, op *Op, token string, lc *LoadCaller, buf *worker
 	if input == nil {
 		input = map[string]any{}
 	}
+	// Headers interpolate like the input and like a scenario step's do: a
+	// per-request header (`Idempotency-Key: load-${worker}-${seq}`) went out
+	// verbatim before, so every request of the run carried the same value.
+	headers, err := expandOpHeaders(op.Headers, ws)
+	if err != nil {
+		if !time.Now().Before(warmupUntil) {
+			buf.conn++
+			buf.lat = append(buf.lat, 0)
+		}
+		return
+	}
 	tok := ""
 	if op.Endpoint.AuthRequired {
 		tok = token
 	}
 
 	t0 := time.Now()
-	code, _ := lc.Fire(op.Endpoint, input, tok, op.Headers)
+	code, _ := lc.Fire(op.Endpoint, input, tok, headers)
 	lat := time.Since(t0).Nanoseconds()
 
 	// Discard warm-up samples (let the pool scale up first).
@@ -236,4 +247,20 @@ func fireOp(ws *runtime.Scope, op *Op, token string, lc *LoadCaller, buf *worker
 	default:
 		buf.success++
 	}
+}
+
+// expandOpHeaders interpolates each header value through the worker's scope.
+func expandOpHeaders(h map[string]string, scope *runtime.Scope) (map[string]string, error) {
+	if len(h) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		ev, err := runtime.Expand(v, scope)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = fmt.Sprint(ev)
+	}
+	return out, nil
 }

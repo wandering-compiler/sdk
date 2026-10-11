@@ -60,7 +60,19 @@ type Domain struct {
 	// each activation is independent.
 	//
 	// Spec: docs/specs/plugins/activation.md.
-	Plugins       []*PluginActivation `protobuf:"bytes,1,rep,name=plugins,proto3" json:"plugins,omitempty"`
+	Plugins []*PluginActivation `protobuf:"bytes,1,rep,name=plugins,proto3" json:"plugins,omitempty"`
+	// Shared modules this domain persists. A shared module
+	// (proto/shared/[<groups…>/]<module>/) holds types that belong to no
+	// domain: ONE type for every domain that uses it. Registering it gives
+	// its models tables in THIS domain's database (prefixed with `as`),
+	// migrations, and a place in this domain's DQL (`<as>.<Model>`). A
+	// domain that does not register it uses the types only (a nested
+	// message, a payload). The data is per domain: two domains that
+	// register one module have two tables of one shape, each with its own
+	// rows.
+	//
+	// Decision: docs/decisions/shared-models-one-type-persisted-where-registered.md.
+	Register      []*SharedRegistration `protobuf:"bytes,2,rep,name=register,proto3" json:"register,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -100,6 +112,74 @@ func (x *Domain) GetPlugins() []*PluginActivation {
 		return x.Plugins
 	}
 	return nil
+}
+
+func (x *Domain) GetRegister() []*SharedRegistration {
+	if x != nil {
+		return x.Register
+	}
+	return nil
+}
+
+// SharedRegistration is one row of (w17.domain).register.
+type SharedRegistration struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The shared module, by its path under the proto root:
+	// "shared/estate", or "shared/<group>/estate" for a grouped one.
+	Module string `protobuf:"bytes,1,opt,name=module,proto3" json:"module,omitempty"`
+	// The name the module takes in this domain — its table prefix and its
+	// DQL module (`estate.Estate`). Default: the module's own name. Follows
+	// the module-name rules, and must not name one of this domain's
+	// modules, plugin activations or other registrations. One registration
+	// per module per domain: under one type, a second name would leave
+	// `<as>.<Model>` naming two tables.
+	As            string `protobuf:"bytes,2,opt,name=as,proto3" json:"as,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SharedRegistration) Reset() {
+	*x = SharedRegistration{}
+	mi := &file_w17_domain_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SharedRegistration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SharedRegistration) ProtoMessage() {}
+
+func (x *SharedRegistration) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_domain_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SharedRegistration.ProtoReflect.Descriptor instead.
+func (*SharedRegistration) Descriptor() ([]byte, []int) {
+	return file_w17_domain_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SharedRegistration) GetModule() string {
+	if x != nil {
+		return x.Module
+	}
+	return ""
+}
+
+func (x *SharedRegistration) GetAs() string {
+	if x != nil {
+		return x.As
+	}
+	return ""
 }
 
 // PluginActivation is one row of (w17.domain).plugins.
@@ -196,7 +276,7 @@ type PluginActivation struct {
 
 func (x *PluginActivation) Reset() {
 	*x = PluginActivation{}
-	mi := &file_w17_domain_proto_msgTypes[1]
+	mi := &file_w17_domain_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -208,7 +288,7 @@ func (x *PluginActivation) String() string {
 func (*PluginActivation) ProtoMessage() {}
 
 func (x *PluginActivation) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[1]
+	mi := &file_w17_domain_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +301,7 @@ func (x *PluginActivation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginActivation.ProtoReflect.Descriptor instead.
 func (*PluginActivation) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{1}
+	return file_w17_domain_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PluginActivation) GetSourceName() string {
@@ -287,7 +367,7 @@ type PresetControls struct {
 
 func (x *PresetControls) Reset() {
 	*x = PresetControls{}
-	mi := &file_w17_domain_proto_msgTypes[2]
+	mi := &file_w17_domain_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -299,7 +379,7 @@ func (x *PresetControls) String() string {
 func (*PresetControls) ProtoMessage() {}
 
 func (x *PresetControls) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[2]
+	mi := &file_w17_domain_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -312,7 +392,7 @@ func (x *PresetControls) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresetControls.ProtoReflect.Descriptor instead.
 func (*PresetControls) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{2}
+	return file_w17_domain_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PresetControls) GetAdmin() *PresetSurface {
@@ -338,7 +418,7 @@ type PresetSurface struct {
 
 func (x *PresetSurface) Reset() {
 	*x = PresetSurface{}
-	mi := &file_w17_domain_proto_msgTypes[3]
+	mi := &file_w17_domain_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -350,7 +430,7 @@ func (x *PresetSurface) String() string {
 func (*PresetSurface) ProtoMessage() {}
 
 func (x *PresetSurface) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[3]
+	mi := &file_w17_domain_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -363,7 +443,7 @@ func (x *PresetSurface) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresetSurface.ProtoReflect.Descriptor instead.
 func (*PresetSurface) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{3}
+	return file_w17_domain_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PresetSurface) GetEnabled() bool {
@@ -388,7 +468,7 @@ type PluginFeatureSet struct {
 
 func (x *PluginFeatureSet) Reset() {
 	*x = PluginFeatureSet{}
-	mi := &file_w17_domain_proto_msgTypes[4]
+	mi := &file_w17_domain_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -400,7 +480,7 @@ func (x *PluginFeatureSet) String() string {
 func (*PluginFeatureSet) ProtoMessage() {}
 
 func (x *PluginFeatureSet) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[4]
+	mi := &file_w17_domain_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -413,7 +493,7 @@ func (x *PluginFeatureSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginFeatureSet.ProtoReflect.Descriptor instead.
 func (*PluginFeatureSet) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{4}
+	return file_w17_domain_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PluginFeatureSet) GetNames() []string {
@@ -452,7 +532,7 @@ type AuthInput struct {
 
 func (x *AuthInput) Reset() {
 	*x = AuthInput{}
-	mi := &file_w17_domain_proto_msgTypes[5]
+	mi := &file_w17_domain_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -464,7 +544,7 @@ func (x *AuthInput) String() string {
 func (*AuthInput) ProtoMessage() {}
 
 func (x *AuthInput) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[5]
+	mi := &file_w17_domain_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -477,7 +557,7 @@ func (x *AuthInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthInput.ProtoReflect.Descriptor instead.
 func (*AuthInput) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{5}
+	return file_w17_domain_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AuthInput) GetHeaderName() string {
@@ -519,9 +599,13 @@ var File_w17_domain_proto protoreflect.FileDescriptor
 
 const file_w17_domain_proto_rawDesc = "" +
 	"\n" +
-	"\x10w17/domain.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"9\n" +
+	"\x10w17/domain.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"n\n" +
 	"\x06Domain\x12/\n" +
-	"\aplugins\x18\x01 \x03(\v2\x15.w17.PluginActivationR\aplugins\"\xf1\x03\n" +
+	"\aplugins\x18\x01 \x03(\v2\x15.w17.PluginActivationR\aplugins\x123\n" +
+	"\bregister\x18\x02 \x03(\v2\x17.w17.SharedRegistrationR\bregister\"<\n" +
+	"\x12SharedRegistration\x12\x16\n" +
+	"\x06module\x18\x01 \x01(\tR\x06module\x12\x0e\n" +
+	"\x02as\x18\x02 \x01(\tR\x02as\"\xf1\x03\n" +
 	"\x10PluginActivation\x12\x1f\n" +
 	"\vsource_name\x18\x01 \x01(\tR\n" +
 	"sourceName\x12#\n" +
@@ -564,33 +648,35 @@ func file_w17_domain_proto_rawDescGZIP() []byte {
 	return file_w17_domain_proto_rawDescData
 }
 
-var file_w17_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_w17_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_w17_domain_proto_goTypes = []any{
 	(*Domain)(nil),                   // 0: w17.Domain
-	(*PluginActivation)(nil),         // 1: w17.PluginActivation
-	(*PresetControls)(nil),           // 2: w17.PresetControls
-	(*PresetSurface)(nil),            // 3: w17.PresetSurface
-	(*PluginFeatureSet)(nil),         // 4: w17.PluginFeatureSet
-	(*AuthInput)(nil),                // 5: w17.AuthInput
-	nil,                              // 6: w17.PluginActivation.ConnectionsEntry
-	nil,                              // 7: w17.PluginActivation.ChannelsEntry
-	(*descriptorpb.FileOptions)(nil), // 8: google.protobuf.FileOptions
+	(*SharedRegistration)(nil),       // 1: w17.SharedRegistration
+	(*PluginActivation)(nil),         // 2: w17.PluginActivation
+	(*PresetControls)(nil),           // 3: w17.PresetControls
+	(*PresetSurface)(nil),            // 4: w17.PresetSurface
+	(*PluginFeatureSet)(nil),         // 5: w17.PluginFeatureSet
+	(*AuthInput)(nil),                // 6: w17.AuthInput
+	nil,                              // 7: w17.PluginActivation.ConnectionsEntry
+	nil,                              // 8: w17.PluginActivation.ChannelsEntry
+	(*descriptorpb.FileOptions)(nil), // 9: google.protobuf.FileOptions
 }
 var file_w17_domain_proto_depIdxs = []int32{
-	1, // 0: w17.Domain.plugins:type_name -> w17.PluginActivation
-	6, // 1: w17.PluginActivation.connections:type_name -> w17.PluginActivation.ConnectionsEntry
-	7, // 2: w17.PluginActivation.channels:type_name -> w17.PluginActivation.ChannelsEntry
-	5, // 3: w17.PluginActivation.auth_input:type_name -> w17.AuthInput
-	4, // 4: w17.PluginActivation.features:type_name -> w17.PluginFeatureSet
-	2, // 5: w17.PluginActivation.presets:type_name -> w17.PresetControls
-	3, // 6: w17.PresetControls.admin:type_name -> w17.PresetSurface
-	8, // 7: w17.domain:extendee -> google.protobuf.FileOptions
-	0, // 8: w17.domain:type_name -> w17.Domain
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	8, // [8:9] is the sub-list for extension type_name
-	7, // [7:8] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	2,  // 0: w17.Domain.plugins:type_name -> w17.PluginActivation
+	1,  // 1: w17.Domain.register:type_name -> w17.SharedRegistration
+	7,  // 2: w17.PluginActivation.connections:type_name -> w17.PluginActivation.ConnectionsEntry
+	8,  // 3: w17.PluginActivation.channels:type_name -> w17.PluginActivation.ChannelsEntry
+	6,  // 4: w17.PluginActivation.auth_input:type_name -> w17.AuthInput
+	5,  // 5: w17.PluginActivation.features:type_name -> w17.PluginFeatureSet
+	3,  // 6: w17.PluginActivation.presets:type_name -> w17.PresetControls
+	4,  // 7: w17.PresetControls.admin:type_name -> w17.PresetSurface
+	9,  // 8: w17.domain:extendee -> google.protobuf.FileOptions
+	0,  // 9: w17.domain:type_name -> w17.Domain
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	9,  // [9:10] is the sub-list for extension type_name
+	8,  // [8:9] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_w17_domain_proto_init() }
@@ -598,14 +684,14 @@ func file_w17_domain_proto_init() {
 	if File_w17_domain_proto != nil {
 		return
 	}
-	file_w17_domain_proto_msgTypes[3].OneofWrappers = []any{}
+	file_w17_domain_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_domain_proto_rawDesc), len(file_w17_domain_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 1,
 			NumServices:   0,
 		},
