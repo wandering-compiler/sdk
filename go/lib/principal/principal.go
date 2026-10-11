@@ -26,6 +26,17 @@
 // storage / business handler or a plugin module can import it without
 // pulling in the gateway's HTTP stack.
 //
+// # Trust boundary
+//
+// The envelope is NOT signed. A backend tier believes `x-w17-user`,
+// `x-w17-scope-*` and `w17-label-*` for two reasons only: the gateway strips
+// those namespaces from everything a client sends before stamping its own
+// ([SanitizeGatewayMD], [WithGatewayMD]), and the backend is reachable only
+// from trusted tiers. Anything that can open a gRPC connection to a backend
+// directly can claim any user, any scope and any event audience. Deployments
+// MUST keep backend tiers off untrusted networks — network policy, or
+// internal mutual TLS so only the platform's own tiers can connect.
+//
 // # Choosing between these and a data scope
 //
 // If you want to FILTER rows by the caller, prefer declaring a
@@ -252,36 +263,66 @@ func ScopeKey(name string) string {
 // namespace before the gateway stamps its own), so everything reaching this
 // relay is gateway-written.
 //
-// A key already present in the outgoing metadata is left untouched — an
-// explicit value the caller set wins and is never duplicated — so the
-// forward is idempotent and safe to apply on every hop. When ctx carries no
-// incoming metadata (an unauthenticated / gateway-bypassed call) it is
-// returned unchanged, so downstream scope guards still fail closed.
+// The verified principal wins. When the incoming side carries any of these
+// keys, the outgoing side's copy of the whole relayed set is REPLACED by the
+// incoming one: an outgoing value for a relayed key is overwritten, and an
+// outgoing-only relayed key (a scope or label the verified principal does not
+// carry) is dropped. Nothing on the outgoing side distinguishes a deliberate
+// override from a context reused across requests, and the second is the
+// dangerous one — a stale `x-w17-scope-*` riding along with a different
+// caller's envelope would scope the next hop to someone else's rows. Every
+// other outgoing key (paging, tracing, locale, tx routing) is kept as is.
+//
+// Calling a downstream tier as a DIFFERENT principal is therefore an explicit
+// act: drop the incoming principal first (e.g. build the call context from
+// `metadata.NewIncomingContext(ctx, nil)` and stamp the outgoing side
+// yourself). When ctx carries no incoming principal (an unauthenticated /
+// gateway-bypassed call, or the gateway itself, which stamps the outgoing side
+// directly) the context is returned unchanged, so downstream scope guards
+// still fail closed and the gateway's own stamps travel as written.
+//
+// The forward is idempotent and safe to apply on every hop: values are never
+// duplicated.
+//
+// Trust boundary: the relayed keys are an unsigned envelope. A backend trusts
+// them because only the gateway can put them on a request — it strips the
+// namespaces from client input ([SanitizeGatewayMD]) — and because backend
+// tiers are reachable only from trusted tiers. Any peer that can open a gRPC
+// connection to a backend can stamp them itself; see the package doc.
 func ForwardToOutgoing(ctx context.Context) context.Context {
 	in, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return ctx
 	}
 	// grpc-go normalises metadata keys to lowercase on both the incoming and
-	// the outgoing side, so the lowercase key constants match verbatim and
-	// the already-set check below compares like for like.
-	out, _ := metadata.FromOutgoingContext(ctx)
-	var pairs []string
+	// the outgoing side, so the lowercase key constants match verbatim.
+	relayed := metadata.MD{}
 	for key, vals := range in {
-		if key != userMetadataKey &&
-			!strings.HasPrefix(key, scopeKeyPrefix) &&
-			!strings.HasPrefix(key, LabelKeyPrefix) {
-			continue
-		}
-		if _, set := out[key]; set {
-			continue
-		}
-		for _, v := range vals {
-			pairs = append(pairs, key, v)
+		if isRelayedKey(key) && len(vals) > 0 {
+			relayed[key] = append([]string(nil), vals...)
 		}
 	}
-	if len(pairs) == 0 {
+	if len(relayed) == 0 {
 		return ctx
 	}
-	return metadata.AppendToOutgoingContext(ctx, pairs...)
+	out, _ := metadata.FromOutgoingContext(ctx)
+	next := metadata.MD{}
+	for key, vals := range out {
+		if isRelayedKey(strings.ToLower(key)) {
+			continue
+		}
+		next[key] = append([]string(nil), vals...)
+	}
+	for key, vals := range relayed {
+		next[key] = vals
+	}
+	return metadata.NewOutgoingContext(ctx, next)
+}
+
+// isRelayedKey reports whether a (lowercase) metadata key is one of the
+// gateway stamps [ForwardToOutgoing] relays.
+func isRelayedKey(key string) bool {
+	return key == userMetadataKey ||
+		strings.HasPrefix(key, scopeKeyPrefix) ||
+		strings.HasPrefix(key, LabelKeyPrefix)
 }

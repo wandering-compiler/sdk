@@ -470,8 +470,9 @@ var _ grpc.ServerTransportStream = (*inprocServerTransportStream)(nil)
 //     interceptor, so it does not exist on this path and has to be applied
 //     here. It copies what the gateway wrote from its verified auth
 //     response (`x-w17-user`, every `x-w17-scope-*`, every `w17-label-*`)
-//     from the caller's incoming side onto its outgoing side, never
-//     overwriting an explicit value, and moves nothing else.
+//     from the caller's incoming side onto its outgoing side — the
+//     verified incoming principal replaces any outgoing copy — and moves
+//     nothing else.
 //  2. Deliver: the transport hands the server the caller's OUTGOING
 //     metadata as INCOMING, so handlers reading
 //     metadata.FromIncomingContext (principal, language, paging, tx-id, …)
