@@ -968,7 +968,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `W17_INTERNAL_TLS` | plaintext h2c | `on/true/1/yes` → TLS; `terminated` → TLS against system roots |
+| `W17_INTERNAL_TLS` | plaintext h2c | `on/true/1/yes` → TLS; `terminated` → TLS against system roots; `off/false/0/no` → plaintext; any other value → error at dial construction |
 | `W17_INTERNAL_TLS_CA` | system roots | Unreadable or no PEM → error |
 | `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error |
 | Retry | 3 attempts, 0.1 s → 1 s backoff, `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | — |
@@ -985,6 +985,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | E30.3 | TLS MUST verify the server; mTLS MUST present the client leaf | `handshake_test.go` (all four) |
 | E30.4 | Dial MUST be non-blocking | `TestDial_NonBlocking` |
 | E30.5 | Keepalive MUST pair with the server's enforcement policy | `TestDefaultClientKeepalive_PairsWithServerEnforcement` |
+| E30.6 | An unrecognised `W17_INTERNAL_TLS` value MUST be refused at dial construction, not read as plaintext | `TestTLSDialOption_UnrecognisedSwitchIsRefused` |
 
 **Deliberate limits.**
 - No circuit breaker beyond retry throttling.
@@ -1000,7 +1001,8 @@ keepalive as E30, plus interceptors that copy the gateway's principal stamps (`x
 `x-w17-scope-*`, `w17-label-*`) from incoming to outgoing metadata.
 
 **Configuration.** `DialOpts(enabled bool)`. `InternalTLSEnabled()` reads `W17_INTERNAL_TLS`
-(`terminated` counts as on). CA, cert and key come from the same variables as E30.
+(`terminated` counts as on). It has no error channel: an unrecognised value is logged and
+answers true, so the dial fails closed over TLS. CA, cert and key come from the same variables as E30.
 
 **Guarantees.**
 
@@ -1008,6 +1010,7 @@ keepalive as E30, plus interceptors that copy the gateway's principal stamps (`x
 |---|---|---|
 | E31.1 | Principal stamps MUST be relayed; an explicit outgoing value MUST NOT be overwritten | `TestForwardPrincipalUnaryInterceptor` (partial: the stream interceptor has no test) |
 | E31.2 | The retry config MUST parse and retry only `UNAVAILABLE` | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable` |
+| E31.3 | An unrecognised `W17_INTERNAL_TLS` value MUST make `InternalTLSEnabled` answer true (dial TLS), never plaintext | `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 
 ---
 

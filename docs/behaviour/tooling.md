@@ -553,8 +553,19 @@ parser enforces this; streams are checked again at run time.
 **Code.** `go/tooling/e2e/runner/scenario.go`, `go/tooling/e2e/runner/caller.go`, `go/tooling/e2e/runner/stream.go`
 
 **Purpose.** When an endpoint requires auth, carries no credential in its URL and the step sets no
-`Credential`, the step takes the `auth.token` capture. `Credential` replaces the bearer entirely.
-MCP sends the token as an HTTP bearer. Streams refuse a `Credential`.
+`Credential`, `Anonymous` or `TokenFrom`, the step takes the `auth.token` capture. `Credential`
+replaces the bearer entirely. `Anonymous` sends the call with no credential at all. `TokenFrom`
+names the capture to present in place of `auth.token` (a second principal, or the session token
+named on purpose). The three are mutually exclusive. MCP sends the token as an HTTP bearer.
+Streams refuse a `Credential`.
+
+**Configuration.**
+
+| Step field | Default | Invalid or edge values |
+|---|---|---|
+| `Anonymous` | false | combined with `Credential` or `TokenFrom` → error |
+| `TokenFrom` | empty (use `auth.token`) | unbound or empty capture → the step fails before sending |
+| implicit `auth.token` with `expect_error: UNAUTHENTICATED` | — | the step fails before sending and asks for `Anonymous` or `TokenFrom` |
 
 **Guarantees.**
 
@@ -564,8 +575,12 @@ MCP sends the token as an HTTP bearer. Streams refuse a `Credential`.
 | T20.2 | `Credential` MUST replace the bearer. | `TestCredentialReplacesTheBearer` |
 | T20.3 | Static headers MUST NOT set `Authorization`. | `TestAHeaderMapStillCannotOverrideAuthorization` |
 | T20.4 | A capability-link step MUST NOT borrow the scenario token. | `TestRunStep_CapabilityLink_DoesNotBorrowScenarioToken` |
-| T20.5 | A step MUST be able to call an auth-required endpoint with no credential, so a signed-out refusal can be asserted. | no test |
+| T20.5 | A step MUST be able to call an auth-required endpoint with no credential, so a signed-out refusal can be asserted. | `TestAnonymousStep_SendsNoCredential` |
 | T20.6 | Event subscriptions for a step that presents its own `Credential` MUST use that credential's principal. | no test |
+| T20.7 | A step that expects `UNAUTHENTICATED` while carrying the session token only by default MUST fail before sending. | `TestImplicitSessionToken_CannotAssertUnauthenticated` |
+| T20.8 | `TokenFrom` MUST present the named capture; an unbound or empty capture MUST fail the step before sending. | `TestTokenFrom_UsesTheNamedCapture`, `TestTokenFrom_UnboundOrEmptyFailsBeforeSending` |
+| T20.9 | A sign-in that returns no token MUST fail at the capture, so no later step sends an empty or placeholder bearer. | `TestSignInWithoutToken_FailsAtTheCapture` |
+| T20.10 | `Anonymous`, `TokenFrom` and `Credential` MUST be mutually exclusive. | `TestStepCredentialFlags_Contradictions` |
 
 ## T21. E2E inputs, captures, generators
 
@@ -605,21 +620,26 @@ without exponent).
 equals number); a bare map is a partial nested match. Named matchers: `eq` (deep), `regex`
 (captures interpolated as literals), `count`, `num` (numeric strings accepted), `distinct`,
 `empty`, `not_empty`, `unwritten` (always fails, placeholder), `capture` (with an optional inner
-matcher).
+matcher). proto3 JSON omits an empty list, a zero scalar and an unset message, so an absent field
+is read as empty: `count == 0`, `empty`, `distinct` and `eq null` accept it. A capture of an
+absent field fails and binds nothing.
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T22.1 | Stray keys in a matcher MUST be refused. | no test |
-| T22.2 | Vacuous counts (`>= 0`, `!= -1`, …) MUST be refused at decode. | no test |
-| T22.3 | `distinct` on a misspelt field MUST be refused. | no test |
+| T22.1 | Stray keys in a matcher MUST be refused. | `TestDecodeMatcher_RefusesAStrayKeyFromAnUnquotedComma` |
+| T22.2 | Vacuous counts (`>= 0`, `!= -1`, …) MUST be refused at decode. | `TestCountMatcher_RefusesAPredicateEveryCountSatisfies` |
+| T22.3 | `distinct` MUST refuse a `field` that no element carries instead of counting zero. | `TestDistinctMatcher_TypoInFieldIsLoud` |
 | T22.4 | `eq 0` against a field absent from proto3 JSON MUST fail with an explanation of presence. | `TestExactMatcher_ZeroAgainstAnAbsentFieldExplainsPresence` |
-| T22.5 | `capture` of an absent field MUST fail. | no test |
-| T22.6 | `count` and `empty` MUST distinguish an absent field from an empty one. | no test |
+| T22.5 | `capture` of an absent field MUST fail and bind nothing, also with an inner matcher that accepts absence. | `TestCapture_AbsentFieldFails` |
+| T22.6 | `count == 0`, `empty`, `distinct` and `eq null` MUST accept an absent field as empty. | `TestCountMatcher`, `TestEmptyMatcher`, `TestExactMatcherAbsentVsNil` (`distinct` not asserted) |
 | T22.7 | Matchers within one `expect` MUST evaluate in a deterministic order, and a capture used by a sibling matcher MUST resolve. | no test |
-| T22.8 | The `unwritten` placeholder's advice MUST be a spec that decode accepts. | no test |
+| T22.8 | Every spec the matcher messages suggest (the `unwritten` placeholder, the vacuous-count refusal) MUST be one that decode accepts. | `TestMatcherAdvice_Decodes` |
 | T22.9 | `regex` MUST stringify numbers the way interpolation does (no exponent). | no test |
+
+**Deliberate limits.**
+- The runner cannot tell a misspelt `expect` key from an omitted empty field. The code generator refuses a misspelt key against the response schema.
 
 ## T23. E2E REST caller
 
@@ -627,7 +647,10 @@ matcher).
 
 **Purpose.** Path params are URL-escaped and removed from the body; declared query params move to
 the query; for GET and DELETE every remaining scalar becomes a query param and lists repeat.
-`raw_body_field` sends bytes verbatim. Status ≥ 400 becomes a `CallError` decoded from
+Lists in declared query params repeat the key, null query values are omitted, and numbers render
+without exponent. An object bound to a declared query or path param, or a nested object on GET or
+DELETE, is an error naming the field. Multipart carries the body remainder only, narrowed to
+`body_field` when set. `raw_body_field` sends bytes verbatim. Status ≥ 400 becomes a `CallError` decoded from
 `{error:{code,message,details}}`; binary media types yield only the `w17_wire` facts; an empty body
 is `{}`.
 
@@ -638,8 +661,9 @@ is `{}`.
 | T23.1 | Path, query and body routing MUST follow the endpoint bindings. | `TestResolveREST_*` |
 | T23.2 | An error response MUST decode into the canonical envelope. | `TestNewCallError_DecodesTheCanonicalEnvelope` |
 | T23.3 | Binary responses MUST yield the wire facts. | `TestDecodeWithWire` |
-| T23.4 | Input that cannot be encoded for the method (such as a nested object on GET or DELETE) MUST be an error, never silently dropped. | no test |
-| T23.5 | Multipart MUST NOT repeat path and query bindings as form fields and MUST honour `body_field`. | no test |
+| T23.4 | Input that cannot be encoded for the method (such as a nested object on GET or DELETE) MUST be an error, never silently dropped. | `TestResolveREST_NestedInputOnBodylessVerbIsRefused` |
+| T23.5 | Multipart MUST NOT repeat path and query bindings as form fields and MUST honour `body_field`. | `TestCall_MultipartSendsOnlyBodyFields` |
+| T23.6 | Numbers routed into a path or query MUST render without exponent. | `TestResolveREST_NumbersRenderWithoutExponent` |
 
 ## T24. E2E MCP caller
 
@@ -692,23 +716,32 @@ topics and times out after 5 s by default.
 (round-robin or random) or `sequence` mode, by count or duration, with warm-up, ramp and think
 time. Teardown failure is non-fatal. The report gives p50/p95/p99/max and checks thresholds.
 
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `Thresholds.ErrorRate` | `0` with `ErrorRateSet` false → unset | with `ErrorRateSet` true, `0` means no errors allowed |
+| any threshold | none | a run that measured no requests fails every configured threshold |
+
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T26.1 | A run that measured no requests MUST fail its thresholds. | no test |
-| T26.2 | `error_rate: 0` MUST mean "no errors allowed". | no test |
+| T26.1 | A run that measured no requests MUST fail its configured thresholds. | `TestCheck_ZeroMeasuredRequestsFails` |
+| T26.2 | `error_rate: 0` MUST mean "no errors allowed" when `ErrorRateSet` marks it configured. | `TestCheck_ErrorRateZeroWhenSetAllowsNoErrors` |
 | T26.3 | The load phase MUST NOT send the bearer to capability-link endpoints. | no test |
 
 **Deliberate limits.**
 - Load success is status < 400; response bodies are not checked.
+- Without `ErrorRateSet`, a zero `ErrorRate` reads as unset, so existing threshold literals keep their meaning.
 
 ## T27. Dev PKI
 
 **Code.** `go/tooling/certgen/certgen.go` — `EnsureCerts`; `go/tooling/certgen/lock_unix.go`
 
 **Purpose.** Mint a development CA (`ca.crt`, `ca.key`) and server leaf (`server.crt`,
-`server.key`) in a directory, idempotently.
+`server.key`) in a directory, idempotently. A leaf that no longer chains to the CA, covers the
+requested names or is valid is re-minted.
 
 **Configuration.** ECDSA P-256; 128-bit positive serials; 10-year validity; CA with
 `MaxPathLenZero` and KeyUsage CertSign|CRLSign; leaf with ServerAuth and ClientAuth and SANs = the
@@ -719,15 +752,16 @@ directory `0700` with a `.gitignore` ignoring everything.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T27.1 | Only missing files MUST be written; a second run MUST change nothing. | `TestEnsureCertsIdempotent` |
+| T27.1 | Only missing files, and a leaf T27.6 re-signs, MUST be written; a second run MUST change nothing. | `TestEnsureCertsIdempotent` |
 | T27.2 | A half-present CA or leaf MUST be refused, never overwritten. | `TestEnsureCA_HalfPresent_*`, `TestEnsureLeaf_HalfPresent_*` |
 | T27.3 | A reused CA MUST be a valid, unexpired signing CA whose key matches. | `TestValidateReusableCA` |
 | T27.4 | Concurrent runs MUST produce a consistent pair (serialised by `flock` on unix). | `TestEnsureCerts_ConcurrentMint_ConsistentPair` |
 | T27.5 | Serials MUST never be zero. | `TestRandSerialFrom_NeverZero` |
-| T27.6 | A reused leaf MUST chain to the current CA, cover the requested SANs and be unexpired. | no test |
+| T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window or does not match its key. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired` (key mismatch not asserted) |
+| T27.7 | An unreadable leaf MUST be refused, not overwritten. | `TestEnsureLeaf_UnreadableIsRefused` |
 
 **Deliberate limits.**
-- Development only; no renewal. Permissions of an existing directory are not tightened. The lock
+- Development only; no scheduled renewal (a leaf is re-minted only when `EnsureCerts` runs). Permissions of an existing directory are not tightened. The lock
   is a no-op outside unix.
 
 ## T28. Path guard

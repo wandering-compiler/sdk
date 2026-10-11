@@ -53,7 +53,7 @@ the emit after the database commit.
 | I1.1 | A marshal or publish failure MUST be returned to the caller and reported to the configured Observer. | `TestRedisBus_DispatchError` |
 | I1.2 | The publish MUST be detached from the request's cancellation (`context.WithoutCancel`); trace values carry forward. | `TestNatsBus_DispatchDetachesCanceledCtx_Embedded`, `TestRedisBus_DispatchDetachesCanceledCtx_Embedded`, `TestMemoryBus_ContextDetached` |
 | I1.3 | The default Observer MUST log every emit failure, delivery failure and drop with channel and topic, and report it to the error reporter. Successes are silent. | `TestDefaultObserver_EmitFailureLeavesATrace`, `TestMemoryBus_ObserverNilDefaults` |
-| I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | no test |
+| I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | `TestMemoryBus_DispatchAfterDrainIsRefused` (in-memory transport after drain only) |
 | I1.5 | An empty topic MUST behave the same on every transport (accepted everywhere or refused everywhere). | no test |
 
 **Deliberate limits.**
@@ -82,9 +82,9 @@ empty topic.
 | ID | Guarantee | Test |
 |---|---|---|
 | I2.1 | `MatchGlob` MUST implement the glob syntax above. | `TestMatchGlob` |
-| I2.2 | Every transport MUST honour `topicFilter` identically, so a hand-written subscriber receives only matching topics. | `TestMemoryBus_TopicFilterMatches` (in-memory transport) |
+| I2.2 | Every transport MUST honour `topicFilter` identically, so a hand-written subscriber receives only matching topics. | `TestMemoryBus_TopicFilterMatches`, `TestTopicFilter_Memory`, `TestTopicFilter_Nats_Embedded`, `TestTopicFilter_Redis_Embedded` |
 | I2.3 | `Subscriber()` after `Close` MUST return `ErrBusClosed`, checked atomically with registration. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded` |
-| I2.4 | `Subscribe()` after `Drain` MUST return `ErrSubscriberDraining`, checked atomically with registration. | `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded` |
+| I2.4 | `Subscribe()` after `Drain` MUST return `ErrSubscriberDraining`, checked atomically with registration. | `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused` |
 | I2.5 | A handler panic MUST become a delivery error (retry or dead-letter on brokers) and be reported; it MUST NOT crash the process. | `TestRecoverHandler_PanicBecomesError` |
 | I2.6 | A panic in loop plumbing MUST be recovered. | `TestRecoverLoopTick_RecoversPanic` |
 
@@ -146,15 +146,16 @@ handlers and runs one goroutine per matching handler per event.
 | I4.4 | Drain MUST wait for in-flight handlers, bounded by its context. | `TestMemoryBus_DrainWaitsForInflight`, `TestMemoryBus_DrainTimeout` |
 | I4.5 | Concurrent subscribe and dispatch MUST be race-free. | `TestMemoryBus_ConcurrentSubscribeAndDispatch` |
 | I4.6 | Bounded channels MUST accept under capacity, drop after `BlockTimeout`, and be isolated per channel; unbounded is the default. | `TestMemoryBus_BufferUnboundedDefaults`, `TestMemoryBus_BufferDropsAfterTimeout`, `TestMemoryBus_BufferAcceptsUnderCapacity`, `TestMemoryBus_BufferPerChannelIsolation` |
-| I4.7 | A Dispatch after Drain MUST be reported as a drop or failure, never as a success. | no test |
-| I4.8 | `Subscribe` after Drain MUST return `ErrSubscriberDraining`. | no test |
-| I4.9 | Draining one channel's subscriber MUST NOT stop delivery on other channels. | no test |
+| I4.7 | A Dispatch after Drain MUST return `ErrBusDraining` and fire `OnEmitFailure`; `OnEmitSuccess` fires only once the fan-out is admitted. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
+| I4.8 | `Subscribe` after Drain MUST return `ErrSubscriberDraining`, checked under the same lock as the registration. | `TestMemoryBus_SubscribeAfterDrainIsRefused` |
+| I4.9 | Drain MUST apply to the whole bus: after it, Dispatch on every channel is refused. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
 | I4.10 | A handler MUST NOT inherit the emitter's transaction id or other request-scoped incoming metadata beyond what the event carries. | no test |
 
 **Deliberate limits.**
 - No ordering between events: each delivery is an independent goroutine.
 - Unbounded mode (the default) has no backpressure: a slow handler under sustained emit grows goroutines.
 - Bounded mode blocks the emitting (committing) goroutine for up to `BlockTimeout` × matching handlers.
+- Drain is bus-wide, not per channel: draining any subscriber of a memory bus ends delivery on all its channels.
 
 ---
 
@@ -187,6 +188,14 @@ stream. Channel → stream `<channel>` with subjects `<channel>.>`; topic → su
   `MAX_DELIVERIES` advisory, consumed by a queue group so one replica acts, after
   the same claim.
 - DLQ broker operations retry 3 times with 200 ms backoff.
+- Each subscription's topic filter is applied with `MatchGlob` to the delivered topic; a non-matching
+  message is settled without invoking the handler. Each filter has its own consumer.
+- A publish that finds no stream drops the cached entry, re-creates the stream and publishes once more.
+- Consume errors that can mean the consumer is gone (deleted, not found, no responders, missed
+  heartbeats) start one recovery per subscription: unless the consumer was reported deleted, it is
+  looked up first and a transient error changes nothing; otherwise the stream, dead-letter stream
+  and claim bucket are re-ensured, the consumer re-created and a new pull loop swapped into the
+  subscription under the subscriber lock. Recovery retries until it succeeds or the subscriber drains.
 - Broker down later: the client reconnects and logs each state change; when it
   gives up, a "closed for good" line is logged and an error reported.
 
@@ -203,10 +212,10 @@ stream. Channel → stream `<channel>` with subjects `<channel>.>`; topic → su
 | I5.7 | A broker outage MUST be logged. | `TestNatsBus_ABrokerOutageIsStillHeard` |
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
 | I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | no test |
-| I5.10 | After a stream or consumer is deleted under a live bus, emit and consume MUST recover without a process restart. | no test |
+| I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
 | I5.11 | Behaviour after the client stops reconnecting MUST be defined and observable. | no test |
 | I5.12 | Channel and topic names MUST be valid on every transport or be refused before use. | no test |
-| I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names. | no test |
+| I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names. | `TestTopicFilter_Nats_Embedded` (through delivery; names not asserted) |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
@@ -224,7 +233,11 @@ each entry `{topic, payload}`; DLQ stream `<channel>.dlq`. A consume loop reads
 batches with `XREADGROUP` (block 1 s) and `XACK`s on success; failures stay pending.
 A claim loop runs every `AckWait`, re-claims pending entries idle at least
 `AckWait` (up to 100 per page), and either re-runs the handler or, at
-`MaxDeliver`, copies to the DLQ and acks.
+`MaxDeliver`, copies to the DLQ and acks. Each subscription's topic filter is applied with
+`MatchGlob`; a non-matching entry is acknowledged without invoking the handler. The catch-all
+filter (`**` or empty) reads through the channel's group; a narrower filter reads through a group
+of its own (`<group>-<filter>`), so that acknowledgement never takes an entry from a sibling
+subscription it matches. `NewRedisBus` PINGs the broker, bounded by a timeout, before returning.
 
 **Configuration.**
 
@@ -247,9 +260,10 @@ A claim loop runs every `AckWait`, re-claims pending entries idle at least
 | I6.2 | The claim loop MUST NOT reclaim or dead-letter a message whose handler is still running, including queued siblings of the same batch; the guard is per consumer identity. | `go/lib/eventbus/redis_batch_inflight_test.go`, `TestRedisBus_InFlightGuardIsPerConsumerIdentity_Embedded`, `go/lib/eventbus/redis_embedded_test.go` (in-flight at cap not dead-lettered) |
 | I6.3 | A lost group (flush or non-persistent restart) MUST be recreated at `$`; entries between loss and recreation are skipped. | `go/lib/eventbus/redis_embedded_test.go` (lost-group recovery) |
 | I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent. | `go/lib/eventbus/redis_embedded_test.go` (drain one of two, idempotent close) |
-| I6.5 | `NewRedisBus` MUST fail when the broker is unreachable at construction. | no test |
-| I6.6 | Consume-loop and pending-scan errors MUST be logged or reported. | no test |
+| I6.5 | `NewRedisBus` MUST fail when the broker is unreachable at construction, with any DSN password redacted from the error. | `TestNewRedisBus_UnreachableBrokerFails` |
+| I6.6 | Consume-loop and pending-scan errors MUST be logged and reported once per outage, and the recovery logged. | `TestRedisSubscriber_LoopFailuresAreReported` |
 | I6.7 | `ReadBatch` and pending pages larger than 100 entries MUST be handled without loss. | no test |
+| I6.8 | A narrower topic filter MUST read through its own consumer group, so an entry it skips still reaches a sibling subscription on the same channel whose filter matches it. | `TestTopicFilter_Redis_Embedded` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.
@@ -285,7 +299,23 @@ explicit silent opt-out. Callbacks run on the hot path.
 **Purpose.** `MetadataFromContext` captures request metadata into
 `Event.Metadata`, from one side (incoming if non-empty, else outgoing). The
 generated subscriber dispatch re-injects it into the handler's context; this is
-how the principal and data scopes cross the event hop. `LabelsFromContext`
+how the principal and data scopes cross the event hop. It carries the
+gateway-stamped principal and scopes (`x-w17-*`), labels (`w17-label-*`), locale,
+trace and correlation context and custom propagated headers. It drops every key
+`ReservedMetadataKey` reports: the transport-internal `w17-tx-id` and
+`w17-conn-id`, and credential-bearing keys. Generated subscriber dispatch filters
+the replayed map with the same predicate.
+
+Credential rule: `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and
+`x-w17-credential` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
+plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
+`apikey`, `api`+`key`, `cookie`, `credential(s)`, `jwt`, `passwd`, `password`,
+`secret`, `session`, `token`. The gateway-owned namespaces (`x-w17-*`,
+`w17-label-*`) are exempt from the segment rule.
+
+Repeated keys collapse to one value, chosen as the key's reader on the subscriber
+side chooses: the first value for the gateway-owned namespaces, the last value for
+every other key (the metadata-binding convention the locale readers follow). `LabelsFromContext`
 extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
 `EmitInvalidate` dispatches an `InvalidateEvent` on the reserved topic
 `w17.invalidate`, labelled from the context like any other event.
@@ -295,10 +325,13 @@ extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
 | ID | Guarantee | Test |
 |---|---|---|
 | I8.1 | The gateway tier (outgoing only) and the server tier (incoming) MUST produce the same metadata and labels. | `TestEventContextReaders_*` |
-| I8.2 | The transaction header MUST NOT ride an envelope. | `TestMetadataFromContext_DropsTheTransactionHeader` |
+| I8.2 | The transaction header and the storage routing token (`w17-tx-id`, `w17-conn-id`) MUST NOT ride an envelope; both literals are pinned against the constants of the packages that set them. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
 | I8.3 | An emit outside a labelled request MUST be unlabelled; invalidate events MUST take labels from incoming or outgoing metadata. | `TestEmitInvalidate_*` |
-| I8.4 | `Event.Metadata` MUST NOT carry credentials. | no test |
-| I8.5 | A subscriber MUST resolve the same language and format locale as the emitter for a multi-valued `w17-language` or `w17-format-locale`. | no test |
+| I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel. | `TestMetadataFromContext_DropsCredentials` |
+| I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` |
+
+**Deliberate limits.**
+- The credential rule is a denylist, not an allowlist, because declared metadata propagation uses arbitrary header names. A credential under a name that matches neither an exact name nor a flagged segment travels with the event.
 
 ---
 

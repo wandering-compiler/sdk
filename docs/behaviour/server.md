@@ -18,9 +18,9 @@ main
      ├─ goroutine per Component  ── first to return cancels shared ctx
      │    └─ runtime.GRPCComponent → internal/server.Run
      │          listen → grpc.NewServer(opts) → RegisterServices → reflection? → health
-     │          serve … ctx.Done → lifecycle.StopGRPC(bounded) → OnShutdown (cfg.Shutdowns, 30s)
+     │          serve … ctx.Done → health NOT_SERVING → lifecycle.StopGRPC(bounded) → OnShutdown (cfg.Shutdowns, 30s) → nil
      ├─ wait for every component
-     ├─ resources[i](ctx 30s)        (RunGraceful only, in order)
+     ├─ resources[i](ctx 30s)        (RunGraceful only, in order; errors reported)
      └─ observx.Shutdown(5s)
 ```
 
@@ -29,9 +29,11 @@ gRPC server options built by `runtime.GRPCComponent`, in order:
 1. `grpc.StatsHandler(otelgrpc.NewServerHandler())` — per-RPC server span, outside every interceptor.
 2. `grpc.KeepaliveEnforcementPolicy{MinTime: 10s, PermitWithoutStream: true}`.
 3. `grpc.KeepaliveParams{Time: 30s, Timeout: 10s}`.
-4. `grpc.ChainUnaryInterceptor(recovery, cfg.UnaryInterceptors...)` — recovery is outermost.
-5. `grpc.ChainStreamInterceptor(recoveryStream)` — the only stream interceptor.
-6. `cfg.ServerOptions...` — appended last.
+4. `grpcserver.TLSServerOption` from the process environment, when the internal-TLS switch is on (S17).
+5. `grpc.UnaryInterceptor(recovery)` and `grpc.StreamInterceptor(recoveryStream)` — grpc-go's singular
+   interceptor slot, which it always runs ahead of every chained interceptor, so recovery is outermost.
+6. `grpc.ChainUnaryInterceptor(cfg.UnaryInterceptors...)` — when the slice is non-empty.
+7. `cfg.ServerOptions...` — appended last; a singular interceptor option here is refused at start.
 
 ## Features
 
@@ -156,7 +158,7 @@ after every transport has drained, so in-flight requests keep their pools.
 | S4.4 | Closers MUST run even when a component failed. | no test |
 | S4.5 | The whole phase MUST be bounded by 30s, provided each closer honours its context. | no test |
 | S4.6 | A resource MUST NOT be closed while a request still uses it. | no test |
-| S4.7 | A closer's error MUST NOT be lost silently. | no test |
+| S4.7 | A closer's error MUST be reported through `observx.ReportError`; later closers still run and Run's result stays the components' verdict. | `TestRunGraceful_ResourceCloserErrorIsReported` |
 
 **Deliberate limits.**
 - After a forced gRPC stop (S12), handler goroutines are not waited for; this is documented on `lifecycle.StopGRPC`.
@@ -181,11 +183,12 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | `EnableMetrics` | false | — |
 | `Addr` | required | empty → `server: address is required`; a bad address fails at listen and is returned |
 | `Reflection` | false | — |
-| `ShutdownTimeout` | `0` → 10s | — |
+| `ShutdownTimeout` | `0` → 10s | negative (`lifecycle.Unbounded`) → no bound |
 | `UnaryInterceptors` | none | — |
-| `ServerOptions` | none; appended last | see S6 |
+| `ServerOptions` | none; appended last | a singular `grpc.UnaryInterceptor` / `grpc.StreamInterceptor` → start-up error (S6) |
 | `RegisterServices` | required | nil → `server: RegisterServices is required`; its error closes the listener and is returned |
-| `Shutdowns` | none | each runs after the server stops, on one shared 30s context; nil entries skipped |
+| `Shutdowns` | none | each runs after the server stops, on one shared 30s context; nil entries skipped; an error is reported and the later hooks still run |
+| `W17_INTERNAL_TLS*` (environment) | off | read at start through `grpcserver.TLSServerOption` (S17); a misconfigured or unrecognised value → start-up error before listening |
 
 **Shares.** Observability globals (through `Serve`); one new `server.DefaultHealthServer()` per component.
 
@@ -194,14 +197,18 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | ID | Guarantee | Test |
 |---|---|---|
 | S5.1 | The component MUST serve until the context is cancelled, then stop within `ShutdownTimeout`. | `TestGRPCComponent_ServesAndDrains` (stop asserted; bound not asserted) |
-| S5.2 | `Shutdowns` MUST run after the server has stopped, in order, with nil entries skipped. | `TestGRPCComponent_ServesAndDrains` (order not asserted) |
+| S5.2 | `Shutdowns` MUST run after the server has stopped, in order, with nil entries skipped. | `TestGRPCComponent_ServesAndDrains`, `TestGRPCComponent_ShutdownHookErrorIsReported` |
 | S5.3 | With no `Shutdowns`, nothing runs. | `TestGRPCComponent_NoShutdowns` |
 | S5.4 | `ObservxConfig()` MUST copy every observability field. | `TestObservxConfig_Projection` |
 | S5.5 | `Serve` MUST run one component under the supervisor and return on context cancel. | `TestServe_StandaloneLifecycle` |
-| S5.6 | A clean, context-driven stop MUST return `nil` (the `Component` contract). | no test |
+| S5.6 | A clean, context-driven stop MUST return `nil` (the `Component` contract) from `GRPCComponent`, `Serve` and `bootstrap.Run` with a gRPC component. | `TestGRPCComponent_CleanStopReturnsNil` |
 | S5.7 | A shutdown that has to force-stop (S12) MUST still run `Shutdowns`. | no test |
 | S5.8 | The server MUST NOT start serving before `RegisterServices` succeeded. | holds by construction; no test |
 | S5.9 | The listener MUST NOT leak on a registration error. | `TestRun_RegisterError` |
+| S5.10 | A failing shutdown hook MUST be reported through `observx.ReportError`, and the later hooks still run. | `TestGRPCComponent_ShutdownHookErrorIsReported` |
+| S5.11 | With the internal-TLS switch on, the listener MUST serve TLS and MUST NOT serve a plaintext client. | `TestGRPCComponent_ServesInternalTLS` |
+| S5.12 | A misconfigured switch (on without certificate and key, or an unrecognised value) MUST fail the start with an error naming `W17_INTERNAL_TLS`. | `TestGRPCComponent_InternalTLSMisconfigurationFailsStart` |
+| S5.13 | `ShutdownTimeout` `0` MUST mean 10s and a negative value MUST mean unbounded, so the opt-out from S14 stays unbounded. | `TestShutdownTimeout_EnvOptOutStaysUnbounded` |
 
 ## S6. Interceptor and server-option order
 
@@ -215,13 +222,14 @@ under "Process shape").
 | ID | Guarantee | Test |
 |---|---|---|
 | S6.1 | The OpenTelemetry stats handler MUST be installed, so every RPC, including one that fails in an interceptor, has a server span. | no test |
-| S6.2 | Recovery MUST be outermost, so it catches panics in every caller-supplied unary interceptor and in the handler. | no test (the interceptor is tested in isolation, S8) |
+| S6.2 | Recovery MUST be outermost (grpc-go's singular interceptor slot), so it catches panics in every caller-supplied unary interceptor and in the handler, and the server keeps serving. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors` |
 | S6.3 | `cfg.UnaryInterceptors` MUST run in slice order, outermost first. | no test on the wire server; the in-process twin is `TestConn_WithUnaryInterceptors_ChainOrder` |
 | S6.4 | `cfg.ServerOptions` MUST be able to override keepalive and add credentials (they come later in the option list). | no test |
-| S6.5 | Every caller-supplied unary interceptor MUST run inside recovery. | no test |
+| S6.5 | Every caller-supplied unary interceptor, in `cfg.UnaryInterceptors` or chained in through `ServerOptions`, MUST run inside recovery. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors` |
+| S6.6 | A singular `grpc.UnaryInterceptor` or `grpc.StreamInterceptor` in `ServerOptions` MUST be refused at start with an error pointing at the chained option, not by a process panic. | `TestGRPCComponent_SingularInterceptorOptionIsRefused`, `TestRun_ConflictingInterceptorOptionsAreAnError` |
 
 **Deliberate limits.**
-- `Config` has no stream-interceptor field (documented on `Config`).
+- `Config` has no stream-interceptor field (documented on `Config`); extra interceptors go in through `grpc.ChainUnaryInterceptor` / `grpc.ChainStreamInterceptor` in `ServerOptions`, since the singular slot belongs to recovery.
 - A tier interceptor added here must also be passed to the in-process bridge (S21) to keep deployment parity (documented on `Config`).
 
 ## S7. Keepalive pairing
@@ -286,11 +294,12 @@ health → `Serve` in a goroutine → wait for context or a serve error.
 | S9.1 | A missing `Addr` or `RegisterServices` MUST be rejected before listening. | `TestRun_ValidationErrors` |
 | S9.2 | A listen failure (port in use, bad address) MUST be returned, wrapped with the address. | `TestRun_ListenError` |
 | S9.3 | A registration error MUST close the listener and be returned. | `TestRun_RegisterError` |
-| S9.4 | On context cancel: bounded graceful stop, then `OnShutdown`, then return. | `TestRun_GracefulShutdown` |
-| S9.5 | If `Serve` fails on its own, `OnShutdown` MUST still run and the serve error is returned. | no test |
-| S9.6 | `OnShutdown` MUST run exactly once on every return path after a successful listen and registration. | no test for the serve-error path |
-| S9.7 | After a serve error, the server MUST be stopped before `OnShutdown` tears down resources. | no test |
+| S9.4 | On context cancel: bounded graceful stop, then `OnShutdown`, then return `nil`. | `TestRun_GracefulShutdown` |
+| S9.5 | If `Serve` fails on its own, `OnShutdown` MUST still run and the serve error is returned, wrapped with the address. | `TestRun_ServeErrorStopsServerBeforeOnShutdown` (address not asserted) |
+| S9.6 | `OnShutdown` MUST run exactly once on every return path after a successful listen and registration. | `TestRun_GracefulShutdown`, `TestRun_ServeErrorStopsServerBeforeOnShutdown` (run asserted; count not asserted) |
+| S9.7 | After a serve error, the server MUST be stopped before `OnShutdown` tears down resources. | `TestRun_ServeErrorStopsServerBeforeOnShutdown` |
 | S9.8 | The server MUST NOT serve any port other than `Addr`. | holds by construction; no test |
+| S9.9 | An option set grpc-go rejects (two singular interceptors) MUST close the listener and be returned as an error. | `TestRun_ConflictingInterceptorOptionsAreAnError` |
 
 **Deliberate limits.**
 - TCP only. No `MaxConcurrentStreams`, `MaxConnectionAge` or `MaxConnectionIdle` defaults; the receive size limit and handshake timeout are grpc-go defaults (4 MiB receive). All can be set through `ServerOptions`.
@@ -320,7 +329,7 @@ health → `Serve` in a goroutine → wait for context or a serve error.
 |---|---|---|
 | S11.1 | The root service MUST answer SERVING once `Serve` starts. | `TestDefaultHealthServer`; end to end through the S16 tests |
 | S11.2 | Health is liveness, not readiness: it MUST NOT consult a dependency. | holds by construction; no test |
-| S11.3 | Health SHOULD report NOT_SERVING once shutdown has begun. | no test |
+| S11.3 | Health MUST report NOT_SERVING for every service once shutdown has begun, before the drain finishes. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
 | S11.4 | Health MUST be reachable without credentials. | no test |
 
 ## S12. Bounded gRPC stop
@@ -391,16 +400,18 @@ with the prefix `W17_MCP`.
 |---|---|
 | unset | 10s |
 | unparseable | 10s, not reported |
-| `<= 0` | `0`, meaning unbounded |
+| `<= 0` | `lifecycle.Unbounded` (negative), meaning unbounded |
 | `N` | N seconds |
 
-Note that `0` here means unbounded, while `runtime.Config.ShutdownTimeout = 0` means 10s.
+The opt-out is negative because `runtime.Config.ShutdownTimeout = 0` means 10s; the result can be
+handed to that field unchanged.
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S14.1 | Every row of the table above MUST hold. | `TestShutdownTimeoutFromEnv` (unset, 25, nonsense, 0; negative input not covered) |
+| S14.1 | Every row of the table above MUST hold. | `TestShutdownTimeoutFromEnv` |
+| S14.2 | The opt-out MUST stay unbounded when handed to `runtime.Config.ShutdownTimeout`. | `TestShutdownTimeout_EnvOptOutStaysUnbounded` |
 
 ## S15. HTTP liveness endpoint
 
@@ -456,6 +467,7 @@ leaf needs the ClientAuth extended key usage.
 | S16.12 | `Dispatch` with `Final=false` MUST pass every non-`health` word through; with `Final=true` it owns the command table. | `TestDispatch_OtherWordsFallThrough`, `TestDispatch_FinalOwnsTheCommandTable` |
 | S16.13 | Redirects MUST NOT be followed, and the body read MUST be capped at 4 KiB. | no test |
 | S16.14 | MUST NOT consult a database. | holds by construction; no test |
+| S16.15 | An unrecognised `W17_INTERNAL_TLS` value MUST fail the check with an error naming it, as the listener refuses it. | `TestRun_GRPCUnrecognisedTLSSwitchFails` |
 
 ## S17. Internal-mesh TLS, server side
 
@@ -463,12 +475,13 @@ leaf needs the ClientAuth extended key usage.
 
 **Purpose.** Derives the listener's TLS credentials from the stack-wide switch. Returns
 `(opt, true, nil)`, `(nil, false, nil)` or `(nil, false, err)`; the caller appends the option.
+`runtime.GRPCComponent` (S5) applies it itself from the process environment.
 
 **Configuration.**
 
 | Variable | Effect |
 |---|---|
-| `W17_INTERNAL_TLS` | `on` / `true` / `1` / `yes` (case-insensitive, trimmed) → TLS. `terminated` → plaintext listener (TLS ends at the platform) |
+| `W17_INTERNAL_TLS` | `on` / `true` / `1` / `yes` (case-insensitive, trimmed) → TLS. `terminated` → plaintext listener (TLS ends at the platform). Unset or `off` / `false` / `0` / `no` → no option. Any other value → error naming the variable, the value and every accepted spelling (`grpcclient.CheckInternalTLS`) |
 | `W17_INTERNAL_TLS_CERT`, `W17_INTERNAL_TLS_KEY` | both required when on; a missing one or a bad pair → error |
 | `W17_INTERNAL_TLS_CLIENT_CA` | set → `RequireAndVerifyClientCert` with that pool; unreadable or no PEM → error; ignored when the switch is off |
 
@@ -487,8 +500,8 @@ variables with S16 and S18.
 | S17.4 | A client CA set → mutual TLS; a client without a certificate is rejected in a real handshake. | `TestMutualTLSWithClientCA`, `TestBackendDial_MTLSRejectsClientWithoutCert` |
 | S17.5 | A bad client CA → error. | `TestBadClientCAErrors` |
 | S17.6 | `terminated` → plaintext listener. | `TestTLSServerOption_TerminatedListensPlain` |
-| S17.7 | A listener MUST NOT serve plaintext when TLS was requested. | no test |
-| S17.8 | A switch value that is not a recognised spelling MUST NOT silently result in plaintext. | no test |
+| S17.7 | A listener MUST NOT serve plaintext when TLS was requested. | `TestGRPCComponent_ServesInternalTLS` |
+| S17.8 | A switch value that is not a recognised spelling MUST be an error, not plaintext. | `TestTLSServerOption_UnrecognisedSwitchIsRefused`, `TestCheckInternalTLS` |
 
 ## S18. Internal-mesh TLS, client side, and dial defaults
 
@@ -501,7 +514,7 @@ retry service config, and keepalive.
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `W17_INTERNAL_TLS` | plaintext (h2c) | `on`-family → TLS; `terminated` → TLS against system roots |
+| `W17_INTERNAL_TLS` | plaintext (h2c) | `on`-family → TLS; `terminated` → TLS against system roots; `off`-family → plaintext; any other value → error from `TLSDialOption` and `Dial` |
 | `W17_INTERNAL_TLS_CA` | system roots | unreadable or no PEM → error |
 | `W17_INTERNAL_TLS_CERT` / `W17_INTERNAL_TLS_KEY` | no client certificate | both set → presented for mTLS; only one set → error |
 | `lookup` | `os.Getenv` in `Dial` | nil passed directly to `TLSDialOption` → plaintext |
@@ -521,6 +534,7 @@ retry service config, and keepalive.
 | S18.7 | Retry MUST cover only `UNAVAILABLE` and MUST be throttled; codes where the server may already have applied a write MUST NOT be retried. | `TestDefaultServiceConfig_*` (3 tests) |
 | S18.8 | No path MUST skip certificate verification. | holds by inspection; no test |
 | S18.9 | In `terminated` mode the client MUST verify against system roots. | no test |
+| S18.10 | An unrecognised switch value MUST be refused at dial construction with an error naming the variable, the value and the accepted spellings. | `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestCheckInternalTLS` |
 
 ## S19. Observability bootstrap
 
@@ -595,9 +609,9 @@ directly, with behaviour equivalent to a wire hop.
 
 | Option | Effect |
 |---|---|
-| `WithUnaryInterceptor(i)`, `WithUnaryInterceptors(...)` | the unary interceptor chain |
-| `WithStreamInterceptor(i)`, `WithStreamInterceptors(...)` | the stream interceptor chain |
-| `RegisterService(sd, impl)` | registers a service; registration must complete before serving (documented contract) |
+| `WithUnaryInterceptor(i)`, `WithUnaryInterceptors(...)` | append to one unary chain, in option order |
+| `WithStreamInterceptor(i)`, `WithStreamInterceptors(...)` | append to one stream chain, in option order |
+| `RegisterService(sd, impl)` | registers a service; registration must complete before serving (documented contract). A service registered twice, or an impl that does not satisfy the descriptor's handler type, panics, as on a wire `*grpc.Server` |
 
 **Behaviour.**
 - Unary `Invoke`: refuses a done context with the matching status before the method lookup;
@@ -626,9 +640,11 @@ directly, with behaviour equivalent to a wire hop.
 | S21.11 | A client send after the handler returned MUST NOT hang. | `TestConn_Streaming_SendAfterServerDoneDoesNotHang` |
 | S21.12 | Caller cancellation MUST reach the handler. | `TestConn_Streaming_CallerCancel` |
 | S21.13 | A handler error MUST become the caller's final status. | `TestConn_Streaming_TrailerErrorPropagates`, `TestInvoke_HandlerError` |
-| S21.14 | Context errors on streams MUST be delivered as gRPC status errors (`Canceled` / `DeadlineExceeded`), as on the wire. | no test |
+| S21.14 | Context errors on streams (`Header`, `SendMsg`, `RecvMsg` on both sides), and a bare context error returned by a unary or stream handler, MUST be delivered as gRPC status errors (`Canceled` / `DeadlineExceeded`), as on the wire. | `TestConn_Stream_ContextErrorsAreStatusErrors`, `TestInvoke_HandlerContextErrorIsStatusError` |
 | S21.15 | Messages MUST be deep-copied, so neither side can mutate the other's value. | no direct test; error paths covered by `TestCloneMsg_NonProto`, `TestCopyProto_Errors` |
 | S21.16 | A nested call MUST NOT be granted more than a wire hop. | covered by the S21.4 tests |
+| S21.17 | Registering a service twice, or an impl that does not satisfy the handler type, MUST panic instead of replacing or accepting it. | `TestConn_RegisterService_DuplicateIsRefused`, `TestConn_RegisterService_WrongImplIsRefused` |
+| S21.18 | Repeated interceptor options MUST append to one chain in option order; a later option MUST NOT drop an earlier one. | `TestConn_UnaryInterceptorOptionsAppend`, `TestConn_StreamInterceptorOptionsAppend` |
 
 **Deliberate limits.**
 - A stream goroutine stays alive until the caller cancels its context or reads to the end — the same contract as grpc-go.

@@ -2,17 +2,19 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-122 interactions; 55 have no test, 34 more are covered only in part.
+126 interactions; 45 have no test, 34 more are covered only in part.
 
 ## Server × Server
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Component supervisor (S1) | gRPC service component (S5) | A clean SIGTERM gives a `nil` result and exit status 0. | no test |
-| Ordered resource teardown (S4) | Bounded gRPC stop (S12) | Pools close only after handlers have ended; teardown after a forced stop must tolerate abandoned handlers. | no test |
-| gRPC panic recovery (S8) | Interceptor and server-option order (S6) | Every caller-supplied unary interceptor, including one passed through `ServerOptions`, runs inside recovery. | no test |
+| Component supervisor (S1) | gRPC service component (S5) | A clean, context-driven stop (what SIGTERM triggers) gives a `nil` result and exit status 0. | `TestGRPCComponent_CleanStopReturnsNil` (context cancel; no signal sent) |
+| Ordered resource teardown (S4) | Bounded gRPC stop (S12) | Pools close only after handlers have ended; teardown after a forced stop must tolerate abandoned handlers. | `TestRun_ServeErrorStopsServerBeforeOnShutdown` (serve-error path only) |
+| gRPC panic recovery (S8) | Interceptor and server-option order (S6) | Every caller-supplied unary interceptor, including one chained in through `ServerOptions`, runs inside recovery; a singular interceptor option, which would run outside it, is refused at start. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors`, `TestGRPCComponent_SingularInterceptorOptionIsRefused` |
 | Server reflection (S10) | Internal-mesh TLS, server side (S17) | Reflection is reachable only by trusted, authenticated peers. | no test |
-| Internal-mesh TLS, server side (S17) | gRPC service component (S5) | With the switch on, the listener built by `runtime.GRPCComponent` / `runtime.Serve` serves TLS. | no test |
+| Internal-mesh TLS, server side (S17) | gRPC service component (S5) | With the switch on, the listener built by `runtime.GRPCComponent` / `runtime.Serve` serves TLS and refuses a plaintext client; a misconfigured or unrecognised switch fails the start. | `TestGRPCComponent_ServesInternalTLS`, `TestGRPCComponent_InternalTLSMisconfigurationFailsStart` |
+| Shutdown timeout from the environment (S14) | gRPC service component (S5) | The operator's opt-out stays unbounded in `Config.ShutdownTimeout`, where `0` means 10s. | `TestShutdownTimeout_EnvOptOutStaysUnbounded` |
+| gRPC health service (S11) | Bounded gRPC stop (S12) | Health reports NOT_SERVING once the drain starts, while in-flight RPCs still finish. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
 | Internal-mesh TLS, server side (S17) | `health` subcommand (S16) | The gRPC check dials with the listener's posture (plaintext, server-auth TLS, mutual TLS, `terminated`). | `TestRun_GRPCUnderInternalTLS` (server-auth TLS only) |
 | Internal-mesh TLS, client side (S18) | `terminated` mode with a private CA variable set | The client verifies against system roots. | no test |
 | Internal-mesh TLS (S17, S18) | Observability bootstrap (S19) | Telemetry export follows the mesh's transport-security posture. | no test |
@@ -34,6 +36,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | In-process gRPC bridge (S21) | Per-client rate limiter | In-process callers are keyed per caller, not into one shared bucket. | no test |
 | Bounded HTTP stop and drain (S13) | MCP session sweeper | `StopWith` runs the sweeper, then a bounded `Shutdown` that force-closes on deadline. | no test |
 | Error and refusal reporting (S20) | Authentication and ACL refusals under load | Each refusal is recorded, with bounded log volume. | no test |
+| Internal-mesh TLS switch (S16, S17, S18) | Inter-tier dial (E31) | An unrecognised `W17_INTERNAL_TLS` value is refused by the listener, the dialer and the health check, and makes `grpcx.InternalTLSEnabled` dial TLS; no side reads it as plaintext. | `TestTLSServerOption_UnrecognisedSwitchIsRefused`, `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestRun_GRPCUnrecognisedTLSSwitchFails`, `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 | Client dial retry (S18, E30) | Non-idempotent handlers | Only `UNAVAILABLE` is retried, so a request is retried only when it never reached the server. | `TestDefaultServiceConfig_RetriesOnlyUnavailable` |
 | Bounded HTTP stop and drain (S13) | `w17-events` (E18), MCP GET stream (E27), per-RPC SSE/WS (E14, E15) | `w17-events` and the MCP GET stream end at drain start, so shutdown is fast and clients reconnect to another instance; per-RPC streams end by the HTTP server's force-close. | `TestStopHTTPDrainAwareStreamEndsImmediately`, `TestW17EventsEndsOnDrain`, `w17events_drain_test.go`, `serve_shutdown_test.go` (per-RPC streams: no test) |
 | Server TLS posture | MCP HTTP listener (E27) | MCP follows the same TLS posture and limits as the other surfaces. | no test |
@@ -42,7 +45,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Ordered resource teardown (S4) | Event bus publish and flush | The bus is flushed after transports drain; a flush failure is reported. | no test |
+| Ordered resource teardown (S4) | Event bus publish and flush | The bus is flushed after transports drain; a flush failure is reported. | `TestRunGraceful_ResourcesCloseAfterComponentsDrain`, `TestRunGraceful_ResourceCloserErrorIsReported`, `TestGRPCComponent_ShutdownHookErrorIsReported` (generic closers, not the bus) |
 | In-process gRPC bridge (S21) | Distributed transactions | A nested call does not inherit the caller's transaction. | `TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver` |
 | Graceful shutdown, `Shutdowns` hooks (S5) | Transaction registry (D5) | Pools close after the server stops and before the orchestrator's kill deadline; open distributed transactions are not RPCs and are not drained, so process exit rolls them back and their parked after-commit work is dropped. | no test |
 | Graceful shutdown | Wait for the database at boot (D2) | A SIGTERM during the boot wait MUST stop the wait through context cancellation. | `TestPing_CancelledContextStopsTheWait` |
@@ -53,7 +56,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 |---|---|---|---|
 | In-process gRPC bridge (S21) | Principal propagation | The gateway stamps (user, scopes, labels) are relayed as on the wire, nothing more. | `TestConn_UnauthenticatedCaller_StaysUnauthenticated`, metadata isolation tests in `go/service/inprocgrpc` |
 | In-process gRPC bridge (S21) | i18n language metadata | `w17-language` set as outgoing by the caller reaches the handler as incoming; a language present only on the caller's incoming side is not relayed, as on the wire. | `TestConn_CallerWithNoOutgoingMetadata_DoesNotLeakItsIncoming` |
-| Process shutdown | Bus subscribers (I2, I4–I6) | `Close` drains every subscriber on every transport; registrations after close or drain are refused. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded`, `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded` (memory transport: no test) |
+| Process shutdown | Bus subscribers (I2, I4–I6) | `Close` drains every subscriber on every transport; registrations after close or drain are refused. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded`, `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused`, `TestMemoryBus_DispatchAfterDrainIsRefused` |
 | Internal-mesh TLS | Principal read side (I10) | Backend tiers that trust the principal metadata are reachable only from authenticated tiers. | no test |
 
 ## Server × Tooling
@@ -61,7 +64,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
 | `health` subcommand (S16) | Command dispatch (T1) | `health` is answered before the server starts and other words go to the next dispatcher; every reserved root is answered; a binary with migration commands must not set `Final=true` ahead of them. | `TestDispatch_FinalOwnsTheCommandTable`, `TestDispatch_AnswersForEveryReservedRoot` (`migrate`, `fixtures` only) |
-| Internal-mesh TLS (server and client) | Dev PKI (T27) | The leaf chains to the current CA and covers every dial name. | no test |
+| Internal-mesh TLS (server and client) | Dev PKI (T27) | The leaf chains to the current CA and covers every dial name. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestGRPCComponent_ServesInternalTLS` |
 
 ## Edges × Edges
 
@@ -113,14 +116,15 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 |---|---|---|---|
 | REST error mapping | E2E MCP caller (T24) | The same refusal code is assertable over REST and MCP where the MCP refusal carries a status. | `TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures` |
 | SSE gateway | E2E streams (T25) | Frames arrive in order; close or an error frame ends the stream; non-JSON frames fail the step. | `TestExpectStream_*` |
-| Authentication and sign-out flows | E2E auth threading (T20) | Each step uses the intended principal, including none, so a signed-out refusal can be asserted. | `TestRunScenario_MissingAuthToken` (missing-token refusal only) |
+| Authentication and sign-out flows | E2E auth threading (T20) | Each step uses the intended principal, including none, so a signed-out refusal can be asserted. | `TestRunScenario_MissingAuthToken`, `TestAnonymousStep_SendsNoCredential`, `TestTokenFrom_UsesTheNamedCapture`, `TestImplicitSessionToken_CannotAssertUnauthenticated` |
 
 ## Data × Data
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
 | Nested transactions (D4) | After-commit work (D6), in-process emit | A callee's emit parks on the root scope, runs once after the root commits, and is dropped on rollback or cancellation. | `TestEmit_ANestedBusinessEmitWaitsForTheRootCommit`, `TestEmit_NothingIsAnnouncedForARolledBackTransaction`, `TestEmit_ACancelledRootAnnouncesNothing` |
-| Auto-rollback interceptor (D7) | Transaction registry adoption lease (D5) | A failed participant MUST doom the transaction even while another participant holds the lease. | no test |
+| Auto-rollback interceptor (D7) | Transaction registry adoption lease (D5) | A failed participant MUST doom the transaction even while another participant holds the lease; a Commit queued before the rollback does not commit. | `TestInterceptor_DoneContextBehindASiblingStillDiscardsTheTransaction`, `TestInterceptor_ZeroFinishWaitDoomsTheTransaction`, `TestDoom_ACommitQueuedBeforeTheRollbackDoesNotCommit` |
+| Auto-rollback interceptor (D7) | Coordinator server (D5) | The coordinator's Commit of a doomed transaction is `Aborted`; its Rollback succeeds. | `TestServer_DoomedTransaction_CommitAbortsAndRollbackSucceeds` |
 | Auto-rollback interceptor (D7) | Transaction control plane (D5) | A failed Begin or Commit MUST NOT trigger an automatic rollback. | `controlplane_test.go` |
 | Transaction lifecycle (D3) | Client disconnect or deadline | Rollback runs on a detached context; no commit is made for a caller that is gone. | `TestRunRollsBackEvenWhenTheCallersContextIsDead`, `TestRunDoesNotCommitOnBehalfOfAVanishedCaller` |
 | Orphan timeout (D5) | Statement timeout | Per-method statement timeout stays below the finish wait (30 s), which stays below the orphan timeout (5 min); the watcher drains an expired entry even under a held lease. | `TestServer_Begin_DefaultTxTimeout_*`, `TestTimeoutWatcher_DrainsUnderALease` |
@@ -130,7 +134,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Cursor paging totals (D9) | Concurrent writes | The total is counted once per paging session and cached in the cursor. | no test |
 | Bounded materialization (D11) | Adopted transaction or locked query (D5) | Fetch windows run sequentially on the transaction. | no test |
 | Bounded materialization (D11) | Cursor paging (D9) | The guard bounds intermediate rows independently of page size. | no test |
-| Column encryption (D16) | UNIQUE index and equality lookups | Deterministic mode keeps the index and `WHERE col = :x` working, including across key rotation. | no test |
+| Column encryption (D16) | UNIQUE index and equality lookups | Deterministic mode keeps the index and `WHERE col = :x` working, including across key rotation (deterministic values stay on the lowest key version). | `TestDeterministic_StableAcrossRotation` |
 | Column encryption (D16) | Cursor paging (D9) | A crypted column used as a keyset key orders by ciphertext; whether to allow it is the generator's decision. | no test |
 | SQLite collation (D12) | Session pins (D1) | Every process that opens the database registers the collation and applies the same session pins; equality matches PostgreSQL. | `TestRegister_UnicodeOrderingAndEquality` (ordering) |
 | Redis HASH codec (D14) | KV multi-fetch (`DedupKeys`, D8) | Multi-fetch multiplicity equals SQL `IN`. | `TestDedupKeys` |
@@ -141,9 +145,9 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
 | After-commit work (D6) | Event bus publish (cross-process) | A storage handler's emit is registered on commit, published after the coordinator's Commit, and dropped on rollback or drain; delivery is at-most-once. | `oncommit_test.go`, `phantom_emit_test.go`; loss between commit and publish: no test |
-| Transaction routing metadata (D4, D5) | Event bus subscriber context | Event envelopes MUST NOT carry transaction routing metadata into a subscriber, so a subscriber is never a participant. | `TestHeaderName_IsTheStrippedEnvelopeKey` (transaction id) |
+| Transaction routing metadata (D4, D5) | Event bus subscriber context | Event envelopes MUST NOT carry transaction routing metadata (`w17-tx-id`, `w17-conn-id`) into a subscriber, so a subscriber is never a participant and its storage calls are not pinned to a settled transaction's connection. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
 | Cursor paging metadata (D9) | Principal relay (`ForwardToOutgoing`) | Paging headers are never relayed hop-to-hop. | no test in the data packages (relay tests live in `go/lib/principal`) |
-| Secret values (D17) | Structured logging | A `Secret` redacts on every logging path, wherever it is held. | `TestSlogRedacts`, `TestStructRedacts` (exported fields) |
+| Secret values (D17) | Structured logging | A `Secret` redacts on every logging path, wherever it is held. | `TestSlogRedacts`, `TestStructRedacts`, `TestUnexportedFieldRedactsInEveryVerb`, `TestUnexportedFieldRedactsInSlog` |
 | Column encryption (D16) | Error layer and logs | Decryption errors carry no plaintext or key material. | `TestDecrypt_*` |
 | In-process transaction scope | In-memory transport (I4) | A memory subscriber does not inherit the emitter's transaction. | no test |
 
@@ -158,13 +162,13 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Event context (I8) | Principal relay into subscribers (I10) | The subscriber runs with the emitter's principal and scopes carried in `Event.Metadata`, and the metadata carries no credentials. | `TestEventContextReaders_*` (scopes and labels); credentials: no test |
+| Event context (I8) | Principal relay into subscribers (I10) | The subscriber runs with the emitter's principal and scopes carried in `Event.Metadata`, and the metadata carries no credentials. | `TestEventContextReaders_*`, `TestMetadataFromContext_DropsCredentials` |
 | Event labels (I8) | Server-sent-events hub audience (I9) | Labelled events reach only principals holding every label; unlabelled events reach nobody under isolation. | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEvent*`, `TestEmitInvalidate_*` |
 | Principal, gateway side (I11) | Event context (I8) | A client cannot inject `x-w17-*` or `w17-label-*` keys into an event envelope. | `TestWithGatewayMD_SanitizesBothSides` |
 | Principal relay (I12) | Dispatcher (I1) | An emit reached through several tiers keeps its scopes and labels. | `TestForwardToOutgoing_SecondHopKeepsTheLabel` |
-| Catalogs and formatting (I14, I15) | Event context (I8) | Subscriber messages use the requester's language and format locale. | no test |
+| Catalogs and formatting (I14, I15) | Event context (I8) | Subscriber messages use the requester's language and format locale. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` (metadata collapse only; rendering not asserted) |
 | Server-sent-events hub (I9) | Delivery modes (I3) | In fan-out mode every replica's hub receives every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent` |
-| Server-sent-events hub (I9) | NATS JetStream transport (I5) | The hub resumes delivery after a broker loss, including a recreated broker. | no test |
+| Server-sent-events hub (I9) | NATS JetStream transport (I5) | The hub resumes delivery after a broker loss, including a recreated broker. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` (bus level; hub not exercised) |
 | Server-sent-events hub (I9) | Slow client | A slow client loses only its own frames; other clients are unaffected. | no test |
 | Server-sent-events hub (I9) | Client reconnect | The client reconnects automatically; events emitted during the gap are not replayed (deliberate). | no test |
 | Permission checks (I13) | Multi-domain auth response | A permission check uses the lock of the handler's own domain. | no test |
@@ -197,6 +201,6 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Fixtures (T6) | Migrations (T11) | Seeding runs after the schema exists; the stale-render check compares fixtures with their render. | `TestFixturesApply_RefusesARenderOlderThanItsFixture` |
 | E2E credential step (T20) | Event awaits (T25) | Event visibility is asserted for the credential's principal. | no test |
 | E2E `${seq}` (T21) | Several runner processes on one database | Generated values stay unique per process; parallel processes need distinct data. | `TestSeqGlobalAcrossScopes` (in-process) |
-| E2E matchers (T22) | Proto3 JSON zero values | Absent and zero are distinguished: `eq 0` explains presence; `count`, `empty` and `capture` fail on an absent field. | `TestExactMatcher_ZeroAgainstAnAbsentFieldExplainsPresence` (`eq` only) |
+| E2E matchers (T22) | Proto3 JSON zero values | An absent field is the encoding of an empty one: `count == 0`, `empty`, `distinct` and `eq null` accept it; `eq 0` explains presence; `capture` fails on it and binds nothing. | `TestExactMatcher_ZeroAgainstAnAbsentFieldExplainsPresence`, `TestCapture_AbsentFieldFails`, `TestCountMatcher`, `TestEmptyMatcher` (`distinct` not asserted) |
 | Stress (T26) | E2E runner routing (T23) | Load requests are routed like runner requests (`ResolveREST`) and carry the same credentials. | no test |
 | Plugin digest (T29) | Code generation | Every compiled file is covered by the digest or regenerated from covered input. | `TestOf_IgnoresRegeneratedPb` (skip rule only) |

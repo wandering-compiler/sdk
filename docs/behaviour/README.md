@@ -18,13 +18,13 @@ changing it.
 
 | Area | Features | Guarantees | No test | Covered in part |
 |---|---|---|---|---|
-| [server.md](server.md) | 21 | 137 | 42 | 19 |
-| [edges.md](edges.md) | 34 | 187 | 27 | 10 |
-| [data.md](data.md) | 17 | 119 | 39 | 2 |
-| [events-identity.md](events-identity.md) | 18 | 105 | 33 | 17 |
-| [tooling.md](tooling.md) | 29 | 154 | 50 | 4 |
-| **All areas** | **119** | **702** | **191** | **52** |
-| [matrix.md](matrix.md) | — | 122 interactions | 55 | 34 |
+| [server.md](server.md) | 21 | 148 | 31 | 19 |
+| [edges.md](edges.md) | 34 | 189 | 27 | 10 |
+| [data.md](data.md) | 17 | 125 | 35 | 3 |
+| [events-identity.md](events-identity.md) | 18 | 106 | 23 | 18 |
+| [tooling.md](tooling.md) | 29 | 160 | 38 | 6 |
+| **All areas** | **119** | **728** | **154** | **56** |
+| [matrix.md](matrix.md) | — | 126 interactions | 45 | 34 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of
 it says **no test**.

@@ -95,7 +95,7 @@ it, so all of them open the database the same way.
 
 ## D3. Transaction lifecycle (`distx.Run`)
 
-**Code.** `go/service/tx/distx/run.go` — `Run`.
+**Code.** `go/service/tx/distx/run.go` — `Run`; `go/service/tx/distx/client.go` — `TxHandle`, `ErrHandleFinished`.
 
 **Purpose.** Run a function inside a distributed transaction held by a storage binary: commit on success, roll back otherwise.
 
@@ -117,6 +117,7 @@ its own per-method transaction when no header is present.
 | D3.6 | When both the function and the rollback fail, the function's error MUST stay the `errors.Is` target and the rollback failure MUST be appended as text. | `TestRunKeepsTheFunctionErrorAndNamesAFailedRollback` |
 | D3.7 | A nil client or nil function MUST be an error. | `TestRunRefusesNils` |
 | D3.8 | The function MUST NOT be called when Begin fails. | `TestRunDoesNotCallTheFunctionWhenBeginFails` |
+| D3.9 | A root `TxHandle` MUST be single use: after a successful Commit or Rollback, a further call returns `ErrHandleFinished` naming how the transaction ended, without an RPC. A failed attempt does not use the handle up. | `TestTxHandle_SecondFinishSaysTheTransactionAlreadyEnded` (failed-attempt retry not asserted) |
 
 **Deliberate limits.**
 - No automatic retry on serialization failures or deadlocks; such errors surface to the caller, and inside a distributed transaction they discard it (D7).
@@ -152,7 +153,7 @@ its own per-method transaction when no header is present.
 
 ## D5. Transaction registry and coordinator server
 
-**Code.** `go/service/tx/txregistry/memory.go` — `Memory`, `WithFinishWait`; `go/service/tx/txregistry/txregistry.go` — `AdoptTx`, `AdoptTxIsolated`, `IsolationFor`, `HeaderName`; `go/service/tx/distx/server.go` — `Server`, `WithDefaultTxTimeout`, `DefaultOrphanTimeout`.
+**Code.** `go/service/tx/txregistry/memory.go` — `Memory`, `WithFinishWait`; `go/service/tx/txregistry/txregistry.go` — `AdoptTx`, `AdoptTxIsolated`, `IsolationFor`, `HeaderName`, `ErrTxBusy`, `ErrTxDoomed`; `go/service/tx/distx/server.go` — `Server`, `WithDefaultTxTimeout`, `DefaultOrphanTimeout`.
 
 **Purpose.** An in-memory `tx_id → *sql.Tx` map with one `*sql.DB` per declared connection, served over gRPC, that generated storage handlers adopt.
 
@@ -173,7 +174,7 @@ its own per-method transaction when no header is present.
 |---|---|---|
 | D5.1 | Transaction ids MUST be random UUIDv4. | no test |
 | D5.2 | Adoption on another connection MUST fail with `ErrConnectionMismatch` and an unknown id with `ErrUnknownTxID`; neither may silently open a fresh transaction. | `txregistry_test.go`, `adopt_unknown_txid_test.go` |
-| D5.3 | The adoption lease MUST be exclusive: a second adopter waits (bounded) for the first, Commit/Rollback wait (bounded) for a running adopter, so a method is never split; on expiry `ErrTxBusy` with the transaction intact and retryable. | `TestAdoptedHandler_FinisherCannotSplitAMethod`, `TestFinisher_WaitsForTheAdopterToRelease`, `TestSecondAdopter_WaitsForTheFirst` |
+| D5.3 | The adoption lease MUST be exclusive: a second adopter waits (bounded) for the first, Commit/Rollback wait (bounded) for a running adopter, so a method is never split; on expiry `ErrTxBusy` with the transaction intact and retryable (a Rollback is the exception, D5.12). | `TestAdoptedHandler_FinisherCannotSplitAMethod`, `TestFinisher_WaitsForTheAdopterToRelease`, `TestSecondAdopter_WaitsForTheFirst` |
 | D5.4 | A waiting finisher MUST block new adopters, so it cannot starve. | no test |
 | D5.5 | One `*sql.Tx` MUST NOT be used from two goroutines at once. | `TestMemory_ConcurrentBeginCommit`, `TestMemory_ConcurrentDoubleCommit_OneWinner`, `TestMemory_ConcurrentLookupVsCommit` |
 | D5.6 | With a timeout, a watcher MUST drain and roll back the entry when the deadline fires, even under a held lease. | `TestTimeoutWatcher_DrainsUnderALease`, `TestMemory_Begin_TxTimeout_*`, `TestServer_Begin_DefaultTxTimeout_OrphanCleanup`, `TestServer_Begin_DefaultTxTimeout_OptOut`, `TestServer_Begin_CallerTimeoutOverridesDefault` |
@@ -182,6 +183,8 @@ its own per-method transaction when no header is present.
 | D5.9 | `AdoptTxIsolated` MUST refuse a transaction whose isolation is weaker than, or unknown relative to, the method's declared level (`ErrIsolationTooWeak`). | no test |
 | D5.10 | Isolation levels MUST be honoured on PostgreSQL and MySQL. | no test (needs a server) |
 | D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | no test |
+| D5.12 | A Rollback MUST doom the transaction before it waits for the lease. A doomed transaction refuses Commit (`ErrTxDoomed`) and new adoptions, and is rolled back by whoever reaches it first: the rollback itself, a Commit that finds it idle, the release of the last lease, or the timeout watcher. A rollback that cannot run at once returns `ErrTxDoomed` wrapping `ErrTxBusy`, whatever the state of its context or the finish wait. | `TestRollbackBehindALease_CancelledContext_DoomsTheTransaction`, `TestRollbackBehindALease_ZeroFinishWait_DoomsTheTransaction`, `TestDoom_ACommitQueuedBeforeTheRollbackDoesNotCommit` |
+| D5.13 | The coordinator server MUST answer a Commit of a doomed transaction with `Aborted` (not retryable) and a Rollback of one with success, since the rollback is already decided. | `TestServer_DoomedTransaction_CommitAbortsAndRollbackSucceeds` |
 
 **Deliberate limits.**
 - In-memory registry: a restart loses every open transaction, and the coordinator's Commit gets NotFound without a cause.
@@ -201,7 +204,7 @@ its own per-method transaction when no header is present.
 |---|---|---|
 | D6.1 | `DeferUntilCommit` MUST run the work now when no transaction is involved, park it until commit when one is, and drop it (with an operator report) when the transaction ended without committing. | `oncommit_test.go`, `phantom_emit_test.go` |
 | D6.2 | In-process hooks MUST run once, in registration order, after a successful commit; a panicking hook is recovered and reported and does not stop the others or undo the commit. | `txscope_test.go`, `TestEmit_APanickingHookAfterCommitDoesNotUndoTheCommit` |
-| D6.3 | A panic in a registry after-commit hook MUST NOT escape `Commit`, skip later hooks, or report failure for a committed transaction. | no test |
+| D6.3 | A panic in a registry after-commit hook MUST be recovered under its own recover and reported; the later hooks still run and `Commit` returns success for the committed transaction. | `TestCommit_APanickingHookIsRecoveredAndTheRestRun` |
 | D6.4 | Nothing MUST be announced for a rolled-back or cancelled root, or for a commit the server refused. | `TestEmit_NothingIsAnnouncedForARolledBackTransaction`, `TestEmit_ACancelledRootAnnouncesNothing`, `TestEmit_ACommitTheServerRefusesDropsTheParkedWork` |
 
 **Deliberate limits.**
@@ -213,14 +216,20 @@ its own per-method transaction when no header is present.
 
 **Purpose.** Roll back the caller's distributed transaction whenever any unary handler inside it fails.
 
+**Configuration.** `grpcrollback.RollbackWait` (= `txregistry.DefaultFinishWait`, 30 s) bounds how
+long the failing call's reply waits for the rollback. The rollback runs on a context detached from
+the request's cancellation (values and metadata kept). Correctness does not depend on the bound:
+the registry dooms the transaction before waiting (D5.12).
+
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
 | D7.1 | A failing unary handler whose request carries `w17-tx-id` MUST trigger a rollback of that transaction; the handler's own error is returned unchanged. | `grpcrollback_test.go` |
-| D7.2 | A failed participant MUST doom the transaction regardless of concurrent participants or the state of the failing call's context. | no test |
+| D7.2 | A failed participant MUST doom the transaction regardless of concurrent participants or the state of the failing call's context; the coordinator's later Commit fails and nothing is committed. | `TestInterceptor_DoneContextBehindASiblingStillDiscardsTheTransaction`, `TestInterceptor_ZeroFinishWaitDoomsTheTransaction` |
 | D7.3 | Control-plane calls (Begin, Commit, Rollback) MUST NOT trigger it. | `controlplane_test.go` |
 | D7.4 | The recorded cause MUST name only the method and status code, never the handler's error text. | `cause_test.go` |
+| D7.5 | A rollback deferred behind a sibling (`ErrTxDoomed`) or a failed rollback MUST be reported through `observx`; `ErrUnknownTxID` (already drained) is ignored; the handler's error is never masked. | `TestInterceptor_ZeroFinishWaitDoomsTheTransaction` (deferred case only) |
 
 **Deliberate limits.**
 - Any failure inside a transaction discards it, including a benign `NotFound` read; a coordinator cannot tolerate a failed call and continue.
@@ -452,13 +461,13 @@ Stamp table: `w17_collation`.
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `W17_FIELD_KEYS=1:<b64 32 bytes>,2:<…>` | highest version encrypts, all versions decrypt | empty → error; versions must be positive and unique; keys exactly 32 bytes (std, raw or URL base64) |
+| `W17_FIELD_KEYS=1:<b64 32 bytes>,2:<…>` | highest version encrypts randomised values, lowest version (`Keyring.DeterministicVersion`) encrypts deterministic values, all versions decrypt | empty → error; versions must be positive and unique; keys exactly 32 bytes (std, raw or URL base64) |
 | `Init()` | installs the process keyring at boot | an error must fail the boot; shared helpers used before `Init` return a clear error |
 | `DevKeys` | a fixed development keyring | development only |
 
 **Construction.** HKDF-SHA256 derives an AES-256-GCM key and a separate MAC key from each
 configured key. Randomised mode uses a 96-bit random nonce; deterministic mode derives the
-nonce from an HMAC of the plaintext. Stored form: `w17c.<ver>.<r|d>.<base64url(nonce||ct||tag)>`.
+nonce from an HMAC of the plaintext, truncated to 96 bits. Stored form: `w17c.<ver>.<r|d>.<base64url(nonce||ct||tag)>`.
 
 **Guarantees.**
 
@@ -467,15 +476,18 @@ nonce from an HMAC of the plaintext. Stored form: `w17c.<ver>.<r|d>.<base64url(n
 | D16.1 | Randomised and deterministic values MUST round-trip, including the empty string; decryption is mode-agnostic. | `TestRandomised_*`, `TestDeterministic_*`, `TestDecrypt_IsModeAgnostic`, `TestRoundTrip_TheEmptyStringIsAValue` |
 | D16.2 | A plaintext row MUST yield `ErrNotEncrypted`, distinct from a tampered or wrong-key value (authentication error). | `TestDecrypt_ATamperedValueIsDistinguishedFromPlaintext`, `TestDecrypt_AWrongKeyDoesNotSilentlyProduceGarbage` |
 | D16.3 | An unknown key version MUST yield `ErrUnknownKeyVersion` naming the versions held. | `fieldcrypt_test.go` |
-| D16.4 | After rotation, old versions MUST stay decryptable and new writes MUST use the newest key. | `TestRotation_OldValuesStayReadableAndNewOnesUseTheNewestKey` (randomised mode) |
-| D16.5 | Deterministic equality lookups and UNIQUE enforcement MUST keep working across a key rotation. | no test |
+| D16.4 | After rotation, old versions MUST stay decryptable and new randomised writes MUST use the newest key. | `TestRotation_OldValuesStayReadableAndNewOnesUseTheNewestKey`, `TestDeterministic_StableAcrossRotation` |
+| D16.5 | Deterministic values MUST be written under the lowest key version, so adding a key (in any listing order) leaves the ciphertext of a plaintext unchanged and equality lookups and UNIQUE enforcement keep working. | `TestDeterministic_StableAcrossRotation` |
 | D16.6 | Error messages MUST NOT include plaintext or key material. | `TestDecrypt_*` |
 | D16.7 | A missing or malformed keyring MUST fail the boot, not the first query. | `TestParse_*`, `shared_test.go` |
 | D16.8 | `DevKeys` MUST be refused outside development. | no test |
+| D16.9 | Dropping the lowest key MUST move deterministic writes to the next lowest version, which `DeterministicVersion` names so a re-encryption can target it. | `TestDeterministic_DroppingTheLowestKeyMovesToTheNext` |
 
 **Deliberate limits.**
 - No protection against a compromised application host, which holds both data and key.
 - Deterministic mode reveals equality of values by design.
+- Deterministic columns cannot be re-keyed gradually. They move to a new key only when the lowest key is dropped; before that, every deterministic value has to be rewritten under the version that becomes the lowest, as a maintenance step with writes to those columns stopped, not a background job.
+- The deterministic nonce is a 96-bit truncated HMAC: two different plaintexts share a nonce with the probability of a 96-bit collision (around 2^48 distinct values under one key before it becomes likely).
 
 ## D17. Secret values and sources
 
@@ -500,13 +512,15 @@ Precedence: environment, then age file, then plain file.
 |---|---|---|
 | D17.1 | Every fmt verb, `String`, `GoString`, JSON and text marshalling and slog `LogValue` MUST emit `***` for a `Secret`. | `TestFmtVerbsRedact`, `TestJSONMarshalRedacts`, `TestSlogRedacts` |
 | D17.2 | A `Secret` in an exported struct field MUST redact when the struct is printed. | `TestStructRedacts` |
-| D17.3 | A `Secret` in an unexported struct field MUST redact when the struct is printed or logged. | no test |
+| D17.3 | A `Secret` in an unexported struct field MUST redact under every fmt verb and through slog's text handler. | `TestUnexportedFieldRedactsInEveryVerb`, `TestUnexportedFieldRedactsInSlog` |
 | D17.4 | Unmarshalling MUST load the value while it stays unprintable. | `TestUnmarshalLoadsButStaysRedacted` |
 | D17.5 | Construction-time failures MUST fail the boot; lookups never fail. | `source_test.go`, `coverage_extra_test.go` |
 | D17.6 | Source precedence MUST be environment, then age file, then plain file; the `SOPS_*` key variables are honoured as fallbacks. | `TestResolver_EnvWins`, `TestResolver_AgeRoundTripAndPrecedence`, `TestConfigFromEnv_SOPSInterop` |
 | D17.7 | `sopsenv` MUST be byte-compatible with the sops dotenv format, bind each value to its key name as associated data, and verify the whole-file MAC before returning values. | `TestRoundTrip`, `TestDecrypt_RefusesTampering` |
 | D17.8 | `Rekey` MUST refuse a tampered file and open the result for the new key only. | `TestRekey_KeepsValuesOpensForTheNewKeyOnly` |
+| D17.9 | `Reveal`, `IsZero` and the unmarshalling methods MUST return the held value regardless of how it is stored. | `TestPointerRepresentationKeepsSemantics` |
 
 **Deliberate limits.**
 - Plain dotenv values are taken literally: no quote stripping, inline comments or `export` prefix (`KEY="x"` yields `"x"` with the quotes).
 - `Resolver.Lookup` returns a plain `string`; wrapping it in `Secret` is the caller's job.
+- The value is held behind a pointer, so `==` on two `Secret`s compares identity, not content; compare `Reveal()` results where content equality is meant.
