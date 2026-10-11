@@ -250,7 +250,7 @@ func openSeedTarget(specs []factory.TargetSpec, withoutDSN []string, want string
 		}
 		return "", nil, nil, fmt.Errorf(
 			"fixtures: none of this bundle's connections (%s) is a store a fixture can be seeded into%s\n"+
-				"  why: a fixture is relational rows; a KV or object store has nothing to insert them as",
+				"  why: fixtures are seeded into Postgres only; MySQL, SQLite, KV and object stores have no seed support",
 			connectionNames(specs), unset)
 	}
 	if len(candidates) > 1 {
@@ -271,7 +271,8 @@ func openSeedTarget(specs []factory.TargetSpec, withoutDSN []string, want string
 	if !ok {
 		_ = ap.Close()
 		return "", nil, nil, fmt.Errorf(
-			"fixtures: connection %q takes no rendered fixture — its store has no seed support",
+			"fixtures: connection %q takes no rendered fixture — its store has no seed support\n"+
+				"  why: fixtures are seeded into Postgres only",
 			spec.Connection)
 	}
 	return spec.Connection, sc, func() { _ = ap.Close() }, nil

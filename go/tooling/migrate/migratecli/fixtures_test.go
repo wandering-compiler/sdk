@@ -443,3 +443,52 @@ func TestFixturesApply_RefusesARenderOlderThanItsFixture(t *testing.T) {
 		t.Fatalf("fresh render not seeded: %+v", rec.calls)
 	}
 }
+
+// A MySQL or SQLite connection beside the Postgres one is not a seed
+// candidate: neither store can take a rendered fixture, so counting them made
+// the choice "ambiguous" and demanded a --connection that could only fail.
+func TestFixturesApply_StoresThatCannotSeedAreNotCandidates(t *testing.T) {
+	rec := &recordingSeeder{}
+	withSeeder(t, rec)
+	dir := seedDir(t, migrate.FixtureSeed{Domain: "app", Name: "base",
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO base")}})
+	lock := writeLock(t,
+		migrate.LockConnection{Name: "app-postgres", TargetMigrationID: "ts-1"},
+		migrate.LockConnection{Name: "app-mysql", TargetMigrationID: "ts-2"},
+		migrate.LockConnection{Name: "app-sqlite", TargetMigrationID: "ts-3"})
+	var out strings.Builder
+	if err := runFixtures(context.Background(), []string{"apply", "--lock", lock, "--fixtures", dir},
+		Options{Getenv: envMap{
+			"W17_TARGET_APP_POSTGRES": "postgres://x/app",
+			"W17_TARGET_APP_MYSQL":    "mysql://u@x/app",
+			"W17_TARGET_APP_SQLITE":   "sqlite:///tmp/app.db",
+		}.get, Out: &out}, &out); err != nil {
+		t.Fatalf("MySQL/SQLite beside Postgres must not make the seed target ambiguous: %v", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("the postgres connection was not seeded: %+v", rec.calls)
+	}
+}
+
+// A bundle whose only relational store cannot seed is refused before any
+// store is opened, with a message that says which stores can.
+func TestFixturesApply_OnlyAStoreThatCannotSeedIsRefusedClearly(t *testing.T) {
+	opened := false
+	prev := newApplierFor
+	newApplierFor = func([]factory.TargetSpec) migrate.ApplierFor {
+		return func(string) (migrate.Applier, error) { opened = true; return kvOnlyApplier{}, nil }
+	}
+	t.Cleanup(func() { newApplierFor = prev })
+	dir := seedDir(t, migrate.FixtureSeed{Domain: "app", Name: "base",
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO base")}})
+	lock := writeLock(t, migrate.LockConnection{Name: "app-mysql", TargetMigrationID: "ts-1"})
+	var out strings.Builder
+	err := runFixtures(context.Background(), []string{"apply", "--lock", lock, "--fixtures", dir},
+		Options{Getenv: envMap{"W17_TARGET_APP_MYSQL": "mysql://u@x/app"}.get, Out: &out}, &out)
+	if err == nil || !strings.Contains(err.Error(), "Postgres only") || !strings.Contains(err.Error(), "app-mysql") {
+		t.Fatalf("want a refusal naming the connection and that only Postgres seeds, got %v", err)
+	}
+	if opened {
+		t.Error("a store that cannot seed was opened to find out")
+	}
+}
