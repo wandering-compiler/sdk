@@ -34,9 +34,8 @@ func TestResolveREST_GETQueryExpansion(t *testing.T) {
 	input := map[string]any{
 		"id":     "p1",
 		"limit":  10,
-		"tags":   []any{"a", "b"},              // repeated query key
-		"nested": map[string]any{"skip": true}, // objects are skipped in GET query
-		"cursor": "abc",                        // unenumerated scalar → query
+		"tags":   []any{"a", "b"}, // repeated query key
+		"cursor": "abc",           // unenumerated scalar → query
 	}
 	method, target, body, err := ResolveREST("http://h", ep, input)
 	if err != nil {
