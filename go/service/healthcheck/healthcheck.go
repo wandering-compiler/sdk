@@ -43,6 +43,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/healthz"
 	"github.com/wandering-compiler/sdk/go/lib/grpcclient"
+	"github.com/wandering-compiler/sdk/go/lib/grpcserver"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/binroots"
 )
 
@@ -362,28 +363,62 @@ func dialOptions(getenv func(string) string) ([]grpc.DialOption, error) {
 		return nil, err
 	}
 	opts := []grpc.DialOption{tlsOpt}
-	name, err := leafServerName(getenv(grpcclient.EnvInternalTLSCert), getenv(grpcclient.EnvInternalTLSKey))
+	leaf, err := ownLeaf(getenv(grpcclient.EnvInternalTLSCert), getenv(grpcclient.EnvInternalTLSKey))
+	if err != nil {
+		return nil, err
+	}
+	// Under mutual TLS the probe presents this same leaf as its client
+	// certificate. A leaf issued for server use only is refused by the
+	// listener's client verification, which would leave the container
+	// unhealthy while it serves correctly; say so instead of reporting a
+	// bare handshake failure.
+	if getenv(grpcserver.EnvInternalTLSClientCA) != "" && !allowsClientAuth(leaf) {
+		return nil, fmt.Errorf("%s is set, so the listener requires client certificates, and the probe presents this container's leaf (%s) as one; "+
+			"its extended key usage does not include ClientAuth, so the listener refuses it — reissue the leaf with both ServerAuth and ClientAuth (certgen does)",
+			grpcserver.EnvInternalTLSClientCA, grpcclient.EnvInternalTLSCert)
+	}
+	name, err := leafServerName(leaf)
 	if err != nil {
 		return nil, err
 	}
 	return append(opts, grpc.WithAuthority(name)), nil
 }
 
-// leafServerName is the name a client verifies this container's own server
-// leaf against: its first DNS SAN, else its first IP SAN.
-func leafServerName(certPath, keyPath string) (string, error) {
+// allowsClientAuth reports whether leaf may be used as a TLS client
+// certificate: no extended key usage at all (unrestricted), or one that
+// lists ClientAuth or Any.
+func allowsClientAuth(leaf *x509.Certificate) bool {
+	if len(leaf.ExtKeyUsage) == 0 && len(leaf.UnknownExtKeyUsage) == 0 {
+		return true
+	}
+	for _, u := range leaf.ExtKeyUsage {
+		if u == x509.ExtKeyUsageClientAuth || u == x509.ExtKeyUsageAny {
+			return true
+		}
+	}
+	return false
+}
+
+// ownLeaf loads and parses this container's own server leaf.
+func ownLeaf(certPath, keyPath string) (*x509.Certificate, error) {
 	if certPath == "" || keyPath == "" {
-		return "", fmt.Errorf("%s is on but %s / %s are not both set — the listener cannot be serving TLS either",
+		return nil, fmt.Errorf("%s is on but %s / %s are not both set — the listener cannot be serving TLS either",
 			grpcclient.EnvInternalTLS, grpcclient.EnvInternalTLSCert, grpcclient.EnvInternalTLSKey)
 	}
 	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
-		return "", fmt.Errorf("loading this container's leaf (%s): %w", grpcclient.EnvInternalTLSCert, err)
+		return nil, fmt.Errorf("loading this container's leaf (%s): %w", grpcclient.EnvInternalTLSCert, err)
 	}
 	leaf, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
-		return "", fmt.Errorf("parsing this container's leaf: %w", err)
+		return nil, fmt.Errorf("parsing this container's leaf: %w", err)
 	}
+	return leaf, nil
+}
+
+// leafServerName is the name a client verifies this container's own server
+// leaf against: its first DNS SAN, else its first IP SAN.
+func leafServerName(leaf *x509.Certificate) (string, error) {
 	if len(leaf.DNSNames) > 0 {
 		return leaf.DNSNames[0], nil
 	}
