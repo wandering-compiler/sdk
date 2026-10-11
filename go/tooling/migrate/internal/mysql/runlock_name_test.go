@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestRunLockName_CarriesTheSchema — T3-7 pass #15, `A15-2`. A defect in
-// pass #14's own fix, one pass later, and the same shape that pass spent
-// itself on: a comment describing a design the code does not implement.
+// TestRunLockName_CarriesTheSchema — a defect in the MySQL run-lock's own
+// first version, and a familiar shape: a comment describing a design the
+// code does not implement.
 //
 // `runLockName`'s comment says "MySQL's GET_LOCK namespace is per-SERVER,
 // not per-schema, so the name carries the schema to keep two databases on
@@ -40,7 +40,7 @@ func TestRunLockName_CarriesTheSchema(t *testing.T) {
 	// on the long ones — so the two assertions never met, and the hashed
 	// branch (the only one that can overrun) was never length-checked. It
 	// produced 65 characters, which MySQL REFUSES with error 4163, and the
-	// test was green (T3-7 pass #15, B15-3's residue).
+	// test was green.
 	long1 := runLockNameFor(strings.Repeat("a", 80) + "_one")
 	long2 := runLockNameFor(strings.Repeat("a", 80) + "_two")
 
@@ -61,8 +61,8 @@ func TestRunLockName_CarriesTheSchema(t *testing.T) {
 	}
 
 	// A long schema name must still be distinguishable from another long one
-	// that shares its prefix — the TenantRole lesson from pass #13, one
-	// package over.
+	// that shares its prefix — the same truncation collision `TenantRole`
+	// hit one package over.
 	if long1 == long2 {
 		t.Errorf("two long schema names collapse to one lock name:\n  %s\n  %s", long1, long2)
 	}

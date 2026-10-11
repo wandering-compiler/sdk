@@ -44,7 +44,7 @@ type ConnTarget struct {
 // (tests). The lock pins per-connection target_migration_id;
 // MigrationsDir holds the artifacts fetched by `w17migrate
 // fetch`; ApplierFor opens per-connection drivers; the DB-side
-// `w17_migrations` table (D27) is the source of truth for what
+// `w17_migrations` table is the source of truth for what
 // is already applied.
 type Config struct {
 	// Targets declare the deploy ceiling per connection (read from the
@@ -143,7 +143,7 @@ type Pending struct {
 	// EXCLUDES a PhasePending migration, and `PlanRollback` adds the pending
 	// ones above the head and rolls them back FIRST — so the head never
 	// equals the first id and the refusal fired forever, blaming a
-	// concurrent run that did not exist (T3-7 pass #15, B15-4).
+	// concurrent run that did not exist.
 	PlannedHead string
 }
 
@@ -177,9 +177,9 @@ type RollbackConfig struct {
 // chain is REFUSED rather than skipped. The applied-head cutoff then trims
 // what is already in the database.
 //
-// The `filesystem ∩ (id > applied_head, id ≤ target)` formula this described
-// until T2-5 pass #14 (D14-2) IS B11-1: id-range selection over whatever the
-// directory holds is what let an inserted off-chain artifact apply. Two other
+// The `filesystem ∩ (id > applied_head, id ≤ target)` formula this once
+// described IS the unchained-selection defect: id-range selection over whatever
+// the directory holds is what let an inserted off-chain artifact apply. Two other
 // contract surfaces still carried it; a second reader implementing the formula
 // would reintroduce the defect wholesale.
 //
@@ -187,7 +187,7 @@ type RollbackConfig struct {
 // inputs (all four SQL segments, `prev`, `supersedes`, `adopt_sql`), not the
 // up_sql body alone.
 //
-// Connections walk in lex name order (D41). Plan opens an Applier
+// Connections walk in lex name order. Plan opens an Applier
 // per connection to query AppliedHead, then closes it; Run reopens
 // for the actual Apply loop. Two opens per deploy is acceptable
 // (driver init is cheap).
@@ -229,12 +229,12 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			return nil, fmt.Errorf("connection %s: target_migration_id %q not found in %s — run `migrate fetch` first",
 				ct.Connection, target, filepath.Join(cfg.MigrationsDir, ct.Connection))
 		}
-		// T25-D2-1: a pinned target MUST carry a content hash. ContentHash always
+		// A pinned target MUST carry a content hash. ContentHash always
 		// yields a non-empty value, so an empty pin on a set target is an anomaly
 		// (a hand-edit that blanked it, or a lock predating the pin) — and the
 		// original `want != "" && …` skipped the whole tamper check for it,
 		// failing OPEN: a tampered artifact would apply unverified. The offline
-		// client does not re-verify the signature (D4), so this content pin is the
+		// client does not re-verify the signature, so this content pin is the
 		// control that catches a tampered fetched artifact — it must fail closed.
 		if ct.TargetContentSha256 == "" {
 			return nil, fmt.Errorf("connection %s: target_migration_id %q is pinned but target_content_sha256 is empty — refusing apply (the content-integrity check cannot run; regenerate the lock, a valid lock always carries the hash)",
@@ -260,7 +260,7 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 		}
 
 		// The applicable set is the CHAIN that ends at the target, not
-		// every file in the id range (T2-5 B11-1).
+		// every file in the id range.
 		//
 		// Selecting by id range is what let a migration nobody vouched for
 		// execute: the lock pins one hash, the target's, and an artifact in
@@ -315,7 +315,7 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			// unrelated id, falls through, and gets the real CREATE.
 			//
 			// And the head must be the LAST id the baseline collapsed, not
-			// merely one of them (T2-5 pass #15, T25-A15-5). A database
+			// merely one of them. A database
 			// mid-range applied a PREFIX of the collapsed set, so the
 			// remainder is exactly the DDL it still needs — adopting there
 			// records the baseline as done and runs none of it, and the
@@ -349,7 +349,7 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 // full set of statements the real apply would run) to cfg.Out. On real
 // apply it walks the plan in order, calls Applier.Apply for each.
 // A mid-list failure aborts loud; the consuming service's DB-side
-// `w17_migrations` table (D27, written by the migration's own
+// `w17_migrations` table (written by the migration's own
 // `up_sql`) reflects the partial-success state on next deploy.
 //
 // Run does NOT update the lock — lock is read-only at apply time
@@ -418,7 +418,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// B plans while A holds the lock mid-apply; A finishes and releases; B
 	// acquires and re-applies what A just did. The lock does its job
 	// perfectly and the double-apply happens anyway, because the decision it
-	// protects was taken against a stale answer (T3-7 pass #14, D14-2).
+	// protects was taken against a stale answer.
 	//
 	// Postgres's in-tx path survives this on its ledger primary key, and its
 	// skirt already does exactly this re-check under its own advisory lock.
@@ -456,8 +456,7 @@ func Run(ctx context.Context, cfg Config) error {
 			// and the run reports success.
 			//
 			// One refusal closes that and the ordinary case together
-			// (T3-7 pass #15, A15-1 — proven against `Run` with a fake
-			// before it was fixed).
+			// (proven against `Run` with a fake before it was fixed).
 			if h < p.PlannedHead {
 				return fmt.Errorf("connection %s: refusing to apply %s — the applied head was %q when this run was planned and is %q now, so another run rolled back while this one waited for the lock and nothing the plan decided still describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
@@ -520,8 +519,8 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 			// "already applied" is now a claim the plan has PROVEN: an
 			// adopt is only reached when the head is the last id the
-			// baseline collapsed. It was not before (T2-5 pass #15,
-			// T25-A15-5) — a mid-range head adopted too, and this line told
+			// baseline collapsed. It was not before — a mid-range head
+			// adopted too, and this line told
 			// the operator it had applied all N when it had applied a
 			// prefix, so the one place the event is visible actively
 			// misinformed.
@@ -669,7 +668,7 @@ func applyOrResume(ctx context.Context, applier Applier, m *applyfetchpb.Migrati
 // concurrent runs. Transactional SQL dialects don't implement RunLockCapable
 // (their w17_migrations PK serialises) and take the plain cached-applier path.
 // MySQL is NOT among them despite being transactional — DDL implicit-commits
-// mid-body, so it implements RunLockCapable; see lock.go (T3-7 pass #14).
+// mid-body, so it implements RunLockCapable; see lock.go.
 type runApplierCache struct {
 	applierFor ApplierFor
 	out        io.Writer
@@ -759,7 +758,7 @@ func logMigration(logger *slog.Logger, action, connection string, m *applyfetchp
 // Empty ToMigrationID means "roll back everything currently
 // applied" (= every id ≤ AppliedHead).
 //
-// An empty AppliedHead is NOT "nothing to roll back" (T2-5 pass #14, D14-2):
+// An empty AppliedHead is NOT "nothing to roll back":
 // the connection is skipped only when the head is empty AND no migration
 // above it is half-applied. A PhasePending row on a fresh-looking database is
 // exactly the state that has to be undone, and the fix that added it is the
@@ -798,7 +797,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 		// (loadConnectionMigrations already re-checks each artifact's own
 		// content_sha256; this anchors the target against the signed lock.)
 		//
-		// T25-D2-1: an empty TargetMigrationID is normal here (the rollback target
+		// An empty TargetMigrationID is normal here (the rollback target
 		// is cfg.ToMigrationID, not the lock pin), but a target that IS pinned must
 		// carry its hash — a pinned-target-with-empty-hash silently skipped the
 		// verification below, failing open exactly as Plan did. Refuse it.
@@ -833,7 +832,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 			_ = applier.Close()
 			return nil, fmt.Errorf("connection %s: AppliedHead: %w", ct.Connection, err)
 		}
-		// writer-F1 — AppliedHead deliberately EXCLUDES a PhasePending
+		// AppliedHead deliberately EXCLUDES a PhasePending
 		// (half-applied: in-tx half committed, skirt crashed) migration so Apply
 		// can resume it. But rollback must ALSO undo such a migration's committed
 		// in-tx DDL and clear its lying "pending" row — otherwise it sits ABOVE
@@ -869,17 +868,17 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 			continue
 		}
 
-		// Rollback selects from the CHAIN, exactly as apply does (T2-5 pass
-		// #12). Before this it selected from whatever the directory held, which
+		// Rollback selects from the CHAIN, exactly as apply does. Before
+		// this it selected from whatever the directory held, which
 		// made the destructive half of the client the one that would execute an
 		// artifact nobody vouched for: measured, an inserted off-chain file that
 		// forward apply REFUSES had its down_sql run on rollback. Same file,
-		// same directory, opposite verdict — the B11-1 fix reached apply only.
+		// same directory, opposite verdict — the chain fix reached apply only.
 		//
 		// A rollback with no pinned target has no anchor to walk from, so the
 		// set stays the directory. What that branch is NOT is the
-		// fresh-service case — it said so until T2-5 pass #14 (A14-1) and the
-		// claim was false in its own control flow: the only skip above is
+		// fresh-service case — an earlier comment said so, and the claim
+		// was false in its own control flow: the only skip above is
 		// `head == "" && no pending`, so this line is reached precisely when
 		// migrations ARE applied. Measured at this seam, an unpinned
 		// connection with `head="ts-2"` planned an off-chain `ts-15` and would
@@ -890,7 +889,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 		// connection with no pin, so `ApplierFor` fails for one and the whole
 		// rollback aborts at `applier` above — before AppliedHead, before any
 		// selection. No operator can reach this branch through the product,
-		// which is why A14-1's security half was refuted after being measured
+		// which is why the security concern was refuted after being measured
 		// through the real `RollbackCmd.Run`.
 		//
 		// ⚠️ That invariant lives in ANOTHER MODULE. `PlanRollback` is public
@@ -964,7 +963,7 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 // Applier.Rollback for each.
 //
 // No signature is verified here, and none can be: this module holds no
-// verifier key by design (D4 — the offline client does zero crypto). What
+// verifier key by design (the offline client does zero crypto). What
 // authenticates a body on this path is the CHAIN — `loadConnectionMigrations`
 // recomputes each artifact's `content_sha256`, `PlanRollback` selects only
 // from the chain the lock pins, and it REFUSES a row in range that the chain
@@ -972,10 +971,11 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 // serves the fetch.
 //
 // This doc used to say "Phase D signature verification runs on every body
-// before the destructive op" (T2-5 pass #14, D14-1). Two other comments in
+// before the destructive op". Two other comments in
 // this module said the same, while two more — twenty lines from one of them —
 // correctly said "No client-side signature verify". The belief that a tampered
-// artifact cannot execute here is the exact belief B11-1 lived under.
+// artifact cannot execute here is the exact belief the unchained-selection
+// defect lived under.
 //
 // Mid-list failure aborts loud; the DB-side `w17_migrations`
 // reflects the partial-rollback state on next deploy. Lock is
@@ -1021,8 +1021,8 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 
 	// The same post-lock re-read the apply path does, and for the same
 	// reason — `PlanRollback` chose what to undo from a head read before any
-	// lock existed. This is D14-2's second member, which the finder missed
-	// and the verifier named (T3-7 pass #14).
+	// lock existed — the rollback twin of the apply path's stale-head defect,
+	// easy to miss because the apply fix did not reach it.
 	//
 	// REFUSING rather than skipping, which is the difference between the two
 	// directions. An apply whose migration somebody else already applied is
@@ -1050,8 +1050,7 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 			// migration sits above the head — `AppliedHead` excludes it and
 			// the planner rolls it back first — so comparing to the id
 			// refused every such cleanup permanently, with a message
-			// blaming a concurrent run that never happened (T3-7 pass #15,
-			// B15-4).
+			// blaming a concurrent run that never happened.
 			if h != p.PlannedHead {
 				return fmt.Errorf("connection %s: refusing to roll back %s — the applied head was %q when this rollback was planned and is %q now, so another run applied or rolled back while this one waited for the lock and the plan no longer describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
@@ -1064,7 +1063,7 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) error {
 		// down ed25519 signatures at fetch time). The client-side keyless
 		// content_sha256 check (loadConnectionMigrations) anchors ALL four segments
 		// — up_sql, up_post_tx, down_pre_tx, down_sql — via migrate.ContentHash
-		// (writer-F2/sign-F5, landed), so the down body executed here is anchored too.
+		// so the down body executed here is anchored too.
 
 		started := time.Now()
 		if err := applier.Rollback(ctx, p.Migration); err != nil {
@@ -1133,7 +1132,7 @@ func captureMigrationError(action, connection string, m *applyfetchpb.Migration,
 }
 
 // chainFromTarget returns the migrations that lead to target, oldest→newest,
-// by walking BACK from it through prev_content_sha256 (T2-5 B11-1).
+// by walking BACK from it through prev_content_sha256.
 //
 // This is the reader half of the chain. The writer half — the predecessor's
 // hash being an INPUT to each migration's own content_sha256, see
@@ -1194,7 +1193,7 @@ func chainFromTarget(diskMigs []*applyfetchpb.Migration, target *applyfetchpb.Mi
 
 	slices.Reverse(rev)
 
-	// Ids must INCREASE along the chain (T2-5 pass #12). The console assigns
+	// Ids must INCREASE along the chain. The console assigns
 	// them monotonically per connection, so this is a property of every
 	// legitimate history — and it is what binds the id, which is deliberately
 	// not an input to ContentHash (see that function's doc for why).
@@ -1274,7 +1273,7 @@ func loadConnectionMigrations(fsys fs.FS, connection string) ([]*applyfetchpb.Mi
 		// existed recomputes differently under the current one, and
 		// refusing it here reads as tampering on a file nobody touched.
 		if !ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256()) {
-			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is a real edit (T2-6 pass #10, B10-3)",
+			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is a real edit",
 				path, m.GetContentSha256(),
 				ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()))
 		}

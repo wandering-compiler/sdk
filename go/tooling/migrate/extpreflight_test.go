@@ -23,7 +23,7 @@ type extFake struct {
 // IsPostgres satisfies PostgresDialect. The preflight's probe is Postgres
 // syntax, so it only fires against an applier that says it speaks it; these
 // tests exercise that path, and `notPG` flips it for the case that must NOT
-// be probed (T2-6 pass #10, D10-1).
+// be probed.
 func (f *extFake) IsPostgres() bool { return !f.notPG }
 
 func (f *extFake) Apply(_ context.Context, m *applyfetchpb.Migration) error {
@@ -151,7 +151,7 @@ func TestRun_RefusesWhenAnExtensionIsMissing(t *testing.T) {
 // TestPreflightExtensions_DoesNotProbeANonPostgresConnection — the probe is
 // Postgres syntax; the manifest field it reads is not Postgres-only.
 //
-// T2-6 pass #10, D10-1 ≡ B10-4. `plan.go` deliberately flows
+// `plan.go` deliberately flows
 // `(w17.pg.field).required_extensions` into non-PG buckets so the manifest
 // TRACKS what was declared — the MySQL emitter stamps its own "manifest
 // tracking only" marker saying exactly that. The preflight bucketed by
@@ -215,7 +215,7 @@ func (w wrappedFake) Unwrap() Applier {
 	return w.Applier
 }
 
-// TestPreflightExtensions_SurvivesADecorator — T2-6 pass #10, D10-1's own
+// TestPreflightExtensions_SurvivesADecorator — the dialect gate's own
 // hole, caught by the live lane.
 //
 // The gate that stops the Postgres probe reaching a MySQL connection reads

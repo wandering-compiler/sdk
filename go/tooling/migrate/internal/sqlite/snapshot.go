@@ -16,8 +16,8 @@ import (
 )
 
 // Snapshotter is the SQLite dump/restore driver for the dev DB
-// lifecycle. SQLite is a single file, so the spec calls for a "file
-// copy" (`docs/specs/storage/dev-db-lifecycle.md` S2). We take that a
+// lifecycle. SQLite is a single file, so a snapshot is a "file
+// copy". We take that a
 // step further than a raw byte copy: Dump runs `VACUUM INTO` to
 // materialise a clean, single-file image of the database, so the
 // snapshot is consistent regardless of the live DB's journal mode
@@ -56,9 +56,9 @@ func NewSnapshotter(dsn string) (*Snapshotter, error) {
 // directory → same filesystem, so VACUUM INTO never crosses a mount)
 // and is removed afterwards.
 func (s *Snapshotter) Dump(ctx context.Context, w io.Writer) error {
-	// F8-D-3: register the W17_UNICODE collation before opening — `VACUUM INTO`
+	// Register the W17_UNICODE collation before opening — `VACUUM INTO`
 	// replays the source schema DDL, so a DB whose string columns carry
-	// `COLLATE W17_UNICODE` (every generated SQLite project since F7-A-5) fails
+	// `COLLATE W17_UNICODE` (every generated SQLite project) fails
 	// with "no such collation sequence" unless this connection knows it. The
 	// Snapshotter opens its OWN connection, distinct from the Applier's, so it
 	// must register too (global + idempotent).

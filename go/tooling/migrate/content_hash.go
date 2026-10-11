@@ -15,7 +15,7 @@ import (
 // storeMigrations / PushRawMigration and the orchestrator's load + WriteMigration
 // paths.
 //
-// It covers ALL FOUR migration segments, not just up_sql (writer-F2/sign-F5):
+// It covers ALL FOUR migration segments, not just up_sql:
 // the down_sql / down_pre_tx / up_post_tx bodies execute on the client too, and
 // before this they rode entirely outside the keyless client-side integrity check
 // (they are ed25519-verified server-side at fetch, but nothing re-anchored them
@@ -23,7 +23,7 @@ import (
 // tag plus decimal length-prefix per segment — so no two distinct segment tuples
 // can collide by shifting bytes across the (empty-delimited) boundaries.
 //
-// # The chain (T2-5 B11-1)
+// # The chain
 //
 // `prev` is the PREDECESSOR's content hash, and covering it is what makes the
 // signed lock reach past the migration it names. The lock pins one hash, for
@@ -54,13 +54,14 @@ import (
 //
 // A squash baseline is therefore NOT v1, despite starting the live history
 // over: it carries `supersedes` (and usually `adopt_sql`), so it hashes as v2
-// and its digest changed under F1 — which is exactly what the §T2-5-pass-#12
-// paragraph below says, in the opposite words. This paragraph claimed the
-// baseline hashed as v1 until T2-5 pass #14 (D14-8), and the two of them
-// answered the one operational question this section exists for — "which
-// stored digests changed?" — differently depending on which the reader
-// reached first.
-// # What else decides what executes (T2-5 pass #12)
+// and its digest changed when `supersedes` and `adopt_sql` became hash
+// inputs — which is exactly what the paragraph below says. An earlier
+// version of this paragraph claimed the baseline hashed as v1, and the two
+// of them then answered the one operational question this section exists
+// for — "which stored digests changed?" — differently depending on which
+// the reader reached first.
+//
+// # What else decides what executes
 //
 // The four bodies are not the whole story, and the first version of the chain
 // treated them as if they were. `supersedes` and `adopt_sql` decide whether a
@@ -125,9 +126,9 @@ func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 // the ones that do. Those were stored, months ago, hashed without the
 // segment; a client carrying the new formula recomputes them differently and
 // `WriteMigration` refuses the fetch with a message about hand-editing. The
-// commit's evidence — "verified against the production console: its one
-// stored migration carries no manifest" — was an existence check over ONE
-// deployment, not over the shape (T2-6 pass #10, B10-2, measured).
+// evidence the change relied on — "verified against the production console:
+// its one stored migration carries no manifest" — was an existence check over
+// ONE deployment, not over the shape (measured).
 //
 // Accepting the legacy digest is not a weakening. The segment's purpose is
 // that STRIPPING the extension list from an artifact must not license a run

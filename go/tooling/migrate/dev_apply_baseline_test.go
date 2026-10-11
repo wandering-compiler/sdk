@@ -35,10 +35,10 @@ func TestDevApplySQLAppendsBaselineLast(t *testing.T) {
 	// `wrapTransaction` writes `BEGIN; … COMMIT;`, so the real batch always
 	// contained one and the baseline was appended AFTER the COMMIT, in its
 	// own autocommit. The test asserted a property of its own input rather
-	// than of the code (T3-7 pass #14, D14-4).
+	// than of the code.
 	//
 	// What the atomicity claim actually requires is checked in
-	// `pass14_baseline_atomicity_test.go`, against the emitter's byte shape:
+	// `dev_apply_baseline_atomicity_test.go`, against the emitter's byte shape:
 	// the baseline goes INSIDE the envelope when there is one.
 	//
 	// Here, with an envelope-free body, the only thing left to say is that

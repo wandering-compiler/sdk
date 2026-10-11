@@ -29,14 +29,13 @@ const runLockPrefix = "w17_migrate_apply"
 // every project as a database inside it, that is the ordinary case.
 //
 // ⚠️ The comment above the old constant said all of this, and the constant
-// was the bare prefix — the reasoning was right and never reached the code
-// (T3-7 pass #15, A15-2, against pass #14's own fix). The Postgres sibling
+// was the bare prefix — the reasoning was right and never reached the code.
+// The Postgres sibling
 // it was modelled on is safe only because PG advisory locks are per-DATABASE;
 // copying the shape without the namespace is what produced the gap.
 //
 // Hashed past the length limit rather than cut, so two long schema names
-// cannot collapse onto one lock — the trap `TenantRole` hit one package over
-// (T3-7 pass #13, B13-6).
+// cannot collapse onto one lock — the trap `TenantRole` hit one package over.
 //
 // ⚠️ MySQL REFUSES an over-long lock name; it does not truncate. Measured on
 // mysql84: 65 characters answers `ERROR 4163 … should not exceed 64
@@ -44,8 +43,7 @@ const runLockPrefix = "w17_migrate_apply"
 // "truncates" and produced 65 (17 + 1 + 30 + 1 + 16), which turned a false
 // contention into a hard boot failure for every uuid project whose
 // connection name reached nine characters — a bigger population than the
-// defect it was fixing (T3-7 pass #15, against the fix from an hour
-// earlier).
+// defect it was fixing.
 //
 // The budget is spelled out rather than summed in the head, because getting
 // it wrong is silent until an engine says so.
@@ -83,8 +81,8 @@ const (
 // racing runs then both apply the tail durably, and the loser's ledger
 // INSERT rejects it afterwards — loud, and too late.
 //
-// Measured on mysql80 and mysql84 through this applier during T3-7 pass
-// #14 (D14-1): the row written after the implicit commit survived the
+// Measured on mysql80 and mysql84 through this applier: the row written
+// after the implicit commit survived the
 // "loud" ER 1062, while a no-DDL control rolled back cleanly and Postgres
 // held. The exposed shape is the raw-SQL escape hatch — a generated body
 // dies at its first non-idempotent DDL before reaching any DML.
@@ -129,7 +127,7 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 	// (8h by default, but deployments lower it, and a few minutes is a common
 	// setting behind a proxy), and ending the session RELEASES THE LOCK. The
 	// run would then continue believing it holds an exclusive lock that a
-	// second run is free to take (T3-7 pass #15, B15-15).
+	// second run is free to take.
 	//
 	// Raising it on this session only: `SET SESSION` touches nothing else on
 	// the server, and the connection is this lock's own for its lifetime.

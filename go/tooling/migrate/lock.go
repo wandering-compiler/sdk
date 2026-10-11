@@ -37,7 +37,7 @@ var ErrLockHeld = errors.New("apply: another apply run holds the target run-lock
 // apply the tail DURABLY, and only then does the loser's ledger INSERT
 // fail. Loud, and too late. Measured on mysql80 and mysql84 through the
 // real applier, with a no-DDL control that rolled back and a Postgres
-// control that held (T3-7 pass #14, D14-1). MySQL implements
+// control that held. MySQL implements
 // RunLockCapable now, via GET_LOCK.
 //
 // The lesson is about the sentence rather than the engine: it named a

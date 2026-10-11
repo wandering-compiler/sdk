@@ -49,8 +49,8 @@ func mkMigFull(id, conn, up, upPostTx, downPreTx, downSql string) *applyfetchpb.
 // root directory.
 //
 // It CHAINS them first, per connection in id order, exactly as the console's
-// storeMigrations does when it appends to a connection's history (T2-5
-// B11-1) — so what a test seeds is what a real fetch delivers. Stamping the
+// storeMigrations does when it appends to a connection's history — so what
+// a test seeds is what a real fetch delivers. Stamping the
 // links here rather than in every test is deliberate: a fixture that forgets
 // them is not a weaker fixture, it is an artifact set the apply path now
 // refuses, and chasing that refusal through thirty tests teaches nothing.
@@ -236,7 +236,7 @@ func TestPlan_NoTargetSkipsConnection(t *testing.T) {
 	}
 }
 
-// TestPlan_OrderedAcrossConnections — D41 lex name order across
+// TestPlan_OrderedAcrossConnections — lex name order across
 // connections.
 func TestPlan_OrderedAcrossConnections(t *testing.T) {
 	a1 := mkMig("a-1", "alpha", "alpha 1")
