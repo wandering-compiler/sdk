@@ -138,6 +138,16 @@ var MAC = regexp.MustCompile(`^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$`)
 // it must be lossless, and quietly forwarding a shape whose stored value the
 // caller cannot predict is the class of bug this whole check exists to close.
 //
+// The column shapes are PostgreSQL's (15 and later): the scale may be
+// negative (`numeric(2,-3)` stores multiples of 1000 below 100000) or larger
+// than the precision (`numeric(2,4)` stores values below 0.01 in steps of
+// 0.0001). In every shape the column holds exactly the values that are a
+// multiple of 10^-scale and whose magnitude is below 10^(precision-scale), so
+// that is the rule here: the least significant non-zero digit may not sit
+// below the 10^-scale place (it would be rounded away) and the most
+// significant one must sit below the 10^(precision-scale) place (the engine
+// refuses with a numeric field overflow). Zero fits every shape.
+//
 // The empty string returns true — emptiness belongs to the required / blank
 // rules, and every other format check in the generated block is guarded by a
 // `!= ""` test for the same reason. A non-positive `precision` also returns
@@ -148,9 +158,6 @@ var MAC = regexp.MustCompile(`^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$`)
 func FitsDecimal(s string, precision, scale int32) bool {
 	if s == "" || precision <= 0 {
 		return true
-	}
-	if scale < 0 {
-		scale = 0
 	}
 	i := 0
 	if s[0] == '+' || s[0] == '-' {
@@ -179,18 +186,34 @@ func FitsDecimal(s string, precision, scale int32) bool {
 		// No digit anywhere — "", "-", "." and friends.
 		return false
 	}
-	// Significant fractional digits: trailing zeros are lossless padding.
-	fe := fracEnd
-	for fe > fracStart && s[fe-1] == '0' {
-		fe--
+	// Place values of the most and least significant non-zero digits: the
+	// units digit is place 0, the first fractional digit place -1. Leading
+	// and trailing zeros are lossless padding and are skipped.
+	digit := func(k int) byte {
+		if k < intEnd {
+			return s[k]
+		}
+		return s[k+1] // past the '.'
 	}
-	if int32(fe-fracStart) > scale {
-		return false
+	place := func(k int) int64 {
+		if k < intEnd {
+			return int64(intEnd - 1 - k)
+		}
+		return -int64(k - intEnd + 1)
 	}
-	// Significant integer digits: leading zeros are lossless padding.
-	is := intStart
-	for is < intEnd && s[is] == '0' {
-		is++
+	n := (intEnd - intStart) + (fracEnd - fracStart) // digits, '.' excluded
+	first, last := -1, -1
+	for k := intStart; k < intStart+n; k++ {
+		if digit(k) != '0' {
+			if first < 0 {
+				first = k
+			}
+			last = k
+		}
 	}
-	return int32(intEnd-is) <= precision-scale
+	if first < 0 {
+		return true // zero
+	}
+	p, sc := int64(precision), int64(scale)
+	return place(last) >= -sc && place(first) < p-sc
 }
