@@ -78,6 +78,9 @@ func NewServer(name, version string, auth MCPAuthFunc) *Server {
 	// filter is a no-op until a PermResolver is injected.
 	s.inner = mcpserver.NewMCPServer(name, version,
 		mcpserver.WithToolFilter(s.filterTools),
+		// Tool arguments reach CallUnary with their numbers as written
+		// (see args.go).
+		mcpserver.WithHooks(exactArgumentHooks()),
 	)
 	return s
 }
@@ -291,8 +294,10 @@ func (s *Server) AuthFunc() MCPAuthFunc { return s.auth }
 // and most local MCP clients. The provided ctx is propagated
 // into every per-request context.
 func (s *Server) ServeStdio(ctx context.Context) error {
+	// One client per stdio connection, so one argument scope for it.
+	scoped := withArgScope(ctx)
 	return mcpserver.ServeStdio(s.inner, mcpserver.WithStdioContextFunc(func(_ context.Context) context.Context {
-		return ctx
+		return scoped
 	}))
 }
 
@@ -333,7 +338,8 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 			if h == nil {
 				h = http.Header{}
 			}
-			return context.WithValue(ctx, httpHeadersCtxKey{}, h)
+			// One message per POST, so one argument scope per request.
+			return withArgScope(context.WithValue(ctx, httpHeadersCtxKey{}, h))
 		}),
 	)
 

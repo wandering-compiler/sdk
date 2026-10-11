@@ -19,7 +19,10 @@
 package protojsonx
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"sync"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -242,12 +245,40 @@ func jsonValueKind(v any) string {
 	}
 }
 
+// DecodeTree parses a JSON document into the generic tree a reshape walks
+// (map[string]any, []any, string, bool, nil), keeping every number as the
+// [json.Number] it was written as.
+//
+// A reshape must not change any value it carries. Decoding numbers into
+// float64 does: an int64 sent as a JSON number (protojson accepts them
+// unquoted) loses everything past 2^53, so 9007199254740993 re-encodes as
+// 9007199254740992 — silently, and only for messages that happen to have a
+// oneof or an alias, since every other message goes to protojson untouched.
+// Keeping the literal makes the reshape a pure key rewrite.
+//
+// Like [json.Unmarshal], anything after the value other than whitespace is
+// an error.
+func DecodeTree(raw []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var node any
+	if err := dec.Decode(&node); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errTrailingData
+	}
+	return node, nil
+}
+
+var errTrailingData = errors.New("protojsonx: invalid JSON: data after the top-level value")
+
 // CollapseOneofs rewrites protojson's flat oneof keys into the collapsed
 // dialect shape. Caller gates on [HasAnyOneof]. aliasOf is the alias
 // resolver to match variant keys with (nil when no alias rewrite ran).
 func CollapseOneofs(raw []byte, desc protoreflect.MessageDescriptor, aliasOf AliasFunc) ([]byte, error) {
-	var node any
-	if err := json.Unmarshal(raw, &node); err != nil {
+	node, err := DecodeTree(raw)
+	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(collapseResponse(node, desc, aliasOf))
@@ -350,8 +381,8 @@ func collapseChild(v any, fd protoreflect.FieldDescriptor, aliasOf AliasFunc) an
 // protojson's flat shape so protojson can decode it. Caller gates on
 // [HasAnyOneof]. On malformed JSON returns the input unchanged.
 func ExpandOneofs(raw []byte, desc protoreflect.MessageDescriptor, aliasOf AliasFunc) ([]byte, error) {
-	var node any
-	if err := json.Unmarshal(raw, &node); err != nil {
+	node, err := DecodeTree(raw)
+	if err != nil {
 		return raw, nil
 	}
 	return json.Marshal(expandRequest(node, desc, aliasOf))

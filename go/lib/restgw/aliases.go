@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -115,8 +116,8 @@ func aliasFor(fd protoreflect.FieldDescriptor) string {
 // without aliases is harmless but pays the parse / re-marshal
 // cost for nothing.
 func rewriteAliasesOnResponseJSON(raw []byte, desc protoreflect.MessageDescriptor) ([]byte, error) {
-	var node any
-	if err := json.Unmarshal(raw, &node); err != nil {
+	node, err := protojsonx.DecodeTree(raw)
+	if err != nil {
 		return nil, err
 	}
 	out := renameForResponse(node, desc)
@@ -202,8 +203,10 @@ func restoreAliasesOnRequestJSON(raw []byte, desc protoreflect.MessageDescriptor
 	if !hasAnyAlias(desc) {
 		return raw, nil
 	}
-	var node any
-	if err := json.Unmarshal(raw, &node); err != nil {
+	// DecodeTree keeps numbers as written: a float64 round trip would turn
+	// a 64-bit id sent as a JSON number into a different id.
+	node, err := protojsonx.DecodeTree(raw)
+	if err != nil {
 		return raw, nil // let protojson surface the parse error with its own context
 	}
 	out, err := restoreForRequest(node, desc)
