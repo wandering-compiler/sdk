@@ -138,3 +138,21 @@ func TestInternalTLSEnabled_UnrecognisedValueFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// Under "terminated" the platform's certificate is verified against the
+// system roots; the stack's CA must not replace them.
+func TestClientTLSConfig_TerminatedIgnoresPrivateCA(t *testing.T) {
+	caPath := writeTestCA(t)
+	cfg := clientTLSConfig(func(k string) string {
+		switch k {
+		case "W17_INTERNAL_TLS":
+			return "terminated"
+		case "W17_INTERNAL_TLS_CA":
+			return caPath
+		}
+		return ""
+	})
+	if cfg.RootCAs != nil {
+		t.Error("terminated replaced the system roots with the private CA")
+	}
+}
