@@ -311,9 +311,9 @@ func (OnEmptyCode) EnumDescriptor() ([]byte, []int) {
 // RedisLayout — how a Redis-backed table's entity values are
 // stored. JSON is the default (one STRING value per key holding
 // the protojson-marshaled entity, iter-2 MVP); HASH splits each
-// scalar field into a hash entry under one key (G3-KV-04);
+// scalar field into a hash entry under one key;
 // HASH_BUCKETED groups N children of a parent under ONE Redis
-// HASH (REV-082) — the bucket-shaped layout that enables native
+// HASH — the bucket-shaped layout that enables native
 // fan-out via HGETALL (no secondary indexes, no pattern scans).
 //
 // HASH_BUCKETED specifics:
@@ -400,7 +400,7 @@ const (
 	IndexMethod_BRIN                     IndexMethod = 4 // Block Range Index
 	IndexMethod_HASH                     IndexMethod = 5 // Hash-based equality lookups
 	IndexMethod_SPGIST                   IndexMethod = 6 // Space-Partitioned GiST
-	// REV-065 — MySQL-specific structured methods. Both emit the
+	// MySQL-specific structured methods. Both emit the
 	// dedicated `CREATE FULLTEXT INDEX` / `CREATE SPATIAL INDEX`
 	// form (NOT a USING-method modifier). PG / SQLite refuse with
 	// a steering diagnostic — full-text + geo on those dialects
@@ -520,7 +520,7 @@ func (NullsOrder) EnumDescriptor() ([]byte, []int) {
 // custom DOMAINs), use (w17.pg.field).custom_type — that remains the
 // opaque escape hatch.
 //
-// Convention exception (REV-014, 2026-05-06): zero value is `AUTO`,
+// Convention exception: zero value is `AUTO`,
 // not `*_UNSPECIFIED` per proto3 norm — same rationale as Type.AUTO
 // above (DSL ergonomics outweigh the wire-format convention; this is
 // a build-time annotation never consumed by third parties).
@@ -1078,8 +1078,7 @@ func (x *LockEntry) GetKind() LockKind {
 // in sync. If any op is a mutation the whole method runs in one
 // transaction ON A RELATIONAL CONNECTION; the LAST-written op is the
 // response producer (it may be a SELECT — e.g. a final read-back that
-// composes a nested response). See `docs/specs/dql/multi-op-methods.md`
-// + `docs/decisions/dql-multiop-source-order.md`.
+// composes a nested response).
 //
 // KV connections are the carve-out and the sentence above predates
 // them: multi-op KV is SEQUENTIAL, so a method with two writes can
@@ -1102,8 +1101,7 @@ type Method struct {
 	Ops []*Operation `protobuf:"bytes,8,rep,name=ops,proto3" json:"ops,omitempty"`
 	// execution_plan — explicit op execution order for multi-
 	// connection methods. Each entry is the 1-based index into
-	// `ops` (source order). Per `docs/archive/iteration-2-multidb.md`
-	// §M2-C, a method whose ops touch tables on multiple
+	// `ops` (source order). A method whose ops touch tables on multiple
 	// connections must provide execution_plan; without it,
 	// typecheck rejects the method.
 	//
@@ -1122,7 +1120,7 @@ type Method struct {
 	// on deadline. 0 (default) leaves the caller's ctx
 	// untouched.
 	//
-	// Two-tier model (docs/archive/iteration-2-multidb.md §M2-F):
+	// Two-tier model:
 	//   - timeout_ms = per-method deadline. Bounds the method's
 	//     own statement work + (for OWNED tx) tx lifetime.
 	//   - tx-wide threshold (separate, propagated from the
@@ -1164,8 +1162,7 @@ type Method struct {
 	// so nothing was pinned anywhere, and the same method
 	// therefore ran SERIALIZABLE standalone and READ COMMITTED
 	// inside a distributed transaction with nothing said — a
-	// declaration accepted and then dropped (T3-7 pass #9
-	// D-F7).
+	// declaration accepted and then dropped.
 	//
 	// A method that declares an isolation level should expect
 	// `codes.Aborted` (serialization failure / deadlock) on the
@@ -1186,7 +1183,7 @@ type Method struct {
 	TxIsolation TxIsolation `protobuf:"varint,5,opt,name=tx_isolation,json=txIsolation,proto3,enum=w17.db.TxIsolation" json:"tx_isolation,omitempty"`
 	// kv_atomic — wrap multi-op KV methods in a single
 	// MULTI/EXEC transaction so partial failure becomes
-	// impossible (REV-066 / G3-KV-06 slice 3). Pre-REV-066 the
+	// impossible. Without it the
 	// sequential semantics let the KV land in the state of the
 	// last successful op; with `kv_atomic: true` the codegen
 	// emits a `client.TxPipelined(ctx, fn)` wrap and queues
@@ -1232,8 +1229,7 @@ type Method struct {
 	// materialize — bounds + tunes the optimizer's app-side
 	// materialization for a fan-out JOIN this method decomposes
 	// (LateMaterialize / Pipeline). Pure override surface over the
-	// budget/dialect-derived defaults; unset = defaults. See
-	// docs/specs/storage/bounded-materialization.md.
+	// budget/dialect-derived defaults; unset = defaults.
 	Materialize   *Materialize `protobuf:"bytes,7,opt,name=materialize,proto3" json:"materialize,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1312,7 +1308,7 @@ func (x *Method) GetMaterialize() *Materialize {
 }
 
 // Materialize — override knobs for the bounded-materialization
-// paths (docs/specs/storage/bounded-materialization.md). Every
+// paths. Every
 // field has a safe default, so existing methods that omit the
 // annotation keep the optimizer's automatic behaviour.
 type Materialize struct {
@@ -1710,11 +1706,11 @@ type Table struct {
 	// Use when:
 	//   - the built-in CHECK variants (Length / Blank / Range / Regex /
 	//     Choices) can't express the constraint AND structured
-	//     `checks:` (REV-136 DQL-based predicate) can't either —
+	//     `checks:` (DQL-based predicate) can't either —
 	//     typically because the body needs a PG-specific operator the
 	//     DQL grammar doesn't accept yet
 	//   - the built-in index shape (btree, fields, INCLUDE, WHERE/expr
-	//     via REV-134/135) can't express the index — GIN / GIST / BRIN /
+	//     via DQL) can't express the index — GIN / GIST / BRIN /
 	//     HASH, operator classes (gin_trgm_ops)
 	RawChecks  []*RawCheck `protobuf:"bytes,3,rep,name=raw_checks,json=rawChecks,proto3" json:"raw_checks,omitempty"`
 	RawIndexes []*RawIndex `protobuf:"bytes,4,rep,name=raw_indexes,json=rawIndexes,proto3" json:"raw_indexes,omitempty"`
@@ -1759,10 +1755,10 @@ type Table struct {
 	// Has no effect when `name` is set explicitly (an explicit
 	// name owns the whole identifier, prefix never applies).
 	Prefix *bool `protobuf:"varint,8,opt,name=prefix,proto3,oneof" json:"prefix,omitempty"`
-	// REV-031 (Phase C, 2026-05-09) — author overrides for
+	// Author overrides for
 	// multi-column constraint failures. Each entry binds a
 	// constraint name to a user-facing message. Without an entry,
-	// the constraint failure stays internal-class (REV-026 PgError
+	// the constraint failure stays internal-class (PgError
 	// → Internal + Sentry).
 	//
 	// Single-column constraint overrides live on
@@ -1776,7 +1772,7 @@ type Table struct {
 	// accept the auto-derived name.
 	ValidationMessages []*TableValidationMessage `protobuf:"bytes,9,rep,name=validation_messages,json=validationMessages,proto3" json:"validation_messages,omitempty"`
 	// Estimated row count — author-supplied size hint for the
-	// optimizer's cost model (REV-055 Fáze 1a). Pure metadata, no
+	// optimizer's cost model. Pure metadata, no
 	// SQL emit.
 	//
 	// The optimizer multiplies this by Σ(field.estimated_avg_bytes)
@@ -1801,12 +1797,11 @@ type Table struct {
 	//     responsibility (revisit when the table grows
 	//     materially).
 	//   - Static only — no runtime hook to re-read live row counts.
-	//     Future iter (per docs/architecture.md "Local schema
-	//     validator") may add a `w17gen analyze` command to refresh
-	//     hints from the live DB.
+	//     A future `w17gen analyze` command may refresh hints from
+	//     the live DB.
 	EstimatedRowCount uint64 `protobuf:"varint,10,opt,name=estimated_row_count,json=estimatedRowCount,proto3" json:"estimated_row_count,omitempty"`
-	// Bucket discriminator column for HASH_BUCKETED Redis tables
-	// (REV-087). Names the table column whose VALUE drives the
+	// Bucket discriminator column for HASH_BUCKETED Redis tables.
+	// Names the table column whose VALUE drives the
 	// Redis HASH key (`<table>:<bucket_value>`) — typically the
 	// FK column pointing at the parent entity. The entity's PK
 	// becomes the HASH field name within that bucket; each HASH
@@ -1828,17 +1823,17 @@ type Table struct {
 	//     PK are distinct dimensions.
 	//
 	// Consumers:
-	//   - REV-082 forward cross-cap dispatch (today's path)
+	//   - forward cross-capability dispatch (today's path)
 	//     keeps inferring the bucket key from the JOIN ON's
 	//     child column; the explicit annotation lets future
 	//     dispatch slices (e.g. KV-only single-child HGET on
 	//     bucketed tables) read the bucket column without
 	//     parsing the JOIN.
-	//   - REV-087+ KV-only mutation slices: INSERT routes to
+	//   - KV-only mutations: INSERT routes to
 	//     HSET <table>:<value_of_redis_bucket_by> field=<pk_value>;
 	//     DELETE routes to HDEL similarly.
 	RedisBucketBy string `protobuf:"bytes,11,opt,name=redis_bucket_by,json=redisBucketBy,proto3" json:"redis_bucket_by,omitempty"`
-	// Structured cross-column CHECK constraints (REV-136). DQL predicate
+	// Structured cross-column CHECK constraints. DQL predicate
 	// body, validated at IR build time (syntax, no `:param` refs, no
 	// qualified column refs — a table CHECK sees only its own table);
 	// emit renders `CONSTRAINT <name> CHECK (<predicate>)` as a table-
@@ -2010,8 +2005,8 @@ func (x *Table) GetChecks() []*TableCheck {
 	return nil
 }
 
-// TableValidationMessage — table-level validation override (REV-031,
-// Phase C, 2026-05-09). See (w17.db.table).validation_messages
+// TableValidationMessage — table-level validation override.
+// See (w17.db.table).validation_messages
 // docstring.
 type TableValidationMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2087,13 +2082,13 @@ func (x *TableValidationMessage) GetMessage() string {
 //	  storage: { "fastupdate": "on" },
 //	  name: "posts_tags_gin" }
 //
-// Partial indexes ship via the `where` field (REV-134; DQL predicate
+// Partial indexes ship via the `where` field (DQL predicate
 // body, validated at IR build time, refused on MySQL — no native
 // partial-index support there). Expression indexes ship via the
-// `IndexField.expr` slot (REV-135; all three dialects render
+// `IndexField.expr` slot (all three dialects render
 // `(<expr>)` in the column list, XOR with `name`). Cross-column
 // CHECK predicates have their own structured slot — see
-// (w17.db.table).checks (REV-136); raw_checks is now only for
+// (w17.db.table).checks; raw_checks is now only for
 // bodies the DQL grammar cannot spell.
 type Index struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2165,7 +2160,7 @@ type Index struct {
 	// the ACCESS_EXCLUSIVE lock the in-transaction CREATE INDEX
 	// would take.
 	Concurrent *bool `protobuf:"varint,7,opt,name=concurrent,proto3,oneof" json:"concurrent,omitempty"`
-	// Partial-index predicate body (REV-134). DQL expression syntax —
+	// Partial-index predicate body. DQL expression syntax —
 	// bare column refs, literals, comparisons, AND/OR/NOT, IS NULL,
 	// IN with literal list, function calls (LOWER / COALESCE / …).
 	//
@@ -2380,7 +2375,7 @@ type IndexField struct {
 	// type. HASH method rejects opclass (HASH uses the type's default
 	// hash function exclusively).
 	Opclass string `protobuf:"bytes,4,opt,name=opclass,proto3" json:"opclass,omitempty"`
-	// Expression-index body (REV-135). DQL expression, compiled to SQL
+	// Expression-index body. DQL expression, compiled to SQL
 	// at IR build time. Mutually exclusive with `name` — exactly one
 	// of (`name`, `expr`) must be set per IndexField entry. Same
 	// compile path as `Index.where`: syntax via lib/dql.Parse, the
@@ -2538,7 +2533,7 @@ func (x *RawCheck) GetExpr() string {
 	return ""
 }
 
-// TableCheck — structured table-level CHECK predicate (REV-136).
+// TableCheck — structured table-level CHECK predicate.
 // Cross-column predicate authored in DQL grammar (parsed +
 // validated at IR build time), rendered identically across PG /
 // SQLite / MySQL as `CONSTRAINT <name> CHECK (<predicate>)`.
@@ -2704,7 +2699,7 @@ type Column struct {
 	// are a DB-level rule (like indexes and CHECK constraints), not a
 	// general field semantic.
 	//
-	// Two forms (REV-015): the preferred MODEL form `<module>.<Model>`
+	// Two forms: the preferred MODEL form `<module>.<Model>`
 	// (auto-pk) or `<module>.<Model>.<field>`, and the legacy raw
 	// `<table>.<column>`. Targets resolve across the whole compiled
 	// batch, not just the declaring file — `fk: "users.User"` from a
@@ -2760,7 +2755,7 @@ type Column struct {
 	// should differ from the developer comment.
 	Comment string `protobuf:"bytes,7,opt,name=comment,proto3" json:"comment,omitempty"`
 	// Exclude this proto field from the table's column set
-	// (REV-014, 2026-05-07). Default behaviour: every proto field
+	// Default behaviour: every proto field
 	// on a `(w17.db.table)`-marked message IS a DB column. Author
 	// opts an individual field out via `exclude: true` — useful
 	// for RPC-only / computed / temporary fields that need to live
@@ -2778,7 +2773,7 @@ type Column struct {
 	//     combination is a proactive lint failure.
 	Exclude bool `protobuf:"varint,8,opt,name=exclude,proto3" json:"exclude,omitempty"`
 	// fk_cross_scope opts THIS reference out of the scope-preserving composite
-	// foreign key (A-F5).
+	// foreign key.
 	//
 	// When a model and its `fk:` target are scoped by the SAME
 	// `(w17.db.scope)` axis, the compiler constrains the reference to stay
@@ -3041,7 +3036,7 @@ var (
 	//
 	// optional w17.db.Table table = 51000;
 	E_Table = &file_w17_db_proto_extTypes[0]
-	// (w17.db.scope) — REV-147 — per-model data-scope declaration.
+	// (w17.db.scope) — per-model data-scope declaration.
 	// One entry per scope axis: each `name` becomes the
 	// `AuthResp.scopes` map key + the `x-w17-scope-<name>`
 	// metadata key suffix; each `path` is the dotted DQL access
@@ -3095,8 +3090,6 @@ var (
 	// gRPC metadata. Storage codegen auto-appends WHERE filters
 	// on SELECT/UPDATE/DELETE and auto-stamps INSERT SET from
 	// metadata. Missing scope metadata → 403 PERMISSION_DENIED.
-	//
-	// Full spec: docs/specs/storage/data-scopes.md.
 	//
 	// optional w17.db.Scope scope = 51009;
 	E_Scope = &file_w17_db_proto_extTypes[5]
@@ -3184,7 +3177,7 @@ var (
 	// to stop the deadlock storm caused by the previous blanket-on-
 	// every-SELECT semantic on multi-relation methods.
 	//
-	// Query-only methods MAY declare a lock (REV-046). The codegen
+	// Query-only methods MAY declare a lock. The codegen
 	// emits a tx-aware preamble that applies the suffix only when the
 	// caller has adopted a transaction, and silently skips it on a
 	// naked-pool call — a lock outside a transaction would be released
@@ -3218,7 +3211,7 @@ var (
 	//
 	// optional w17.db.Lock lock = 51007;
 	E_Lock = &file_w17_db_proto_extTypes[3]
-	// (w17.db.bypass_scope) — REV-147 — opt-out from one or more
+	// (w17.db.bypass_scope) — opt-out from one or more
 	// data scopes on a method or service. Admin endpoints +
 	// migration jobs that legitimately need to read/write across
 	// scopes declare the bypass here so the codegen skips the
@@ -3305,9 +3298,9 @@ var (
 	// only on the calls that send that value. Prefer bare columns on an
 	// enum more than one method sorts by.
 	//
-	// (T1-4 pass #14, A-4 — ACCEPTED by the owner 2026-08-13: the
-	// alias coupling IS the author's responsibility this annotation
-	// documents, and the failure is loud. Recorded rather than gated.)
+	// (The alias coupling IS the author's responsibility this
+	// annotation documents, and the failure is loud, so it is
+	// documented rather than gated.)
 	//
 	// optional w17.db.EnumValueColumn enum_value = 51008;
 	E_EnumValue = &file_w17_db_proto_extTypes[4]
@@ -3319,7 +3312,7 @@ var (
 	// method-level `bypass_scope` because protoc requires
 	// extension names to be unique within a package even
 	// across different extension targets (same constraint
-	// that drove REV-146's `acl_endpoint` vs `acl_service`
+	// that drove the ACL vocabulary's `acl_endpoint` vs `acl_service`
 	// split).
 	//
 	// ⚠️ THE TWO LAYERS UNION. This comment used to end "Method-

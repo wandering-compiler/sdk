@@ -63,7 +63,7 @@ type McpApi struct {
 	// time and neither is emitted. The tool list an MCP client
 	// consumes is served by the generated bundle over the
 	// protocol itself (`tools/list`), so there was never a file
-	// to read (a consumer went looking for one, 2026-08-31).
+	// to read.
 	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
 	// Human-readable description of the MCP surface. Surfaces
 	// verbatim in the generated bundle, which serves it to a
@@ -89,8 +89,6 @@ type McpApi struct {
 	// STANDALONE `<domain>-mcp-server` bundle instead, list them
 	// explicitly in `tools` by ref; an include-only surface generates
 	// no standalone bundle.
-	//
-	// Spec: docs/decisions/plugin-surfaces-opt-in.md.
 	Include       []string `protobuf:"bytes,5,rep,name=include,proto3" json:"include,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -341,7 +339,7 @@ var (
 	// a domain MCP surface registry. The author wires which
 	// gRPC methods become MCP tools by referencing them via
 	// string `ref` paths. The file declares ZERO messages —
-	// it's a sentinel similar to `(w17.rest_api)` (REV-017) and
+	// it's a sentinel similar to `(w17.rest_api)` and
 	// `(w17.event_subscribers)` (eventbus redesign).
 	//
 	// Driven by the compiler's MCP parser: every loaded

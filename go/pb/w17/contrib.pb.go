@@ -4,8 +4,7 @@
 // 	protoc        v5.29.3
 // source: w17/contrib.proto
 
-// Plugin extension vocab (Phase G of the plugin-system
-// implementation plan — `docs/specs/plugins/`).
+// Plugin extension vocab.
 //
 // Lets a consuming project add fields to a plugin's exposed
 // message without forking the plugin. The extension is a
@@ -50,9 +49,8 @@
 
 // Package `w17.contrib` (not `w17`) so the option syntax
 // reads `(w17.contrib.extends)` — package `w17.contrib` plus
-// field name `extends`. Matches the spec's authoring surface
-// in docs/specs/plugins/manifest.md without needing snake-
-// case workarounds.
+// field name `extends`. Matches the manifest's authoring
+// surface without needing snake-case workarounds.
 
 package w17pb
 
@@ -204,7 +202,7 @@ var (
 	// is sufficient.
 	//
 	// Body: [Extends]. Worked example + the staging rules: the
-	// header of this file and docs/specs/plugins/.
+	// header of this file.
 	//
 	// optional w17.contrib.Extends extends = 51022;
 	E_Extends = &file_w17_contrib_proto_extTypes[0]
@@ -213,8 +211,7 @@ var (
 	// message block from the staged .proto when the activation's
 	// `features:` set doesn't include this tag. Cross-file refs
 	// to dropped messages surface as standard protocompile
-	// "no such type" errors. See Phase G2 of the auth+acl plugin
-	// track + docs/specs/plugins/feature-tags.md.
+	// "no such type" errors.
 	//
 	// Proto3 namespaces extension field names per containing
 	// package; the three plugin_feature_* variants below carry

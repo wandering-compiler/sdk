@@ -47,7 +47,7 @@ type RpcApi struct {
 	// internal-only surface can keep its shape unadvertised.
 	Reflection bool `protobuf:"varint,4,opt,name=reflection,proto3" json:"reflection,omitempty"`
 	// Logical groupings of the public surface — mirrors
-	// `RestApi.groups` (REV-017). Each group's `name` is a public
+	// `RestApi.groups`. Each group's `name` is a public
 	// gRPC service in the emitted `w17.lock.rpc.proto`; its `refs`
 	// name the backend methods that service wraps. The picked
 	// methods carry the gateway-tier concerns (event emit, auth,
@@ -129,7 +129,7 @@ func (x *RpcApi) GetGroups() []*RpcGroup {
 }
 
 // RpcGroup buckets backend methods under one public gRPC service
-// — the gRPC sibling of `RestGroup` (REV-017). Where REST groups
+// — the gRPC sibling of `RestGroup`. Where REST groups
 // surface as a URL sub-prefix + OpenAPI tag, an rpc group's
 // `name` IS the public `service` name emitted into
 // `w17.lock.rpc.proto`. Methods drawn from several backend
@@ -152,7 +152,7 @@ type RpcGroup struct {
 	//	"console.initiatives.SnapshotMutation.PushSnapshot" — one method
 	//
 	// `<module>` is the proto module (last package segment), matching
-	// the FK / REST `ref` shape (REV-015 / REV-017). Resolution is
+	// the FK / REST `ref` shape. Resolution is
 	// domain-scoped; a cross-domain ref is a parse-time error. The
 	// request/response message types are reused verbatim from the
 	// backend (imported into the lock, never redefined).
@@ -289,7 +289,7 @@ var (
 	// backend request/response message types. Streaming
 	// qualifiers (server / client / bidi) carry over verbatim and
 	// are forwarded natively. Sibling-scalar shape mirrors
-	// `(w17.mcp)` (REV-018): a bare bool pick + a separate string
+	// `(w17.mcp)`: a bare bool pick + a separate string
 	// override, rather than a message option.
 	//
 	// optional bool rpc = 50111;
@@ -316,7 +316,7 @@ var (
 	// rpc (gRPC gateway) surface registry. A sentinel carrying the
 	// surface's identity + knobs; the per-method `(w17.rpc)` flags
 	// do the picking. The file declares ZERO messages, like
-	// `(w17.rest_api)` (REV-017) and `(w17.mcp_api)` (REV-018).
+	// `(w17.rest_api)` and `(w17.mcp_api)`.
 	//
 	// One rpc surface per domain (one generated
 	// `w17.lock.rpc.proto` per domain); two files in one domain

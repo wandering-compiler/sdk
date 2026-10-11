@@ -1,7 +1,6 @@
 syntax = "proto3";
 
-// Plugin extension vocab (Phase G of the plugin-system
-// implementation plan — `docs/specs/plugins/`).
+// Plugin extension vocab.
 //
 // Lets a consuming project add fields to a plugin's exposed
 // message without forking the plugin. The extension is a
@@ -46,9 +45,8 @@ syntax = "proto3";
 
 // Package `w17.contrib` (not `w17`) so the option syntax
 // reads `(w17.contrib.extends)` — package `w17.contrib` plus
-// field name `extends`. Matches the spec's authoring surface
-// in docs/specs/plugins/manifest.md without needing snake-
-// case workarounds.
+// field name `extends`. Matches the manifest's authoring
+// surface without needing snake-case workarounds.
 package w17.contrib;
 
 import "google/protobuf/descriptor.proto";
@@ -82,15 +80,14 @@ extend google.protobuf.MessageOptions {
   // is sufficient.
   //
   // Body: [Extends]. Worked example + the staging rules: the
-  // header of this file and docs/specs/plugins/.
+  // header of this file.
   Extends extends = 51022;
   // (w17.contrib.plugin_feature) on `message` — opt a message
   // into a plugin feature tag. Staging-time filter drops the
   // message block from the staged .proto when the activation's
   // `features:` set doesn't include this tag. Cross-file refs
   // to dropped messages surface as standard protocompile
-  // "no such type" errors. See Phase G2 of the auth+acl plugin
-  // track + docs/specs/plugins/feature-tags.md.
+  // "no such type" errors.
   //
   // Proto3 namespaces extension field names per containing
   // package; the three plugin_feature_* variants below carry
@@ -120,7 +117,7 @@ extend google.protobuf.MethodOptions {
   // ⛔ 51027 IS BURNED — DO NOT REUSE IT.
   //
   // It was `plugin_feature_rpc_unless`, the INVERSE gate: emit this rpc
-  // only when the named feature is NOT active. Retired 2026-08-26 (Jiri).
+  // only when the named feature is NOT active. Retired.
   //
   // The burn is a COMMENT and cannot be anything else: proto3 has no
   // `reserved` inside an `extend` block, and the number lives in
@@ -142,7 +139,6 @@ extend google.protobuf.MethodOptions {
   // the baseline was the one being filtered away, so with `tenant_scope`
   // on, `UserCreated` had no emitter and every subscriber to
   // auth.user.created silently never fired.
-  // See docs/decisions/dql-feature-gated-fragments.md.
   //
   // It could still express a baseline a feature wholly replaces with
   // DIFFERENT SEMANTICS rather than an extra column. Nothing has ever

@@ -6,10 +6,10 @@ import "google/protobuf/descriptor.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
-// REV-017 (2026-05-07) — MCP exposure annotations split from
-// the now-removed `proto/w17/http.proto`.
+// MCP exposure annotations, split from the now-removed
+// `proto/w17/http.proto`.
 //
-// REV-018 (2026-05-29) — domain-level `(w17.mcp_api)` registry
+// The domain-level `(w17.mcp_api)` registry is defined
 // added below, mirroring `(w17.rest_api)`. The per-method
 // `(w17.mcp)` flag stays as a sibling path: small services with
 // a few MCP tools can still mark methods inline, while large
@@ -56,7 +56,7 @@ extend google.protobuf.FileOptions {
   // a domain MCP surface registry. The author wires which
   // gRPC methods become MCP tools by referencing them via
   // string `ref` paths. The file declares ZERO messages —
-  // it's a sentinel similar to `(w17.rest_api)` (REV-017) and
+  // it's a sentinel similar to `(w17.rest_api)` and
   // `(w17.event_subscribers)` (eventbus redesign).
   //
   // Driven by the compiler's MCP parser: every loaded
@@ -121,7 +121,7 @@ message McpApi {
   // time and neither is emitted. The tool list an MCP client
   // consumes is served by the generated bundle over the
   // protocol itself (`tools/list`), so there was never a file
-  // to read (a consumer went looking for one, 2026-08-31).
+  // to read.
   string version = 2;
 
   // Human-readable description of the MCP surface. Surfaces
@@ -150,8 +150,6 @@ message McpApi {
   // STANDALONE `<domain>-mcp-server` bundle instead, list them
   // explicitly in `tools` by ref; an include-only surface generates
   // no standalone bundle.
-  //
-  // Spec: docs/decisions/plugin-surfaces-opt-in.md.
   repeated string include = 5;
 }
 
