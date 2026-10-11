@@ -3,8 +3,10 @@ package restgw_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,5 +166,100 @@ func TestTicketIssuer_PrincipalFailure_401(t *testing.T) {
 	issuer.ServeHTTP(rec, r)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+// The default store must not grow without bound: the issuer mints for any
+// request carrying a credential, before the credential is validated.
+func TestTicketIssuer_FloodIsBounded(t *testing.T) {
+	store := restgw.NewMemoryTicketStore(restgw.WithMaxTickets(50))
+	defer store.Close()
+	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{
+		Principal: restgw.WSAuthTicketPrincipal,
+		Store:     store,
+	})
+	issued, refused := 0, 0
+	for i := 0; i < 200; i++ {
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
+		r.Header.Set("Authorization", "Bearer not-validated")
+		issuer.ServeHTTP(rec, r)
+		switch rec.Code {
+		case http.StatusOK:
+			issued++
+		case http.StatusServiceUnavailable:
+			refused++
+			if rec.Header().Get("Retry-After") == "" {
+				t.Fatal("503 without Retry-After")
+			}
+		default:
+			t.Fatalf("status = %d", rec.Code)
+		}
+	}
+	if issued != 50 || refused != 150 {
+		t.Errorf("issued=%d refused=%d, want 50/150", issued, refused)
+	}
+}
+
+// A redeemed ticket frees its slot.
+func TestTicketStore_RedeemFreesCapacity(t *testing.T) {
+	store := restgw.NewMemoryTicketStore(restgw.WithMaxTickets(1))
+	defer store.Close()
+	ctx := context.Background()
+	tk, err := store.Issue(ctx, map[string]string{"a": "b"}, time.Minute)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := store.Issue(ctx, nil, time.Minute); !errors.Is(err, restgw.ErrTicketStoreFull) {
+		t.Fatalf("second Issue err = %v, want ErrTicketStoreFull", err)
+	}
+	if _, err := store.Redeem(ctx, tk); err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if _, err := store.Issue(ctx, nil, time.Minute); err != nil {
+		t.Fatalf("Issue after redeem: %v", err)
+	}
+}
+
+// The byte budget counts label payload, so few large tickets fill it.
+func TestTicketStore_ByteBudget(t *testing.T) {
+	store := restgw.NewMemoryTicketStore(restgw.WithMaxTicketBytes(4096))
+	defer store.Close()
+	ctx := context.Background()
+	big := map[string]string{"authorization": strings.Repeat("x", 3000)}
+	if _, err := store.Issue(ctx, big, time.Minute); err != nil {
+		t.Fatalf("first Issue: %v", err)
+	}
+	if _, err := store.Issue(ctx, big, time.Minute); !errors.Is(err, restgw.ErrTicketStoreFull) {
+		t.Fatalf("second Issue err = %v, want ErrTicketStoreFull", err)
+	}
+}
+
+// WSAuthTicketPrincipal refuses an oversized credential and the issuer maps
+// it to 431, storing nothing.
+func TestTicketIssuer_OversizedAuthorization(t *testing.T) {
+	store := restgw.NewMemoryTicketStore(restgw.WithMaxTickets(1))
+	defer store.Close()
+	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{
+		Principal: restgw.WSAuthTicketPrincipal,
+		Store:     store,
+	})
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
+	r.Header.Set("Authorization", "Bearer "+strings.Repeat("x", restgw.MaxTicketAuthorizationBytes))
+	issuer.ServeHTTP(rec, r)
+	if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("status = %d, want 431", rec.Code)
+	}
+	// The single slot is still free.
+	if _, err := store.Issue(context.Background(), nil, time.Minute); err != nil {
+		t.Fatalf("Issue after refused oversized request: %v", err)
+	}
+
+	// At the limit is still accepted.
+	ok := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
+	ok.Header.Set("Authorization", strings.Repeat("x", restgw.MaxTicketAuthorizationBytes))
+	if _, err := restgw.WSAuthTicketPrincipal(ok); err != nil {
+		t.Fatalf("Authorization at the limit refused: %v", err)
 	}
 }

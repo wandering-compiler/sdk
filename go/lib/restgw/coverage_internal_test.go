@@ -315,3 +315,42 @@ func TestMarshalUnmarshalProto_AliasRoundTrip(t *testing.T) {
 		t.Errorf("alias key should decode into the proto field; got %q", v)
 	}
 }
+
+// A full store sweeps expired tickets itself before refusing, so capacity
+// does not wait for the minute-long janitor; byte accounting returns to
+// zero once every ticket is gone.
+func TestMemoryTicketStore_FullStoreSweepsExpired(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	s := NewMemoryTicketStore(WithMaxTickets(2))
+	defer s.Close()
+	s.now = func() time.Time { return now }
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := s.Issue(ctx, map[string]string{"k": "v"}, time.Second); err != nil {
+			t.Fatalf("Issue %d: %v", i, err)
+		}
+	}
+	if _, err := s.Issue(ctx, nil, time.Second); err != ErrTicketStoreFull {
+		t.Fatalf("Issue on full store err = %v, want ErrTicketStoreFull", err)
+	}
+	now = now.Add(2 * time.Second)
+	tk, err := s.Issue(ctx, nil, time.Second)
+	if err != nil {
+		t.Fatalf("Issue after expiry: %v", err)
+	}
+	s.mu.Lock()
+	n := len(s.entries)
+	s.mu.Unlock()
+	if n != 1 {
+		t.Errorf("entries = %d, want 1 (expired swept)", n)
+	}
+	if _, err := s.Redeem(ctx, tk); err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	s.mu.Lock()
+	b := s.bytes
+	s.mu.Unlock()
+	if b != 0 {
+		t.Errorf("bytes = %d after store emptied, want 0", b)
+	}
+}

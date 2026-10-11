@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
@@ -161,51 +162,131 @@ func TestProcessFilePart_WildcardExt(t *testing.T) {
 	}
 }
 
-func TestProcessFilePart_HashStable(t *testing.T) {
-	// Same body → same hash → same final key, regardless of
-	// uploaded filename. Confirms the storage handle is
-	// content-derived (hash-keyed), so duplicate uploads
-	// dedupe at the driver layer.
+// Identical bodies must land in distinct objects. A content-derived key
+// shared one object between requests, so a request that failed after its
+// upload rolled back the object an earlier, committed request still
+// referenced.
+func TestProcessFilePart_IdenticalBodiesGetDistinctObjects(t *testing.T) {
 	d := memdriver.New()
-	body1, ct1 := buildMultipart(t, map[string]string{"file": "a.pdf=same-bytes"})
-	body2, ct2 := buildMultipart(t, map[string]string{"file": "different-name.pdf=same-bytes"})
-
-	r1 := httptest.NewRequest(http.MethodPost, "/u", body1)
-	r1.Header.Set("Content-Type", ct1)
-	if err := r1.ParseMultipartForm(32 << 20); err != nil {
-		t.Fatalf("ParseMultipartForm 1: %v", err)
+	cfg := sameBytesConfig(d)
+	h1 := uploadSameBytes(t, cfg, "a.pdf")
+	h2 := uploadSameBytes(t, cfg, "different-name.pdf")
+	if h1 == h2 {
+		t.Fatalf("identical uploads share handle %q", h1)
 	}
-	r2 := httptest.NewRequest(http.MethodPost, "/u", body2)
-	r2.Header.Set("Content-Type", ct2)
-	if err := r2.ParseMultipartForm(32 << 20); err != nil {
-		t.Fatalf("ParseMultipartForm 2: %v", err)
+	if got := len(d.Keys()); got != 2 {
+		t.Errorf("driver keys = %d, want 2 (one object per upload)", got)
+	}
+	// The key still starts from the content hash, so it stays traceable.
+	want := kvfs.HashKey([]byte("same-bytes"))
+	for _, h := range []string{h1, h2} {
+		if !strings.Contains(h, want+"-") {
+			t.Errorf("handle %q does not carry the content hash %s", h, want)
+		}
+	}
+}
+
+// A failed request's rollback must not remove an object an earlier,
+// committed request stored with the same bytes.
+func TestRollbackUploads_KeepsAnotherRequestsIdenticalObject(t *testing.T) {
+	d := memdriver.New()
+	cfg := sameBytesConfig(d)
+	committed := uploadSameBytes(t, cfg, "a.pdf")
+	failed := uploadSameBytes(t, cfg, "a.pdf")
+
+	restgw.RollbackUploads(context.Background(), map[string]kvfs.Driver{"c": d},
+		[]restgw.UploadedObject{{Connection: "c", Handle: failed}})
+
+	if !d.Has(committed) {
+		t.Fatalf("rollback of a failed request removed the committed request's object %q", committed)
+	}
+	if d.Has(failed) {
+		t.Errorf("rollback left the failed request's own object %q behind", failed)
+	}
+}
+
+// Two identical uploads in flight at once: whichever fails and rolls back,
+// the other keeps its object.
+func TestRollbackUploads_ConcurrentIdenticalUploads(t *testing.T) {
+	d := memdriver.New()
+	cfg := sameBytesConfig(d)
+	const n = 16
+	reqs := make([]*http.Request, n)
+	for i := range reqs {
+		reqs[i] = sameBytesRequest(t, "a.pdf")
+	}
+	handles := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range reqs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			handles[i], errs[i] = restgw.ProcessFilePart(context.Background(), reqs[i], cfg)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("upload %d: %v", i, err)
+		}
 	}
 
-	cfg := restgw.FilePartConfig{
+	// Every odd request fails and rolls back concurrently.
+	drivers := map[string]kvfs.Driver{"c": d}
+	for i := 1; i < n; i += 2 {
+		wg.Add(1)
+		go func(h string) {
+			defer wg.Done()
+			restgw.RollbackUploads(context.Background(), drivers, []restgw.UploadedObject{{Connection: "c", Handle: h}})
+		}(handles[i])
+	}
+	wg.Wait()
+
+	for i := 0; i < n; i += 2 {
+		if !d.Has(handles[i]) {
+			t.Errorf("request %d committed, but its object %q is gone", i, handles[i])
+		}
+	}
+	if got := len(d.Keys()); got != n/2 {
+		t.Errorf("driver keys = %d, want %d", got, n/2)
+	}
+}
+
+func sameBytesConfig(d kvfs.Driver) restgw.FilePartConfig {
+	return restgw.FilePartConfig{
 		FormName:          "file",
 		Driver:            d,
 		BucketPath:        "/x",
-		ExpectedObjects:   1,
-		MaxPerBucket:      1,
+		ExpectedObjects:   1000,
+		MaxPerBucket:      10,
 		MaxSizeBytes:      1024,
 		AllowedExtensions: []string{"pdf"},
 	}
-	h1, err := restgw.ProcessFilePart(context.Background(), r1, cfg)
+}
+
+// sameBytesRequest builds a parsed multipart request carrying the fixed
+// body "same-bytes" under filename.
+func sameBytesRequest(t *testing.T, filename string) *http.Request {
+	t.Helper()
+	body, ct := buildMultipart(t, map[string]string{"file": filename + "=same-bytes"})
+	r := httptest.NewRequest(http.MethodPost, "/u", body)
+	r.Header.Set("Content-Type", ct)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		t.Fatalf("ParseMultipartForm: %v", err)
+	}
+	return r
+}
+
+// uploadSameBytes stores the fixed body "same-bytes" under filename and
+// returns the handle.
+func uploadSameBytes(t *testing.T, cfg restgw.FilePartConfig, filename string) string {
+	t.Helper()
+	h, err := restgw.ProcessFilePart(context.Background(), sameBytesRequest(t, filename), cfg)
 	if err != nil {
-		t.Fatalf("Process 1: %v", err)
+		t.Fatalf("ProcessFilePart: %v", err)
 	}
-	h2, err := restgw.ProcessFilePart(context.Background(), r2, cfg)
-	if err != nil {
-		t.Fatalf("Process 2: %v", err)
-	}
-	if h1 != h2 {
-		t.Errorf("hash-keyed handles differ: %q vs %q (same body)", h1, h2)
-	}
-	// Both Puts under the same key → only one entry in the
-	// driver.
-	if got := len(d.Keys()); got != 1 {
-		t.Errorf("driver keys = %d, want 1 (dedup by hash)", got)
-	}
+	return h
 }
 
 // R-restgw-5 — MaxSizeBytes == 0 means UNLIMITED, not "reject
