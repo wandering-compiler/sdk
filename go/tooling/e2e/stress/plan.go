@@ -41,12 +41,22 @@ const (
 	SelectRandom     = "random"
 )
 
-// Thresholds is the optional pass/fail gate. A zero field is "no gate on
-// this dimension".
+// Thresholds is the optional pass/fail gate. A zero latency or throughput
+// field is "no gate on this dimension". Any non-nil Thresholds also fails a
+// run that measured no requests: a gate over nothing passes for a load
+// phase that never reached the server.
 type Thresholds struct {
 	P50, P95, P99, Max time.Duration
-	ErrorRate          float64
-	MinThroughput      float64
+
+	// ErrorRate is the maximum acceptable error fraction. A positive value
+	// is always a gate. Zero is a gate — "no errors allowed" — when
+	// ErrorRateSet is true; without it a zero ErrorRate means the plan did
+	// not configure one, which is how literals written before ErrorRateSet
+	// existed read.
+	ErrorRate    float64
+	ErrorRateSet bool
+
+	MinThroughput float64
 }
 
 // Op is one baked load call: routing + the request contract. Distinct

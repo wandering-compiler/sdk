@@ -43,7 +43,7 @@ func TestCountMatcher_RefusesAPredicateEveryCountSatisfies(t *testing.T) {
 		}
 		// The message has to name both honest alternatives, because which
 		// one is right is the question the author actually has to answer.
-		for _, want := range []string{">= 1", "== 0"} {
+		for _, want := range []string{"{matcher: count, op: '>=', value: 1}", "{matcher: count, op: '==', value: 0}"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal for %v does not offer %q as the alternative: %v", m, want, err)
 			}

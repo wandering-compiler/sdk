@@ -29,7 +29,7 @@ func TestUnwrittenMatcher_AlwaysFails(t *testing.T) {
 			if !strings.Contains(err.Error(), "unwritten") {
 				t.Errorf("the failure must name the matcher to replace:\n%s", err)
 			}
-			if !strings.Contains(err.Error(), "accept anything on purpose") {
+			if !strings.Contains(err.Error(), "check nothing about this field on purpose") {
 				t.Errorf("the failure must offer the deliberate escape hatch:\n%s", err)
 			}
 		})

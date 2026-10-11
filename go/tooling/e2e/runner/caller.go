@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/wandering-compiler/sdk/go/tooling/e2e/internal/runtime"
 )
 
 // Caller issues one call to the target and returns the response as a
@@ -58,7 +60,29 @@ func NewRESTCaller(baseURL string, client *http.Client) *RESTCaller {
 // bodyless verbs / empty bodies. It is the SINGLE routing implementation,
 // shared by the asserting RESTCaller and the stress LoadCaller, so the two
 // can never drift on how a step maps to an HTTP call.
+//
+// Input it cannot place is an error, never dropped: a nested object on a
+// bodyless verb has no query-string shape, and a request sent without it
+// would be asserted against as if the filter had been applied.
 func ResolveREST(baseURL string, ep Endpoint, input map[string]any) (method, target string, body []byte, err error) {
+	r, err := resolveREST(baseURL, ep, input)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return r.method, r.target, r.body, nil
+}
+
+// restRequest is a resolved REST call. form is what remains for the
+// request BODY once path and query bindings are taken — the fields a
+// multipart request carries as form fields (body_field applied).
+type restRequest struct {
+	method, target string
+	body           []byte
+	form           map[string]any
+}
+
+func resolveREST(baseURL string, ep Endpoint, input map[string]any) (restRequest, error) {
+	var out restRequest
 	// Work on a shallow copy so path/query extraction doesn't mutate
 	// the caller's map.
 	rest := make(map[string]any, len(input))
@@ -70,16 +94,22 @@ func ResolveREST(baseURL string, ep Endpoint, input map[string]any) (method, tar
 	for _, p := range ep.PathParams {
 		v, ok := rest[p]
 		if !ok {
-			return "", "", nil, fmt.Errorf("rest %s: path param %q missing from input", ep.Ref, p)
+			return out, fmt.Errorf("rest %s: path param %q missing from input", ep.Ref, p)
 		}
-		path = strings.ReplaceAll(path, "{"+p+"}", url.PathEscape(fmt.Sprint(v)))
+		seg, ok := scalarText(v)
+		if !ok || v == nil {
+			return out, fmt.Errorf("rest %s: path param %q is %T — a path segment takes a single scalar value", ep.Ref, p, v)
+		}
+		path = strings.ReplaceAll(path, "{"+p+"}", url.PathEscape(seg))
 		delete(rest, p)
 	}
 
 	q := url.Values{}
 	for _, name := range ep.QueryParams {
 		if v, ok := rest[name]; ok {
-			q.Set(name, fmt.Sprint(v))
+			if err := addQuery(q, ep, name, v); err != nil {
+				return out, err
+			}
 			delete(rest, name)
 		}
 	}
@@ -88,29 +118,26 @@ func ResolveREST(baseURL string, ep Endpoint, input map[string]any) (method, tar
 	// belongs in the query string — this covers params the routing table
 	// doesn't enumerate as explicit bindings, notably cursor-paging knobs
 	// (`?limit=`, `?cursor=`) the gateway reads straight off the URL.
-	// Nested objects can't be a flat query value (iter-1: the author
-	// omits or flattens them); repeated scalars become repeated keys.
-	method = strings.ToUpper(ep.HTTPMethod)
+	// Repeated scalars become repeated keys. A nested object has no flat
+	// query shape and is refused: dropping it sent an unfiltered request
+	// that the step then asserted against as if it were filtered. (An
+	// endpoint that expands a sub-message into the query reads its leaves
+	// as top-level keys, so the step names them that way.)
+	method := strings.ToUpper(ep.HTTPMethod)
 	if method == http.MethodGet || method == http.MethodDelete {
 		for k, v := range rest {
-			switch vv := v.(type) {
-			case map[string]any:
-				continue
-			case []any:
-				for _, e := range vv {
-					q.Add(k, fmt.Sprint(e))
-				}
-			default:
-				q.Set(k, fmt.Sprint(v))
+			if err := addQuery(q, ep, k, v); err != nil {
+				return out, err
 			}
 			delete(rest, k)
 		}
 	}
 
-	target = baseURL + path
+	target := baseURL + path
 	if enc := q.Encode(); enc != "" {
 		target += "?" + enc
 	}
+	out.method, out.target = method, target
 
 	// A raw-body endpoint takes its body VERBATIM: the named input value
 	// is the bytes on the wire, with no JSON envelope around it. That is
@@ -123,49 +150,101 @@ func ResolveREST(baseURL string, ep Endpoint, input map[string]any) (method, tar
 	if ep.RawBodyField != "" {
 		v, ok := input[ep.RawBodyField]
 		if !ok {
-			return "", "", nil, fmt.Errorf("rest %s: raw body field %q missing from input", ep.Ref, ep.RawBodyField)
+			return out, fmt.Errorf("rest %s: raw body field %q missing from input", ep.Ref, ep.RawBodyField)
 		}
 		switch vv := v.(type) {
 		case string:
-			body = []byte(vv)
+			out.body = []byte(vv)
 		case []byte:
-			body = vv
+			out.body = vv
 		default:
-			return "", "", nil, fmt.Errorf("rest %s: raw body field %q must be a string, got %T", ep.Ref, ep.RawBodyField, v)
+			return out, fmt.Errorf("rest %s: raw body field %q must be a string, got %T", ep.Ref, ep.RawBodyField, v)
 		}
-		return method, target, body, nil
+		return out, nil
 	}
 
 	var payload any = rest
+	out.form = rest
 	if ep.BodyField != "" && ep.BodyField != "*" {
 		payload = input[ep.BodyField]
+		switch pv := payload.(type) {
+		case nil:
+			out.form = nil
+		case map[string]any:
+			out.form = pv
+		default:
+			out.form = map[string]any{ep.BodyField: pv}
+		}
 	}
 	if method != http.MethodGet && method != http.MethodDelete && len(rest) > 0 {
 		b, err := json.Marshal(payload)
 		if err != nil {
-			return "", "", nil, fmt.Errorf("rest %s: marshal body: %w", ep.Ref, err)
+			return out, fmt.Errorf("rest %s: marshal body: %w", ep.Ref, err)
 		}
-		body = b
+		out.body = b
 	}
-	return method, target, body, nil
+	return out, nil
+}
+
+// addQuery adds one input value to the query string: a scalar as one
+// key, a list of scalars as repeated keys, null as nothing (proto3 JSON
+// reads null as unset). Anything else has no query-string encoding and
+// is an error rather than the Go rendering of a map.
+func addQuery(q url.Values, ep Endpoint, name string, v any) error {
+	if v == nil {
+		return nil
+	}
+	if list, ok := v.([]any); ok {
+		for i, e := range list {
+			s, ok := scalarText(e)
+			if !ok || e == nil {
+				return fmt.Errorf("rest %s: query param %q[%d] is %T — a query string carries scalars only", ep.Ref, name, i, e)
+			}
+			q.Add(name, s)
+		}
+		return nil
+	}
+	s, ok := scalarText(v)
+	if !ok {
+		return fmt.Errorf("rest %s %s: input %q is %T, which has no query-string encoding — "+
+			"a %s request carries no body, so the value would be dropped. Name the leaf fields the endpoint reads as top-level input keys",
+			ep.Ref, strings.ToUpper(ep.HTTPMethod), name, v, strings.ToUpper(ep.HTTPMethod))
+	}
+	q.Set(name, s)
+	return nil
+}
+
+// scalarText renders a scalar input value as request text (numbers without
+// exponent, the way interpolation renders them). ok is false for anything
+// that is not a scalar. nil renders as "" with ok true; callers that cannot
+// carry null check for it.
+func scalarText(v any) (string, bool) {
+	switch v.(type) {
+	case nil:
+		return "", true
+	case string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		return runtime.Text(v), true
+	}
+	return "", false
 }
 
 func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, credential string, files []FilePart) (map[string]any, error) {
-	method, target, body, err := ResolveREST(c.BaseURL, ep, input)
+	r, err := resolveREST(c.BaseURL, ep, input)
 	if err != nil {
 		return nil, err
 	}
+	method, target, body := r.method, r.target, r.body
 
 	var reqBody io.Reader
 	contentType := ""
 	if len(files) > 0 {
 		// A multipart endpoint takes its scalars as ordinary form
 		// fields, not as a JSON body — so the JSON `body` computed
-		// above is discarded and the same input is re-encoded here.
-		// The endpoint's own path/query bindings were already
-		// consumed by ResolveREST, so what remains in `input` is the
-		// message body's fields.
-		mb, ct, err := multipartBody(ep, input, files)
+		// above is discarded and the BODY's fields are re-encoded here:
+		// what is left after the path and query bindings, narrowed to
+		// body_field when the endpoint names one. Re-encoding the whole
+		// input sent path and query values a second time as form fields.
+		mb, ct, err := multipartBody(ep, r.form, files)
 		if err != nil {
 			return nil, err
 		}
@@ -406,8 +485,8 @@ func multipartBody(ep Endpoint, input map[string]any, files []FilePart) ([]byte,
 			if err := w.WriteField(k, v); err != nil {
 				return nil, "", fmt.Errorf("rest %s: multipart field %q: %w", ep.Ref, k, err)
 			}
-		case bool, int, int32, int64, uint, uint32, uint64, float32, float64, json.Number:
-			if err := w.WriteField(k, fmt.Sprint(v)); err != nil {
+		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+			if err := w.WriteField(k, runtime.Text(v)); err != nil {
 				return nil, "", fmt.Errorf("rest %s: multipart field %q: %w", ep.Ref, k, err)
 			}
 		default:
