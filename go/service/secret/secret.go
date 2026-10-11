@@ -44,23 +44,40 @@ const Redacted = "***"
 //
 // Constrained to ~string because every real secret env var (password,
 // token, key, DSN) is a string; secret int/bool is not a use case.
+//
+// The value is held behind a pointer, and that is load-bearing. fmt
+// cannot call methods through an UNEXPORTED struct field, so a Secret in
+// `struct{ key secret.String }` is printed by reflection, bypassing
+// Format and String entirely — and a string field prints as itself. A
+// pointer below the top level prints as its address, so reflection finds
+// nothing to reveal. log/slog's text handler formats structs through
+// fmt and inherits the same protection; its JSON handler skips
+// unexported fields.
+//
+// One consequence: `==` on two Secrets compares identity, not content.
+// Compare `Reveal()` results where content equality is meant.
 type Secret[T ~string] struct {
-	v T
+	v *T
 }
 
 // String is the alias the codegen names for the common case.
 type String = Secret[string]
 
 // New wraps v in a Secret.
-func New[T ~string](v T) Secret[T] { return Secret[T]{v: v} }
+func New[T ~string](v T) Secret[T] { return Secret[T]{v: &v} }
 
 // Reveal returns the wrapped cleartext value. This is the ONLY way to
 // read it — every other access path redacts. Spell it out at each use
 // site so secret usage stays auditable.
-func (s Secret[T]) Reveal() T { return s.v }
+func (s Secret[T]) Reveal() T {
+	if s.v == nil {
+		return ""
+	}
+	return *s.v
+}
 
 // IsZero reports whether the wrapped value is empty.
-func (s Secret[T]) IsZero() bool { return s.v == "" }
+func (s Secret[T]) IsZero() bool { return s.v == nil || *s.v == "" }
 
 // Format implements [fmt.Formatter] so EVERY fmt verb (%v, %s, %q,
 // %#v, %d, …) renders [Redacted]. This is the bulletproof layer:
@@ -93,7 +110,8 @@ func (s Secret[T]) LogValue() slog.Value { return slog.StringValue(Redacted) }
 // UnmarshalText loads a secret from a text config source. The value
 // is stored but stays unprintable.
 func (s *Secret[T]) UnmarshalText(b []byte) error {
-	s.v = T(b)
+	v := T(b)
+	s.v = &v
 	return nil
 }
 
@@ -104,6 +122,7 @@ func (s *Secret[T]) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &str); err != nil {
 		return err
 	}
-	s.v = T(str)
+	v := T(str)
+	s.v = &v
 	return nil
 }
