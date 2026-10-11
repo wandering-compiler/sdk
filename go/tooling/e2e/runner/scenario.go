@@ -96,6 +96,22 @@ type Step struct {
 	// e2espec.Doc.Credential for why `Headers` cannot carry it.
 	Credential string
 
+	// Anonymous sends this step's call with NO credential at all, even to
+	// an auth-required endpoint and even after the scenario captured
+	// `auth.token`. It is how a step asserts that a signed-out caller is
+	// refused: without it, every auth-required step either carries the
+	// session token or fails before sending anything. Exclusive with
+	// Credential and TokenFrom.
+	Anonymous bool
+
+	// TokenFrom names the capture whose value is this step's bearer token,
+	// in place of the reserved `auth.token` — a second signed-in principal
+	// in the same scenario, or the session token named on purpose (a step
+	// asserting that this very session is now refused, after a sign-out).
+	// The capture must be bound and non-empty. Exclusive with Credential
+	// and Anonymous.
+	TokenFrom string
+
 	// Repeat runs this step N times sequentially (the `${seq}`
 	// generator advances each iteration). Zero/one = once.
 	Repeat int
@@ -266,25 +282,9 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	if input == nil {
 		input = map[string]any{}
 	}
-	token := ""
-	// A capability-link endpoint IS auth-required, but its
-	// credential rides in the URL. Injecting the scenario's bearer
-	// token here would be worse than redundant: the case would pass
-	// while exercising a request no recipient of such a link can
-	// make, and it would fail outright in any scenario that never
-	// signed anyone in — which is the only honest way to write this
-	// case in the first place.
-	// A step naming its own credential does not take the reserved token:
-	// presenting two is a request no caller makes, and leaving the bearer
-	// on would let the scenario's session answer for the credential under
-	// test — which is how a first version of this passed while proving
-	// nothing.
-	if s.Endpoint.AuthRequired && !s.Endpoint.CredentialInURL && s.Credential == "" {
-		v, ok := scope.Get("auth.token")
-		if !ok {
-			return fmt.Errorf("auth-required endpoint but no auth.token captured upstream in this scenario")
-		}
-		token = fmt.Sprint(v)
+	token, err := stepToken(s, scope)
+	if err != nil {
+		return err
 	}
 	headers, err := expandHeaders(s.Headers, scope)
 	if err != nil {
@@ -315,8 +315,8 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 			// The /w17-events stream is gated by the same realm as REST;
 			// reuse the scenario's captured token even when this step's own
 			// endpoint needs none.
-			if v, ok := scope.Get("auth.token"); ok {
-				evToken = fmt.Sprint(v)
+			if v, ok := scope.Get("auth.token"); ok && v != nil {
+				evToken = runtime.Text(v)
 			}
 		}
 		for _, ae := range s.AwaitEvents {
@@ -367,6 +367,67 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		}
 	}
 	return nil
+}
+
+// stepToken resolves the bearer token a step presents ("" for none).
+//
+// A capability-link endpoint IS auth-required, but its credential rides in
+// the URL. Injecting the scenario's bearer token there would be worse than
+// redundant: the case would pass while exercising a request no recipient of
+// such a link can make, and it would fail outright in any scenario that
+// never signed anyone in — which is the only honest way to write that case.
+//
+// A step naming its own credential does not take the reserved token either:
+// presenting two is a request no caller makes, and leaving the bearer on
+// would let the scenario's session answer for the credential under test.
+func stepToken(s Step, scope *runtime.Scope) (string, error) {
+	switch {
+	case s.Anonymous && (s.Credential != "" || s.TokenFrom != ""):
+		return "", fmt.Errorf("step is anonymous and also names a credential or token_from — an anonymous call presents nothing, so the two contradict each other")
+	case s.Credential != "" && s.TokenFrom != "":
+		return "", fmt.Errorf("step names both a credential and token_from %q — a call carries one Authorization value", s.TokenFrom)
+	case s.Anonymous || s.Credential != "":
+		return "", nil
+	case s.TokenFrom != "":
+		return capturedToken(scope, s.TokenFrom)
+	case !s.Endpoint.AuthRequired || s.Endpoint.CredentialInURL:
+		return "", nil
+	}
+	if s.ExpectError != nil && s.ExpectError.Code == "UNAUTHENTICATED" {
+		// The session token rides this call only because nobody said
+		// otherwise, and the step expects to be told it is not signed in.
+		// A refusal here cannot show what the step is named for: a server
+		// that turned away EVERY signed-in call would pass it. Say which
+		// of the two cases is meant.
+		return "", fmt.Errorf("step expects UNAUTHENTICATED but would present the scenario's session token (auth.token) by default — " +
+			"a refusal of that call does not show that a signed-out caller is refused. " +
+			"Mark the step anonymous (`anonymous: true`) to send it with no credential, or name the token " +
+			"(`token_from: auth.token`) if the point is that this session itself is refused, e.g. after a sign-out")
+	}
+	tok, err := capturedToken(scope, "auth.token")
+	if err != nil {
+		return "", fmt.Errorf("auth-required endpoint but %w", err)
+	}
+	return tok, nil
+}
+
+// capturedToken reads a token capture. A bound-but-empty value is an error
+// rather than a token: interpolating it would send `Bearer ` or
+// `Bearer <nil>`, and every refusal the scenario then asserts would pass on
+// a sign-in that never produced a token.
+func capturedToken(scope *runtime.Scope, name string) (string, error) {
+	v, ok := scope.Get(name)
+	if !ok {
+		return "", fmt.Errorf("no %s captured upstream in this scenario", name)
+	}
+	tok := ""
+	if v != nil {
+		tok = runtime.Text(v)
+	}
+	if strings.TrimSpace(tok) == "" {
+		return "", fmt.Errorf("%s was captured but is empty (%v) — the step that bound it did not receive a token", name, v)
+	}
+	return tok, nil
 }
 
 // runUnaryStep issues a non-streaming call and asserts its one outcome: the
