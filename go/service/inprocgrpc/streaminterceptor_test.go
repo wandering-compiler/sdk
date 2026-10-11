@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/wandering-compiler/sdk/go/service/inprocgrpc"
@@ -83,9 +85,10 @@ func TestConn_WithStreamInterceptors_ChainOrder(t *testing.T) {
 // status, not be swallowed — otherwise a guard could "run" and change
 // nothing.
 func TestConn_StreamInterceptor_RejectionSurfaces(t *testing.T) {
+	refused := status.Error(codes.PermissionDenied, "refused by the interceptor")
 	conn := inprocgrpc.New(inprocgrpc.WithStreamInterceptors(
 		func(any, grpc.ServerStream, *grpc.StreamServerInfo, grpc.StreamHandler) error {
-			return context.Canceled
+			return refused
 		}))
 	handlerRan := false
 	conn.RegisterService(&grpc.ServiceDesc{
@@ -102,7 +105,7 @@ func TestConn_StreamInterceptor_RejectionSurfaces(t *testing.T) {
 		t.Fatalf("NewStream: %v", err)
 	}
 	out := new(wrapperspb.Int32Value)
-	if err := cs.RecvMsg(out); err != context.Canceled {
+	if err := cs.RecvMsg(out); err != refused {
 		t.Errorf("terminal error = %v, want the interceptor's rejection", err)
 	}
 	if handlerRan {
