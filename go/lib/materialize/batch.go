@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
 
 // FetchBatches splits ids into windows of batchSize and runs fn for
@@ -32,6 +33,14 @@ import (
 // fn MUST treat ctx as the cancellation signal for its query and MUST
 // NOT mutate shared state — it returns its window's items and
 // FetchBatches does the merge.
+//
+// Inside a transaction the windows run sequentially, whatever
+// maxParallel says: a transaction is one connection, the drivers do not
+// multiplex result sets on one, and the registry's adoption lease
+// serialises handlers, not goroutines inside one handler. A request that
+// carries a distributed transaction id (`w17-tx-id`) is inside one, and
+// so is any ctx marked with [WithinTx] — the caller marks it when fn
+// queries a *sql.Tx it opened itself (a locked query).
 func FetchBatches[B any, T any](
 	ctx context.Context,
 	pool *sql.DB,
@@ -57,6 +66,9 @@ func FetchBatches[B any, T any](
 	}
 
 	par := effectiveParallel(maxParallel, pool)
+	if inTx(ctx) {
+		par = 1
+	}
 	if par <= 1 || len(windows) <= 1 {
 		var out []T
 		for _, w := range windows {
@@ -141,6 +153,21 @@ func FetchBatches[B any, T any](
 		out = append(out, r...)
 	}
 	return out, nil
+}
+
+type withinTxKey struct{}
+
+// WithinTx marks ctx as running inside a transaction, so [FetchBatches]
+// fetches its windows one after another on it.
+func WithinTx(ctx context.Context) context.Context {
+	return context.WithValue(ctx, withinTxKey{}, true)
+}
+
+func inTx(ctx context.Context) bool {
+	if marked, _ := ctx.Value(withinTxKey{}).(bool); marked {
+		return true
+	}
+	return txregistry.RequestTxID(ctx) != ""
 }
 
 // effectiveParallel clamps the author's requested concurrency to a
