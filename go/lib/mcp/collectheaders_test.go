@@ -12,10 +12,10 @@ import (
 // (Env / InitializeParams) as well as HTTP (HTTPHeaders) — not just the
 // HTTP-header-only path that breaks stdio auth.
 func TestCollectAuthHeaders_MergesAllSources(t *testing.T) {
+	// stdio: env + initialize params.
 	conn := mcp.ConnectionInfo{
 		Env:              map[string]string{"AUTHORIZATION": "Bearer env", "X_API_KEY": "k1"},
 		InitializeParams: map[string]any{"session-id": "s1", "ignored-int": 7},
-		HTTPHeaders:      http.Header{"Trace-Id": []string{"t1"}},
 	}
 	got := mcp.CollectAuthHeaders(conn)
 
@@ -23,7 +23,6 @@ func TestCollectAuthHeaders_MergesAllSources(t *testing.T) {
 		"authorization": "Bearer env", // env, reversed SCREAMING->header
 		"x-api-key":     "k1",         // env underscore -> dash
 		"session-id":    "s1",         // initialize param (string only)
-		"trace-id":      "t1",         // http header, lowercased
 	}
 	for k, v := range want {
 		if got[k] != v {
@@ -32,6 +31,16 @@ func TestCollectAuthHeaders_MergesAllSources(t *testing.T) {
 	}
 	if _, leaked := got["ignored-int"]; leaked {
 		t.Errorf("non-string InitializeParams value must be skipped, got %v", got)
+	}
+
+	// HTTP: headers + initialize params; env is not an identity source.
+	conn.HTTPHeaders = http.Header{"Trace-Id": []string{"t1"}}
+	got = mcp.CollectAuthHeaders(conn)
+	if got["trace-id"] != "t1" || got["session-id"] != "s1" {
+		t.Errorf("http conn must carry headers + initialize params, got %v", got)
+	}
+	if _, ok := got["authorization"]; ok {
+		t.Errorf("http conn must not carry env-derived headers, got %v", got)
 	}
 }
 

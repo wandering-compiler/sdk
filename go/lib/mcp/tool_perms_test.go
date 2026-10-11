@@ -2,10 +2,11 @@ package mcp
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // An MCP tool must be able to require MORE than one
@@ -30,7 +31,7 @@ func TestSetToolPerms_CallRequiresEveryPerm(t *testing.T) {
 	if ok {
 		t.Fatal("tool ran with endpoint perm only — model perm not enforced (ACL bypass)")
 	}
-	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("err = %v, want permission denied", err)
 	}
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -53,6 +54,10 @@ type Server struct {
 	// SCREAMING_SNAKE-keyed with the prefix stripped, matching envKey so
 	// CollectAuthHeaders + lookup read it consistently.
 	authEnv map[string]string
+
+	// maxBody caps a POST body on the HTTP transport; 0 = the default
+	// (see SetMaxRequestBodyBytes).
+	maxBody int64
 }
 
 // NewServer constructs a Server with the given name/version
@@ -80,9 +85,10 @@ func NewServer(name, version string, auth MCPAuthFunc) *Server {
 // SetAuthEnvPrefix enables stdio identity forwarding (Q63-mcp-1): it
 // snapshots the process environment, keeping only `<prefix>_<KEY>` vars
 // (prefix + the joining `_` stripped, so `MYAPP_AUTHORIZATION` becomes
-// `AUTHORIZATION`). Those land on every ConnectionInfo's Env, so the auth
-// translator + permission resolver can source the connection's token from
-// env when the HTTP-header channel is absent (stdio). Scoping to the
+// `AUTHORIZATION`). Those land on the Env of every stdio ConnectionInfo, so
+// the auth translator + permission resolver can source the connection's
+// token from env when the HTTP-header channel is absent. They are never
+// attached to an HTTP connection: there the caller is not the operator. Scoping to the
 // prefix bounds exposure to the project's own namespace — the whole
 // environment is never forwarded. Empty prefix is a no-op (env forwarding
 // stays off). Generated main calls this with the project's ENV prefix when
@@ -108,14 +114,22 @@ func (s *Server) SetAuthEnvPrefix(prefix string) {
 	}
 }
 
-// connInfo builds the ConnectionInfo for the current request, threading
-// the prefix-scoped env snapshot alongside any HTTP headers so the auth
-// resolvers see one identity view across transports.
+// connInfo builds the ConnectionInfo for the current request.
+//
+// The env snapshot is the stdio identity: on stdio the process IS the
+// client, so the operator's environment speaks for it. On HTTP the caller
+// is someone else, and its identity comes from the request alone — the env
+// snapshot is never attached there, or a caller sending no credentials
+// would be authenticated as the operator, and every `<PREFIX>_*` variable
+// would be forwarded to the auth backend on each call.
 func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
-	return ConnectionInfo{
-		HTTPHeaders: HTTPHeadersFromContext(ctx),
-		Env:         s.authEnv,
+	if h, isHTTP := ctx.Value(httpHeadersCtxKey{}).(http.Header); isHTTP {
+		if h == nil {
+			h = http.Header{}
+		}
+		return ConnectionInfo{HTTPHeaders: h}
 	}
+	return ConnectionInfo{Env: s.authEnv}
 }
 
 // SetPermResolver turns permission gating ON: the resolver is consulted
@@ -313,12 +327,18 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 		mcpserver.WithEndpointPath(EndpointPath),
 		mcpserver.WithStreamableHTTPServer(httpSrv),
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			return context.WithValue(ctx, httpHeadersCtxKey{}, r.Header)
+			// Never nil: a non-nil HTTPHeaders is what marks the
+			// connection as HTTP (see connInfo).
+			h := r.Header
+			if h == nil {
+				h = http.Header{}
+			}
+			return context.WithValue(ctx, httpHeadersCtxKey{}, h)
 		}),
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(EndpointPath, drainAwareStream(srv))
+	mux.Handle(EndpointPath, limitBody(drainAwareStream(srv), s.maxBodyBytes()))
 	// Liveness for `<binary> health` and any orchestrator probe. Outside the
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
@@ -415,6 +435,12 @@ type httpHeadersCtxKey struct{}
 // message and returns the response message — never copy a
 // proto.Message by value, so we never write into a caller-
 // supplied respMsg.
+//
+// Every error it returns is a gRPC status fit for the client: the
+// code, the catalog sentence (or the backend's request-level
+// detail) and any field details. The original error — backend
+// status message, auth backend text, decode detail — goes to
+// observability only (see errors.go).
 func (s *Server) CallUnary(
 	ctx context.Context,
 	req mcp.CallToolRequest,
@@ -438,17 +464,18 @@ func (s *Server) CallUnary(
 		if permIDs, gated := s.toolPerms[req.Params.Name]; gated {
 			perms, err := s.permResolver(ctx, conn)
 			if err != nil {
-				return nil, fmt.Errorf("mcp auth: %w", err)
+				return nil, publicError(ctx, fmt.Errorf("mcp auth: %w", err))
 			}
 			if !coversAllInt32(perms, permIDs) {
-				return nil, fmt.Errorf("mcp: permission denied for tool %q", req.Params.Name)
+				return nil, refusal(ctx, codes.PermissionDenied,
+					fmt.Errorf("mcp: permission denied for tool %q", req.Params.Name))
 			}
 		}
 	}
 
 	md, err := s.auth(ctx, conn)
 	if err != nil {
-		return nil, fmt.Errorf("mcp auth: %w", err)
+		return nil, publicError(ctx, fmt.Errorf("mcp auth: %w", err))
 	}
 	if len(md) > 0 {
 		// Merge with any pre-existing outgoing metadata
@@ -464,16 +491,16 @@ func (s *Server) CallUnary(
 	if raw := req.GetRawArguments(); raw != nil {
 		data, err := json.Marshal(raw)
 		if err != nil {
-			return nil, fmt.Errorf("encode arguments: %w", err)
+			return nil, refusal(ctx, codes.InvalidArgument, fmt.Errorf("encode arguments: %w", err))
 		}
 		if err := unmarshalProto(data, reqMsg); err != nil {
-			return nil, fmt.Errorf("decode arguments into %T: %w", reqMsg, err)
+			return nil, refusal(ctx, codes.InvalidArgument, fmt.Errorf("decode arguments into %T: %w", reqMsg, err))
 		}
 	}
 
 	respMsg, err := invoke(ctx, reqMsg)
 	if err != nil {
-		return nil, err
+		return nil, publicError(ctx, err)
 	}
 
 	// UseEnumNumbers mirrors restgw: enum values are INTEGERS on every w17
@@ -484,7 +511,7 @@ func (s *Server) CallUnary(
 	// mismatch on every enum field.
 	out, err := protojson.MarshalOptions{UseProtoNames: true, UseEnumNumbers: true}.Marshal(respMsg)
 	if err != nil {
-		return nil, fmt.Errorf("marshal response: %w", err)
+		return nil, refusal(ctx, codes.Internal, fmt.Errorf("marshal response: %w", err))
 	}
 	// Route through the w17 JSON dialect so an MCP tool result carries the
 	// FE-friendly collapsed oneof — matching the tool's registered schema
@@ -493,7 +520,7 @@ func (s *Server) CallUnary(
 	if desc := respMsg.ProtoReflect().Descriptor(); protojsonx.HasAnyOneof(desc) {
 		out, err = protojsonx.CollapseOneofs(out, desc, nil)
 		if err != nil {
-			return nil, fmt.Errorf("collapse oneof: %w", err)
+			return nil, refusal(ctx, codes.Internal, fmt.Errorf("collapse oneof: %w", err))
 		}
 	}
 	return mcp.NewToolResultText(string(out)), nil
