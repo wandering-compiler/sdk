@@ -34,13 +34,6 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 			"so a wrong non-empty value survives into logging and adopt bookkeeping and is not " +
 			"corrected — which is why this is excused as unauthoritative rather than as derived " +
 			"(an earlier version of this excuse wrongly claimed the loader rewrites it unconditionally)",
-		"adopt_preflight_sql": "fail-CLOSED, so stripping it cannot widen what an attacker can do. " +
-			"It is the check `migrate adopt` must pass before recording a migration it will not run, " +
-			"and an EMPTY value means REFUSE rather than \"nothing to check\", so tampering " +
-			"with it can only prevent an adoption, never license one. Hashing it would change every " +
-			"stored digest and every lock pin in existence to close a hole that is already shut in the " +
-			"one direction that matters. The statements it carries are also never applied as a " +
-			"migration: apply runs up_sql, and only the explicit adopt path runs this",
 		"manifest_json": "bound by PROJECTION, not by its bytes — see TestContentHash_BindsTheExtensionSet, " +
 			"which is what keeps this excuse from being a promise about another layer. The manifest is " +
 			"protojson over a message the compiler keeps growing, so hashing the blob would move the " +
@@ -109,9 +102,9 @@ func fieldMovesTheDigest(t *testing.T, fd protoreflect.FieldDescriptor) bool {
 }
 
 func digestOf(m *applyfetchpb.Migration) string {
-	return migrate.ContentHash(
+	return migrate.ContentHashWithPreflight(
 		m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(),
-		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson())
+		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson())
 }
 
 // The excuse above says manifest_json is bound by its projection. This is the

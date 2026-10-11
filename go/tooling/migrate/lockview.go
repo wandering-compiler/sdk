@@ -137,6 +137,14 @@ func MigrationSetFS(migs []*applyfetchpb.Migration) (fs.FS, error) {
 		if m.GetConnection() == "" {
 			return nil, fmt.Errorf("MigrationSetFS: empty connection on %s", m.GetId())
 		}
+		// The same names WriteMigration refuses as path segments: a fetched
+		// set must describe the one layout both paths share.
+		if err := checkArtifactSegment("connection", m.GetConnection()); err != nil {
+			return nil, fmt.Errorf("MigrationSetFS: %w", err)
+		}
+		if err := checkArtifactSegment("migration id", m.GetId()); err != nil {
+			return nil, fmt.Errorf("MigrationSetFS: %w", err)
+		}
 		buf, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true, Indent: "  "}.Marshal(m)
 		if err != nil {
 			return nil, fmt.Errorf("MigrationSetFS: marshal %s: %w", m.GetId(), err)

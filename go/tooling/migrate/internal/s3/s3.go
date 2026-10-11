@@ -45,6 +45,7 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // trackerPrefix is the well-known object-key prefix used for
@@ -172,7 +173,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // Phase E: YAML data migration bodies dispatch through
 // rollbackYAMLDataMigration. The down body is either an
 // auto-derived YAML inverse or a `# w17:irreversible:` comment
-// block — the latter refuses without --allow-irreversible.
+// block — the latter is refused (no override).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if datamigrate.LooksLikeYAML([]byte(m.GetUpSql())) {
 		return a.rollbackYAMLDataMigration(ctx, m)
@@ -410,7 +411,7 @@ func ParseDSN(dsn string) (DSNConfig, error) {
 	}
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return DSNConfig{}, fmt.Errorf("s3: parse url: %w", err)
+		return DSNConfig{}, fmt.Errorf("s3: parse url: %w", dsnredact.Err(err))
 	}
 	if u.Scheme != "s3" {
 		return DSNConfig{}, fmt.Errorf("s3: expected s3:// scheme, got %q", u.Scheme)

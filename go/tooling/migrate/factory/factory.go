@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/mysql"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/nats"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"
@@ -38,18 +39,18 @@ func ParseTargets(flags []string) ([]TargetSpec, error) {
 	for _, raw := range flags {
 		eq := strings.Index(raw, "=")
 		if eq < 0 {
-			return nil, fmt.Errorf("--target %q: expected <connection>=<dsn>", raw)
+			return nil, fmt.Errorf("--target %q: expected <connection>=<dsn>", dsnredact.String(raw))
 		}
 		name := strings.TrimSpace(raw[:eq])
 		dsn := strings.TrimSpace(raw[eq+1:])
 		if name == "" {
-			return nil, fmt.Errorf("--target %q: connection name is empty", raw)
+			return nil, fmt.Errorf("--target %q: connection name is empty", dsnredact.String(raw))
 		}
 		if dsn == "" {
-			return nil, fmt.Errorf("--target %q: dsn is empty", raw)
+			return nil, fmt.Errorf("--target %q: dsn is empty", dsnredact.String(raw))
 		}
 		if _, dup := seen[name]; dup {
-			return nil, fmt.Errorf("--target %q: connection %q already specified", raw, name)
+			return nil, fmt.Errorf("--target %q: connection %q already specified", dsnredact.String(raw), name)
 		}
 		seen[name] = struct{}{}
 		out = append(out, TargetSpec{Connection: name, DSN: dsn})
@@ -123,7 +124,7 @@ func FromTargets(specs []TargetSpec, opts ...option) migrate.ApplierFor {
 			return a, nil
 		}
 		return nil, fmt.Errorf("connection %q: unrecognised DSN scheme in %q (supported: postgres://, mysql://, sqlite://, redis://, nats://, s3://)",
-			connection, spec.DSN)
+			connection, dsnredact.String(spec.DSN))
 	}
 }
 
@@ -159,7 +160,7 @@ func SnapshotterFromTargets(specs []TargetSpec) migrate.SnapshotterFor {
 			return s3.NewSnapshotter(spec.DSN)
 		}
 		return nil, fmt.Errorf("connection %q: unrecognised DSN scheme in %q (supported: postgres://, mysql://, sqlite://, redis://, nats://, s3://)",
-			connection, spec.DSN)
+			connection, dsnredact.String(spec.DSN))
 	}
 }
 

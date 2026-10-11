@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 )
 
 // ContentHash is the canonical keyless integrity hash a migration's
@@ -93,7 +95,31 @@ import (
 //     connection, so `chainFromTarget` requires ids to increase along the
 //     chain. That is what catches a relabel; hashing the id would change every
 //     stored digest to close the same hole.
+//
+// # The adopt preflight
+//
+// `adopt_preflight_sql` is not an input to ContentHash; it is to
+// [ContentHashWithPreflight]. It was once excused on the grounds that an empty
+// preflight refuses, so tampering could only block an adoption. That reasoning
+// covered stripping it and missed replacing it: `--fake` EXECUTES the
+// preflight, so a replaced body runs as written, and a trivially true one
+// licenses an adoption the real check would have refused.
+//
+// It could not simply be added here: every digest already minted for a
+// migration that carries a preflight would change, and with it every lock pin
+// on such a migration. So the binding is a separate formula, and the one
+// place that runs the preflight — `--fake` — refuses an artifact whose digest
+// does not bind it (see preflightBound). Everything else keeps verifying
+// against the digests it already has.
 func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, manifestJSON string) string {
+	return ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", manifestJSON)
+}
+
+// ContentHashWithPreflight is [ContentHash] with `adopt_preflight_sql` bound as
+// well. With an empty preflight it is byte-identical to ContentHash, so only a
+// migration that carries a preflight gets a different digest — and that is the
+// digest an artifact needs for `--fake` to run its preflight.
+func ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL, manifestJSON string) string {
 	// The manifest is bound by its PROJECTION, not by its bytes.
 	//
 	// `manifest_json` is protojson over a message the compiler keeps growing,
@@ -109,10 +135,10 @@ func ContentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 	// Not excused as metadata, though the rest of the manifest is: an empty
 	// list means "no prerequisites, proceed", so stripping the list from a
 	// fetched artifact LICENSES a run that would have been refused. That is
-	// the opposite direction from adopt_preflight_sql, which fails closed and
-	// is excused for exactly that reason.
+	// the same direction as a replaced adopt_preflight_sql, which is why that
+	// one is bound too (by ContentHashWithPreflight).
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
-	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, exts)
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts)
 }
 
 // ContentHashMatches reports whether `want` is a digest this content can
@@ -143,7 +169,7 @@ func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersede
 		return false
 	}
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
-	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, exts) == want {
+	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts) == want {
 		return true
 	}
 	if len(exts) == 0 {
@@ -151,13 +177,36 @@ func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersede
 		return false
 	}
 	// The pre-segment formula: identical but for the extension set.
-	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, nil) == want
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", nil) == want
 }
 
-func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL string, exts []string) string {
+// migrationHashMatches is the artifact check the loader and WriteMigration
+// apply: the digest is either one that binds the adopt preflight, or one of
+// the formulas [ContentHashMatches] accepts, which do not.
+func migrationHashMatches(m *applyfetchpb.Migration) bool {
+	if m.GetAdoptPreflightSql() != "" && preflightBound(m) {
+		return true
+	}
+	return ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256())
+}
+
+// preflightBound reports whether m's content_sha256 covers its
+// `adopt_preflight_sql` — trivially so when it carries none. A digest minted
+// by [ContentHash] for a migration that does carry one verifies everything
+// else but leaves the preflight free to be replaced, so it must not be run on
+// the strength of that digest.
+func preflightBound(m *applyfetchpb.Migration) bool {
+	if m.GetAdoptPreflightSql() == "" {
+		return true
+	}
+	want := m.GetContentSha256()
+	return want != "" && ContentHashWithPreflight(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson()) == want
+}
+
+func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL string, exts []string) string {
 
 	var b strings.Builder
-	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && len(exts) == 0 {
+	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && adoptPreflightSQL == "" && len(exts) == 0 {
 		b.WriteString("w17.content.v1\n")
 	} else {
 		b.WriteString("w17.content.v2\n")
@@ -181,6 +230,11 @@ func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 	}
 	if adoptSQL != "" {
 		writeSeg(&b, "adopt", adoptSQL)
+	}
+	// Written only when non-empty, so a migration without a preflight keeps
+	// the digest it already had.
+	if adoptPreflightSQL != "" {
+		writeSeg(&b, "adoptpre", adoptPreflightSQL)
 	}
 	// Written only when non-empty, so every digest minted before the manifest
 	// travelled keeps its value. A migration declaring no extensions hashes

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -118,8 +117,8 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 
 // rollbackYAMLDataMigration is the inverse path. Down body
 // either (a) auto-derived YAML inverse from emit/s3 or
-// (b) `# w17:irreversible:` comment block. Latter refuses
-// without --allow-irreversible.
+// (b) `# w17:irreversible:` comment block. Latter is refused;
+// a rollback target must keep it applied.
 //
 // Cursor key uses `.rollback.cursor.json` suffix so a partial
 // rollback resumes against its own state independent of any
@@ -127,7 +126,7 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb.Migration) error {
 	body := m.GetDownSql()
 	if isIrreversibleMarkerBody(body) {
-		return errors.New("s3 rollbackYAMLDataMigration: down body is irreversible (REMOVE_FIELD has no inverse) — refused without --allow-irreversible")
+		return irreversibleRollback(m.GetId())
 	}
 	mig, err := datamigrate.Unmarshal([]byte(body))
 	if err != nil {
@@ -476,4 +475,12 @@ func isIrreversibleMarkerBody(body string) bool {
 		}
 	}
 	return false
+}
+
+// irreversibleRollback is the refusal for a data migration whose forward
+// operation has no inverse. There is no override that rolls it back anyway —
+// skipping the body would drop the ledger row while the data stays changed —
+// so the message names the one way through: keep the migration applied.
+func irreversibleRollback(id string) error {
+	return fmt.Errorf("s3 rollbackYAMLDataMigration: migration %s cannot be rolled back — its down body is irreversible (the forward operation has no inverse). Keep it applied: pass a rollback target (--to) at or above %s", id, id)
 }

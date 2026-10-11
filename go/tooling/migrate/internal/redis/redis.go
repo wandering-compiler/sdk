@@ -33,6 +33,7 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Applier wraps a single go-redis client. Lazy-connect: New
@@ -73,7 +74,7 @@ func New(_ context.Context, dsn string) (*Applier, error) {
 	}
 	opts, err := goredis.ParseURL(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("redis.New: %w", err)
+		return nil, fmt.Errorf("redis.New: %w", dsnredact.Err(err))
 	}
 	return &Applier{client: goredis.NewClient(opts)}, nil
 }
@@ -138,7 +139,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // dispatch through rollbackYAMLDataMigration. The down body is
 // either an auto-derived YAML inverse (RENAME swap, ADD
 // reverses to REMOVE) or a `# w17:irreversible:` comment block
-// — the latter refuses without --allow-irreversible.
+// — the latter is refused (no override).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if datamigrate.LooksLikeYAML([]byte(m.GetUpSql())) {
 		return a.rollbackYAMLDataMigration(ctx, m)

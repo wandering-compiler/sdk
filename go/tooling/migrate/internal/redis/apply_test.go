@@ -161,7 +161,12 @@ func TestRollback_YAMLIrreversibleRefused(t *testing.T) {
 		DownSql: "# w17:irreversible: REMOVE_FIELD has no inverse",
 	})
 	if err == nil || !strings.Contains(err.Error(), "irreversible") {
-		t.Errorf("expected irreversible refusal, got %v", err)
+		t.Fatalf("expected irreversible refusal, got %v", err)
+	}
+	// The refusal must point at a way through that exists: there is no
+	// override flag, only keeping the migration applied.
+	if msg := err.Error(); strings.Contains(msg, "--allow-irreversible") || !strings.Contains(msg, "--to") || !strings.Contains(msg, "ts-irr") {
+		t.Errorf("refusal does not name a real remedy for ts-irr: %v", err)
 	}
 }
 

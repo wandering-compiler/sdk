@@ -14,11 +14,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/getsentry/sentry-go"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
+	"github.com/wandering-compiler/sdk/go/tooling/pathguard"
 )
 
 // ConnTarget pins one connection's apply ceiling — the lock's
@@ -104,7 +106,9 @@ type Config struct {
 	// with it would leave the two disagreeing, which is the failure this
 	// exists to prevent. A migration whose preflight is EMPTY is refused —
 	// empty means the dialect cannot ask the question, not that there is
-	// nothing to ask.
+	// nothing to ask. A preflight the content hash does not cover is refused
+	// too (see ContentHashWithPreflight): it is executed, so it has to be
+	// bound like every other body that runs.
 	Fake bool
 
 	// LogFormat selects the per-migration log shape:
@@ -200,8 +204,10 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 		return nil, fmt.Errorf("migrate.Plan: ApplierFor is nil")
 	}
 
-	targets := append([]ConnTarget(nil), cfg.Targets...)
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Connection < targets[j].Connection })
+	targets, err := sortedTargets(cfg.Targets)
+	if err != nil {
+		return nil, fmt.Errorf("migrate.Plan: %w", err)
+	}
 
 	var out []Pending
 	for _, ct := range targets {
@@ -577,6 +583,19 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), err)
 		return err
 	}
+	if !preflightBound(p.Migration) {
+		// The preflight is about to EXECUTE, and the digest this artifact
+		// verified under does not cover it — so its text is whatever the
+		// file says, not what the console rendered. Running it would let a
+		// replaced preflight run arbitrary statements, or license the record
+		// with a check that always passes.
+		err := fmt.Errorf("fake apply %s/%s: this migration's content_sha256 does not cover its adopt preflight, so the preflight cannot be trusted to be the one the console rendered\n"+
+			"  why: --fake executes the preflight and records the migration on its result, so the preflight has to be bound by the digest like every other body that runs\n"+
+			"  fix: fetch the migration again from a console that binds the preflight in content_sha256, or apply it for real",
+			p.Connection, p.Migration.GetId())
+		logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), err)
+		return err
+	}
 	body := &applyfetchpb.Migration{
 		Id:            p.Migration.GetId(),
 		Connection:    p.Migration.GetConnection(),
@@ -772,15 +791,38 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 		return nil, fmt.Errorf("migrate.PlanRollback: ApplierFor is nil")
 	}
 
-	targets := append([]ConnTarget(nil), cfg.Targets...)
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Connection < targets[j].Connection })
+	targets, err := sortedTargets(cfg.Targets)
+	if err != nil {
+		return nil, fmt.Errorf("migrate.PlanRollback: %w", err)
+	}
 
-	var out []Pending
+	// Every connection's artifacts are loaded up front so the rollback
+	// target can be checked against all of them before anything is opened.
+	migsByConn := make(map[string][]*applyfetchpb.Migration, len(targets))
+	toKnown := cfg.ToMigrationID == ""
 	for _, ct := range targets {
 		diskMigs, err := loadConnectionMigrations(migFS, ct.Connection)
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: %w", ct.Connection, err)
 		}
+		migsByConn[ct.Connection] = diskMigs
+		for _, m := range diskMigs {
+			if m.GetId() == cfg.ToMigrationID {
+				toKnown = true
+			}
+		}
+	}
+	// The cut is a lexical comparison, so an id that names no migration still
+	// selects a range — and a typo that sorts low selects everything. A
+	// destructive command does not get to guess what was meant.
+	if !toKnown {
+		return nil, fmt.Errorf("migrate.PlanRollback: rollback target %q is not the id of any migration on the connections being rolled back — refusing, because every applied migration that sorts above it would be rolled back. Pass the id of the migration to keep (as listed under the migrations directory), or an explicit empty target to roll back everything",
+			cfg.ToMigrationID)
+	}
+
+	var out []Pending
+	for _, ct := range targets {
+		diskMigs := migsByConn[ct.Connection]
 		// ROLLBACK-UNPINNED — a connection declared in the lock but never pushed
 		// has no migrations on disk (the w17ctl DSN resolver skips it too), so
 		// there is nothing to roll back. Skip BEFORE opening an applier, otherwise
@@ -956,6 +998,21 @@ func PlanRollback(ctx context.Context, cfg RollbackConfig) ([]Pending, error) {
 		}
 	}
 	return out, nil
+}
+
+// sortedTargets returns the targets in connection-name order, refusing a
+// connection named more than once. Each entry is planned on its own, so a
+// duplicate would plan — and apply or roll back — the same chain twice; with
+// two different pins it is also ambiguous which one is meant.
+func sortedTargets(in []ConnTarget) ([]ConnTarget, error) {
+	targets := append([]ConnTarget(nil), in...)
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Connection < targets[j].Connection })
+	for i := 1; i < len(targets); i++ {
+		if targets[i].Connection == targets[i-1].Connection {
+			return nil, fmt.Errorf("connection %q is listed more than once in the lock — each connection must appear exactly once, or its migrations would be planned once per entry", targets[i].Connection)
+		}
+	}
+	return targets, nil
 }
 
 // RunRollback plans + rolls back. Inverse-apply equivalent of
@@ -1272,10 +1329,10 @@ func loadConnectionMigrations(fsys fs.FS, connection string) ([]*applyfetchpb.Mi
 		// [ContentHashMatches]. An artifact stored before that segment
 		// existed recomputes differently under the current one, and
 		// refusing it here reads as tampering on a file nobody touched.
-		if !ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256()) {
+		if !migrationHashMatches(m) {
 			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is a real edit",
 				path, m.GetContentSha256(),
-				ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()))
+				ContentHashWithPreflight(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson()))
 		}
 		// Backfill connection_name when missing (older fetches that
 		// didn't stamp; harmless self-heal).
@@ -1313,12 +1370,27 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if m.GetConnection() == "" {
 		return fmt.Errorf("WriteMigration: empty connection_name on %s", m.GetId())
 	}
-	if !ContentHashMatches(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson(), m.GetContentSha256()) {
+	// Both names arrive from the console and become path segments below.
+	// Neither is covered by the content hash, so a value shaped like a path
+	// would otherwise decide where on disk the artifact lands.
+	if err := checkArtifactSegment("connection", m.GetConnection()); err != nil {
+		return fmt.Errorf("WriteMigration: %w", err)
+	}
+	if err := checkArtifactSegment("migration id", m.GetId()); err != nil {
+		return fmt.Errorf("WriteMigration: %w", err)
+	}
+	if !migrationHashMatches(m) {
 		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s) — the artifact does not hash to its own digest under this compiler's formula or the one that predates required-extension binding. Unlike the load-side check this one reads a FRESH fetch, so re-fetching cannot help: the console and this client disagree about the artifact, which is either a console-side mutation or wire tampering",
 			m.GetId(), m.GetContentSha256(),
-			ContentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetManifestJson()))
+			ContentHashWithPreflight(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson()))
 	}
-	dir := filepath.Join(root, m.GetConnection())
+	// The segment check above is the refusal; the containment check is the
+	// backstop, so a future change to what a segment may hold cannot reopen
+	// an escape from root.
+	dir, err := pathguard.Join(root, m.GetConnection())
+	if err != nil {
+		return fmt.Errorf("WriteMigration: connection %q: %w", m.GetConnection(), err)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -1326,14 +1398,36 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", m.GetId(), err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, m.GetId()+".json"), jsonBuf, 0o644); err != nil {
-		return err
+	files := []struct {
+		ext  string
+		body []byte
+	}{
+		{".json", jsonBuf},
+		{".up.sql", []byte(m.GetUpSql())},
+		{".down.sql", []byte(m.GetDownSql())},
 	}
-	if err := os.WriteFile(filepath.Join(dir, m.GetId()+".up.sql"), []byte(m.GetUpSql()), 0o644); err != nil {
-		return err
+	for _, f := range files {
+		p, err := pathguard.Join(dir, m.GetId()+f.ext)
+		if err != nil {
+			return fmt.Errorf("WriteMigration: migration id %q: %w", m.GetId(), err)
+		}
+		if err := os.WriteFile(p, f.body, 0o644); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, m.GetId()+".down.sql"), []byte(m.GetDownSql()), 0o644); err != nil {
-		return err
+	return nil
+}
+
+// checkArtifactSegment refuses a connection name or migration id that is not a
+// single plain path segment. The on-disk layout is `<root>/<connection>/<id>.json`
+// and the loader reads exactly one directory level, so a value containing a
+// separator, a `.`/`..` segment or a control character is never a legitimate
+// name — only a way to place a file somewhere other than that layout.
+func checkArtifactSegment(kind, v string) error {
+	if v == "" || v == "." || v == ".." ||
+		strings.ContainsAny(v, `/\:`) ||
+		strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return fmt.Errorf("%s %q is not a plain name (it must be one path segment with no separators, `.`/`..` or control characters)", kind, v)
 	}
 	return nil
 }

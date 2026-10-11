@@ -28,6 +28,7 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/fingerprint"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Applier is the per-connection MySQL apply driver.
@@ -231,7 +232,7 @@ func (a *Applier) Fingerprint(ctx context.Context) (string, error) {
 func URLToDriverDSN(urlDSN string) (string, error) {
 	u, err := url.Parse(urlDSN)
 	if err != nil {
-		return "", fmt.Errorf("parse url: %w", err)
+		return "", fmt.Errorf("parse url: %w", dsnredact.Err(err))
 	}
 	if u.Scheme != "mysql" {
 		return "", fmt.Errorf("expected mysql:// scheme, got %q", u.Scheme)
