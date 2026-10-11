@@ -1,13 +1,13 @@
 // Package runlock holds the shared pieces of the cross-process
 // "apply run-lock" that w17migrate takes before mutating a
-// non-transactional store (S3 / Redis). Two concurrent apply runs
+// non-transactional store (S3 / Redis / NATS). Two concurrent apply runs
 // against one target would otherwise double-apply a non-idempotent
 // TRANSFORM_FIELD data migration (Q48-datamigrate-1); the lock
 // serialises them.
 //
 // The store-specific acquire / refresh / release lives in each
 // applier package (it needs that store's atomic primitive — Redis
-// SET NX PX, S3 PutObject If-None-Match). This package only carries
+// SET NX PX, S3 PutObject If-None-Match, a NATS KV create). This package only carries
 // what's common: the owner-token shape, the shared tunables, and a
 // heartbeat ticker so a long run keeps its lock alive instead of
 // letting it expire underneath itself.

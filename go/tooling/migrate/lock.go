@@ -33,6 +33,9 @@ var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run"
 // resume cursor only guards a single process resuming after a crash;
 // it is a read-check-write with no cross-process atomicity.
 //
+// NATS implements it too: its bodies are command lines with no
+// transaction around them, so two racing runs would both apply them.
+//
 // Postgres and SQLite do NOT implement it: their up_sql runs in a
 // transaction whose w17_migrations INSERT has the migration id as a
 // primary key, so a second concurrent run fails loudly on the unique
