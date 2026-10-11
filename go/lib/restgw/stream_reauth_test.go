@@ -3,11 +3,15 @@ package restgw_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
@@ -34,7 +38,7 @@ func TestWatchStreamAuth_CancelsWhenAuthStartsFailing(t *testing.T) {
 	var calls atomic.Int32
 	authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
 		if calls.Add(1) >= 2 {
-			return nil, errors.New("token revoked")
+			return nil, status.Error(codes.Unauthenticated, "token revoked")
 		}
 		return nil, nil
 	})
@@ -44,6 +48,118 @@ func TestWatchStreamAuth_CancelsWhenAuthStartsFailing(t *testing.T) {
 
 	if !waitCancelled(ctx, 2*time.Second) {
 		t.Fatal("stream context still live after auth began failing; a revoked credential would keep streaming")
+	}
+}
+
+// Every definite refusal ends the stream: the two codes the gateway answers
+// 401 and 403 with, and the ticket sentinels for a stream left with no
+// credential to show.
+func TestWatchStreamAuth_DefiniteRefusalsCancel(t *testing.T) {
+	cases := map[string]error{
+		"unauthenticated":   status.Error(codes.Unauthenticated, "revoked"),
+		"permission denied": status.Error(codes.PermissionDenied, "membership removed"),
+		"ticket invalid":    fmt.Errorf("redeem: %w", restgw.ErrTicketInvalid),
+		"no ticket":         restgw.ErrWSAuthNoTicket,
+	}
+	for name, refusal := range cases {
+		t.Run(name, func(t *testing.T) {
+			authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
+				return nil, refusal
+			})
+			ctx, stop := restgw.WatchStreamAuth(context.Background(), authFn, reauthReq(), 5*time.Millisecond)
+			defer stop()
+			if !waitCancelled(ctx, 2*time.Second) {
+				t.Fatalf("%v did not end the stream", refusal)
+			}
+		})
+	}
+}
+
+// A backend that is DOWN answers fast — connection refused comes back as
+// UNAVAILABLE in microseconds, well inside the probe's own timeout. That is
+// still not a verdict on the credential. Reading it as one cut every open
+// stream on the surface within one interval of an auth outage.
+func TestWatchStreamAuth_FastBackendFailureIsNotARevocation(t *testing.T) {
+	defer restgw.SetStreamReauthRetryMinForTest(time.Millisecond)()
+	cases := map[string]error{
+		"unavailable":        status.Error(codes.Unavailable, "connection refused"),
+		"internal":           status.Error(codes.Internal, "auth handler panicked"),
+		"deadline exceeded":  status.Error(codes.DeadlineExceeded, "upstream deadline"),
+		"resource exhausted": status.Error(codes.ResourceExhausted, "auth rate limit"),
+		"non-status":         errors.New("dial tcp 10.0.0.5:9000: connection refused"),
+	}
+	for name, outage := range cases {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
+				calls.Add(1)
+				return nil, outage
+			})
+			ctx, stop := restgw.WatchStreamAuth(context.Background(), authFn, reauthReq(), 5*time.Millisecond)
+			defer stop()
+			if waitCancelled(ctx, 150*time.Millisecond) {
+				t.Fatalf("%v ended the stream; an auth outage is not a revocation", outage)
+			}
+			if calls.Load() < 3 {
+				t.Fatalf("watchdog probed %d time(s) during the outage; it must keep asking", calls.Load())
+			}
+		})
+	}
+}
+
+// Surviving an outage must not mean forgetting to revoke: the first verdict
+// after the backend recovers still ends a revoked stream.
+func TestWatchStreamAuth_RevocationLandsAfterTheOutage(t *testing.T) {
+	defer restgw.SetStreamReauthRetryMinForTest(time.Millisecond)()
+	var calls atomic.Int32
+	authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
+		if calls.Add(1) <= 5 {
+			return nil, status.Error(codes.Unavailable, "down")
+		}
+		return nil, status.Error(codes.Unauthenticated, "revoked")
+	})
+	ctx, stop := restgw.WatchStreamAuth(context.Background(), authFn, reauthReq(), 5*time.Millisecond)
+	defer stop()
+	if !waitCancelled(ctx, 2*time.Second) {
+		t.Fatal("a credential revoked during an auth outage kept streaming after the backend recovered")
+	}
+}
+
+// The watchdog goroutine ends with the stream, whichever way the stream
+// ends: no probe runs after stop or after the parent is cancelled.
+func TestWatchStreamAuth_EndsWithTheStream(t *testing.T) {
+	for _, how := range []string{"stop", "parent cancel"} {
+		t.Run(how, func(t *testing.T) {
+			var calls atomic.Int32
+			authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
+				calls.Add(1)
+				return nil, nil
+			})
+			parent, cancelParent := context.WithCancel(context.Background())
+			defer cancelParent()
+			_, stop := restgw.WatchStreamAuth(parent, authFn, reauthReq(), 2*time.Millisecond)
+			defer stop()
+
+			deadline := time.Now().Add(2 * time.Second)
+			for calls.Load() == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("watchdog never probed")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if how == "stop" {
+				stop()
+			} else {
+				cancelParent()
+			}
+			// One probe may already be in flight when the stream ends.
+			time.Sleep(20 * time.Millisecond)
+			after := calls.Load()
+			time.Sleep(50 * time.Millisecond)
+			if got := calls.Load(); got != after {
+				t.Fatalf("watchdog kept probing after %s (%d more calls)", how, got-after)
+			}
+		})
 	}
 }
 
