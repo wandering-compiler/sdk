@@ -129,14 +129,7 @@ func (c *SSEStreamCaller) OpenStream(ctx context.Context, ep Endpoint, input map
 		// with the vocabulary every other refusal case already uses.
 		return nil, newCallError("open stream "+ep.Ref, resp.StatusCode, raw)
 	}
-	sub := &sseSub{
-		cancel: cancel,
-		body:   resp.Body,
-		frames: make(chan Event, 16),
-		done:   make(chan struct{}),
-	}
-	go sub.read()
-	return sub, nil
+	return newSSESub(cancel, resp.Body), nil
 }
 
 // runStreamStep opens a streaming endpoint and asserts what it sends.
