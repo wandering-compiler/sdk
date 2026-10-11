@@ -223,8 +223,12 @@ func fireOp(ws *runtime.Scope, op *Op, token string, lc *LoadCaller, buf *worker
 		}
 		return
 	}
+	// The same rule the asserting runner applies: a capability-link
+	// endpoint's credential rides in its URL, so the setup's bearer is not
+	// sent there. Sending it measured a request no holder of the link makes,
+	// and handed the session's token to an endpoint that never asked for it.
 	tok := ""
-	if op.Endpoint.AuthRequired {
+	if op.Endpoint.AuthRequired && !op.Endpoint.CredentialInURL {
 		tok = token
 	}
 
