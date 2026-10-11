@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Config is the parsed + validated redis DSN, expressed as the
@@ -27,7 +29,7 @@ func ParseDSN(dsn string) (Config, error) {
 	}
 	opts, err := goredis.ParseURL(dsn)
 	if err != nil {
-		return Config{}, fmt.Errorf("redis: %w", err)
+		return Config{}, fmt.Errorf("redis: %w", dsnredact.Err(err))
 	}
 	return Config{DSN: dsn, Options: opts}, nil
 }

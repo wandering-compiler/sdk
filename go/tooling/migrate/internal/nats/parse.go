@@ -3,6 +3,8 @@ package nats
 import (
 	"fmt"
 	"net/url"
+
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Config is the parsed + validated nats DSN. Today this is the
@@ -45,7 +47,7 @@ func Validate(cfg Config) error {
 func DSNToServer(dsn string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "", fmt.Errorf("parse url: %w", err)
+		return "", fmt.Errorf("parse url: %w", dsnredact.Err(err))
 	}
 	if u.Scheme != "nats" {
 		return "", fmt.Errorf("expected nats:// scheme, got %q", u.Scheme)

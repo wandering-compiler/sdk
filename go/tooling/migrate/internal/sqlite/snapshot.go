@@ -13,6 +13,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/lib/sqlitecollate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Snapshotter is the SQLite dump/restore driver for the dev DB
@@ -42,11 +43,11 @@ func NewSnapshotter(dsn string) (*Snapshotter, error) {
 	// `file::memory:`, or a `mode=memory` query param. They have no
 	// on-disk file to snapshot and vanish with the process anyway.
 	if strings.Contains(dsn, ":memory:") || strings.Contains(dsn, "mode=memory") {
-		return nil, fmt.Errorf("sqlite.NewSnapshotter: in-memory DSN %q has no file to snapshot", dsn)
+		return nil, fmt.Errorf("sqlite.NewSnapshotter: in-memory DSN %q has no file to snapshot", dsnredact.String(dsn))
 	}
 	path := dsnToFilePath(dsn)
 	if path == "" {
-		return nil, fmt.Errorf("sqlite.NewSnapshotter: pathless DSN %q has no file to snapshot", dsn)
+		return nil, fmt.Errorf("sqlite.NewSnapshotter: pathless DSN %q has no file to snapshot", dsnredact.String(dsn))
 	}
 	return &Snapshotter{path: path}, nil
 }

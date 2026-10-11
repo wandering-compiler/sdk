@@ -33,6 +33,7 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Applier wraps a single go-redis client. Lazy-connect: New
@@ -73,7 +74,7 @@ func New(_ context.Context, dsn string) (*Applier, error) {
 	}
 	opts, err := goredis.ParseURL(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("redis.New: %w", err)
+		return nil, fmt.Errorf("redis.New: %w", dsnredact.Err(err))
 	}
 	return &Applier{client: goredis.NewClient(opts)}, nil
 }

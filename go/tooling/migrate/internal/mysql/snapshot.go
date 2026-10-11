@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Snapshotter is the MySQL dump/restore driver for the dev DB
@@ -47,7 +48,7 @@ func NewSnapshotter(dsn string) (*Snapshotter, error) {
 	}
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("mysql.NewSnapshotter: parse url: %w", err)
+		return nil, fmt.Errorf("mysql.NewSnapshotter: parse url: %w", dsnredact.Err(err))
 	}
 	if u.Scheme != "mysql" {
 		return nil, fmt.Errorf("mysql.NewSnapshotter: expected mysql:// scheme, got %q", u.Scheme)
