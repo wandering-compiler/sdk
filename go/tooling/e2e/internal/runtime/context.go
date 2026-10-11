@@ -147,6 +147,27 @@ func (s *Scope) Seed(captures map[string]any) {
 	}
 }
 
+// Fork returns a scope that starts with this one's captures and minted
+// values and shares its run, so a match can be TRIED without binding
+// anything here. Adopt keeps what the fork bound; dropping the fork discards
+// it.
+func (s *Scope) Fork() *Scope {
+	f := &Scope{run: s.run, captures: s.Captures()}
+	if s.onced != nil {
+		f.onced = make(map[string]int, len(s.onced))
+		for k, v := range s.onced {
+			f.onced[k] = v
+		}
+	}
+	return f
+}
+
+// Adopt replaces this scope's captures and minted values with a fork's.
+func (s *Scope) Adopt(f *Scope) {
+	s.captures = f.captures
+	s.onced = f.onced
+}
+
 // lookup resolves a capture reference. It tries the exact flat key
 // first (so a `{capture: project.id}` binding is found directly),
 // then falls back to walking dotted segments through nested maps
