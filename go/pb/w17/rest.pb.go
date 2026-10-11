@@ -308,6 +308,57 @@ func (ContentDisposition) EnumDescriptor() ([]byte, []int) {
 	return file_w17_rest_proto_rawDescGZIP(), []int{3}
 }
 
+// PublicLimit — how a method that takes no credential charges the gateway's
+// per-address rate limit. See RestEndpoint.public_limit.
+type PublicLimit int32
+
+const (
+	// Every request takes a token, success or not. The default.
+	PublicLimit_PUBLIC_LIMIT_EVERY_REQUEST PublicLimit = 0
+	// Only a request answered with a 4xx/5xx takes a token; admission still
+	// checks that one is left.
+	PublicLimit_PUBLIC_LIMIT_FAILED_ONLY PublicLimit = 1
+)
+
+// Enum value maps for PublicLimit.
+var (
+	PublicLimit_name = map[int32]string{
+		0: "PUBLIC_LIMIT_EVERY_REQUEST",
+		1: "PUBLIC_LIMIT_FAILED_ONLY",
+	}
+	PublicLimit_value = map[string]int32{
+		"PUBLIC_LIMIT_EVERY_REQUEST": 0,
+		"PUBLIC_LIMIT_FAILED_ONLY":   1,
+	}
+)
+
+func (x PublicLimit) Enum() *PublicLimit {
+	p := new(PublicLimit)
+	*p = x
+	return p
+}
+
+func (x PublicLimit) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PublicLimit) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_rest_proto_enumTypes[4].Descriptor()
+}
+
+func (PublicLimit) Type() protoreflect.EnumType {
+	return &file_w17_rest_proto_enumTypes[4]
+}
+
+func (x PublicLimit) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PublicLimit.Descriptor instead.
+func (PublicLimit) EnumDescriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{4}
+}
+
 // HttpMethod enumerates the HTTP verbs the gateway emits.
 // Adding a verb here must extend the gateway generator's
 // route emit; today the five most common are wired. PATCH-as-
@@ -355,11 +406,11 @@ func (x HttpMethod) String() string {
 }
 
 func (HttpMethod) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[4].Descriptor()
+	return file_w17_rest_proto_enumTypes[5].Descriptor()
 }
 
 func (HttpMethod) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[4]
+	return &file_w17_rest_proto_enumTypes[5]
 }
 
 func (x HttpMethod) Number() protoreflect.EnumNumber {
@@ -368,7 +419,7 @@ func (x HttpMethod) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HttpMethod.Descriptor instead.
 func (HttpMethod) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{4}
+	return file_w17_rest_proto_rawDescGZIP(), []int{5}
 }
 
 // StreamTransport selects the HTTP-side streaming shape for a
@@ -408,11 +459,11 @@ func (x StreamTransport) String() string {
 }
 
 func (StreamTransport) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[5].Descriptor()
+	return file_w17_rest_proto_enumTypes[6].Descriptor()
 }
 
 func (StreamTransport) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[5]
+	return &file_w17_rest_proto_enumTypes[6]
 }
 
 func (x StreamTransport) Number() protoreflect.EnumNumber {
@@ -421,7 +472,7 @@ func (x StreamTransport) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamTransport.Descriptor instead.
 func (StreamTransport) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{5}
+	return file_w17_rest_proto_rawDescGZIP(), []int{6}
 }
 
 // RestApi declares one REST surface — one logical API exposed
@@ -1496,7 +1547,28 @@ type RestEndpoint struct {
 	// reads the VERIFIED org from its scope, not from that field.
 	//
 	// Empty (the default) = the org comes from the header alone.
-	OrgFromPath   string `protobuf:"bytes,19,opt,name=org_from_path,json=orgFromPath,proto3" json:"org_from_path,omitempty"`
+	OrgFromPath string `protobuf:"bytes,19,opt,name=org_from_path,json=orgFromPath,proto3" json:"org_from_path,omitempty"`
+	// How the per-address rate limit on a method that takes no credential
+	// (`exclude_auth`) charges its token bucket. FAILED_ONLY on an endpoint
+	// that requires a credential is refused at parse time; nothing applies
+	// when the gateway's limit is off.
+	//
+	// The default charges EVERY request: the limit then bounds how often one
+	// address may call the method at all, which is what a method that does
+	// something on SUCCESS needs. Registration creates an account and sends
+	// a mail; a password-reset request sends one and answers success either
+	// way, so it never fails at all. Charging only failures left both
+	// unbounded (a consumer measured 45 registrations in a row from one
+	// address, 2026-10-11).
+	//
+	// FAILED_ONLY suits a method that checks a guessable secret: a sign-in, a
+	// one-time code, a link token. An attacker's guesses fail and are
+	// counted; the right answer, which a legitimate caller sends, is free, so
+	// an office behind one address is never locked out. A sign-in is one and
+	// must say so: it is an ordinary exclude_auth endpoint. Only a method
+	// listed in `RestApi.auth_methods` — the RPC that checks a presented
+	// token, when it is also published — is FAILED_ONLY without saying so.
+	PublicLimit   PublicLimit `protobuf:"varint,20,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1641,6 +1713,13 @@ func (x *RestEndpoint) GetOrgFromPath() string {
 		return x.OrgFromPath
 	}
 	return ""
+}
+
+func (x *RestEndpoint) GetPublicLimit() PublicLimit {
+	if x != nil {
+		return x.PublicLimit
+	}
+	return PublicLimit_PUBLIC_LIMIT_EVERY_REQUEST
 }
 
 // MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata
@@ -2318,7 +2397,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\x8f\x05\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\xc4\x05\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2338,7 +2417,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"credential\x18\x11 \x01(\v2\x0f.w17.CredentialR\n" +
 	"credential\x12?\n" +
 	"\x10browser_redirect\x18\x12 \x01(\v2\x14.w17.BrowserRedirectR\x0fbrowserRedirect\x12\"\n" +
-	"\rorg_from_path\x18\x13 \x01(\tR\vorgFromPathJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
+	"\rorg_from_path\x18\x13 \x01(\tR\vorgFromPath\x123\n" +
+	"\fpublic_limit\x18\x14 \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimitJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
 	"\x0fMetadataBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1a\n" +
@@ -2397,7 +2477,10 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x12ContentDisposition\x12#\n" +
 	"\x1fCONTENT_DISPOSITION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aCONTENT_DISPOSITION_INLINE\x10\x01\x12\"\n" +
-	"\x1eCONTENT_DISPOSITION_ATTACHMENT\x10\x02*\\\n" +
+	"\x1eCONTENT_DISPOSITION_ATTACHMENT\x10\x02*K\n" +
+	"\vPublicLimit\x12\x1e\n" +
+	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x00\x12\x1c\n" +
+	"\x18PUBLIC_LIMIT_FAILED_ONLY\x10\x01*\\\n" +
 	"\n" +
 	"HttpMethod\x12\x1b\n" +
 	"\x17HTTP_METHOD_UNSPECIFIED\x10\x00\x12\a\n" +
@@ -2425,62 +2508,64 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 	return file_w17_rest_proto_rawDescData
 }
 
-var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
 	(FieldSource)(0),                 // 1: w17.FieldSource
 	(URLForm)(0),                     // 2: w17.URLForm
 	(ContentDisposition)(0),          // 3: w17.ContentDisposition
-	(HttpMethod)(0),                  // 4: w17.HttpMethod
-	(StreamTransport)(0),             // 5: w17.StreamTransport
-	(*RestApi)(nil),                  // 6: w17.RestApi
-	(*PluginInclude)(nil),            // 7: w17.PluginInclude
-	(*BrowserRedirect)(nil),          // 8: w17.BrowserRedirect
-	(*AuthMethod)(nil),               // 9: w17.AuthMethod
-	(*Credential)(nil),               // 10: w17.Credential
-	(*MetadataPropagation)(nil),      // 11: w17.MetadataPropagation
-	(*HeaderRename)(nil),             // 12: w17.HeaderRename
-	(*RestGroup)(nil),                // 13: w17.RestGroup
-	(*RestEndpoint)(nil),             // 14: w17.RestEndpoint
-	(*MetadataBinding)(nil),          // 15: w17.MetadataBinding
-	(*PagedConfig)(nil),              // 16: w17.PagedConfig
-	(*FieldBinding)(nil),             // 17: w17.FieldBinding
-	(*RestStream)(nil),               // 18: w17.RestStream
-	(*DownloadEndpoint)(nil),         // 19: w17.DownloadEndpoint
-	(*descriptorpb.FileOptions)(nil), // 20: google.protobuf.FileOptions
+	(PublicLimit)(0),                 // 4: w17.PublicLimit
+	(HttpMethod)(0),                  // 5: w17.HttpMethod
+	(StreamTransport)(0),             // 6: w17.StreamTransport
+	(*RestApi)(nil),                  // 7: w17.RestApi
+	(*PluginInclude)(nil),            // 8: w17.PluginInclude
+	(*BrowserRedirect)(nil),          // 9: w17.BrowserRedirect
+	(*AuthMethod)(nil),               // 10: w17.AuthMethod
+	(*Credential)(nil),               // 11: w17.Credential
+	(*MetadataPropagation)(nil),      // 12: w17.MetadataPropagation
+	(*HeaderRename)(nil),             // 13: w17.HeaderRename
+	(*RestGroup)(nil),                // 14: w17.RestGroup
+	(*RestEndpoint)(nil),             // 15: w17.RestEndpoint
+	(*MetadataBinding)(nil),          // 16: w17.MetadataBinding
+	(*PagedConfig)(nil),              // 17: w17.PagedConfig
+	(*FieldBinding)(nil),             // 18: w17.FieldBinding
+	(*RestStream)(nil),               // 19: w17.RestStream
+	(*DownloadEndpoint)(nil),         // 20: w17.DownloadEndpoint
+	(*descriptorpb.FileOptions)(nil), // 21: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
-	9,  // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
-	13, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
-	11, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
-	7,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
+	10, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
+	14, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
+	12, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
+	8,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
 	0,  // 4: w17.AuthMethod.token_types:type_name -> w17.TokenType
-	12, // 5: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
-	14, // 6: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	18, // 7: w17.RestGroup.streams:type_name -> w17.RestStream
-	19, // 8: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
-	4,  // 9: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	17, // 10: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	16, // 11: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	15, // 12: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
-	10, // 13: w17.RestEndpoint.credential:type_name -> w17.Credential
-	8,  // 14: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
-	1,  // 15: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 16: w17.FieldBinding.from:type_name -> w17.FieldSource
-	5,  // 17: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	15, // 18: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	17, // 19: w17.RestStream.fields:type_name -> w17.FieldBinding
-	10, // 20: w17.RestStream.credential:type_name -> w17.Credential
-	3,  // 21: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 22: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	20, // 23: w17.rest_api:extendee -> google.protobuf.FileOptions
-	6,  // 24: w17.rest_api:type_name -> w17.RestApi
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	24, // [24:25] is the sub-list for extension type_name
-	23, // [23:24] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	13, // 5: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
+	15, // 6: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
+	19, // 7: w17.RestGroup.streams:type_name -> w17.RestStream
+	20, // 8: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	5,  // 9: w17.RestEndpoint.method:type_name -> w17.HttpMethod
+	18, // 10: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	17, // 11: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	16, // 12: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	11, // 13: w17.RestEndpoint.credential:type_name -> w17.Credential
+	9,  // 14: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
+	4,  // 15: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
+	1,  // 16: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 17: w17.FieldBinding.from:type_name -> w17.FieldSource
+	6,  // 18: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	16, // 19: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	18, // 20: w17.RestStream.fields:type_name -> w17.FieldBinding
+	11, // 21: w17.RestStream.credential:type_name -> w17.Credential
+	3,  // 22: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 23: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	21, // 24: w17.rest_api:extendee -> google.protobuf.FileOptions
+	7,  // 25: w17.rest_api:type_name -> w17.RestApi
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	25, // [25:26] is the sub-list for extension type_name
+	24, // [24:25] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2493,7 +2578,7 @@ func file_w17_rest_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
-			NumEnums:      6,
+			NumEnums:      7,
 			NumMessages:   14,
 			NumExtensions: 1,
 			NumServices:   0,

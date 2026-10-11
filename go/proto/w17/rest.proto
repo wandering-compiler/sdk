@@ -737,6 +737,28 @@ message RestEndpoint {
   //
   // Empty (the default) = the org comes from the header alone.
   string org_from_path = 19;
+
+  // How the per-address rate limit on a method that takes no credential
+  // (`exclude_auth`) charges its token bucket. FAILED_ONLY on an endpoint
+  // that requires a credential is refused at parse time; nothing applies
+  // when the gateway's limit is off.
+  //
+  // The default charges EVERY request: the limit then bounds how often one
+  // address may call the method at all, which is what a method that does
+  // something on SUCCESS needs. Registration creates an account and sends
+  // a mail; a password-reset request sends one and answers success either
+  // way, so it never fails at all. Charging only failures left both
+  // unbounded (a consumer measured 45 registrations in a row from one
+  // address, 2026-10-11).
+  //
+  // FAILED_ONLY suits a method that checks a guessable secret: a sign-in, a
+  // one-time code, a link token. An attacker's guesses fail and are
+  // counted; the right answer, which a legitimate caller sends, is free, so
+  // an office behind one address is never locked out. A sign-in is one and
+  // must say so: it is an ordinary exclude_auth endpoint. Only a method
+  // listed in `RestApi.auth_methods` — the RPC that checks a presented
+  // token, when it is also published — is FAILED_ONLY without saying so.
+  PublicLimit public_limit = 20;
 }
 
 // MetadataBinding (REV-149) — one HTTP-slot → gRPC-metadata
@@ -1048,6 +1070,16 @@ enum ContentDisposition {
   CONTENT_DISPOSITION_UNSPECIFIED = 0; // → INLINE
   CONTENT_DISPOSITION_INLINE      = 1;
   CONTENT_DISPOSITION_ATTACHMENT  = 2;
+}
+
+// PublicLimit — how a method that takes no credential charges the gateway's
+// per-address rate limit. See RestEndpoint.public_limit.
+enum PublicLimit {
+  // Every request takes a token, success or not. The default.
+  PUBLIC_LIMIT_EVERY_REQUEST = 0;
+  // Only a request answered with a 4xx/5xx takes a token; admission still
+  // checks that one is left.
+  PUBLIC_LIMIT_FAILED_ONLY = 1;
 }
 
 // HttpMethod enumerates the HTTP verbs the gateway emits.
