@@ -179,23 +179,27 @@ func (m *MemoryBus) Drops() map[string]int64 {
 // handler list under lock, then fires one goroutine per
 // matching handler. Errors returned by handlers are silently
 // dropped at the bus boundary (per spec emit.md's
-// fire-and-forget rule). The proto.Marshal failure is the
-// only error path the caller sees — typically a programmer
-// mistake passing an invalid envelope.
+// fire-and-forget rule). The caller sees two errors: a
+// proto.Marshal failure (typically a programmer mistake
+// passing an invalid envelope) and [ErrBusDraining] once the
+// bus has been drained.
 func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelope proto.Message) error {
 	raw, err := proto.Marshal(envelope)
 	if err != nil {
 		m.observer.OnEmitFailure(channel, topic, err)
 		return err
 	}
-	m.observer.OnEmitSuccess(channel, topic)
 
 	m.mu.Lock()
 	if m.draining {
-		// Bus is draining/shutting down — drop new emits rather than
+		// Bus is draining/shutting down — refuse new emits rather than
 		// spawn handlers whose wg.Add would race the drain's wg.Wait.
+		// Refused, not swallowed: the event reaches no handler, so it is
+		// reported as a failed emit like a broker adapter's emit on a
+		// closed connection, never as a success.
 		m.mu.Unlock()
-		return nil
+		m.observer.OnEmitFailure(channel, topic, ErrBusDraining)
+		return ErrBusDraining
 	}
 	source := m.handlers[channel]
 	snapshot := make([]registeredHandler, len(source))
@@ -205,6 +209,7 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 	m.dispatchWG.Add(1)
 	m.mu.Unlock()
 	defer m.dispatchWG.Done()
+	m.observer.OnEmitSuccess(channel, topic)
 
 	// Detach from the emit ctx so handlers outlive the
 	// originating RPC's cancellation. Trace + baggage carry
@@ -312,13 +317,22 @@ func (m *MemoryBus) Subscriber(_ context.Context, channel string) (Subscriber, e
 // register slots a HandlerFunc into the bus under `channel`
 // with the given topic filter. Concurrent calls are
 // serialised by the bus mutex.
-func (m *MemoryBus) register(channel, topicFilter string, h HandlerFunc) {
+//
+// Refuses with [ErrSubscriberDraining] once the bus has begun draining,
+// checked under the same lock hold as the append: drain is bus-wide and
+// stops every later emit, so a handler registered after it would never be
+// called — the broker adapters refuse the same late registration.
+func (m *MemoryBus) register(channel, topicFilter string, h HandlerFunc) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.draining {
+		return ErrSubscriberDraining
+	}
 	m.handlers[channel] = append(m.handlers[channel], registeredHandler{
 		topicFilter: topicFilter,
 		fn:          h,
 	})
+	return nil
 }
 
 // drain blocks until every in-flight Dispatch goroutine
@@ -364,13 +378,12 @@ type memorySubscriber struct {
 }
 
 // Subscribe registers `h` for messages arriving on the
-// subscriber's channel that match `topicFilter`. Returns nil
-// — the in-memory transport has no failure mode at Subscribe
-// time (the per-channel registration is a single map write
-// under lock).
+// subscriber's channel that match `topicFilter`. Its only
+// failure is [ErrSubscriberDraining]: the bus has been drained
+// (drain is bus-wide, so draining any subscriber of this bus
+// counts) and the handler could never be invoked.
 func (s *memorySubscriber) Subscribe(_ context.Context, topicFilter string, h HandlerFunc) error {
-	s.bus.register(s.channel, topicFilter, recoverHandler(h))
-	return nil
+	return s.bus.register(s.channel, topicFilter, recoverHandler(h))
 }
 
 // Drain blocks until every in-flight Dispatch goroutine

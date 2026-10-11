@@ -31,6 +31,10 @@ var (
 	// ErrSubscriberDraining is returned by Subscribe() once Drain has begun
 	// on that subscriber (which bus Close does to every subscriber).
 	ErrSubscriberDraining = errors.New("eventbus: subscriber is draining")
+
+	// ErrBusDraining is returned by MemoryBus.Dispatch once the bus has been
+	// drained: the emit reaches no handler and is reported as a failure.
+	ErrBusDraining = errors.New("eventbus: bus is draining")
 )
 
 // DeliveryMode selects how the REPLICAS of one surface share a channel's
