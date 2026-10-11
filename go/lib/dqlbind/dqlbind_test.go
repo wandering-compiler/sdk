@@ -30,11 +30,11 @@ func TestExpandIn(t *testing.T) {
 			want:       "SELECT * FROM users WHERE id IN (?)",
 		},
 		{
-			name:       "single bind, n=0 → NULL",
+			name:       "single bind, n=0 → empty subquery",
 			sql:        "SELECT * FROM users WHERE id IN (?)",
 			occurrence: 1,
 			n:          0,
-			want:       "SELECT * FROM users WHERE id IN (NULL)",
+			want:       "SELECT * FROM users WHERE id IN (" + EmptyList + ")",
 		},
 		{
 			name:       "second occurrence among multiple ? — only that one expands",
@@ -76,7 +76,7 @@ func TestExpandIn(t *testing.T) {
 			sql:        "SELECT * FROM t WHERE a = ? AND b IN (?)",
 			occurrence: 2,
 			n:          0,
-			want:       "SELECT * FROM t WHERE a = ? AND b IN (NULL)",
+			want:       "SELECT * FROM t WHERE a = ? AND b IN (" + EmptyList + ")",
 		},
 	}
 	for _, tc := range cases {

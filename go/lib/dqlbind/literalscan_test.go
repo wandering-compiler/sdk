@@ -61,11 +61,11 @@ func TestExpandIn_LiteralQuestionMark(t *testing.T) {
 		},
 		{
 			// n==0 is the empty-filter semantic. Blindly, occurrence 1 is
-			// the literal's `?` and `'why?'` becomes `'whyNULL'` — the
+			// the literal's `?` and `'why?'` becomes `'why<empty list>'` — the
 			// stored predicate silently changes meaning.
 			name: "first list empty — literal must survive",
 			n1:   0, n2: 2,
-			want: "SELECT id FROM t WHERE note = 'why?' AND b IN (NULL) AND c IN (?, ?)",
+			want: "SELECT id FROM t WHERE note = 'why?' AND b IN (" + EmptyList + ") AND c IN (?, ?)",
 		},
 	}
 	for _, tc := range cases {
