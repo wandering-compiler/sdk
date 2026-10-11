@@ -63,13 +63,19 @@ func requiredExtensionsFromManifest(manifestJSON string) []string {
 //
 // Names are single-quote escaped rather than parameterised because a DO block
 // takes no parameters. They arrive from a proto field an author wrote, so the
-// escape is what stands between a stray quote and a broken probe.
+// escape is what stands between a stray quote and a broken probe. The block's
+// dollar tag is chosen so no name contains it: a name carrying the tag would
+// otherwise close the block early, which no quote escape prevents.
 func extensionPreflightSQL(exts []string) string {
 	if len(exts) == 0 {
 		return ""
 	}
+	tag := "$w17_ext$"
+	for n := 0; containsAny(exts, tag); n++ {
+		tag = fmt.Sprintf("$w17_ext%d$", n)
+	}
 	var b strings.Builder
-	b.WriteString("DO $w17_ext$\nBEGIN\n")
+	b.WriteString("DO " + tag + "\nBEGIN\n")
 	for _, e := range exts {
 		q := strings.ReplaceAll(e, "'", "''")
 		fmt.Fprintf(&b,
@@ -77,8 +83,18 @@ func extensionPreflightSQL(exts []string) string {
 				"    RAISE EXCEPTION 'required extension %% is not installed in this database', '%s';\n"+
 				"  END IF;\n", q, q)
 	}
-	b.WriteString("END\n$w17_ext$;")
+	b.WriteString("END\n" + tag + ";")
 	return b.String()
+}
+
+// containsAny reports whether any of names contains sub.
+func containsAny(names []string, sub string) bool {
+	for _, n := range names {
+		if strings.Contains(n, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // preflightExtensions refuses the whole run when any migration about to be

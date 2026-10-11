@@ -56,7 +56,8 @@ func DevApply(ctx context.Context, plan *applyplanpb.DevApplyPlan, applierFor Ap
 var concurrentlyRe = regexp.MustCompile(`(?i)\s+CONCURRENTLY\b`)
 
 // stripConcurrently removes the CONCURRENTLY keyword from executable SQL
-// while leaving string literals, quoted identifiers and comments untouched.
+// while leaving string literals, quoted identifiers, dollar-quoted bodies and
+// comments untouched.
 //
 // It is a scanner rather than a cleverer regexp because the thing being
 // decided — "is this offset inside a literal" — is not something a regular
@@ -64,56 +65,137 @@ var concurrentlyRe = regexp.MustCompile(`(?i)\s+CONCURRENTLY\b`)
 func stripConcurrently(sql string) string {
 	var out strings.Builder
 	out.Grow(len(sql))
-	for i := 0; i < len(sql); {
-		switch {
-		case strings.HasPrefix(sql[i:], "--"):
-			end := strings.IndexByte(sql[i:], '\n')
-			if end < 0 {
-				out.WriteString(sql[i:])
-				return out.String()
-			}
-			out.WriteString(sql[i : i+end])
-			i += end
-		case strings.HasPrefix(sql[i:], "/*"):
-			end := strings.Index(sql[i+2:], "*/")
-			if end < 0 {
-				out.WriteString(sql[i:])
-				return out.String()
-			}
-			out.WriteString(sql[i : i+2+end+2])
-			i += 2 + end + 2
-		case sql[i] == '\'' || sql[i] == '"':
-			q := sql[i]
-			j := i + 1
-			for j < len(sql) {
-				if sql[j] == q {
-					// A doubled quote is an escaped one and stays inside.
-					if j+1 < len(sql) && sql[j+1] == q {
-						j += 2
-						continue
-					}
-					j++
-					break
-				}
-				j++
-			}
-			out.WriteString(sql[i:j])
-			i = j
-		default:
-			// Executable run: up to the next literal/comment opener.
-			j := i
-			for j < len(sql) {
-				if sql[j] == '\'' || sql[j] == '"' ||
-					strings.HasPrefix(sql[j:], "--") || strings.HasPrefix(sql[j:], "/*") {
-					break
-				}
-				j++
-			}
-			out.WriteString(concurrentlyRe.ReplaceAllString(sql[i:j], ""))
-			i = j
+	scanSQL(sql, func(start, end int, executable bool) {
+		if executable {
+			out.WriteString(concurrentlyRe.ReplaceAllString(sql[start:end], ""))
+			return
+		}
+		out.WriteString(sql[start:end])
+	})
+	return out.String()
+}
+
+// scanSQL walks a Postgres script and hands each consecutive span to visit,
+// marking whether it is EXECUTABLE text or text a rewrite must leave alone:
+// a `--` or (nested) `/* */` comment, a quoted identifier, a string literal
+// (with `E'…'` backslash escapes), or a dollar-quoted body (`$$…$$`,
+// `$tag$…$tag$`). The spans cover the input exactly, in order.
+//
+// One traversal for every rewrite in this file. A function body is the
+// common case for a dollar-quoted span, and its text is full of the words
+// the rewrites look for — a `COMMIT;` inside a procedure, a CONCURRENTLY in
+// a string the function builds — so a scanner that did not know the form
+// edited the author's function.
+func scanSQL(sql string, visit func(start, end int, executable bool)) {
+	run := 0 // start of the pending executable span
+	flushTo := func(i int) {
+		if i > run {
+			visit(run, i, true)
 		}
 	}
-	return out.String()
+	for i := 0; i < len(sql); {
+		end := opaqueEnd(sql, i)
+		if end < 0 {
+			i++
+			continue
+		}
+		flushTo(i)
+		visit(i, end, false)
+		i, run = end, end
+	}
+	flushTo(len(sql))
+}
+
+// opaqueEnd reports where the opaque span starting at sql[i] ends, or -1
+// when sql[i] starts executable text. An unterminated span runs to the end.
+func opaqueEnd(sql string, i int) int {
+	switch c := sql[i]; {
+	case strings.HasPrefix(sql[i:], "--"):
+		if nl := strings.IndexByte(sql[i:], '\n'); nl >= 0 {
+			return i + nl
+		}
+		return len(sql)
+	case strings.HasPrefix(sql[i:], "/*"):
+		// Postgres block comments nest.
+		depth := 0
+		for j := i; j < len(sql); {
+			switch {
+			case strings.HasPrefix(sql[j:], "/*"):
+				depth++
+				j += 2
+			case strings.HasPrefix(sql[j:], "*/"):
+				depth--
+				j += 2
+				if depth == 0 {
+					return j
+				}
+			default:
+				j++
+			}
+		}
+		return len(sql)
+	case c == '"':
+		return quotedEnd(sql, i, '"', false)
+	case c == '\'':
+		// E'…' (escape string): a backslash escapes the next character.
+		escapes := i > 0 && (sql[i-1] == 'E' || sql[i-1] == 'e') && (i < 2 || !isIdentByte(sql[i-2]))
+		return quotedEnd(sql, i, '\'', escapes)
+	case c == '$':
+		if i > 0 && isIdentByte(sql[i-1]) {
+			return -1 // `$` inside an identifier, as in a$b
+		}
+		tag := dollarTagAt(sql, i)
+		if tag == "" {
+			return -1
+		}
+		if close := strings.Index(sql[i+len(tag):], tag); close >= 0 {
+			return i + len(tag) + close + len(tag)
+		}
+		return len(sql)
+	}
+	return -1
+}
+
+// quotedEnd returns the index just past the closing quote of the span
+// opening at sql[i]. A doubled quote is an escaped one and stays inside.
+func quotedEnd(sql string, i int, q byte, backslash bool) int {
+	for j := i + 1; j < len(sql); j++ {
+		switch {
+		case backslash && sql[j] == '\\':
+			j++
+		case sql[j] == q:
+			if j+1 < len(sql) && sql[j+1] == q {
+				j++
+				continue
+			}
+			return j + 1
+		}
+	}
+	return len(sql)
+}
+
+// dollarTagAt returns the `$tag$` delimiter opening at sql[i], or "" when
+// none does. A tag follows identifier rules and cannot start with a digit,
+// so a positional parameter (`$1`) is not one.
+func dollarTagAt(sql string, i int) string {
+	j := i + 1
+	if j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
+		return ""
+	}
+	for j < len(sql) && sql[j] != '$' && isIdentByte(sql[j]) {
+		j++
+	}
+	if j < len(sql) && sql[j] == '$' {
+		return sql[i : j+1]
+	}
+	return ""
+}
+
+// isIdentByte reports whether b can continue an unquoted identifier. Bytes
+// of a multi-byte UTF-8 rune count, as Postgres lets them into identifiers.
+func isIdentByte(b byte) bool {
+	return b == '_' || b == '$' || b >= 0x80 ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // devApplySQL renders the SQL dev executes for one migration: the
@@ -166,12 +248,12 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	// gone; the prerequisite travels with the plan that needs it.
 	for _, ns := range m.GetRequiredSchemas() {
 		if ns = strings.TrimSpace(ns); ns != "" {
-			prereq = append(prereq, `CREATE SCHEMA IF NOT EXISTS "`+ns+`";`)
+			prereq = append(prereq, "CREATE SCHEMA IF NOT EXISTS "+pgQuoteIdent(ns)+";")
 		}
 	}
 	for _, ext := range m.GetRequiredExtensions() {
 		if ext = strings.TrimSpace(ext); ext != "" {
-			prereq = append(prereq, `CREATE EXTENSION IF NOT EXISTS "`+ext+`";`)
+			prereq = append(prereq, "CREATE EXTENSION IF NOT EXISTS "+pgQuoteIdent(ext)+";")
 		}
 	}
 
@@ -231,58 +313,31 @@ func joinNonEmpty(sep string, parts ...string) string {
 	return strings.Join(kept, sep)
 }
 
+// commitRe is a transaction-ending COMMIT statement, in any case and with
+// the optional noise word.
+var commitRe = regexp.MustCompile(`(?i)\bCOMMIT(?:\s+(?:WORK|TRANSACTION))?\s*;`)
+
 // lastTopLevelCommit returns the index of the final `COMMIT;` that is real
-// SQL — not one sitting inside a comment or a quoted string. Returns -1 when
-// the body carries no transaction envelope.
+// SQL — not one sitting inside a comment, a quoted string or a dollar-quoted
+// body. Returns -1 when the body carries no transaction envelope.
 //
 // ⚠️ A substring search is not good enough and that is measured, not
 // theoretical: a post-tx statement containing `'after COMMIT; rebuild
 // stats'` had the baseline spliced into the middle of the author's string
-// literal. The correct scanner already existed in
-// this file — `stripConcurrently` walks comments and quoted strings — and
-// simply was not used. Reusing its traversal rather than writing a second
-// one is the point: two scanners over the same grammar drift, and the one
-// that drifts is the one nobody reads.
+// literal. A procedure body (`$$ … COMMIT; … $$`) is the same mistake
+// inside a dollar quote, and a lower-case `commit;` envelope was not seen at
+// all, which put the baseline AFTER the transaction it belongs in. The
+// traversal is scanSQL, shared with stripConcurrently: two scanners over the
+// same grammar drift, and the one that drifts is the one nobody reads.
 func lastTopLevelCommit(sql string) int {
-	const needle = "COMMIT;"
 	last := -1
-	for i := 0; i < len(sql); {
-		switch {
-		case strings.HasPrefix(sql[i:], "--"):
-			end := strings.IndexByte(sql[i:], '\n')
-			if end < 0 {
-				return last
-			}
-			i += end
-		case strings.HasPrefix(sql[i:], "/*"):
-			end := strings.Index(sql[i+2:], "*/")
-			if end < 0 {
-				return last
-			}
-			i += 2 + end + 2
-		case sql[i] == '\'' || sql[i] == '"':
-			q := sql[i]
-			j := i + 1
-			for j < len(sql) {
-				if sql[j] == q {
-					if j+1 < len(sql) && sql[j+1] == q {
-						j += 2
-						continue
-					}
-					j++
-					break
-				}
-				j++
-			}
-			i = j
-		default:
-			if strings.HasPrefix(sql[i:], needle) {
-				last = i
-				i += len(needle)
-				continue
-			}
-			i++
+	scanSQL(sql, func(start, end int, executable bool) {
+		if !executable {
+			return
 		}
-	}
+		if locs := commitRe.FindAllStringIndex(sql[start:end], -1); len(locs) > 0 {
+			last = start + locs[len(locs)-1][0]
+		}
+	})
 	return last
 }

@@ -36,9 +36,18 @@ func requiredSchemasFromManifest(manifestJSON string) []string {
 func schemaPrepSQL(schemas []string) string {
 	var b strings.Builder
 	for _, s := range schemas {
-		fmt.Fprintf(&b, "CREATE SCHEMA IF NOT EXISTS \"%s\";\n", strings.ReplaceAll(s, `"`, `""`))
+		fmt.Fprintf(&b, "CREATE SCHEMA IF NOT EXISTS %s;\n", pgQuoteIdent(s))
 	}
 	return b.String()
+}
+
+// pgQuoteIdent renders name as a Postgres quoted identifier, doubling any
+// embedded double quote. Every schema and extension name this package puts
+// into SQL goes through here: the names come from options an author wrote,
+// and one unescaped quote ends the identifier and turns the rest of the name
+// into statement text.
+func pgQuoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // prepareSchemas creates, before the first migration of the run, every
