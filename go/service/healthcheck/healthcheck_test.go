@@ -327,3 +327,27 @@ func TestDispatch_FinalOwnsTheCommandTable(t *testing.T) {
 		t.Error("without Final, a non-health word is the next dispatcher's")
 	}
 }
+
+// An unrecognised switch value fails the probe, naming the variable, rather
+// than being read as off and probing in plaintext — the listener refuses the
+// same value at start.
+func TestRun_GRPCUnrecognisedTLSSwitchFails(t *testing.T) {
+	addr := listenGRPC(t, grpc_health_v1.HealthCheckResponse_SERVING)
+	var out bytes.Buffer
+	_, err := healthcheck.Dispatch(context.Background(), []string{"health"}, healthcheck.Options{
+		Probes: []healthcheck.Probe{healthcheck.GRPC("grpc", addr)},
+		Out:    &out,
+		Getenv: func(k string) string {
+			if k == "W17_INTERNAL_TLS" {
+				return "enabled"
+			}
+			return ""
+		},
+	})
+	if err == nil {
+		t.Fatalf("probe passed with W17_INTERNAL_TLS=enabled\n%s", out.String())
+	}
+	if !strings.Contains(out.String()+err.Error(), "W17_INTERNAL_TLS") {
+		t.Errorf("failure does not name the switch: err=%v\n%s", err, out.String())
+	}
+}

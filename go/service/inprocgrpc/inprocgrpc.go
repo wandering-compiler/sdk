@@ -36,8 +36,10 @@ package inprocgrpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"runtime/debug"
 	"sync"
 
@@ -69,6 +71,11 @@ type Conn struct {
 	streamInterceptor grpc.StreamServerInterceptor
 	methods           map[string]*methodEntry
 	streams           map[string]*streamEntry
+	services          map[string]bool
+
+	// The options collect into these; New chains them once.
+	unaryInts  []grpc.UnaryServerInterceptor
+	streamInts []grpc.StreamServerInterceptor
 }
 
 // methodEntry binds one fully-qualified method to its server impl + the
@@ -90,24 +97,39 @@ type streamEntry struct {
 // option configures a [Conn].
 type option func(*Conn)
 
-// WithUnaryInterceptor sets the server-side unary interceptor run for
+// WithUnaryInterceptor adds a server-side unary interceptor run for
 // every in-process call on this Conn — the in-process equivalent of the
 // interceptors a standalone bundle installs on its *grpc.Server (e.g.
-// the storage tier's auto-rollback + eventbus-emit interceptors). One
-// per Conn; compose multiple into one with a chaining interceptor.
+// the storage tier's auto-rollback + eventbus-emit interceptors).
+//
+// Interceptor options ADD to one chain in the order they are given
+// (outermost first); a later option never replaces an earlier one, so
+// combining this with [WithUnaryInterceptors] cannot drop an interceptor
+// silently. A nil interceptor is skipped.
 func WithUnaryInterceptor(i grpc.UnaryServerInterceptor) option {
-	return func(c *Conn) { c.interceptor = i }
+	return func(c *Conn) {
+		if i != nil {
+			c.unaryInts = append(c.unaryInts, i)
+		}
+	}
 }
 
-// WithUnaryInterceptors sets the server-side interceptor CHAIN run for
+// WithUnaryInterceptors adds a server-side interceptor CHAIN run for
 // every in-process call — the in-process equivalent of a bundle's
 // grpc.ChainUnaryInterceptor server option. Interceptors run outermost
 // first (grpc-go chain semantics), so a tier can hand its
 // Resources.Interceptors() slice straight through. An empty / nil slice
-// installs no interceptor. A composed -server uses this to apply the
-// storage tier's auto-rollback + eventbus-emit chain on its Conn.
+// adds nothing. A composed -server uses this to apply the storage tier's
+// auto-rollback + eventbus-emit chain on its Conn. Like grpc-go's chain
+// option, repeated use appends (see [WithUnaryInterceptor]).
 func WithUnaryInterceptors(interceptors ...grpc.UnaryServerInterceptor) option {
-	return func(c *Conn) { c.interceptor = chainUnary(interceptors) }
+	return func(c *Conn) {
+		for _, i := range interceptors {
+			if i != nil {
+				c.unaryInts = append(c.unaryInts, i)
+			}
+		}
+	}
 }
 
 // chainUnary composes interceptors into a single one, outermost first
@@ -134,15 +156,20 @@ func chainUnary(interceptors []grpc.UnaryServerInterceptor) grpc.UnaryServerInte
 	}
 }
 
-// WithStreamInterceptor sets the server-side STREAM interceptor run for
+// WithStreamInterceptor adds a server-side STREAM interceptor run for
 // every in-process streaming call on this Conn — the in-process equivalent
-// of grpc.StreamInterceptor on a standalone bundle's *grpc.Server. One per
-// Conn; compose several with [WithStreamInterceptors].
+// of a stream interceptor on a standalone bundle's *grpc.Server. Like the
+// unary options, stream interceptor options append to one chain in the
+// order given; a nil interceptor is skipped.
 func WithStreamInterceptor(i grpc.StreamServerInterceptor) option {
-	return func(c *Conn) { c.streamInterceptor = i }
+	return func(c *Conn) {
+		if i != nil {
+			c.streamInts = append(c.streamInts, i)
+		}
+	}
 }
 
-// WithStreamInterceptors sets the server-side stream interceptor CHAIN run
+// WithStreamInterceptors adds a server-side stream interceptor CHAIN run
 // for every in-process streaming call — the in-process equivalent of
 // grpc.ChainStreamInterceptor. Interceptors run outermost first (grpc-go
 // chain semantics), so a tier can hand its slice straight through. An empty
@@ -157,7 +184,13 @@ func WithStreamInterceptor(i grpc.StreamServerInterceptor) option {
 // inline), so nothing wires this yet; whoever adds the first one must pass
 // it here too, and this is the seam that makes that possible.
 func WithStreamInterceptors(interceptors ...grpc.StreamServerInterceptor) option {
-	return func(c *Conn) { c.streamInterceptor = chainStream(interceptors) }
+	return func(c *Conn) {
+		for _, i := range interceptors {
+			if i != nil {
+				c.streamInts = append(c.streamInts, i)
+			}
+		}
+	}
 }
 
 // chainStream composes stream interceptors into one, outermost first
@@ -186,10 +219,12 @@ func chainStream(interceptors []grpc.StreamServerInterceptor) grpc.StreamServerI
 
 // New returns an empty Conn ready for RegisterService calls.
 func New(opts ...option) *Conn {
-	c := &Conn{methods: map[string]*methodEntry{}, streams: map[string]*streamEntry{}}
+	c := &Conn{methods: map[string]*methodEntry{}, streams: map[string]*streamEntry{}, services: map[string]bool{}}
 	for _, o := range opts {
 		o(c)
 	}
+	c.interceptor = chainUnary(c.unaryInts)
+	c.streamInterceptor = chainStream(c.streamInts)
 	return c
 }
 
@@ -201,7 +236,23 @@ func New(opts ...option) *Conn {
 // binary fold a tier that exposes a server-/client-/bidi-streaming method
 // (e.g. the re-hosted CodegenService's GenerateProject) the same way the
 // networked deployment would.
+//
+// Registration is checked the way a wire *grpc.Server checks it: a service
+// registered twice, or an impl that does not implement the descriptor's
+// handler type, panics at wiring time. The wire server treats both as
+// fatal; quietly keeping the last registration would leave whichever tier
+// or plugin registered last serving, with a green build.
 func (c *Conn) RegisterService(sd *grpc.ServiceDesc, impl any) {
+	if impl != nil && sd.HandlerType != nil {
+		ht := reflect.TypeOf(sd.HandlerType).Elem()
+		if st := reflect.TypeOf(impl); !st.Implements(ht) {
+			panic(fmt.Sprintf("inprocgrpc: RegisterService found the handler of type %v that does not satisfy %v", st, ht))
+		}
+	}
+	if c.services[sd.ServiceName] {
+		panic(fmt.Sprintf("inprocgrpc: RegisterService found duplicate service registration for %q", sd.ServiceName))
+	}
+	c.services[sd.ServiceName] = true
 	for i := range sd.Methods {
 		m := sd.Methods[i]
 		full := "/" + sd.ServiceName + "/" + m.MethodName
@@ -266,6 +317,7 @@ func (c *Conn) Invoke(ctx context.Context, method string, args, reply any, opts 
 	}
 	resp, err := e.handler(e.impl, ctx, dec, c.interceptor)
 	if err != nil {
+		err = contextStatus(err)
 		span.SetStatus(otelcodes.Error, err.Error())
 		return err
 	}
@@ -298,6 +350,25 @@ func refuseDoneContext(ctx context.Context) error {
 		return status.FromContextError(err).Err()
 	}
 	return nil
+}
+
+// contextStatus turns a bare context error into the status error the wire
+// delivers for it (Canceled / DeadlineExceeded): grpc-go maps a handler's
+// context error to that code, and a client stream ended by its context
+// reports it the same way, so status.Code must not answer Unknown just
+// because the call stayed in-process. A status error, and any error that
+// is not a context error, is returned unchanged.
+func contextStatus(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	return err
 }
 
 // inprocServerTransportStream is the unary call's stand-in for the
@@ -494,7 +565,7 @@ func (c *Conn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method stri
 		// standalone bundle's grpc.ChainStreamInterceptor would. Without
 		// this the two deployments could not agree even if the composed
 		// wiring passed a chain — see [WithStreamInterceptors].
-		err := c.dispatchStream(e, method, desc, p)
+		err := contextStatus(c.dispatchStream(e, method, desc, p))
 		if err != nil {
 			span.SetStatus(otelcodes.Error, err.Error())
 		}
@@ -617,7 +688,7 @@ func (s clientStream) Header() (metadata.MD, error) {
 	if s.p.headerReady != nil {
 		select {
 		case <-s.p.clientCtx.Done():
-			return nil, s.p.clientCtx.Err()
+			return nil, contextStatus(s.p.clientCtx.Err())
 		case <-s.p.headerReady:
 		}
 	}
@@ -661,9 +732,9 @@ func (s clientStream) SendMsg(m any) error {
 	}
 	select {
 	case <-s.p.clientCtx.Done():
-		return s.p.clientCtx.Err()
+		return contextStatus(s.p.clientCtx.Err())
 	case <-serverDone:
-		return s.p.serverCtx.Err()
+		return contextStatus(s.p.serverCtx.Err())
 	case s.p.c2s <- cp:
 		return nil
 	}
@@ -672,7 +743,7 @@ func (s clientStream) SendMsg(m any) error {
 func (s clientStream) RecvMsg(m any) error {
 	select {
 	case <-s.p.clientCtx.Done():
-		return s.p.clientCtx.Err()
+		return contextStatus(s.p.clientCtx.Err())
 	case <-s.p.finished:
 		// No send can still be pending: finish runs after the handler
 		// returned, and any sender parked on s2c is released by this same
@@ -736,7 +807,7 @@ func (s serverStream) SendMsg(m any) error {
 	s.p.markHeaderSent()
 	select {
 	case <-s.p.serverCtx.Done():
-		return s.p.serverCtx.Err()
+		return contextStatus(s.p.serverCtx.Err())
 	case <-s.p.finished:
 		// A goroutine the handler spawned, still sending after the handler
 		// returned. The wire answers this with an error; so do we.
@@ -749,7 +820,7 @@ func (s serverStream) SendMsg(m any) error {
 func (s serverStream) RecvMsg(m any) error {
 	select {
 	case <-s.p.serverCtx.Done():
-		return s.p.serverCtx.Err()
+		return contextStatus(s.p.serverCtx.Err())
 	case v, ok := <-s.p.c2s:
 		if !ok {
 			return io.EOF // client called CloseSend

@@ -77,8 +77,9 @@ func TestRun_GracefulShutdown(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != context.Canceled {
-			t.Errorf("Run returned %v, want context.Canceled", err)
+		// A ctx-driven stop is the normal way down, not a failure.
+		if err != nil {
+			t.Errorf("Run returned %v, want nil on a clean ctx-driven stop", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return after ctx cancel")

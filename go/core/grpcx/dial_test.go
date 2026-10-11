@@ -119,3 +119,22 @@ func writeTestCA(t *testing.T) string {
 	}
 	return path
 }
+
+// InternalTLSEnabled has no error channel, so an unrecognised switch value
+// fails closed (dial TLS, visibly failing against a plaintext server)
+// instead of being read as off.
+func TestInternalTLSEnabled_UnrecognisedValueFailsClosed(t *testing.T) {
+	for v, want := range map[string]bool{
+		"":           false,
+		"off":        false,
+		"on":         true,
+		"terminated": true,
+		"enabled":    true,
+		"required":   true,
+	} {
+		t.Setenv("W17_INTERNAL_TLS", v)
+		if got := InternalTLSEnabled(); got != want {
+			t.Errorf("W17_INTERNAL_TLS=%q → %v, want %v", v, got, want)
+		}
+	}
+}

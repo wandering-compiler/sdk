@@ -50,12 +50,19 @@ import (
 // number instead of waiting forever.
 const DefaultShutdownTimeout = 10 * time.Second
 
+// Unbounded is the graceful-stop bound that disables the bound: wait for
+// every in-flight request, however long. [StopGRPC] and [HTTPStopper]
+// read any value <= 0 that way; Unbounded is negative so it also survives
+// a config field where 0 means "use the default" ([runtime.Config]).
+const Unbounded time.Duration = -1
+
 // ShutdownTimeoutFromEnv reads `<PREFIX>_SHUTDOWN_TIMEOUT_SECONDS` off
 // `lookup` and returns the graceful-stop bound a transport passes to
 // [StopGRPC] / [HTTPStopper.Stop]. Unset / unparseable falls back to
-// [DefaultShutdownTimeout]; an explicit value <= 0 disables the bound
-// (unbounded graceful stop — an operator opt-out, the same `0` semantic
-// [runtime.Config].ShutdownTimeout documents).
+// [DefaultShutdownTimeout]; an explicit value <= 0 is the operator's
+// opt-out and returns [Unbounded]. The result can be handed to
+// [runtime.Config].ShutdownTimeout unchanged: there 0 means the default,
+// and Unbounded keeps meaning unbounded.
 func ShutdownTimeoutFromEnv(prefix string, lookup func(string) string) time.Duration {
 	raw := lookup(prefix + "_SHUTDOWN_TIMEOUT_SECONDS")
 	if raw == "" {
@@ -66,7 +73,7 @@ func ShutdownTimeoutFromEnv(prefix string, lookup func(string) string) time.Dura
 		return DefaultShutdownTimeout
 	}
 	if n <= 0 {
-		return 0 // explicit opt-out — block until every RPC finishes
+		return Unbounded // explicit opt-out — block until every RPC finishes
 	}
 	return time.Duration(n) * time.Second
 }

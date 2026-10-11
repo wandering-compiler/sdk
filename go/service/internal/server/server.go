@@ -73,6 +73,15 @@ type Config struct {
 // Run starts a gRPC server and blocks until ctx is cancelled (or
 // the listener fails), then stops it gracefully (subject to
 // ShutdownTimeout) and calls OnShutdown if set.
+//
+// A ctx-driven stop is the normal way down and returns nil; only a
+// failure (validation, listen, registration, or Serve ending on its
+// own) returns an error. When shutdown begins the health server, if
+// any, reports NOT_SERVING for every service before the drain starts,
+// so a client watching health sees the stop coming instead of SERVING
+// until the connection drops. On every path that reaches OnShutdown
+// the server has been stopped first, so no handler is still running
+// on a connection when the hooks close the resources it uses.
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.Addr == "" {
 		return fmt.Errorf("server: address is required")
@@ -81,12 +90,16 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("server: RegisterServices is required")
 	}
 
-	listener, err := net.Listen("tcp", cfg.Addr)
+	listener, err := listen("tcp", cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("server: listen on %s: %w", cfg.Addr, err)
 	}
 
-	srv := grpc.NewServer(cfg.ServerOptions...)
+	srv, err := newServer(cfg.ServerOptions)
+	if err != nil {
+		_ = listener.Close()
+		return err
+	}
 
 	if err = cfg.RegisterServices(srv); err != nil {
 		_ = listener.Close()
@@ -109,16 +122,49 @@ func Run(ctx context.Context, cfg Config) error {
 	// listener error.
 	select {
 	case err = <-serveErr:
-		// Server stopped on its own (e.g. listener closed).
+		// Serve ended on its own (e.g. the listener failed). Connections
+		// it already accepted keep running handlers until the server is
+		// stopped, so stop it before OnShutdown closes what they use.
+		markNotServing(cfg.HealthServer)
+		srv.Stop()
+		if err != nil {
+			err = fmt.Errorf("server: serve on %s: %w", cfg.Addr, err)
+		}
 	case <-ctx.Done():
+		markNotServing(cfg.HealthServer)
 		gracefulStop(srv, cfg.ShutdownTimeout)
-		err = ctx.Err()
+		err = nil
 	}
 
 	if cfg.OnShutdown != nil {
 		cfg.OnShutdown()
 	}
 	return err
+}
+
+// listen is the listener constructor; a test replaces it to make Serve
+// fail on its own.
+var listen = net.Listen
+
+// newServer builds the grpc.Server. grpc-go panics on a conflicting
+// option set (a singular grpc.UnaryInterceptor or grpc.StreamInterceptor
+// given twice); that is a configuration error, so it is returned as one
+// instead of taking the process down from inside the lifecycle.
+func newServer(opts []grpc.ServerOption) (srv *grpc.Server, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("server: invalid server options: %v (pass extra interceptors with grpc.ChainUnaryInterceptor / grpc.ChainStreamInterceptor, not the singular grpc.UnaryInterceptor / grpc.StreamInterceptor)", r)
+		}
+	}()
+	return grpc.NewServer(opts...), nil
+}
+
+// markNotServing flips every service on hs to NOT_SERVING (and keeps it
+// there) once shutdown has begun. nil-safe.
+func markNotServing(hs *health.Server) {
+	if hs != nil {
+		hs.Shutdown()
+	}
 }
 
 // gracefulStop attempts a graceful shutdown within timeout; zero

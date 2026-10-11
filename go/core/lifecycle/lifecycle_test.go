@@ -265,8 +265,13 @@ func TestShutdownTimeoutFromEnv(t *testing.T) {
 	if got := lifecycle.ShutdownTimeoutFromEnv("APP", lookup); got != lifecycle.DefaultShutdownTimeout {
 		t.Fatalf("unparseable → %s, want the default", got)
 	}
-	env["APP_SHUTDOWN_TIMEOUT_SECONDS"] = "0"
-	if got := lifecycle.ShutdownTimeoutFromEnv("APP", lookup); got != 0 {
-		t.Fatalf("explicit 0 → %s, want the unbounded opt-out", got)
+	// The opt-out is negative, not 0: a config field where 0 means "use
+	// the default" (runtime.Config.ShutdownTimeout) must not turn it back
+	// into a bound.
+	for _, v := range []string{"0", "-5"} {
+		env["APP_SHUTDOWN_TIMEOUT_SECONDS"] = v
+		if got := lifecycle.ShutdownTimeoutFromEnv("APP", lookup); got != lifecycle.Unbounded || got >= 0 {
+			t.Fatalf("explicit %s → %s, want lifecycle.Unbounded (negative)", v, got)
+		}
 	}
 }

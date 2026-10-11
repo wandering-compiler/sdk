@@ -23,6 +23,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/signal"
 	"runtime/debug"
 	"sync"
@@ -95,7 +96,11 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	defer func() {
 		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = observx.Shutdown(flushCtx)
+		// observx is going away, so its own failure (spans or events
+		// that did not reach the collector) can only go to the log.
+		if err := observx.Shutdown(flushCtx); err != nil {
+			log.Printf("bootstrap: observability flush: %v", err)
+		}
 	}()
 
 	// One signal owner for the whole process; the derived ctx is the
@@ -147,9 +152,15 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	// process ctx is already cancelled, so use a fresh bounded context.
 	if len(resources) > 0 {
 		drainCtx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
-		for _, closeRes := range resources {
-			if closeRes != nil {
-				_ = closeRes(drainCtx)
+		for i, closeRes := range resources {
+			if closeRes == nil {
+				continue
+			}
+			// A failing closer does not stop the rest, and it does not
+			// change Run's result (the components already decided that);
+			// it is reported so a failed pool close or bus flush is seen.
+			if err := closeRes(drainCtx); err != nil {
+				observx.ReportError(drainCtx, fmt.Errorf("bootstrap: resource closer %d: %w", i, err))
 			}
 		}
 		dcancel()

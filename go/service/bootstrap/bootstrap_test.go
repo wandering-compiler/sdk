@@ -1,8 +1,10 @@
 package bootstrap_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -214,5 +216,41 @@ func TestRunGraceful_NilResourceSkipped(t *testing.T) {
 	}
 	if !ran.Load() {
 		t.Fatal("non-nil resource closer should have run")
+	}
+}
+
+// A failing resource closer is reported (not dropped), later closers still
+// run, and Run's result stays the components' verdict.
+func TestRunGraceful_ResourceCloserErrorIsReported(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	comp := bootstrap.Func(func(ctx context.Context) error { <-ctx.Done(); return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	var laterRan atomic.Bool
+	go func() {
+		done <- bootstrap.RunGraceful(ctx, testObs, []func(context.Context) error{
+			func(context.Context) error { return errors.New("pool close failed") },
+			func(context.Context) error { laterRan.Store(true); return nil },
+		}, comp)
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunGraceful = %v, want nil (the components stopped cleanly)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunGraceful did not return")
+	}
+	if !laterRan.Load() {
+		t.Error("a failing closer stopped the later ones")
+	}
+	if !strings.Contains(buf.String(), "pool close failed") {
+		t.Errorf("the closer's error was not reported; log = %q", buf.String())
 	}
 }
