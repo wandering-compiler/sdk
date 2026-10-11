@@ -147,11 +147,19 @@ func WriteGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", "nil error")
 		return
 	}
-	// The operator's copy, always and regardless of outcome. It is the only
-	// place the method prefix and any backend prose is allowed to land.
-	observx.ReportError(context.Background(), err)
-
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c, message, details := ClientError(ctx, err)
+
+	// The operator's copy, always and regardless of outcome. It is the only
+	// place the method prefix and any backend prose is allowed to land. It
+	// goes down the channel its code belongs on — a NotFound or a validation
+	// failure is the caller's outcome, not a fault to page on — and with the
+	// request's context, so the report lands on the request's trace. The
+	// SSE and WebSocket writers classify the same way.
+	reportByCode(ctx, c, err)
+
 	httpStatus := HTTPStatusFromGRPCCode(c)
 	if len(details) > 0 {
 		WriteErrorWithDetails(w, httpStatus, GRPCCodeName(c), message, details)

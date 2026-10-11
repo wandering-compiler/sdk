@@ -28,7 +28,6 @@
 package restgw
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -93,11 +92,10 @@ func ObservabilityMiddleware(next http.Handler, serviceName string, requestIDCfg
 				id = uuid.NewString()
 			}
 			w.Header().Set(header, id)
-			ctx := context.WithValue(r.Context(), requestIDCtxKey{}, id)
-			if span := trace.SpanFromContext(ctx); span.IsRecording() {
+			r = withRequestID(r, header, id)
+			if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
 				span.SetAttributes(attribute.String("request_id", id))
 			}
-			r = r.WithContext(ctx)
 		}
 		next.ServeHTTP(w, r)
 	})

@@ -48,7 +48,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
 )
 
@@ -322,18 +326,42 @@ func validateExtension(header *multipart.FileHeader, allowed []string) error {
 	return fmt.Errorf("%w: filename %q (extension %q not in allowlist %v)", ErrUploadBadExt, header.Filename, got, allowed)
 }
 
-// WriteUploadError translates the upload-helper errors to
-// canonical REST status responses. Generated handler emit
-// calls this at the error site so the wire shape stays
-// consistent with the rest of the gateway error envelope.
+// Sentences for the upload refusals. They name what the person can act on —
+// attach a file, pick a smaller one, pick another type — and nothing about
+// this deployment: not the configured size limit, not the allowlist, not the
+// form field's internal name.
+const (
+	MsgidUploadMissing  = "No file was attached."
+	MsgidUploadTooLarge = "The file is too large."
+	MsgidUploadBadType  = "This type of file is not accepted."
+)
+
+// WriteUploadError translates the upload-helper errors to canonical REST
+// status responses. Without a request in scope the sentence stays in the
+// source locale and the report carries no trace; prefer
+// [WriteUploadErrorCtx].
 func WriteUploadError(w http.ResponseWriter, err error) {
+	WriteUploadErrorCtx(context.Background(), w, err)
+}
+
+// WriteUploadErrorCtx translates the upload-helper errors to canonical REST
+// status responses, under the same two-audience rule as every other gateway
+// refusal: the helper's own error text — the filename, the allowlist, the
+// configured limit — goes to the operator, and the client gets a code and a
+// catalog sentence in its language.
+func WriteUploadErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
+	var (
+		httpStatus int
+		code       codes.Code
+		msgid      string
+	)
 	switch {
 	case errors.Is(err, ErrFilePartMissing):
-		WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		httpStatus, code, msgid = http.StatusBadRequest, codes.InvalidArgument, MsgidUploadMissing
 	case errors.Is(err, ErrUploadTooLarge):
-		WriteError(w, http.StatusRequestEntityTooLarge, "RESOURCE_EXHAUSTED", err.Error())
+		httpStatus, code, msgid = http.StatusRequestEntityTooLarge, codes.ResourceExhausted, MsgidUploadTooLarge
 	case errors.Is(err, ErrUploadBadExt):
-		WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		httpStatus, code, msgid = http.StatusBadRequest, codes.InvalidArgument, MsgidUploadBadType
 	default:
 		// Q36-restgw-1: don't reflect the internal error to the client.
 		// The non-sentinel errors reaching here wrap driver / tmp-file
@@ -342,9 +370,12 @@ func WriteUploadError(w http.ResponseWriter, err error) {
 		// (`restgw: mkdir/create/close tmp: …`). Log it and return a
 		// generic message, matching WriteGRPCError / ServeDownload
 		// (restgw-sec-3).
-		observx.ReportError(context.Background(), err)
+		observx.ReportError(ctx, err)
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
 	}
+	reportByCode(ctx, code, status.Error(code, err.Error()))
+	WriteError(w, httpStatus, GRPCCodeName(code), i18n.T(ctx, msgid, nil))
 }
 
 // UploadedObject names one object a request stored durably, so a later

@@ -14,7 +14,10 @@
 package restgw
 
 import (
+	"context"
 	"net/http"
+
+	"google.golang.org/grpc/codes"
 )
 
 // scopeKeyPrefix is the gRPC metadata key prefix the gateway
@@ -46,24 +49,25 @@ func ScopeKey(name string) string {
 	return scopeKeyPrefix + name
 }
 
-// WriteMissingScope writes the canonical 403 envelope for
-// the fail-closed data-scope runtime check. Generated storage
-// handlers call this when a required scope's metadata key
-// isn't present on the incoming gRPC context — i.e. the
-// caller authenticated but the auth backend didn't populate
-// `AuthResp.scopes["<name>"]` (or the gateway router didn't
-// thread it).
+// WriteMissingScope writes the canonical 403 envelope for the fail-closed
+// data-scope runtime check. Generated storage handlers call this when a
+// required scope's metadata key isn't present on the incoming gRPC context —
+// i.e. the caller authenticated but the auth backend didn't populate
+// `AuthResp.scopes["<name>"]` (or the gateway router didn't thread it).
 //
-// Message format pinned per spec: `"missing required scope:
-// <name>"`. Clients can branch on the suffix to surface a
-// user-friendly "you don't have access to any <tenant>"
-// message; the canonical wire shape stays stable.
-//
-// This is a thin specialization over `WriteForbidden(w,
-// reason)` so the error envelope shape stays consistent
-// across the permission check + scope check
-// (same code, same status, just a different message).
+// It is [WriteMissingScopeCtx] without a request in scope: the sentence stays
+// in the source locale and the report carries no trace.
 func WriteMissingScope(w http.ResponseWriter, name string) {
-	WriteError(w, http.StatusForbidden, "PERMISSION_DENIED",
-		"missing required scope: "+name)
+	WriteMissingScopeCtx(context.Background(), w, name)
+}
+
+// WriteMissingScopeCtx is the two-audience form of the missing-scope refusal.
+//
+// The scope's name is configuration — which column this deployment isolates
+// tenants on — and a caller can do nothing with it, so it goes to the
+// operator only. The client gets PERMISSION_DENIED and the code's catalog
+// sentence, translated with the request's locale, exactly like any other
+// refusal of access.
+func WriteMissingScopeCtx(ctx context.Context, w http.ResponseWriter, name string) {
+	WriteRefusal(ctx, w, codes.PermissionDenied, "missing required scope: "+name)
 }

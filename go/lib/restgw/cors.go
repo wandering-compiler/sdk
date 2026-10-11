@@ -137,9 +137,14 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+		// Every response this middleware sees depends on Origin, including
+		// the ones that carry no CORS headers: without Vary on those, a
+		// shared cache can store the no-CORS variant (a request with no or
+		// a disallowed Origin) and hand it to an allowed origin, whose
+		// browser then refuses it.
+		addVary(w.Header(), "Origin")
 		if allow := matchOrigin(origin, cfg.AllowedOrigins, allowCredentials); allow != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allow)
-			w.Header().Add("Vary", "Origin")
 			if allowCredentials {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}

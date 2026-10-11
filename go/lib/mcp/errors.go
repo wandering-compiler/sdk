@@ -27,8 +27,10 @@ import (
 // publicError maps an error from the backend (or from the auth backend) to
 // the status a client may see, reporting the original.
 func publicError(ctx context.Context, err error) error {
-	observx.ReportError(ctx, err)
 	c, msg, details := restgw.ClientError(ctx, err)
+	// Classified like every other surface: a refusal the backend decided is
+	// the caller's outcome, not a server fault.
+	report(ctx, c, err)
 	st := status.New(c, msg)
 	if len(details) > 0 {
 		pb := make([]*w17pb.ErrorDetail, 0, len(details))
@@ -58,11 +60,18 @@ func withErrorDetails(st *status.Status, details []*w17pb.ErrorDetail) (*status.
 // reaches observability only, and the client gets the code's catalog
 // sentence.
 func refusal(ctx context.Context, c codes.Code, operator error) error {
+	report(ctx, c, operator)
+	return status.Error(c, restgw.ClientSentence(ctx, c))
+}
+
+// report sends the operator's copy down the channel its code belongs on:
+// server faults are exceptions, everything else is an expected outcome of a
+// request and goes to the non-exception channel.
+func report(ctx context.Context, c codes.Code, err error) {
 	switch c {
 	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable:
-		observx.ReportError(ctx, operator)
+		observx.ReportError(ctx, err)
 	default:
-		observx.ReportRefusal(ctx, operator)
+		observx.ReportRefusal(ctx, err)
 	}
-	return status.Error(c, restgw.ClientSentence(ctx, c))
 }

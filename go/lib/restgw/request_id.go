@@ -102,9 +102,30 @@ func RequestIDMiddleware(cfg RequestIDConfig, next http.Handler) http.Handler {
 			id = uuid.NewString()
 		}
 		w.Header().Set(header, id)
-		ctx := context.WithValue(r.Context(), requestIDCtxKey{}, id)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, withRequestID(r, header, id))
 	})
+}
+
+// withRequestID attaches the chosen id to the request's context and makes it
+// the only value of the request-id header on the request handed on.
+//
+// The header matters as much as the context: header propagation forwards the
+// request's own header to the backend, so without the rewrite the backend
+// received whatever the client sent — the unvalidated value the check above
+// exists to keep out of logs, or nothing when the gateway generated the id —
+// while the gateway logged and echoed another. The caller's header map is
+// never modified; a copy is made only when the value has to change.
+func withRequestID(r *http.Request, header, id string) *http.Request {
+	r = r.WithContext(context.WithValue(r.Context(), requestIDCtxKey{}, id))
+	if vals := r.Header.Values(header); len(vals) != 1 || vals[0] != id {
+		h := r.Header.Clone()
+		if h == nil {
+			h = http.Header{}
+		}
+		h.Set(header, id)
+		r.Header = h
+	}
+	return r
 }
 
 // validRequestID accepts a non-empty, length-bounded id made only of
