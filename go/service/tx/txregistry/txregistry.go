@@ -142,8 +142,23 @@ var ErrConnectionMismatch = errors.New("txregistry: tx_id was opened on a differ
 // is still issuing statements on it. Both directions are
 // bounded waits, not refusals-on-sight: the error means the
 // wait ran out, and the transaction is left exactly as it was —
-// still open, still adoptable, safe to retry.
+// still open, still adoptable, safe to retry. The one exception is
+// a Rollback: it dooms the transaction before it waits, so its
+// ErrTxBusy also wraps [ErrTxDoomed] and the rollback is deferred,
+// not abandoned.
 var ErrTxBusy = errors.New("txregistry: tx_id is in use by another caller")
+
+// ErrTxDoomed is returned for a transaction a rollback was already
+// asked for — typically by the auto-rollback interceptor after a
+// call inside it failed — but which a handler was still holding at
+// the time. Such a transaction can only end one way: Commit refuses
+// it, a new adoption is refused, and the rollback runs as soon as
+// the running handler releases its lease.
+//
+// A Rollback that could not run at once returns it too (wrapping
+// [ErrTxBusy]): the rollback is not lost, only deferred, which is
+// why the coordinator's Rollback RPC answers success for it.
+var ErrTxDoomed = errors.New("txregistry: transaction is being rolled back and can no longer commit")
 
 // AdoptTx reads the w17-tx-id metadata header off ctx and
 // resolves it through reg against the calling method's
@@ -161,7 +176,8 @@ var ErrTxBusy = errors.New("txregistry: tx_id is in use by another caller")
 //     minted by another bundle's registry), the tx was opened
 //     on a different connection (ErrConnectionMismatch), or
 //     another handler holds it and did not release in time
-//     (ErrTxBusy). The generator surfaces this to the client as
+//     (ErrTxBusy), or a rollback of it is already pending
+//     (ErrTxDoomed). The generator surfaces this to the client as
 //     `codes.InvalidArgument`. Falling through to a fresh tx
 //     here would split the caller's logical transaction with no
 //     error at all — see [ErrUnknownTxID].

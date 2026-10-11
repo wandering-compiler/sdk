@@ -3,6 +3,7 @@ package fieldcrypt_test
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -218,6 +219,64 @@ func TestRoundTrip_TheEmptyStringIsAValue(t *testing.T) {
 		t.Fatal("the empty string encrypted to the empty string — nothing was stored")
 	}
 	if back, err := kr.Decrypt(stored); err != nil || back != "" {
+		t.Fatalf("round trip: %q, %v", back, err)
+	}
+}
+
+// A deterministic value is what an equality lookup binds and what a UNIQUE
+// index compares, so the same plaintext must keep producing the same
+// ciphertext after a key is added. Written under the newest key, a lookup
+// after rotation missed every older row and the index accepted a duplicate.
+func TestDeterministic_StableAcrossRotation(t *testing.T) {
+	before := ring(t, "1:"+key(1))
+	stored, err := before.EncryptDeterministic("alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, spec := range []string{
+		"1:" + key(1) + ",2:" + key(9),
+		"2:" + key(9) + ",1:" + key(1), // listing order is irrelevant
+		"1:" + key(1) + ",2:" + key(9) + ",3:" + key(7),
+	} {
+		rotated := ring(t, spec)
+		if rotated.DeterministicVersion() != 1 {
+			t.Errorf("%s: DeterministicVersion() = %d, want the lowest (1)", spec, rotated.DeterministicVersion())
+		}
+		lookup, err := rotated.EncryptDeterministic("alice@example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lookup != stored {
+			t.Errorf("%s: after rotation the lookup value %q no longer equals the stored %q — "+
+				"equality lookups miss old rows and UNIQUE accepts a duplicate", spec, lookup, stored)
+		}
+		// Randomised values still move to the newest key.
+		r, err := rotated.EncryptRandomised("x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(r, fmt.Sprintf("w17c.%d.", rotated.CurrentVersion())) {
+			t.Errorf("%s: randomised value %q not under the newest key", spec, r)
+		}
+	}
+}
+
+// Dropping the lowest key moves deterministic values to the next one, and
+// says which version it is so a re-encryption can target it.
+func TestDeterministic_DroppingTheLowestKeyMovesToTheNext(t *testing.T) {
+	kr := ring(t, "2:"+key(9)+",3:"+key(7))
+	if kr.DeterministicVersion() != 2 {
+		t.Fatalf("DeterministicVersion() = %d, want 2", kr.DeterministicVersion())
+	}
+	v, err := kr.EncryptDeterministic("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(v, "w17c.2.d.") {
+		t.Fatalf("deterministic value %q not under version 2", v)
+	}
+	if back, err := kr.Decrypt(v); err != nil || back != "s" {
 		t.Fatalf("round trip: %q, %v", back, err)
 	}
 }

@@ -24,9 +24,27 @@
 //	w17c.<key-version>.<mode>.<base64url(nonce || ciphertext)>
 //
 // The version is what makes rotation possible: a keyring holds several keys at
-// once, decrypts with whichever version a value names, and encrypts with the
-// newest. Without it in the value there is no way to re-encrypt a table
-// gradually, and rotation becomes a flag day nobody schedules.
+// once, decrypts with whichever version a value names, and encrypts randomised
+// values with the newest. Without it in the value there is no way to
+// re-encrypt a table gradually, and rotation becomes a flag day nobody
+// schedules.
+//
+// # Deterministic values do not follow the newest key
+//
+// A deterministic value is only useful while EVERY row holding the same
+// plaintext holds the same ciphertext: that is what an equality lookup binds
+// and what a UNIQUE index compares. Encrypting it under the newest key would
+// break both the moment a key is added — a lookup would miss every row written
+// before the rotation, and the index would accept a second row with the same
+// plaintext under the new version. So deterministic mode always uses the
+// LOWEST version in the keyring (see [Keyring.DeterministicVersion]), which
+// adding a key does not change.
+//
+// The price is that deterministic columns cannot be re-keyed gradually: they
+// move to a new key only when the old one is dropped, and before that every
+// deterministic value has to be rewritten under the version that becomes the
+// lowest — a maintenance step with writes to those columns stopped, not a
+// background job.
 //
 // The mode travels with the value too. That is why a column whose mode changed
 // still decrypts row by row — and why the migrator refuses the change anyway:
@@ -64,8 +82,10 @@ const EnvKeys = "W17_FIELD_KEYS"
 const DevKeys = "1:EjeJTfdvxIRaZpA9Jx6z4RZ9ZL9yhQxalMwx0kHtsD4="
 
 // NewKeySpec returns spec with a fresh random key appended as the next
-// version — `1:<key>` for an empty spec. New values are then encrypted with it
-// and the existing versions keep decrypting, which is a rotation's first step.
+// version — `1:<key>` for an empty spec. New randomised values are then
+// encrypted with it and the existing versions keep decrypting, which is a
+// rotation's first step. Deterministic values stay on the lowest version (see
+// the package documentation).
 func NewKeySpec(spec string) (string, error) {
 	next := 1
 	if strings.TrimSpace(spec) != "" {
@@ -113,7 +133,10 @@ var ErrUnknownKeyVersion = errors.New("fieldcrypt: no key for the version this v
 // encrypts with.
 type Keyring struct {
 	current int
-	keys    map[int]*keyset
+	// deterministic is the version deterministic values are written
+	// under: the lowest one held, so adding a key never changes it.
+	deterministic int
+	keys          map[int]*keyset
 }
 
 type keyset struct {
@@ -128,8 +151,9 @@ type keyset struct {
 //
 //	W17_FIELD_KEYS=1:<base64 32 bytes>,2:<base64 32 bytes>
 //
-// The HIGHEST version is the one new values are encrypted with; every listed
-// version can still be decrypted. Rotation is therefore: append a key, deploy,
+// The HIGHEST version is the one new randomised values are encrypted with; the
+// LOWEST is the one deterministic values are (see the package documentation);
+// every listed version can still be decrypted. Rotation is therefore: append a key, deploy,
 // re-encrypt in the background, drop the old entry once nothing names it.
 //
 // A service with a CRYPTED_SECRET column and no keys must REFUSE TO BOOT
@@ -177,6 +201,9 @@ func Parse(spec string) (*Keyring, error) {
 		if ver > kr.current {
 			kr.current = ver
 		}
+		if kr.deterministic == 0 || ver < kr.deterministic {
+			kr.deterministic = ver
+		}
 	}
 	if len(kr.keys) == 0 {
 		return nil, fmt.Errorf("fieldcrypt: %s listed no usable keys", EnvKeys)
@@ -222,8 +249,13 @@ func newKeyset(raw []byte) (*keyset, error) {
 	return &keyset{aead: aead, mac: macKey}, nil
 }
 
-// CurrentVersion is the key version new values are written under.
+// CurrentVersion is the key version new randomised values are written under.
 func (k *Keyring) CurrentVersion() int { return k.current }
+
+// DeterministicVersion is the key version deterministic values are written
+// under: the lowest one in the keyring, so a rotation that adds a key leaves
+// equality lookups and UNIQUE enforcement intact.
+func (k *Keyring) DeterministicVersion() int { return k.deterministic }
 
 // EncryptRandomised is the default mode: a fresh nonce per call, so the same
 // plaintext never stores the same way twice.
@@ -233,30 +265,35 @@ func (k *Keyring) EncryptRandomised(plain string) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("fieldcrypt: nonce: %w", err)
 	}
-	return k.seal(ks, modeRandomised, nonce, plain), nil
+	return seal(ks, k.current, modeRandomised, nonce, plain), nil
 }
 
 // EncryptDeterministic derives the nonce FROM the plaintext, so the same input
 // always produces the same output and an index over the column means something.
 //
 // The nonce is an HMAC of the plaintext under a subkey that is not the
-// encryption key — the SIV shape. Two different plaintexts colliding would
-// require an HMAC-SHA256 collision, so the GCM rule that a nonce must never
-// repeat for two different messages holds for the same reason the hash does.
+// encryption key — the SIV shape. The HMAC is truncated to GCM's 96-bit nonce,
+// so two different plaintexts share a nonce with the probability of a 96-bit
+// collision: by the birthday bound, around 2^48 distinct values under one key
+// before it becomes likely, and negligible for any realistic column. A shared
+// nonce for two different messages is the case GCM must never meet.
+//
+// It is written under [Keyring.DeterministicVersion], not the newest key, so
+// the same plaintext keeps the same ciphertext across a rotation.
 func (k *Keyring) EncryptDeterministic(plain string) (string, error) {
-	ks := k.keys[k.current]
+	ks := k.keys[k.deterministic]
 	mac := hmac.New(sha256.New, ks.mac)
 	mac.Write([]byte(plain))
 	nonce := mac.Sum(nil)[:ks.aead.NonceSize()]
-	return k.seal(ks, modeDeterministic, nonce, plain), nil
+	return seal(ks, k.deterministic, modeDeterministic, nonce, plain), nil
 }
 
-func (k *Keyring) seal(ks *keyset, mode string, nonce []byte, plain string) string {
+func seal(ks *keyset, version int, mode string, nonce []byte, plain string) string {
 	sealed := ks.aead.Seal(nil, nonce, []byte(plain), nil)
 	body := make([]byte, 0, len(nonce)+len(sealed))
 	body = append(body, nonce...)
 	body = append(body, sealed...)
-	return strings.Join([]string{prefix, strconv.Itoa(k.current), mode,
+	return strings.Join([]string{prefix, strconv.Itoa(version), mode,
 		base64.RawURLEncoding.EncodeToString(body)}, ".")
 }
 

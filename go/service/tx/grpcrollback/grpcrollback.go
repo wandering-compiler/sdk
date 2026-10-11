@@ -46,13 +46,14 @@
 //     rollback is a future extension; today only unary RPCs
 //     are wrapped.
 //
-//   - Doesn't mask the original handler error. The Rollback
-//     error (if any) is dropped; the handler's error
-//     propagates to the caller verbatim.
+//   - Doesn't mask the original handler error. A Rollback
+//     error is reported to the operator, never returned; the
+//     handler's error propagates to the caller verbatim.
 package grpcrollback
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -60,8 +61,20 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
+
+// RollbackWait bounds how long the interceptor waits for the
+// automatic rollback — in practice, for a sibling handler that still
+// holds the transaction to release it. It is independent of the
+// failing request's context, which is frequently already done.
+//
+// Correctness does not depend on it: [txregistry.Memory] dooms the
+// transaction before waiting, so a rollback that does not finish
+// within the bound still happens, on the sibling's release. The bound
+// only caps how long the failing call's reply is held back.
+const RollbackWait = txregistry.DefaultFinishWait
 
 // TxRoller exposes the tx-rollback method the interceptor
 // needs. Defined here (not on [txregistry.Registry], which is
@@ -97,6 +110,14 @@ type CausedRoller interface {
 	RollbackCaused(ctx context.Context, txID, cause string) error
 }
 
+// isControlPlane reports whether a method is the distributed transaction's own
+// lifecycle surface (Begin / Commit / Rollback) rather than work performed
+// inside a transaction. Matched on the service prefix so a new control-plane
+// method is covered the day it is added rather than the day it is noticed.
+func isControlPlane(fullMethod string) bool {
+	return strings.HasPrefix(fullMethod, "/w17.common.distx.W17DistributedTransaction/")
+}
+
 // Interceptor returns a gRPC unary server interceptor that
 // auto-rollbacks the caller-supplied distributed transaction
 // when the wrapped handler returns a non-nil error.
@@ -109,24 +130,21 @@ type CausedRoller interface {
 //     metadata carries a non-empty `w17-tx-id` AND `roller`
 //     is non-nil → calls `roller.Rollback(txID)` then
 //     propagates the original error.
-//   - The Rollback error (typically [txregistry.ErrUnknownTxID]
-//     when the registry has already drained the entry — user
-//     Commit, Tier-2 deadline watcher, handler-side deferred
-//     rollback) is silently ignored. We don't mask the
-//     handler's error.
+//   - The rollback runs on a context detached from the request's
+//     cancellation, bounded by [RollbackWait]. A failed participant
+//     therefore dooms the transaction even when its own context is
+//     done or a sibling still holds the transaction.
+//   - [txregistry.ErrUnknownTxID] from the rollback (the registry
+//     already drained the entry — user Commit, Tier-2 deadline
+//     watcher, handler-side deferred rollback) is ignored; any other
+//     rollback error, and a rollback deferred behind a sibling
+//     ([txregistry.ErrTxDoomed]), is reported through observx. The
+//     handler's error is never masked.
 //
 // Pass nil `roller` to disable auto-rollback (the interceptor
 // becomes a no-op pass-through). Useful for binaries without
 // a tx registry — e.g. query-only services that never adopt
 // caller transactions.
-// isControlPlane reports whether a method is the distributed transaction's own
-// lifecycle surface (Begin / Commit / Rollback) rather than work performed
-// inside a transaction. Matched on the service prefix so a new control-plane
-// method is covered the day it is added rather than the day it is noticed.
-func isControlPlane(fullMethod string) bool {
-	return strings.HasPrefix(fullMethod, "/w17.common.distx.W17DistributedTransaction/")
-}
-
 func Interceptor(roller TxRoller) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		resp, err := handler(ctx, req)
@@ -154,10 +172,24 @@ func Interceptor(roller TxRoller) grpc.UnaryServerInterceptor {
 		if isControlPlane(info.FullMethod) {
 			return resp, err
 		}
-		// Best-effort rollback. Errors (typically
-		// ErrUnknownTxID) are intentionally ignored — we don't
-		// want a registry-side drain race to mask the handler's
-		// real error.
+		// The rollback runs on a context DETACHED from the request's
+		// cancellation (values and metadata kept) and bounded on its own.
+		// The request context is the wrong bound: the commonest reason a
+		// participant fails is that this very context is done (deadline,
+		// client gone), and a rollback tied to it gives up the moment it
+		// has to wait for a sibling still holding the transaction — which
+		// used to leave the transaction live for the coordinator to
+		// commit. distx's client side detaches its rollback for the same
+		// reason.
+		//
+		// A rollback that still cannot run (the sibling holds on past the
+		// bound) is not lost: the registry dooms the transaction before
+		// waiting, so its Commit is refused and the rollback runs when the
+		// sibling releases. That case is reported, because a coordinator
+		// is about to be told its transaction is gone.
+		//
+		// ErrUnknownTxID is expected and ignored — something already
+		// drained the entry. Nothing here masks the handler's own error.
 		//
 		// The cause travels with it when the roller can hold one, so
 		// the coordinator's Commit can name THIS call. Note what it
@@ -165,12 +197,26 @@ func Interceptor(roller TxRoller) grpc.UnaryServerInterceptor {
 		// error string — that has not been through the error layer's
 		// sanitisation and must not reach a client via the back door of
 		// a diagnostic (no schema / table / column leakage).
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RollbackWait)
+		defer cancel()
+		var rerr error
 		if cr, ok := roller.(CausedRoller); ok {
-			_ = cr.RollbackCaused(ctx, txID, fmt.Sprintf(
+			rerr = cr.RollbackCaused(rctx, txID, fmt.Sprintf(
 				"a call to %s inside it failed with %s, and any failure inside a transaction discards it",
 				info.FullMethod, status.Code(err)))
 		} else {
-			_ = roller.Rollback(ctx, txID)
+			rerr = roller.Rollback(rctx, txID)
+		}
+		switch {
+		case rerr == nil, errors.Is(rerr, txregistry.ErrUnknownTxID):
+		case errors.Is(rerr, txregistry.ErrTxDoomed):
+			observx.ReportError(rctx, fmt.Errorf(
+				"grpcrollback: %s failed inside transaction %s; the transaction is doomed and will roll back when the call still holding it finishes: %w",
+				info.FullMethod, txID, rerr))
+		default:
+			observx.ReportError(rctx, fmt.Errorf(
+				"grpcrollback: %s failed inside transaction %s and the automatic rollback failed: %w",
+				info.FullMethod, txID, rerr))
 		}
 		return resp, err
 	}
