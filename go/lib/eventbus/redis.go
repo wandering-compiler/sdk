@@ -92,8 +92,9 @@ type RedisBusOptions struct {
 //
 // Channel name -> stream key. Topic is stored as a field on
 // each XADD entry alongside the serialised envelope payload;
-// the subscriber re-extracts topic for per-subscription
-// MatchGlob filtering in the generated dispatch code.
+// the subscriber re-extracts topic and applies the
+// subscription's topic filter (MatchGlob) before invoking the
+// handler.
 //
 // Retry / DLQ:
 //
@@ -474,7 +475,7 @@ type redisSubscriber struct {
 // a plain presence bit, not a refcount, so a second marker's release cancels
 // the first's; one owner per acquisition is what keeps the bit meaning "this
 // process still has it".
-func (s *redisSubscriber) markInFlight(msgID string) func() {
+func (s *redisSubscription) markInFlight(msgID string) func() {
 	key := redisPELKey(s.channel, s.group, s.bus.opts.ConsumerName, msgID)
 	s.bus.inFlight.Store(key, struct{}{})
 	return func() { s.bus.inFlight.Delete(key) }
@@ -482,20 +483,57 @@ func (s *redisSubscriber) markInFlight(msgID string) func() {
 
 // inFlightBusy reports whether a handler under this subscriber's PEL identity
 // is currently processing msgID.
-func (s *redisSubscriber) inFlightBusy(msgID string) bool {
+func (s *redisSubscription) inFlightBusy(msgID string) bool {
 	_, busy := s.bus.inFlight.Load(redisPELKey(s.channel, s.group, s.bus.opts.ConsumerName, msgID))
 	return busy
 }
 
+// redisSubscription is one Subscribe call: the subscriber it belongs to
+// (whose lock, WaitGroup and drain state it shares) plus the consumer group
+// it reads through and the topic filter it applies. The `group` field
+// shadows the subscriber's channel-wide group.
+type redisSubscription struct {
+	*redisSubscriber
+	group  string
+	filter string
+}
+
+// subscription binds a consumer group and topic filter to s.
+func (s *redisSubscriber) subscription(group, filter string) *redisSubscription {
+	return &redisSubscription{redisSubscriber: s, group: group, filter: filter}
+}
+
+// subscriptionGroup is the consumer group one Subscribe call reads
+// through. The catch-all filter (the one generated subscribers use) reads
+// through the channel's group. A narrower filter gets a group of its own —
+// the Redis counterpart of the NATS adapter's per-filter consumer —
+// because entries outside the filter are acknowledged without being
+// handled, and in a shared group that acknowledgement would take the entry
+// away from a sibling subscription whose filter it matches.
+func (s *redisSubscriber) subscriptionGroup(topicFilter string) string {
+	if topicFilter == "" || topicFilter == "**" {
+		return s.group
+	}
+	return s.group + "-" + sanitizeDurableSuffix(topicFilter)
+}
+
 // Subscribe starts a consume loop + a claim loop on the
-// stream/group, both fed to the same HandlerFunc. The
-// topicFilter is stored on the subscription (for dispatch-
-// time filtering, mirroring the NATS adapter's
-// catch-all-then-filter shape) but doesn't push down to
-// Redis since Streams have no native filter primitive.
+// stream/group, both fed to the same HandlerFunc. Streams have
+// no native filter primitive, so the topicFilter is applied to
+// each entry's topic field with [MatchGlob] before the handler
+// runs, the same rule the memory and NATS adapters apply.
 func (s *redisSubscriber) Subscribe(ctx context.Context, topicFilter string, h HandlerFunc) error {
-	_ = topicFilter // dispatch-side MatchGlob handles per-sub filtering
 	h = recoverHandler(h)
+	if s.isDraining() {
+		return ErrSubscriberDraining
+	}
+	group := s.subscriptionGroup(topicFilter)
+	if group != s.group {
+		if err := s.bus.ensureGroup(ctx, s.channel, group, s.bus.groupStart()); err != nil {
+			return err
+		}
+	}
+	sub := s.subscription(group, topicFilter)
 	consumeCtx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel is stored in s.cancels and invoked by Drain(); not leaked.
 	// The cancel registration, the draining check and the wg.Add are ONE
 	// critical section: Drain snapshots s.cancels and then waits on the wg, so
@@ -512,9 +550,18 @@ func (s *redisSubscriber) Subscribe(ctx context.Context, topicFilter string, h H
 	s.wg.Add(2)
 	s.mu.Unlock()
 
-	go s.consumeLoop(consumeCtx, h)
-	go s.claimLoop(consumeCtx, h)
+	go sub.consumeLoop(consumeCtx, h)
+	go sub.claimLoop(consumeCtx, h)
 	return nil
+}
+
+// isDraining reports whether Drain has begun. The early-out it serves
+// saves the XGROUP round-trip of a filtered subscription; the load-bearing
+// check is the one taken with the registration in Subscribe.
+func (s *redisSubscriber) isDraining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
 }
 
 // Drain cancels every consume + claim goroutine started via
@@ -550,7 +597,7 @@ func (s *redisSubscriber) Drain(ctx context.Context) error {
 // consumeLoop reads new entries via XREADGROUP, calls the
 // handler, ACKs on success, leaves in PEL on failure (the
 // claim loop picks failures up after AckWait).
-func (s *redisSubscriber) consumeLoop(ctx context.Context, h HandlerFunc) {
+func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 	defer s.wg.Done()
 	bgCtx := context.WithoutCancel(ctx)
 	for {
@@ -642,7 +689,7 @@ func (s *redisSubscriber) consumeLoop(ctx context.Context, h HandlerFunc) {
 // Resolves per-channel retry overrides at startup; the
 // ticker + idle threshold + DLQ cutoff all key off the
 // channel's effective MaxDeliver / AckWait.
-func (s *redisSubscriber) claimLoop(ctx context.Context, h HandlerFunc) {
+func (s *redisSubscription) claimLoop(ctx context.Context, h HandlerFunc) {
 	defer s.wg.Done()
 	maxDeliver, ackWait := s.bus.retryFor(s.channel)
 	ticker := time.NewTicker(ackWait)
@@ -663,7 +710,7 @@ func (s *redisSubscriber) claimLoop(ctx context.Context, h HandlerFunc) {
 
 // claimPending walks the PEL once. Entries past MaxDeliver
 // go to DLQ; others get XCLAIM'd + replayed.
-func (s *redisSubscriber) claimPending(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration) {
+func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration) {
 	pendings, err := s.bus.client.XPendingExt(ctx, &goredis.XPendingExtArgs{
 		Stream: s.channel,
 		Group:  s.group,
@@ -750,7 +797,7 @@ func (b *RedisBus) retryFor(channel string) (int, time.Duration) {
 // retryCount is passed for future observability wiring (Phase
 // E7) — for now unused beyond the DLQ threshold check happens
 // in claimPending before this function gets the message.
-func (s *redisSubscriber) processMessage(
+func (s *redisSubscription) processMessage(
 	ctx context.Context,
 	h HandlerFunc,
 	msgID string,
@@ -761,6 +808,13 @@ func (s *redisSubscriber) processMessage(
 	defer s.wg.Done()
 
 	topic, _ := values[redisFieldTopic].(string)
+	if !MatchGlob(s.filter, topic) {
+		// Outside this subscription's filter: settle it unhandled. The
+		// group is per filter (subscriptionGroup), so no sibling
+		// subscription loses the entry by this acknowledgement.
+		_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
+		return
+	}
 	payload, _ := values[redisFieldPayload].(string)
 	raw := []byte(payload)
 
@@ -781,7 +835,7 @@ func (s *redisSubscriber) processMessage(
 // `<channel>.dlq` + XACKs the origin entry to free the slot.
 // Tolerates errors silently — surfaces via Observer.OnDrop
 // for the metric backend.
-func (s *redisSubscriber) routeToDLQ(ctx context.Context, msgID string) {
+func (s *redisSubscription) routeToDLQ(ctx context.Context, msgID string) {
 	// Fetch the original entry by ID so we have the
 	// topic+payload to forward.
 	msgs, err := s.bus.client.XRange(ctx, s.channel, msgID, msgID).Result()

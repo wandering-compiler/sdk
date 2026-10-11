@@ -80,10 +80,10 @@ type NatsBusOptions struct {
 // `<channel>.>` subject filter on first use). Topic → subject
 // suffix (emit on channel `default` with topic `user.created`
 // publishes to subject `default.user.created`). Subscriber
-// uses subject filter `<channel>.>` (catch-all) + relies on
-// the generated dispatch code's MatchGlob for per-subscription
-// topic filtering — keeps the per-channel consumer count at
-// one regardless of subscription fan-out.
+// uses subject filter `<channel>.>` (catch-all) and applies the
+// subscription's topic filter with MatchGlob before invoking the
+// handler. The generated subscribers register `**`, so they run
+// one consumer per channel and filter per event in dispatch.
 //
 // Retry / DLQ are driven by JetStream consumer config:
 // `MaxDeliver` from NatsBusOptions.DefaultMaxDeliver,
@@ -615,7 +615,8 @@ type natsConsumeHandle struct {
 // Subscribe creates (or updates) a JetStream consumer with a
 // catch-all subject filter on the channel + starts streaming
 // envelopes through `h`. Each delivery's subject suffix (topic)
-// is recovered + passed to the handler; on handler success the
+// is recovered and matched against topicFilter ([MatchGlob]);
+// only a match is passed to the handler; on handler success the
 // message is Ack'd, on failure Nack'd (NATS redelivers per the
 // consumer's retry policy).
 //
@@ -685,6 +686,18 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		s.mu.Unlock()
 		defer s.wg.Done()
 
+		// The consumer reads the whole channel (`<channel>.>`), so the
+		// subscription's own topic filter is applied here, with the same
+		// MatchGlob the memory bus uses: a handler subscribed to `user.*`
+		// must not be handed `order.created`. The consumer is per filter
+		// (see consumerName), so a message outside it is simply settled —
+		// another subscription's consumer has its own copy.
+		topic := strings.TrimPrefix(msg.Subject(), prefix)
+		if !MatchGlob(topicFilter, topic) {
+			_ = msg.Ack()
+			return
+		}
+
 		// D1 — mark this stream sequence in-flight for the handler's
 		// lifetime so a MAX_DELIVERIES advisory that fires mid-handler
 		// (the slow-handler-past-AckWait race) defers the DLQ decision to
@@ -722,7 +735,6 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			}
 		}
 
-		topic := strings.TrimPrefix(msg.Subject(), prefix)
 		start := time.Now()
 		err := h(bgCtx, topic, msg.Data())
 		reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))
