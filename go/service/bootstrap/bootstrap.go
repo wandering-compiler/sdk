@@ -104,7 +104,13 @@ func Run(parent context.Context, obs observx.Config, comps ...Component) error {
 // ordering is intra-component there and needs no phase here.
 func RunGraceful(parent context.Context, obs observx.Config, resources []func(context.Context) error, comps ...Component) error {
 	deadline := shutdownDeadline(os.Getenv)
-	if err := observx.MustInit(obs); err != nil {
+	// A hold, not a plain init: a second supervisor in the same process
+	// (a test binary, a composed binary) shares the setup when its
+	// Config is the same and is refused when it differs, instead of
+	// swapping the providers under the first one's running components.
+	// The last supervisor to finish flushes and shuts down.
+	releaseObs, err := observx.Acquire(obs)
+	if err != nil {
 		return err
 	}
 	defer func() {
@@ -112,7 +118,7 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 		defer cancel()
 		// observx is going away, so its own failure (spans or events
 		// that did not reach the collector) can only go to the log.
-		if err := observx.Shutdown(flushCtx); err != nil {
+		if err := releaseObs(flushCtx); err != nil {
 			log.Printf("bootstrap: observability flush: %v", err)
 		}
 	}()
