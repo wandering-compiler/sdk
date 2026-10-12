@@ -105,7 +105,10 @@ func ObservabilityMiddleware(next http.Handler, serviceName string, requestIDCfg
 		}
 		next.ServeHTTP(w, r)
 	})
-	return otelhttp.NewHandler(inner, serviceName)
+	traced := otelhttp.NewHandler(inner, serviceName)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		traced.ServeHTTP(w, withCredentialRedactor(r))
+	})
 }
 
 // OTelMiddleware wraps every HTTP handler in an OTel span +
