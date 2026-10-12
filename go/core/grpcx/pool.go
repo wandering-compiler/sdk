@@ -223,12 +223,22 @@ func (p *Pool) Release(addr string, conn *grpc.ClientConn) {
 	}
 }
 
-// Reconnect closes the existing connection for the given address and creates
-// a new one using the same dial options. Returns the new connection.
-// Returns an error if no connection exists for the address.
+// Reconnect forces an immediate reconnection attempt on every connection
+// the pool holds for addr and returns the (regular, else first scaled)
+// connection. Returns an error if no connection exists for the address.
 //
-// For scaled connections, all connections for the address are reconnected
-// and their active stream counters are reset to zero.
+// A connection the pool handed out is never closed here: callers keep the
+// pointer [Connect] returned, and closing it under them turned every later
+// RPC into "client connection is closing", permanently. A gRPC channel
+// reconnects by itself, so Reconnect asks it to do so NOW — it resets the
+// channel's backoff and kicks it out of idle — and returns the same
+// connection. Only a connection that is already shut down (someone closed
+// it despite the pool owning it) is replaced, because nothing can use it
+// any more; that replacement is dialled with the original options.
+//
+// For scaled connections, a replaced entry starts with zero active streams
+// (Release on the old pointer is a no-op); a kept entry keeps its count, so
+// callers that still hold it release into the right counter.
 func (p *Pool) Reconnect(addr string) (*grpc.ClientConn, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -246,21 +256,15 @@ func (p *Pool) Reconnect(addr string) (*grpc.ClientConn, error) {
 
 	// Reconnect scaled connections first (side effect).
 	if hasScaled {
-		p.reconnectScaledGroupLocked(addr, group)
+		p.refreshScaledGroupLocked(addr, group, true)
 	}
 
-	// Reconnect regular connection.
 	if hasRegular {
-		_ = entry.conn.Close()
-
-		conn, err := grpc.NewClient(addr, entry.opts...)
-		if err != nil {
+		if err := p.refreshEntryLocked(addr, entry, true); err != nil {
 			delete(p.conns, addr)
-			return nil, fmt.Errorf("grpcx: failed to redial %q: %w", addr, err)
+			return nil, err
 		}
-
-		entry.conn = conn
-		return conn, nil
+		return entry.conn, nil
 	}
 
 	// Only scaled connections exist — return the first one.
@@ -271,23 +275,62 @@ func (p *Pool) Reconnect(addr string) (*grpc.ClientConn, error) {
 	return nil, fmt.Errorf("grpcx: failed to redial %q: all connections failed", addr)
 }
 
-// reconnectScaledGroupLocked reconnects all connections in a scaled group.
-// Connections that fail to redial are dropped. If all fail, the group is
-// removed from the pool.
+// refreshConn decides what to do with one pooled connection. A connection
+// in Shutdown has been closed and is useless to everyone, so it is
+// replaced. Any other state is left to gRPC, whose channel reconnects on
+// its own — TransientFailure is the normal state of a channel whose backend
+// is restarting, not a dead connection. kick asks a non-shut-down channel
+// to retry now instead of waiting out its backoff.
+//
+// Returns the connection to keep (the same one unless replaced) and whether
+// it was replaced.
+func refreshConn(addr string, conn *grpc.ClientConn, opts []grpc.DialOption, kick bool) (*grpc.ClientConn, bool, error) {
+	switch conn.GetState() {
+	case connectivity.Shutdown:
+		fresh, err := grpc.NewClient(addr, opts...)
+		if err != nil {
+			return nil, false, fmt.Errorf("grpcx: failed to redial %q: %w", addr, err)
+		}
+		return fresh, true, nil
+	case connectivity.TransientFailure:
+		conn.ResetConnectBackoff()
+	default:
+		if kick {
+			conn.ResetConnectBackoff()
+			conn.Connect()
+		}
+	}
+	return conn, false, nil
+}
+
+// refreshEntryLocked applies refreshConn to a regular entry.
 //
 // Must be called with p.mu held.
-func (p *Pool) reconnectScaledGroupLocked(addr string, group *scaledGroup) {
+func (p *Pool) refreshEntryLocked(addr string, entry *poolEntry, kick bool) error {
+	conn, _, err := refreshConn(addr, entry.conn, entry.opts, kick)
+	if err != nil {
+		return err
+	}
+	entry.conn = conn
+	return nil
+}
+
+// refreshScaledGroupLocked applies refreshConn to every connection in a
+// scaled group. A shut-down connection that fails to redial is dropped; if
+// none is left, the group is removed from the pool.
+//
+// Must be called with p.mu held.
+func (p *Pool) refreshScaledGroupLocked(addr string, group *scaledGroup, kick bool) {
 	alive := make([]*scaledEntry, 0, len(group.entries))
 	for _, e := range group.entries {
-		_ = e.conn.Close()
-
-		conn, err := grpc.NewClient(addr, group.opts...)
+		conn, replaced, err := refreshConn(addr, e.conn, group.opts, kick)
 		if err != nil {
 			continue
 		}
-
-		e.conn = conn
-		e.activeStreams = 0
+		if replaced {
+			e.conn = conn
+			e.activeStreams = 0
+		}
 		alive = append(alive, e)
 	}
 
@@ -298,10 +341,14 @@ func (p *Pool) reconnectScaledGroupLocked(addr string, group *scaledGroup) {
 }
 
 // EnableHealthWatch starts a background goroutine that periodically checks
-// the connectivity state of all connections in the pool. Connections in
-// TransientFailure or Shutdown state are closed and reconnected using their
-// original dial options. If reconnect fails, the connection is removed from
-// the pool.
+// the connectivity state of all connections in the pool.
+//
+// A connection in TransientFailure has its reconnect backoff reset, so it
+// retries at once rather than after an exponentially growing wait; it is
+// NOT closed — callers may still hold it, and gRPC recovers it in place
+// when the backend comes back. A connection in Shutdown (closed by someone
+// other than the pool) is replaced using its original dial options; if
+// that redial fails, the connection is removed from the pool.
 //
 // The goroutine is stopped when Close is called. Calling EnableHealthWatch
 // on a pool that is already closed is a no-op — the pool is unusable after
@@ -353,42 +400,13 @@ func (p *Pool) checkConnections() {
 	defer p.mu.Unlock()
 
 	for addr, entry := range p.conns {
-		state := entry.conn.GetState()
-		if state == connectivity.TransientFailure || state == connectivity.Shutdown {
-			_ = entry.conn.Close()
-
-			conn, err := grpc.NewClient(addr, entry.opts...)
-			if err != nil {
-				delete(p.conns, addr)
-				continue
-			}
-			entry.conn = conn
+		if err := p.refreshEntryLocked(addr, entry, false); err != nil {
+			delete(p.conns, addr)
 		}
 	}
 
 	for addr, group := range p.scaled {
-		alive := make([]*scaledEntry, 0, len(group.entries))
-		for _, e := range group.entries {
-			state := e.conn.GetState()
-			if state == connectivity.TransientFailure || state == connectivity.Shutdown {
-				_ = e.conn.Close()
-
-				conn, err := grpc.NewClient(addr, group.opts...)
-				if err != nil {
-					continue
-				}
-
-				e.conn = conn
-				e.activeStreams = 0
-			}
-			alive = append(alive, e)
-		}
-
-		if len(alive) == 0 {
-			delete(p.scaled, addr)
-		} else {
-			group.entries = alive
-		}
+		p.refreshScaledGroupLocked(addr, group, false)
 	}
 }
 

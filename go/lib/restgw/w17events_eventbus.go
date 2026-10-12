@@ -171,8 +171,34 @@ func (e *EventbusEventSource) Subscribe(ctx context.Context, topics []string, us
 	e.clients[c] = struct{}{}
 	e.mu.Unlock()
 
+	// The labels above are the principal's entitlement AT CONNECT. When the
+	// stream runs under the re-auth watchdog (WatchStreamAuth), every probe
+	// publishes the principal's current AuthResp; a membership removed or a
+	// role changed since connect shows up there with the credential still
+	// valid. Without this the hub kept delivering on the connect-time labels
+	// for the life of the connection. A changed entitlement ENDS the client
+	// rather than swapping its labels in place: the browser reconnects and
+	// is admitted on the fresh principal through the same path as everyone
+	// else, and no frame is ever filtered by a mix of old and new labels.
+	var changed <-chan struct{}
+	watch := streamPrincipalFrom(ctx)
+	if watch != nil && e.principal != nil {
+		changed = watch.changed
+	}
+
 	go func() {
-		<-ctx.Done()
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				break wait
+			case <-changed:
+				if labelsEqual(e.principal(watch.latest()), labels) {
+					continue
+				}
+				break wait
+			}
+		}
 		e.mu.Lock()
 		delete(e.clients, c)
 		e.mu.Unlock()
@@ -183,6 +209,20 @@ func (e *EventbusEventSource) Subscribe(ctx context.Context, topics []string, us
 		close(c.out)
 	}()
 	return c.out, nil
+}
+
+// labelsEqual reports whether two principal label sets are the same
+// entitlement. nil and empty are the same set.
+func labelsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
 }
 
 // openDrainTimeout bounds the cleanup drain of a FAILED open attempt.

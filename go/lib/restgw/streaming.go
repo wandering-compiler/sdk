@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 	"github.com/wandering-compiler/sdk/go/core/observx"
@@ -240,15 +241,41 @@ func WriteSSEGRPCErrorCtxWithTimeout(ctx context.Context, w http.ResponseWriter,
 //     `OriginPatterns` via the option helper if needed.
 //   - CompressionMode: disabled — tiny per-message payloads
 //     don't benefit, deflate adds CPU.
+//   - read limit: one inbound message may be as large as a REST
+//     request body — see [MaxWebSocketMessageBytes].
 //
 // On accept failure (handshake rejection, origin mismatch)
 // the helper has already responded; caller bails without
 // further writes.
 func AcceptWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
-	return websocket.Accept(w, r, &websocket.AcceptOptions{
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionDisabled,
 		Subprotocols:    []string{wsSubprotocolPB, wsSubprotocolJSON},
 	})
+	if err != nil {
+		return nil, err
+	}
+	conn.SetReadLimit(wsReadLimit())
+	return conn, nil
+}
+
+// MaxWebSocketMessageBytes caps one inbound WebSocket message. Zero (the
+// default) or negative means "the same as [MaxRequestBodyBytes]".
+//
+// The WebSocket library's own default is 32 KiB, so a client-stream or
+// bidi frame that is a perfectly valid request body over REST closed the
+// socket with "message too big" the moment it went over a socket instead.
+// One message is one request in a stream, so the REST body cap is the
+// limit it is held to; a deployment that raises (or lowers) that cap moves
+// this one with it unless it sets a separate value here at startup.
+var MaxWebSocketMessageBytes int64
+
+// wsReadLimit is the read limit AcceptWebSocket installs.
+func wsReadLimit() int64 {
+	if MaxWebSocketMessageBytes > 0 {
+		return MaxWebSocketMessageBytes
+	}
+	return MaxRequestBodyBytes
 }
 
 // WSFormat reports the wire format negotiated for a WS conn from
@@ -555,7 +582,32 @@ func WSWriteError(ctx context.Context, conn *websocket.Conn, code, message strin
 func WSWriteErrorWithDetails(ctx context.Context, conn *websocket.Conn, code, message string, details []FieldError) {
 	body := wsErrorFrameJSON(code, message, details)
 	_ = conn.Write(ctx, websocket.MessageText, body)
-	_ = conn.Close(websocket.StatusPolicyViolation, message)
+	_ = conn.Close(websocket.StatusPolicyViolation, wsCloseReason(message))
+}
+
+// wsMaxCloseReason is the longest close reason a WebSocket close frame can
+// carry: a control frame payload is at most 125 bytes, two of which are the
+// status code (RFC 6455 §5.5).
+const wsMaxCloseReason = 123
+
+// wsCloseReason fits a client sentence into a close frame.
+//
+// The library refuses a longer reason outright and then drops the
+// connection WITHOUT a close frame, so a translated sentence a little too
+// long turned a policy close (1008) into an abnormal one (1006) at the
+// client. The full sentence already travelled in the error frame written
+// just before; the reason is a summary, so it is cut on a UTF-8 boundary
+// and marked with an ellipsis rather than split mid-character.
+func wsCloseReason(reason string) string {
+	if len(reason) <= wsMaxCloseReason {
+		return reason
+	}
+	const ellipsis = "…" // 3 bytes
+	cut := wsMaxCloseReason - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+	return reason[:cut] + ellipsis
 }
 
 // WSWriteErrorWithDetailsWithTimeout wraps WSWriteErrorWithDetails with a

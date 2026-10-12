@@ -36,10 +36,20 @@
 package restgw
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/sdk/go/core/observx"
 )
 
 // DefaultStreamReauthInterval bounds how long a revoked credential can keep
@@ -88,14 +98,37 @@ func StreamReauthIntervalFromEnv(prefix string, getenv func(string) string) time
 }
 
 // WatchStreamAuth returns a context that is cancelled as soon as re-running
-// authFn against r stops succeeding, plus a stop function the caller MUST
-// defer.
+// authFn against r is REFUSED, plus a stop function the caller MUST defer.
 //
 // Cancelling the context is the whole mechanism: every generated streaming
 // handler already threads its rpc context into the backend call and its
 // send loop, so a cancel tears the stream down through the paths that
 // already exist rather than through a second shutdown mechanism that could
 // disagree with the first.
+//
+// # Refused versus unanswered
+//
+// Only a definite refusal ends the stream: a gRPC status of
+// UNAUTHENTICATED or PERMISSION_DENIED from the auth method, or the ticket
+// sentinels [ErrWSAuthNoTicket] / [ErrTicketInvalid]. Everything else — a
+// probe that timed out, UNAVAILABLE from a backend that is down, any other
+// status, a non-status error from the dial — means the auth backend never
+// rendered a verdict. Reading that as "revoked" would let one auth outage
+// disconnect every live stream on the surface within one interval, turning
+// a partial failure into a total one. An unanswered probe is reported to
+// the operator instead and asked again sooner than the interval (backing
+// off from [streamReauthRetryMin] up to the interval itself), so a
+// revocation still lands at the first answer after the backend recovers.
+// This is the same split [RequireAuth] makes on the way in, where a
+// non-status error is a 500 and not a 401.
+//
+// # The principal, not just the credential
+//
+// A successful probe can still change WHO the credential stands for — a
+// membership removed, a role narrowed. The latest verdict is kept on the
+// returned context, and a consumer whose entitlement was decided at connect
+// time (the `w17-events` hub, see [EventbusEventSource]) re-derives it
+// after every probe and ends its stream when it changed.
 //
 // interval <= 0 disables the watchdog and returns ctx unchanged with a
 // no-op stop, so a caller never has to branch.
@@ -108,6 +141,11 @@ func WatchStreamAuth(ctx context.Context, authFn AuthFunc, r *http.Request, inte
 		return ctx, func() {}
 	}
 	watched, cancel := context.WithCancel(ctx)
+	principal := &streamPrincipal{
+		userData: AuthUserDataFromContext(r.Context()),
+		changed:  make(chan struct{}, 1),
+	}
+	watched = context.WithValue(watched, streamPrincipalKey{}, principal)
 	// The request carries the credential (a header, or the reserved slot the
 	// gateway filled from the URL). Detach it from the ORIGINAL request's
 	// context before re-using it: that context ends when the stream ends,
@@ -120,47 +158,158 @@ func WatchStreamAuth(ctx context.Context, authFn AuthFunc, r *http.Request, inte
 	// auth failure in the logs.
 	probe := r.Clone(context.WithoutCancel(ctx))
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		// Consecutive unanswered probes; drives the retry backoff.
+		unanswered := 0
 		for {
 			select {
 			case <-watched.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				// Bound each probe so a hung auth backend cannot pin this
-				// goroutine for the lifetime of the process. A timeout is
-				// NOT treated as a failed auth — see below.
+				// goroutine for the lifetime of the process.
 				probeCtx, probeCancel := context.WithTimeout(probe.Context(), streamReauthProbeTimeout)
-				_, err := authFn(probeCtx, probe.WithContext(probeCtx))
-				// Read the probe's own deadline state BEFORE cancelling it.
-				// probeCancel() sets probeCtx.Err() unconditionally, so
-				// checking it afterwards reports "timed out" for every
-				// outcome — including a genuine rejection. The watchdog
-				// then never fires, silently, which is the failure mode a
-				// security control can least afford.
-				timedOut := probeCtx.Err() != nil
+				userData, err := authFn(probeCtx, probe.WithContext(probeCtx))
 				probeCancel()
-				if err == nil {
-					continue
+				switch {
+				case err == nil:
+					unanswered = 0
+					principal.publish(userData)
+					timer.Reset(interval)
+				case isAuthRefusal(err):
+					cancel()
+					return
+				default:
+					unanswered++
+					reportUnansweredReauth(probe.Context(), err)
+					timer.Reset(streamReauthRetryDelay(unanswered, interval))
 				}
-				if timedOut {
-					// The probe itself timed out or was cancelled. The auth
-					// backend never rendered a verdict, so treating this as
-					// "revoked" would let a backend outage disconnect every
-					// live stream on the surface at once — turning a partial
-					// failure into a total one. Skip this round; the next
-					// tick asks again.
-					continue
-				}
-				cancel()
-				return
 			}
 		}
 	}()
 	return watched, cancel
 }
 
+// isAuthRefusal reports whether an auth error is the backend's verdict that
+// the credential is no good — as opposed to the backend not answering.
+//
+// The two codes are the ones [WriteAuthError] turns into 401 and 403. The
+// ticket sentinels are what [NewWSAuth] returns for a request whose only
+// credential is a ticket that cannot be redeemed; a re-auth probe normally
+// carries the promoted Authorization instead, so reaching them means the
+// stream has no credential left to show.
+func isAuthRefusal(err error) bool {
+	if errors.Is(err, ErrWSAuthNoTicket) || errors.Is(err, ErrTicketInvalid) {
+		return true
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return true
+	}
+	return false
+}
+
+// defaultStreamReauthRetryMin is the first retry delay after an unanswered
+// probe; each further unanswered probe doubles it, up to the interval.
+const defaultStreamReauthRetryMin = 5 * time.Second
+
+// streamReauthRetryMin overrides the first retry delay when positive.
+// Atomic so a test can shorten it while watchdogs of other tests are still
+// running.
+var streamReauthRetryMin atomic.Int64
+
+// streamReauthRetryDelay is the wait before the next probe after the n-th
+// consecutive unanswered one. It never exceeds the interval — an outage
+// must not make revocation SLOWER than it is on a healthy backend — and it
+// never drops below streamReauthRetryMin, so an auth backend that is down
+// is not hammered by every open stream at once.
+func streamReauthRetryDelay(n int, interval time.Duration) time.Duration {
+	d := defaultStreamReauthRetryMin
+	if o := time.Duration(streamReauthRetryMin.Load()); o > 0 {
+		d = o
+	}
+	for i := 1; i < n && d < interval; i++ {
+		d *= 2
+	}
+	if d > interval {
+		d = interval
+	}
+	return d
+}
+
+// reauthReportEvery throttles the operator report for unanswered probes.
+// One auth outage makes every open stream's probe fail at about the same
+// moment; one report per window says the same thing as ten thousand.
+const reauthReportEvery = time.Minute
+
+// reauthLastReport is the unix-nano time of the last unanswered-probe
+// report, shared by every watchdog in the process.
+var reauthLastReport atomic.Int64
+
+// reportUnansweredReauth tells the operator that a re-auth probe got no
+// verdict. It is a fault — the auth backend is unreachable or broken — so it
+// goes on the exception channel, throttled process-wide.
+func reportUnansweredReauth(ctx context.Context, err error) {
+	now := time.Now().UnixNano()
+	last := reauthLastReport.Load()
+	if last != 0 && now-last < int64(reauthReportEvery) {
+		return
+	}
+	if !reauthLastReport.CompareAndSwap(last, now) {
+		return
+	}
+	observx.ReportError(ctx, fmt.Errorf("stream re-auth: auth backend gave no verdict; streams stay open and are re-probed: %w", err))
+}
+
 // streamReauthProbeTimeout bounds one re-auth call. Generous relative to a
 // healthy auth backend and short relative to the interval, so a slow probe
 // cannot still be running when the next tick fires.
 const streamReauthProbeTimeout = 10 * time.Second
+
+// streamPrincipal is the latest successful verdict of a stream's re-auth
+// watchdog, published on the watched context so a consumer that derived
+// something from the principal at connect time can notice it changed.
+type streamPrincipal struct {
+	mu       sync.Mutex
+	userData []byte
+	// changed carries one pending notification (capacity 1): a consumer
+	// only needs to know "look again", not how many times.
+	changed chan struct{}
+}
+
+type streamPrincipalKey struct{}
+
+// publish records a verdict and notifies a consumer when it differs from
+// the previous one.
+func (p *streamPrincipal) publish(userData []byte) {
+	p.mu.Lock()
+	if bytes.Equal(p.userData, userData) {
+		p.mu.Unlock()
+		return
+	}
+	p.userData = userData
+	p.mu.Unlock()
+	select {
+	case p.changed <- struct{}{}:
+	default:
+	}
+}
+
+// latest returns the most recent verdict's AuthResp bytes.
+func (p *streamPrincipal) latest() []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.userData
+}
+
+// streamPrincipalFrom returns the watchdog's principal record carried by
+// ctx, or nil when the stream is not watched.
+func streamPrincipalFrom(ctx context.Context) *streamPrincipal {
+	p, _ := ctx.Value(streamPrincipalKey{}).(*streamPrincipal)
+	return p
+}

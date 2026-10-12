@@ -1,11 +1,14 @@
 package grpcx
 
 import (
+	"context"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -241,8 +244,13 @@ func TestPool_Reconnect(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if conn1 == conn2 {
-		t.Fatal("expected new connection after reconnect")
+	// The connection a caller already holds must survive a reconnect: the
+	// pool asks the channel to retry, it does not close it under the caller.
+	if conn1 != conn2 {
+		t.Fatal("Reconnect replaced a live connection; callers holding the old pointer would be left with a closed one")
+	}
+	if st := conn1.GetState(); st == connectivity.Shutdown {
+		t.Fatalf("Reconnect closed the connection a caller holds (state %v)", st)
 	}
 	if p.Len() != 1 {
 		t.Fatalf("expected pool size 1, got %d", p.Len())
@@ -274,12 +282,14 @@ func TestPool_Reconnect_DialError(t *testing.T) {
 	p := NewPool()
 	defer func() { _ = p.Close() }()
 
-	_, err := p.Connect("passthrough:///localhost:0", insecureOpt)
+	conn, err := p.Connect("passthrough:///localhost:0", insecureOpt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Replace opts with invalid ones to force redial failure.
+	// Only a closed connection is redialled; close it, then replace opts
+	// with invalid ones to force the redial to fail.
+	_ = conn.Close()
 	p.mu.Lock()
 	p.conns["passthrough:///localhost:0"].opts = nil
 	p.mu.Unlock()
@@ -409,6 +419,93 @@ func TestPool_EnableHealthWatch_RemovesOnDialError(t *testing.T) {
 	}
 
 	_ = p.Close()
+}
+
+// transientFailureConn returns a pooled connection dialled at an address nothing
+// listens on, once gRPC reports it in TransientFailure — the state a
+// healthy channel is in while its backend restarts.
+func transientFailureConn(t *testing.T, p *Pool, scaled bool) *grpc.ClientConn {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := "passthrough:///" + ln.Addr().String()
+	_ = ln.Close() // nothing listens there any more: dials are refused
+
+	var conn *grpc.ClientConn
+	if scaled {
+		conn, err = p.ConnectScaled(addr, ScalingConfig{}, insecureOpt)
+	} else {
+		conn, err = p.Connect(addr, insecureOpt)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Connect()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for st := conn.GetState(); st != connectivity.TransientFailure; st = conn.GetState() {
+		if !conn.WaitForStateChange(ctx, st) {
+			t.Fatalf("connection never reached TransientFailure (last %v)", st)
+		}
+	}
+	return conn
+}
+
+// A backend restart puts every channel to it in TransientFailure, and gRPC
+// recovers from that by itself. The health watch must not close such a
+// connection: a caller holding it would get "client connection is closing"
+// on every RPC from then on, long after the backend came back.
+func TestPool_HealthWatch_KeepsATransientFailureConnOpen(t *testing.T) {
+	for _, scaled := range []bool{false, true} {
+		p := NewPool()
+		conn := transientFailureConn(t, p, scaled)
+
+		p.checkConnections()
+
+		if st := conn.GetState(); st == connectivity.Shutdown {
+			t.Fatalf("scaled=%v: health watch closed a connection in TransientFailure that callers still hold", scaled)
+		}
+		if p.Len() != 1 {
+			t.Fatalf("scaled=%v: pool size %d, want 1", scaled, p.Len())
+		}
+		p.mu.Lock()
+		var pooled *grpc.ClientConn
+		for _, e := range p.conns {
+			pooled = e.conn
+		}
+		for _, g := range p.scaled {
+			pooled = g.entries[0].conn
+		}
+		p.mu.Unlock()
+		if pooled != conn {
+			t.Fatalf("scaled=%v: health watch swapped the pooled connection; callers of Connect would now hold a different one than new callers", scaled)
+		}
+		_ = p.Close()
+	}
+}
+
+// Same for an explicit Reconnect of a connection that is failing.
+func TestPool_Reconnect_KeepsATransientFailureConnOpen(t *testing.T) {
+	p := NewPool()
+	defer func() { _ = p.Close() }()
+	conn := transientFailureConn(t, p, false)
+
+	var addr string
+	p.mu.Lock()
+	for a := range p.conns {
+		addr = a
+	}
+	p.mu.Unlock()
+
+	got, err := p.Reconnect(addr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != conn || conn.GetState() == connectivity.Shutdown {
+		t.Fatal("Reconnect closed a failing connection a caller holds instead of letting it recover")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -843,17 +940,22 @@ func TestPool_Reconnect_Scaled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Returned connection should be different from originals (reconnected).
-	if conn == c1 || conn == c2 {
-		t.Fatal("expected new connection after reconnect")
+	// Live connections are kept: callers hold them and will Release them.
+	if conn != c1 {
+		t.Fatal("Reconnect replaced a live scaled connection")
+	}
+	for _, c := range []*grpc.ClientConn{c1, c2} {
+		if c.GetState() == connectivity.Shutdown {
+			t.Fatal("Reconnect closed a scaled connection a caller holds")
+		}
 	}
 
-	// Active streams should be reset.
+	// Kept entries keep their counters, so the holders' Release lands.
 	p.mu.Lock()
 	group := p.scaled["passthrough:///localhost:0"]
 	for _, e := range group.entries {
-		if e.activeStreams != 0 {
-			t.Fatalf("expected 0 active streams after reconnect, got %d", e.activeStreams)
+		if e.activeStreams != 1 {
+			t.Errorf("active streams = %d after reconnect, want 1 (the holder has not released yet)", e.activeStreams)
 		}
 	}
 	p.mu.Unlock()
@@ -864,9 +966,10 @@ func TestPool_Reconnect_ScaledDialError(t *testing.T) {
 	defer func() { _ = p.Close() }()
 
 	cfg := ScalingConfig{StreamsPerConn: 100, MaxConns: 2}
-	_, _ = p.ConnectScaled("passthrough:///localhost:0", cfg, insecureOpt)
+	conn, _ := p.ConnectScaled("passthrough:///localhost:0", cfg, insecureOpt)
 
-	// Sabotage opts.
+	// Close it (only a closed connection is redialled) and sabotage opts.
+	_ = conn.Close()
 	p.mu.Lock()
 	p.scaled["passthrough:///localhost:0"].opts = nil
 	p.mu.Unlock()
@@ -902,19 +1005,34 @@ func TestPool_Reconnect_BothRegularAndScaled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should return the reconnected regular connection.
-	if conn == regularConn {
-		t.Fatal("expected new regular connection")
+	// Should return the regular connection, kept open.
+	if conn != regularConn {
+		t.Fatal("expected the regular connection callers already hold")
 	}
 
-	// Scaled connection should also be reconnected.
 	p.mu.Lock()
 	group := p.scaled["passthrough:///localhost:0"]
-	newScaledConn := group.entries[0].conn
+	keptScaledConn := group.entries[0].conn
 	p.mu.Unlock()
 
-	if newScaledConn == scaledConn {
-		t.Fatal("expected scaled connection to be reconnected too")
+	if keptScaledConn != scaledConn || scaledConn.GetState() == connectivity.Shutdown {
+		t.Fatal("expected the scaled connection to be kept open too")
+	}
+}
+
+func TestPool_Reconnect_ReplacesAClosedConnection(t *testing.T) {
+	p := NewPool()
+	defer func() { _ = p.Close() }()
+
+	conn, _ := p.Connect("passthrough:///localhost:0", insecureOpt)
+	_ = conn.Close()
+
+	fresh, err := p.Reconnect("passthrough:///localhost:0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fresh == conn || fresh.GetState() == connectivity.Shutdown {
+		t.Fatal("a closed connection must be replaced by a usable one")
 	}
 }
 
