@@ -39,10 +39,16 @@
 package restgw
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -165,10 +171,65 @@ func URLCredentialFromQuery(r *http.Request, name string) string {
 // (see [defaultAuthCacheKeyHeaders], which includes this slot —
 // without it two different capability tokens would collide on one
 // cache entry and be served each other's identity).
+//
+// The value is also registered with the request's redactor, so the
+// request path the trace and a panic report carry name it as
+// `{credential}` instead (see [redactedPath]).
 func WithURLCredential(r *http.Request, value string) *http.Request {
+	if value != "" {
+		if rd, ok := r.Context().Value(redactorKey{}).(*credentialRedactor); ok {
+			rd.add(value)
+		}
+		if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+			span.SetAttributes(attribute.String("url.path", redactedPath(r)))
+		}
+	}
 	cloned := r.Clone(r.Context())
 	cloned.Header.Set(CredentialHeader, value)
 	return cloned
+}
+
+// credentialRedactor collects the URL credentials found while serving one
+// request. The outermost middleware installs it, so a handler deep in the
+// chain can register a value that a wrapper outside it — which holds an
+// earlier copy of the request — still sees when it describes the request.
+type credentialRedactor struct {
+	mu     sync.Mutex
+	values []string
+}
+
+type redactorKey struct{}
+
+func (c *credentialRedactor) add(v string) {
+	c.mu.Lock()
+	c.values = append(c.values, v)
+	c.mu.Unlock()
+}
+
+// withCredentialRedactor returns r with a redactor in its context, or r
+// itself when one is already there.
+func withCredentialRedactor(r *http.Request) *http.Request {
+	if _, ok := r.Context().Value(redactorKey{}).(*credentialRedactor); ok {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), redactorKey{}, &credentialRedactor{}))
+}
+
+// redactedPath is the request path with every registered URL credential,
+// raw or escaped, replaced by `{credential}`.
+func redactedPath(r *http.Request) string {
+	p := r.URL.Path
+	rd, ok := r.Context().Value(redactorKey{}).(*credentialRedactor)
+	if !ok {
+		return p
+	}
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	for _, v := range rd.values {
+		p = strings.ReplaceAll(p, v, "{credential}")
+		p = strings.ReplaceAll(p, url.PathEscape(v), "{credential}")
+	}
+	return p
 }
 
 // HasURLCredential reports whether the request carries an injected

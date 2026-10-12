@@ -50,6 +50,7 @@ func RecoverPanicMiddleware(next http.Handler) http.Handler {
 		if ctx := observx.WithRequestScope(r.Context()); ctx != r.Context() {
 			r = r.WithContext(ctx)
 		}
+		r = withCredentialRedactor(r)
 		defer func() {
 			rec := recover()
 			if rec == nil {
@@ -68,7 +69,7 @@ func RecoverPanicMiddleware(next http.Handler) http.Handler {
 				ctx = context.Background()
 			}
 			observx.ReportError(ctx, fmt.Errorf("PANIC %s %s: %v\n%s",
-				r.Method, r.URL.Path, rec, debug.Stack()))
+				r.Method, redactedPath(r), rec, debug.Stack()))
 			// Best-effort write — if the handler already
 			// flushed any bytes the response is mangled
 			// anyway and there's nothing better we can do

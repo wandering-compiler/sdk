@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-129 interactions; 10 have no test (9 of them owned by generated code or the deployment), 15 more are covered only in part.
+129 interactions; 9 have no test (all owned by generated code or the deployment), 15 more are covered only in part.
 
 ## Server × Server
 
@@ -78,7 +78,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Stream re-auth watchdog (E17) | `w17-events` channel (E18) and per-RPC streams (E14, E15) | Every authenticated stream is re-probed every interval; only a definite refusal ends it, and an auth-backend outage does not. On `w17-events` a verdict whose labels differ from those at connect ends the stream, so the client reconnects under its current entitlement. | `TestWatchStreamAuth_DefiniteRefusalsCancel`, `TestWatchStreamAuth_FastBackendFailureIsNotARevocation`, `TestW17Events_RevokedCredentialEndsTheStream`, `TestW17Events_ChangedMembershipEndsTheStream`, `TestW17Events_SameLabelsKeepTheStream`, `TestW17Events_AuthOutageKeepsTheStream` |
 | CORS (E12) | WebSocket helpers (E15) | Browser access to WebSocket routes follows the documented same-origin rule, independent of the CORS allowlist. | `TestAcceptWebSocket_SameOriginRuleIgnoresTheCORSAllowlist` |
 | Auth result cache (E6) | Stream re-auth watchdog (E17) | Revocation becomes visible within `max(reauth interval, TTL)`. | `TestWatchStreamAuth_RevocationLandsThroughTheCacheTTL`, `TestWatchStreamAuth_RevocationLandsAfterTheOutage` |
-| URL-carried credentials (E7) | Request tracing (E11), pagination links (E23), browser redirects (E22) | The credential reaches auth only through the reserved slot. | no test |
+| URL-carried credentials (E7) | Request tracing (E11), pagination links (E23), browser redirects (E22) | The credential reaches auth only through the reserved slot. It never reaches the trace, a panic report or a redirect; a next-page link keeps it, because the link holder is the page holder. | `TestURLCredential_NeverReachesTheTrace`, `TestURLCredential_NeverReachesAPanicReport`, `TestURLCredential_NextPageLinkKeepsIt`, `TestURLCredential_NeverReachesARedirect` |
 | URL-carried credentials (E7) | Auth result cache (E6) | Distinct capability tokens never share a cache slot (the slot is a key header). | `TestCachedAuth_DistinctCapabilityTokensNeverShareASlot`, `TestAuth_CachedAuthFunc_DistinctHeadersDistinctSlots` |
 | Organization from the path (E8) | Auth result cache (E6) | A request with `W17-Org` bypasses the cache, so every org-scoped call makes a full auth call. | `TestCachedAuth_OrgScopedAndPromotedRequestsBypassTheCache`, `TestAuth_CachedAuthFunc_UnknownHeaderBypassesCache` |
 | Browser stream tickets (E16) | Multiple gateway replicas | Issue and redeem happen on the same process (documented limit: per-process store); each replica's store is bounded on its own. | `TestTicketStore_ReplicasAreIndependent`, `TestTicketIssuer_FloodIsBounded` |
