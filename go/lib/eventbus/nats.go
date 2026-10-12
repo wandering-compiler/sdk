@@ -715,7 +715,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 	if s.isDraining() {
 		return ErrSubscriberDraining
 	}
-	h = recoverHandler(h)
+	h = deliveryHandler(h)
 	consumerName := s.bus.opts.DurablePrefix + "-" + s.channel
 	if topicFilter != "" && topicFilter != "**" {
 		consumerName += "-" + sanitizeDurableSuffix(topicFilter)

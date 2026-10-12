@@ -593,7 +593,7 @@ func (s *redisSubscriber) subscriptionGroup(topicFilter string) string {
 // each entry's topic field with [MatchGlob] before the handler
 // runs, the same rule the memory and NATS adapters apply.
 func (s *redisSubscriber) Subscribe(ctx context.Context, topicFilter string, h HandlerFunc) error {
-	h = recoverHandler(h)
+	h = deliveryHandler(h)
 	if s.isDraining() {
 		return ErrSubscriberDraining
 	}
