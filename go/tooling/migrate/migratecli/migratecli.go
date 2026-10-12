@@ -270,7 +270,6 @@ type applyFlags struct {
 	lock       string
 	migrations string
 	fixtures   string
-	schema     string
 	console    string
 	domain     string
 	group      string
@@ -300,7 +299,6 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.console, "console", "", "console endpoint; overrides W17_CONSOLE_ADDR")
 	fs.StringVar(&f.to, "to", "", "rollback only: highest migration id to KEEP applied")
 	fs.StringVar(&f.fixtures, "fixtures", "w17/fixtures", "fixtures only: directory of rendered seeds a render step produced")
-	fs.StringVar(&f.schema, "schema", "w17/schema", "schema only: directory holding the rendered dev plan")
 	fs.StringVar(&f.domain, "domain", "", "fixtures only: seed just this domain (empty = every domain)")
 	fs.StringVar(&f.group, "group", "", "fixtures only: fixture group to seed; empty = the default group")
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
@@ -340,7 +338,55 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 			"  fix: drop --allow-no-dsn",
 			name, name)
 	}
+	// Every verb shares this flag set, and each reads only part of it. A
+	// flag set on a verb that does not read it used to be accepted and
+	// ignored — `status --fake`, `apply --to 20260101…`, `apply --domain
+	// billing` all ran as if it had not been given, and the operator who
+	// typed it was told nothing.
+	var stray error
+	fs.Visit(func(fl *flag.Flag) {
+		if stray != nil || flagVerbs[fl.Name][name] {
+			return
+		}
+		var on []string
+		for _, v := range verbOrder {
+			if flagVerbs[fl.Name][v] {
+				on = append(on, "`"+v+"`")
+			}
+		}
+		stray = fmt.Errorf("migrate %s: --%s has no effect on `%s`\n"+
+			"  why: it is read only by %s; here it would be accepted and ignored\n"+
+			"  fix: drop --%s, or run the verb it belongs to",
+			name, fl.Name, name, strings.Join(on, ", "), fl.Name)
+	})
+	if stray != nil {
+		return f, stray
+	}
 	return f, nil
+}
+
+// verbOrder lists the verbs parseFlags serves, for messages.
+var verbOrder = []string{"apply", "status", "rollback", "fetch", "fixtures apply"}
+
+// flagVerbs names, per flag, the verbs that read it. A flag missing a verb
+// here is refused on that verb rather than silently ignored.
+var flagVerbs = map[string]map[string]bool{
+	"lock":         {"apply": true, "status": true, "rollback": true, "fetch": true, "fixtures apply": true},
+	"migrations":   {"apply": true, "status": true, "rollback": true, "fetch": true},
+	"console":      {"apply": true, "status": true, "rollback": true, "fetch": true, "fixtures apply": true},
+	"fetch":        {"apply": true, "status": true, "rollback": true, "fixtures apply": true},
+	"parallel":     {"apply": true, "rollback": true},
+	"dry-run":      {"apply": true, "rollback": true, "fixtures apply": true},
+	"log-format":   {"apply": true, "rollback": true},
+	"fake":         {"apply": true},
+	"exit-code":    {"status": true},
+	"to":           {"rollback": true},
+	"fixtures":     {"fixtures apply": true},
+	"domain":       {"fixtures apply": true},
+	"group":        {"fixtures apply": true},
+	"connection":   {"fixtures apply": true},
+	"allow-stale":  {"fixtures apply": true},
+	"allow-no-dsn": {"fixtures apply": true},
 }
 
 func runApply(ctx context.Context, args []string, opts Options, out io.Writer) error {

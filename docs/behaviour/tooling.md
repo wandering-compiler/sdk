@@ -115,6 +115,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | `--allow-no-dsn` | — | `fixtures apply` only; on `apply`, `status`, `rollback` and `fetch` refused with a message naming `fixtures apply` |
 | DSN | `W17_TARGET_<CONN>` (connection name upper-cased, `-` → `_`) | no flag accepts a DSN or a token |
 | Timeout | 30 minutes, fixed | — |
+| A flag the verb does not read | — | refused, naming the verbs that read it (`status --fake`, `apply --to`, `apply --domain`, …) |
 
 **Guarantees.**
 
@@ -128,7 +129,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.6 | Fetched artefacts MUST pass the same loader and hash check as artefacts on disk. | `TestMigrationSetFS_RefusesATamperedBody` |
 | T2.7 | Two distinct connections MUST NOT resolve to the same DSN variable. | `TestDSNVariable_TwoConnectionsCannotShareOne`, `TestDSNVariable_DistinctNamesPass` |
 | T2.8 | A connection listed twice in the lock MUST be refused by planning and rollback planning before any applier is used. | `TestRun_RefusesAConnectionListedTwice` |
-| T2.9 | Every flag a verb accepts MUST take effect on that verb. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` (`--allow-no-dsn` only) |
+| T2.9 | Every flag a verb accepts MUST take effect on that verb. | `TestParseFlags_AllowNoDSNOnlyOnFixtures`, `TestParseFlags_AFlagTheVerbDoesNotReadIsRefused`, `TestFlagVerbs_CoversEveryDefinedFlag` |
 | T2.10 | `--allow-no-dsn` on any verb other than `fixtures apply` MUST be refused with a message naming where it applies. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` |
 
 **Deliberate limits.**
@@ -422,7 +423,7 @@ the dialect defines.
 | ID | Guarantee | Test |
 |---|---|---|
 | T14.1 | An in-range id not on the pinned chain MUST NOT be rolled back. | `TestRunRollback_OffChainMigrationIsNotRolledBack` |
-| T14.2 | The head re-read under the lock MUST equal the planned head, and refuse only when it actually moved. | `TestRollback_RefusesOnlyWhenTheHeadActuallyMoved`; `TestRunRollback_ReVerifiesTheHeadUnderTheLock` (source-text check) |
+| T14.2 | The head re-read under the lock MUST equal the planned head, and refuse only when it actually moved. | `TestRollback_RefusesOnlyWhenTheHeadActuallyMoved`, `TestRunRollback_ReVerifiesTheHeadUnderTheLock` |
 | T14.3 | Irreversible data migrations MUST refuse to roll back. | `TestRollback_YAMLIrreversibleRefused` |
 | T14.4 | A connection listed more than once MUST be refused; a non-empty rollback target MUST name a migration on the connections being rolled back (T5.4). | `TestRun_RefusesAConnectionListedTwice`, `TestPlanRollback_RefusesAnUnknownTarget` |
 
