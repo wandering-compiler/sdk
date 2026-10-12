@@ -422,3 +422,49 @@ func buildMultipart(t *testing.T, parts map[string]string) (io.Reader, string) {
 
 // kvfs alias check — keeps the import-graph test ergonomic.
 var _ = kvfs.ErrNotFound
+
+// failingDeletes is a driver whose Delete fails for the listed keys.
+type failingDeletes struct {
+	kvfs.Driver
+	fail map[string]bool
+}
+
+func (d failingDeletes) Delete(ctx context.Context, key string) error {
+	if d.fail[key] {
+		return errors.New("delete refused")
+	}
+	return d.Driver.Delete(ctx, key)
+}
+
+// The request has already failed when it rolls back, so the rollback must
+// go on past every object it cannot remove: a failing delete, a connection
+// the bundle does not carry, an empty handle. Running it twice (two exit
+// paths of one request) must be harmless.
+func TestRollbackUploads_BestEffortAndIdempotent(t *testing.T) {
+	mem := memdriver.New()
+	cfg := sameBytesConfig(mem)
+	stuck := uploadSameBytes(t, cfg, "a.pdf")
+	first := uploadSameBytes(t, cfg, "b.pdf")
+	last := uploadSameBytes(t, cfg, "c.pdf")
+	drivers := map[string]kvfs.Driver{"c": failingDeletes{Driver: mem, fail: map[string]bool{stuck: true}}}
+	objs := []restgw.UploadedObject{
+		{Connection: "c", Handle: first},
+		{Connection: "c", Handle: stuck},
+		{Connection: "absent", Handle: "whatever"},
+		{Connection: "c", Handle: ""},
+		{Connection: "c", Handle: last},
+	}
+
+	restgw.RollbackUploads(context.Background(), drivers, objs)
+	restgw.RollbackUploads(context.Background(), drivers, objs)
+
+	for _, h := range []string{first, last} {
+		if mem.Has(h) {
+			t.Errorf("object %q survived the rollback", h)
+		}
+	}
+	if !mem.Has(stuck) {
+		t.Errorf("the undeletable object %q is gone; the test driver did not refuse", stuck)
+	}
+	restgw.RollbackUploads(context.Background(), nil, objs)
+}

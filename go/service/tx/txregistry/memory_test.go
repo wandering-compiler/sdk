@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
@@ -550,5 +551,32 @@ func TestMemory_Begin_TxTimeout_ZeroIsNoOp(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if err := reg.Commit(context.Background(), id); err != nil {
 		t.Errorf("Commit after no-timeout idle: %v (want nil)", err)
+	}
+}
+
+// A transaction id is a bearer handle: whoever presents it adopts the
+// transaction, so it must not be guessable from another one.
+func TestMemory_Begin_IdsAreRandomUUIDv4(t *testing.T) {
+	reg := singleConnRegistry(t)
+	seen := map[string]bool{}
+	for i := 0; i < 64; i++ {
+		id, err := reg.Begin(context.Background(), txregistry.BeginOptions{ConnectionName: "main"})
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		u, err := uuid.Parse(id)
+		if err != nil {
+			t.Fatalf("id %q is not a UUID: %v", id, err)
+		}
+		if u.Version() != 4 || u.Variant() != uuid.RFC4122 {
+			t.Fatalf("id %q is version %d, variant %v; want a random (v4) RFC 4122 UUID", id, u.Version(), u.Variant())
+		}
+		if seen[id] {
+			t.Fatalf("id %q handed out twice", id)
+		}
+		seen[id] = true
+		if err := reg.Rollback(context.Background(), id); err != nil {
+			t.Fatalf("Rollback: %v", err)
+		}
 	}
 }

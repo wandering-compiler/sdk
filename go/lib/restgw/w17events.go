@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -110,8 +111,8 @@ func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource,
 	// best-effort (some ResponseWriter wrappers don't support it).
 	ctrl := http.NewResponseController(w)
 	withWriteDeadline := func(write func() error) error {
-		if defaultW17EventsWriteTimeout > 0 {
-			_ = ctrl.SetWriteDeadline(time.Now().Add(defaultW17EventsWriteTimeout))
+		if d := w17EventsWriteTimeout(); d > 0 {
+			_ = ctrl.SetWriteDeadline(time.Now().Add(d))
 			defer func() { _ = ctrl.SetWriteDeadline(time.Time{}) }()
 		}
 		return write()
@@ -154,6 +155,17 @@ func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource,
 // internal to avoid changing the HandleW17Events signature, which is
 // called from generated gateway code.)
 const defaultW17EventsWriteTimeout = 30 * time.Second
+
+// w17EventsWriteTimeoutOverride replaces defaultW17EventsWriteTimeout
+// when positive. Tests only.
+var w17EventsWriteTimeoutOverride atomic.Int64
+
+func w17EventsWriteTimeout() time.Duration {
+	if o := time.Duration(w17EventsWriteTimeoutOverride.Load()); o > 0 {
+		return o
+	}
+	return defaultW17EventsWriteTimeout
+}
 
 // EventSource is the contract a w17-events handler needs from
 // the underlying bus. Subscribe binds to the request context

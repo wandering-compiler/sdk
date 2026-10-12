@@ -181,15 +181,15 @@ its own per-method transaction when no header is present.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| D5.1 | Transaction ids MUST be random UUIDv4. | no test |
+| D5.1 | Transaction ids MUST be random UUIDv4. | `TestMemory_Begin_IdsAreRandomUUIDv4` |
 | D5.2 | Adoption on another connection MUST fail with `ErrConnectionMismatch` and an unknown id with `ErrUnknownTxID`; neither may silently open a fresh transaction. | `txregistry_test.go`, `adopt_unknown_txid_test.go` |
 | D5.3 | The adoption lease MUST be exclusive: a second adopter waits (bounded) for the first, Commit/Rollback wait (bounded) for a running adopter, so a method is never split; on expiry `ErrTxBusy` with the transaction intact and retryable (a Rollback is the exception, D5.12). | `TestAdoptedHandler_FinisherCannotSplitAMethod`, `TestFinisher_WaitsForTheAdopterToRelease`, `TestSecondAdopter_WaitsForTheFirst` |
-| D5.4 | A waiting finisher MUST block new adopters, so it cannot starve. | no test |
+| D5.4 | A waiting finisher MUST block new adopters, so it cannot starve. | `TestWaitingFinisher_RefusesNewAdopters`, `TestWaitingFinisher_GivingUpReopensTheTransaction` |
 | D5.5 | One `*sql.Tx` MUST NOT be used from two goroutines at once. | `TestMemory_ConcurrentBeginCommit`, `TestMemory_ConcurrentDoubleCommit_OneWinner`, `TestMemory_ConcurrentLookupVsCommit` |
 | D5.6 | With a timeout, a watcher MUST drain and roll back the entry when the deadline fires, even under a held lease. | `TestTimeoutWatcher_DrainsUnderALease`, `TestMemory_Begin_TxTimeout_*`, `TestServer_Begin_DefaultTxTimeout_OrphanCleanup`, `TestServer_Begin_DefaultTxTimeout_OptOut`, `TestServer_Begin_CallerTimeoutOverridesDefault` |
 | D5.7 | A failed Commit MUST roll back to release the connection and drop the deferred work. | `outcome_test.go` |
 | D5.8 | Recently drained ids (last 256) MUST remember why they are gone, so a later NotFound names the cause. | `outcome_test.go` |
-| D5.9 | `AdoptTxIsolated` MUST refuse a transaction whose isolation is weaker than, or unknown relative to, the method's declared level (`ErrIsolationTooWeak`). | no test |
+| D5.9 | `AdoptTxIsolated` MUST refuse a transaction whose isolation is weaker than, or unknown relative to, the method's declared level (`ErrIsolationTooWeak`). | `TestAdoptTxIsolated_RefusesWeakerOrUnknownLevels`, `TestAdoptTxIsolated_RegistryThatCannotReportRefuses`, `TestAdoptTxIsolated_MemoryReportsTheOpenedLevel`, `TestAdoptTxIsolated_NoTransactionIdOpensFresh` |
 | D5.10 | Isolation levels MUST be honoured on PostgreSQL and MySQL. | no test (needs a server) |
 | D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | no test |
 | D5.12 | A Rollback MUST doom the transaction before it waits for the lease. A doomed transaction refuses Commit (`ErrTxDoomed`) and new adoptions, and is rolled back by whoever reaches it first: the rollback itself, a Commit that finds it idle, the release of the last lease, or the timeout watcher. A rollback that cannot run at once returns `ErrTxDoomed` wrapping `ErrTxBusy`, whatever the state of its context or the finish wait. | `TestRollbackBehindALease_CancelledContext_DoomsTheTransaction`, `TestRollbackBehindALease_ZeroFinishWait_DoomsTheTransaction`, `TestDoom_ACommitQueuedBeforeTheRollbackDoesNotCommit` |

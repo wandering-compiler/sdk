@@ -582,7 +582,7 @@ promotion marker header forces a cache bypass on probes).
 | E16.3 | In header-and-ticket mode a header MUST win | `TestWSAuth_HeaderAndTicket_HeaderWins` |
 | E16.4 | A redeemed ticket MUST be promoted to `Authorization` on the caller's request so later re-auth probes work, in both modes | `TestWatchStreamAuth_TicketStreamSurvivesTheTick`, `TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick` |
 | E16.5 | Issuer responses MUST be `no-store` with `Vary: Authorization, Cookie` | `TestTicketIssuer_HappyPOST` (`no-store`, and `Vary` present; its value has no test) |
-| E16.6 | A client MUST NOT be able to present the promotion marker (a per-instance 256-bit random value) | no test |
+| E16.6 | A client MUST NOT be able to present the promotion marker (a per-instance 256-bit random value) | `TestWSAuth_TicketOnly_ClientCannotPresentThePromotionMarker`, `TestWSAuth_PromotionMarkerIsPerInstance`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
 | E16.7 | The default store MUST NOT grow memory without bound: outstanding tickets and the bytes they hold are both capped, and a redeemed or expired ticket frees its share | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_ByteBudget`, `TestTicketStore_RedeemFreesCapacity`, `TestMemoryTicketStore_FullStoreSweepsExpired` |
 | E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
 | E16.9 | An `Authorization` value longer than `MaxTicketAuthorizationBytes` MUST be answered 431 and store nothing; a value at the limit is accepted | `TestTicketIssuer_OversizedAuthorization` |
@@ -744,7 +744,7 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 | E20.3 | Every upload MUST be stored under its own object key, `<sha256>-<random 128-bit suffix>`; identical bodies MUST get distinct objects | `TestProcessFilePart_IdenticalBodiesGetDistinctObjects` |
 | E20.4 | The staging file MUST be removed after a copy-style publish | `TestProcessFilePart_RemovesTempFileOnCopyDriver` |
 | E20.5 | Non-sentinel errors MUST be logged and answered as a generic 500 | `TestWriteUploadError_MasksInternalError` |
-| E20.6 | `RollbackUploads` MUST be best-effort and idempotent | no test |
+| E20.6 | `RollbackUploads` MUST be best-effort and idempotent | `TestRollbackUploads_BestEffortAndIdempotent` |
 | E20.7 | An unbounded request body MUST NOT be spilled to disk (relies on the generated `MaxBytesReader`) | no test |
 | E20.8 | Rollback MUST NOT delete an object another request references, including one with identical bytes that committed earlier or is still in flight | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
 | E20.9 | Upload refusals MUST NOT show developer prose or configuration to the client: each sentinel answers one of the upload msgids (`MsgidUploadMissing`, `MsgidUploadTooLarge`, `MsgidUploadBadType`), and the allowlist and size limit go to the operator channel | `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestVocabulary_CarriesTheUploadSentences` |

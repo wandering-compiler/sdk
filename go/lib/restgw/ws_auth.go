@@ -245,15 +245,11 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 // NewWSAuth call.
 const promotedHeader = "X-W17-Ticket-Promoted"
 
-// randomMarker mints the per-instance nonce. On the vanishingly unlikely
-// event that crypto/rand fails, it returns a value no request can match
-// either — the fallback must not be a constant a client could guess.
+// randomMarker mints the per-instance nonce: 256 random bits. crypto/rand
+// never returns an error (it aborts the process instead), so there is no
+// fallback value a client could match.
 func randomMarker() string {
 	var buf [32]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		// Unreachable in practice; a marker nothing matches degrades to the
-		// pre-fix behaviour rather than to a bypass.
-		return ""
-	}
+	_, _ = rand.Read(buf[:])
 	return hex.EncodeToString(buf[:])
 }

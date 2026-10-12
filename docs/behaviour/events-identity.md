@@ -408,8 +408,8 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `go/lib/restgw/w17events_ensureopen_test.go`, `go/lib/restgw/w17events_eventbus_test.go` (partial open) |
 | I9.5 | Streams MUST end on client disconnect or server drain. | `TestW17EventsEndsOnDrain`, `go/lib/restgw/w17events_drain_test.go` |
 | I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `go/lib/restgw/w17events_eventbus_test.go` (transcode skip) |
-| I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | no test |
-| I9.8 | A write to a stalled client MUST end within the write deadline. | no test |
+| I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
+| I9.8 | A write to a stalled client MUST end within the write deadline. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
 | I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | no test |
 
 **Deliberate limits.**
