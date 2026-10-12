@@ -35,20 +35,32 @@ func TestSplitStatements_QuotedIdentifiersAndEscapeStrings(t *testing.T) {
 	}
 }
 
-// Wipe drops public and every owned schema, each as an escaped identifier,
-// and recreates an empty public — in one batch.
-func TestWipeSQL_DropsEveryOwnedSchema(t *testing.T) {
-	got := wipeSQL([]string{"billing", `we"ird`})
+// Wipe drops public and every declared schema, each as an escaped
+// identifier, and recreates an empty public — in one batch. public and
+// repeats are folded; a system schema is refused.
+func TestWipeSQL_DropsDeclaredSchemas(t *testing.T) {
+	got, err := wipeSQL([]string{"billing", `we"ird`, "public", "billing", " "})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"DROP SCHEMA IF EXISTS public CASCADE;",
 		`DROP SCHEMA IF EXISTS "billing" CASCADE;`,
 		`DROP SCHEMA IF EXISTS "we""ird" CASCADE;`,
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %s in:\n%s", want, got)
+		if strings.Count(got, want) != 1 {
+			t.Errorf("want exactly one %s in:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, `"public"`) {
+		t.Errorf("public dropped twice:\n%s", got)
 	}
 	if !strings.HasSuffix(got, "CREATE SCHEMA public;") {
 		t.Errorf("public is not recreated last:\n%s", got)
+	}
+	for _, sys := range []string{"pg_catalog", "information_schema", "pg_toast"} {
+		if _, err := wipeSQL([]string{sys}); err == nil {
+			t.Errorf("system schema %s accepted", sys)
+		}
 	}
 }

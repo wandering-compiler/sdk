@@ -166,7 +166,7 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 // issued through the pool, the SET landed on one connection and the DROPs
 // on others (where FK checks were still on), and an early return left a
 // pooled connection with FK checks off for whatever borrowed it next.
-func (a *Applier) Wipe(ctx context.Context) (err error) {
+func (a *Applier) Wipe(ctx context.Context, _ []string) (err error) {
 	conn, err := a.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("mysql Wipe: acquire conn: %w", err)

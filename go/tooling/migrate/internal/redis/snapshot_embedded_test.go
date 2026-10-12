@@ -78,7 +78,7 @@ func TestWipe_FlushesKeyspace(t *testing.T) {
 	a, mr := liveApplier(t)
 	_ = mr.Set("a", "1")
 	_ = mr.Set("b", "2")
-	if err := a.Wipe(context.Background()); err != nil {
+	if err := a.Wipe(context.Background(), nil); err != nil {
 		t.Fatalf("Wipe: %v", err)
 	}
 	if keys := mr.Keys(); len(keys) != 0 {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
+	applyplanpb "github.com/wandering-compiler/sdk/go/pb/applyplan"
 )
 
 // requiredSchemasFromManifest pulls the Postgres namespaces a migration's
@@ -29,6 +30,52 @@ func requiredSchemasFromManifest(manifestJSON string) []string {
 		return nil
 	}
 	return doc.RequiredSchemas
+}
+
+// DeclaredNamespaces lists, sorted and de-duplicated, the namespaces the
+// given migrations declare (their manifests' required schemas) for one
+// connection — exactly what schema prep creates, and so what a Wiper must
+// remove to return the store to empty. Pass every migration of the
+// connection's series, not only the pending ones.
+func DeclaredNamespaces(migs []*applyfetchpb.Migration, connection string) []string {
+	set := map[string]bool{}
+	for _, m := range migs {
+		if m.GetConnection() != connection {
+			continue
+		}
+		for _, s := range requiredSchemasFromManifest(m.GetManifestJson()) {
+			if s = strings.TrimSpace(s); s != "" {
+				set[s] = true
+			}
+		}
+	}
+	return sortedKeys(set)
+}
+
+// DevPlanNamespaces is DeclaredNamespaces for a dev plan: the namespaces its
+// migrations for connection require.
+func DevPlanNamespaces(plan *applyplanpb.DevApplyPlan, connection string) []string {
+	set := map[string]bool{}
+	for _, m := range plan.GetMigrations() {
+		if m.GetConnection() != connection {
+			continue
+		}
+		for _, s := range m.GetRequiredSchemas() {
+			if s = strings.TrimSpace(s); s != "" {
+				set[s] = true
+			}
+		}
+	}
+	return sortedKeys(set)
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // schemaPrepSQL creates each namespace that does not exist yet. Identifiers

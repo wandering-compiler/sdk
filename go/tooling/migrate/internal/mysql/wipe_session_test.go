@@ -97,7 +97,7 @@ func TestWipe_RunsOnOneSessionAndRestoresFKChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Wipe(ctx); err != nil {
+	if err := a.Wipe(ctx, nil); err != nil {
 		t.Fatalf("Wipe: %v", err)
 	}
 	_ = other.Close()
@@ -117,7 +117,7 @@ func TestWipe_AFailureStillRestoresFKChecks(t *testing.T) {
 	a := newSessionApplier(d)
 	defer func() { _ = a.db.Close() }()
 
-	if err := a.Wipe(context.Background()); err == nil {
+	if err := a.Wipe(context.Background(), nil); err == nil {
 		t.Fatal("Wipe succeeded over a failing DROP")
 	}
 	if len(d.fkOff) != 0 {

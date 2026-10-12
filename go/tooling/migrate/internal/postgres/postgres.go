@@ -499,11 +499,12 @@ func hasPrefixAt(b []byte, i int, s string) bool {
 }
 
 // Wipe returns the connected database to the empty state (migrate.Wiper) —
-// the dev fresh-build primitive. It drops `public` and every other schema
-// this role owns, then recreates an empty `public`; everything inside goes
-// with them (tables incl. w17_migrations, types, functions, extensions
-// installed there). One simple-protocol batch, so it runs as one implicit
-// transaction: a failure leaves the database as it was.
+// the dev fresh-build primitive. It drops `public` and each DECLARED
+// namespace (the ones schema prep creates for the migration set, see
+// migrate.DeclaredNamespaces), then recreates an empty `public`; everything
+// inside goes with them (tables incl. w17_migrations, types, functions,
+// extensions installed there). One simple-protocol batch, so it runs as one
+// implicit transaction: a failure leaves the database as it was.
 //
 // `public` alone was not enough. Schema prep creates each namespace a
 // module's tables are qualified with (`billing`, `ledger`), and a wipe that
@@ -511,45 +512,41 @@ func hasPrefixAt(b []byte, i int, s string) bool {
 // a populated store and `CREATE TABLE "billing"."invoices"` failed on a
 // database that was supposed to be empty.
 //
-// Owned schemas only (the role, or one it is a member of): a namespace
-// another role provisioned is the platform's, not this applier's to drop.
-// System schemas are never candidates. Only the connected database is
-// touched, and no session setting is changed.
-func (a *Applier) Wipe(ctx context.Context) error {
-	schemas, err := a.ownedSchemas(ctx)
+// Declared namespaces only, never "whatever this role may drop": a dev
+// stack usually connects as a superuser, which may drop every schema in the
+// database, including ones other tools keep there. A schema the migration
+// set does not declare stays. A system schema is refused. Only the connected
+// database is touched, and no session setting is changed.
+func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
+	stmt, err := wipeSQL(namespaces)
 	if err != nil {
-		return fmt.Errorf("postgres Wipe: list schemas: %w", err)
+		return fmt.Errorf("postgres Wipe: %w", err)
 	}
-	if _, err := a.conn.Exec(ctx, wipeSQL(schemas), pgx.QueryExecModeSimpleProtocol); err != nil {
+	if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
 		return fmt.Errorf("postgres Wipe: %w", err)
 	}
 	a.phaseColEnsured = false
 	return nil
 }
 
-// ownedSchemas lists the non-system schemas, other than public, that the
-// current role owns or is a member of the owner of.
-func (a *Applier) ownedSchemas(ctx context.Context) ([]string, error) {
-	rows, err := a.conn.Query(ctx, `SELECT nspname FROM pg_namespace
-		WHERE nspname <> 'public' AND nspname <> 'information_schema'
-		  AND nspname NOT LIKE 'pg\_%'
-		  AND pg_has_role(current_user, nspowner, 'MEMBER')
-		ORDER BY nspname`)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
-}
-
 // wipeSQL drops public and the given schemas and recreates an empty public.
-func wipeSQL(schemas []string) string {
+// `public` and duplicates are folded; a system schema is refused.
+func wipeSQL(schemas []string) (string, error) {
 	var b strings.Builder
 	b.WriteString("DROP SCHEMA IF EXISTS public CASCADE;\n")
+	seen := map[string]bool{"public": true}
 	for _, s := range schemas {
+		if s = strings.TrimSpace(s); s == "" || seen[s] {
+			continue
+		}
+		if s == "information_schema" || strings.HasPrefix(s, "pg_") {
+			return "", fmt.Errorf("refusing to drop system schema %q", s)
+		}
+		seen[s] = true
 		b.WriteString("DROP SCHEMA IF EXISTS " + pgx.Identifier{s}.Sanitize() + " CASCADE;\n")
 	}
 	b.WriteString("CREATE SCHEMA public;")
-	return b.String()
+	return b.String(), nil
 }
 
 // Close releases the underlying pgx connection. Idempotent —
