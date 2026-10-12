@@ -90,17 +90,43 @@ func TestSanitizeDurableSuffix(t *testing.T) {
 		// Dot -> underscore (NATS durable names disallow dots).
 		{"user.created", "user_created"},
 		{"a.b.c", "a_b_c"},
-		// `*` -> `s` (single-segment wildcard tag).
-		{"user.*", "user_s"},
-		{"*.created", "s_created"},
-		// `**` -> `ss`.
-		{"user.**", "user_ss"},
-		// Other special chars -> `x` (catch-all sanitizer).
-		{"user-created", "userxcreated"},
+		// Everything else is escaped behind `-`, which never appears
+		// unescaped, so the mapping is injective.
+		{"user.*", "user_-s"},
+		{"*.created", "-s_created"},
+		{"user.**", "user_-s-s"},
+		{"user-created", "user-dcreated"},
+		{"user_created", "user-ucreated"},
+		{"a b", "a-x20b"},
 	}
 	for _, c := range cases {
 		if got := sanitizeDurableSuffix(c.in); got != c.want {
 			t.Errorf("sanitizeDurableSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Distinct filters must never share a consumer-name suffix: two
+// subscriptions on one channel would otherwise share one consumer and
+// compete for its messages. Includes the pairs the earlier lossy mapping
+// collapsed (`*` vs a literal `s`, `-` vs `_` vs a literal `x`).
+func TestSanitizeDurableSuffix_Injective(t *testing.T) {
+	filters := []string{
+		"user.*", "user.s", "user.**", "user.ss", "user.-s", "user._s",
+		"a-b", "a_b", "axb", "a.b", "a-db", "a-ub", "a-x2db", "a b",
+		"*", "s", "-s", ".", "_", "x", "", "a..b", "a.-.b",
+	}
+	seen := map[string]string{}
+	for _, f := range filters {
+		got := sanitizeDurableSuffix(f)
+		if prev, dup := seen[got]; dup {
+			t.Errorf("filters %q and %q both map to %q", prev, f, got)
+		}
+		seen[got] = f
+		for _, r := range got {
+			if !isNameRune(r) {
+				t.Errorf("sanitizeDurableSuffix(%q) = %q contains %q, illegal in a consumer name", f, got, r)
+			}
 		}
 	}
 }

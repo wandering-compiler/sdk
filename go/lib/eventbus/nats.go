@@ -70,8 +70,27 @@ type NatsBusOptions struct {
 	// override. Channels missing from the map use the
 	// Default* values. Codegen-generated wiring fills this from
 	// the parser's per-event ResolvedRetry rolled up to
-	// channel granularity.
+	// channel granularity. Keys must be valid channel names
+	// ([ValidateChannel]); NewNatsBus refuses one that is not.
 	ChannelRetries map[string]ChannelRetry
+
+	// Retention bounds every channel stream this bus creates (JetStream
+	// MaxAge / MaxMsgs, oldest discarded first). Zero value -> messages
+	// older than [DefaultStreamMaxAge] are removed, no count limit. The
+	// limits are (re)applied each time the bus ensures the stream, so they
+	// replace limits configured on the broker by other means.
+	Retention StreamRetention
+
+	// DLQRetention bounds every dead-letter stream this bus creates. Zero
+	// value -> [DefaultDLQMaxAge], no count limit.
+	DLQRetention StreamRetention
+
+	// PublishTimeout bounds one Dispatch: the stream check, the publish and
+	// the wait for JetStream's acknowledgement. Zero ->
+	// [DefaultPublishTimeout]. A Dispatch that runs out of time fails (and
+	// is reported to the Observer) instead of holding its caller for the
+	// client's full request timeout during a broker outage.
+	PublishTimeout time.Duration
 }
 
 // NatsBus implements Dispatcher + SubscriberFactory against a
@@ -155,6 +174,20 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	}
 	if !strings.HasPrefix(opts.DSN, "nats://") && !strings.HasPrefix(opts.DSN, "tls://") {
 		return nil, fmt.Errorf("NatsBusOptions: DSN %q must use nats:// or tls:// scheme", opts.DSN)
+	}
+	// The prefix starts every JetStream consumer name, which forbids `.`,
+	// `*`, `>` and whitespace: refuse it here rather than at the first
+	// Subscribe.
+	for _, r := range opts.DurablePrefix {
+		if !isNameRune(r) {
+			return nil, fmt.Errorf("NatsBusOptions: DurablePrefix %q contains %q (allowed: letters, digits, '_' and '-')", opts.DurablePrefix, r)
+		}
+	}
+	if err := validateChannelKeys("NatsBusOptions.ChannelRetries", opts.ChannelRetries); err != nil {
+		return nil, err
+	}
+	if opts.PublishTimeout <= 0 {
+		opts.PublishTimeout = DefaultPublishTimeout
 	}
 	if opts.DefaultMaxDeliver == 0 {
 		opts.DefaultMaxDeliver = 3
@@ -270,11 +303,26 @@ func (b *NatsBus) Close(ctx context.Context) error {
 // directly; the generated emit interceptor wraps the call in
 // `_ = bus.Dispatch(...)` per fire-and-forget semantics.
 func (b *NatsBus) Dispatch(ctx context.Context, channel, topic string, envelope proto.Message) error {
+	if err := validateEmit(channel, topic); err != nil {
+		b.opts.Observer.OnEmitFailure(channel, topic, err)
+		return err
+	}
+	if b.conn.IsClosed() {
+		// The client gave up reconnecting (or Close ran): no publish can
+		// succeed, so do not spend the timeout finding that out per event.
+		err := fmt.Errorf("eventbus nats: connection is closed: %w", natsgo.ErrConnectionClosed)
+		b.opts.Observer.OnEmitFailure(channel, topic, err)
+		return err
+	}
 	// Detach from the caller's (cancellable) RPC ctx so a fire-and-forget
 	// emit isn't lost when the originating request ctx is already cancelled
 	// — mirrors MemoryBus.Dispatch (R-bus-4). Trace/baggage carry forward;
-	// cancellation does not.
-	pubCtx := context.WithoutCancel(ctx)
+	// cancellation does not. The emit runs on the committing goroutine, so
+	// the whole of it — stream check, publish, acknowledgement — is bounded
+	// by PublishTimeout: during an outage each event fails after that long
+	// instead of after the client's own request timeout.
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.opts.PublishTimeout)
+	defer cancel()
 	if err := b.ensureStream(pubCtx, channel); err != nil {
 		b.opts.Observer.OnEmitFailure(channel, topic, err)
 		return err
@@ -325,6 +373,9 @@ func natsStreamMissing(err error) bool {
 // not clear, so on a channel used before Close the whole call is local and
 // would have succeeded.
 func (b *NatsBus) Subscriber(ctx context.Context, channel string) (Subscriber, error) {
+	if err := ValidateChannel(channel); err != nil {
+		return nil, err
+	}
 	if b.isClosed() {
 		return nil, ErrBusClosed
 	}
@@ -367,6 +418,7 @@ func (b *NatsBus) ensureStream(ctx context.Context, channel string) error {
 		Subjects:  []string{channel + ".>"},
 		Retention: jetstream.LimitsPolicy,
 	}
+	applyNatsRetention(&cfg, b.opts.Retention, DefaultStreamMaxAge)
 	_, err := b.js.CreateOrUpdateStream(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("ensure stream %q: %w", channel, err)
@@ -376,6 +428,18 @@ func (b *NatsBus) ensureStream(ctx context.Context, channel string) error {
 	b.streams[channel] = true
 	b.mu.Unlock()
 	return nil
+}
+
+// applyNatsRetention writes the resolved retention limits onto a stream
+// config. Oldest messages are discarded first; -1 is JetStream's "no limit".
+func applyNatsRetention(cfg *jetstream.StreamConfig, r StreamRetention, defaultAge time.Duration) {
+	maxAge, maxMsgs := r.limits(defaultAge)
+	cfg.Discard = jetstream.DiscardOld
+	cfg.MaxAge = maxAge
+	cfg.MaxMsgs = -1
+	if maxMsgs > 0 {
+		cfg.MaxMsgs = maxMsgs
+	}
 }
 
 // ensureDLQStream materialises the dead-letter stream that
@@ -400,6 +464,7 @@ func (b *NatsBus) ensureDLQStream(ctx context.Context, channel string) error {
 		Subjects:  []string{base, wildcard},
 		Retention: jetstream.LimitsPolicy,
 	}
+	applyNatsRetention(&cfg, b.opts.DLQRetention, DefaultDLQMaxAge)
 	if _, err := b.js.CreateOrUpdateStream(ctx, cfg); err != nil {
 		return fmt.Errorf("ensure dlq stream %q: %w", name, err)
 	}
@@ -1276,25 +1341,45 @@ func natsSubject(channel, topic string) string {
 	return channel + "." + topic
 }
 
-// sanitizeDurableSuffix turns a topic-glob filter into a
-// JetStream-safe durable-name suffix. NATS durable names
-// allow alphanumeric + `-` + `_`; dots and wildcards (`*`,
-// `**`) get translated.
+// sanitizeDurableSuffix turns a topic-glob filter into a consumer-name
+// suffix that is legal on both brokers (JetStream consumer names allow
+// letters, digits, `_` and `-`) and INJECTIVE: two distinct filters never
+// share a suffix, so two subscriptions on one channel never share — and
+// compete for — one consumer.
+//
+// Letters and digits are kept and `.` becomes `_`, so a plain dotted filter
+// (`user.created` → `user_created`) maps exactly as it always has and its
+// existing consumer is reused. Every other character is escaped behind `-`,
+// which therefore never appears unescaped:
+//
+//   - -> -s     _  -> -u     -  -> -d     other byte -> -xHH
+//
+// (Before this encoding `*` became a bare `s`, `_` and `-` a bare `x`, so
+// `user.*` and `user.s` — or `a-b` and `a_b` — collided. Consumers for
+// filters containing those characters are renamed by this change.)
 func sanitizeDurableSuffix(filter string) string {
+	const hexDigits = "0123456789abcdef"
 	var b strings.Builder
 	b.Grow(len(filter))
-	for _, r := range filter {
+	for i := 0; i < len(filter); i++ {
+		c := filter[i]
 		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '.':
+		case c >= 'a' && c <= 'z',
+			c >= 'A' && c <= 'Z',
+			c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case c == '.':
 			b.WriteByte('_')
-		case r == '*':
-			b.WriteByte('s')
+		case c == '*':
+			b.WriteString("-s")
+		case c == '_':
+			b.WriteString("-u")
+		case c == '-':
+			b.WriteString("-d")
 		default:
-			b.WriteByte('x')
+			b.WriteString("-x")
+			b.WriteByte(hexDigits[c>>4])
+			b.WriteByte(hexDigits[c&0x0f])
 		}
 	}
 	return b.String()

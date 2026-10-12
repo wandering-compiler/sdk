@@ -31,8 +31,12 @@ const FormatLocaleMetadataKey = "w17-format-locale"
 // the frozen table actually carries, mirroring what negotiateCatalog does for
 // message catalogs. A clean tag is returned untouched; [ResolveFormats] owns
 // the base-language and `en` fallbacks from there.
+//
+// Like [LocaleFromContext] it reads INCOMING metadata first, then OUTGOING:
+// a gateway has no incoming gRPC metadata, and the format locale it renders
+// its own messages in lives on the outgoing side it is about to send.
 func FormatLocaleFromContext(ctx context.Context) string {
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
+	for _, md := range []metadata.MD{incomingMD(ctx), outgoingMD(ctx)} {
 		if vals := md.Get(FormatLocaleMetadataKey); len(vals) > 0 {
 			if v := strings.TrimSpace(vals[len(vals)-1]); v != "" {
 				return negotiateFormatLocale(v)

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -85,8 +86,27 @@ type RedisBusOptions struct {
 	// DefaultAckWait per-channel. Used by the claim loop's
 	// XPENDING idle threshold + the past-MaxDeliver DLQ
 	// check. Channels missing from the map fall back to
-	// Default*.
+	// Default*. Keys must be valid channel names
+	// ([ValidateChannel]); NewRedisBus refuses one that is not.
 	ChannelRetries map[string]ChannelRetry
+
+	// Retention bounds every channel stream this bus writes. Applied on
+	// each XADD: the age limit as `MINID ~ <now - MaxAge>`, the count
+	// limit as `MAXLEN ~ N` (approximate trimming, so a stream may briefly
+	// hold a little more). Zero value -> entries older than
+	// [DefaultStreamMaxAge] are trimmed, no count limit. The age is
+	// measured against this process's clock, since entry IDs carry the
+	// broker's millisecond time.
+	Retention StreamRetention
+
+	// DLQRetention bounds every dead-letter stream (`<channel>.dlq`) the
+	// same way. Zero value -> [DefaultDLQMaxAge], no count limit.
+	DLQRetention StreamRetention
+
+	// PublishTimeout bounds one Dispatch (the XADD and its reply). Zero ->
+	// [DefaultPublishTimeout]. Without it a Dispatch during an outage
+	// waited for the client's dial and read timeouts across its retries.
+	PublishTimeout time.Duration
 }
 
 // RedisBus implements Dispatcher + SubscriberFactory against a
@@ -220,6 +240,12 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("RedisBusOptions: DSN %q: %w", opts.DSN, err)
 	}
+	if err := validateChannelKeys("RedisBusOptions.ChannelRetries", opts.ChannelRetries); err != nil {
+		return nil, err
+	}
+	if opts.PublishTimeout <= 0 {
+		opts.PublishTimeout = DefaultPublishTimeout
+	}
 	if opts.ConsumerName == "" {
 		host, err := os.Hostname()
 		if err != nil || host == "" {
@@ -286,6 +312,10 @@ func (b *RedisBus) Close(ctx context.Context) error {
 // per-subscription MatchGlob filtering (Redis Streams has no
 // native subject hierarchy like NATS).
 func (b *RedisBus) Dispatch(ctx context.Context, channel, topic string, envelope proto.Message) error {
+	if err := validateEmit(channel, topic); err != nil {
+		b.opts.Observer.OnEmitFailure(channel, topic, err)
+		return err
+	}
 	raw, err := proto.Marshal(envelope)
 	if err != nil {
 		b.opts.Observer.OnEmitFailure(channel, topic, err)
@@ -295,14 +325,13 @@ func (b *RedisBus) Dispatch(ctx context.Context, channel, topic string, envelope
 	// emit isn't lost when the originating request ctx is already cancelled
 	// — mirrors MemoryBus.Dispatch (R-bus-4). Trace/baggage carry forward;
 	// cancellation does not.
-	pubCtx := context.WithoutCancel(ctx)
-	if err := b.client.XAdd(pubCtx, &goredis.XAddArgs{
-		Stream: channel,
-		Values: map[string]any{
-			redisFieldTopic:   topic,
-			redisFieldPayload: string(raw),
-		},
-	}).Err(); err != nil {
+	// Bounded by PublishTimeout: the emit runs on the committing goroutine.
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.opts.PublishTimeout)
+	defer cancel()
+	if err := b.xadd(pubCtx, channel, map[string]any{
+		redisFieldTopic:   topic,
+		redisFieldPayload: string(raw),
+	}, b.opts.Retention, DefaultStreamMaxAge); err != nil {
 		b.opts.Observer.OnEmitFailure(channel, topic, err)
 		return err
 	}
@@ -322,6 +351,9 @@ func (b *RedisBus) Dispatch(ctx context.Context, channel, topic string, envelope
 // on the bus's groups cache, which Close does not clear, so on a channel
 // used before Close the whole call is local and would have succeeded.
 func (b *RedisBus) Subscriber(ctx context.Context, channel string) (Subscriber, error) {
+	if err := ValidateChannel(channel); err != nil {
+		return nil, err
+	}
 	if b.isClosed() {
 		return nil, ErrBusClosed
 	}
@@ -930,10 +962,7 @@ func (s *redisSubscription) routeToDLQ(ctx context.Context, msgID string) {
 		return
 	}
 	topic, _ := msgs[0].Values[redisFieldTopic].(string)
-	if addErr := s.bus.client.XAdd(ctx, &goredis.XAddArgs{
-		Stream: dlqStream(s.channel),
-		Values: msgs[0].Values,
-	}).Err(); addErr != nil {
+	if addErr := s.bus.xadd(ctx, dlqStream(s.channel), msgs[0].Values, s.bus.opts.DLQRetention, DefaultDLQMaxAge); addErr != nil {
 		// DLQ write failed — leave the origin in the PEL for a retry
 		// rather than acking and dropping the payload entirely.
 		s.bus.opts.Observer.OnDeliverFailure(s.channel, topic, addErr)
@@ -942,6 +971,30 @@ func (s *redisSubscription) routeToDLQ(ctx context.Context, msgID string) {
 	// Only now that the payload is safely in the DLQ do we ack the origin.
 	_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
 	s.bus.opts.Observer.OnDrop(s.channel, topic, DropReasonMaxDeliverExceeded)
+}
+
+// xadd appends one entry to stream, trimming it to the retention limits in
+// the same command where possible. With both an age and a count limit the
+// count is enforced by a follow-up XTRIM; that trim is best-effort — the
+// entry is written either way, and the next append trims again.
+func (b *RedisBus) xadd(ctx context.Context, stream string, values any, r StreamRetention, defaultAge time.Duration) error {
+	maxAge, maxMsgs := r.limits(defaultAge)
+	args := &goredis.XAddArgs{Stream: stream, Values: values}
+	switch {
+	case maxAge > 0:
+		args.MinID = strconv.FormatInt(time.Now().Add(-maxAge).UnixMilli(), 10) + "-0"
+		args.Approx = true
+	case maxMsgs > 0:
+		args.MaxLen = maxMsgs
+		args.Approx = true
+	}
+	if err := b.client.XAdd(ctx, args).Err(); err != nil {
+		return err
+	}
+	if maxAge > 0 && maxMsgs > 0 {
+		_ = b.client.XTrimMaxLenApprox(ctx, stream, maxMsgs, 0).Err()
+	}
+	return nil
 }
 
 // dlqStream composes the DLQ stream key for a channel.

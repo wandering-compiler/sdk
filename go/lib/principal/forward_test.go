@@ -67,19 +67,64 @@ func TestForwardToOutgoing_ExcludesNonPrincipal(t *testing.T) {
 	}
 }
 
-// TestForwardToOutgoing_PreservesExplicitOutgoing pins idempotence and the
-// override rule: a value the handler deliberately set on the OUTGOING side
-// (e.g. a cross-tenant call) wins and is never duplicated by the relay.
-func TestForwardToOutgoing_PreservesExplicitOutgoing(t *testing.T) {
-	ctx := metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("x-w17-scope-org_id", "from-caller"))
-	ctx = metadata.AppendToOutgoingContext(ctx, "x-w17-scope-org_id", "override")
+// TestForwardToOutgoing_VerifiedPrincipalWins pins the precedence rule: the
+// verified principal on the INCOMING side replaces whatever the outgoing side
+// carries for the relayed keys. A value already on the outgoing side cannot
+// be told apart from a context reused across requests, so an outgoing scope
+// for the same key is overwritten and an outgoing-only scope or label is
+// dropped. Non-relayed outgoing keys stay, nothing is duplicated, and a
+// second forward changes nothing.
+func TestForwardToOutgoing_VerifiedPrincipalWins(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"x-w17-user", "verified-env",
+		"x-w17-scope-org_id", "org-verified",
+		"w17-label-org_id", "org-verified",
+	))
+	ctx = metadata.AppendToOutgoingContext(ctx,
+		"x-w17-user", "stale-env",
+		"x-w17-scope-org_id", "org-stale",
+		"x-w17-scope-tenant_id", "tenant-stale",
+		"w17-label-region", "stale",
+		"x-w17-paging-limit", "50",
+		"w17-language", "cs",
+	)
 
 	ctx = principal.ForwardToOutgoing(ctx)
+	ctx = principal.ForwardToOutgoing(ctx) // idempotent
 
 	out, _ := metadata.FromOutgoingContext(ctx)
-	if got := out.Get("x-w17-scope-org_id"); len(got) != 1 || got[0] != "override" {
-		t.Errorf("outgoing scope = %v, want single [override] (explicit value preserved, not duplicated)", got)
+	for k, want := range map[string]string{
+		"x-w17-user":         "verified-env",
+		"x-w17-scope-org_id": "org-verified",
+		"w17-label-org_id":   "org-verified",
+		"x-w17-paging-limit": "50",
+		"w17-language":       "cs",
+	} {
+		if got := out.Get(k); len(got) != 1 || got[0] != want {
+			t.Errorf("outgoing[%q] = %v, want single [%q]", k, got, want)
+		}
+	}
+	for _, k := range []string{"x-w17-scope-tenant_id", "w17-label-region"} {
+		if got := out.Get(k); len(got) != 0 {
+			t.Errorf("outgoing[%q] = %v, want dropped (not part of the verified principal)", k, got)
+		}
+	}
+}
+
+// TestForwardToOutgoing_GatewayStampsUntouched: the gateway stamps the
+// principal on the OUTGOING side directly and its incoming side carries no
+// principal (the client's copy was stripped), so the relay must leave those
+// stamps exactly as written.
+func TestForwardToOutgoing_GatewayStampsUntouched(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("w17-language", "cs"))
+	ctx = metadata.AppendToOutgoingContext(ctx,
+		"x-w17-user", "env", "x-w17-scope-org_id", "org-1", "w17-label-org_id", "org-1")
+	ctx = principal.ForwardToOutgoing(ctx)
+	out, _ := metadata.FromOutgoingContext(ctx)
+	for k, want := range map[string]string{"x-w17-user": "env", "x-w17-scope-org_id": "org-1", "w17-label-org_id": "org-1"} {
+		if got := out.Get(k); len(got) != 1 || got[0] != want {
+			t.Errorf("outgoing[%q] = %v, want single [%q]", k, got, want)
+		}
 	}
 }
 

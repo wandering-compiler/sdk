@@ -116,8 +116,8 @@ func DialOpts(enabled bool) []grpc.DialOption {
 // The relay is scoped to the gateway's own stamps — the principal envelope,
 // the data scopes and the broadcast labels (see
 // [principal.ForwardToOutgoing]): paging / tracing / tx-routing metadata are
-// deliberately untouched, and an explicit outgoing value the handler set is
-// never overwritten.
+// deliberately untouched, and the verified incoming principal replaces any
+// copy of those keys already on the outgoing side.
 func forwardPrincipalUnaryInterceptor(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	return invoker(principal.ForwardToOutgoing(ctx), method, req, reply, cc, opts...)
 }

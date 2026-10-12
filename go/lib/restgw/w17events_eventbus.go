@@ -3,9 +3,11 @@ package restgw
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
+	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/eventbus"
 )
 
@@ -98,8 +100,9 @@ const hubClientBuffer = 64
 // (skip=true) when the topic shouldn't be forwarded (e.g.
 // a delivery the handler doesn't recognise); the source
 // drops without erroring. Returns (err) when the envelope
-// is corrupt — the source logs + drops; the SSE connection
-// stays open.
+// is corrupt — the source logs it (with channel and topic),
+// reports it to the error reporter and drops the event; the SSE
+// connection stays open.
 //
 // labels are the event's tenant/scope labels (envelope.labels,
 // stamped at emit time). The source delivers the frame to a
@@ -286,7 +289,11 @@ func (e *EventbusEventSource) ensureOpen() error {
 			drainAll()
 			return fmt.Errorf("eventbus source: subscriber for channel %q: %w", channel, err)
 		}
-		if err := sub.Subscribe(context.Background(), "**", e.handleDelivery); err != nil {
+		ch := channel
+		handler := func(ctx context.Context, topic string, envelope []byte) error {
+			return e.handleDelivery(ctx, ch, topic, envelope)
+		}
+		if err := sub.Subscribe(context.Background(), "**", handler); err != nil {
 			// Drain this one too: Subscriber() handed back a live handle
 			// whether or not the subscription took.
 			subs = append(subs, sub)
@@ -318,12 +325,22 @@ func (e *EventbusEventSource) isOpened() bool {
 // interested client. Returning nil acks the delivery (the bus
 // protocol is at-least-once / fire-and-forget at this layer —
 // there's no error envelope into the FE).
-func (e *EventbusEventSource) handleDelivery(_ context.Context, topic string, envelope []byte) error {
+//
+// A transcode error means the envelope could not be decoded — a corrupt
+// payload or a producer/consumer schema mismatch. The event is dropped for
+// every client (it cannot be rendered), and the drop is logged with its
+// channel and topic and reported, since nothing downstream will ever see it.
+func (e *EventbusEventSource) handleDelivery(ctx context.Context, channel, topic string, envelope []byte) error {
 	if !e.anyInterested(topic) {
 		return nil
 	}
 	payload, labels, skip, err := e.transcode(topic, envelope)
-	if err != nil || skip {
+	if err != nil {
+		log.Printf("restgw: /w17-events dropped an event it could not transcode (channel %q, topic %q): %v", channel, topic, err)
+		observx.ReportError(ctx, fmt.Errorf("w17-events transcode (channel %q, topic %q): %w", channel, topic, err))
+		return nil
+	}
+	if skip {
 		return nil
 	}
 	e.fanOut(topic, labels, Event{Topic: topic, Data: payload})
