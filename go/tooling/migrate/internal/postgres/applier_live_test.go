@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -198,5 +199,65 @@ func TestApplier_PostTxWaitsForTheAdvisoryLockAndRechecks_Live(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("ApplyPostTx never returned after the lock was released")
+	}
+}
+
+// The run lock serialises runs on one database: a second acquirer is
+// refused at once; once the holder's session is killed the server frees
+// the lock, and the holder's Check and Release both report the loss.
+func TestRunLock_SerialisesAndReportsALostSession_Live(t *testing.T) {
+	dsn := liveDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a, err := postgres.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = a.Close() }()
+	b, err := postgres.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	rl, err := a.AcquireRunLock(ctx)
+	if err != nil {
+		t.Fatalf("AcquireRunLock: %v", err)
+	}
+	lock, ok := rl.(migrate.CheckedRunLock)
+	if !ok {
+		t.Fatalf("the Postgres run lock (%T) is not a CheckedRunLock", rl)
+	}
+	if err := lock.Check(ctx); err != nil {
+		t.Fatalf("Check on a held lock = %v", err)
+	}
+	if _, err := b.AcquireRunLock(ctx); !errors.Is(err, migrate.ErrLockHeld) {
+		t.Fatalf("second AcquireRunLock = %v, want ErrLockHeld", err)
+	}
+
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+	if _, err := admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND objsubid = 2 AND granted AND pid <> pg_backend_pid()`); err != nil {
+		t.Fatalf("terminate the holder: %v", err)
+	}
+	var second migrate.RunLock
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if second, err = b.AcquireRunLock(ctx); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("AcquireRunLock after the holder was killed: %v", err)
+		}
+	}
+	defer func() { _ = second.Release(context.Background()) }()
+	if err := lock.Check(ctx); !errors.Is(err, migrate.ErrLockLost) {
+		t.Fatalf("Check after the session was killed = %v, want ErrLockLost", err)
+	}
+	if err := lock.Release(ctx); !errors.Is(err, migrate.ErrLockLost) {
+		t.Fatalf("Release after the session was killed = %v, want ErrLockLost", err)
 	}
 }

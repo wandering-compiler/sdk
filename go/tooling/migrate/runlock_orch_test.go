@@ -3,9 +3,11 @@ package migrate
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 )
@@ -73,9 +75,8 @@ func TestRun_AcquiresAndReleasesRunLock(t *testing.T) {
 	}
 }
 
-// When the target's run-lock is already held by a live run,
-// AcquireRunLock returns ErrLockHeld and the orchestrator must
-// fail-fast WITHOUT applying anything (no double-apply).
+// With no wait (LockWait < 0), a run-lock held by a live run aborts the
+// run at once WITHOUT applying anything (no double-apply).
 func TestRun_LockHeldAbortsFailFast(t *testing.T) {
 	m := signedMig(t, "ts-1", "main", "CREATE TABLE x;")
 	dir := seedMigs(t, m)
@@ -85,6 +86,7 @@ func TestRun_LockHeldAbortsFailFast(t *testing.T) {
 	err := Run(context.Background(), Config{
 		Targets: tg, MigrationsDir: dir,
 		ApplierFor: func(_ string) (Applier, error) { return fake, nil },
+		LockWait:   -1,
 	})
 	if err == nil || !strings.Contains(err.Error(), "another migration run is in progress") {
 		t.Fatalf("want fail-fast lock-held abort, got %v", err)
@@ -137,5 +139,75 @@ func TestRunRollback_AcquiresRunLock(t *testing.T) {
 	}
 	if len(fake.rolled) != 1 {
 		t.Errorf("rolled = %v, want [ts-1]", fake.rolled)
+	}
+}
+
+// releasingLockFake reports the lock held for its first `heldFor` attempts,
+// then grants it — another run finishing while this one waits.
+type releasingLockFake struct {
+	lockFake
+	heldFor int32
+	tries   int32
+}
+
+func (f *releasingLockFake) AcquireRunLock(ctx context.Context) (RunLock, error) {
+	if atomic.AddInt32(&f.tries, 1) <= f.heldFor {
+		return nil, ErrLockHeld
+	}
+	return f.lockFake.AcquireRunLock(ctx)
+}
+
+// A run that finds the lock held waits for it, says so once, and applies
+// when the holder lets go — the replica that lost the race succeeds.
+func TestRun_WaitsForAHeldLockAndApplies(t *testing.T) {
+	prev := lockRetryEvery
+	lockRetryEvery = 10 * time.Millisecond
+	t.Cleanup(func() { lockRetryEvery = prev })
+
+	m := signedMig(t, "ts-1", "main", "CREATE TABLE x;")
+	dir := seedMigs(t, m)
+	fake := &releasingLockFake{heldFor: 3}
+	var out strings.Builder
+	err := Run(context.Background(), Config{
+		Targets: tgts(tgt("main", m.GetId(), m.GetContentSha256())), MigrationsDir: dir,
+		ApplierFor: func(_ string) (Applier, error) { return fake, nil },
+		Out:        &out,
+	})
+	if err != nil {
+		t.Fatalf("Run = %v, want it to wait and apply", err)
+	}
+	if len(fake.applied) != 1 {
+		t.Errorf("applied = %v, want [ts-1]", fake.applied)
+	}
+	if n := strings.Count(out.String(), "waiting up to"); n != 1 {
+		t.Errorf("the wait was said %d times, want once; output: %q", n, out.String())
+	}
+}
+
+// The wait is bounded: a lock still held when LockWait runs out aborts the
+// run, naming how long it waited, with nothing applied.
+func TestRun_LockWaitIsBounded(t *testing.T) {
+	prev := lockRetryEvery
+	lockRetryEvery = 10 * time.Millisecond
+	t.Cleanup(func() { lockRetryEvery = prev })
+
+	m := signedMig(t, "ts-1", "main", "CREATE TABLE x;")
+	dir := seedMigs(t, m)
+	fake := &lockFake{acquireErr: ErrLockHeld}
+	start := time.Now()
+	err := Run(context.Background(), Config{
+		Targets: tgts(tgt("main", m.GetId(), m.GetContentSha256())), MigrationsDir: dir,
+		ApplierFor: func(_ string) (Applier, error) { return fake, nil },
+		Out:        io.Discard,
+		LockWait:   200 * time.Millisecond,
+	})
+	if err == nil || !strings.Contains(err.Error(), "waited 200ms") {
+		t.Fatalf("Run = %v, want the abort naming the 200ms wait", err)
+	}
+	if took := time.Since(start); took < 200*time.Millisecond || took > 5*time.Second {
+		t.Errorf("gave up after %v, want ~200ms", took)
+	}
+	if len(fake.applied) != 0 {
+		t.Errorf("applied %v while the lock was held", fake.applied)
 	}
 }

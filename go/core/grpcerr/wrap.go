@@ -5,9 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -176,6 +180,9 @@ const (
 	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
 	CodeTooManyValues   = "TOO_MANY_VALUES"
 	CodeInternal        = "INTERNAL"
+	// CodeDatabaseUnavailable: the database could not be reached, so the
+	// call ran nothing and may be retried as it is.
+	CodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
 
 	// The ACL gate's three refusals. All three are PERMISSION_DENIED on the
 	// wire, and until 2026-09-28 that was ALL a caller could see: the gate said
@@ -447,6 +454,21 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return forCaller(ctx, codes.DeadlineExceeded, method, "deadline exceeded", CodeTimeout, UserMsgid(codes.DeadlineExceeded), nil)
+	}
+	// The database could not be reached at all: the connection was never
+	// established, so nothing this call sent ran. That is UNAVAILABLE — the
+	// one code the w17 clients retry by themselves, because it proves the
+	// work did not happen. It used to be Internal plus an error report per
+	// request, so a database outage flooded the error tracker with one
+	// event for every call made while it lasted. It is reported once a
+	// minute instead.
+	//
+	// Only a connection that never came up. One that broke mid-call leaves
+	// the outcome unknown (the statement may have run), and it stays on the
+	// internal path below, reported and never retried for the caller.
+	if isConnectFailure(err) {
+		reportOutage(ctx, method, err)
+		return forCaller(ctx, codes.Unavailable, method, "database unavailable", CodeDatabaseUnavailable, UserMsgid(codes.Unavailable), nil)
 	}
 	// SQL "data exception" class — a value the CALLER supplied that the
 	// column cannot hold. It is not a constraint violation (no constraint
@@ -773,4 +795,47 @@ func codeForKind(kind string) codes.Code {
 		return codes.InvalidArgument
 	}
 	return codes.Internal
+}
+
+// isConnectFailure reports an error from a database the call never reached:
+// the dial failed, or the server refused the connection. A server that
+// answered — an authentication failure, any SQLSTATE — is not one; neither
+// is a connection that broke after it was up.
+func isConnectFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return false
+	}
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// outageReports throttles the report of an unreachable database to one a
+// minute: the outage is worth an alert, each failed call during it is not.
+var outageReports struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+// outageReportEvery is how often an ongoing outage is reported again.
+var outageReportEvery = time.Minute
+
+func reportOutage(ctx context.Context, method string, err error) {
+	outageReports.mu.Lock()
+	now := time.Now()
+	due := outageReports.last.IsZero() || now.Sub(outageReports.last) >= outageReportEvery
+	if due {
+		outageReports.last = now
+	}
+	outageReports.mu.Unlock()
+	if due {
+		observx.ReportError(ctx, fmt.Errorf("%s: the database is unreachable (reported at most once a minute while it lasts; calls get UNAVAILABLE): %w", method, err))
+	}
 }
