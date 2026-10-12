@@ -1121,7 +1121,7 @@ statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E33.1 | Precedence MUST be: nil → nil; `sql.ErrNoRows` → NotFound; serialization or deadlock → Aborted; context canceled or deadline → Canceled or DeadlineExceeded (not reported); class-22 caller value errors → InvalidArgument; mapped constraint → InvalidArgument with a field detail; unmapped constraint → FailedPrecondition and a report; anything else → Internal and a report | `wrap_test.go`, `wrap_ctx_test.go`, `wrap_dialect_test.go` (each arm) |
+| E33.1 | Precedence MUST be: nil → nil; `sql.ErrNoRows` → NotFound; serialization or deadlock → Aborted; context canceled or deadline → Canceled or DeadlineExceeded (not reported); a database the call never reached → Unavailable with `DATABASE_UNAVAILABLE` (reported at most once a minute); class-22 caller value errors → InvalidArgument; mapped constraint → InvalidArgument with a field detail; unmapped constraint → FailedPrecondition and a report; anything else → Internal and a report | `wrap_test.go`, `wrap_ctx_test.go`, `wrap_dialect_test.go` (each arm) |
 | E33.2 | Every branch MUST attach a detail with a stable code and a translated sentence | `constraint_locale_test.go`, `foruserwith_test.go`, `onempty_test.go` |
 | E33.3 | The raw driver error MUST NOT become the status message; Internal says only `<method>: internal error` | `TestWrap_InternalOnUnknownError`, `TestWrap_InternalErrorRoutesViaErrorx` |
 | E33.4 | A bare SQLite FK failure MUST be attributed only when the whole service has exactly one FK | `TestWrap_SQLite_FK_SingleFKTableWithMultiFKElsewhere_NoAttribution` |
@@ -1129,6 +1129,7 @@ statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message
 | E33.6 | Panic recovery (`RecoverPanic`, the interceptors, `RecoverPump`) MUST return a generic Internal and report the stack | `recover_test.go`, `recover_interceptor_test.go` |
 | E33.7 | `Wrap` MUST NOT retry on its own; Aborted is the caller's signal | holds by construction (`Wrap` takes an error, not an operation it could run again); no test |
 | E33.8 | Constraint and table names MUST NOT reach a client on any surface | `TestConstraintFailure_NamesNoConstraintOrTableToTheClient` (REST and the MCP reading; the generated rpc surface is not covered here) |
+| E33.9 | A database the call never reached (the dial failed or the connection was refused) MUST answer Unavailable, the code w17 clients retry, and an outage MUST be reported at most once a minute rather than once per call; a connection that broke mid-call, or a server that answered (an authentication failure), MUST stay Internal and be reported | `TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce`, `TestWrap_AnOngoingOutageIsReportedAgainAfterTheWindow`, `TestWrap_ABrokenConnectionOrAnAnsweringServerIsNotUnavailable` |
 
 **Deliberate limits.**
 - `RecoverPump` blocks if its error channel is unbuffered and nobody reads it.

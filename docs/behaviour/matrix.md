@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-129 interactions; 20 have no test, 32 more are covered only in part.
+129 interactions; 19 have no test, 32 more are covered only in part.
 
 ## Server × Server
 
@@ -98,7 +98,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
 | Multipart uploads (E20) | Blob store (D13) | Rolling back a failed request MUST NOT remove an object another request references; every upload owns its own object. | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
-| Database error mapping (E33) | Database outage | A transient database failure is surfaced as retryable and not reported as a fault. | no test |
+| Database error mapping (E33) | Database outage | A database the call never reached answers Unavailable (retried by the w17 clients, since nothing ran) and the outage is reported at most once a minute; a connection that broke mid-call stays Internal and is reported, never retried for the caller. | `TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce`, `TestWrap_AnOngoingOutageIsReportedAgainAfterTheWindow`, `TestWrap_ABrokenConnectionOrAnAnsweringServerIsNotUnavailable` |
 | REST gateway limit | Cursor paging (D9) | The gateway clamps `?limit=` and forwards it; storage clamps the forwarded limit again to `MaxLimit` (10000) and reads `0` as absent; no caller receives an unbounded result. | `TestClampLimit`, `TestLimitFromIncomingMD_ClampsToMaxLimit` |
 | REST gateway auth and data scopes | Cursor paging (D9) | Each resumed page re-authorizes from the caller's verified identity; scopes come from metadata, not from request fields in the cursor. A cursor signed with a `CallerKey` does not decode for another caller; generated code must sign with it for the binding to apply. | `TestCallerKey_ACursorDoesNotDecodeForAnotherCaller`, `TestDecodeCursor_ResumeReplacesTheRequest` (binding only; per-page re-authorization: no test) |
 | REST upload and download | Blob store (D13) | The gateway writes via `BuildKey`; readers use the same key form; a published object is never seen partially written. | `kvfs_test.go`, `TestPutFromTempFile_CrossFS_ReaderNeverSeesPartialBody` |
