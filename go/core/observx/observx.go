@@ -261,6 +261,7 @@ var (
 	otlpExporter   *otlptrace.Exporter
 	meterProvider  *sdkmetric.MeterProvider
 	sentryEnabled  bool
+	sentryClient   *sentry.Client // the client MustInit bound; nil when off
 	debugEvents    bool
 	cfg            Config
 )
@@ -380,6 +381,7 @@ func initLocked(c Config) error {
 			return fmt.Errorf("observx: sentry init: %w", err)
 		}
 		sentryEnabled = true
+		sentryClient = sentry.CurrentHub().Client()
 	}
 
 	// OTel resource — shared by tracer + meter providers
@@ -559,6 +561,16 @@ func shutdownLocked(ctx context.Context) error {
 	}
 	if meterProvider != nil && otel.GetMeterProvider() == metric.MeterProvider(meterProvider) {
 		otel.SetMeterProvider(metricnoop.NewMeterProvider())
+	}
+	// Same for Sentry: a client left bound on the global hub kept sending
+	// for anyone calling sentry directly after Shutdown — and after a
+	// MustInit that failed part-way, which is meant to install nothing.
+	if sentryClient != nil {
+		if sentry.CurrentHub().Client() == sentryClient {
+			sentry.CurrentHub().BindClient(nil)
+		}
+		sentryClient.Close()
+		sentryClient = nil
 	}
 	for _, l := range limiters {
 		l.flush()

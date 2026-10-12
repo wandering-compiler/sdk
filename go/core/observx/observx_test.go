@@ -25,6 +25,7 @@ func resetForTest(t *testing.T) {
 	meterProvider = nil
 	otlpExporter = nil
 	sentryEnabled = false
+	sentryClient = nil
 	debugEvents = false
 	cfg = Config{}
 	mu.Unlock()
@@ -277,5 +278,27 @@ func TestShutdown_NilSafe(t *testing.T) {
 	// Shutdown without prior Init should not panic.
 	if err := Shutdown(context.Background()); err != nil {
 		t.Errorf("nil-state shutdown should be no-op; got %v", err)
+	}
+}
+
+// The stderr fallback writes one line per error: CR and LF inside the error
+// text are escaped, so a caller-influenced message cannot forge a second
+// log line.
+func TestReportError_StderrFallbackEscapesLineBreaks(t *testing.T) {
+	resetForTest(t)
+	_ = MustInit(Config{ServiceName: "test"})
+	defer func() { _ = Shutdown(context.Background()) }()
+	var buf bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(original)
+
+	ReportError(context.Background(), errors.New("first\nforged: admin logged in\r\nthird"))
+	out := strings.TrimSuffix(buf.String(), "\n")
+	if strings.ContainsAny(out, "\r\n") {
+		t.Fatalf("the error text broke the log line: %q", buf.String())
+	}
+	if !strings.Contains(out, `first\nforged: admin logged in\r\nthird`) {
+		t.Errorf("line breaks not escaped visibly: %q", out)
 	}
 }

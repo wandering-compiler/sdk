@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/service/bootstrap"
@@ -127,5 +130,93 @@ func TestShutdownDeadline_UnparseableIsLoggedAndDefaulted(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), bootstrap.EnvShutdownDeadline) || !strings.Contains(buf.String(), `"ten"`) {
 		t.Errorf("log = %q, want the variable and the value named", buf.String())
+	}
+}
+
+// The telemetry flush at the end of a run is bounded at 5s: a collector that
+// accepts the connection and never answers does not hold the process past
+// it.
+func TestRun_ObservabilityFlushIsBoundedAtFiveSeconds(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = c.Close() }() // held open, never answered
+		}
+	}()
+
+	obs := observx.Config{ServiceName: "bootstrap-flush-bound", OTelEndpoint: l.Addr().String(), OTelTLS: "off"}
+	traced := bootstrap.Func(func(ctx context.Context) error {
+		_, span := otel.Tracer("bootstrap-test").Start(ctx, "pending-at-shutdown")
+		span.End()
+		return nil
+	})
+	start := time.Now()
+	if err := bootstrap.Run(context.Background(), obs, traced); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if took := time.Since(start); took > 7*time.Second {
+		t.Fatalf("Run returned after %v with an unresponsive collector, want the flush bounded at ~5s", took.Round(100*time.Millisecond))
+	}
+}
+
+// Every component may report an error at once — failing or panicking —
+// and the supervisor still returns: the reports cannot block each other.
+func TestRun_EveryComponentFailingAtOnceDoesNotDeadlock(t *testing.T) {
+	const n = 64
+	comps := make([]bootstrap.Component, 0, n)
+	for i := 0; i < n; i++ {
+		if i%2 == 0 {
+			comps = append(comps, bootstrap.Func(func(context.Context) error { return errors.New("boot failed") }))
+		} else {
+			comps = append(comps, bootstrap.Func(func(context.Context) error { panic("boot exploded") }))
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- bootstrap.Run(context.Background(), testObs, comps...) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run = nil with every component failing")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return with every component failing at once")
+	}
+}
+
+// With no shutdown deadline, resource teardown is still bounded: a closer
+// that waits on its context is told to give up after 30s. Takes 30s by
+// construction.
+func TestRunGraceful_ResourceTeardownIsBoundedAtThirtySeconds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("30s teardown bound")
+	}
+	t.Setenv(bootstrap.EnvShutdownDeadline, "0")
+	var waited time.Duration
+	closer := func(ctx context.Context) error {
+		start := time.Now()
+		<-ctx.Done()
+		waited = time.Since(start)
+		return ctx.Err()
+	}
+	noop := bootstrap.Func(func(context.Context) error { return nil })
+	done := make(chan error, 1)
+	go func() {
+		done <- bootstrap.RunGraceful(context.Background(), testObs, []func(context.Context) error{closer}, noop)
+	}()
+	select {
+	case <-done:
+	case <-time.After(45 * time.Second):
+		t.Fatal("RunGraceful did not return: the closer was never told to give up")
+	}
+	if waited < 25*time.Second || waited > 35*time.Second {
+		t.Errorf("the closer's context ended after %v, want ~30s", waited.Round(time.Second))
 	}
 }

@@ -1,6 +1,8 @@
 package observx
 
 import (
+	"github.com/getsentry/sentry-go"
+
 	"context"
 	"errors"
 	"testing"
@@ -120,5 +122,43 @@ func TestReportEvent_SentryBreadcrumb(t *testing.T) {
 	}
 	if !foundEvent {
 		t.Error("ReportEvent should add an observx.event span event")
+	}
+}
+
+// A step that fails after Sentry was already wired takes Sentry down with
+// it: init is all or nothing, so a failed MustInit leaves no exporter
+// running and reports nothing anywhere.
+func TestMustInit_FailureAfterSentryTearsItDown(t *testing.T) {
+	resetForTest(t)
+	err := MustInit(Config{ServiceName: "svc", SentryDSN: fakeDSN, OTelEndpoint: "127.0.0.1:1", OTelTLS: "sometimes"})
+	if err == nil {
+		t.Fatal("want an error for an unknown OTelTLS value")
+	}
+	mu.Lock()
+	on := sentryEnabled
+	mu.Unlock()
+	if on {
+		t.Error("Sentry is still enabled after MustInit failed part-way")
+	}
+	if sentry.CurrentHub().Client() != nil {
+		t.Error("a Sentry client is still installed after MustInit failed part-way")
+	}
+}
+
+// Shutdown takes the Sentry client it installed off the global hub, as it
+// does the OTel providers: nothing keeps reporting after it.
+func TestShutdown_UnbindsTheSentryClient(t *testing.T) {
+	resetForTest(t)
+	if err := MustInit(Config{ServiceName: "svc", SentryDSN: fakeDSN}); err != nil {
+		t.Fatal(err)
+	}
+	if sentry.CurrentHub().Client() == nil {
+		t.Fatal("MustInit installed no Sentry client")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = Shutdown(ctx)
+	if sentry.CurrentHub().Client() != nil {
+		t.Error("the Sentry client is still bound after Shutdown")
 	}
 }

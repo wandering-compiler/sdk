@@ -90,9 +90,9 @@ every component's context.
 | S1.3 | When one component returns an error, the shared context MUST be cancelled, siblings drain, and Run returns the first non-nil error. | `TestRun_ComponentError_DrainsSiblingAndReturnsErr` |
 | S1.4 | A component that returns `nil` early MUST also cancel its siblings. | `TestRun_CleanEarlyReturnCancelsSiblings` |
 | S1.5 | Run MUST NOT return while any component goroutine is still running, except when the shutdown deadline (S1.9) has passed. | covered implicitly by the tests above; `TestRun_ShutdownDeadlineZeroIsUnbounded` |
-| S1.6 | Observability MUST be flushed, bounded at 5s, after components and resources finish, including when a component failed at boot. | `TestRun_ObservabilityReleasedAfterComponentsFinish` (the 5s bound not covered) |
+| S1.6 | Observability MUST be flushed, bounded at 5s, after components and resources finish, including when a component failed at boot. | `TestRun_ObservabilityReleasedAfterComponentsFinish`, `TestRun_ObservabilityFlushIsBoundedAtFiveSeconds` |
 | S1.7 | With no components, Run MUST return `nil` at once. | `TestRun_NoComponents_ReturnsNil` |
-| S1.8 | Error reporting MUST NOT deadlock: each component reports at most once into a buffer sized to the component count. | holds by construction; no test |
+| S1.8 | Error reporting MUST NOT deadlock: each component reports at most once into a buffer sized to the component count. | `TestRun_EveryComponentFailingAtOnceDoesNotDeadlock` |
 | S1.9 | From the moment shutdown starts (the shared context is cancelled for any reason), the component drain and the resource teardown together MUST finish within the shutdown deadline; on overrun Run returns an error naming `W17_SHUTDOWN_DEADLINE_SECONDS` without waiting for the components, the error is reported through `observx.ReportError`, and the teardown context is cancelled. | `TestRun_ShutdownDeadlineBoundsAStuckComponent`, `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` |
 | S1.10 | On overrun, a component error reported before the deadline MUST be returned together with the deadline error. | `TestRun_ShutdownDeadlineKeepsTheComponentError` |
 | S1.11 | A deadline of `0` MUST remove the bound; an unparseable value MUST be logged and the default applied. | `TestRun_ShutdownDeadlineZeroIsUnbounded`, `TestShutdownDeadline_UnparseableIsLoggedAndDefaulted` |
@@ -119,9 +119,9 @@ keeps Go's default behaviour (goroutine dump and exit).
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S2.1 | The first SIGINT, SIGTERM or SIGHUP MUST cancel the shared context exactly once. | `TestRun_SecondSignalExitsImmediately` (first SIGTERM starts the drain; SIGINT and SIGHUP not covered) |
+| S2.1 | The first SIGINT, SIGTERM or SIGHUP MUST cancel the shared context exactly once. | `TestRun_SecondSignalExitsImmediately` |
 | S2.2 | After `RunGraceful` returns, the signal registration MUST be removed. | `TestRunGraceful_SignalRegistrationRemovedOnReturn` |
-| S2.3 | A second SIGINT, SIGTERM or SIGHUP during the drain MUST exit the process at once with status 1, whether or not a shutdown deadline is set. | `TestRun_SecondSignalExitsImmediately` (real SIGTERM to a child process; SIGINT and SIGHUP not covered) |
+| S2.3 | A second SIGINT, SIGTERM or SIGHUP during the drain MUST exit the process at once with status 1, whether or not a shutdown deadline is set. | `TestRun_SecondSignalExitsImmediately` |
 
 **Deliberate limits.**
 - That components do not install their own signal handler is a convention; nothing enforces it.
@@ -164,7 +164,7 @@ after every transport has drained, so in-flight requests keep their pools.
 | S4.2 | Closers MUST run in caller-defined order. | `TestRunGraceful_ResourcesCloseAfterComponentsDrain` |
 | S4.3 | `nil` closers MUST be skipped. | `TestRunGraceful_NilResourceSkipped` |
 | S4.4 | Closers MUST run even when a component failed. | `TestRunGraceful_ClosersRunWhenAComponentFailed` |
-| S4.5 | The whole phase MUST be bounded by 30s and by the shutdown deadline (S1.9), whose passing cancels the closers' context; Run returns at the deadline even when a closer ignores its context. | `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` (30s bound not covered) |
+| S4.5 | The whole phase MUST be bounded by 30s and by the shutdown deadline (S1.9), whose passing cancels the closers' context; Run returns at the deadline even when a closer ignores its context. | `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown`, `TestRunGraceful_ResourceTeardownIsBoundedAtThirtySeconds` |
 | S4.6 | A resource MUST NOT be closed while a request still uses it. | `TestGRPCComponent_AbandonedHandlerHoldsResources`, `TestRunGraceful_HeldResourcesAreNotClosed`, `TestGRPCComponent_ShutdownHooksWaitForHandlersAfterForcedStop` |
 | S4.7 | A closer's error MUST be reported through `observx.ReportError`; later closers still run and Run's result stays the components' verdict. | `TestRunGraceful_ResourceCloserErrorIsReported` |
 
@@ -207,14 +207,14 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S5.1 | The component MUST serve until the context is cancelled, then stop within `ShutdownTimeout`. | `TestGRPCComponent_ServesAndDrains` (stop asserted; bound not asserted) |
+| S5.1 | The component MUST serve until the context is cancelled, then stop within `ShutdownTimeout`. | `TestGRPCComponent_ServesAndDrains`, `TestGRPCComponent_StopsWithinShutdownTimeout` |
 | S5.2 | `Shutdowns` MUST run after the server has stopped, in order, with nil entries skipped. | `TestGRPCComponent_ServesAndDrains`, `TestGRPCComponent_ShutdownHookErrorIsReported` |
 | S5.3 | With no `Shutdowns`, nothing runs. | `TestGRPCComponent_NoShutdowns` |
 | S5.4 | `ObservxConfig()` MUST copy every observability field, including `OTelTLS`. | `TestObservxConfig_Projection` |
 | S5.5 | `Serve` MUST run one component under the supervisor and return on context cancel. | `TestServe_StandaloneLifecycle` |
 | S5.6 | A clean, context-driven stop MUST return `nil` (the `Component` contract) from `GRPCComponent`, `Serve` and `bootstrap.Run` with a gRPC component. | `TestGRPCComponent_CleanStopReturnsNil` |
 | S5.7 | A shutdown that has to force-stop (S12) MUST still run `Shutdowns` once the handlers have returned; when a handler is still running after the grace, the hooks MUST be skipped and reported rather than run under it (S4.6). | `TestGRPCComponent_ShutdownHooksWaitForHandlersAfterForcedStop`, `TestGRPCComponent_AbandonedHandlerHoldsResources` |
-| S5.8 | The server MUST NOT start serving before `RegisterServices` succeeded. | holds by construction; no test |
+| S5.8 | The server MUST NOT start serving before `RegisterServices` succeeded. | `TestRun_DoesNotServeBeforeRegistrationReturns` |
 | S5.9 | The listener MUST NOT leak on a registration error. | `TestRun_RegisterError` |
 | S5.10 | A failing shutdown hook MUST be reported through `observx.ReportError`, and the later hooks still run. | `TestGRPCComponent_ShutdownHookErrorIsReported` |
 | S5.11 | With the internal-TLS switch on, the listener MUST serve TLS and MUST NOT serve a plaintext client. | `TestGRPCComponent_ServesInternalTLS` |
@@ -236,7 +236,7 @@ under "Process shape").
 | S6.1 | The OpenTelemetry stats handler MUST be installed, so every RPC, including one that fails in an interceptor, has a server span. | `TestServerOptions_EveryRPCHasAServerSpan` |
 | S6.2 | Recovery MUST be outermost (grpc-go's singular interceptor slot), so it catches panics in every caller-supplied unary interceptor and in the handler, and the server keeps serving. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors` |
 | S6.3 | `cfg.UnaryInterceptors` MUST run in slice order, outermost first. | `TestServerOptions_UnaryInterceptorsRunInSliceOrder` |
-| S6.4 | `cfg.ServerOptions` MUST be able to override keepalive and add credentials (they come later in the option list). | `TestServerOptions_CallerCredentialsOverrideInternalTLS` (keepalive override not covered) |
+| S6.4 | `cfg.ServerOptions` MUST be able to override keepalive and add credentials (they come later in the option list). | `TestServerOptions_CallerCredentialsOverrideInternalTLS`, `TestGRPCComponent_CallerKeepaliveOverridesTheDefault` |
 | S6.5 | Every caller-supplied unary interceptor, in `cfg.UnaryInterceptors` or chained in through `ServerOptions`, MUST run inside recovery. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors` |
 | S6.6 | A singular `grpc.UnaryInterceptor` or `grpc.StreamInterceptor` in `ServerOptions` MUST be refused at start with an error pointing at the chained option, not by a process panic. | `TestGRPCComponent_SingularInterceptorOptionIsRefused`, `TestRun_ConflictingInterceptorOptionsAreAnError` |
 
@@ -310,8 +310,8 @@ wait for context or a serve error.
 | S9.2 | A listen failure (port in use, bad address) MUST be returned, wrapped with the address. | `TestRun_ListenError` |
 | S9.3 | A registration error MUST close the listener and be returned. | `TestRun_RegisterError` |
 | S9.4 | On context cancel: bounded graceful stop, then `OnShutdown`, then return `nil`. | `TestRun_GracefulShutdown` |
-| S9.5 | If `Serve` fails on its own, `OnShutdown` MUST still run and the serve error is returned, wrapped with the address. | `TestRun_ServeErrorStopsServerBeforeOnShutdown` (address not asserted) |
-| S9.6 | `OnShutdown` MUST run exactly once on every return path after a successful listen and registration. | `TestRun_GracefulShutdown`, `TestRun_ServeErrorStopsServerBeforeOnShutdown` (run asserted; count not asserted) |
+| S9.5 | If `Serve` fails on its own, `OnShutdown` MUST still run and the serve error is returned, wrapped with the address. | `TestRun_ServeErrorStopsServerBeforeOnShutdown`, `TestRun_ServeErrorNamesTheAddress` |
+| S9.6 | `OnShutdown` MUST run exactly once on every return path after a successful listen and registration. | `TestRun_OnShutdownRunsExactlyOnce` |
 | S9.7 | After a serve error, the server MUST be stopped before `OnShutdown` tears down resources. | `TestRun_ServeErrorStopsServerBeforeOnShutdown` |
 | S9.8 | The server MUST NOT serve any port other than `Addr`. | holds by construction; no test |
 | S9.9 | An option set grpc-go rejects (two singular interceptors) MUST close the listener and be returned as an error. | `TestRun_ConflictingInterceptorOptionsAreAnError` |
@@ -345,7 +345,7 @@ The same three fields exist on `runtime.Config` (S5).
 | S10.2 | Reflection MUST NOT be reachable by untrusted callers without authentication: `Reflection: true` with neither `ReflectionAuth` nor `ReflectionUnauthenticated` MUST be refused at start, before listening. | `TestRun_UnguardedReflectionIsRefused`, `TestGRPCComponent_UnguardedReflectionIsRefused` |
 | S10.3 | With `ReflectionAuth` set, the guard MUST run on every reflection stream of both v1 and v1alpha before any answer. | `TestRun_ReflectionAuthGuardsBothVersions` |
 | S10.4 | A plain error from the guard MUST become `Unauthenticated` without its text reaching the caller; a gRPC status error MUST pass through unchanged. | `TestRun_ReflectionAuthGuardsBothVersions`, `TestRun_ReflectionAuthStatusPassesThrough` |
-| S10.5 | `ReflectionUnauthenticated` MUST serve reflection and be logged at start. | `TestRun_ReflectionRegisteredOnlyWhenSet` (log line not asserted) |
+| S10.5 | `ReflectionUnauthenticated` MUST serve reflection and be logged at start. | `TestRun_ReflectionRegisteredOnlyWhenSet`, `TestRun_UnauthenticatedReflectionIsLogged` |
 
 **Deliberate limits.**
 - The SDK enforces that a guard or an explicit opt-in exists; it does not choose the guard. A generated or hand-written `main` that enables reflection must pass `ReflectionAuth` (or `ReflectionUnauthenticated`) itself.
@@ -565,9 +565,9 @@ retry service config, and keepalive.
 | S18.3 | With the switch off, the other variables MUST be ignored. | `TestTLSDialOption_OffIgnoresKnobs` |
 | S18.4 | Misconfiguration MUST error at dial-construction time, not on the first RPC. | `TestTLSDialOption_MissingCAFile_Errors`, `TestTLSDialOption_HalfMTLS_Errors`, `TestDial_TLSConfigError_Propagates` |
 | S18.5 | Dial MUST NOT block, so a backend that is down at start does not fail startup. | `TestDial_NonBlocking` |
-| S18.6 | Real handshakes: a custom CA verifies, an untrusted server fails, mTLS succeeds, a client without a certificate is rejected. | `TestBackendDial_*` (4 tests) |
-| S18.7 | Retry MUST cover only `UNAVAILABLE` and MUST be throttled; codes where the server may already have applied a write MUST NOT be retried. | `TestDefaultServiceConfig_*` (3 tests) |
-| S18.8 | No path MUST skip certificate verification. | holds by inspection; no test |
+| S18.6 | Real handshakes: a custom CA verifies, an untrusted server fails, mTLS succeeds, a client without a certificate is rejected. | `TestBackendDial_HandshakeWithCustomCA`, `TestBackendDial_HandshakeFailsWithoutTrust`, `TestBackendDial_MTLSHandshake`, `TestBackendDial_MTLSRejectsClientWithoutCert` |
+| S18.7 | Retry MUST cover only `UNAVAILABLE` and MUST be throttled; codes where the server may already have applied a write MUST NOT be retried. | `TestDefaultServiceConfig_RetriesOnlyUnavailable`, `TestDefaultServiceConfig_HasRetryThrottling`, `TestDefaultServiceConfig_IsValidJSON` |
+| S18.8 | No path MUST skip certificate verification. | `TestMeshDialers_NeverSkipCertificateVerification` |
 | S18.9 | In `terminated` mode the client MUST verify against the system roots only: `W17_INTERNAL_TLS_CA` and the client pair MUST be ignored, and a warning MUST name the ignored variables. | `TestClientTLSConfig_TerminatedUsesSystemRootsOnly`, `TestInternalTLS_Terminated` |
 | S18.10 | An unrecognised switch value MUST be refused at dial construction with an error naming the variable, the value and the accepted spellings. | `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestCheckInternalTLS` |
 | S18.11 | `ClientTLSConfig` MUST return no configuration when the switch is off, and otherwise the same configuration `TLSDialOption` dials with, so other clients (the telemetry exporter, S19) share one posture. | `TestClientTLSConfig_OffIsNil`, `TestClientTLSConfig_TerminatedUsesSystemRootsOnly` |
@@ -606,13 +606,13 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 | S19.2 | With no exporters, init MUST succeed and be cheap. | `TestMustInit_NoExporters_OK` |
 | S19.3 | The full stack MUST initialise with agreeing resource schema URLs. | `TestMustInit_FullStack` |
 | S19.4 | Environment overrides for service name and endpoint MUST apply with the documented precedence. | `TestMustInit_OTelServiceNameOverride`, `TestMustInit_OTelServiceNameEmptyKeepsConfig`, `TestMustInit_OTelEndpointFallback`, `TestMustInit_W17OTelEndpointWinsOverFallback` |
-| S19.5 | A failure part-way through init MUST tear down whatever was installed (all or nothing). | `TestMustInit_SentryInitError` (first step only) |
+| S19.5 | A failure part-way through init MUST tear down whatever was installed (all or nothing). | `TestMustInit_SentryInitError`, `TestMustInit_FailureAfterSentryTearsItDown`, `TestShutdown_UnbindsTheSentryClient` |
 | S19.6 | Re-init MUST shut down the previous providers first. | `TestMustInit_ReinitShutsDownThePreviousProviders` |
 | S19.7 | `Shutdown` MUST be safe with nothing initialised. | `TestShutdown_NilSafe` |
 | S19.8 | Secret config attributes MUST NOT be exported. | `TestConfigResourceAttrsExcludeSecrets` |
 | S19.9 | `Tracer()` MUST never return nil. | `TestTracer_ReturnsNonNil` |
 | S19.10 | After `Shutdown` or a failed init, the global tracer and meter providers MUST NOT point at shut-down instances: each is reset to a no-op provider when it is still the one observx installed. | `TestShutdown_ResetsGlobalProviders`, `TestMustInit_FailureResetsGlobalProviders` |
-| S19.11 | Telemetry export MUST follow the deployment's transport-security posture: TLS whenever the internal-mesh switch is on, plaintext only when the switch is off or the operator opts out explicitly. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut` (`terminated` not covered) |
+| S19.11 | Telemetry export MUST follow the deployment's transport-security posture: TLS whenever the internal-mesh switch is on, plaintext only when the switch is off or the operator opts out explicitly. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut` |
 | S19.12 | `OTelTLS=on` MUST force TLS with the switch off; an explicit opt-out while the mesh is on MUST be logged; an unrecognised value MUST fail init with an error naming `W17_OTEL_TLS`. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut`, `TestMustInit_RejectsUnknownOTelTLS` |
 | S19.13 | Sampling MUST be parent-based: an incoming sampling decision is kept whatever the local rate. | `TestSampler_HonoursTheParentDecision` |
 | S19.14 | A `SampleRate` outside 0..1, or NaN, MUST fail init instead of being clamped or ignored. | `TestMustInit_RejectsSampleRateOutsideZeroToOne` |
@@ -638,9 +638,9 @@ at `Shutdown`.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S20.1 | A nil error MUST be a no-op on all three. | `TestReportError_NilNoOp` (`ReportEvent` / `ReportRefusal` not covered) |
+| S20.1 | A nil error MUST be a no-op on all three. | `TestReportError_NilNoOp`, `TestReportRefusal_RecordsWithoutRaising` |
 | S20.2 | `ReportError` MUST mark the active span as failed and record the error. | `TestReportError_AttachesToActiveOTelSpan` |
-| S20.3 | Without the error tracker, `ReportError` MUST log to stderr with CR/LF escaped, within the log budget (S20.8). | `TestReportError_StderrFallback` (escaping not covered) |
+| S20.3 | Without the error tracker, `ReportError` MUST log to stderr with CR/LF escaped, within the log budget (S20.8). | `TestReportError_StderrFallback`, `TestReportError_StderrFallbackEscapesLineBreaks` |
 | S20.4 | With the error tracker, the event MUST carry service, trace_id and span_id tags. | `TestReportError_SentryPath` |
 | S20.5 | `ReportEvent` MUST be a no-op unless the debug knob is on; when on it adds a span event and never sets error status. | `TestReportEvent_OffByDefault_NoOp`, `TestReportEvent_DebugKnob_StderrFallback`, `TestReportEvent_SpanEvent_NoErrorStatus`, `TestReportEvent_SentryBreadcrumb` |
 | S20.6 | `ReportRefusal` MUST always record (span event, and a log line within the log budget), never set error status and never raise an issue. | `TestReportRefusal_RecordsWithoutRaising` |

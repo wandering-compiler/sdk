@@ -133,15 +133,27 @@ func TestDefaultShutdownDeadline_FitsTheCommonGracePeriod(t *testing.T) {
 	}
 }
 
-// A second SIGTERM during the drain ends the process at once instead of
-// being swallowed. Runs the supervisor in a child process and signals it.
+// The first SIGINT, SIGTERM or SIGHUP starts the drain; a second one during
+// the drain ends the process at once with status 1 instead of being
+// swallowed — with no shutdown deadline and with one that has not passed.
+// Runs the supervisor in a child process and signals it.
 func TestRun_SecondSignalExitsImmediately(t *testing.T) {
 	if os.Getenv("BOOTSTRAP_SIGNAL_CHILD") == "1" {
 		signalChild()
 		return
 	}
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		for _, deadline := range []string{"0", "120"} {
+			t.Run(fmt.Sprintf("%s/deadline=%s", sig, deadline), func(t *testing.T) {
+				secondSignalExits(t, sig, deadline)
+			})
+		}
+	}
+}
+
+func secondSignalExits(t *testing.T, sig syscall.Signal, deadline string) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestRun_SecondSignalExitsImmediately$")
-	cmd.Env = append(os.Environ(), "BOOTSTRAP_SIGNAL_CHILD=1", "W17_SHUTDOWN_DEADLINE_SECONDS=0")
+	cmd.Env = append(os.Environ(), "BOOTSTRAP_SIGNAL_CHILD=1", "W17_SHUTDOWN_DEADLINE_SECONDS="+deadline)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -174,11 +186,11 @@ func TestRun_SecondSignalExitsImmediately(t *testing.T) {
 		}
 	}
 	waitFor("running")
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := cmd.Process.Signal(sig); err != nil {
 		t.Fatal(err)
 	}
 	waitFor("draining")
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := cmd.Process.Signal(sig); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,7 +203,7 @@ func TestRun_SecondSignalExitsImmediately(t *testing.T) {
 			t.Errorf("child exit = %v, want status 1", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("a second SIGTERM during the drain did not end the process")
+		t.Fatalf("a second %s during the drain did not end the process", sig)
 	}
 }
 
