@@ -411,7 +411,7 @@ type memorySubscriber struct {
 // the same context a broker adapter hands its handlers — not with the
 // context of the request that emitted the event.
 func (s *memorySubscriber) Subscribe(ctx context.Context, topicFilter string, h HandlerFunc) error {
-	return s.bus.register(ctx, s.channel, topicFilter, recoverHandler(h))
+	return s.bus.register(ctx, s.channel, topicFilter, deliveryHandler(h))
 }
 
 // Drain blocks until every in-flight Dispatch goroutine

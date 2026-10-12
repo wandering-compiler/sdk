@@ -210,7 +210,9 @@ func isCredentialKey(k string) bool {
 //
 // Generated subscriber dispatch applies the same predicate when it replays
 // `Event.Metadata` into the handler's context, so envelopes persisted before
-// a key was added here are filtered on delivery too. Exported also so the
+// a key was added here are filtered on delivery too. The transaction keys
+// never get that far: a delivery whose envelope carries one is refused by
+// the bus itself (ErrTransactionKeyInEnvelope). Exported also so the
 // drift test that owns the transaction key's real definition can check this
 // list against it.
 func ReservedMetadataKey(k string) bool {

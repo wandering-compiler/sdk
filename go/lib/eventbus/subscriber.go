@@ -140,7 +140,8 @@ func sanitizeInstanceID(s string) string {
 // §Sentry), and the returned error flows into the transport's normal
 // delivery-failure path (NAK / retry / DLQ), so a poisoned message
 // is retried or dead-lettered — never fatal. Every transport's
-// Subscribe wraps its handler with this before feeding deliveries.
+// Subscribe wraps its handler with this (through deliveryHandler) before
+// feeding deliveries.
 func recoverHandler(h HandlerFunc) HandlerFunc {
 	return func(ctx context.Context, topic string, envelope []byte) (err error) {
 		defer func() {
