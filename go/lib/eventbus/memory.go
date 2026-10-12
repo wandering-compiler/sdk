@@ -149,10 +149,9 @@ func NewMemoryBusWithOptions(opts MemoryBusOptions) *MemoryBus {
 	if blockTimeout <= 0 {
 		blockTimeout = 100 * time.Millisecond
 	}
-	observer := opts.Observer
-	if observer == nil {
-		observer = DefaultObserver{}
-	}
+	// guardObserver maps nil to DefaultObserver and makes every callback
+	// panic-safe.
+	observer := guardObserver(opts.Observer)
 	return &MemoryBus{
 		handlers:     map[string][]registeredHandler{},
 		bufferSizes:  bufferSizes,
@@ -242,10 +241,11 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 			m.wg.Add(1)
 			go func(h registeredHandler) {
 				defer m.wg.Done()
-				// The same belt the NATS and Redis loops wear: the handler
-				// is recover-wrapped, the observer callbacks around it are
-				// not, and this goroutine is detached — a panic here takes
-				// the process down with nothing to catch it.
+				// The same belt the NATS and Redis loops wear: this
+				// goroutine is detached, so anything that panicked here
+				// would take the process down with nothing to catch it.
+				// (The handler and the observer callbacks also guard
+				// themselves; this is the last line.)
 				defer recoverLoopTick(h.ctx, "eventbus memory fan-out")
 				start := time.Now()
 				err := h.fn(h.ctx, topic, raw)
@@ -269,10 +269,11 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 			m.wg.Add(1)
 			go func(h registeredHandler) {
 				defer m.wg.Done()
-				// The same belt the NATS and Redis loops wear: the handler
-				// is recover-wrapped, the observer callbacks around it are
-				// not, and this goroutine is detached — a panic here takes
-				// the process down with nothing to catch it.
+				// The same belt the NATS and Redis loops wear: this
+				// goroutine is detached, so anything that panicked here
+				// would take the process down with nothing to catch it.
+				// (The handler and the observer callbacks also guard
+				// themselves; this is the last line.)
 				defer recoverLoopTick(h.ctx, "eventbus memory fan-out")
 				defer func() { <-sem }()
 				start := time.Now()

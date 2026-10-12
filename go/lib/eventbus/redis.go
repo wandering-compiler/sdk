@@ -262,9 +262,8 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	if opts.ReadBatch == 0 {
 		opts.ReadBatch = 10
 	}
-	if opts.Observer == nil {
-		opts.Observer = DefaultObserver{}
-	}
+	// Nil -> DefaultObserver; every callback made panic-safe.
+	opts.Observer = guardObserver(opts.Observer)
 	if opts.InstanceID == "" {
 		opts.InstanceID = newInstanceID()
 	} else {

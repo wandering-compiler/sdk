@@ -18,6 +18,9 @@ import "sort"
 //  4. `Reserved` is monotonic — once an ID lands there, it
 //     never leaves. Allocate enforces this by union-merging
 //     prev's reserved set with the removed-ID set.
+//  5. No ID is consumed without being assigned or reserved:
+//     a permission listed more than once in `current` gets
+//     one ID, and empty strings are skipped.
 //
 // The caller controls iteration order via `current`: new
 // permissions receive IDs in `current` slice order. For
@@ -50,6 +53,14 @@ func Allocate(prev *Lock, current []string) *Lock {
 	currentSet := make(map[string]bool, len(current))
 	for _, perm := range current {
 		if perm == "" {
+			continue
+		}
+		// A repeated entry is the same permission: it already has its
+		// ID. Allocating again would overwrite the first ID with a
+		// second one and leave the first neither assigned nor
+		// reserved — a hole a later generation would hand to a
+		// different permission.
+		if _, seen := currentSet[perm]; seen {
 			continue
 		}
 		currentSet[perm] = true

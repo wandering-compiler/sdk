@@ -281,12 +281,22 @@ var (
 // only valid recovery from a bad telemetry config is "fix the
 // config and restart". On failure nothing it installed is left
 // behind: exporters are shut down and the global OTel providers
-// are reset. Idempotent — second call replaces the previous
-// setup (useful for tests; not expected in prod).
+// are reset. A second call replaces the previous setup (useful for
+// tests; not expected in prod) — unless a supervisor holds the state
+// through [Acquire]: then it is refused with [ErrHeld], because
+// replacing the providers would swap telemetry under components that
+// are running.
 func MustInit(c Config) error {
 	mu.Lock()
 	defer mu.Unlock()
+	if holders > 0 {
+		return heldError("MustInit")
+	}
+	return initLocked(c)
+}
 
+// initLocked is the body of [MustInit]; the caller MUST hold mu.
+func initLocked(c Config) error {
 	// Idempotent re-init: tear down any providers/exporters/Sentry a
 	// previous MustInit installed before replacing the globals, so a
 	// second call (chiefly the test re-init path) doesn't leak the
@@ -502,9 +512,16 @@ func otlpTransport(setting string, lookup func(string) string) (otlptracegrpc.Op
 // to push the final batch. Returns the first error
 // encountered; callers typically log + ignore (we're
 // shutting down anyway).
+//
+// While a supervisor holds the state through [Acquire], Shutdown
+// is refused with [ErrHeld] and tears nothing down; the last
+// holder's release shuts down instead.
 func Shutdown(ctx context.Context) error {
 	mu.Lock()
 	defer mu.Unlock()
+	if holders > 0 {
+		return heldError("Shutdown")
+	}
 	return shutdownLocked(ctx)
 }
 
