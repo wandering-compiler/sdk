@@ -1,10 +1,12 @@
 package mysql_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -239,5 +241,39 @@ func TestAppliedHead_IsReadOnlyAndDoesNotWaitBehindAMigration_Live(t *testing.T)
 	}
 	if head != first.Id {
 		t.Errorf("head = %q, want %s (the in-flight row is not applied yet)", head, first.Id)
+	}
+}
+
+// MySQL cannot resume a post-transaction half: the applier does not offer
+// the resume capability, and running a non-empty one warns, naming the
+// migration; a migration without one says nothing.
+func TestApply_PostTxWarnsThatItIsNotResumable_Live(t *testing.T) {
+	dsn, _ := liveMySQL(t)
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a, err := mysql.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close() }()
+	if _, ok := any(a).(migrate.ResumableApplier); ok {
+		t.Error("the MySQL applier claims it can resume a post-transaction half")
+	}
+	if err := a.Apply(ctx, &applyfetchpb.Migration{Id: "20260101T000000Z", UpSql: "CREATE TABLE t (id BIGINT);"}); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("a migration without a post-transaction half warned: %q", buf.String())
+	}
+	if err := a.Apply(ctx, &applyfetchpb.Migration{Id: "20260201T000000Z", UpSql: "CREATE TABLE u (id BIGINT);", UpPostTx: "CREATE INDEX u_id ON u (id);"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := buf.String(); !strings.Contains(out, "NOT resumable") || !strings.Contains(out, "20260201T000000Z") {
+		t.Errorf("no not-resumable warning naming the migration: %q", out)
 	}
 }

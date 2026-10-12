@@ -11,8 +11,9 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// A streaming call opened through DialOpts relays the principal stamps to
-// the downstream tier, like a unary one, and nothing else.
+// A streaming call opened through DialOpts relays the principal stamps —
+// scopes and event labels — to the downstream tier, like a unary one, and
+// nothing else.
 func TestDialOpts_StreamRelaysThePrincipalOnly(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -44,7 +45,7 @@ func TestDialOpts_StreamRelaysThePrincipalOnly(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-w17-scope-org_id", "org-7", "x-w17-paging-limit", "10"))
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-w17-scope-org_id", "org-7", "w17-label-tenant", "acme", "x-w17-paging-limit", "10"))
 	cs, err := conn.NewStream(ctx, &grpc.StreamDesc{StreamName: "Watch", ServerStreams: true}, "/test.Watch/Watch")
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +58,9 @@ func TestDialOpts_StreamRelaysThePrincipalOnly(t *testing.T) {
 	case md := <-seen:
 		if got := md.Get("x-w17-scope-org_id"); len(got) != 1 || got[0] != "org-7" {
 			t.Errorf("principal not relayed on a stream: %v", got)
+		}
+		if got := md.Get("w17-label-tenant"); len(got) != 1 || got[0] != "acme" {
+			t.Errorf("event label not relayed on a stream: %v", got)
 		}
 		if got := md.Get("x-w17-paging-limit"); len(got) != 0 {
 			t.Errorf("non-principal metadata relayed on a stream: %v", got)
