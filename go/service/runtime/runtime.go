@@ -30,6 +30,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -114,8 +115,11 @@ type Config struct {
 	// the server (storage handlers, plugin wire-up, …). Required.
 	RegisterServices func(s *grpc.Server) error
 
-	// Shutdowns run after the server stops, before observx flush
-	// — drain plugin shutdown hooks, close the eventbus, etc.
+	// Shutdowns run after the server stops and every handler has
+	// returned, before observx flush — drain plugin shutdown hooks,
+	// close the eventbus, etc. When a forced stop leaves a handler
+	// running past a short grace, they are skipped (and reported) rather
+	// than run under it.
 	// Each is bounded by the same 30s teardown context. A hook's
 	// error does not stop the later hooks; it is reported through
 	// observx.ReportError (best-effort drain on the way down, but
@@ -155,7 +159,8 @@ func (cfg Config) ObservxConfig() observx.Config {
 // returns nil.
 func GRPCComponent(cfg Config) bootstrap.Component {
 	return bootstrap.Func(func(ctx context.Context) error {
-		opts, err := serverOptions(cfg, os.Getenv)
+		handlers := newInflight()
+		opts, err := serverOptions(cfg, os.Getenv, handlers)
 		if err != nil {
 			return err
 		}
@@ -169,6 +174,17 @@ func GRPCComponent(cfg Config) bootstrap.Component {
 			ServerOptions:             opts,
 			RegisterServices:          cfg.RegisterServices,
 			OnShutdown: func() {
+				// The server has stopped, but a forced stop does not wait
+				// for handlers. Give them a bounded moment to return; one
+				// that does not is abandoned, and the hooks are skipped
+				// rather than run under it — the process exits next, which
+				// releases what they would have closed.
+				if abandoned := handlers.wait(handlerReturnGrace); len(abandoned) > 0 {
+					reason := fmt.Sprintf("%d gRPC handler(s) still running after the server stopped: %s", len(abandoned), strings.Join(abandoned, ", "))
+					observx.ReportError(context.Background(), fmt.Errorf("runtime: %s; shutdown hooks skipped", reason))
+					bootstrap.HoldResources(ctx, reason)
+					return
+				}
 				runShutdowns(cfg.Shutdowns)
 			},
 		})
@@ -176,8 +192,9 @@ func GRPCComponent(cfg Config) bootstrap.Component {
 }
 
 // serverOptions builds the grpc.ServerOption list for cfg, reading the
-// internal TLS posture through lookup.
-func serverOptions(cfg Config, lookup grpcserver.LookupFunc) ([]grpc.ServerOption, error) {
+// internal TLS posture through lookup. A non-nil handlers tracks every
+// handler that runs (see [inflight]).
+func serverOptions(cfg Config, lookup grpcserver.LookupFunc, handlers *inflight) ([]grpc.ServerOption, error) {
 	tlsOpt, tlsOn, err := grpcserver.TLSServerOption(lookup)
 	if err != nil {
 		return nil, fmt.Errorf("runtime: internal TLS: %w", err)
@@ -223,6 +240,12 @@ func serverOptions(cfg Config, lookup grpcserver.LookupFunc) ([]grpc.ServerOptio
 	// singular interceptor, which server.Run returns as an error.
 	opts = append(opts, grpc.UnaryInterceptor(recoveryUnaryInterceptor))
 	opts = append(opts, grpc.StreamInterceptor(recoveryStreamInterceptor))
+	// Handler tracking is the first chained interceptor, so it counts a
+	// request for as long as any of the caller's interceptors or the
+	// handler itself is running on it.
+	if handlers != nil {
+		opts = append(opts, grpc.ChainUnaryInterceptor(handlers.unary), grpc.ChainStreamInterceptor(handlers.stream))
+	}
 	if len(cfg.UnaryInterceptors) > 0 {
 		opts = append(opts, grpc.ChainUnaryInterceptor(cfg.UnaryInterceptors...))
 	}

@@ -51,7 +51,7 @@ var pingDesc = grpc.ServiceDesc{
 // in-memory listener, registering hs as the health service.
 func serveWithOptions(t *testing.T, cfg Config, hs grpc_health_v1.HealthServer) *grpc.ClientConn {
 	t.Helper()
-	opts, err := serverOptions(cfg, func(string) string { return "" })
+	opts, err := serverOptions(cfg, func(string) string { return "" }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

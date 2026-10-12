@@ -254,3 +254,27 @@ func TestRunGraceful_ResourceCloserErrorIsReported(t *testing.T) {
 		t.Errorf("the closer's error was not reported; log = %q", buf.String())
 	}
 }
+
+// A component that returns with request work still running on the shared
+// resources holds them: RunGraceful must not close them under it. Without a
+// hold the closers run as before, and outside a supervisor a hold is inert.
+func TestRunGraceful_HeldResourcesAreNotClosed(t *testing.T) {
+	for _, hold := range []bool{true, false} {
+		var closed atomic.Bool
+		err := bootstrap.RunGraceful(context.Background(), testObs,
+			[]func(context.Context) error{func(context.Context) error { closed.Store(true); return nil }},
+			bootstrap.Func(func(ctx context.Context) error {
+				if hold {
+					bootstrap.HoldResources(ctx, "1 handler still running")
+				}
+				return nil
+			}))
+		if err != nil {
+			t.Fatalf("hold=%v: RunGraceful = %v, want nil (the components' verdict)", hold, err)
+		}
+		if closed.Load() == hold {
+			t.Errorf("hold=%v: resource closed = %v", hold, closed.Load())
+		}
+	}
+	bootstrap.HoldResources(context.Background(), "no supervisor") // must not panic
+}
