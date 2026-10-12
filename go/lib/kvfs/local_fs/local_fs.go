@@ -64,13 +64,89 @@ var errNotAnObject = errors.New("local_fs: key names a directory, not an object"
 // A key that cleans to the root itself is refused too: it names no
 // object, and passing it through let Open hand back the bucket
 // directory and Delete remove an empty bucket root.
+//
+// The check is made on the RESOLVED directory, not only on the text:
+// a symlink inside the bucket ("avatars" -> "/etc") passes a lexical
+// check and still leads out of it. The returned path is the object's
+// real parent directory joined with its final name, so a put or delete
+// lands where the check looked. The final name itself is NOT followed
+// here — rename and remove act on a symlink, not on its target; the
+// read paths, which open it, follow it through [Driver.containedObject].
 func (d *Driver) containedPath(key string) (string, error) {
 	final := filepath.Join(d.root, filepath.FromSlash(key))
-	rel, err := filepath.Rel(d.root, final)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if filepath.Clean(final) == filepath.Clean(d.root) || !within(d.root, final) {
 		return "", errEscapesRoot
 	}
-	return final, nil
+	realRoot, err := filepath.EvalSymlinks(d.root)
+	if err != nil {
+		// No root yet means nothing under it to follow; the operation
+		// itself reports the missing path.
+		return final, nil
+	}
+	dir, err := resolveExisting(filepath.Dir(final))
+	if err != nil {
+		return "", err
+	}
+	if !within(realRoot, dir) {
+		return "", errEscapesRoot
+	}
+	return filepath.Join(dir, filepath.Base(final)), nil
+}
+
+// containedObject is containedPath for the paths that OPEN the object:
+// when the key is itself a symlink, its target must resolve inside the
+// root as well, and the resolved path is returned.
+func (d *Driver) containedObject(key string) (string, error) {
+	final, err := d.containedPath(key)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Lstat(final)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return final, nil
+	}
+	target, err := filepath.EvalSymlinks(final)
+	if err != nil {
+		return "", errEscapesRoot
+	}
+	realRoot, err := filepath.EvalSymlinks(d.root)
+	if err != nil || !within(realRoot, target) {
+		return "", errEscapesRoot
+	}
+	return target, nil
+}
+
+// within reports whether path is root or lies beneath it, lexically.
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveExisting resolves every symlink on the existing part of p and
+// re-appends the part that does not exist yet (directories a put is about
+// to create). A dangling symlink on the way is refused rather than walked
+// past: creating "under" it would create wherever it points.
+func resolveExisting(p string) (string, error) {
+	var tail []string
+	cur := p
+	for {
+		real, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			return filepath.Join(append([]string{real}, tail...)...), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		if fi, lerr := os.Lstat(cur); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return "", errEscapesRoot
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p, nil
+		}
+		tail = append([]string{filepath.Base(cur)}, tail...)
+		cur = parent
+	}
 }
 
 // New returns a driver rooted at `root`. The root must
@@ -175,7 +251,11 @@ func (d *Driver) StagingDir() (string, error) {
 	if d.root == "" {
 		return "", errors.New("local_fs: driver not initialised (root is empty)")
 	}
-	dir := filepath.Join(d.root, stagingDirName)
+	dir, err := d.containedPath(stagingDirName + "/x")
+	if err != nil {
+		return "", fmt.Errorf("local_fs: staging dir: %w", err)
+	}
+	dir = filepath.Dir(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("local_fs: staging dir %s: %w", dir, err)
 	}
@@ -191,7 +271,7 @@ func (d *Driver) Open(_ context.Context, key string) (io.ReadCloser, error) {
 	if d.root == "" {
 		return nil, errors.New("local_fs: driver not initialised (root is empty)")
 	}
-	final, err := d.containedPath(key)
+	final, err := d.containedObject(key)
 	if err != nil {
 		// Escape attempt: report as missing, don't leak the boundary.
 		return nil, kvfs.ErrNotFound
@@ -209,7 +289,7 @@ func (d *Driver) Stat(_ context.Context, key string) (kvfs.Info, error) {
 	if d.root == "" {
 		return kvfs.Info{}, errors.New("local_fs: driver not initialised (root is empty)")
 	}
-	final, err := d.containedPath(key)
+	final, err := d.containedObject(key)
 	if err != nil {
 		return kvfs.Info{}, kvfs.ErrNotFound
 	}
@@ -233,7 +313,7 @@ func (d *Driver) OpenSeekable(_ context.Context, key string) (io.ReadSeekCloser,
 	if d.root == "" {
 		return nil, errors.New("local_fs: driver not initialised (root is empty)")
 	}
-	final, err := d.containedPath(key)
+	final, err := d.containedObject(key)
 	if err != nil {
 		return nil, kvfs.ErrNotFound
 	}
