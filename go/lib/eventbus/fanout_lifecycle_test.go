@@ -129,13 +129,16 @@ func expectBacklogAcrossCut(t *testing.T, r *replicaBus, proxy *stallProxy, prod
 	}
 	time.Sleep(300 * time.Millisecond)
 	proxy.stalled.Store(false)
-	for _, want := range []string{"during.one", "during.two"} {
-		topic, ok := r.received(20 * time.Second)
+	// The backlog is promised, its order is not: a message the server had
+	// already handed to the dying connection comes back only after AckWait
+	// (30s), behind the ones still queued.
+	missing := map[string]bool{"during.one": true, "during.two": true}
+	deadline := time.Now().Add(45 * time.Second)
+	for len(missing) > 0 {
+		topic, ok := r.received(time.Until(deadline))
 		if !ok {
-			t.Fatalf("%q emitted during the link loss never arrived after reconnect", want)
+			t.Fatalf("emitted during the link loss, never arrived after reconnect: %v", missing)
 		}
-		if topic != want {
-			t.Fatalf("after reconnect got %q, want %q", topic, want)
-		}
+		delete(missing, topic)
 	}
 }
