@@ -109,9 +109,10 @@ func TestRunLock_ReleaseIsOwnerChecked(t *testing.T) {
 		t.Fatalf("a2 takeover: %v", err)
 	}
 
-	// a1 (now a zombie) releases late — must be a no-op against a2's lock.
-	if err := l1.Release(ctx); err != nil {
-		t.Fatalf("zombie release: %v", err)
+	// a1 (now a zombie) releases late — must not free a2's lock, and must
+	// SAY the lock was lost: part of a1's run was not protected by it.
+	if err := l1.Release(ctx); !errors.Is(err, migrate.ErrLockLost) {
+		t.Fatalf("zombie release = %v, want ErrLockLost", err)
 	}
 	if !mr.Exists(redis.RunLockKeyForTest()) {
 		t.Fatal("zombie a1.Release wrongly freed a2's lock")

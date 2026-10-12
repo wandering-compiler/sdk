@@ -82,6 +82,11 @@ type Applier struct {
 	nowFn     func() time.Time
 	lockStale time.Duration
 	lockBeat  time.Duration
+
+	// held is the run lock this applier took, if any. Every write asks
+	// it first (stillHeld), so a run that lost its lock stops before
+	// the next write instead of racing whoever took it over.
+	held *s3RunLock
 }
 
 var _ migrate.Applier = (*Applier)(nil)
@@ -243,6 +248,9 @@ func (a *Applier) run(ctx context.Context, script string) error {
 //   - `S3 DELETE <key>`            → DeleteObject
 //   - `S3 DELETE_PREFIX <prefix>`  → ListObjectsV2 + DeleteObjects
 func (a *Applier) runOne(ctx context.Context, line string) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
 	rest := strings.TrimPrefix(line, "S3 ")
 
 	cli, err := a.s3Client(ctx)

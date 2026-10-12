@@ -217,10 +217,13 @@ func dialectFromDSN(dsn string) string {
 // that owns a KV store alongside its database would otherwise fail its seeding
 // step whenever that KV store happened to be down — on a question whose answer
 // never depended on it.
+//
+// Only Postgres: it is the one applier that implements migrate.SeedCapable.
+// Nominating MySQL or SQLite as well ("relational, so plausible") made a
+// bundle with one of them pick it as THE seed target and then fail with "no
+// seed support", or count it as a second candidate and demand a --connection
+// that could never work. TestSeedCandidate_MatchesSeedCapable keeps this list
+// and the appliers in step.
 func SeedCandidate(dsn string) bool {
-	switch dialectFromDSN(dsn) {
-	case "postgres", "mysql", "sqlite":
-		return true
-	}
-	return false
+	return dialectFromDSN(dsn) == "postgres"
 }

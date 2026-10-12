@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 
@@ -19,16 +20,21 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/runlock"
 )
 
-var _ migrate.RunLockCapable = (*Applier)(nil)
+var (
+	_ migrate.RunLockCapable = (*Applier)(nil)
+	_ migrate.CheckedRunLock = (*s3RunLock)(nil)
+)
 
 // runLockKey is the apply run-lock object. Kept OUTSIDE trackerPrefix
 // (`w17-migrations/`) so AppliedHead's listing never mistakes the lock
 // for a recorded migration.
 const runLockKey = "w17-migrate-runlock.json"
 
-// lockBody is the JSON persisted at runLockKey. heartbeat_at is the
-// staleness clock — a holder refreshes it; a reader treats a lock
-// whose heartbeat_at is older than staleAfter as abandoned.
+// lockBody is the JSON persisted at runLockKey. The timestamps are the
+// holder's own clock and are informational only: staleness is judged
+// from the STORE's clock (see lockAge), because comparing this host's
+// clock with a time another host wrote lets a host whose clock runs
+// ahead take over a live lock.
 type lockBody struct {
 	Owner       string `json:"owner"`
 	AcquiredAt  int64  `json:"acquired_at"`
@@ -62,12 +68,13 @@ type s3RunLock struct {
 	mu     sync.Mutex // guards etag against the heartbeat / Release race
 	etag   string
 	beater *runlock.Beater
+	lease  *runlock.Lease
 }
 
 // AcquireRunLock implements migrate.RunLockCapable for S3. S3 has no
-// native TTL, so staleness is timestamp-based: acquisition is an
-// atomic create-if-absent (PutObject If-None-Match:*), and a lock
-// whose heartbeat_at has gone stale is taken over by atomically
+// native TTL, so staleness is time-based: acquisition is an atomic
+// create-if-absent (PutObject If-None-Match:*), and a lock the store
+// has not seen refreshed for staleAfter is taken over by atomically
 // overwriting that exact object (PutObject If-Match:<etag>).
 func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 	cli, err := a.s3Client(ctx)
@@ -75,11 +82,13 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 		return nil, err
 	}
 	owner := runlock.OwnerID()
+	sent := time.Now()
 	etag, acquiredAt, err := a.tryAcquire(ctx, cli, owner)
 	if err != nil {
 		return nil, err
 	}
-	l := &s3RunLock{a: a, cli: cli, owner: owner, etag: etag, acquiredAt: acquiredAt}
+	l := &s3RunLock{a: a, cli: cli, owner: owner, etag: etag, acquiredAt: acquiredAt,
+		lease: runlock.NewLease(a.staleAfter(), sent)}
 	beat := a.lockBeat
 	if beat <= 0 {
 		beat = runlock.Heartbeat
@@ -93,7 +102,24 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 		slog.Warn("run-lock heartbeat refresh failed (lock may expire; concurrent run could double-apply)",
 			slog.String("error", err.Error()))
 	})
+	// Every write this applier makes from now on asks the lease first.
+	a.held = l
 	return l, nil
+}
+
+// stillHeld is asked before every write: nil when no run lock was taken
+// (an applier driven directly, outside a run) or the lock is still ours.
+func (a *Applier) stillHeld() error {
+	if a.held == nil {
+		return nil
+	}
+	return a.held.lease.Check()
+}
+
+// Check implements migrate.CheckedRunLock from the lease, without a round
+// trip, so the applier can afford it before every write.
+func (l *s3RunLock) Check(context.Context) error {
+	return l.lease.Check()
 }
 
 // tryAcquire: create-if-absent, else take over only a stale lock,
@@ -121,7 +147,7 @@ func (a *Applier) tryAcquire(ctx context.Context, cli *awss3.Client, owner strin
 	}
 
 	// Object exists — read it and take over only if it has gone stale.
-	cur, curETag, gerr := a.readLock(ctx, cli)
+	held, gerr := a.readLock(ctx, cli)
 	if gerr != nil {
 		if isNoSuchKey(gerr) {
 			// The holder released between our PUT and our GET. Stay
@@ -130,9 +156,15 @@ func (a *Applier) tryAcquire(ctx context.Context, cli *awss3.Client, owner strin
 		}
 		return "", 0, fmt.Errorf("s3 acquire run-lock: read existing: %w", gerr)
 	}
-	if now.Unix()-cur.HeartbeatAt <= int64(a.staleAfter().Seconds()) {
+	age, ok := held.age()
+	if !ok {
+		return "", 0, fmt.Errorf("s3 acquire run-lock: %s exists and the store did not report both its last-modified time and its own current time, so whether the holder is still alive cannot be judged without trusting this host's clock against another's\n"+
+			"  fix: if no other migration run is in progress against %s, delete %s and run again", runLockKey, a.bucket, runLockKey)
+	}
+	if age <= a.staleAfter() {
 		return "", 0, migrate.ErrLockHeld // a live holder is refreshing it
 	}
+	curETag := held.etag
 
 	// Stale: atomically replace THIS exact object. If-Match means only
 	// one taker wins; a loser sees a changed ETag → ErrLockHeld.
@@ -151,37 +183,72 @@ func (a *Applier) tryAcquire(ctx context.Context, cli *awss3.Client, owner strin
 	return aws.ToString(out.ETag), acquiredAt, nil
 }
 
-func (a *Applier) readLock(ctx context.Context, cli *awss3.Client) (lockBody, string, error) {
+// heldLock is what a would-be taker reads of an existing lock: its ETag
+// (the If-Match a takeover needs) and two times from the STORE's clock —
+// when the object was last written and when the store answered.
+type heldLock struct {
+	etag         string
+	lastModified time.Time
+	serverNow    time.Time
+}
+
+// age is how long the store has gone without a refresh of the lock,
+// measured entirely on the store's clock. Both ends of the comparison
+// come from one clock, so skew between the holder's host, this host and
+// the store cancels out. ok is false when the store did not report both
+// times; the caller then refuses to judge rather than fall back to a
+// local clock.
+func (h heldLock) age() (time.Duration, bool) {
+	if h.lastModified.IsZero() || h.serverNow.IsZero() {
+		return 0, false
+	}
+	return h.serverNow.Sub(h.lastModified), true
+}
+
+func (a *Applier) readLock(ctx context.Context, cli *awss3.Client) (heldLock, error) {
 	got, err := cli.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket: aws.String(a.bucket),
 		Key:    aws.String(runLockKey),
 	})
 	if err != nil {
-		return lockBody{}, "", err
+		return heldLock{}, err
 	}
 	raw, rerr := io.ReadAll(got.Body)
 	cerr := got.Body.Close()
 	if rerr != nil {
-		return lockBody{}, "", rerr
+		return heldLock{}, rerr
 	}
 	if cerr != nil {
-		return lockBody{}, "", cerr
+		return heldLock{}, cerr
 	}
+	// Decoded only to refuse an object that is not a lock; the holder's
+	// timestamps inside it are not used to judge staleness.
 	var lb lockBody
 	if err := json.Unmarshal(raw, &lb); err != nil {
-		return lockBody{}, "", fmt.Errorf("decode lock: %w", err)
+		return heldLock{}, fmt.Errorf("decode lock: %w", err)
 	}
-	return lb, aws.ToString(got.ETag), nil
+	h := heldLock{etag: aws.ToString(got.ETag)}
+	if got.LastModified != nil {
+		h.lastModified = *got.LastModified
+	}
+	// The store's own clock when it answered: the response's Date header,
+	// as the SDK parsed it. Absent → zero → age() refuses to judge.
+	if t, ok := awsmiddleware.GetServerTime(got.ResultMetadata); ok {
+		h.serverNow = t
+	}
+	return h, nil
 }
 
-// refreshOnce re-stamps heartbeat_at, guarded by If-Match so it only
-// writes if we still hold the exact object. Losing the If-Match means
-// a taker replaced us — surfaced as an error to the beater's onErr.
+// refreshOnce rewrites the lock object (which moves its last-modified
+// time on the store's clock), guarded by If-Match so it only writes if we
+// still hold the exact object. Losing the If-Match means a taker replaced
+// us: the lease is marked lost, and the next write stops.
 func (l *s3RunLock) refreshOnce(ctx context.Context) error {
 	l.mu.Lock()
 	etag := l.etag
 	l.mu.Unlock()
 
+	sent := time.Now()
 	now := l.a.now()
 	body, err := json.Marshal(lockBody{Owner: l.owner, AcquiredAt: l.acquiredAt, HeartbeatAt: now.Unix()})
 	if err != nil {
@@ -194,17 +261,27 @@ func (l *s3RunLock) refreshOnce(ctx context.Context) error {
 		IfMatch: aws.String(etag),
 	})
 	if err != nil {
+		if isPreconditionFailed(err) || isNoSuchKey(err) {
+			lost := fmt.Errorf("s3 run-lock %s was replaced or removed by another run", runLockKey)
+			l.lease.Lose(lost)
+			return lost
+		}
+		// Not proof of loss: the lease runs out on its own if no later
+		// refresh gets through in time.
 		return fmt.Errorf("s3 refresh run-lock: %w", err)
 	}
 	l.mu.Lock()
 	l.etag = aws.ToString(out.ETag)
 	l.mu.Unlock()
+	l.lease.Renewed(sent)
 	return nil
 }
 
 // Release stops the heartbeat then deletes the lock object iff we
 // still own it (If-Match our ETag). A precondition failure / missing
-// object means a taker already owns it — nothing of ours to free.
+// object means a taker replaced or removed it: nothing of ours to free,
+// and REPORTED as migrate.ErrLockLost, because the object only still
+// carries our ETag if nobody took the lock during the run.
 func (l *s3RunLock) Release(ctx context.Context) error {
 	if l.beater != nil {
 		l.beater.Stop()
@@ -221,7 +298,7 @@ func (l *s3RunLock) Release(ctx context.Context) error {
 	})
 	if err != nil {
 		if isPreconditionFailed(err) || isNoSuchKey(err) {
-			return nil
+			return fmt.Errorf("s3 release run-lock: %w: %s was replaced or removed by another run during this run", migrate.ErrLockLost, runLockKey)
 		}
 		return fmt.Errorf("s3 release run-lock: %w", err)
 	}

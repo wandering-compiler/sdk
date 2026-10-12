@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
@@ -25,3 +27,8 @@ func RunLockKeyForTest() string { return runLockKey }
 func RefreshForTest(l migrate.RunLock) error {
 	return l.(*redisRunLock).refreshOnce(context.Background())
 }
+
+// AddHookForTest installs a go-redis hook on the applier's client, so a
+// test can reshape replies the embedded server would never produce (a
+// SCAN page that repeats keys, as a real Redis may during a rehash).
+func (a *Applier) AddHookForTest(h goredis.Hook) { a.client.AddHook(h) }
