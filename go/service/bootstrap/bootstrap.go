@@ -5,8 +5,12 @@
 //
 //   - observability: a single [observx.MustInit] for the whole
 //     process (+ a bounded flush on the way down);
-//   - OS signals: one SIGINT/SIGTERM handler that cancels a shared
-//     context — components never install their own;
+//   - OS signals: one SIGINT/SIGTERM/SIGHUP handler that cancels a
+//     shared context — components never install their own; a second
+//     signal during the drain exits at once;
+//   - a deadline on the whole shutdown (component drain + resource
+//     teardown), so the process ends on its own terms before the
+//     orchestrator's kill;
 //   - composition: N [Component]s run concurrently, each on the
 //     shared context; the first to exit (clean or error) cancels
 //     the context so the siblings drain too.
@@ -22,10 +26,13 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -63,6 +70,12 @@ func (f Func) Run(ctx context.Context) error { return f(ctx) }
 //
 // observability is flushed (bounded) after all components drain,
 // even when one failed to start.
+//
+// Shutdown is bounded as a whole (see [EnvShutdownDeadline]): once it
+// starts, the components and the resource teardown must finish within
+// the deadline, or Run returns an error naming it without waiting for
+// them. A second SIGINT/SIGTERM/SIGHUP while shutting down exits the
+// process immediately with status 1.
 func Run(parent context.Context, obs observx.Config, comps ...Component) error {
 	return RunGraceful(parent, obs, nil, comps...)
 }
@@ -90,6 +103,7 @@ func Run(parent context.Context, obs observx.Config, comps ...Component) error {
 // closes DB pools in its post-GracefulStop shutdown hooks), so the
 // ordering is intra-component there and needs no phase here.
 func RunGraceful(parent context.Context, obs observx.Config, resources []func(context.Context) error, comps ...Component) error {
+	deadline := shutdownDeadline(os.Getenv)
 	if err := observx.MustInit(obs); err != nil {
 		return err
 	}
@@ -105,10 +119,14 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 
 	// One signal owner for the whole process; the derived ctx is the
 	// single shutdown source every component selects on.
-	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	finished := make(chan struct{})
+	defer close(finished)
+	sigCh := make(chan os.Signal, 2)
+	notifySignals(sigCh)
+	defer signal.Stop(sigCh)
+	go watchSignals(sigCh, cancel, finished)
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(comps))
@@ -143,27 +161,48 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 		}()
 	}
 
-	wg.Wait()
-	close(errCh)
+	// teardownCtx is cancelled when the shutdown deadline passes, so a
+	// resource closer still running then is told to give up.
+	teardownCtx, teardownCancel := context.WithCancel(context.Background())
+	defer teardownCancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+		close(errCh)
 
-	// Phase 2 — resource teardown. Every component has fully returned,
-	// so all transports have drained their in-flight work; only now is
-	// it safe to close the shared resources they depended on. The
-	// process ctx is already cancelled, so use a fresh bounded context.
-	if len(resources) > 0 {
-		drainCtx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
-		for i, closeRes := range resources {
-			if closeRes == nil {
-				continue
+		// Phase 2 — resource teardown. Every component has fully returned,
+		// so all transports have drained their in-flight work; only now is
+		// it safe to close the shared resources they depended on. The
+		// process ctx is already cancelled, so use a fresh bounded context.
+		if len(resources) > 0 {
+			drainCtx, dcancel := context.WithTimeout(teardownCtx, 30*time.Second)
+			for i, closeRes := range resources {
+				if closeRes == nil {
+					continue
+				}
+				// A failing closer does not stop the rest, and it does not
+				// change Run's result (the components already decided that);
+				// it is reported so a failed pool close or bus flush is seen.
+				if err := closeRes(drainCtx); err != nil {
+					observx.ReportError(drainCtx, fmt.Errorf("bootstrap: resource closer %d: %w", i, err))
+				}
 			}
-			// A failing closer does not stop the rest, and it does not
-			// change Run's result (the components already decided that);
-			// it is reported so a failed pool close or bus flush is seen.
-			if err := closeRes(drainCtx); err != nil {
-				observx.ReportError(drainCtx, fmt.Errorf("bootstrap: resource closer %d: %w", i, err))
-			}
+			dcancel()
 		}
-		dcancel()
+	}()
+
+	// Shutdown starts when the shared ctx is cancelled (a signal, the
+	// parent, or the first component to return); from then on the rest
+	// of the sequence has `deadline` to finish.
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if err := awaitShutdown(done, deadline); err != nil {
+			teardownCancel()
+			observx.ReportError(context.Background(), err)
+			return errors.Join(firstQueued(errCh), err)
+		}
 	}
 
 	var first error
@@ -173,4 +212,90 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 		}
 	}
 	return first
+}
+
+// EnvShutdownDeadline bounds the whole shutdown sequence — the drain of
+// every component and the resource teardown after it — in whole seconds.
+// Unset means [DefaultShutdownDeadline]; 0 or a negative value removes the
+// bound (wait for everything); an unparseable value is logged and the
+// default applies.
+const EnvShutdownDeadline = "W17_SHUTDOWN_DEADLINE_SECONDS"
+
+// DefaultShutdownDeadline is the shutdown bound when none is configured.
+// Orchestrators commonly kill a process 30s after asking it to stop
+// (Kubernetes' default termination grace period); 20s for drain and
+// teardown plus at most 5s of telemetry flush ends the process before
+// that. Under a shorter grace period (docker stop waits 10s), set
+// [EnvShutdownDeadline] lower, and keep each component's own drain bound
+// (runtime.Config.ShutdownTimeout, default 10s) below it.
+const DefaultShutdownDeadline = 20 * time.Second
+
+func shutdownDeadline(lookup func(string) string) time.Duration {
+	raw := lookup(EnvShutdownDeadline)
+	if raw == "" {
+		return DefaultShutdownDeadline
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("bootstrap: %s=%q is not a whole number of seconds; using %s", EnvShutdownDeadline, raw, DefaultShutdownDeadline)
+		return DefaultShutdownDeadline
+	}
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
+}
+
+// awaitShutdown waits for done, for at most d (d == 0: no bound).
+func awaitShutdown(done <-chan struct{}, d time.Duration) error {
+	if d <= 0 {
+		<-done
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-t.C:
+		return fmt.Errorf("bootstrap: shutdown did not finish within %s (%s); exiting with components or resource closers still running", d, EnvShutdownDeadline)
+	}
+}
+
+// firstQueued returns the first component error already reported, without
+// waiting for the others.
+func firstQueued(errCh <-chan error) error {
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+
+// Test seams: the signals the supervisor owns, and how it force-exits.
+var (
+	notifySignals = func(c chan<- os.Signal) {
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	}
+	forceExit = os.Exit
+)
+
+// watchSignals cancels the shared context on the first signal and exits the
+// process on the second: an operator (or orchestrator) that asks twice
+// does not want to wait for the drain.
+func watchSignals(sigCh <-chan os.Signal, cancel context.CancelFunc, finished <-chan struct{}) {
+	select {
+	case sig := <-sigCh:
+		log.Printf("bootstrap: received %s; shutting down (send it again to exit immediately)", sig)
+		cancel()
+	case <-finished:
+		return
+	}
+	select {
+	case sig := <-sigCh:
+		log.Printf("bootstrap: received %s again during shutdown; exiting immediately", sig)
+		forceExit(1)
+	case <-finished:
+	}
 }

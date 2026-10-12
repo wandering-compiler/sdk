@@ -132,3 +132,40 @@ func TestEnsureLeaf_UnreadableIsRefused(t *testing.T) {
 		t.Error("an unreadable leaf was overwritten")
 	}
 }
+
+// A leaf issued for server use only is re-minted: the node also presents
+// it as its client certificate under mutual TLS, and a listener that
+// verifies clients refuses a leaf without ClientAuth.
+func TestEnsureLeaf_ReMintedWithoutClientAuth(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := EnsureCerts(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	ca, caKey := readCA(t, dir)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(8),
+		Subject:      pkix.Name{CommonName: "server-only"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCertPEM(filepath.Join(dir, serverCertFile), der); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeyPEM(filepath.Join(dir, serverKeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureCerts(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if leaf := readLeaf(t, dir); !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		t.Errorf("server-only leaf kept: EKU %v", leaf.ExtKeyUsage)
+	}
+}

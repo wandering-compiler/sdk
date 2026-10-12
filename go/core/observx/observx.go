@@ -46,6 +46,21 @@
 // Empty SentryDSN / OTelEndpoint = that exporter stays off;
 // `ReportError` falls back to log.Printf so dev / test envs
 // don't need any external dep configured.
+//
+// Breadcrumbs belong to one request: an entry point (the gRPC
+// recovery interceptor, the REST recovery middleware, an MCP tool
+// call) gives the request its own Sentry hub with [WithRequestScope],
+// and [ReportEvent] / [ReportRefusal] add breadcrumbs only to the hub
+// carried by their context. Nothing is added to the process-wide hub,
+// so one request's breadcrumbs are never attached to another
+// request's event.
+//
+// The log lines the package writes (the stderr fallback of
+// [ReportError] and [ReportEvent], and every [ReportRefusal]) are
+// rate-limited per channel; lines over the budget are counted and the
+// count is logged with the next line that is written (and on
+// [Shutdown]), so a flood of client-driven refusals cannot become an
+// equal flood of log writes.
 package observx
 
 import (
@@ -53,6 +68,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -74,8 +90,14 @@ import (
 	// URLs is an error, and MustInit returns it — every generated binary
 	// with OTel on would refuse to boot. TestMustInit_FullStack catches a
 	// mismatch; bump this with the SDK (v1.45.0 uses v1.43.0).
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc/credentials"
+
+	"github.com/wandering-compiler/sdk/go/lib/grpcclient"
 )
 
 // Config carries the bootstrap input for [MustInit]. Only
@@ -145,12 +167,36 @@ type Config struct {
 	// erroring; spans simply aren't exported anywhere.
 	OTelEndpoint string
 
-	// SampleRate is the OTel trace sample rate (0..1).
-	// 0 (default) → 1.0 (100% sampling) when OTel is
-	// enabled; explicitly set to a fraction for prod
-	// where full sampling is too noisy. Sentry's
-	// TracesSampleRate stays at gox/sentryx's default 0.2
-	// (Sentry has its own pricing-driven sampling story).
+	// OTelTLS is the transport security of the OTLP export.
+	// Empty falls back to the W17_OTEL_TLS env var; both empty
+	// means "follow the internal mesh": the exporter dials TLS
+	// exactly when a w17 client would (W17_INTERNAL_TLS on or
+	// terminated), with the same CA and client pair, and
+	// plaintext only when the mesh switch is off.
+	//
+	//   - "on" / "true" / "1" / "yes": TLS whatever the mesh
+	//     switch says (W17_INTERNAL_TLS_CA and the client pair
+	//     are used when set, else the system roots).
+	//   - "off" / "false" / "0" / "no": plaintext, the explicit
+	//     operator opt-out. With the mesh switch on this is
+	//     logged as a warning at init.
+	//
+	// Any other value fails [MustInit]. Span status descriptions
+	// carry error text, so telemetry travels with the same
+	// protection as the traffic it describes.
+	OTelTLS string
+
+	// SampleRate is the OTel trace sample rate for traces
+	// this service starts (0..1). 0 (default) → 1.0 (100%
+	// sampling) when OTel is enabled; explicitly set to a
+	// fraction for prod where full sampling is too noisy. A
+	// request that arrives with a sampling decision from its
+	// caller keeps that decision (parent-based), so a trace
+	// is not cut into pieces by services with different
+	// rates. A value outside 0..1 (or NaN) fails [MustInit].
+	// Sentry's TracesSampleRate stays at gox/sentryx's
+	// default 0.2 (Sentry has its own pricing-driven
+	// sampling story).
 	SampleRate float64
 
 	// EnableMetrics turns on a Prometheus MeterProvider
@@ -219,11 +265,24 @@ var (
 	cfg            Config
 )
 
-// MustInit panics on bootstrap failure — generated `main.go`
-// calls it inside log.Fatal-style boot; the only valid
-// recovery from a bad telemetry config is "fix the config
-// and restart". Idempotent — second call replaces the
-// previous setup (useful for tests; not expected in prod).
+// EnvOTelTLS is the env fallback for [Config.OTelTLS].
+const EnvOTelTLS = "W17_OTEL_TLS"
+
+// Test seams.
+var (
+	newPrometheusExporter = prometheus.New
+	// sentryBeforeSend, when set, is installed as Sentry's BeforeSend.
+	sentryBeforeSend func(*sentry.Event, *sentry.EventHint) *sentry.Event
+)
+
+// MustInit initialises observability and returns an error on
+// bootstrap failure (it does not panic, despite the name) —
+// generated `main.go` calls it inside log.Fatal-style boot; the
+// only valid recovery from a bad telemetry config is "fix the
+// config and restart". On failure nothing it installed is left
+// behind: exporters are shut down and the global OTel providers
+// are reset. Idempotent — second call replaces the previous
+// setup (useful for tests; not expected in prod).
 func MustInit(c Config) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -276,6 +335,12 @@ func MustInit(c Config) error {
 	if c.OTelEndpoint == "" {
 		c.OTelEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
+	if c.OTelTLS == "" {
+		c.OTelTLS = os.Getenv(EnvOTelTLS)
+	}
+	if math.IsNaN(c.SampleRate) || c.SampleRate < 0 || c.SampleRate > 1 {
+		return fmt.Errorf("observx: SampleRate %v is outside 0..1 (0 means sample every trace)", c.SampleRate)
+	}
 
 	cfg = c
 
@@ -299,6 +364,7 @@ func MustInit(c Config) error {
 			Environment:      c.Environment,
 			EnableTracing:    true,
 			TracesSampleRate: 0.2,
+			BeforeSend:       sentryBeforeSend,
 		}
 		if err := sentry.Init(opts); err != nil {
 			return fmt.Errorf("observx: sentry init: %w", err)
@@ -342,11 +408,15 @@ func MustInit(c Config) error {
 	// `tracer.Start(ctx, ...)` calls in generated handlers
 	// cost almost nothing.
 	if c.OTelEndpoint != "" {
+		transport, err := otlpTransport(c.OTelTLS, os.Getenv)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		exp, err := otlptracegrpc.New(ctx,
 			otlptracegrpc.WithEndpoint(c.OTelEndpoint),
-			otlptracegrpc.WithInsecure(),
+			transport,
 		)
 		if err != nil {
 			return fmt.Errorf("observx: otlp exporter: %w", err)
@@ -360,7 +430,7 @@ func MustInit(c Config) error {
 		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exp),
 			sdktrace.WithResource(res),
-			sdktrace.WithSampler(sdktrace.TraceIDRatioBased(sampleRate)),
+			sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRate))),
 		)
 		otel.SetTracerProvider(tracerProvider)
 		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
@@ -375,7 +445,7 @@ func MustInit(c Config) error {
 	// restgw.MountMetricsListener picks up everything
 	// otelhttp / sentry / custom otel.Meter() emit.
 	if c.EnableMetrics {
-		promExporter, err := prometheus.New()
+		promExporter, err := newPrometheusExporter()
 		if err != nil {
 			return fmt.Errorf("observx: prometheus exporter: %w", err)
 		}
@@ -387,6 +457,43 @@ func MustInit(c Config) error {
 	}
 	success = true
 	return nil
+}
+
+// otlpTransport picks the OTLP exporter's transport security from the
+// OTelTLS setting and the internal-mesh switch read through lookup (see
+// [Config.OTelTLS]).
+func otlpTransport(setting string, lookup func(string) string) (otlptracegrpc.Option, error) {
+	var tlsLookup grpcclient.LookupFunc
+	switch strings.ToLower(strings.TrimSpace(setting)) {
+	case "":
+		// Follow the mesh: TLS exactly when a w17 client dials TLS.
+		tlsLookup = lookup
+	case "on", "true", "1", "yes":
+		mesh := lookup(grpcclient.EnvInternalTLS)
+		tlsLookup = func(k string) string {
+			if k == grpcclient.EnvInternalTLS && !grpcclient.InternalTLSDial(mesh) {
+				return "on"
+			}
+			return lookup(k)
+		}
+	case "off", "false", "0", "no":
+		if mesh := lookup(grpcclient.EnvInternalTLS); grpcclient.InternalTLSDial(mesh) {
+			log.Printf("observx: telemetry is exported in plaintext although %s=%s, because %s is off",
+				grpcclient.EnvInternalTLS, mesh, EnvOTelTLS)
+		}
+		return otlptracegrpc.WithInsecure(), nil
+	default:
+		return nil, fmt.Errorf("observx: %s=%q is not a recognised value; accepted: on|true|1|yes (TLS), off|false|0|no (plaintext), or unset (follow %s)",
+			EnvOTelTLS, setting, grpcclient.EnvInternalTLS)
+	}
+	tlsCfg, err := grpcclient.ClientTLSConfig(tlsLookup)
+	if err != nil {
+		return nil, fmt.Errorf("observx: otlp exporter TLS: %w", err)
+	}
+	if tlsCfg == nil {
+		return otlptracegrpc.WithInsecure(), nil
+	}
+	return otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsCfg)), nil
 }
 
 // Shutdown flushes any buffered telemetry and closes the
@@ -425,6 +532,19 @@ func shutdownLocked(ctx context.Context) error {
 		if !sentry.Flush(2*time.Second) && firstErr == nil {
 			firstErr = errors.New("observx: sentry flush timed out")
 		}
+	}
+	// The globals must not keep pointing at a provider that is shut down:
+	// spans and instruments taken from them afterwards would be dropped
+	// silently. Reset only what this package installed, so a provider
+	// someone else set in the meantime is left alone.
+	if tracerProvider != nil && otel.GetTracerProvider() == trace.TracerProvider(tracerProvider) {
+		otel.SetTracerProvider(tracenoop.NewTracerProvider())
+	}
+	if meterProvider != nil && otel.GetMeterProvider() == metric.MeterProvider(meterProvider) {
+		otel.SetMeterProvider(metricnoop.NewMeterProvider())
+	}
+	for _, l := range limiters {
+		l.flush()
 	}
 	tracerProvider = nil
 	meterProvider = nil
@@ -477,12 +597,23 @@ func ReportError(ctx context.Context, err error) {
 		// No Sentry → log.Printf fallback. Matches
 		// gox/errorx's behavior so the migration is
 		// observability-equivalent without Sentry.
-		log.Printf("error: %s", scrubLog(err.Error()))
+		errorLog.printf("error: %s", scrubLog(err.Error()))
 		return
 	}
 
-	hub := sentry.CurrentHub().Clone()
+	// The request's own hub carries its breadcrumbs. Without one, a clone
+	// of the process hub is used with its breadcrumbs dropped: whatever
+	// sits there was not recorded for this request.
+	hub := sentry.GetHubFromContext(ctx)
+	ownHub := hub != nil
+	if !ownHub {
+		hub = sentry.CurrentHub()
+	}
+	hub = hub.Clone()
 	hub.WithScope(func(scope *sentry.Scope) {
+		if !ownHub {
+			scope.ClearBreadcrumbs()
+		}
 		if svc != "" {
 			scope.SetTag("service", svc)
 		}
@@ -541,11 +672,11 @@ func ReportEvent(ctx context.Context, err error) {
 	}
 
 	if !sentryOn {
-		log.Printf("debug: %s", scrubLog(err.Error()))
+		eventLog.printf("debug: %s", scrubLog(err.Error()))
 		return
 	}
 
-	sentry.AddBreadcrumb(&sentry.Breadcrumb{
+	addBreadcrumb(ctx, &sentry.Breadcrumb{
 		Category:  "observx",
 		Message:   err.Error(),
 		Level:     sentry.LevelDebug,
@@ -591,7 +722,7 @@ func ReportRefusal(ctx context.Context, err error) {
 	mu.Unlock()
 
 	if sentryOn {
-		sentry.AddBreadcrumb(&sentry.Breadcrumb{
+		addBreadcrumb(ctx, &sentry.Breadcrumb{
 			Category:  "observx.refusal",
 			Message:   err.Error(),
 			Level:     sentry.LevelInfo,
@@ -601,8 +732,108 @@ func ReportRefusal(ctx context.Context, err error) {
 
 	// Logged whether or not an exporter is configured: with Sentry on, a
 	// breadcrumb alone is retrievable only if a LATER exception happens on
-	// the same hub, and a refusal usually has no later exception.
-	log.Printf("refused: %s", scrubLog(err.Error()))
+	// the same hub, and a refusal usually has no later exception. Refusals
+	// are client-driven, so the line is rate-limited: over the budget it
+	// is counted, and the count is logged with the next line written.
+	refusalLog.printf("refused: %s", scrubLog(err.Error()))
+}
+
+// WithRequestScope gives the request carried by ctx its own Sentry hub,
+// so the breadcrumbs [ReportEvent] and [ReportRefusal] record for it are
+// attached to this request's events only. Entry points call it once per
+// request; a ctx that already carries a hub is returned unchanged, so a
+// nested entry point (an in-process call inside a gateway request) stays
+// in its caller's request. Without Sentry it returns ctx unchanged.
+func WithRequestScope(ctx context.Context) context.Context {
+	mu.Lock()
+	on := sentryEnabled
+	mu.Unlock()
+	if !on || sentry.HasHubOnContext(ctx) {
+		return ctx
+	}
+	hub := sentry.CurrentHub().Clone()
+	hub.Scope().ClearBreadcrumbs()
+	return sentry.SetHubOnContext(ctx, hub)
+}
+
+// addBreadcrumb records b on the request's own hub. A context without one
+// gets no breadcrumb: the process-wide hub is shared by every concurrent
+// request, so a breadcrumb there would be attached to whichever request
+// next reports an error.
+func addBreadcrumb(ctx context.Context, b *sentry.Breadcrumb) {
+	if hub := sentry.GetHubFromContext(ctx); hub != nil {
+		hub.AddBreadcrumb(b, nil)
+	}
+}
+
+// Log budgets per channel: a burst, then a steady rate. Beyond it lines
+// are counted, not written.
+const (
+	logBurst = 50
+	logRate  = 10 // lines per second
+)
+
+var (
+	refusalLog = newLogLimiter("refused", logBurst, logRate)
+	errorLog   = newLogLimiter("error", logBurst, logRate)
+	eventLog   = newLogLimiter("debug", logBurst, logRate)
+	limiters   = []*logLimiter{refusalLog, errorLog, eventLog}
+)
+
+// logLimiter is a token bucket in front of log.Printf for one channel.
+type logLimiter struct {
+	name  string
+	burst float64
+	rate  float64
+	now   func() time.Time
+
+	mu         sync.Mutex
+	tokens     float64
+	last       time.Time
+	suppressed int
+	since      time.Time
+}
+
+func newLogLimiter(name string, burst, rate float64) *logLimiter {
+	return &logLimiter{name: name, burst: burst, rate: rate, tokens: burst, now: time.Now}
+}
+
+// printf writes the line when the budget allows. A line that follows
+// suppressed ones is preceded by their count.
+func (l *logLimiter) printf(format string, args ...any) {
+	l.mu.Lock()
+	now := l.now()
+	if !l.last.IsZero() {
+		l.tokens = math.Min(l.burst, l.tokens+now.Sub(l.last).Seconds()*l.rate)
+	}
+	l.last = now
+	if l.tokens < 1 {
+		if l.suppressed == 0 {
+			l.since = now
+		}
+		l.suppressed++
+		l.mu.Unlock()
+		return
+	}
+	l.tokens--
+	n, since := l.suppressed, l.since
+	l.suppressed = 0
+	l.mu.Unlock()
+	if n > 0 {
+		log.Printf("observx: %d %q line(s) suppressed by the log rate limit since %s", n, l.name, since.Format(time.RFC3339))
+	}
+	log.Printf(format, args...)
+}
+
+// flush logs the count of lines suppressed since the last written one.
+func (l *logLimiter) flush() {
+	l.mu.Lock()
+	n, since := l.suppressed, l.since
+	l.suppressed = 0
+	l.mu.Unlock()
+	if n > 0 {
+		log.Printf("observx: %d %q line(s) suppressed by the log rate limit since %s", n, l.name, since.Format(time.RFC3339))
+	}
 }
 
 // Tracer returns the configured tracer for the service.

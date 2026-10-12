@@ -27,7 +27,6 @@ err := runtime.Serve(ctx, runtime.Config{
     SentryDSN:    os.Getenv("W17_SENTRY_DSN"),    // empty = Sentry off
     OTelEndpoint: os.Getenv("W17_OTEL_ENDPOINT"), // empty = export off
     Addr:         ":50051",
-    Reflection:   true,
     UnaryInterceptors: []grpc.UnaryServerInterceptor{ /* rollback, emit, … */ },
     RegisterServices: func(s *grpc.Server) error {
         pb.RegisterFooServer(s, fooHandler)
@@ -44,6 +43,23 @@ a misconfigured or unrecognised switch value fails the start instead of
 listening in plaintext. Add interceptors through `UnaryInterceptors` (or
 `grpc.ChainUnaryInterceptor` in `ServerOptions`) so they run inside the
 recovery net; the singular `grpc.UnaryInterceptor` option is refused.
+
+Server reflection lists every service and message schema and is not covered by
+the handlers' authentication. `Reflection: true` is therefore refused at start
+unless `ReflectionAuth` guards it (a check run on every reflection stream) or
+`ReflectionUnauthenticated: true` states that anyone who reaches the port may
+read it — meant for a local development listener only.
+
+Shutdown is bounded as a whole: a second SIGINT/SIGTERM during the drain exits
+at once, and the drain plus teardown must finish within
+`W17_SHUTDOWN_DEADLINE_SECONDS` (default 20s, leaving room for the 5s telemetry
+flush inside the common 30s orchestrator grace period; `0` removes the bound).
+Under a shorter grace period (`docker stop` waits 10s) lower it accordingly.
+
+Telemetry export (`OTelEndpoint`) follows the same TLS switch: with
+`W17_INTERNAL_TLS` on or `terminated` the OTLP exporter dials TLS with the
+mesh's CA and client pair; `W17_OTEL_TLS=off` is the explicit opt-out to
+plaintext, `W17_OTEL_TLS=on` forces TLS with the mesh off.
 
 ---
 

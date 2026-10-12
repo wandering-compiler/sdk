@@ -53,12 +53,25 @@ type Config struct {
 	Environment    string  // prod / staging / dev; optional
 	SentryDSN      string  // empty = Sentry off
 	OTelEndpoint   string  // empty = OTLP trace export off
+	OTelTLS        string  // OTLP transport: "" follows W17_INTERNAL_TLS; see observx.Config.OTelTLS
 	SampleRate     float64 // 0 → 100% when OTel on
 	EnableMetrics  bool    // Prometheus MeterProvider (gateways)
 
 	// --- server ---
-	Addr       string // listen address; required
-	Reflection bool   // register gRPC reflection
+	Addr string // listen address; required
+	// Reflection registers gRPC server reflection, which lists every
+	// service and message schema. It is refused at start unless
+	// ReflectionAuth guards it or ReflectionUnauthenticated states it is
+	// served to anyone who reaches the port.
+	Reflection bool
+	// ReflectionAuth runs on every reflection stream; a non-nil error
+	// refuses it (a gRPC status error as is, anything else as
+	// Unauthenticated).
+	ReflectionAuth func(ctx context.Context) error
+	// ReflectionUnauthenticated serves reflection without
+	// authentication — only for a listener untrusted callers cannot
+	// reach. Logged as a warning at start.
+	ReflectionUnauthenticated bool
 	// ShutdownTimeout bounds the graceful stop. 0 (unset) means
 	// [lifecycle.DefaultShutdownTimeout] (10s); a negative value —
 	// [lifecycle.Unbounded], which is also what
@@ -121,6 +134,7 @@ func (cfg Config) ObservxConfig() observx.Config {
 		Environment:    cfg.Environment,
 		SentryDSN:      cfg.SentryDSN,
 		OTelEndpoint:   cfg.OTelEndpoint,
+		OTelTLS:        cfg.OTelTLS,
 		SampleRate:     cfg.SampleRate,
 		EnableMetrics:  cfg.EnableMetrics,
 	}
@@ -146,12 +160,14 @@ func GRPCComponent(cfg Config) bootstrap.Component {
 			return err
 		}
 		return server.Run(ctx, server.Config{
-			Addr:             cfg.Addr,
-			Reflection:       cfg.Reflection,
-			HealthServer:     server.DefaultHealthServer(),
-			ShutdownTimeout:  effectiveShutdownTimeout(cfg.ShutdownTimeout),
-			ServerOptions:    opts,
-			RegisterServices: cfg.RegisterServices,
+			Addr:                      cfg.Addr,
+			Reflection:                cfg.Reflection,
+			ReflectionAuth:            cfg.ReflectionAuth,
+			ReflectionUnauthenticated: cfg.ReflectionUnauthenticated,
+			HealthServer:              server.DefaultHealthServer(),
+			ShutdownTimeout:           effectiveShutdownTimeout(cfg.ShutdownTimeout),
+			ServerOptions:             opts,
+			RegisterServices:          cfg.RegisterServices,
 			OnShutdown: func() {
 				runShutdowns(cfg.Shutdowns)
 			},

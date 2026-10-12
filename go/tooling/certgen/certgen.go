@@ -74,7 +74,8 @@ const devCertValidity = 10 * 365 * 24 * time.Hour
 // CA signed, carrying sans as its SubjectAltNames. It writes only
 // the files that are missing: an existing CA is reused to sign a
 // missing leaf, an existing leaf that no longer chains to the CA,
-// lacks a requested SAN or has expired is re-minted, and a complete,
+// lacks a requested SAN, lacks the ServerAuth or ClientAuth extended key
+// usage, or has expired is re-minted, and a complete,
 // current set is left untouched. dir is
 // created (0700) when absent. Returns the list of files it
 // actually wrote so the caller can report what changed.
@@ -245,6 +246,14 @@ func leafStaleReason(cert *x509.Certificate, key *ecdsa.PrivateKey, caCert *x509
 	if !ok || !key.PublicKey.Equal(pub) {
 		return "key does not match the certificate"
 	}
+	// Every node's leaf is also its client certificate under mutual TLS
+	// (inter-tier dials and the health probe present it), so a leaf
+	// minted for server use only is replaced.
+	for _, u := range []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth} {
+		if !slices.Contains(cert.ExtKeyUsage, u) {
+			return "missing the ServerAuth and ClientAuth extended key usages"
+		}
+	}
 	dns, ips := splitSANs(sans)
 	for _, d := range dns {
 		if !slices.Contains(cert.DNSNames, d) {
@@ -259,7 +268,9 @@ func leafStaleReason(cert *x509.Certificate, key *ecdsa.PrivateKey, caCert *x509
 	return ""
 }
 
-// mintLeaf signs a fresh server leaf with the CA and writes the pair.
+// mintLeaf signs a fresh leaf with the CA and writes the pair. It carries
+// both ServerAuth and ClientAuth: the node presents it as its server
+// certificate, and as its client certificate under mutual TLS.
 func mintLeaf(certPath, keyPath string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, sans []string) ([]string, error) {
 	dns, ips := splitSANs(sans)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

@@ -192,6 +192,8 @@ func (s *Server) AddTool(name, description string, rawInputSchema json.RawMessag
 // generic error result and the connection stays up.
 func recoverTool(name string, h mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (res *mcp.CallToolResult, err error) {
+		// One tool call is one request for the error tracker.
+		ctx = observx.WithRequestScope(ctx)
 		defer func() {
 			if r := recover(); r != nil {
 				observx.ReportError(ctx, fmt.Errorf("PANIC MCP tool %q: %v\n%s", name, r, debug.Stack()))

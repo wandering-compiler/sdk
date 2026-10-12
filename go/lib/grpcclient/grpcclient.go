@@ -56,6 +56,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -233,8 +234,9 @@ func Dial(addr string, lookup LookupFunc, opts ...grpc.DialOption) (*grpc.Client
 //
 //	W17_INTERNAL_TLS        — off (unset / "off") → plain h2c.
 //	                          "on" → dial TLS, verifying the server.
-//	                          "terminated" → dial TLS (system roots) to a
-//	                          server whose platform terminates TLS in
+//	                          "terminated" → dial TLS (system roots only;
+//	                          the CA and client pair below are ignored) to
+//	                          a server whose platform terminates TLS in
 //	                          front of it; the server itself listens plain.
 //	W17_INTERNAL_TLS_CA     — CA bundle to verify the server leaf
 //	                          (RootCAs). Unset = system trust roots.
@@ -265,18 +267,55 @@ func Dial(addr string, lookup LookupFunc, opts ...grpc.DialOption) (*grpc.Client
 // of at dial-time. Exposed separately from [Dial] for callers that own
 // their full DialOption list and just need the TLS slot.
 func TLSDialOption(lookup LookupFunc) (grpc.DialOption, error) {
-	if lookup != nil {
-		if err := CheckInternalTLS(lookup(EnvInternalTLS)); err != nil {
-			return nil, err
-		}
+	tlsCfg, err := ClientTLSConfig(lookup)
+	if err != nil {
+		return nil, err
 	}
-	if lookup == nil || !InternalTLSDial(lookup(EnvInternalTLS)) {
+	if tlsCfg == nil {
 		// Switch off (default): plain h2c. The internal mesh is trusted
 		// / infra-secured; plaintext between services is intended here.
 		return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
 	}
+	return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+}
+
+// ClientTLSConfig is the tls.Config a w17 client dials the internal mesh
+// with, built from the same switch and knobs as [TLSDialOption]; nil means
+// the switch is off and the client dials plaintext. Exposed for other
+// clients that must follow the mesh posture (the telemetry exporter).
+//
+// Under "terminated" the server's certificate is the PLATFORM's, issued by
+// a public CA, so the client verifies it against the system roots only and
+// presents no client certificate: the stack's private CA and this node's
+// leaf are ignored, with a warning when they are set, rather than making
+// verification of the platform certificate fail.
+func ClientTLSConfig(lookup LookupFunc) (*tls.Config, error) {
+	if lookup == nil {
+		return nil, nil
+	}
+	switchVal := lookup(EnvInternalTLS)
+	if err := CheckInternalTLS(switchVal); err != nil {
+		return nil, err
+	}
+	if !InternalTLSDial(switchVal) {
+		return nil, nil
+	}
 
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if InternalTLSTerminated(switchVal) {
+		var ignored []string
+		for _, k := range []string{EnvInternalTLSCA, EnvInternalTLSCert, EnvInternalTLSKey} {
+			if lookup(k) != "" {
+				ignored = append(ignored, k)
+			}
+		}
+		if len(ignored) > 0 {
+			warnf("grpcclient: %s=terminated verifies the platform certificate against the system roots; ignoring %s",
+				EnvInternalTLS, strings.Join(ignored, ", "))
+		}
+		return tlsCfg, nil
+	}
 
 	if caPath := lookup(EnvInternalTLSCA); caPath != "" {
 		caPEM, err := os.ReadFile(caPath)
@@ -305,6 +344,8 @@ func TLSDialOption(lookup LookupFunc) (grpc.DialOption, error) {
 	case clientCert != "" || clientKey != "":
 		return nil, fmt.Errorf("%s and %s must be set together (mTLS needs both)", EnvInternalTLSCert, EnvInternalTLSKey)
 	}
-
-	return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+	return tlsCfg, nil
 }
+
+// warnf is where a configuration warning goes; a test replaces it.
+var warnf = log.Printf

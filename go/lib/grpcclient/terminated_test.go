@@ -1,6 +1,9 @@
 package grpcclient
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -75,5 +78,67 @@ func TestTLSDialOption_UnrecognisedSwitchIsRefused(t *testing.T) {
 		return ""
 	}); err == nil {
 		t.Fatal("Dial accepted W17_INTERNAL_TLS=required")
+	}
+}
+
+// Under "terminated" the server presents the platform's certificate, so the
+// client verifies it against the system roots alone. A private CA or client
+// pair left over from a TLS-on stack is ignored, with a warning, instead of
+// replacing the system roots and failing every handshake with the platform.
+func TestClientTLSConfig_TerminatedUsesSystemRootsOnly(t *testing.T) {
+	var warned []string
+	prev := warnf
+	warnf = func(format string, args ...any) { warned = append(warned, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { warnf = prev })
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, []byte("not even a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		EnvInternalTLS:     "terminated",
+		EnvInternalTLSCA:   caPath,
+		EnvInternalTLSCert: filepath.Join(dir, "missing.crt"),
+		EnvInternalTLSKey:  filepath.Join(dir, "missing.key"),
+	}
+	cfg, err := ClientTLSConfig(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("terminated with a private CA set: %v (the CA must be ignored, not loaded)", err)
+	}
+	if cfg == nil {
+		t.Fatal("terminated must dial TLS")
+	}
+	if cfg.RootCAs != nil {
+		t.Error("terminated replaced the system roots with the private CA")
+	}
+	if len(cfg.Certificates) != 0 {
+		t.Error("terminated presents a client certificate")
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], EnvInternalTLSCA) || !strings.Contains(warned[0], EnvInternalTLSCert) {
+		t.Errorf("want one warning naming the ignored variables, got %q", warned)
+	}
+	if _, err := TLSDialOption(func(k string) string { return env[k] }); err != nil {
+		t.Errorf("TLSDialOption under terminated: %v", err)
+	}
+
+	// Nothing set beyond the switch: no warning.
+	warned = nil
+	if _, err := ClientTLSConfig(func(k string) string {
+		if k == EnvInternalTLS {
+			return "terminated"
+		}
+		return ""
+	}); err != nil || len(warned) != 0 {
+		t.Errorf("bare terminated: err=%v warnings=%q", err, warned)
+	}
+}
+
+func TestClientTLSConfig_OffIsNil(t *testing.T) {
+	for _, lookup := range []LookupFunc{nil, func(string) string { return "" }} {
+		cfg, err := ClientTLSConfig(lookup)
+		if err != nil || cfg != nil {
+			t.Errorf("switch off: (%v, %v), want (nil, nil)", cfg, err)
+		}
 	}
 }

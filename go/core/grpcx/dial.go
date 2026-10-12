@@ -156,8 +156,15 @@ func InternalTLSEnabled() bool {
 // W17_INTERNAL_TLS_* env knobs. A missing / unreadable CA falls back to
 // the system roots rather than erroring — DialOpts has no error channel,
 // and a wrong CA path surfaces as a verification failure on the first RPC.
+//
+// Under "terminated" the server presents the platform's certificate, so the
+// system roots verify it and the stack's CA and client pair are ignored, as
+// [grpcclient.ClientTLSConfig] does.
 func clientTLSConfig(lookup func(string) string) *tls.Config {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if grpcclient.InternalTLSTerminated(lookup(grpcclient.EnvInternalTLS)) {
+		return cfg
+	}
 	if caPath := lookup(grpcclient.EnvInternalTLSCA); caPath != "" {
 		if pemBytes, err := os.ReadFile(caPath); err == nil {
 			pool := x509.NewCertPool()

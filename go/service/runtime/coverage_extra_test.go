@@ -15,12 +15,13 @@ func TestObservxConfig_Projection(t *testing.T) {
 		Environment:    "prod",
 		SentryDSN:      "dsn",
 		OTelEndpoint:   "otel:4317",
+		OTelTLS:        "on",
 		SampleRate:     0.5,
 		EnableMetrics:  true,
 	}
 	o := cfg.ObservxConfig()
 	if o.ServiceName != "app-storage" || o.ServiceVersion != "abc123" || o.Environment != "prod" ||
-		o.SentryDSN != "dsn" || o.OTelEndpoint != "otel:4317" || o.SampleRate != 0.5 || !o.EnableMetrics {
+		o.SentryDSN != "dsn" || o.OTelEndpoint != "otel:4317" || o.SampleRate != 0.5 || !o.EnableMetrics || o.OTelTLS != "on" {
 		t.Errorf("ObservxConfig projection mismatch: %+v", o)
 	}
 }
@@ -30,9 +31,10 @@ func TestObservxConfig_Projection(t *testing.T) {
 func TestGRPCComponent_ServesAndDrains(t *testing.T) {
 	drained := make(chan struct{})
 	cfg := Config{
-		Addr:             "127.0.0.1:0",
-		Reflection:       true,
-		RegisterServices: func(*grpc.Server) error { return nil },
+		Addr:                      "127.0.0.1:0",
+		Reflection:                true,
+		ReflectionUnauthenticated: true,
+		RegisterServices:          func(*grpc.Server) error { return nil },
 		UnaryInterceptors: []grpc.UnaryServerInterceptor{
 			func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 				return h(ctx, req)
