@@ -118,8 +118,8 @@ empty topic.
 |---|---|---|
 | I3.1 | Queue mode: a surface deployed after its producer MUST process the retained backlog. | `TestNatsBus_StartPosition_Embedded`, `TestRedisBus_StartPosition_Embedded` |
 | I3.2 | Fan-out mode: every replica MUST receive every message; history MUST NOT be replayed into a new process. | `TestNatsBus_DeliveryMode_ReplicaFanOut_Embedded`, `TestRedisBus_DeliveryMode_ReplicaFanOut_Embedded`, `TestNatsBus_StartPosition_Embedded`, `TestRedisBus_StartPosition_Embedded` |
-| I3.3 | A fan-out NATS consumer MUST be ephemeral and reaped by the server 5 minutes after it stops pulling; a fan-out Redis group MUST be destroyed on `Close`. | no test |
-| I3.4 | After transient link loss shorter than the client's reconnect budget, a fan-out subscriber MUST receive the backlog since disconnect. | no test |
+| I3.3 | A fan-out NATS consumer MUST be ephemeral and reaped by the server 5 minutes after it stops pulling; a fan-out Redis group MUST be destroyed on `Close`. | `TestNatsBus_FanOutConsumerIsEphemeralAndReaped_Embedded`, `TestRedisBus_FanOutGroupDestroyedOnClose_Embedded` |
+| I3.4 | After transient link loss shorter than the client's reconnect budget, a fan-out subscriber MUST receive the backlog since disconnect. | `TestFanOut_BacklogSinceDisconnectArrivesAfterReconnect` |
 
 **Deliberate limits.**
 - A restarted process gets a new fan-out identity starting at "new"; events emitted while it was down are not seen.
@@ -229,9 +229,9 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.6 | `Close` MUST drain all subscribers, then close the connection; it MUST be idempotent and MUST NOT produce error-level callbacks for its own close. | `TestNatsBus_CloseAtShutdownIsNotAnError`, `go/lib/eventbus/nats_embedded_test.go` (idempotent close) |
 | I5.7 | A broker outage MUST be logged. | `TestNatsBus_ABrokerOutageIsStillHeard` |
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
-| I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | no test |
+| I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | `TestNewNatsBus_UnreachableBrokerFails` |
 | I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
-| I5.11 | After the client stops reconnecting, the bus MUST log a "closed for good" line, report an error, and fail every later `Dispatch` at once through `OnEmitFailure`. | no test |
+| I5.11 | After the client stops reconnecting, the bus MUST log a "closed for good" line, report an error, and fail every later `Dispatch` at once through `OnEmitFailure`. | `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I5.12 | Channel and topic names MUST be valid on every transport or be refused before use; `DurablePrefix` and the keys of `ChannelRetries` MUST be checked at construction. | `TestChannelNameRefusedOnEveryTransport`, `TestDispatch_EmptyTopicRefusedOnEveryTransport`, `TestBusConstruction_RefusesInvalidNames` |
 | I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names; a plain dotted filter keeps its name. | `TestSanitizeDurableSuffix_Injective`, `TestSanitizeDurableSuffix`, `TestTopicFilter_Nats_Embedded` |
 | I5.14 | Every channel stream and dead-letter stream the bus ensures MUST carry the configured retention limits, or the defaults when none are configured. | `TestNatsBus_StreamRetention_Embedded` |
@@ -290,10 +290,10 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent. | `go/lib/eventbus/redis_embedded_test.go` (drain one of two, idempotent close) |
 | I6.5 | `NewRedisBus` MUST fail when the broker is unreachable at construction, with any DSN password redacted from the error. | `TestNewRedisBus_UnreachableBrokerFails` |
 | I6.6 | Consume-loop and pending-scan errors MUST be logged and reported once per outage, and the recovery logged. | `TestRedisSubscriber_LoopFailuresAreReported` |
-| I6.7 | `ReadBatch` and pending pages larger than 100 entries MUST be handled without loss. | no test |
+| I6.7 | `ReadBatch` and pending pages larger than 100 entries MUST be handled without loss. | `TestRedisBus_ReadBatchAbove100LosesNothing`; pending pages: holds by construction (every claim tick re-reads the pending list from its start); no test |
 | I6.8 | A narrower topic filter MUST read through its own consumer group, so an entry it skips still reaches a sibling subscription on the same channel whose filter matches it. | `TestTopicFilter_Redis_Embedded` |
-| I6.9 | Each append MUST trim the stream to the configured age and count limits, or to the default age when none are configured. | `TestRedisBus_StreamRetention_Embedded` (channel streams; dead-letter stream: no test) |
-| I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | no test |
+| I6.9 | Each append MUST trim the stream to the configured age and count limits, or to the default age when none are configured. | `TestRedisBus_StreamRetention_Embedded`, `TestRedisBus_DLQRetention_Embedded` |
+| I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | `TestRedisBus_PublishTimeoutBoundsAHangingBroker` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.
@@ -410,7 +410,7 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `go/lib/restgw/w17events_eventbus_test.go` (transcode skip) |
 | I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | I9.8 | A write to a stalled client MUST end within the write deadline. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
-| I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | no test |
+| I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | `TestEventbusEventSource_ResumesAfterTheBrokerRecreatesItsConsumer` |
 
 **Deliberate limits.**
 - Deliveries are always acked; nothing is retried.
@@ -434,8 +434,8 @@ scope, and `w17-label-<name>` per broadcast label.
 | I10.1 | `UserID` MUST take the `x-w17-scope-user_id` fast path, else the envelope; the scope MUST win over the envelope. | `TestUserID_FromScope`, `TestUserID_FromEnvelope`, `TestUserID_ScopeWinsOverEnvelope` |
 | I10.2 | `UserID` MUST fail closed with `ErrNoPrincipal` (wrapped) on absence, bad base64, bad proto or empty id. | `TestUserID_FailsClosed` |
 | I10.3 | `Envelope` and `Scope` MUST report "not present" on absent or empty values. | `TestEnvelope_FullClaims`, `TestEnvelope_FailsClosed`, `TestScope`, `TestScopeKey` |
-| I10.4 | `Label` and `LabelKey` MUST report "not present" on absent or empty values. | no test |
-| I10.5 | Only incoming metadata MUST be read; the first value of a multi-valued key wins. | `TestUserID_FromScope` (incoming); first value: no test |
+| I10.4 | `Label` and `LabelKey` MUST report "not present" on absent or empty values. | `TestLabel_AbsentOrEmptyIsNotPresent` |
+| I10.5 | Only incoming metadata MUST be read; the first value of a multi-valued key wins. | `TestUserID_FromScope`, `TestReaders_IgnoreOutgoingMetadata`, `TestReaders_FirstValueWins` |
 
 **Deliberate limits.**
 - The envelope is not signed. Its integrity rests on the gateway stripping
@@ -522,10 +522,10 @@ check helpers. `IDByString` accepts the enum value name or the cascade code.
 | ID | Guarantee | Test |
 |---|---|---|
 | I13.1 | `Allocate` MUST keep existing IDs, give new permissions the smallest positive unused, unreserved ID, move removed IDs to `Reserved`, skip empty strings, and be deterministic for a given input order. | `TestAllocate_EmptyPrev`, `TestAllocate_PreservesExisting`, `TestAllocate_RemovedGoesToReserved`, `go/lib/acllock/allocator_internal_test.go` |
-| I13.2 | A reserved ID MUST never be reused, across any number of generations. | no test (single generation only) |
+| I13.2 | A reserved ID MUST never be reused, across any number of generations. | `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
 | I13.3 | `Allocate` MUST NOT consume an ID without assigning or reserving it (for example on duplicate input entries). | `TestAllocate_DuplicateEntryConsumesNoID`, `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
 | I13.4 | Checks MUST deny by default and never grant on error; no helper returns an error. | `TestHasPermission`, `TestHasAllPermissions`, `go/lib/acllock/strict_test.go` |
-| I13.5 | `HasAnyPermission` with empty `wanted` MUST return false. | `TestHasAnyPermission` (non-empty input; empty: no test) |
+| I13.5 | `HasAnyPermission` with empty `wanted` MUST return false. | `TestHasAnyPermission` |
 | I13.6 | `GrantAll` MUST return every current, non-reserved ID. | `TestGrantAll` |
 | I13.7 | `IDByString` MUST resolve declared enum names and cascade codes. | `TestIDStringLookups`, `go/lib/acllock/permission_alphabet_test.go` |
 
@@ -623,7 +623,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 | I17.1 | `ValidEmail` MUST require one `@`, a non-empty local part and a domain with an inner dot, and reject any byte `<= 0x20` or `0x7f`. | `TestValidEmail`, `TestValidEmail_RejectsControlChars` |
 | I17.2 | `FitsDecimal(s, precision, scale)` MUST be value preserving, reject exponent and NaN, and accept empty input. | `TestFitsDecimal` |
 | I17.3 | `FitsDecimal` MUST agree with the database for every column shape the declaration validator admits (including scale greater than precision and negative scale). | `TestFitsDecimal_AgreesWithPostgresOnEveryScale` |
-| I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` MUST match their documented shapes. | no test |
+| I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` MUST match their documented shapes. | `TestTypeRegexes_MatchTheirDocumentedShapes` |
 
 **Deliberate limits.**
 - These are shape checks. `URL` does no host check and accepts only a lower-case scheme. `ValidEmail` blocks control characters but not markup; output escaping is the renderer's job.

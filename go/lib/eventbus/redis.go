@@ -240,6 +240,11 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("RedisBusOptions: DSN %q: %w", opts.DSN, err)
 	}
+	// go-redis ignores a context deadline unless told otherwise. Without
+	// this PublishTimeout bounded nothing: a broker that stopped answering
+	// held each Dispatch — on the committing goroutine — for the client's
+	// read timeout on every retry.
+	parsed.ContextTimeoutEnabled = true
 	if err := validateChannelKeys("RedisBusOptions.ChannelRetries", opts.ChannelRetries); err != nil {
 		return nil, err
 	}
