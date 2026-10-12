@@ -73,19 +73,21 @@ type MCPAuthFunc func(ctx context.Context, conn ConnectionInfo) (metadata.MD, er
 // Example: forward=["session_id"] with the env var
 // `SESSION_ID=abc` set produces metadata `session_id=abc`.
 //
-// A key naming a gateway-owned namespace ([principal.IsGatewayOwnedKey] —
-// `x-w17-*`, `w17-label-*`) is DROPPED, whatever the operator listed. Those
+// A key the gateway reserves ([principal.IsEdgeReservedKey] — `x-w17-*`,
+// `w17-label-*`, the transaction keys `w17-tx-id` / `w17-conn-id`,
+// `grpcgateway-*`) is DROPPED, whatever the operator listed. The principal
 // keys are written from the verified auth response and trusted by storage and
 // by the event hub, and the generated wrapper stamps the principal OVER this
 // map — so a forwarded one survives wherever the stamp is silent, which is the
 // deliberate fail-closed branch of an ambiguous scope resolver, not an exotic
-// case (C8-F8). The same key routed through a declared `metadata_propagation`
-// is refused at parse time; this channel had no such fence.
+// case. The transaction keys decide which transaction a storage call joins.
+// The same keys routed through the REST gateway's header propagation are
+// refused there too.
 func DefaultAuthFunc(forward ...string) MCPAuthFunc {
 	return func(_ context.Context, conn ConnectionInfo) (metadata.MD, error) {
 		md := metadata.MD{}
 		for _, key := range forward {
-			if principal.IsGatewayOwnedKey(key) {
+			if principal.IsEdgeReservedKey(key) {
 				continue
 			}
 			if v := lookup(conn, key); v != "" {
@@ -143,22 +145,29 @@ func lookup(conn ConnectionInfo, key string) string {
 // never reads os.Environ itself, so an unscoped process environment is
 // never bulk-forwarded (the env snapshot is scoped to the server's auth
 // prefix by SetAuthEnvPrefix).
+//
+// Keys the gateway reserves ([principal.IsEdgeReservedKey]) are left out
+// from every source, as the REST gateway strips them from every inbound
+// request before its auth call. The one that matters most is
+// `x-w17-credential`: the auth backend reads it as a capability token the
+// GATEWAY lifted out of a URL, so a caller able to send it directly would
+// choose which authentication path its credential takes.
 func CollectAuthHeaders(conn ConnectionInfo) map[string]string {
 	out := map[string]string{}
 	if conn.HTTPHeaders == nil {
 		for k, v := range conn.Env {
-			if v != "" {
-				out[headerFromEnvKey(k)] = v
+			if k := headerFromEnvKey(k); v != "" && !principal.IsEdgeReservedKey(k) {
+				out[k] = v
 			}
 		}
 	}
 	for k, v := range conn.InitializeParams {
-		if s, ok := v.(string); ok && s != "" {
+		if s, ok := v.(string); ok && s != "" && !principal.IsEdgeReservedKey(k) {
 			out[strings.ToLower(k)] = s
 		}
 	}
 	for k, vs := range conn.HTTPHeaders {
-		if len(vs) > 0 {
+		if len(vs) > 0 && !principal.IsEdgeReservedKey(k) {
 			out[strings.ToLower(k)] = vs[0]
 		}
 	}

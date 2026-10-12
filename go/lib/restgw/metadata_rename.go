@@ -45,6 +45,8 @@ import (
 	"net/http"
 
 	"google.golang.org/grpc/metadata"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // HeaderRenameRule is one HTTP header → gRPC metadata key
@@ -73,7 +75,14 @@ type HeaderRenameRule struct {
 //
 // Headers absent / blank on the incoming request are skipped
 // (the middleware never injects empty metadata values).
+//
+// A rule whose TARGET is a gateway-reserved key
+// ([principal.IsEdgeReservedKey]) is dropped and logged, for the
+// reason [MetadataPropagationMiddleware] gives: renaming an innocuous
+// client header into `x-w17-user` is the same forgery under another
+// name.
 func MetadataRenameMiddleware(rules []HeaderRenameRule, next http.Handler) http.Handler {
+	rules = withoutReservedRenames(rules)
 	if len(rules) == 0 {
 		return next
 	}
@@ -121,7 +130,14 @@ type DefaultMetadataStamp struct {
 // — reads the outgoing-context-stored MD without copying. When
 // the key already has at least one value, this middleware is a
 // no-op for that key.
+//
+// A stamp on a gateway-reserved key ([principal.IsEdgeReservedKey])
+// is dropped and logged. A default principal, scope or label would
+// land on exactly the requests auth did not vouch for — the
+// unauthenticated ones, and the scopes a resolver left unset on
+// purpose so the scoped read fails closed.
 func MetadataDefaultStampMiddleware(stamps []DefaultMetadataStamp, next http.Handler) http.Handler {
+	stamps = withoutReservedStamps(stamps)
 	if len(stamps) == 0 {
 		return next
 	}
@@ -140,4 +156,48 @@ func MetadataDefaultStampMiddleware(stamps []DefaultMetadataStamp, next http.Han
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// withoutReservedRenames drops the rename rules whose target metadata key
+// the gateway reserves, logging each one.
+func withoutReservedRenames(rules []HeaderRenameRule) []HeaderRenameRule {
+	var kept []HeaderRenameRule
+	for i, rule := range rules {
+		if principal.IsEdgeReservedKey(rule.Metadata) {
+			if kept == nil {
+				kept = append(make([]HeaderRenameRule, 0, len(rules)), rules[:i]...)
+			}
+			logReservedMetadataKey("rename target", rule.Metadata)
+			continue
+		}
+		if kept != nil {
+			kept = append(kept, rule)
+		}
+	}
+	if kept == nil {
+		return rules
+	}
+	return kept
+}
+
+// withoutReservedStamps drops the default stamps on a gateway-reserved
+// metadata key, logging each one.
+func withoutReservedStamps(stamps []DefaultMetadataStamp) []DefaultMetadataStamp {
+	var kept []DefaultMetadataStamp
+	for i, s := range stamps {
+		if principal.IsEdgeReservedKey(s.Key) {
+			if kept == nil {
+				kept = append(make([]DefaultMetadataStamp, 0, len(stamps)), stamps[:i]...)
+			}
+			logReservedMetadataKey("default stamp", s.Key)
+			continue
+		}
+		if kept != nil {
+			kept = append(kept, s)
+		}
+	}
+	if kept == nil {
+		return stamps
+	}
+	return kept
 }

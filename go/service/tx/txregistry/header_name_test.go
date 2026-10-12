@@ -3,6 +3,7 @@ package txregistry_test
 import (
 	"testing"
 
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
 
@@ -26,5 +27,14 @@ func TestHeaderName_IsTheStrippedEnvelopeKey(t *testing.T) {
 			"(reservedMetadataKeys in eventctx.go) — update it in the same commit, or events "+
 			"emitted inside a transaction will start failing delivery in silence",
 			txregistry.HeaderName, "w17-tx-id")
+	}
+}
+
+// The edges refuse to fill this key from client input, matching it by the
+// same literal; a rename must move both.
+func TestHeaderName_IsReservedAtTheEdge(t *testing.T) {
+	if !principal.IsEdgeReservedKey(txregistry.HeaderName) {
+		t.Fatalf("principal.IsEdgeReservedKey(%q) = false: a client could name the transaction a storage call adopts — update transportKeys in lib/principal/reserved.go",
+			txregistry.HeaderName)
 	}
 }

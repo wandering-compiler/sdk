@@ -321,9 +321,14 @@ func startHTTP(t *testing.T, s *Server) string {
 	return ""
 }
 
-func postMCP(t *testing.T, url, session, body string) (*http.Response, string) {
+func postMCP(t *testing.T, url, session, body string, extra ...http.Header) (*http.Response, string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBufferString(body))
+	for _, h := range extra {
+		for k, vs := range h {
+			req.Header[k] = vs
+		}
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if session != "" {
@@ -338,15 +343,15 @@ func postMCP(t *testing.T, url, session, body string) (*http.Response, string) {
 	return resp, string(b)
 }
 
-func callToolHTTP(t *testing.T, base, name string) string {
+func callToolHTTP(t *testing.T, base, name string, extra ...http.Header) string {
 	t.Helper()
 	url := base + EndpointPath
-	resp, body := postMCP(t, url, "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`)
+	resp, body := postMCP(t, url, "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`, extra...)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("initialize: %d %s", resp.StatusCode, body)
 	}
 	session := resp.Header.Get("Mcp-Session-Id")
-	_, _ = postMCP(t, url, session, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-	_, body = postMCP(t, url, session, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"`+name+`","arguments":{}}}`)
+	_, _ = postMCP(t, url, session, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, extra...)
+	_, body = postMCP(t, url, session, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"`+name+`","arguments":{}}}`, extra...)
 	return body
 }
