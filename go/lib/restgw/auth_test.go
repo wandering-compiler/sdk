@@ -660,8 +660,8 @@ func captureLog(t *testing.T, fn func()) string {
 // `{"code":"PERMISSION_DENIED","message":"You do not have access to this."}` with
 // no details. Three different causes — a role too narrow, a missing membership, a
 // mistyped path — became one string, and because that string is per-CODE an
-// assertion on it cannot fail. A consumer measured it live and it cost their
-// seven ACL checks their only real assertion (2026-09-28).
+// assertion on it cannot fail. Measured live, it cost a suite of seven ACL
+// checks their only real assertion.
 //
 // ⚠️ Two consumer reports pull opposite ways here and the test holds both ends.
 // One reported service and method names reaching an end user in a browser, which

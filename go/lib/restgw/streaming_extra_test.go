@@ -22,9 +22,9 @@ import (
 // WriteSSEGRPCErrorCtx carries the envelope's details[] — the SSE leg of the
 // parity the unary and WS writers already had. On a stream this
 // frame is the ONLY place a backend refusal can go (the 200 is already sent),
-// and it was dropping the stable code a client dispatches on: a consumer's
-// overload refusal arrived as bare RESOURCE_EXHAUSTED with PARSE_OVERLOADED
-// nowhere on the wire (2026-10-06).
+// and it was dropping the stable code a client dispatches on: an overload
+// refusal arrived as bare RESOURCE_EXHAUSTED with PARSE_OVERLOADED nowhere on
+// the wire.
 func TestWriteSSEGRPCErrorCtx_ForwardsDetails(t *testing.T) {
 	st, err := status.New(codes.ResourceExhausted, "ParseService.Stream: queue full").WithDetails(
 		protoadapt.MessageV1Of(&w17pb.ErrorDetail{Code: "PARSE_OVERLOADED", Message: "Busy, try again."}),

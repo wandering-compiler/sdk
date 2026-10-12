@@ -2278,7 +2278,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SnapshotMutationClient interface {
 	// PushSnapshot — store an immutable snapshot AND advance the
-	// initiative head to it, ATOMICALLY in one handler (G7). Two mutation
+	// initiative head to it, ATOMICALLY in one handler. Two mutation
 	// ops on the one connection run in a single transaction, so a crash
 	// can never leave a stored snapshot with a stale head. The second op
 	// references the first op's RETURNING via the cross-op alias
@@ -2309,7 +2309,7 @@ func (c *snapshotMutationClient) PushSnapshot(ctx context.Context, in *initiativ
 // for forward compatibility.
 type SnapshotMutationServer interface {
 	// PushSnapshot — store an immutable snapshot AND advance the
-	// initiative head to it, ATOMICALLY in one handler (G7). Two mutation
+	// initiative head to it, ATOMICALLY in one handler. Two mutation
 	// ops on the one connection run in a single transaction, so a crash
 	// can never leave a stored snapshot with a stale head. The second op
 	// references the first op's RETURNING via the cross-op alias

@@ -582,8 +582,7 @@ type InspectPluginManifestRequest struct {
 	// The client computes the digest itself (`plugindigest.Of` lives in the
 	// public SDK precisely so both ends get the same answer, and hashing is not
 	// trust cryptography — `stack build` hashes today). It never checks the
-	// signature: public-split §4 puts anything that verifies an artefact on the
-	// console, the same rule that put VerifyLock there.
+	// signature: anything that verifies an artefact belongs on the console, the same rule that put VerifyLock there.
 	//
 	// `signature` is the BODY of the tree's plugin.sig, verbatim — not a bare
 	// hex signature. The console parses it, because the console wrote it.

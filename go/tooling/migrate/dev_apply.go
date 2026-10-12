@@ -12,7 +12,7 @@ import (
 
 // DevApply applies a dev diff plan to the local stores — the LOCAL
 // execution half of the dev DB lifecycle's diff-apply (the planning half
-// moved behind the console API in the thin-client refactor; this stays
+// lives behind the console API; this stays
 // local because it touches the developer's stores directly). Each
 // migration's transactional body (with post-tx folded in, CONCURRENTLY
 // stripped) is executed via the per-connection Applier resolved from

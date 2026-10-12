@@ -140,17 +140,14 @@ type CodegenServiceClient interface {
 	// GenerateProject for the measurement this comes from.
 	CompileIR(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CompileIRRequest, CompileIRResponse], error)
 	// GenerateCi renders the opt-in CI configs for the requested providers
-	// from the project's lock data (providers + connection names) — the
-	// first of the seam-D generator family moved off w17ctl's in-process
-	// migrator/cmd/cli onto a sibling codegen RPC (thin-client refactor
-	// Step 3a). Returns the rendered files (relative paths + contents); the
+	// from the project's lock data (providers + connection names) on the
+	// console rather than in w17ctl. Returns the rendered files (relative paths + contents); the
 	// client writes them under the project's CI tree (executable bit by
 	// .sh suffix). CI generation needs no proto set — it's pure lock-driven
 	// templating.
 	GenerateCi(ctx context.Context, in *GenerateCiRequest, opts ...grpc.CallOption) (*GenerateCiResponse, error)
 	// GenerateEventbus renders the per-domain subscriber bundle(s) + the
-	// events lock from the project's proto set (seam-D generator family,
-	// thin-client refactor Step 3a). Distinct from the emit-interceptor
+	// events lock from the project's proto set. Distinct from the emit-interceptor
 	// code Generate folds into the storage bundle: this is the standalone
 	// `<domain>-eventbus/` module (main.go, dispatch, channels, Dockerfile,
 	// …). The server stages the uploaded protos and runs the same
@@ -158,7 +155,7 @@ type CodegenServiceClient interface {
 	// services dir.
 	GenerateEventbus(ctx context.Context, in *GenerateEventbusRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateGrpcClients renders the typed gRPC client package(s) from the
-	// project's services (seam-D, thin-client refactor Step 3a). Proto-only
+	// project's services. Proto-only
 	// (no generated-Go-tree read). Drives both the per-domain project-pb
 	// clients and the w17/stubs partitioned clients (the request's `out` +
 	// `w17_stubs_pb` select which). The server runs the same generator the
@@ -166,32 +163,31 @@ type CodegenServiceClient interface {
 	// `out`.
 	GenerateGrpcClients(ctx context.Context, in *GenerateGrpcClientsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateMcp renders the per-domain MCP-server bundle(s) from the
-	// project's MCP surface (seam-D, thin-client refactor Step 3a).
+	// project's MCP surface.
 	// Proto-only. The client passes the bundle's replace-path knobs
 	// (srcgo_rel / sdk_go_rel) it computes locally; the server runs the
 	// generator and returns the bundle files.
 	GenerateMcp(ctx context.Context, in *GenerateMcpRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateAcl refreshes the per-domain ACL permission lock
-	// (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface (seam-D,
-	// thin-client refactor Step 3a). Proto-only, no knobs — the generator
+	// (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface.
+	// Proto-only, no knobs — the generator
 	// resolves the w17 vocab from the server's own proto root. Returns the
 	// regenerated lock(s); the client writes them back into the proto tree.
 	GenerateAcl(ctx context.Context, in *GenerateAclRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateBusiness renders the generated <domain>-business bundle(s)
 	// (the binary w17 builds for a domain when the project opts in via the
-	// lock's business_bundles) (seam-D, thin-client refactor Step 3a).
+	// lock's business_bundles).
 	// Proto-only apart from reading the project's gen-dir go.mod for the
 	// grpc version, which the client uploads in `go_mod`.
 	GenerateBusiness(ctx context.Context, in *GenerateBusinessRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateProjectMap renders the AI navigation map (w17/map/*.map +
-	// w17/AGENTS.md) from the project's proto surface (seam-D, thin-client
-	// refactor Step 3a). Best-effort. The grpc-client cross-domain edges are
+	// w17/AGENTS.md) from the project's proto surface. Best-effort. The grpc-client cross-domain edges are
 	// derived from the generated Go tree, which the client uploads in
 	// `gen_files` (empty = proto-only map, those edges omitted).
 	GenerateProjectMap(ctx context.Context, in *GenerateProjectMapRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateE2e scaffolds the generated e2e test skeletons (one
 	// gRPC-shaped test per REST/MCP endpoint, generate-if-missing) from the
-	// project's surface (seam-D, thin-client refactor Step 3a). Proto-only.
+	// project's surface. Proto-only.
 	GenerateE2E(ctx context.Context, in *GenerateE2ERequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// GenerateProject runs the WHOLE codegen pipeline server-side and streams
 	// the resulting filesystem operations. It absorbs the orchestration that
@@ -236,8 +232,8 @@ type CodegenServiceClient interface {
 	SignAclLock(ctx context.Context, in *SignAclLockRequest, opts ...grpc.CallOption) (*SignAclLockResponse, error)
 	// VerifyAcl / VerifyEventbus recompute the committed lock from the
 	// uploaded proto set (which includes the committed lock) and report
-	// whether it still matches — the CI drift hook (`w17ctl verify`),
-	// thin-client refactor Step 3a. Drift is reported as `ok=false` +
+	// whether it still matches — the CI drift hook (`w17ctl verify`).
+	// Drift is reported as `ok=false` +
 	// a message, NOT a gRPC error (it's an expected outcome).
 	VerifyAcl(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	VerifyEventbus(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResult, error)
@@ -259,8 +255,8 @@ type CodegenServiceClient interface {
 	// a message, NOT a gRPC error, like the other Verify* RPCs.
 	VerifyEgressClient(ctx context.Context, in *VerifyEgressClientRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	// VerifyLock checks the committed `w17/lock.yaml` signature server-side
-	// — the client performs ZERO cryptography (public-split boundary §4: no
-	// signing key in the public binary). The thin client ships the on-disk
+	// — the client performs ZERO cryptography (no signing key in the public
+	// binary). The thin client ships the on-disk
 	// lock bytes; the console (which holds the verifier) confirms the
 	// signature + canonical form. The CI consistency hook (`w17ctl verify`):
 	// a hand-edited / tampered / unsigned committed lock is reported as
@@ -268,8 +264,8 @@ type CodegenServiceClient interface {
 	VerifyLock(ctx context.Context, in *VerifyLockRequest, opts ...grpc.CallOption) (*VerifyResult, error)
 	// Classify runs the compat engine (lib/compat — the DB/WIRE/API
 	// breaking-change classifier) over two compiled IR states base→head and
-	// returns the findings + the dev/prod gate decision (public-split: the
-	// engine is a COMPILER concern, so the thin client classifies over the
+	// returns the findings + the dev/prod gate decision (the engine is a
+	// COMPILER concern, so the thin client classifies over the
 	// API instead of holding lib/compat or the IR type). base/head are the
 	// opaque marshalled IR bytes the client already carries (a snapshot's
 	// `ir_schema` or a fresh CompileIR output) — like CompileIRResponse.schema,
@@ -299,8 +295,7 @@ type CodegenServiceClient interface {
 	// exactly as it already does for `migrate apply` and the dev plan.
 	DumpFixtures(ctx context.Context, in *DumpFixturesRequest, opts ...grpc.CallOption) (*DumpFixturesResponse, error)
 	// GenerateClient renders the FE client tree(s) (TS/JS/React/Vue)
-	// declared in the lock's generated_code.clients[] (seam-D, thin-client
-	// refactor Step 3a — the last generator off the in-process toolchain).
+	// declared in the lock's generated_code.clients[].
 	// The server runs the FE client generator against the staged proto set
 	// + lock; the client writes the returned trees under each client's
 	// output_root.
@@ -314,8 +309,7 @@ type CodegenServiceClient interface {
 	// DiscoverPluginSandboxes returns each activated plugin's dev-only
 	// sandbox declarations (image services the project's compose tree
 	// wires in) — discovering activations needs the proto loader, so a
-	// thin client asks the console instead of parsing locally (thin-client
-	// refactor Step 3a). The client folds the result into its
+	// thin client asks the console instead of parsing locally. The client folds the result into its
 	// (loader-free) compose render.
 	DiscoverPluginSandboxes(ctx context.Context, in *DiscoverPluginSandboxesRequest, opts ...grpc.CallOption) (*PluginSandboxes, error)
 	// GeneratePluginPb compiles a plugin's standalone src/gen/pb from its
@@ -345,8 +339,8 @@ type CodegenServiceClient interface {
 	// only when absent). Returns compose.w17.yaml + compose.yaml.
 	RenderProjectScaffold(ctx context.Context, in *RenderProjectScaffoldRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GeneratedFile], error)
 	// EditLock applies one editor INTENT to the lock and returns the
-	// re-signed bytes (public-split Block 2 §8.2). The console owns the
-	// lock: a dumb client must not sign (boundary §4) and editing requires
+	// re-signed bytes. The console owns the lock: a dumb client must not
+	// sign and editing requires
 	// re-signing, so editor commands ship the current lock bytes + a typed
 	// intent rather than constructing lockpb themselves. The server decodes,
 	// applies the intent, validates (dup names, default conflicts, …),
@@ -355,7 +349,7 @@ type CodegenServiceClient interface {
 	// bootstraps it). The oneof grows one arm per editor family.
 	EditLock(ctx context.Context, in *EditLockRequest, opts ...grpc.CallOption) (*EditLockResponse, error)
 	// DescribeLock decodes the lock and returns the routing fields the thin
-	// client reads (public-split Block 2 §8.2) — replacing client-side
+	// client reads — replacing client-side
 	// lock.Effective* / lockpb parsing. The console address (w17_url) is NOT
 	// here: you can't dial the console to learn where it is, so that one
 	// field is sourced from flag / env / registry / compiled default instead.
@@ -366,7 +360,7 @@ type CodegenServiceClient interface {
 	// thin client uploads the raw manifest bytes + the installed-plugin set and
 	// gets back the identity (name/version) it records + any requirement
 	// warnings to print. Replaces the client-side console/plugins ParseManifest
-	// / CheckRequires (public-split Block 3). A parse / validation failure is a
+	// / CheckRequires. A parse / validation failure is a
 	// gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
 	// refusal.
 	InspectPluginManifest(ctx context.Context, in *InspectPluginManifestRequest, opts ...grpc.CallOption) (*InspectPluginManifestResponse, error)
@@ -947,17 +941,14 @@ type CodegenServiceServer interface {
 	// GenerateProject for the measurement this comes from.
 	CompileIR(grpc.ClientStreamingServer[CompileIRRequest, CompileIRResponse]) error
 	// GenerateCi renders the opt-in CI configs for the requested providers
-	// from the project's lock data (providers + connection names) — the
-	// first of the seam-D generator family moved off w17ctl's in-process
-	// migrator/cmd/cli onto a sibling codegen RPC (thin-client refactor
-	// Step 3a). Returns the rendered files (relative paths + contents); the
+	// from the project's lock data (providers + connection names) on the
+	// console rather than in w17ctl. Returns the rendered files (relative paths + contents); the
 	// client writes them under the project's CI tree (executable bit by
 	// .sh suffix). CI generation needs no proto set — it's pure lock-driven
 	// templating.
 	GenerateCi(context.Context, *GenerateCiRequest) (*GenerateCiResponse, error)
 	// GenerateEventbus renders the per-domain subscriber bundle(s) + the
-	// events lock from the project's proto set (seam-D generator family,
-	// thin-client refactor Step 3a). Distinct from the emit-interceptor
+	// events lock from the project's proto set. Distinct from the emit-interceptor
 	// code Generate folds into the storage bundle: this is the standalone
 	// `<domain>-eventbus/` module (main.go, dispatch, channels, Dockerfile,
 	// …). The server stages the uploaded protos and runs the same
@@ -965,7 +956,7 @@ type CodegenServiceServer interface {
 	// services dir.
 	GenerateEventbus(*GenerateEventbusRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateGrpcClients renders the typed gRPC client package(s) from the
-	// project's services (seam-D, thin-client refactor Step 3a). Proto-only
+	// project's services. Proto-only
 	// (no generated-Go-tree read). Drives both the per-domain project-pb
 	// clients and the w17/stubs partitioned clients (the request's `out` +
 	// `w17_stubs_pb` select which). The server runs the same generator the
@@ -973,32 +964,31 @@ type CodegenServiceServer interface {
 	// `out`.
 	GenerateGrpcClients(*GenerateGrpcClientsRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateMcp renders the per-domain MCP-server bundle(s) from the
-	// project's MCP surface (seam-D, thin-client refactor Step 3a).
+	// project's MCP surface.
 	// Proto-only. The client passes the bundle's replace-path knobs
 	// (srcgo_rel / sdk_go_rel) it computes locally; the server runs the
 	// generator and returns the bundle files.
 	GenerateMcp(*GenerateMcpRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateAcl refreshes the per-domain ACL permission lock
-	// (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface (seam-D,
-	// thin-client refactor Step 3a). Proto-only, no knobs — the generator
+	// (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface.
+	// Proto-only, no knobs — the generator
 	// resolves the w17 vocab from the server's own proto root. Returns the
 	// regenerated lock(s); the client writes them back into the proto tree.
 	GenerateAcl(*GenerateAclRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateBusiness renders the generated <domain>-business bundle(s)
 	// (the binary w17 builds for a domain when the project opts in via the
-	// lock's business_bundles) (seam-D, thin-client refactor Step 3a).
+	// lock's business_bundles).
 	// Proto-only apart from reading the project's gen-dir go.mod for the
 	// grpc version, which the client uploads in `go_mod`.
 	GenerateBusiness(*GenerateBusinessRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateProjectMap renders the AI navigation map (w17/map/*.map +
-	// w17/AGENTS.md) from the project's proto surface (seam-D, thin-client
-	// refactor Step 3a). Best-effort. The grpc-client cross-domain edges are
+	// w17/AGENTS.md) from the project's proto surface. Best-effort. The grpc-client cross-domain edges are
 	// derived from the generated Go tree, which the client uploads in
 	// `gen_files` (empty = proto-only map, those edges omitted).
 	GenerateProjectMap(*GenerateProjectMapRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateE2e scaffolds the generated e2e test skeletons (one
 	// gRPC-shaped test per REST/MCP endpoint, generate-if-missing) from the
-	// project's surface (seam-D, thin-client refactor Step 3a). Proto-only.
+	// project's surface. Proto-only.
 	GenerateE2E(*GenerateE2ERequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// GenerateProject runs the WHOLE codegen pipeline server-side and streams
 	// the resulting filesystem operations. It absorbs the orchestration that
@@ -1043,8 +1033,8 @@ type CodegenServiceServer interface {
 	SignAclLock(context.Context, *SignAclLockRequest) (*SignAclLockResponse, error)
 	// VerifyAcl / VerifyEventbus recompute the committed lock from the
 	// uploaded proto set (which includes the committed lock) and report
-	// whether it still matches — the CI drift hook (`w17ctl verify`),
-	// thin-client refactor Step 3a. Drift is reported as `ok=false` +
+	// whether it still matches — the CI drift hook (`w17ctl verify`).
+	// Drift is reported as `ok=false` +
 	// a message, NOT a gRPC error (it's an expected outcome).
 	VerifyAcl(context.Context, *VerifyRequest) (*VerifyResult, error)
 	VerifyEventbus(context.Context, *VerifyRequest) (*VerifyResult, error)
@@ -1066,8 +1056,8 @@ type CodegenServiceServer interface {
 	// a message, NOT a gRPC error, like the other Verify* RPCs.
 	VerifyEgressClient(context.Context, *VerifyEgressClientRequest) (*VerifyResult, error)
 	// VerifyLock checks the committed `w17/lock.yaml` signature server-side
-	// — the client performs ZERO cryptography (public-split boundary §4: no
-	// signing key in the public binary). The thin client ships the on-disk
+	// — the client performs ZERO cryptography (no signing key in the public
+	// binary). The thin client ships the on-disk
 	// lock bytes; the console (which holds the verifier) confirms the
 	// signature + canonical form. The CI consistency hook (`w17ctl verify`):
 	// a hand-edited / tampered / unsigned committed lock is reported as
@@ -1075,8 +1065,8 @@ type CodegenServiceServer interface {
 	VerifyLock(context.Context, *VerifyLockRequest) (*VerifyResult, error)
 	// Classify runs the compat engine (lib/compat — the DB/WIRE/API
 	// breaking-change classifier) over two compiled IR states base→head and
-	// returns the findings + the dev/prod gate decision (public-split: the
-	// engine is a COMPILER concern, so the thin client classifies over the
+	// returns the findings + the dev/prod gate decision (the engine is a
+	// COMPILER concern, so the thin client classifies over the
 	// API instead of holding lib/compat or the IR type). base/head are the
 	// opaque marshalled IR bytes the client already carries (a snapshot's
 	// `ir_schema` or a fresh CompileIR output) — like CompileIRResponse.schema,
@@ -1106,8 +1096,7 @@ type CodegenServiceServer interface {
 	// exactly as it already does for `migrate apply` and the dev plan.
 	DumpFixtures(context.Context, *DumpFixturesRequest) (*DumpFixturesResponse, error)
 	// GenerateClient renders the FE client tree(s) (TS/JS/React/Vue)
-	// declared in the lock's generated_code.clients[] (seam-D, thin-client
-	// refactor Step 3a — the last generator off the in-process toolchain).
+	// declared in the lock's generated_code.clients[].
 	// The server runs the FE client generator against the staged proto set
 	// + lock; the client writes the returned trees under each client's
 	// output_root.
@@ -1121,8 +1110,7 @@ type CodegenServiceServer interface {
 	// DiscoverPluginSandboxes returns each activated plugin's dev-only
 	// sandbox declarations (image services the project's compose tree
 	// wires in) — discovering activations needs the proto loader, so a
-	// thin client asks the console instead of parsing locally (thin-client
-	// refactor Step 3a). The client folds the result into its
+	// thin client asks the console instead of parsing locally. The client folds the result into its
 	// (loader-free) compose render.
 	DiscoverPluginSandboxes(context.Context, *DiscoverPluginSandboxesRequest) (*PluginSandboxes, error)
 	// GeneratePluginPb compiles a plugin's standalone src/gen/pb from its
@@ -1152,8 +1140,8 @@ type CodegenServiceServer interface {
 	// only when absent). Returns compose.w17.yaml + compose.yaml.
 	RenderProjectScaffold(*RenderProjectScaffoldRequest, grpc.ServerStreamingServer[GeneratedFile]) error
 	// EditLock applies one editor INTENT to the lock and returns the
-	// re-signed bytes (public-split Block 2 §8.2). The console owns the
-	// lock: a dumb client must not sign (boundary §4) and editing requires
+	// re-signed bytes. The console owns the lock: a dumb client must not
+	// sign and editing requires
 	// re-signing, so editor commands ship the current lock bytes + a typed
 	// intent rather than constructing lockpb themselves. The server decodes,
 	// applies the intent, validates (dup names, default conflicts, …),
@@ -1162,7 +1150,7 @@ type CodegenServiceServer interface {
 	// bootstraps it). The oneof grows one arm per editor family.
 	EditLock(context.Context, *EditLockRequest) (*EditLockResponse, error)
 	// DescribeLock decodes the lock and returns the routing fields the thin
-	// client reads (public-split Block 2 §8.2) — replacing client-side
+	// client reads — replacing client-side
 	// lock.Effective* / lockpb parsing. The console address (w17_url) is NOT
 	// here: you can't dial the console to learn where it is, so that one
 	// field is sourced from flag / env / registry / compiled default instead.
@@ -1173,7 +1161,7 @@ type CodegenServiceServer interface {
 	// thin client uploads the raw manifest bytes + the installed-plugin set and
 	// gets back the identity (name/version) it records + any requirement
 	// warnings to print. Replaces the client-side console/plugins ParseManifest
-	// / CheckRequires (public-split Block 3). A parse / validation failure is a
+	// / CheckRequires. A parse / validation failure is a
 	// gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
 	// refusal.
 	InspectPluginManifest(context.Context, *InspectPluginManifestRequest) (*InspectPluginManifestResponse, error)
