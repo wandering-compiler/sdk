@@ -68,12 +68,33 @@ func plainConn(t *testing.T, addr string) *grpc.ClientConn {
 }
 
 // runComponent starts GRPCComponent(cfg) and returns a stop func that
-// cancels it and returns its result.
+// cancels it and returns its result. With a fixed address it returns once
+// the address accepts connections: a client that dials earlier is refused
+// and, without WaitForReady, fails its first call as Unavailable.
 func runComponent(t *testing.T, cfg Config) (stop func() error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- GRPCComponent(cfg).Run(ctx) }()
+	if _, port, err := net.SplitHostPort(cfg.Addr); err == nil && port != "0" {
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			if c, err := net.Dial("tcp", cfg.Addr); err == nil {
+				_ = c.Close()
+				break
+			}
+			select {
+			case err := <-done:
+				cancel()
+				t.Fatalf("component ended before it listened on %s: %v", cfg.Addr, err)
+			default:
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatalf("component did not listen on %s within 5s", cfg.Addr)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	return func() error {
 		cancel()
 		select {
