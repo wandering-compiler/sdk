@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  leaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: scripts/check-leaks.sh
+
+  go:
+    runs-on: ubuntu-latest
+    container: golang:1.26
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "$out"; echo "gofmt: the files above are not formatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  vuln:
+    runs-on: ubuntu-latest
+    container: golang:1.26
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  # go/pb is generated from go/proto with the protoc pinned in tools/protoc;
+  # the committed tree must be exactly what that writes.
+  pb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: make check-pb
+
+  ts:
+    runs-on: ubuntu-latest
+    container: node:22-alpine
+    defaults:
+      run:
+        working-directory: ts/admin-runtime
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit -p .
+      - run: npx eslint .
+      - run: npm test
+
+  # The adoption test: every public example generated, built and run against
+  # this commit of the SDK. Needs the W17_TOKEN secret, which a pull request
+  # from a fork does not get, so it runs for this repository's own branches.
+  adoption:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: wandering-compiler/examples/.github/workflows/adoption.yml@main
+    with:
+      sdk_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    secrets:
+      W17_TOKEN: ${{ secrets.W17_TOKEN }}
