@@ -172,7 +172,15 @@ func (f *fakeS3) handlePut(w http.ResponseWriter, r *http.Request, key string) {
 		writeS3Error(w, status, "InternalError")
 		return
 	}
-	body, _ := io.ReadAll(r.Body)
+	// S3 stores an object only when the whole body arrived: an upload the
+	// client abandoned mid-body (a cancelled context) is IncompleteBody and
+	// leaves the old object as it was. Storing the truncated bytes made a
+	// timed-out run look like it had emptied the object.
+	body, err := io.ReadAll(r.Body)
+	if err != nil || (r.ContentLength >= 0 && int64(len(body)) != r.ContentLength) {
+		writeS3Error(w, http.StatusBadRequest, "IncompleteBody")
+		return
+	}
 	f.objects[key] = body
 	// Record the metadata the SDK serialised so a test can assert a
 	// rewrite carried it across. Overwrite per-PUT: a plain rewrite

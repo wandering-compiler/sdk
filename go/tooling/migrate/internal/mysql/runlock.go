@@ -178,7 +178,14 @@ func (l *runLock) Release(ctx context.Context) error {
 	// a lost lock indistinguishable from a clean release.
 	var released sql.NullInt64
 	err := l.conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", l.name).Scan(&released)
-	if err == nil && (!released.Valid || released.Int64 != 1) {
+	if err != nil && ctx.Err() == nil {
+		// A session that cannot be asked no longer holds the lock: the server
+		// released it when the session ended. Same reading as Check. A
+		// cancelled caller is not that: the session may be alive, and closing
+		// it below releases the lock.
+		err = fmt.Errorf("mysql run lock: %w: the lock session could not release %s, so it "+
+			"had already ended and part of this run was not protected by it: %v", migrate.ErrLockLost, l.name, err)
+	} else if err == nil && (!released.Valid || released.Int64 != 1) {
 		err = fmt.Errorf("mysql run lock: %w: %s was no longer held by this session at release "+
 			"(RELEASE_LOCK answered %s) — the lock session was reaped or killed, so part of "+
 			"this run was not protected by it", migrate.ErrLockLost, l.name, nullIntString(released))

@@ -46,7 +46,7 @@ it, so all of them open the database the same way.
 | Dialect | Pins | Applier rule |
 |---|---|---|
 | SQLite | `_pragma=case_sensitive_like(1)`, `_pragma=foreign_keys(1)`, `_time_format=sqlite` | appends a pin unless the DSN already runs that pragma (keyed by the pragma's name, whatever its spelling: `foreign_keys(0)`, `foreign_keys=0`, `main.foreign_keys = off`) or sets `_time_format` |
-| MySQL | `sql_mode=REPLACE(@@sql_mode,'NO_BACKSLASH_ESCAPES','')`, `parseTime=true`, `collation=utf8mb4_0900_as_cs` | appends a pin unless the operator already set that parameter; parameters are read from the list after the first `?` that follows the last `/` (the database name), as the driver reads them |
+| MySQL | `sql_mode=REPLACE(@@sql_mode,'NO_BACKSLASH_ESCAPES','')`, `parseTime=true`, `collation_connection=utf8mb4_0900_as_cs` | appends a pin unless the operator already set that parameter (an operator `collation` counts as setting `collation_connection`); parameters are read from the list after the first `?` that follows the last `/` (the database name), as the driver reads them |
 | PostgreSQL | `standard_conforming_strings=on`, `search_path=public` | as MySQL; URL form (`postgres://…?k=v`, query plus `-c k=v` entries in `options`, encoded or not) and libpq keyword form (`host=… user=…`, quoted values honoured) |
 
 The DSN is parsed the way its driver parses it, never searched as text. An operator's value is
@@ -65,8 +65,8 @@ logged, naming the dialect, the parameter and the pinned value, never the DSN.
 | D1.4 | PostgreSQL: a parameter the operator named MUST keep the operator's value, in URL and keyword form, including a `search_path` set through `options`. | `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplyPGDSNParams_SearchPathInOptionsIsKept` |
 | D1.5 | The applier MUST recognise an operator parameter by its name, not by matching text elsewhere in the DSN (a password, a database name). | `TestApply_NameInsideAPasswordDoesNotSuppressThePin`, `TestApplyMySQLDSNParams_QuestionMarkInPasswordDoesNotStartTheQuery` |
 | D1.6 | SQLite: on a DSN that does not set them, foreign keys MUST be enforced, LIKE MUST be case-sensitive, and `time.Time` MUST be stored in a format SQLite date functions parse. | `TestApplySQLitePragmas_LiveConnection`, `TestApplySQLitePragmas_PinsABareDSN` |
-| D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | no test (needs a MySQL server) |
-| D1.8 | PostgreSQL: single-quote-doubling escaping MUST stay correct and bare table names MUST resolve in `public`. | no test (needs a PostgreSQL server) |
+| D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | `TestMySQLPins_LiveServer`, `TestURLToDriverDSN_CollationPinAndOperatorChoice` |
+| D1.8 | PostgreSQL: single-quote-doubling escaping MUST stay correct and bare table names MUST resolve in `public`. | `TestPGPins_LiveServer` |
 | D1.9 | The helpers MUST NOT log the DSN. A kept operator value that differs from the pin MUST be logged once per process and parameter, naming the parameter only. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` |
 | D1.10 | SQLite: a pragma the operator set MUST keep the operator's value on the live connection, whatever its spelling; an equal value spelled differently is not a difference. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged`, `TestApplySQLitePragmas_LiveConnection` |
 
@@ -190,7 +190,7 @@ its own per-method transaction when no header is present.
 | D5.7 | A failed Commit MUST roll back to release the connection and drop the deferred work. | `outcome_test.go` |
 | D5.8 | Recently drained ids (last 256) MUST remember why they are gone, so a later NotFound names the cause. | `outcome_test.go` |
 | D5.9 | `AdoptTxIsolated` MUST refuse a transaction whose isolation is weaker than, or unknown relative to, the method's declared level (`ErrIsolationTooWeak`). | `TestAdoptTxIsolated_RefusesWeakerOrUnknownLevels`, `TestAdoptTxIsolated_RegistryThatCannotReportRefuses`, `TestAdoptTxIsolated_MemoryReportsTheOpenedLevel`, `TestAdoptTxIsolated_NoTransactionIdOpensFresh` |
-| D5.10 | Isolation levels MUST be honoured on PostgreSQL and MySQL. | no test (needs a server) |
+| D5.10 | Isolation levels MUST be honoured on PostgreSQL and MySQL. | `TestBegin_IsolationIsHonoured_Live` |
 | D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | `TestSanitizeGatewayMD_StripsTransactionKeys`, `TestHeaderName_IsGatewayOwned`, `TestConnIDHeader_IsGatewayOwned` (no edge forwards a client's transaction id; keeping the storage port internal is deployment and not covered) |
 | D5.12 | A Rollback MUST doom the transaction before it waits for the lease. A doomed transaction refuses Commit (`ErrTxDoomed`) and new adoptions, and is rolled back by whoever reaches it first: the rollback itself, a Commit that finds it idle, the release of the last lease, or the timeout watcher. A rollback that cannot run at once returns `ErrTxDoomed` wrapping `ErrTxBusy`, whatever the state of its context or the finish wait. | `TestRollbackBehindALease_CancelledContext_DoomsTheTransaction`, `TestRollbackBehindALease_ZeroFinishWait_DoomsTheTransaction`, `TestDoom_ACommitQueuedBeforeTheRollbackDoesNotCommit` |
 | D5.13 | The coordinator server MUST answer a Commit of a doomed transaction with `Aborted` (not retryable) and a Rollback of one with success, since the rollback is already decided. | `TestServer_DoomedTransaction_CommitAbortsAndRollbackSucceeds` |
@@ -278,7 +278,7 @@ the registry dooms the transaction before waiting (D5.12).
 | D8.5 | `NullIfEmpty` and `TimestampOrNull` MUST bind NULL for empty values. | `TestNullIfEmpty`, `TestTimestampOrNull` |
 | D8.6 | `Arr` and `Bytes` MUST NOT bind NULL into NOT NULL array or bytea columns. | `TestArr_EmptyBindsTheEmptyArrayNotNull`, `TestBytes_EmptyIsStoredInANotNullColumn` |
 | D8.7 | `EnumFieldOrNull` MUST bind NULL for an unset enum under an absent parent message. | `TestEnumFieldOrNull_AbsentParentAndUnsetFieldAreNull` |
-| D8.8 | Expanded SQL MUST execute correctly on MySQL. | no test (needs a server) |
+| D8.8 | Expanded SQL MUST execute correctly on MySQL. | `TestExpandedSQL_RunsOnMySQL_Live` |
 
 **Deliberate limits.**
 - The scanner understands only single-quoted literals; it relies on the emitter never producing double-quoted strings, dollar-quoted bodies, comments or backslash-escaped quotes.
