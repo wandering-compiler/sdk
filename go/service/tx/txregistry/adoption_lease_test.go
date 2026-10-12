@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,5 +222,89 @@ func TestTimeoutWatcher_DrainsUnderALease(t *testing.T) {
 				"a wedged handler would pin the tx and its pooled connection forever")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A waiting finisher closes the door: a new adopter is refused at once
+// instead of queueing on the lease. Otherwise every release would wake the
+// finisher and the newcomer together, and a steady stream of adopters
+// could keep a Commit waiting until its finish wait runs out.
+func TestWaitingFinisher_RefusesNewAdopters(t *testing.T) {
+	reg, id := openReg(t) // default finish wait: the Commit stays parked
+	ctx := leaseCtx(id)
+
+	_, adopted, release, err := txregistry.AdoptTx(ctx, reg, "main")
+	if err != nil || !adopted {
+		t.Fatalf("AdoptTx: %v / %v", adopted, err)
+	}
+	committed := make(chan error, 1)
+	go func() { committed <- reg.Commit(context.Background(), id) }()
+
+	// Until the Commit has queued, a newcomer waits on the lease and its
+	// short context ends that wait; once it has, the refusal is immediate
+	// and names the finisher.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		probe, stop := context.WithTimeout(ctx, 5*time.Millisecond)
+		_, _, rel, err := txregistry.AdoptTx(probe, reg, "main")
+		stop()
+		rel()
+		if errors.Is(err, txregistry.ErrTxBusy) && strings.Contains(err.Error(), "being committed") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the Commit never queued behind the lease")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// A newcomer with plenty of time is still refused at once.
+	patient, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	start := time.Now()
+	_, _, rel, err := txregistry.AdoptTx(patient, reg, "main")
+	rel()
+	if !errors.Is(err, txregistry.ErrTxBusy) {
+		t.Fatalf("newcomer behind a waiting finisher = %v, want ErrTxBusy", err)
+	}
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("newcomer queued for %s behind a waiting finisher", waited)
+	}
+
+	release()
+	select {
+	case err := <-committed:
+		if err != nil {
+			t.Fatalf("Commit after the holder released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Commit never resumed after the lease was released")
+	}
+}
+
+// A finisher that gives up withdraws its claim, so the transaction is
+// adoptable again and the Commit can be retried.
+func TestWaitingFinisher_GivingUpReopensTheTransaction(t *testing.T) {
+	reg, id := openReg(t)
+	ctx := leaseCtx(id)
+
+	_, _, release, err := txregistry.AdoptTx(ctx, reg, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer stop()
+	if err := reg.Commit(short, id); !errors.Is(err, txregistry.ErrTxBusy) {
+		t.Fatalf("Commit behind a lease with a short context = %v, want ErrTxBusy", err)
+	}
+	release()
+
+	_, adopted, rel, err := txregistry.AdoptTx(ctx, reg, "main")
+	if err != nil || !adopted {
+		t.Fatalf("AdoptTx after the finisher gave up = %v / %v; its claim was never withdrawn", adopted, err)
+	}
+	rel()
+	if err := reg.Commit(context.Background(), id); err != nil {
+		t.Fatalf("retried Commit: %v", err)
 	}
 }
