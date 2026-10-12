@@ -187,6 +187,17 @@ func (a *Applier) runDataOp(ctx context.Context, cli *awss3.Client, op datamigra
 	g, gctx := errgroup.WithContext(ctx)
 	keys := make(chan string, parallel*4)
 
+	// A key the listing hands back twice must not be transformed twice in
+	// one run: a TRANSFORM_FIELD script need not be idempotent
+	// (`price = price * 1.1`). S3 itself does not repeat a key within one
+	// listing, but an S3-compatible store may, and the Redis applier
+	// already guards the same way. Only for TRANSFORM_FIELD: the set grows
+	// with the keyspace, and the other ops are idempotent per key.
+	var seen map[string]struct{}
+	if op.Op == datamigrate.OpTransformField {
+		seen = map[string]struct{}{}
+	}
+
 	g.Go(func() error {
 		defer close(keys)
 		var token *string
@@ -201,6 +212,12 @@ func (a *Applier) runDataOp(ctx context.Context, cli *awss3.Client, op datamigra
 			}
 			for _, obj := range out.Contents {
 				key := aws.ToString(obj.Key)
+				if seen != nil {
+					if _, dup := seen[key]; dup {
+						continue
+					}
+					seen[key] = struct{}{}
+				}
 				select {
 				case keys <- key:
 				case <-gctx.Done():

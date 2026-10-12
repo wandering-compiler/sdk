@@ -92,7 +92,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T1.1 | An unknown verb MUST NOT start the server. | `TestDispatch_UnknownVerbIsRefused` |
 | T1.2 | `--help` MUST NOT bind a port. | `TestDispatch_HelpDoesNotStartAServer` |
 | T1.3 | Flags MUST fall through to the generated main. | `TestDispatch_FlagsStillFallThrough` |
-| T1.4 | Every root listed in `binroots.Reserved` MUST be answered by the binary; a root the generated main relies on (such as `health`) MUST NOT be refused as unknown, and `Reserved` MUST list only roots that exist. | `TestDispatch_AnswersForEveryReservedRoot` (covers `migrate` and `fixtures` only) |
+| T1.4 | Every root listed in `binroots.Reserved` MUST be answered by the binary; a root the generated main relies on (such as `health`) MUST NOT be refused as unknown, and `Reserved` MUST list only roots that exist. | `TestDispatch_AnswersForEveryReservedRoot`, `TestDispatchChain_AnswersEveryReservedRoot` |
 
 ## T2. `migrate apply` (CLI)
 
@@ -150,7 +150,7 @@ and the column is added only on the apply path.
 | ID | Guarantee | Test |
 |---|---|---|
 | T3.1 | `--exit-code` MUST turn pending migrations into a non-zero exit. | `TestReportStatus_ExitCode` |
-| T3.2 | `status` MUST NOT write to the database, alter the ledger, or take locks that block on an in-flight migration. | `TestAppliedHead_IsReadOnlyOnALegacyLedger_Live` (Postgres, live; other dialects not asserted) |
+| T3.2 | `status` MUST NOT write to the database, alter the ledger, or take locks that block on an in-flight migration. | `TestAppliedHead_IsReadOnlyOnALegacyLedger_Live`, `TestAppliedHead_IsReadOnlyAndDoesNotWaitBehindAMigration_Live` |
 
 ## T4. Artefact fetch (`migrate fetch`, `--fetch`)
 
@@ -377,7 +377,7 @@ the check, and it runs only when the artefact's digest covers it (T7).
 | ID | Guarantee | Test |
 |---|---|---|
 | T12.1 | An empty preflight or empty `adopt_sql` MUST be refused. | `TestFake_EmptyPreflightOrAdoptSQLIsRefused` |
-| T12.2 | Preflight and ledger write MUST run as one unit, so a failing check leaves no ledger row. | `TestFake_BoundPreflightRuns` (one body, preflight first; a failing check on a real database has no test) |
+| T12.2 | Preflight and ledger write MUST run as one unit, so a failing check leaves no ledger row. | `TestFake_BoundPreflightRuns`, `TestFake_FailingPreflightLeavesNoLedgerRow_Live` |
 | T12.3 | `--fake` together with `--dry-run` MUST be refused. | `TestApply_FakeWithDryRunIsRefused` |
 | T12.4 | A drift refusal MUST name the fake apply as the remedy. | `TestDriftRefusal_NamesTheFakeApply` |
 | T12.5 | A migration whose digest does not cover its preflight MUST be refused before anything executes; a replaced or stripped bound preflight MUST be refused as a content mismatch. | `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced`, `TestFake_BoundPreflightCannotBeStripped` |
@@ -506,7 +506,7 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 | T16.5 | `RENAME_FIELD` MUST NOT overwrite a differing destination; a destination already holding the same value is benign. | `TestJSONApplyOp_RenameField_ClobberRefused`, `TestJSONApplyOp_RenameField_SameValueDestination_Benign`, `TestProtoCodec_RenameField_RefusesClobber` |
 | T16.6 | Inverse ops MUST be derived; `REMOVE_FIELD` and `TRANSFORM_FIELD` MUST be irreversible. | `TestInverseOperations_*`, `TestRollback_YAMLIrreversibleRefused` |
 | T16.7 | A stored value that is not exactly one JSON object (an array, a scalar, or an object followed by more data) MUST be refused with an error. | `TestJSONApplyOp_NotAJSONObjectIsRefused` |
-| T16.8 | A `TRANSFORM_FIELD` op MUST hand each key to its workers at most once per run, even when the store's scan returns a key more than once. | `TestApply_YAMLTransformAppliesOncePerKeyDespiteScanRepeats` (Redis; S3 not asserted) |
+| T16.8 | A `TRANSFORM_FIELD` op MUST hand each key to its workers at most once per run, even when the store's scan returns a key more than once. | `TestApply_YAMLTransformAppliesOncePerKeyDespiteScanRepeats`, `TestApply_YAMLTransformAppliesOncePerKeyDespiteListRepeats` |
 | T16.9 | Refusal messages MUST name only flags that exist; the irreversible-rollback refusal names the migration and a rollback target (`--to`) that keeps it applied. | `TestRollback_YAMLIrreversibleRefused` (Redis and S3) |
 | T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | `TestApply_YAMLApplyTimeoutLeavesAResumableState_Live`, `TestApply_YAMLApplyTimeoutLeavesAResumableState` |
 | T16.11 | A stored JSON `null` MUST be treated like an empty value: every op is a no-op on it and none panics. | `TestJSONApplyOp_NullValueIsANoOp` |
@@ -575,7 +575,7 @@ parser enforces this; streams are checked again at run time.
 | ID | Guarantee | Test |
 |---|---|---|
 | T19.1 | The first failing step MUST abort the scenario. | `TestRunScenario_FailAborts` |
-| T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | `TestExpectStream_AStreamStepAssertingNothingFails`, `TestExpectStream_ACredentialIsRefused` (`expect_transport_error` on a stream not asserted) |
+| T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | `TestExpectStream_AStreamStepAssertingNothingFails`, `TestExpectStream_ACredentialIsRefused`, `TestExpectStream_ATransportErrorExpectationIsRefused` |
 
 ## T20. E2E auth token threading
 
@@ -662,7 +662,7 @@ absent field fails and binds nothing.
 | T22.3 | `distinct` MUST refuse a `field` that no element carries instead of counting zero. | `TestDistinctMatcher_TypoInFieldIsLoud` |
 | T22.4 | `eq 0` against a field absent from proto3 JSON MUST fail with an explanation of presence. | `TestExactMatcher_ZeroAgainstAnAbsentFieldExplainsPresence` |
 | T22.5 | `capture` of an absent field MUST fail and bind nothing, also with an inner matcher that accepts absence. | `TestCapture_AbsentFieldFails` |
-| T22.6 | `count == 0`, `empty`, `distinct` and `eq null` MUST accept an absent field as empty. | `TestCountMatcher`, `TestEmptyMatcher`, `TestExactMatcherAbsentVsNil` (`distinct` not asserted) |
+| T22.6 | `count == 0`, `empty`, `distinct` and `eq null` MUST accept an absent field as empty. | `TestCountMatcher`, `TestEmptyMatcher`, `TestExactMatcherAbsentVsNil`, `TestDistinctMatcher_AbsentListIsEmpty` |
 | T22.7 | Matchers within one `expect` MUST evaluate in a deterministic order, and a capture used by a sibling matcher MUST resolve. | `TestMatchExpect_ASiblingSeesTheCapture`, `TestMatchExpect_ReportsTheSameFailureEveryRun` |
 | T22.8 | Every spec the matcher messages suggest (the `unwritten` placeholder, the vacuous-count refusal) MUST be one that decode accepts. | `TestMatcherAdvice_Decodes` |
 | T22.9 | `regex` MUST stringify a numeric response value the way interpolation does (no exponent) before matching it. | `TestRegex_NumericValueHasNoExponent` |
@@ -787,7 +787,7 @@ directory `0700` with a `.gitignore` ignoring everything.
 | T27.3 | A reused CA MUST be a valid, unexpired signing CA whose key matches. | `TestValidateReusableCA` |
 | T27.4 | Concurrent runs MUST produce a consistent pair (serialised by `flock` on unix). | `TestEnsureCerts_ConcurrentMint_ConsistentPair` |
 | T27.5 | Serials MUST never be zero. | `TestRandSerialFrom_NeverZero` |
-| T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window, does not match its key, or lacks ServerAuth or ClientAuth extended key usage. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired`, `TestEnsureLeaf_ReMintedWithoutClientAuth` (key mismatch and missing ServerAuth not asserted) |
+| T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window, does not match its key, or lacks ServerAuth or ClientAuth extended key usage. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired`, `TestEnsureLeaf_ReMintedWithoutClientAuth`, `TestEnsureLeaf_ReMintedWithoutServerAuth`, `TestEnsureLeaf_ReMintedWhenTheKeyDoesNotMatch` |
 | T27.7 | An unreadable leaf MUST be refused, not overwritten. | `TestEnsureLeaf_UnreadableIsRefused` |
 
 **Deliberate limits.**
@@ -834,7 +834,7 @@ those locations without following symlinks, so a fetched tree holds only covered
 | T29.2 | The executable bit MUST be covered. | `TestOf_ExecutableBitIsCovered` |
 | T29.3 | Regenerated code under `src/gen` MUST NOT change the digest. | `TestOf_IgnoresRegeneratedPb` |
 | T29.4 | Only the root `plugin.sig` MUST be excluded; a signature file below the root MUST be covered. | `TestSignatureFileIsNotPartOfTheDigest`, `TestASignatureFileBelowTheRootIsStillCovered` |
-| T29.5 | Symlinks and other non-regular files MUST be refused. | `TestOf_RefusesASymlink` (other non-regular files not asserted) |
+| T29.5 | Symlinks and other non-regular files MUST be refused. | `TestOf_RefusesASymlink`, `TestOf_RefusesANamedPipe` |
 | T29.6 | `Check` MUST require 64 lower-case hex characters. | `TestCheck_RequiresLowerCaseHexOfTheRightLength` |
 | T29.7 | After `Prune`, every file in a plugin tree MUST be covered by the digest, so whatever is compiled or loaded from it is covered or regenerated from covered input. | `TestPrune_LeavesOnlyCoveredContent` |
 | T29.8 | `Uncovered` MUST name every file the digest does not cover in a regenerated location. | `TestUncovered_NamesEveryFileOutsideTheDigest` |

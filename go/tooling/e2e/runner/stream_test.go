@@ -458,3 +458,16 @@ func TestExpectStream_RefusalTimeoutIsTheErrorsOwn(t *testing.T) {
 		t.Fatalf("a refusal inside the declared bound: %v", err)
 	}
 }
+
+// A stream has no transport-level refusal the runner can read, so a stream
+// step asserting expect_transport_error is refused rather than run.
+func TestExpectStream_ATransportErrorExpectationIsRefused(t *testing.T) {
+	srv := streamServer(t, nil, false, http.StatusUnauthorized)
+	s := streamStep(nil)
+	s.ExpectTransportError = &ExpectTransportError{}
+	s.ExpectError = &ExpectError{Code: "UNAUTHENTICATED"} // so no other check refuses the step first
+	err := runStream(t, srv, s)
+	if err == nil || !strings.Contains(err.Error(), "expect_transport_error on the stream") {
+		t.Fatalf("expect_transport_error on a stream step: %v", err)
+	}
+}

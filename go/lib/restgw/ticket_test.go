@@ -111,8 +111,10 @@ func TestTicketIssuer_HappyPOST(t *testing.T) {
 	if rec.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", rec.Header().Get("Cache-Control"))
 	}
-	if rec.Header().Get("Vary") == "" {
-		t.Errorf("Vary missing")
+	// The ticket depends on who asked: a cache keyed on anything less
+	// would hand one caller's ticket to another.
+	if vary := rec.Header().Get("Vary"); !strings.Contains(vary, "Authorization") || !strings.Contains(vary, "Cookie") {
+		t.Errorf("Vary = %q, want it to name Authorization and Cookie", vary)
 	}
 
 	var body struct {

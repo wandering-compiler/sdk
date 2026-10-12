@@ -122,7 +122,7 @@ its own per-method transaction when no header is present.
 | D3.6 | When both the function and the rollback fail, the function's error MUST stay the `errors.Is` target and the rollback failure MUST be appended as text. | `TestRunKeepsTheFunctionErrorAndNamesAFailedRollback` |
 | D3.7 | A nil client or nil function MUST be an error. | `TestRunRefusesNils` |
 | D3.8 | The function MUST NOT be called when Begin fails. | `TestRunDoesNotCallTheFunctionWhenBeginFails` |
-| D3.9 | A root `TxHandle` MUST be single use: after a successful Commit or Rollback, a further call returns `ErrHandleFinished` naming how the transaction ended, without an RPC. A failed attempt does not use the handle up. | `TestTxHandle_SecondFinishSaysTheTransactionAlreadyEnded` (failed-attempt retry not asserted) |
+| D3.9 | A root `TxHandle` MUST be single use: after a successful Commit or Rollback, a further call returns `ErrHandleFinished` naming how the transaction ended, without an RPC. A failed attempt does not use the handle up. | `TestTxHandle_SecondFinishSaysTheTransactionAlreadyEnded`, `TestTxHandle_RefusedFinishCanBeRetried` |
 | D3.10 | A Commit that fails in transport (Unavailable, DeadlineExceeded, Canceled) MUST be settled with a Rollback on a detached context. When the Rollback succeeds, the caller gets an ordinary failure saying the transaction was rolled back. | `TestCommit_ATransportFailureBeforeTheCommitIsSettledByRollingBack` |
 | D3.11 | When that Rollback fails too, Commit MUST return `ErrCommitOutcomeUnknown` wrapping the transport error (its status code kept), MUST NOT run the parked after-commit work, and MUST report the ambiguity through `observx` with the transaction id and the amount of work not run. | `TestCommit_AnUnsettledTransportFailureIsReportedAsUnknown` |
 | D3.12 | Any other commit failure (a coordinator answer such as Aborted or NotFound, or a non-status error) MUST NOT be settled by a Rollback or reported as unknown; it is an ordinary commit failure. | `TestCommit_ARefusalIsNotSettled` |
@@ -238,7 +238,7 @@ the registry dooms the transaction before waiting (D5.12).
 | D7.2 | A failed participant MUST doom the transaction regardless of concurrent participants or the state of the failing call's context; the coordinator's later Commit fails and nothing is committed. | `TestInterceptor_DoneContextBehindASiblingStillDiscardsTheTransaction`, `TestInterceptor_ZeroFinishWaitDoomsTheTransaction` |
 | D7.3 | Control-plane calls (Begin, Commit, Rollback) MUST NOT trigger it. | `controlplane_test.go` |
 | D7.4 | The recorded cause MUST name only the method and status code, never the handler's error text. | `cause_test.go` |
-| D7.5 | A rollback deferred behind a sibling (`ErrTxDoomed`) or a failed rollback MUST be reported through `observx`; `ErrUnknownTxID` (already drained) is ignored; the handler's error is never masked. | `TestInterceptor_ZeroFinishWaitDoomsTheTransaction` (deferred case only) |
+| D7.5 | A rollback deferred behind a sibling (`ErrTxDoomed`) or a failed rollback MUST be reported through `observx`; `ErrUnknownTxID` (already drained) is ignored; the handler's error is never masked. | `TestInterceptor_ZeroFinishWaitDoomsTheTransaction`, `TestInterceptor_ReportsAFailedRollbackOnly` |
 
 **Deliberate limits.**
 - Any failure inside a transaction discards it, including a benign `NotFound` read; a coordinator cannot tolerate a failed call and continue.
@@ -309,7 +309,7 @@ serialized request, boundary values, total, direction, schema version and sort s
 | ID | Guarantee | Test |
 |---|---|---|
 | D9.1 | A forged or tampered cursor MUST be rejected by a constant-time MAC check before any of its bytes reach the request. | `TestDecodeCursor_RejectsForgedCursor`, `TestDecodeCursor_RejectsTamperedPayload` |
-| D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `cursor_test.go` (schema-version rejection) |
+| D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `TestSchemaVersion_Rejection`; the schema version hashes the endpoint's request message, so another endpoint's cursor is a version mismatch |
 | D9.3 | On resume the request MUST be replaced by the minted one; filters cannot change mid-session and the cursor's sort selector is authoritative. | `TestDecodeCursor_ResumeReplacesTheRequest`, `TestEncodeDecode_SortSelectorRoundtrip` |
 | D9.4 | An empty boundary oneof MUST be rejected as malformed on both the cursor and metadata paths, without panicking. | `metadata_test.go`, `TestScalarOf_*` |
 | D9.5 | `uint64` keys above `MaxInt64` MUST round-trip without sign wrap. | `keyset_uint64_test.go` |

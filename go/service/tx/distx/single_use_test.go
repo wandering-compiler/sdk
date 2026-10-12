@@ -2,12 +2,18 @@ package distx_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
@@ -85,5 +91,52 @@ func TestServer_DoomedTransaction_CommitAbortsAndRollbackSucceeds(t *testing.T) 
 	release()
 	if reg.Active() != 0 {
 		t.Fatalf("Active() = %d after the holder released, want 0", reg.Active())
+	}
+}
+
+// A finish the coordinator answered with a failure does not use the handle
+// up: a Commit refused because a call still holds the transaction
+// (ErrTxBusy, the transaction intact) is retried on the same handle and
+// commits.
+func TestTxHandle_RefusedFinishCanBeRetried(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	reg := txregistry.NewMemory(map[string]*sql.DB{"main": db}, txregistry.WithFinishWait(50*time.Millisecond))
+	srv := grpc.NewServer()
+	distxpb.RegisterW17DistributedTransactionServer(srv, distx.NewServer(reg))
+	lis := bufconn.Listen(1024 * 1024)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient("passthrough://bufconn",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := distxpb.NewW17DistributedTransactionClient(conn)
+
+	h, _, err := distx.Begin(context.Background(), client, &distxpb.BeginRequest{ConnectionName: "main"})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	_, release, err := reg.LookupTx(context.Background(), h.TxID(), "main")
+	if err != nil {
+		t.Fatalf("LookupTx: %v", err)
+	}
+	err = h.Commit(context.Background())
+	if status.Code(err) != codes.FailedPrecondition {
+		release()
+		t.Fatalf("Commit while a call holds the transaction = %v, want FailedPrecondition (busy)", err)
+	}
+	release()
+	if err := h.Commit(context.Background()); err != nil {
+		t.Fatalf("Commit retried on the same handle = %v, want it to commit", err)
+	}
+	if reg.Active() != 0 {
+		t.Errorf("Active() = %d after the retried Commit, want 0", reg.Active())
 	}
 }

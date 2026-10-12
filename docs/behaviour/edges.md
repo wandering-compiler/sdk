@@ -219,7 +219,7 @@ upload msgids); `observx.ReportRefusal`
 | E4.2 | A 401 for an unsupported credential scheme MUST NOT name the scheme | `TestWriteUnauthorized` |
 | E4.3 | `WriteBadInput` MUST name the caller-facing field in `details[].field` with code `INVALID_VALUE`, never the parser's prose | `TestWriteBadInput` |
 | E4.4 | Refusals MUST reach the operator channel with no environment knob set | `TestWriteRefusal_ReachesTheOperatorWithNoKnobSet` |
-| E4.5 | Gateway pre-flight validation and backend InvalidArgument MUST produce the same sentence | `preflight_sentence_test.go` (all four tests) |
+| E4.5 | Gateway pre-flight validation and backend InvalidArgument MUST produce the same sentence | `TestPreflightSentence_IsTheCatalogueSentenceForInvalidArgument`, `TestPreflightSentence_AgreesWithTheDemotionUnderALocale`, `TestPreflightSentence_IsNotTheOperatorsPhrasing`, `TestClientFacing_AgreesWithPreflightWhenNothingWasAttached`, `TestClientFacing_RequestLevelDetailStillWins` |
 | E4.6 | Every gateway-written envelope MUST carry a catalog sentence, never an operator or configuration string (a scope name, the extension allowlist, a size limit); the detail goes to the operator channel | `TestWriteMissingScopeCtx_NameReachesTheOperatorOnly`, `TestWriteMissingScope`, `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestVocabulary_CarriesTheUploadSentences`, `TestAdmitPublic_RefusalIsTheCatalogSentence`, `TestWriteBrowserRedirect_RefusalIsTheCatalogSentence`, `TestTicketIssuer_ErrorsAreTheEnvelope`, `TestServeDownload_ErrorsAreTheEnvelope` |
 
 ---
@@ -249,7 +249,7 @@ re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which
 | ID | Guarantee | Test |
 |---|---|---|
 | E5.1 | Empty user data MUST NOT write `x-w17-user` | `TestAuth_SetUserMetadata_NilNoOp` |
-| E5.2 | `SetUserMetadata` MUST overwrite (not append) `x-w17-user` and preserve other outgoing metadata | `TestSetUserMetadata_PreservesExistingOutgoing` (partial: replacement of a pre-existing value has no test) |
+| E5.2 | `SetUserMetadata` MUST overwrite (not append) `x-w17-user` and preserve other outgoing metadata | `TestSetUserMetadata_PreservesExistingOutgoing`, `TestSetUserMetadata_ReplacesAPreexistingValue` |
 | E5.3 | `RequireAuth` MUST map a missing or invalid ticket to 401 and other failures through `WriteAuthError` (status → mapped, non-status → 500) | `TestRequireAuth_TicketSentinel401`, `TestRequireAuth_TransportError500` |
 | E5.4 | `RequireAuth` MUST stash user data on the context for streaming handlers | `TestRequireAuth_StashesPrincipal` |
 | E5.5 | `GetUserMetadata` MUST treat absent, empty and non-base64 values as "no principal" | `TestAuth_GetUserMetadata_AbsentOrBad`, `TestGetUserMetadata_EmptyValueIsAbsent` |
@@ -291,7 +291,7 @@ that not every request costs an auth RPC.
 | E6.3 | A request with no credential header MUST NOT be cached | `TestAuthLookupCache_UncredentialedRequestIsNotCached` |
 | E6.4 | Errors MUST NOT be cached | `TestAuth_CachedAuthFunc_ErrorsNotCached` |
 | E6.5 | Every hit MUST return a private copy | `TestAuth_CachedAuthFunc_HitsDoNotShareABackingArray`, `TestAuthLookupCache_HitsDoNotAlias` |
-| E6.6 | The entry count MUST stay bounded under distinct valid credentials; expired entries MUST be reaped without a same-key get | `authcache_bound_internal_test.go` (both tests) |
+| E6.6 | The entry count MUST stay bounded under distinct valid credentials; expired entries MUST be reaped without a same-key get | `TestAuthCache_BoundedUnderDistinctValidCredentials`, `TestAuthCache_ReapsExpiredWithoutASameKeyGet` |
 | E6.7 | TTL expiry MUST force a fresh auth call | `TestAuth_CachedAuthFunc_TTLExpiry`, `TestAuthLookupCache_Expires` |
 
 **Deliberate limits.**
@@ -476,7 +476,7 @@ goroutines.
 |---|---|---|
 | E13.1 | A panic MUST become 500 `INTERNAL` / "internal error"; the panic value MUST NOT appear in the body | `TestRecoverPanicMiddleware_CatchesPanic` |
 | E13.2 | `http.ErrAbortHandler` MUST be re-panicked | `TestRecoverPanicMiddleware_RepanicsAbortHandler` |
-| E13.3 | A pump panic MUST close the socket with `StatusInternalError` instead of crashing the process | `TestRecoverWSPump_NilContextFallback` (partial: nil-context arm only) |
+| E13.3 | A pump panic MUST close the socket with `StatusInternalError` instead of crashing the process | `TestRecoverWSPump_ClosesWithInternalError`, `TestRecoverWSPump_NilContextFallback` |
 | E13.4 | Each request MUST run with its own reporting scope, so breadcrumbs recorded by one request never reach another request's report | `TestRecoverPanicMiddleware_GivesEachRequestItsOwnScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 
 **Deliberate limits.**
@@ -581,7 +581,7 @@ promotion marker header forces a cache bypass on probes).
 | E16.2 | Ticket-only mode MUST refuse a request without a ticket even if it carries `Authorization` | `TestWSAuth_TicketOnly_NoTicket_FailsFast`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
 | E16.3 | In header-and-ticket mode a header MUST win | `TestWSAuth_HeaderAndTicket_HeaderWins` |
 | E16.4 | A redeemed ticket MUST be promoted to `Authorization` on the caller's request so later re-auth probes work, in both modes | `TestWatchStreamAuth_TicketStreamSurvivesTheTick`, `TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick` |
-| E16.5 | Issuer responses MUST be `no-store` with `Vary: Authorization, Cookie` | `TestTicketIssuer_HappyPOST` (`no-store`, and `Vary` present; its value has no test) |
+| E16.5 | Issuer responses MUST be `no-store` with `Vary: Authorization, Cookie` | `TestTicketIssuer_HappyPOST` |
 | E16.6 | A client MUST NOT be able to present the promotion marker (a per-instance 256-bit random value) | `TestWSAuth_TicketOnly_ClientCannotPresentThePromotionMarker`, `TestWSAuth_PromotionMarkerIsPerInstance`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
 | E16.7 | The default store MUST NOT grow memory without bound: outstanding tickets and the bytes they hold are both capped, and a redeemed or expired ticket frees its share | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_ByteBudget`, `TestTicketStore_RedeemFreesCapacity`, `TestMemoryTicketStore_FullStoreSweepsExpired` |
 | E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
@@ -890,9 +890,9 @@ is bounded without a global cap.
 | E26.8 | An unparseable peer MUST share one `unknown` bucket | `TestUnknownPeerSharesOneBucket` |
 | E26.9 | A client MUST NOT be able to choose its own bucket: with the default configuration a forwarded header is ignored, whatever the peer's range | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestForwardedIgnoredFromUntrustedPeer` |
 | E26.10 | Concurrency MUST NOT multiply the per-client budget: every attempt in flight holds its own token | `TestChargeable_ConcurrentFailuresStayWithinTheBudget`, `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
-| E26.11 | The limiter MUST NOT become a CPU sink under a stream of fresh keys: eviction at the ceiling is constant time (buckets sit on a recency list) | `TestLimiter_FreshKeysAtTheCeilingStayCheap` (with `BenchmarkLimiter_FreshKeyAtTheCeiling`, `BenchmarkLimiter_KnownKey`) |
+| E26.11 | The limiter MUST NOT become a CPU sink under a stream of fresh keys: eviction at the ceiling is constant time (buckets sit on a recency list) | `TestLimiter_FreshKeysAtTheCeilingStayCheap`, `BenchmarkLimiter_FreshKeyAtTheCeiling`, `BenchmarkLimiter_KnownKey` |
 | E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback and private ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
-| E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored` (the hourly throttle has no test) |
+| E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestUntrustedForwarderWarningIsHourly` |
 | E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
 
 **Deliberate limits.**
@@ -930,7 +930,7 @@ unary gRPC call using the w17 JSON dialect.
 | ID | Guarantee | Test |
 |---|---|---|
 | E27.1 | A tool panic MUST become an error result; the process survives | `TestRecoverTool_PanicBecomesErrorResult` |
-| E27.2 | Tool results MUST use proto names, integer enums and collapsed oneofs | `TestCallUnary_DecodesArgsAndMergesMetadata` (partial: integer enums have no test) |
+| E27.2 | Tool results MUST use proto names, integer enums and collapsed oneofs | `TestCallUnary_DecodesArgsAndMergesMetadata`, `TestCallUnary_ResultUsesProtoNamesAndIntegerEnums` |
 | E27.3 | Unknown argument fields MUST be ignored | `TestUnmarshalProto_EmptyAndDecode` |
 | E27.4 | The long-lived GET stream MUST end at shutdown start; POST and DELETE keep the drain budget | `serve_shutdown_test.go` (both) |
 | E27.5 | The health route MUST be answered outside MCP auth | `healthz_test.go` |
@@ -1063,7 +1063,7 @@ E30, and are ignored the same way in `terminated` mode.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E31.1 | Principal stamps MUST be relayed through `principal.ForwardToOutgoing` and other metadata MUST NOT be; when the incoming side carries a principal, the relayed set replaces any outgoing copy of it (I12) | `TestForwardPrincipalUnaryInterceptor`, `TestForwardToOutgoing_VerifiedPrincipalWins` (partial: the stream interceptor has no test) |
+| E31.1 | Principal stamps MUST be relayed through `principal.ForwardToOutgoing` and other metadata MUST NOT be; when the incoming side carries a principal, the relayed set replaces any outgoing copy of it (I12) | `TestForwardPrincipalUnaryInterceptor`, `TestForwardToOutgoing_VerifiedPrincipalWins`, `TestDialOpts_StreamRelaysThePrincipalOnly` |
 | E31.2 | The retry config MUST parse and retry only `UNAVAILABLE` | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable` |
 | E31.3 | An unrecognised `W17_INTERNAL_TLS` value MUST make `InternalTLSEnabled` answer true (dial TLS), never plaintext | `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 | E31.4 | In `terminated` mode `DialOpts` MUST verify against the system roots only, ignoring a private CA | `TestClientTLSConfig_TerminatedIgnoresPrivateCA` |

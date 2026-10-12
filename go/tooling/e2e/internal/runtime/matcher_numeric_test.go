@@ -76,3 +76,14 @@ func TestDistinctMatcher_RequiresField(t *testing.T) {
 		t.Fatal("distinct without `field` must be refused at build time")
 	}
 }
+
+// An absent list is an empty one: no distinct values. `== 0` accepts it
+// and `>= 1` refuses it, as `count` does.
+func TestDistinctMatcher_AbsentListIsEmpty(t *testing.T) {
+	if err := match(t, map[string]any{"matcher": "distinct", "field": "tenant_id", "op": "==", "value": 0}, nil, false); err != nil {
+		t.Errorf("absent list failed distinct == 0: %v", err)
+	}
+	if err := match(t, map[string]any{"matcher": "distinct", "field": "tenant_id", "op": ">=", "value": 1}, nil, false); err == nil {
+		t.Error("absent list passed distinct >= 1")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
@@ -167,5 +168,60 @@ func TestEnsureLeaf_ReMintedWithoutClientAuth(t *testing.T) {
 	}
 	if leaf := readLeaf(t, dir); !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
 		t.Errorf("server-only leaf kept: EKU %v", leaf.ExtKeyUsage)
+	}
+}
+
+// A leaf without ServerAuth is re-signed, as one without ClientAuth is: the
+// pair serves both ends of the mesh.
+func TestEnsureLeaf_ReMintedWithoutServerAuth(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := EnsureCerts(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	ca, caKey := readCA(t, dir)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(9),
+		Subject:      pkix.Name{CommonName: "client-only"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCertPEM(filepath.Join(dir, serverCertFile), der); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeyPEM(filepath.Join(dir, serverKeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureCerts(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if leaf := readLeaf(t, dir); !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+		t.Errorf("client-only leaf kept: EKU %v", leaf.ExtKeyUsage)
+	}
+}
+
+// A leaf whose key file no longer matches it is re-signed for the key on
+// disk: serving it would fail every handshake.
+func TestEnsureLeaf_ReMintedWhenTheKeyDoesNotMatch(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := EnsureCerts(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err := writeKeyPEM(filepath.Join(dir, serverKeyFile), other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureCerts(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tls.LoadX509KeyPair(filepath.Join(dir, serverCertFile), filepath.Join(dir, serverKeyFile)); err != nil {
+		t.Fatalf("leaf and key still do not match after EnsureCerts: %v", err)
 	}
 }
