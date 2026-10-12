@@ -35,9 +35,12 @@ import (
 const DefaultRequestIDHeader = "X-Request-ID"
 
 // RequestIDConfig captures the resolved per-binary settings.
-// `Disabled` short-circuits the middleware to a pass-through —
+// `Disabled` turns off generating, echoing and attaching the id —
 // useful when the deployment fronts the gateway with a layer
 // that already injects request IDs and we don't want to overwrite.
+// A disabled gateway still applies the shape rule to the header it
+// hands on (see [dropMalformedRequestID]): the fronting layer's
+// well-formed id passes untouched, a malformed one does not.
 type RequestIDConfig struct {
 	Header   string
 	Disabled bool
@@ -85,12 +88,14 @@ func RequestIDFromContext(ctx context.Context) string {
 // (custom HTTP servers that want correlated logs without the
 // OTel pipeline).
 func RequestIDMiddleware(cfg RequestIDConfig, next http.Handler) http.Handler {
-	if cfg.Disabled {
-		return next
-	}
 	header := cfg.Header
 	if header == "" {
 		header = DefaultRequestIDHeader
+	}
+	if cfg.Disabled {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, dropMalformedRequestID(r, header))
+		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(r.Header.Get(header))
@@ -125,6 +130,28 @@ func withRequestID(r *http.Request, header, id string) *http.Request {
 		h.Set(header, id)
 		r.Header = h
 	}
+	return r
+}
+
+// dropMalformedRequestID is the disabled-mode half of the request-id rule.
+//
+// With the id disabled the gateway generates nothing and echoes nothing: the
+// layer in front of it owns the id. But header propagation still forwards the
+// request-id header to the backend, which logs it — so a client talking to the
+// gateway directly could put an unbounded or control-character value into the
+// backend's logs past the very check the enabled mode exists for. The header
+// is therefore handed on only when it is a single value of the accepted shape
+// ([validRequestID]), which every id a fronting layer generates is; anything
+// else is removed, not replaced. The caller's header map is never modified.
+func dropMalformedRequestID(r *http.Request, header string) *http.Request {
+	vals := r.Header.Values(header)
+	if len(vals) == 0 || (len(vals) == 1 && validRequestID(vals[0])) {
+		return r
+	}
+	h := r.Header.Clone()
+	h.Del(header)
+	r = r.WithContext(r.Context())
+	r.Header = h
 	return r
 }
 

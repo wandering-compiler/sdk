@@ -140,3 +140,57 @@ func TestObservabilityMiddleware_CustomHeader(t *testing.T) {
 		t.Errorf("ctx ID = %q, want custom-id", seenID)
 	}
 }
+
+// With the id disabled the fronting layer owns it, so a well-formed id is
+// handed on exactly as received — but header propagation forwards that header
+// to the backend, so a malformed or repeated client value must not ride along
+// past the shape check the enabled mode applies. Both middlewares, same rule.
+func TestRequestID_DisabledHandsOnOnlyAWellFormedHeader(t *testing.T) {
+	mws := map[string]func(http.Handler) http.Handler{
+		"ObservabilityMiddleware": func(h http.Handler) http.Handler {
+			return restgw.ObservabilityMiddleware(h, "test-service", restgw.RequestIDConfig{Disabled: true})
+		},
+		"RequestIDMiddleware": func(h http.Handler) http.Handler {
+			return restgw.RequestIDMiddleware(restgw.RequestIDConfig{Disabled: true}, h)
+		},
+	}
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"absent", nil, nil},
+		{"fronting layer id", []string{"edge-7f3a.c9:01"}, []string{"edge-7f3a.c9:01"}},
+		{"forged log line", []string{"ok\n2026-01-01 level=error user=admin"}, nil},
+		{"over-long", []string{strings.Repeat("a", 129)}, nil},
+		{"repeated", []string{"a", "b"}, nil},
+	}
+	for name, mw := range mws {
+		for _, tc := range cases {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				var seen []string
+				var seenID string
+				h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					seen = r.Header.Values("X-Request-ID")
+					seenID = restgw.RequestIDFromContext(r.Context())
+				}))
+				r := httptest.NewRequest(http.MethodGet, "/", nil)
+				for _, v := range tc.in {
+					r.Header.Add("X-Request-ID", v)
+				}
+				before := append([]string(nil), r.Header.Values("X-Request-ID")...)
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, r)
+				if len(seen) != len(tc.want) || (len(seen) > 0 && seen[0] != tc.want[0]) {
+					t.Errorf("handed on %q, want %q", seen, tc.want)
+				}
+				if got := r.Header.Values("X-Request-ID"); len(got) != len(before) {
+					t.Errorf("caller's header map modified: %q, was %q", got, before)
+				}
+				if rec.Header().Get("X-Request-ID") != "" || seenID != "" {
+					t.Errorf("disabled mode echoed %q / attached %q", rec.Header().Get("X-Request-ID"), seenID)
+				}
+			})
+		}
+	}
+}
