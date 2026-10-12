@@ -115,6 +115,11 @@ type Config struct {
 	// JSON enables CI / SIEM ingest without parsing free-form
 	// text.
 	LogFormat string
+
+	// LockWait bounds how long the run waits for a run lock another run
+	// holds (several replicas migrating at boot): 0 means
+	// [DefaultLockWait], a negative value fails at once.
+	LockWait time.Duration
 }
 
 // Pending is one migration the orchestrator wants to apply (or
@@ -169,6 +174,9 @@ type RollbackConfig struct {
 	// Empty string = roll back everything currently applied
 	// (reset to fresh DB).
 	ToMigrationID string
+
+	// LockWait mirrors Config.LockWait.
+	LockWait time.Duration
 }
 
 // Plan walks every connection in the lock, opens each connection's
@@ -395,7 +403,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	// so sibling migrations reuse the driver) and take a run-lock on each
 	// non-transactional target; closeAll releases the locks then closes
 	// the drivers.
-	ac := newRunApplierCache(cfg.ApplierFor, out)
+	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
 	defer func() { err = joinRelease(err, ac.closeAll()) }()
 
 	// Before ANYTHING is written: does the target hold what the schema says it
@@ -726,12 +734,28 @@ type runApplierCache struct {
 	// for the whole run, released by closeAll BEFORE Close so the lock's
 	// final conditional write still has a live client.
 	locks map[string]RunLock
+	// lockWait bounds the wait for a run lock another run holds; <0 = none.
+	lockWait time.Duration
 }
 
-func newRunApplierCache(applierFor ApplierFor, out io.Writer) *runApplierCache {
+// DefaultLockWait is how long a run waits for another run's lock before
+// giving up. Several replicas migrating at boot is the common case: one
+// holds the lock and applies, the others wait, then find the work done and
+// succeed — which is what Flyway, Liquibase, golang-migrate and Prisma do.
+// Failing at once instead made every losing replica a failed deploy.
+const DefaultLockWait = 5 * time.Minute
+
+// lockRetryEvery is how often a waiting run tries the lock again.
+var lockRetryEvery = time.Second
+
+func newRunApplierCache(applierFor ApplierFor, out io.Writer, lockWait time.Duration) *runApplierCache {
+	if lockWait == 0 {
+		lockWait = DefaultLockWait
+	}
 	return &runApplierCache{
 		applierFor: applierFor,
 		out:        out,
+		lockWait:   lockWait,
 		cache:      map[string]Applier{},
 		locks:      map[string]RunLock{},
 	}
@@ -748,11 +772,11 @@ func (c *runApplierCache) get(ctx context.Context, conn string) (Applier, error)
 		return nil, fmt.Errorf("connection %s: %w", conn, err)
 	}
 	if lc, ok := a.(RunLockCapable); ok {
-		l, lerr := lc.AcquireRunLock(ctx)
+		l, lerr := c.acquire(ctx, conn, lc)
 		if lerr != nil {
 			_ = a.Close()
 			if errors.Is(lerr, ErrLockHeld) {
-				return nil, fmt.Errorf("connection %s: another migration run is in progress against this target (run-lock held) — aborting", conn)
+				return nil, fmt.Errorf("connection %s: another migration run is in progress against this target (run-lock held, waited %s) — aborting", conn, c.waited())
 			}
 			return nil, fmt.Errorf("connection %s: acquire run-lock: %w", conn, lerr)
 		}
@@ -760,6 +784,41 @@ func (c *runApplierCache) get(ctx context.Context, conn string) (Applier, error)
 	}
 	c.cache[conn] = a
 	return a, nil
+}
+
+// acquire takes conn's run lock, waiting up to lockWait while another run
+// holds it. The wait is said once, so an operator watching a replica that
+// sits there knows why. Whatever the holder applied, this run finds when it
+// re-reads the head under the lock, and skips.
+func (c *runApplierCache) acquire(ctx context.Context, conn string, lc RunLockCapable) (RunLock, error) {
+	if c.lockWait < 0 {
+		return lc.AcquireRunLock(ctx)
+	}
+	deadline := time.Now().Add(c.lockWait)
+	said := false
+	for {
+		l, err := lc.AcquireRunLock(ctx)
+		if !errors.Is(err, ErrLockHeld) || !time.Now().Before(deadline) {
+			return l, err
+		}
+		if !said {
+			fmt.Fprintf(c.out, "migrate: connection %s: another migration run holds the run lock; waiting up to %s for it to finish\n", conn, c.lockWait)
+			said = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(lockRetryEvery):
+		}
+	}
+}
+
+// waited names the wait a refused run gave the holder, for its message.
+func (c *runApplierCache) waited() string {
+	if c.lockWait < 0 {
+		return "not at all"
+	}
+	return c.lockWait.String()
 }
 
 // checkHeld fails when the run lock taken for conn is no longer this run's.
@@ -1152,7 +1211,7 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 		return nil
 	}
 
-	ac := newRunApplierCache(cfg.ApplierFor, out)
+	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
 	defer func() { err = joinRelease(err, ac.closeAll()) }()
 
 	logger := newLogger(out, cfg.LogFormat)

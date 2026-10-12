@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A flag takes effect on the verb it is given to, or that verb refuses it:
@@ -62,5 +63,27 @@ func TestFlagVerbs_CoversEveryDefinedFlag(t *testing.T) {
 		if !strings.Contains(help.String(), "-"+name) {
 			t.Errorf("flagVerbs lists --%s, which is not defined", name)
 		}
+	}
+}
+
+// --lock-wait reaches apply and rollback; its 0 means "do not wait", which
+// is not migrate's 0 (the default wait).
+func TestParseFlags_LockWait(t *testing.T) {
+	f, err := parseFlags("apply", []string{"--lock-wait", "0"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lockWaitOf(f.lockWait); got >= 0 {
+		t.Errorf("--lock-wait 0 maps to %v, want a negative wait (fail at once)", got)
+	}
+	f, err = parseFlags("rollback", []string{"--to", "", "--lock-wait", "90s"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lockWaitOf(f.lockWait); got != 90*time.Second {
+		t.Errorf("--lock-wait 90s maps to %v", got)
+	}
+	if _, err := parseFlags("status", []string{"--lock-wait", "1m"}, &strings.Builder{}); err == nil {
+		t.Error("status accepted --lock-wait, which it does not read")
 	}
 }

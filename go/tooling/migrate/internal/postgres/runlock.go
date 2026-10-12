@@ -27,9 +27,9 @@ const (
 // (`duplicate key value violates unique constraint
 // "pg_type_typname_nsp_index"`): an error that reads as a broken migration
 // rather than as another run in progress. With N replicas migrating at
-// boot that is N-1 alarming failures per deploy. The lock makes the loser
-// fail fast with the orchestrator's own message, as on every other
-// dialect.
+// boot that is N-1 alarming failures per deploy. With the lock the losers
+// wait for it (the orchestrator retries, see migrate.Config.LockWait),
+// then find the work done — as on every other dialect.
 //
 // It is held on the applier's own connection — the one that runs the
 // bodies — so it lives exactly as long as the run's session and is freed

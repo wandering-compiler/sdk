@@ -288,6 +288,7 @@ type applyFlags struct {
 	fake      bool
 	// exitCode: status fails while anything is pending.
 	exitCode bool
+	lockWait time.Duration
 }
 
 func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
@@ -310,6 +311,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
 	fs.BoolVar(&f.exitCode, "exit-code", false, "status only: exit non-zero while anything is pending (for a deploy that can read an exit code, not the output)")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
+	fs.DurationVar(&f.lockWait, "lock-wait", migrate.DefaultLockWait, "apply/rollback: how long to wait for another run's migration lock before giving up; 0 = fail at once")
 	if err := fs.Parse(args); err != nil {
 		return f, fmt.Errorf("migrate %s: %w", name, err)
 	}
@@ -376,6 +378,7 @@ var flagVerbs = map[string]map[string]bool{
 	"console":      {"apply": true, "status": true, "rollback": true, "fetch": true, "fixtures apply": true},
 	"fetch":        {"apply": true, "status": true, "rollback": true, "fixtures apply": true},
 	"parallel":     {"apply": true, "rollback": true},
+	"lock-wait":    {"apply": true, "rollback": true},
 	"dry-run":      {"apply": true, "rollback": true, "fixtures apply": true},
 	"log-format":   {"apply": true, "rollback": true},
 	"fake":         {"apply": true},
@@ -401,6 +404,7 @@ func runApply(ctx context.Context, args []string, opts Options, out io.Writer) e
 	cfg.DryRun = f.dryRun
 	cfg.LogFormat = f.logFormat
 	cfg.Fake = f.fake
+	cfg.LockWait = lockWaitOf(f.lockWait)
 	if f.fake && f.dryRun {
 		// Both mean "do not run the body", and they disagree about the
 		// ledger: one writes the row, the other writes nothing. Silently
@@ -487,6 +491,7 @@ func runRollback(ctx context.Context, args []string, opts Options, out io.Writer
 		DryRun:        f.dryRun,
 		LogFormat:     f.logFormat,
 		ToMigrationID: f.to,
+		LockWait:      lockWaitOf(f.lockWait),
 	})
 }
 
@@ -777,4 +782,14 @@ func consoleAddrOf(flagVal string, getenv func(string) string) func(string) stri
 		}
 		return getenv(k)
 	}
+}
+
+// lockWaitOf maps the --lock-wait flag onto migrate's LockWait: the flag's
+// 0 is "do not wait", which migrate spells as a negative wait (its 0 is
+// the default).
+func lockWaitOf(d time.Duration) time.Duration {
+	if d <= 0 {
+		return -1
+	}
+	return d
 }

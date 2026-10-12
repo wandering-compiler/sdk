@@ -187,7 +187,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Apply run (T11), Postgres applier (T15) | Concurrent appliers (several replicas at boot) | Exactly one applies; each other run either finds it applied or fails fast on the run lock, naming the run in progress (the next start finds the work done), never on what the body ran into. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live` |
+| Apply run (T11), Postgres applier (T15) | Concurrent appliers (several replicas at boot) | Exactly one applies; the others wait for the run lock (5 min by default), find the work done and succeed — no replica's deploy fails — never failing on what the body ran into. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies` |
 | MySQL applier and run lock (T15) | Concurrent appliers | `GET_LOCK` serialises; the loser fails fast; a lost lock session fails the run. | `TestRunLock_SurvivesAnIdleServerTimeout` (lock session only) |
 | Redis/S3 run lock (T15) | Long data migration (T16) | The lock is held for the whole migration; a holder that loses it stops before writing again and the run fails with `ErrLockLost`. | `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestRun_LostRunLockStopsBeforeTheNextMigration` |
 | Squash adopt (T10) | Rollback by another run while this one waits on the lock (T11) | A head that moved backward is refused. | `TestApply_RefusesWhenTheHeadMovedBACKWARD` |

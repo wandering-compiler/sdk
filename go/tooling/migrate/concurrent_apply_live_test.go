@@ -15,10 +15,10 @@ import (
 )
 
 // Several replicas booting at once each run the same apply against one
-// Postgres database. Exactly one applies the migration. Each of the others
-// either finds it applied or fails fast on the run lock, naming the run in
-// progress — never on what the migration's own body ran into (a catalog
-// collision on the table it creates reads as a broken migration).
+// Postgres database. Exactly one applies the migration; the others wait
+// for its run lock, find the work done and succeed — no replica's deploy
+// fails, and none fails on what the migration's own body ran into (a
+// catalog collision on the table it creates reads as a broken migration).
 func TestApply_ConcurrentMigratorsApplyOnce_Live(t *testing.T) {
 	dsn := fakePGDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -56,17 +56,10 @@ func TestApply_ConcurrentMigratorsApplyOnce_Live(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	succeeded := 0
 	for i, err := range errs {
-		switch {
-		case err == nil:
-			succeeded++
-		case !strings.Contains(err.Error(), "another migration run is in progress"):
-			t.Errorf("replica %d failed on something other than the run lock: %v", i, err)
+		if err != nil {
+			t.Errorf("replica %d: %v; a replica that lost the race must wait and succeed", i, err)
 		}
-	}
-	if succeeded == 0 {
-		t.Error("no replica applied the migration")
 	}
 
 	probe, err := pgx.Connect(ctx, dsn)

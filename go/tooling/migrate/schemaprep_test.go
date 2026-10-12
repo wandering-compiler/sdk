@@ -42,7 +42,7 @@ func TestPrepareSchemas_PerConnection(t *testing.T) {
 			return other, nil
 		}
 		return pg, nil
-	}, io.Discard)
+	}, io.Discard, 0)
 	pending := []Pending{
 		{Connection: "billing-postgres", Migration: withManifest("m1", "billing-postgres", `{"required_schemas":["billing"]}`)},
 		{Connection: "billing-postgres", Migration: withManifest("m2", "billing-postgres", `{"required_schemas":["billing","ledger"]}`)},
@@ -59,7 +59,7 @@ func TestPrepareSchemas_PerConnection(t *testing.T) {
 	}
 
 	none := &extFake{}
-	ac = newRunApplierCache(func(string) (Applier, error) { return none, nil }, io.Discard)
+	ac = newRunApplierCache(func(string) (Applier, error) { return none, nil }, io.Discard, 0)
 	if err := prepareSchemas(context.Background(), ac, []Pending{{Connection: "main", Migration: withManifest("m", "main", "")}}); err != nil || len(none.ran) != 0 {
 		t.Errorf("no declared schema: err=%v ran=%q", err, none.ran)
 	}

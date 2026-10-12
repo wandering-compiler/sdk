@@ -112,6 +112,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | `--fake` | off | see T12 |
 | `--log-format` | `text` | `text` or `json`; anything else refused |
 | `--parallel N` | the data migration's own setting | `<= 0` keeps the migration's own setting |
+| `--lock-wait D` | 5m (`migrate.DefaultLockWait`) | how long `apply` and `rollback` wait for another run's run lock; `0` fails at once |
 | `--allow-no-dsn` | — | `fixtures apply` only; on `apply`, `status`, `rollback` and `fetch` refused with a message naming `fixtures apply` |
 | DSN | `W17_TARGET_<CONN>` (connection name upper-cased, `-` → `_`) | no flag accepts a DSN or a token |
 | Timeout | 30 minutes, fixed | — |
@@ -471,7 +472,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.12 | A Redis or S3 run lock whose lease is no longer provably held (a refresh found another owner, or the lease ran out without a refresh) MUST report itself lost for good, and the applier MUST stop before its next write. | `TestRunLock_RefreshOfATakenOverLockReportsItLost`, `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestLease_HoldsUntilItsMarginThenRunsOut`, `TestLease_LostStaysLost`, `TestLease_RenewalExtendsFromWhenTheRefreshWasSent` |
 | T15.13 | The S3 run lock MUST judge staleness on the store's clock only, so a taker whose local clock runs ahead cannot take over a live lock; a store that reports no time MUST be refused, never judged on the local clock. | `TestS3RunLock_ClockSkewedTakerCannotTakeOverALiveLock`, `TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness` |
 | T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | `TestRunLock_CheckReportsALostLockSession_Live` |
-| T15.15 | Concurrent Postgres runs against one database MUST apply a migration exactly once, and every other run MUST either find it applied or fail fast on the run lock, never on what the migration's body ran into; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live` |
+| T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.

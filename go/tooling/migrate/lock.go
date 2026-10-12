@@ -6,12 +6,12 @@ import (
 )
 
 // ErrLockHeld is returned by AcquireRunLock when another LIVE apply
-// run already holds the target's run-lock. The orchestrator turns it
-// into a fail-fast abort (a second concurrent apply must not proceed)
-// rather than waiting — in the deploy shapes that race (CI pipelines,
-// blue/green, N replicas each running migrations on boot) the holder
-// will finish the apply, so the loser just exits and the next boot
-// sees the work already done.
+// run already holds the target's run-lock. AcquireRunLock itself never
+// blocks; the orchestrator retries it for up to Config.LockWait. In the
+// deploy shapes that race (CI pipelines, blue/green, N replicas each
+// running migrations on boot) the holder finishes the apply, the waiting
+// run then takes the lock, finds the work done under its head re-read and
+// succeeds. Only a wait that runs out aborts the run.
 var ErrLockHeld = errors.New("apply: another apply run holds the target run-lock")
 
 // ErrLockLost reports that a run lock this run took is no longer provably its

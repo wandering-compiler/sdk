@@ -80,7 +80,7 @@ func TestExtensionPreflightSQL_NamesEachExtensionAndEscapes(t *testing.T) {
 // database neither migrated nor clean.
 func TestPreflightExtensions_RefusesBeforeAnythingIsWritten(t *testing.T) {
 	fake := &extFake{failOn: "pg_extension"}
-	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard)
+	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard, 0)
 
 	pending := []Pending{
 		{Connection: "main", Migration: withManifest("m1", "main", `{"required_extensions":["vector"]}`)},
@@ -104,7 +104,7 @@ func TestPreflightExtensions_RefusesBeforeAnythingIsWritten(t *testing.T) {
 
 func TestPreflightExtensions_SilentWhenNothingIsDeclared(t *testing.T) {
 	fake := &extFake{}
-	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard)
+	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard, 0)
 	pending := []Pending{{Connection: "main", Migration: withManifest("m1", "main", "")}}
 
 	if err := preflightExtensions(context.Background(), ac, pending); err != nil {
@@ -175,7 +175,7 @@ func TestPreflightExtensions_DoesNotProbeANonPostgresConnection(t *testing.T) {
 		},
 	}}
 
-	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard)
+	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard, 0)
 	defer ac.closeAll()
 
 	if err := preflightExtensions(context.Background(), ac, pending); err != nil {
@@ -190,7 +190,7 @@ func TestPreflightExtensions_DoesNotProbeANonPostgresConnection(t *testing.T) {
 	// Control: the SAME manifest on a Postgres connection must still be
 	// probed and still refuse, or this fix would have disabled the check.
 	pgFake := &extFake{failOn: "pg_extension"}
-	pgAc := newRunApplierCache(func(string) (Applier, error) { return pgFake, nil }, io.Discard)
+	pgAc := newRunApplierCache(func(string) (Applier, error) { return pgFake, nil }, io.Discard, 0)
 	defer pgAc.closeAll()
 	if err := preflightExtensions(context.Background(), pgAc, pending); err == nil {
 		t.Error("a Postgres connection missing a declared extension was NOT refused — the preflight stopped working")
@@ -241,7 +241,7 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 
 	inner := &extFake{failOn: "pg_extension"}
 	wrapped := wrappedFake{Applier: inner, unwrappable: true}
-	ac := newRunApplierCache(func(string) (Applier, error) { return wrapped, nil }, io.Discard)
+	ac := newRunApplierCache(func(string) (Applier, error) { return wrapped, nil }, io.Discard, 0)
 	defer ac.closeAll()
 
 	if err := preflightExtensions(context.Background(), ac, pending); err == nil {
@@ -252,7 +252,7 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 	// the fix would have re-opened the hole it closed.
 	innerMy := &extFake{failOn: "pg_extension", notPG: true}
 	wrappedMy := wrappedFake{Applier: innerMy, unwrappable: true}
-	myAc := newRunApplierCache(func(string) (Applier, error) { return wrappedMy, nil }, io.Discard)
+	myAc := newRunApplierCache(func(string) (Applier, error) { return wrappedMy, nil }, io.Discard, 0)
 	defer myAc.closeAll()
 	if err := preflightExtensions(context.Background(), myAc, pending); err != nil {
 		t.Errorf("a wrapped non-Postgres connection was probed with Postgres syntax: %v", err)
@@ -262,7 +262,7 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 	// through, and must fail CLOSED on the skip side — not be treated as
 	// Postgres on a guess.
 	opaque := wrappedFake{Applier: &extFake{failOn: "pg_extension"}}
-	opAc := newRunApplierCache(func(string) (Applier, error) { return opaque, nil }, io.Discard)
+	opAc := newRunApplierCache(func(string) (Applier, error) { return opaque, nil }, io.Discard, 0)
 	defer opAc.closeAll()
 	if err := preflightExtensions(context.Background(), opAc, pending); err != nil {
 		t.Errorf("an opaque decorator was probed on a guess: %v", err)
