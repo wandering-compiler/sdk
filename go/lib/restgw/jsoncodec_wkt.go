@@ -12,8 +12,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Dynamic well-known-type JSON encoders for the generated marshaler
-// (S2b inc5). These are the WKTs whose JSON is NOT a simple scalar:
+// Dynamic well-known-type JSON encoders for the generated marshaler.
+// These are the WKTs whose JSON is NOT a simple scalar:
 // Struct/Value/ListValue (arbitrary dynamic JSON), FieldMask (a
 // comma-joined camelCase path string), and Any (a `@type`-tagged object).
 // Hand-written here so the generated per-message marshaler can emit a

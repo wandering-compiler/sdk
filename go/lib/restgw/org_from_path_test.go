@@ -46,3 +46,18 @@ func TestWithOrgFromPath_RefusesAConflictingHeader(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOrgPathConflict", err)
 	}
 }
+
+// An empty {org} segment names no organization; it is refused rather than
+// passed on as an empty W17-Org header.
+func TestWithOrgFromPath_EmptySegmentIsRefused(t *testing.T) {
+	var got *http.Request
+	var gotErr error
+	r := chi.NewRouter()
+	r.Get("/orgs/{org}/members", func(w http.ResponseWriter, req *http.Request) {
+		got, gotErr = WithOrgFromPath(req, "org")
+	})
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/orgs//members", nil))
+	if gotErr == nil || got != nil {
+		t.Fatalf("WithOrgFromPath(empty) = %v, %v; want an error and no request", got, gotErr)
+	}
+}
