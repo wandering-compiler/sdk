@@ -5,6 +5,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
+	applyplanpb "github.com/wandering-compiler/sdk/go/pb/applyplan"
 )
 
 func TestRequiredSchemasFromManifest(t *testing.T) {
@@ -59,5 +62,27 @@ func TestPrepareSchemas_PerConnection(t *testing.T) {
 	ac = newRunApplierCache(func(string) (Applier, error) { return none, nil }, io.Discard)
 	if err := prepareSchemas(context.Background(), ac, []Pending{{Connection: "main", Migration: withManifest("m", "main", "")}}); err != nil || len(none.ran) != 0 {
 		t.Errorf("no declared schema: err=%v ran=%q", err, none.ran)
+	}
+}
+
+// The namespaces a Wiper is handed are exactly those the connection's
+// migration set declares — sorted, de-duplicated, other connections' left
+// out — from a fetched series and from a dev plan alike.
+func TestDeclaredNamespaces(t *testing.T) {
+	migs := []*applyfetchpb.Migration{
+		{Connection: "app", ManifestJson: `{"required_schemas":["ledger","billing"]}`},
+		{Connection: "app", ManifestJson: `{"required_schemas":["billing"," "]}`},
+		{Connection: "other", ManifestJson: `{"required_schemas":["theirs"]}`},
+		{Connection: "app", ManifestJson: `not json`},
+	}
+	if got := DeclaredNamespaces(migs, "app"); strings.Join(got, ",") != "billing,ledger" {
+		t.Errorf("DeclaredNamespaces = %v, want [billing ledger]", got)
+	}
+	plan := &applyplanpb.DevApplyPlan{Migrations: []*applyplanpb.DevMigration{
+		{Connection: "app", RequiredSchemas: []string{"ledger", "billing"}},
+		{Connection: "other", RequiredSchemas: []string{"theirs"}},
+	}}
+	if got := DevPlanNamespaces(plan, "app"); strings.Join(got, ",") != "billing,ledger" {
+		t.Errorf("DevPlanNamespaces = %v, want [billing ledger]", got)
 	}
 }

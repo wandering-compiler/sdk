@@ -147,7 +147,7 @@ func TestWipe_CancelledContext(t *testing.T) {
 	defer func() { _ = a.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancelled → acquiring a conn fails
-	if err := a.Wipe(ctx); err == nil {
+	if err := a.Wipe(ctx, nil); err == nil {
 		t.Fatal("want error wiping with a cancelled context")
 	}
 }

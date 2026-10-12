@@ -107,11 +107,11 @@ func TestWipe_DropsAllTables(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Wipe(ctx); err != nil {
+	if err := a.Wipe(ctx, nil); err != nil {
 		t.Fatalf("wipe: %v", err)
 	}
 	// A second wipe on the now-empty DB is a clean no-op.
-	if err := a.Wipe(ctx); err != nil {
+	if err := a.Wipe(ctx, nil); err != nil {
 		t.Fatalf("wipe (empty): %v", err)
 	}
 }

@@ -505,6 +505,9 @@ func buildConfig(ctx context.Context, f applyFlags, opts Options, out io.Writer)
 			strings.Join(opts.Connections, ", "), f.lock,
 		)
 	}
+	if err := refuseSharedDSNVariable("migrate", targets); err != nil {
+		return migrate.Config{}, err
+	}
 	specs, err := dsnSpecs(targets, opts.getenv())
 	if err != nil {
 		return migrate.Config{}, err
@@ -578,6 +581,42 @@ func ownedTargets(all []migrate.ConnTarget, owned []string) []migrate.ConnTarget
 		}
 	}
 	return out
+}
+
+// refuseSharedDSNVariable refuses a connection set in which two DIFFERENT
+// connections read their DSN from the same variable.
+//
+// The variable name folds case and turns `-` into `_`, so `app-db` and
+// `app_db` (or `App_DB`) are two connections in the lock and one variable in
+// the environment. Both would then be opened against whichever database that
+// variable names, and the second connection's migrations would run against
+// the first one's store. Nothing downstream could notice: each applier sees
+// a DSN that works.
+//
+// A connection listed twice under the SAME name is a different mistake,
+// refused by planning with its own message.
+func refuseSharedDSNVariable(verb string, targets []migrate.ConnTarget) error {
+	byVar := map[string]string{}
+	var clashes []string
+	for _, t := range targets {
+		v := migrate.TargetEnvVar(t.Connection)
+		prev, seen := byVar[v]
+		switch {
+		case !seen:
+			byVar[v] = t.Connection
+		case prev != t.Connection:
+			clashes = append(clashes, fmt.Sprintf("%s and %s → %s", prev, t.Connection, v))
+		}
+	}
+	if len(clashes) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: two connections read their DSN from the same variable: %s\n"+
+			"  why: the variable name ignores case and treats `-` as `_`, so both connections would be\n"+
+			"       opened against one database\n"+
+			"  fix: rename one of the connections so the names differ after that folding",
+		verb, strings.Join(clashes, "; "))
 }
 
 // dsnSpecs reads each pinned connection's DSN from the environment.

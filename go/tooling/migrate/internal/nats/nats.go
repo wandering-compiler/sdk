@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	natsgo "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -71,6 +72,16 @@ type Applier struct {
 	conn    *natsgo.Conn
 	js      jetstream.JetStream
 	buckets map[string]jetstream.KeyValue
+
+	// Run-lock tunables; zero means the shared defaults (runlock.TTL,
+	// runlock.Heartbeat). Tests shrink them.
+	lockTTL  time.Duration
+	lockBeat time.Duration
+
+	// held is the run lock this applier took, if any. Every command line
+	// asks it first (stillHeld), so a run that lost its lock stops before
+	// writing next to the run that took it over.
+	held *natsRunLock
 }
 
 var _ migrate.Applier = (*Applier)(nil)
@@ -201,6 +212,11 @@ func (a *Applier) run(ctx context.Context, script string) error {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
+		}
+		// Every line is a write (the ledger's own `kv put` included), so the
+		// lease is asked before each one.
+		if err := a.stillHeld(); err != nil {
+			return err
 		}
 		if err := a.runOne(ctx, line); err != nil {
 			return err

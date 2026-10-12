@@ -45,7 +45,7 @@ func TestRedis_DumpEncodeError(t *testing.T) {
 // context (FlushDB returns context.Canceled rather than completing).
 func TestRedis_WipeError(t *testing.T) {
 	a, _ := liveApplier(t)
-	if err := a.Wipe(cancelledCtx()); err == nil {
+	if err := a.Wipe(cancelledCtx(), nil); err == nil {
 		t.Fatal("want Wipe error under a cancelled context")
 	}
 }

@@ -22,8 +22,15 @@ type Matcher interface {
 // a decoded response object. It is the runner-facing entry point:
 // the runner JSON/structured-decodes the response into a string-keyed
 // map and calls this. Matchers see the field as (value, present).
+//
+// The order is fixed: fields whose matcher binds a capture first, then the
+// rest, each group by field name. A map has no order of its own, so a
+// sibling that interpolated a capture bound in the same `expect` resolved on
+// some runs and failed "unresolved" on others, and which failure a
+// multi-field mismatch reported changed between runs too.
 func MatchExpect(expect map[string]any, actual map[string]any, scope *Scope) error {
-	for field, spec := range expect {
+	for _, field := range matchOrder(expect) {
+		spec := expect[field]
 		m, err := DecodeMatcher(spec)
 		if err != nil {
 			return fmt.Errorf("expect %q: %w", field, err)
@@ -34,6 +41,54 @@ func MatchExpect(expect map[string]any, actual map[string]any, scope *Scope) err
 		}
 	}
 	return nil
+}
+
+// matchOrder lists expect's fields capture-binding first, then the rest,
+// each group sorted.
+func matchOrder(expect map[string]any) []string {
+	var binds, rest []string
+	for field, spec := range expect {
+		if bindsCapture(spec) {
+			binds = append(binds, field)
+		} else {
+			rest = append(rest, field)
+		}
+	}
+	sort.Strings(binds)
+	sort.Strings(rest)
+	return append(binds, rest...)
+}
+
+// BindsCapture reports whether an expect mapping binds a capture anywhere in
+// it, so a caller can refuse a capture where nothing will be bound.
+func BindsCapture(expect map[string]any) bool {
+	for _, spec := range expect {
+		if bindsCapture(spec) {
+			return true
+		}
+	}
+	return false
+}
+
+// bindsCapture reports whether a matcher spec binds a capture anywhere in it
+// — at its top, or inside a nested object or a `match:` it carries.
+func bindsCapture(spec any) bool {
+	m, ok := asStringMap(spec)
+	if !ok {
+		return false
+	}
+	if _, ok := m["capture"]; ok {
+		return true
+	}
+	if _, isNamed := m["matcher"]; isNamed {
+		return false // a named matcher's keys are its arguments, not fields
+	}
+	for _, v := range m {
+		if bindsCapture(v) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveField looks up an expect key in the decoded response. A plain
@@ -386,7 +441,10 @@ func (m regexMatcher) Match(actual any, present bool, scope *Scope) error {
 	if !present {
 		return fmt.Errorf("regex %q: field absent", shown)
 	}
-	s := fmt.Sprint(actual)
+	// The same rendering interpolation uses: a JSON number decodes as
+	// float64, and fmt.Sprint writes 1234567 as 1.234567e+06, so `^\d+$`
+	// failed against an integer id.
+	s := textOf(actual)
 	if !re.MatchString(s) {
 		return fmt.Errorf("regex %q: no match for %q", shown, s)
 	}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,12 +43,43 @@ type AwaitEvent struct {
 	// capture, nested, exact). An empty Match asserts only that the event
 	// arrived. Capture matchers bind into the shared scenario scope, so a
 	// later step can use an id the event carried.
+	//
+	// Match also ATTRIBUTES the event: an event on Topic whose payload does
+	// not match is skipped and the wait goes on, so a late event from an
+	// earlier step's call cannot stand in for this one. A Match that pins
+	// something this call produced (an id it returned, `${id}`) is what
+	// makes the attribution exact; frames that arrived before this step's
+	// call was sent are never considered.
 	Match map[string]any
+
+	// Absent turns the await into the opposite assertion: NO event on Topic
+	// matching Match is delivered within the window (TimeoutMs, else
+	// DefaultAwaitTimeoutMs). It is how a suite proves an event is not
+	// delivered — to another tenant, to a signed-out subscriber. The whole
+	// window is waited out; a closed or failing stream fails the step,
+	// since it proves nothing about delivery. Match may not capture.
+	Absent bool
+
+	// TokenFrom names the capture whose value is the bearer this
+	// subscription presents, in place of the step's own principal — the
+	// OTHER tenant whose stream must stay silent, for example. Empty means
+	// the step's principal.
+	TokenFrom string
+
+	// Headers, when non-nil, replace the step's headers on this
+	// subscription (interpolated the same way). A header such as `W17-Org`
+	// decides which principal a token resolves to, so a subscription made
+	// as another principal usually needs its own.
+	Headers map[string]string
 }
 
 // DefaultAwaitTimeoutMs is the await window applied when
 // AwaitEvent.TimeoutMs is zero.
 const DefaultAwaitTimeoutMs = 5000
+
+// ErrAwaitTimeout is what [Subscription.Await] wraps when no event on the
+// topic arrived within the timeout.
+var ErrAwaitTimeout = errors.New("timeout")
 
 // Event is one delivered SSE event: its topic (the `event:` line) and the
 // decoded JSON payload (the `data:` line).
@@ -90,6 +122,24 @@ type Subscription interface {
 	Close() error
 }
 
+// CredentialSubscriber is an [EventSubscriber] that can open a stream with a
+// whole `Authorization` value rather than a bearer token — what a step with
+// its own Credential needs, so the stream it observes is that credential's
+// principal's. [SSESubscriber] implements it; a step with a Credential that
+// awaits an event through a subscriber without it fails rather than
+// subscribing as somebody else.
+type CredentialSubscriber interface {
+	SubscribeWithCredential(ctx context.Context, path string, topics []string, authorization string, headers map[string]string) (Subscription, error)
+}
+
+// Settable is a [Subscription] that can be told to ignore every frame it
+// received before a moment. The runner marks the moment it sends the step's
+// call, so a frame already delivered by then — an earlier step's late event
+// — is never taken for this call's.
+type Settable interface {
+	IgnoreBefore(t time.Time)
+}
+
 // SSESubscriber subscribes to the gateway's `/w17-events` SSE broadcast over
 // HTTP. It is the production [EventSubscriber]; the generated runner builds
 // one from the REST target URL.
@@ -120,6 +170,16 @@ func NewSSESubscriber(baseURL string, client *http.Client) *SSESubscriber {
 // the SSE content negotiation — the same rule [RESTCaller.Call] applies to
 // the call itself.
 func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []string, token string, headers map[string]string) (Subscription, error) {
+	authorization := ""
+	if token != "" {
+		authorization = "Bearer " + token
+	}
+	return s.SubscribeWithCredential(ctx, path, topics, authorization, headers)
+}
+
+// SubscribeWithCredential is Subscribe presenting authorization as the whole
+// `Authorization` header (empty: none) — see [CredentialSubscriber].
+func (s *SSESubscriber) SubscribeWithCredential(ctx context.Context, path string, topics []string, authorization string, headers map[string]string) (Subscription, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	target := s.BaseURL + path + "?topics=" + url.QueryEscape(strings.Join(topics, ","))
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, target, nil)
@@ -128,8 +188,8 @@ func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []str
 		return nil, fmt.Errorf("await_event: build subscribe request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
 	}
 	for k, v := range headers {
 		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Accept") {
@@ -148,14 +208,7 @@ func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []str
 		cancel()
 		return nil, fmt.Errorf("await_event: subscribe %s: status %d: %s", target, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	sub := &sseSub{
-		cancel: cancel,
-		body:   resp.Body,
-		frames: make(chan Event, 16),
-		done:   make(chan struct{}),
-	}
-	go sub.read()
-	return sub, nil
+	return newSSESub(cancel, resp.Body), nil
 }
 
 // sseSub is one live SSE subscription: a reader goroutine parses frames off
@@ -163,10 +216,53 @@ func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []str
 type sseSub struct {
 	cancel    context.CancelFunc
 	body      io.ReadCloser
-	frames    chan Event
+	frames    chan sseFrame
 	done      chan struct{}
 	closeOnce sync.Once
 	readErr   error
+
+	mu    sync.Mutex
+	since time.Time
+}
+
+// sseFrame is one parsed frame, when the reader parsed it, and why its
+// `data:` could not be decoded (nil when it could).
+type sseFrame struct {
+	ev        Event
+	at        time.Time
+	decodeErr error
+}
+
+func newSSESub(cancel context.CancelFunc, body io.ReadCloser) *sseSub {
+	sub := &sseSub{
+		cancel: cancel,
+		body:   body,
+		frames: make(chan sseFrame, 16),
+		done:   make(chan struct{}),
+	}
+	go sub.read()
+	return sub
+}
+
+// IgnoreBefore implements [Settable].
+func (s *sseSub) IgnoreBefore(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.since = t
+}
+
+// stale reports a frame received before the IgnoreBefore mark.
+func (s *sseSub) stale(f sseFrame) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return f.at.Before(s.since)
+}
+
+// notJSON is the failure for a frame whose data is not a JSON object. An
+// empty payload would read as "an event with no fields", which a Match
+// asserting nothing accepts — a green over a frame nobody could read.
+func notJSON(ev Event, err error) error {
+	return fmt.Errorf("frame on topic %q carries data that is not a JSON object (%v): %q", ev.Topic, err, ev.Raw)
 }
 
 // read parses SSE frames (`event:` / `data:` lines, blank-line separated)
@@ -182,11 +278,13 @@ func (s *sseSub) read() {
 			return
 		}
 		var payload map[string]any
+		var decodeErr error
 		if data != "" {
-			_ = json.Unmarshal([]byte(data), &payload)
+			decodeErr = json.Unmarshal([]byte(data), &payload)
 		}
+		f := sseFrame{ev: Event{Topic: event, Data: payload, Raw: data}, at: time.Now(), decodeErr: decodeErr}
 		select {
-		case s.frames <- Event{Topic: event, Data: payload, Raw: data}:
+		case s.frames <- f:
 		case <-s.done:
 		}
 		event, data = "", ""
@@ -226,18 +324,25 @@ func (s *sseSub) Await(ctx context.Context, topic string, timeout time.Duration)
 		case <-ctx.Done():
 			return Event{}, ctx.Err()
 		case <-deadline.C:
-			return Event{}, fmt.Errorf("timeout after %s waiting for event on topic %q", timeout, topic)
-		case ev, ok := <-s.frames:
+			return Event{}, fmt.Errorf("%w after %s waiting for event on topic %q", ErrAwaitTimeout, timeout, topic)
+		case f, ok := <-s.frames:
 			if !ok {
 				if s.readErr != nil {
 					return Event{}, fmt.Errorf("event stream closed: %w", s.readErr)
 				}
 				return Event{}, fmt.Errorf("event stream closed before an event on topic %q arrived", topic)
 			}
+			if s.stale(f) {
+				continue // delivered before this step's call was sent
+			}
+			ev := f.ev
 			if ev.Topic == "error" {
-				return Event{}, fmt.Errorf("event stream error frame: %v", ev.Data)
+				return Event{}, fmt.Errorf("event stream error frame: %s", ev.Raw)
 			}
 			if ev.Topic == topic {
+				if f.decodeErr != nil {
+					return Event{}, notJSON(ev, f.decodeErr)
+				}
 				return ev, nil
 			}
 			// A different topic (we asked for one, but stay tolerant of a
@@ -267,7 +372,7 @@ func (s *sseSub) Next(ctx context.Context, timeout time.Duration) (Event, error)
 		return Event{}, ctx.Err()
 	case <-deadline.C:
 		return Event{}, fmt.Errorf("timeout after %s waiting for the next frame", timeout)
-	case ev, ok := <-s.frames:
+	case f, ok := <-s.frames:
 		if !ok {
 			if s.readErr != nil {
 				// BOTH wrapped: a caller matching ErrStreamClosed must
@@ -276,10 +381,13 @@ func (s *sseSub) Next(ctx context.Context, timeout time.Duration) (Event, error)
 			}
 			return Event{}, ErrStreamClosed
 		}
-		if ev.Topic == "error" {
-			return Event{}, streamErrorFrame(ev)
+		if f.ev.Topic == "error" {
+			return Event{}, streamErrorFrame(f.ev)
 		}
-		return ev, nil
+		if f.decodeErr != nil {
+			return Event{}, notJSON(f.ev, f.decodeErr)
+		}
+		return f.ev, nil
 	}
 }
 

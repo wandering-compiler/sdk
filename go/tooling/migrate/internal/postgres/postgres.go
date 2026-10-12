@@ -384,13 +384,24 @@ func splitStatements(sql string) []string {
 	for i := 0; i < len(b); {
 		c := b[i]
 		switch {
-		case c == '\'': // single-quoted string; '' is an escaped quote
+		case c == '\'' || c == '"':
+			// Single-quoted string or quoted identifier; a doubled quote is
+			// an escaped one. An E'…' string also escapes with a backslash,
+			// so `E'it\'s; fine'` is one literal, not a boundary.
+			backslash := c == '\'' && i > 0 && (b[i-1] == 'E' || b[i-1] == 'e') &&
+				(i < 2 || !identByte(b[i-2]))
 			buf.WriteByte(c)
 			i++
 			for i < len(b) {
 				buf.WriteByte(b[i])
-				if b[i] == '\'' {
-					if i+1 < len(b) && b[i+1] == '\'' {
+				if backslash && b[i] == '\\' && i+1 < len(b) {
+					i++
+					buf.WriteByte(b[i])
+					i++
+					continue
+				}
+				if b[i] == c {
+					if i+1 < len(b) && b[i+1] == c {
 						i++
 						buf.WriteByte(b[i])
 						i++
@@ -428,7 +439,7 @@ func splitStatements(sql string) []string {
 				i++
 			}
 		case c == '$': // dollar-quoted string: $tag$ … $tag$ (tag may be empty)
-			if tag := dollarTag(b, i); tag != "" {
+			if tag := dollarTag(b, i); tag != "" && (i == 0 || !identByte(b[i-1])) {
 				buf.WriteString(tag)
 				i += len(tag)
 				for i < len(b) {
@@ -456,13 +467,16 @@ func splitStatements(sql string) []string {
 	return out
 }
 
-// dollarTag returns the `$tag$` opening delimiter at b[i] (tag ∈ [A-Za-z0-9_]*),
-// or "" when b[i] doesn't start one.
+// dollarTag returns the `$tag$` opening delimiter at b[i] (tag ∈ [A-Za-z0-9_]*,
+// not starting with a digit), or "" when b[i] doesn't start one.
 func dollarTag(b []byte, i int) string {
 	if b[i] != '$' {
 		return ""
 	}
 	j := i + 1
+	if j < len(b) && b[j] >= '0' && b[j] <= '9' {
+		return "" // a positional parameter ($1), not a quote
+	}
 	for j < len(b) && (b[j] == '_' || (b[j] >= 'a' && b[j] <= 'z') || (b[j] >= 'A' && b[j] <= 'Z') || (b[j] >= '0' && b[j] <= '9')) {
 		j++
 	}
@@ -472,22 +486,67 @@ func dollarTag(b []byte, i int) string {
 	return ""
 }
 
+// identByte reports whether c can continue an unquoted identifier, so a `$`
+// or an `E` before a quote that belongs to a longer word is not read as
+// syntax.
+func identByte(c byte) bool {
+	return c == '_' || c == '$' || c >= 0x80 ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
 func hasPrefixAt(b []byte, i int, s string) bool {
 	return i+len(s) <= len(b) && string(b[i:i+len(s)]) == s
 }
 
-// Wipe drops every object in the public schema and recreates it empty
-// (migrate.Wiper) — the dev fresh-build primitive. `DROP SCHEMA public
-// CASCADE` removes all tables (incl. w17_migrations), types, indexes,
-// etc.; `CREATE SCHEMA public` restores the empty default schema. Only
-// the connected database is touched.
-func (a *Applier) Wipe(ctx context.Context) error {
-	if _, err := a.conn.Exec(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public",
-		pgx.QueryExecModeSimpleProtocol); err != nil {
+// Wipe returns the connected database to the empty state (migrate.Wiper) —
+// the dev fresh-build primitive. It drops `public` and each DECLARED
+// namespace (the ones schema prep creates for the migration set, see
+// migrate.DeclaredNamespaces), then recreates an empty `public`; everything
+// inside goes with them (tables incl. w17_migrations, types, functions,
+// extensions installed there). One simple-protocol batch, so it runs as one
+// implicit transaction: a failure leaves the database as it was.
+//
+// `public` alone was not enough. Schema prep creates each namespace a
+// module's tables are qualified with (`billing`, `ledger`), and a wipe that
+// left them behind left their tables too — the next fresh build then found
+// a populated store and `CREATE TABLE "billing"."invoices"` failed on a
+// database that was supposed to be empty.
+//
+// Declared namespaces only, never "whatever this role may drop": a dev
+// stack usually connects as a superuser, which may drop every schema in the
+// database, including ones other tools keep there. A schema the migration
+// set does not declare stays. A system schema is refused. Only the connected
+// database is touched, and no session setting is changed.
+func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
+	stmt, err := wipeSQL(namespaces)
+	if err != nil {
+		return fmt.Errorf("postgres Wipe: %w", err)
+	}
+	if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
 		return fmt.Errorf("postgres Wipe: %w", err)
 	}
 	a.phaseColEnsured = false
 	return nil
+}
+
+// wipeSQL drops public and the given schemas and recreates an empty public.
+// `public` and duplicates are folded; a system schema is refused.
+func wipeSQL(schemas []string) (string, error) {
+	var b strings.Builder
+	b.WriteString("DROP SCHEMA IF EXISTS public CASCADE;\n")
+	seen := map[string]bool{"public": true}
+	for _, s := range schemas {
+		if s = strings.TrimSpace(s); s == "" || seen[s] {
+			continue
+		}
+		if s == "information_schema" || strings.HasPrefix(s, "pg_") {
+			return "", fmt.Errorf("refusing to drop system schema %q", s)
+		}
+		seen[s] = true
+		b.WriteString("DROP SCHEMA IF EXISTS " + pgx.Identifier{s}.Sanitize() + " CASCADE;\n")
+	}
+	b.WriteString("CREATE SCHEMA public;")
+	return b.String(), nil
 }
 
 // Close releases the underlying pgx connection. Idempotent —

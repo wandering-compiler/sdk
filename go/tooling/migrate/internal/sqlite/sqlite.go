@@ -220,7 +220,7 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 // primitive. Enumerates sqlite_master (skipping SQLite's internal
 // sqlite_* objects) and DROPs each table with foreign_keys off so
 // dependency order doesn't matter.
-func (a *Applier) Wipe(ctx context.Context) error {
+func (a *Applier) Wipe(ctx context.Context, _ []string) error {
 	conn, err := a.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("sqlite Wipe: acquire conn: %w", err)

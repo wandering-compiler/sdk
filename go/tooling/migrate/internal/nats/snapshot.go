@@ -66,6 +66,12 @@ func (s *Snapshotter) Dump(ctx context.Context, w io.Writer) error {
 
 	names := js.KeyValueStoreNames(ctx)
 	for name := range names.Name() {
+		if name == runLockBucket {
+			// The run lock is the state of a run, not of the store, and a
+			// restored copy would come back without its TTL — a lock that
+			// never ages out and refuses every later run.
+			continue
+		}
 		if err := enc.Encode(natsRecord{Bucket: name, IsBucket: true}); err != nil {
 			return fmt.Errorf("nats Dump: encode bucket %q: %w", name, err)
 		}
@@ -114,6 +120,9 @@ func (s *Snapshotter) Restore(ctx context.Context, r io.Reader) error {
 				break
 			}
 			return fmt.Errorf("nats Restore: decode: %w", err)
+		}
+		if rec.Bucket == runLockBucket {
+			continue // see Dump: never restored, even from an older dump
 		}
 		if rec.IsBucket {
 			kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: rec.Bucket})

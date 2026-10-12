@@ -161,7 +161,7 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 // Wipe flushes the connected logical DB (migrate.Wiper) — the dev
 // fresh-build primitive. FLUSHDB drops every key in this DB only (not
 // the whole server), leaving it empty.
-func (a *Applier) Wipe(ctx context.Context) error {
+func (a *Applier) Wipe(ctx context.Context, _ []string) error {
 	if err := a.client.FlushDB(ctx).Err(); err != nil {
 		return fmt.Errorf("redis Wipe: %w", err)
 	}

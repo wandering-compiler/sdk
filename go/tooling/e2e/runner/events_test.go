@@ -211,8 +211,10 @@ func TestAwaitEvent_PayloadMismatch(t *testing.T) {
 	srv := hub.server(t, true)
 	defer srv.Close()
 
+	// A non-matching event is skipped (it may be an earlier call's), so the
+	// mismatch is reported when the window closes; keep the window short.
 	steps := []Step{createTaskStep(&AwaitEvent{
-		Topic: "task.created", Path: "/api/v1/w17-events",
+		Topic: "task.created", Path: "/api/v1/w17-events", TimeoutMs: 300,
 		Match: map[string]any{"task_id": "does-not-match"},
 	})}
 	cs := map[string]Caller{"rest": NewRESTCaller(srv.URL, nil)}

@@ -200,7 +200,7 @@ func TestWipe(t *testing.T) {
 	if err := a.Apply(ctx, reg); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := a.Wipe(ctx); err != nil {
+	if err := a.Wipe(ctx, nil); err != nil {
 		t.Fatalf("Wipe: %v", err)
 	}
 	// Re-open + count user tables → 0.

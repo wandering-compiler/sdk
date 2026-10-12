@@ -713,7 +713,7 @@ func applyOrResume(ctx context.Context, applier Applier, m *applyfetchpb.Migrati
 }
 
 // runApplierCache caches one Applier per connection for the duration of a
-// Run / RunRollback loop and, for non-transactional stores (Redis / S3 that
+// Run / RunRollback loop and, for non-transactional stores (Redis / S3 / NATS that
 // implement RunLockCapable), acquires a run-lock on first open so a
 // non-idempotent TRANSFORM_FIELD data migration can't double-apply across
 // concurrent runs. Transactional SQL dialects don't implement RunLockCapable

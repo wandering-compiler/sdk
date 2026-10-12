@@ -28,7 +28,7 @@ func TestWipe_DropsEverything(t *testing.T) {
 	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: `CREATE TABLE a(id BIGINT PRIMARY KEY); CREATE TABLE b(id BIGINT PRIMARY KEY, a_id BIGINT REFERENCES a(id));`}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := a.Wipe(ctx); err != nil {
+	if err := a.Wipe(ctx, nil); err != nil {
 		t.Fatalf("Wipe: %v", err)
 	}
 

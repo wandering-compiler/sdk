@@ -300,38 +300,23 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	// replay). One subscription per awaited topic keeps each Await from
 	// consuming a sibling's frame. Subscriptions are live once Subscribe
 	// returns.
-	var subs []Subscription
+	subs, err := subscribeAwaits(ctx, s, cfg, scope, token, credential, headers)
 	defer func() {
 		for _, sub := range subs {
 			_ = sub.Close()
 		}
 	}()
-	if len(s.AwaitEvents) > 0 {
-		if cfg.events == nil {
-			return fmt.Errorf("step awaits event %q but no event subscriber configured (pass runner.WithEventSubscriber)", s.AwaitEvents[0].Topic)
-		}
-		evToken := token
-		if evToken == "" {
-			// The /w17-events stream is gated by the same realm as REST;
-			// reuse the scenario's captured token even when this step's own
-			// endpoint needs none.
-			if v, ok := scope.Get("auth.token"); ok && v != nil {
-				evToken = runtime.Text(v)
-			}
-		}
-		for _, ae := range s.AwaitEvents {
-			// The step's headers ride the subscribe too. The stream is
-			// authenticated by the same auth method as the call, and that
-			// method reads client-chosen headers: `W17-Org` picks the active
-			// org, whose id is the label the /w17-events hub partitions by.
-			// Subscribing without them would connect a label-less principal
-			// — which on an isolating surface is entitled to NO event — so
-			// the await would time out on a surface that works.
-			sub, err := cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, evToken, headers)
-			if err != nil {
-				return err
-			}
-			subs = append(subs, sub)
+	if err != nil {
+		return err
+	}
+
+	// Everything a subscription delivered up to now predates this call, so
+	// none of it can be this call's event: an earlier step's event that
+	// arrived late is exactly such a frame.
+	sent := time.Now()
+	for _, sub := range subs {
+		if st, ok := sub.(Settable); ok {
+			st.IgnoreBefore(sent)
 		}
 	}
 
@@ -354,19 +339,154 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	}
 
 	for i, ae := range s.AwaitEvents {
-		timeout := time.Duration(ae.TimeoutMs) * time.Millisecond
-		if timeout <= 0 {
-			timeout = DefaultAwaitTimeoutMs * time.Millisecond
-		}
-		ev, err := subs[i].Await(ctx, ae.Topic, timeout)
-		if err != nil {
-			return fmt.Errorf("await_event %q: %w", ae.Topic, err)
-		}
-		if err := runtime.MatchExpect(ae.Match, ev.Data, scope); err != nil {
-			return fmt.Errorf("await_event %q payload: %w", ae.Topic, err)
+		if err := awaitOne(ctx, ae, subs[i], scope); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// subscribeAwaits opens one subscription per awaited event, each as the
+// principal that await observes: the await's own TokenFrom when it names
+// one, else the step's — its Credential, its token, or (for a step whose
+// own endpoint needs none) the scenario's session.
+//
+// The step's headers ride the subscribe too, unless the await names its
+// own. The stream is authenticated by the same auth method as the call, and
+// that method reads client-chosen headers: `W17-Org` picks the active org,
+// whose id is the label the /w17-events hub partitions by. Subscribing
+// without them would connect a label-less principal — which on an isolating
+// surface is entitled to NO event — so the await would time out on a
+// surface that works.
+func subscribeAwaits(ctx context.Context, s Step, cfg runCfg, scope *runtime.Scope, token, credential string, headers map[string]string) ([]Subscription, error) {
+	if len(s.AwaitEvents) == 0 {
+		return nil, nil
+	}
+	if cfg.events == nil {
+		return nil, fmt.Errorf("step awaits event %q but no event subscriber configured (pass runner.WithEventSubscriber)", s.AwaitEvents[0].Topic)
+	}
+	var subs []Subscription
+	for _, ae := range s.AwaitEvents {
+		if ae.Absent && bindsCapture(ae.Match) {
+			return subs, fmt.Errorf("await_event %q: an absent event has nothing to capture from — drop the capture from its match", ae.Topic)
+		}
+		subHeaders := headers
+		if ae.Headers != nil {
+			h, err := expandHeaders(ae.Headers, scope)
+			if err != nil {
+				return subs, fmt.Errorf("await_event %q: expand headers: %w", ae.Topic, err)
+			}
+			subHeaders = h
+		}
+		var sub Subscription
+		var err error
+		switch {
+		case ae.TokenFrom != "":
+			tok, terr := capturedToken(scope, ae.TokenFrom)
+			if terr != nil {
+				return subs, fmt.Errorf("await_event %q: %w", ae.Topic, terr)
+			}
+			sub, err = cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, tok, subHeaders)
+		case credential != "":
+			// The step's own credential, not the session's: the stream has to
+			// be that principal's for the await to say anything about what
+			// that principal is shown.
+			cs, ok := cfg.events.(CredentialSubscriber)
+			if !ok {
+				return subs, fmt.Errorf("await_event %q: the step presents its own credential, and the event subscriber cannot present one (it does not implement runner.CredentialSubscriber) — subscribing as anyone else would observe the wrong principal", ae.Topic)
+			}
+			sub, err = cs.SubscribeWithCredential(ctx, ae.Path, []string{ae.Topic}, credential, subHeaders)
+		default:
+			evToken := token
+			if evToken == "" {
+				// The /w17-events stream is gated by the same realm as REST;
+				// reuse the scenario's captured token even when this step's own
+				// endpoint needs none.
+				if v, ok := scope.Get("auth.token"); ok && v != nil {
+					evToken = runtime.Text(v)
+				}
+			}
+			sub, err = cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, evToken, subHeaders)
+		}
+		if err != nil {
+			return subs, err
+		}
+		subs = append(subs, sub)
+	}
+	return subs, nil
+}
+
+// awaitOne asserts one awaited event after the step's call.
+//
+// Events on the topic whose payload does not match are skipped, not failed:
+// the topic alone does not say which call an event came from, and the first
+// one to arrive may be an earlier step's. The match runs on a fork of the
+// scope, so a skipped event binds nothing; the matching one's captures are
+// kept.
+func awaitOne(ctx context.Context, ae AwaitEvent, sub Subscription, scope *runtime.Scope) error {
+	timeout := time.Duration(ae.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = DefaultAwaitTimeoutMs * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	var skipped int
+	var lastMismatch error
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return awaitTimedOut(ae, timeout, skipped, lastMismatch)
+		}
+		ev, err := sub.Await(ctx, ae.Topic, remaining)
+		if err != nil {
+			if timedOut(ctx, err, deadline) && (ae.Absent || skipped > 0) {
+				return awaitTimedOut(ae, timeout, skipped, lastMismatch)
+			}
+			if ae.Absent {
+				return fmt.Errorf("await_event %q (absent): the stream failed before the window closed, so it proves nothing about delivery: %w", ae.Topic, err)
+			}
+			return fmt.Errorf("await_event %q: %w", ae.Topic, err)
+		}
+		trial := scope.Fork()
+		if err := runtime.MatchExpect(ae.Match, ev.Data, trial); err != nil {
+			skipped++
+			lastMismatch = err
+			continue
+		}
+		if ae.Absent {
+			return fmt.Errorf("await_event %q (absent): the event WAS delivered within %s — payload %s", ae.Topic, timeout, ev.Raw)
+		}
+		scope.Adopt(trial)
+		return nil
+	}
+}
+
+// awaitTimedOut reports a window that closed: success for an absent event,
+// otherwise a failure that says whether nothing arrived or only events this
+// step's match did not accept.
+func awaitTimedOut(ae AwaitEvent, timeout time.Duration, skipped int, lastMismatch error) error {
+	switch {
+	case ae.Absent:
+		return nil
+	case skipped == 0:
+		return fmt.Errorf("await_event %q: %w after %s waiting for event on topic %q", ae.Topic, ErrAwaitTimeout, timeout, ae.Topic)
+	default:
+		return fmt.Errorf("await_event %q payload: %d event(s) on the topic arrived within %s and none matched; the last: %w", ae.Topic, skipped, timeout, lastMismatch)
+	}
+}
+
+// timedOut reports an Await that ended because the window closed: the
+// subscription said so, or the deadline has passed while the run's own
+// context is still live (a subscription that words its timeout otherwise).
+func timedOut(ctx context.Context, err error, deadline time.Time) bool {
+	if errors.Is(err, ErrAwaitTimeout) {
+		return true
+	}
+	return ctx.Err() == nil && !time.Now().Before(deadline)
+}
+
+// bindsCapture reports whether a match binds a capture anywhere in it.
+func bindsCapture(match map[string]any) bool {
+	return runtime.BindsCapture(match)
 }
 
 // stepToken resolves the bearer token a step presents ("" for none).

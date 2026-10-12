@@ -141,8 +141,15 @@ type ResumableApplier interface {
 // Implemented by the relational dialects (PG / MySQL / SQLite) +
 // Redis; schemaless object/stream stores (NATS / S3) don't implement
 // it (the reconcile logs + skips them). The orchestrator type-asserts.
+//
+// namespaces are the store's declared namespaces beyond its default one —
+// on Postgres the schemas the migration set qualifies its tables with,
+// which schema prep creates ([DeclaredNamespaces], [DevPlanNamespaces]).
+// They are wiped too; a namespace present in the store but not declared is
+// left alone, so a wipe never reaches data the project does not own.
+// Dialects without namespaces in this sense ignore the argument.
 type Wiper interface {
-	Wipe(ctx context.Context) error
+	Wipe(ctx context.Context, namespaces []string) error
 }
 
 // FingerprintCapable is an optional Applier capability: extract

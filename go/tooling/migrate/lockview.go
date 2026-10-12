@@ -149,7 +149,13 @@ func MigrationSetFS(migs []*applyfetchpb.Migration) (fs.FS, error) {
 		if err != nil {
 			return nil, fmt.Errorf("MigrationSetFS: marshal %s: %w", m.GetId(), err)
 		}
-		set[gopath.Join(m.GetConnection(), m.GetId()+".json")] = buf
+		name := gopath.Join(m.GetConnection(), m.GetId()+".json")
+		// One path per (connection, id): a second entry would silently
+		// replace the first, and which body runs would depend on order.
+		if _, dup := set[name]; dup {
+			return nil, fmt.Errorf("MigrationSetFS: migration %s/%s appears twice", m.GetConnection(), m.GetId())
+		}
+		set[name] = buf
 	}
 	return set, nil
 }

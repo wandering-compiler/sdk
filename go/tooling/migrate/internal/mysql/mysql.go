@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -159,15 +160,36 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 // dev fresh-build primitive. Disables FK checks, enumerates the current
 // DATABASE()'s tables via information_schema, DROPs each, then restores
 // FK checks. Only the connected schema is touched.
-func (a *Applier) Wipe(ctx context.Context) error {
-	if _, err := a.db.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0"); err != nil {
+//
+// All of it runs on ONE pooled connection, and that connection's FK checks
+// are restored whatever happens. FOREIGN_KEY_CHECKS is a session setting:
+// issued through the pool, the SET landed on one connection and the DROPs
+// on others (where FK checks were still on), and an early return left a
+// pooled connection with FK checks off for whatever borrowed it next.
+func (a *Applier) Wipe(ctx context.Context, _ []string) (err error) {
+	conn, err := a.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("mysql Wipe: acquire conn: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0"); err != nil {
 		return fmt.Errorf("mysql Wipe: disable FK checks: %w", err)
 	}
+	defer func() {
+		if _, rerr := conn.ExecContext(context.WithoutCancel(ctx), "SET FOREIGN_KEY_CHECKS=1"); rerr != nil {
+			// The setting could not be put back, so this connection must
+			// not return to the pool carrying it.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			if err == nil {
+				err = fmt.Errorf("mysql Wipe: restore FK checks: %w", rerr)
+			}
+		}
+	}()
 	// List tables in a closure so `defer rows.Close()` releases the cursor
 	// BEFORE the DROP loop (and rows.Err() is checked) — the rows must be
 	// closed before the writes, not at function end.
 	listTables := func() ([]string, error) {
-		rows, err := a.db.QueryContext(ctx,
+		rows, err := conn.QueryContext(ctx,
 			"SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()")
 		if err != nil {
 			return nil, err
@@ -188,14 +210,17 @@ func (a *Applier) Wipe(ctx context.Context) error {
 		return fmt.Errorf("mysql Wipe: list tables: %w", err)
 	}
 	for _, n := range names {
-		if _, err := a.db.ExecContext(ctx, "DROP TABLE IF EXISTS `"+n+"`"); err != nil {
+		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+quoteMySQLIdent(n)); err != nil {
 			return fmt.Errorf("mysql Wipe: drop %s: %w", n, err)
 		}
 	}
-	if _, err := a.db.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1"); err != nil {
-		return fmt.Errorf("mysql Wipe: restore FK checks: %w", err)
-	}
 	return nil
+}
+
+// quoteMySQLIdent renders name as a backtick-quoted identifier, doubling any
+// embedded backtick.
+func quoteMySQLIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
 // Close releases the underlying sql.DB pool. Idempotent — second

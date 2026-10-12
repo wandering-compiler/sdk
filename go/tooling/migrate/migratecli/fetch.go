@@ -127,7 +127,37 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 		}
 		return nil, fmt.Errorf("migrate: fetch from %s: %w", addr, err)
 	}
-	return resp.GetMigrations(), nil
+	return requestedOnly(resp.GetMigrations(), want)
+}
+
+// requestedOnly narrows a fetched set to the connections that were asked
+// for, and refuses a set that names one migration twice.
+//
+// The reply is the console's answer, not this binary's: a connection nobody
+// requested would be written beside this bundle's artefacts (or applied, for
+// an in-memory fetch, to whatever that name resolves to here), so it is
+// dropped rather than trusted. A duplicate `(connection, id)` is refused
+// outright: the two copies land on one path, and which body survives would
+// depend on the order of the reply.
+func requestedOnly(migs []*applyfetchpb.Migration, want []*applyfetchpb.Target) ([]*applyfetchpb.Migration, error) {
+	asked := make(map[string]bool, len(want))
+	for _, t := range want {
+		asked[t.GetConnection()] = true
+	}
+	seen := make(map[[2]string]bool, len(migs))
+	out := make([]*applyfetchpb.Migration, 0, len(migs))
+	for _, m := range migs {
+		if !asked[m.GetConnection()] {
+			continue
+		}
+		key := [2]string{m.GetConnection(), m.GetId()}
+		if seen[key] {
+			return nil, fmt.Errorf("migrate: the console returned migration %s/%s twice — refusing a set in which one id names two bodies", m.GetConnection(), m.GetId())
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // fetchMaxRecvMsgSize bounds one fetch response. A response carries every
