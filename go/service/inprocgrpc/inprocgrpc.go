@@ -633,6 +633,10 @@ type inprocStream struct {
 	trailer     metadata.MD
 	headerOnce  sync.Once
 	headerReady chan struct{}
+	// trailersOnly is set when the stream ended before the handler sent any
+	// headers. Written before headerReady is closed and read only after it
+	// is observed closed, so the channel orders it.
+	trailersOnly bool
 }
 
 // markHeaderSent releases anyone waiting in ClientStream.Header. Idempotent
@@ -669,7 +673,12 @@ func (p *inprocStream) finish(err error) {
 		// Header() — the wire delivers a trailers-only response there, and
 		// a Header() that could block forever would be worse than one that
 		// returns empty.
-		p.markHeaderSent()
+		p.headerOnce.Do(func() {
+			p.trailersOnly = true
+			if p.headerReady != nil {
+				close(p.headerReady)
+			}
+		})
 		close(p.finished)
 		p.cancel()
 	})
@@ -690,6 +699,13 @@ func (s clientStream) Header() (metadata.MD, error) {
 		case <-s.p.clientCtx.Done():
 			return nil, contextStatus(s.p.clientCtx.Err())
 		case <-s.p.headerReady:
+		}
+		// A stream the caller cancelled usually ends before any header is
+		// sent, and then both cases above are ready at once; the select
+		// would pick one at random. Headers that were never sent are not an
+		// answer to a cancelled caller.
+		if err := s.p.clientCtx.Err(); err != nil && s.p.trailersOnly {
+			return nil, contextStatus(err)
 		}
 	}
 	s.p.hdrMu.Lock()
