@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -113,8 +114,22 @@ func (b *recordingBackend) record(ctx context.Context) {
 	b.mu.Unlock()
 }
 
+// take returns the metadata of the one call the surface made. The HTTP
+// handler can hand its headers over before its backend call is recorded (a
+// streaming surface dials after it starts the response), so it waits for
+// the call rather than reading whatever has arrived.
 func (b *recordingBackend) take(t *testing.T) metadata.MD {
 	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b.mu.Lock()
+		n := len(b.seen)
+		b.mu.Unlock()
+		if n > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.seen) != 1 {
@@ -311,6 +326,10 @@ func TestEdge_ClientCannotSetReservedMetadataOnAnySurface(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Read to the end: closing early cancels the request, and a
+		// streaming surface that has already sent its headers would then
+		// abandon its backend call before making it.
+		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		if resp.StatusCode >= 300 {
 			t.Fatalf("%s %s: status %d", method, path, resp.StatusCode)
