@@ -234,7 +234,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.7 | A broker outage MUST be logged. | `TestNatsBus_ABrokerOutageIsStillHeard` |
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
 | I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | `TestNewNatsBus_UnreachableBrokerFails` |
-| I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
+| I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_EmitOnlyProcessRecreatesALostStream_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
 | I5.11 | After the client stops reconnecting, the bus MUST log a "closed for good" line, report an error, and fail every later `Dispatch` at once through `OnEmitFailure`. | `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I5.12 | Channel and topic names MUST be valid on every transport or be refused before use; `DurablePrefix` and the keys of `ChannelRetries` MUST be checked at construction. | `TestChannelNameRefusedOnEveryTransport`, `TestDispatch_EmptyTopicRefusedOnEveryTransport`, `TestBusConstruction_RefusesInvalidNames` |
 | I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names; a plain dotted filter keeps its name. | `TestSanitizeDurableSuffix_Injective`, `TestSanitizeDurableSuffix`, `TestTopicFilter_Nats_Embedded` |

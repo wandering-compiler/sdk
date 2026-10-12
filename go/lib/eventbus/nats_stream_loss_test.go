@@ -19,10 +19,17 @@ import (
 // the stream deleted) must not leave the process unable to emit or consume
 // on that channel until it restarts. The emit side re-creates the stream;
 // the subscribe side re-creates the consumer and resumes delivery.
+//
+// The first emit after the loss runs while the subscriber is re-creating
+// the stream, its dead-letter stream and its consumer; the broker answers
+// those requests one at a time, and on a loaded CI runner they outlast the
+// default 2s PublishTimeout. That bound has its own test; this one is about
+// recovery, so it gives each emit room to finish.
 func TestNatsBus_RecoversFromStreamLoss_Embedded(t *testing.T) {
 	dsn := startEmbeddedNATS(t)
 	obs := &recordingObserver{}
-	bus, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{DSN: dsn, DurablePrefix: "loss", Observer: obs})
+	bus, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{DSN: dsn, DurablePrefix: "loss", Observer: obs,
+		PublishTimeout: 15 * time.Second})
 	if err != nil {
 		t.Fatalf("NewNatsBus: %v", err)
 	}
@@ -60,7 +67,7 @@ func TestNatsBus_RecoversFromStreamLoss_Embedded(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		dctx, dcancel := context.WithTimeout(ctx, 20*time.Second)
 		err := bus.Dispatch(dctx, "lossy", "a.b", wrapperspb.String("after"))
 		dcancel()
 		if err != nil {
@@ -132,4 +139,49 @@ func TestNatsBus_RecoversFromBrokerRecreated_Embedded(t *testing.T) {
 	waitFor(t, 60*time.Second, "event emitted after the broker was recreated delivered", func() bool {
 		return delivered.Load() >= 2
 	})
+}
+
+// The emit side recovers on its own: a process that only emits on a
+// channel (no subscriber of its own to re-create the stream) re-creates
+// the lost stream on the next emit, and the event is stored in it.
+func TestNatsBus_EmitOnlyProcessRecreatesALostStream_Embedded(t *testing.T) {
+	dsn := startEmbeddedNATS(t)
+	bus, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{DSN: dsn, DurablePrefix: "emitonly"})
+	if err != nil {
+		t.Fatalf("NewNatsBus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := bus.Dispatch(ctx, "emitonly", "a.b", wrapperspb.String("before")); err != nil {
+		t.Fatalf("Dispatch before loss: %v", err)
+	}
+	nc, err := natsgo.Connect(dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	if err := js.DeleteStream(ctx, "emitonly"); err != nil {
+		t.Fatalf("DeleteStream: %v", err)
+	}
+
+	if err := bus.Dispatch(ctx, "emitonly", "a.b", wrapperspb.String("after")); err != nil {
+		t.Fatalf("Dispatch after the broker lost the stream: %v", err)
+	}
+	s, err := js.Stream(ctx, "emitonly")
+	if err != nil {
+		t.Fatalf("the emit did not re-create the stream: %v", err)
+	}
+	info, err := s.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 1 {
+		t.Errorf("re-created stream holds %d messages, want the one emitted after the loss", info.State.Msgs)
+	}
 }
