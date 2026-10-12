@@ -220,3 +220,33 @@ func TestRunGraceful_ResourceTeardownIsBoundedAtThirtySeconds(t *testing.T) {
 		t.Errorf("the closer's context ended after %v, want ~30s", waited.Round(time.Second))
 	}
 }
+
+// Transports drain in parallel on the one shared context: two that each
+// need a second to drain take about a second together, not two — so the
+// shutdown deadline is spent once, not once per transport.
+func TestRun_TransportsDrainInParallel(t *testing.T) {
+	draining := func(ctx context.Context) error {
+		<-ctx.Done()
+		time.Sleep(time.Second)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bootstrap.Run(ctx, testObs, bootstrap.Func(draining), bootstrap.Func(draining), bootstrap.Func(draining))
+	}()
+	time.Sleep(100 * time.Millisecond)
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		if took := time.Since(start); took > 1800*time.Millisecond {
+			t.Errorf("three 1s drains took %v together, want ~1s (in parallel)", took.Round(100*time.Millisecond))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+}
