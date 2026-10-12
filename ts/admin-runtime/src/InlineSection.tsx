@@ -11,7 +11,7 @@
 //   - Form pulls editable fields from `spec.pages[inline.page].
 //     detail.fields` when present, falling back to the list's
 //     columns minus "id". Inputs are plain TextInput — same
-//     shape as ActionModal; typed inputs are an iter-3 lift.
+//     shape as ActionModal; typed inputs are not wired yet.
 
 import { useEffect, useState } from "react";
 import {
@@ -111,7 +111,7 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
   // Columns inherited from the target page's list.columns. When
   // the target page has no list (detail-only target), fall back
   // to "(no columns declared)" — caller's storage method must
-  // return a shape the SPA can introspect; iter-3 lift.
+  // return a shape the SPA can introspect.
   const columns = targetPage.list?.columns || [];
   const columnNames = columns.map((c) => c.name);
   // Same rule as ListPage: an inlined pivot page may itself be list-only,

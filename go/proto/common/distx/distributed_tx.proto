@@ -18,9 +18,9 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/common/distx;distxp
 // running binary's tx registry, and run their queries inside
 // the open *sql.Tx. If the metadata is absent (caller didn't
 // open a tx, or the id resolves to nothing), the handler opens
-// a per-method tx — the slice 6H "always-fresh-tx" fallback.
+// a per-method tx — the "always-fresh-tx" fallback.
 //
-// **Single-instance default (D-iter2-dql-11).** In the common
+// **Single-instance default.** In the common
 // case of one storage binary per domain, `conn_id` is a
 // redundant axis — every `tx_id` resolves on the sole live
 // binary. The single-instance impl returns conn_id as an empty
@@ -46,13 +46,13 @@ service W17DistributedTransaction {
 
 message BeginRequest {
   // ConnectionName names a connection declared in the domain's
-  // schema (D26 unique identifier). Single-instance ignores
-  // this until M2 multi-connection lands; multi-instance
+  // schema (its unique identifier). Single-instance ignores
+  // this; multi-instance
   // domains route Begin to the replica owning that connection.
   string connection_name = 1;
 
   // TxTimeoutMs — long-running transaction deadline in
-  // milliseconds (slice 6Q-F Tier 2). When > 0, the distx
+  // milliseconds (Tier 2 below). When > 0, the distx
   // server wraps the tx's ctx with `context.WithTimeout`; on
   // expiry the sql package auto-rolls back the underlying
   // transaction. 0 (default) leaves the tx with the

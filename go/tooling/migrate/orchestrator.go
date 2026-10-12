@@ -41,8 +41,8 @@ type ConnTarget struct {
 	TargetContentSha256 string
 }
 
-// Config pins everything Run needs to drive an offline apply
-// (D-iter3-6). Built from CLI flags (production) or directly
+// Config pins everything Run needs to drive an offline apply.
+// Built from CLI flags (production) or directly
 // (tests). The lock pins per-connection target_migration_id;
 // MigrationsDir holds the artifacts fetched by `w17migrate
 // fetch`; ApplierFor opens per-connection drivers; the DB-side
@@ -51,7 +51,7 @@ type ConnTarget struct {
 type Config struct {
 	// Targets declare the deploy ceiling per connection (read from the
 	// caller's lock). Read-only at apply time — never written back
-	// (D-iter3-7: lock is pin, not cursor).
+	// (the lock is a pin, not a cursor).
 	Targets []ConnTarget
 
 	// MigrationsDir is the filesystem root holding artifacts
@@ -174,7 +174,7 @@ type RollbackConfig struct {
 }
 
 // Plan walks every connection in the lock, opens each connection's
-// Applier to query AppliedHead (DB-side cutoff per D-iter3-7),
+// Applier to query AppliedHead (the cutoff is DB-side),
 // loads filesystem migrations from MigrationsDir, and selects the CHAIN
 // leading to the pinned target — `chainFromTarget` walks `prev_content_sha256`
 // links backwards from the pin, and an artifact in range that is not on that
@@ -358,9 +358,9 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 // `w17_migrations` table (written by the migration's own
 // `up_sql`) reflects the partial-success state on next deploy.
 //
-// Run does NOT update the lock — lock is read-only at apply time
-// (D-iter3-7). Run does NOT contact console — apply is offline
-// (D-iter3-6); audit / RecordApplied happen out-of-band.
+// Run does NOT update the lock — lock is read-only at apply time.
+// Run does NOT contact console — apply is offline;
+// audit / RecordApplied happen out-of-band.
 func Run(ctx context.Context, cfg Config) (err error) {
 	out := cfg.Out
 	if out == nil {
@@ -682,7 +682,7 @@ func supersedes(m *applyfetchpb.Migration, id string) bool {
 }
 
 // applyOrResume applies a migration, resuming the post-tx phase when
-// the applier reports it as PhasePending (Q52 two-phase crash
+// the applier reports it as PhasePending (two-phase crash
 // recovery). For a ResumableApplier the orchestrator reads
 // MigrationPhase first:
 //
@@ -724,7 +724,7 @@ type runApplierCache struct {
 	applierFor ApplierFor
 	out        io.Writer
 	cache      map[string]Applier
-	// Q48-datamigrate-1: run-locks taken per non-transactional target, held
+	// Run-locks taken per non-transactional target, held
 	// for the whole run, released by closeAll BEFORE Close so the lock's
 	// final conditional write still has a live client.
 	locks map[string]RunLock
@@ -1110,7 +1110,7 @@ func sortedTargets(in []ConnTarget) ([]ConnTarget, error) {
 // does not vouch for. The ed25519 verify happens SERVER-side, when the console
 // serves the fetch.
 //
-// This doc used to say "Phase D signature verification runs on every body
+// This doc used to say "signature verification runs on every body
 // before the destructive op". Two other comments in
 // this module said the same, while two more — twenty lines from one of them —
 // correctly said "No client-side signature verify". The belief that a tampered

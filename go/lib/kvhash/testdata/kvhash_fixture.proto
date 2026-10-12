@@ -30,7 +30,7 @@ message FlatEntity {
 
 // OptionalEntity pairs a proto3-`optional` scalar (which carries
 // presence via a synthetic oneof) with a plain proto3 scalar (no
-// presence). Drives the Q7-kvhash-1 presence-preservation path:
+// presence). Drives the presence-preservation path:
 // an unset optional must be omitted from the HASH, while the plain
 // scalar is always emitted.
 message OptionalEntity {

@@ -1,5 +1,4 @@
-// WS / SSE auth decorator (G3i3-GW-F). Adapted from
-// protobridge's `runtime/ws_auth.go`.
+// WS / SSE auth decorator.
 //
 // Wraps an existing AuthFunc to accept either:
 //   - the standard Authorization header (works for native

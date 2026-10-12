@@ -104,9 +104,9 @@ func parseSQLiteColumnList(s string) (table string, cols []string) {
 	// ambiguous latches once any entry is bare (no `table.` prefix) or
 	// carries a prefix different from the first — at that point we can no
 	// longer attribute the list to one table, and a later same-looking
-	// prefix must NOT resurrect the table. (Q55-grpcerr-2: the bare-column
-	// case previously left an earlier prefix in place, mis-attributing a
-	// mixed list to the first column's table.)
+	// prefix must NOT resurrect the table. (A bare column used to leave an
+	// earlier prefix in place, mis-attributing a mixed list to the first
+	// column's table.)
 	ambiguous := false
 	for i, p := range parts {
 		p = strings.TrimSpace(p)

@@ -199,9 +199,9 @@ func WithFinishWait(d time.Duration) MemoryOption {
 //
 // `Timeout`, when > 0, wraps the tx's ctx with
 // `context.WithTimeout`; on expiry the sql package auto-rolls
-// back the tx (see [Memory.Begin]). Tier 2 of the §M2-F
-// salamonsky two-tier model: `(w17.db.method).timeout_ms`
-// (Tier 1) bounds individual statement work; this Timeout
+// back the tx (see [Memory.Begin]). Of the two deadlines,
+// `(w17.db.method).timeout_ms` bounds individual statement
+// work; this Timeout
 // bounds the long-running tx-as-an-entity across multiple
 // method calls.
 type BeginOptions struct {
@@ -283,7 +283,7 @@ func (m *Memory) Begin(ctx context.Context, opts BeginOptions) (string, error) {
 	m.txs[id] = txEntry{tx: tx, connName: opts.ConnectionName, cancel: cancel, iso: iso}
 	m.mu.Unlock()
 	if opts.Timeout > 0 {
-		// Tier 2 background-watcher (slice 6Q-F follow-up):
+		// Background watcher:
 		// when the tx ctx fires (deadline OR user-driven cancel
 		// via Commit/Rollback), drain the registry entry. Race-
 		// safe with user Commit/Rollback through the same mutex
@@ -410,7 +410,7 @@ func (m *Memory) Commit(ctx context.Context, txID string) error {
 		m.rollbackDrained(ctx, txID, entry)
 		return doomedError(txID, entry.doomCause)
 	}
-	// Release the WithTimeout goroutine (if Tier 2 timeout was
+	// Release the WithTimeout goroutine (if a tx timeout was
 	// set on Begin) before doing the actual Commit — Commit
 	// either succeeds (timer harmless) or fails (we want the
 	// timer cleaned up either way).
@@ -589,7 +589,7 @@ func (m *Memory) RollbackCaused(ctx context.Context, txID, cause string) error {
 //     finished → (nil, noop, ErrTxBusy)
 //   - tx_id known, conn match    → (tx, release, nil)
 //
-// The connection check is the M2-D correctness gate — a tx
+// The connection check is the correctness gate — a tx
 // opened on connection A cannot be reused by a method on
 // connection B (different `*sql.DB`, different backend
 // transaction). AdoptTx propagates the mismatch error to the

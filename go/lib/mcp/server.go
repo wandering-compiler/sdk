@@ -46,7 +46,7 @@ type Server struct {
 	toolPerms    map[string][]int32
 
 	// authEnv is a prefix-scoped snapshot of the process environment used
-	// as the stdio identity source (Q63-mcp-1): on stdio there are no HTTP
+	// as the stdio identity source: on stdio there are no HTTP
 	// headers, so the auth/permission resolvers source the connection's
 	// token from `<prefix>_<HEADER>` env vars instead. nil until
 	// SetAuthEnvPrefix is called (default: no env forwarding). Captured
@@ -85,7 +85,7 @@ func NewServer(name, version string, auth MCPAuthFunc) *Server {
 	return s
 }
 
-// SetAuthEnvPrefix enables stdio identity forwarding (Q63-mcp-1): it
+// SetAuthEnvPrefix enables stdio identity forwarding: it
 // snapshots the process environment, keeping only `<prefix>_<KEY>` vars
 // (prefix + the joining `_` stripped, so `MYAPP_AUTHORIZATION` becomes
 // `AUTHORIZATION`). Those land on the Env of every stdio ConnectionInfo, so
@@ -457,11 +457,11 @@ func (s *Server) CallUnary(
 ) (*mcp.CallToolResult, error) {
 	conn := s.connInfo(ctx)
 
-	// Authorization runs BEFORE decoding the arguments (Q47-mcp-1): an
+	// Authorization runs BEFORE decoding the arguments: an
 	// unauthorized caller is refused without the server spending CPU
 	// unmarshaling a (potentially large) payload it has no right to submit,
 	// and the generated handler defers the backend dial until after this
-	// returns (Q47-mcp-2) so a denied call never touches the upstream.
+	// returns so a denied call never touches the upstream.
 
 	// Permission gate — when gating is on and this tool requires a perm,
 	// the connection's token must cover it. The dynamic tools/list

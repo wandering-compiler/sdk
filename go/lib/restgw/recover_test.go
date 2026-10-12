@@ -14,7 +14,7 @@ import (
 
 // A panic in a downstream handler →
 // HTTP 500 + observx report + standard restgw envelope.
-// Panic value never leaks to the client (Phase C principle 2).
+// Panic value never leaks to the client.
 func TestRecoverPanicMiddleware_CatchesPanic(t *testing.T) {
 	// Capture log so the observx fallback (log.Printf) doesn't
 	// pollute test output.

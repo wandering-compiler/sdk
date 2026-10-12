@@ -180,7 +180,7 @@ func TestFromTargets_PostgresDSN_ConnectError(t *testing.T) {
 
 // TestFromTargets_WithParallelOption — WithParallel option is
 // threaded through; the resulting Applier accepts the
-// per-CLI parallel override (D-iter3-18). For dialects that
+// per-CLI parallel override. For dialects that
 // don't implement SetParallelOverride (e.g. PG), the option
 // is silently ignored — tests just confirm the factory
 // doesn't error when the option is supplied.
@@ -293,7 +293,7 @@ func TestSnapshotterFromTargets_UnknownDSNScheme(t *testing.T) {
 }
 
 // TestFromTargets_NATSAndRedisAndS3 — the remaining DSN
-// schemes the factory dispatches on (Phase E.C). Each one
+// schemes the factory dispatches on. Each one
 // successfully constructs an Applier (parsed DSN; lazy
 // connect happens at first call, not at New).
 func TestFromTargets_NATSAndRedisAndS3(t *testing.T) {

@@ -15,7 +15,7 @@ type Config struct {
 	DSN string
 
 	// Server is the value `nats.Connect` consumes. User-info is
-	// dropped at parse time (auth lands when Phase G ships).
+	// dropped at parse time (NATS auth is not supported yet).
 	Server string
 }
 
@@ -43,7 +43,7 @@ func Validate(cfg Config) error {
 // nats.go `Connect` accepts. Drops user info + path + query
 // (nats.Connect uses option funcs for credentials when
 // authenticated; w17ctl keeps this lean — secret-bearing
-// auth comes in Phase G alongside console-side auth).
+// auth is not supported yet).
 func DSNToServer(dsn string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {

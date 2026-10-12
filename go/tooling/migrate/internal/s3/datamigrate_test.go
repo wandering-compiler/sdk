@@ -6,7 +6,7 @@ import (
 )
 
 // TestDataCursor_HasAndAdd — pure-logic unit cover for the
-// op-completion bookkeeping struct used by Phase E v2.1
+// op-completion bookkeeping struct used by data-migration
 // resumability. add is idempotent (re-adding doesn't grow the
 // list); has reports membership.
 func TestDataCursor_HasAndAdd(t *testing.T) {

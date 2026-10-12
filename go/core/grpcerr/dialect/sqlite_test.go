@@ -135,7 +135,7 @@ func TestParseSQLite_NotSQLiteError(t *testing.T) {
 	}
 }
 
-// Q55-grpcerr-2 — a mixed column list (different table prefixes, or a
+// A mixed column list (different table prefixes, or a
 // bare column among prefixed ones) cannot be attributed to one table:
 // parseSQLiteColumnList must return an empty table, not retain the
 // first prefix.

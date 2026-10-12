@@ -1,6 +1,5 @@
 // Short-lived one-shot ticket store for browser auth on
-// streaming endpoints (G3i3-GW-F). Adapted from protobridge's
-// `runtime/events/ticket.go`.
+// streaming endpoints.
 //
 // Why this exists: browsers' `new WebSocket()` and `EventSource`
 // constructors CANNOT set custom headers — `Authorization:

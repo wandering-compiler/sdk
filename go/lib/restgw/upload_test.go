@@ -289,7 +289,7 @@ func uploadSameBytes(t *testing.T, cfg restgw.FilePartConfig, filename string) s
 	return h
 }
 
-// R-restgw-5 — MaxSizeBytes == 0 means UNLIMITED, not "reject
+// MaxSizeBytes == 0 means UNLIMITED, not "reject
 // everything". The old LimitReader+1 trick turned a 0 cap into a
 // 1-byte limit that bounced even a 1-byte upload; the fix skips
 // the cap entirely for 0. (The generated gateway never hits this
@@ -322,7 +322,7 @@ func TestProcessFilePart_MaxSizeZero_Unlimited(t *testing.T) {
 	}
 }
 
-// R-restgw-5 — on the success path the staging tmp file must be
+// On the success path the staging tmp file must be
 // removed even when the driver COPIES rather than renames (the
 // cross-filesystem / non-rename driver path). Otherwise every
 // upload leaks a file under TmpDir. copyLeaveDriver mimics a

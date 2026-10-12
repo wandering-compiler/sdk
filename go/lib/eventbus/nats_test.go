@@ -173,7 +173,7 @@ type countingObserver struct {
 func (c *countingObserver) OnDeliverFailure(string, string, error) { c.deliverFailures++ }
 func (c *countingObserver) OnDrop(string, string, string)          { c.drops++ }
 
-// B4-eventbus-2: an advisory that fires once Drain has set the draining flag
+// An advisory that fires once Drain has set the draining flag
 // must SHORT-CIRCUIT — it must not run routeToDLQ (which would touch the
 // JetStream context Close() is about to tear down). A non-draining advisory
 // still proceeds (here an empty payload trips routeToDLQ's unparsable guard,
@@ -206,7 +206,7 @@ func TestNatsSubscriber_AdvisoryRespectsDraining(t *testing.T) {
 // routeToDLQ's two broker-free guard arms: a syntactically valid advisory
 // that carries no usable stream_seq is a deliver failure (the err==nil
 // branch of errAdvisoryUnparsable), and an advisory for a sequence a
-// handler is still processing is deferred (D1 in-flight guard) — neither
+// handler is still processing is deferred — neither
 // touches the JetStream context.
 func TestNatsSubscriber_RouteToDLQ_BrokerFreeGuards(t *testing.T) {
 	t.Run("valid advisory missing stream_seq", func(t *testing.T) {

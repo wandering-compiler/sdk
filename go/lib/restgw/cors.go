@@ -104,7 +104,7 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	// just stops carrying credentials — and warn loudly so the operator
 	// narrows the allowlist to the concrete origins that actually need
 	// cookies. A credentialed setup requires an explicit origin list,
-	// never `*`. (R-restgw-2)
+	// never `*`.
 	allowCredentials := cfg.AllowCredentials
 	if allowCredentials && containsWildcardOrigin(cfg.AllowedOrigins) {
 		slog.Warn("restgw: CORS credentials disabled — a wildcard '*' origin allowlist cannot be combined with Access-Control-Allow-Credentials (forbidden open credentialed CORS); set an explicit origin list to keep credentials")
@@ -164,7 +164,7 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 
 // containsWildcardOrigin reports whether the allowlist contains the
 // bare `*` wildcard entry. Used to refuse the forbidden `*` +
-// credentials combination at middleware construction (R-restgw-2).
+// credentials combination at middleware construction.
 func containsWildcardOrigin(allowed []string) bool {
 	for _, a := range allowed {
 		if a == "*" {

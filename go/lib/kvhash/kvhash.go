@@ -1,5 +1,5 @@
 // Package kvhash provides marshal/unmarshal helpers between proto
-// messages and a Redis HASH (HSET / HGETALL value map). G3-KV-04
+// messages and a Redis HASH (HSET / HGETALL value map). The
 // HASH layout uses one Redis HASH per entity, with each scalar
 // proto field landing in its own hash field. The codegen body
 // emit calls into this package — there is no per-table generated
@@ -34,8 +34,8 @@
 //   - repeated fields
 //   - map fields
 //
-// All three are the iter-2 design call's "flat schemas only"
-// rule for HASH layout v1.
+// All three follow the "flat schemas only" rule for HASH
+// layout v1.
 package kvhash
 
 import (
@@ -85,7 +85,7 @@ func MarshalEntity(m proto.Message) ([]any, error) {
 		// proto3-optional scalars, which live in a synthetic oneof and likewise
 		// have presence — encoding an unset optional as its zero would conflate
 		// null with zero in the HASH layout, losing the set/unset distinction on
-		// round-trip (Q7-kvhash-1). Plain proto3 scalars have no presence and are
+		// round-trip. Plain proto3 scalars have no presence and are
 		// always encoded (defaults round-trip as their zero values).
 		if fd.HasPresence() && !rm.Has(fd) {
 			continue

@@ -143,7 +143,7 @@ func TestCallUnary_DecodesArgsAndMergesMetadata(t *testing.T) {
 	}
 }
 
-// Q47-mcp-1: the permission gate runs BEFORE the arguments are decoded —
+// The permission gate runs BEFORE the arguments are decoded —
 // a denied caller's (potentially large) payload must never be unmarshaled.
 // Observable: with a denying gate the target reqMsg stays empty.
 func TestCallUnary_Gate_DeniesBeforeDecode(t *testing.T) {
@@ -165,7 +165,7 @@ func TestCallUnary_Gate_DeniesBeforeDecode(t *testing.T) {
 		t.Fatal("expected permission denied")
 	}
 	if len(in.GetFields()) != 0 {
-		t.Errorf("Q47-mcp-1: arguments must NOT be decoded for a denied caller; got %v", in.GetFields())
+		t.Errorf("arguments must NOT be decoded for a denied caller; got %v", in.GetFields())
 	}
 }
 

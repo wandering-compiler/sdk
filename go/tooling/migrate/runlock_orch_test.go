@@ -12,7 +12,7 @@ import (
 
 // lockFake is a covFake that also implements RunLockCapable, so the
 // orchestrator's acquire-before-apply / release-after-run wiring
-// (Q48-datamigrate-1) can be asserted at the run level.
+// can be asserted at the run level.
 type lockFake struct {
 	covFake
 	acquireErr      error

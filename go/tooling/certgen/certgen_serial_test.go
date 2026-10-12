@@ -14,7 +14,7 @@ func (zeroReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Q44-certgen-1: rand.Int returns a value in [0, 2^128), so a serial of
+// rand.Int returns a value in [0, 2^128), so a serial of
 // 0 is possible — RFC 5280 §4.1.2.2 requires a POSITIVE integer, and a
 // zero serial can be rejected by strict validators. randSerialFrom must
 // never return a non-positive serial. Driven with an all-zero source the

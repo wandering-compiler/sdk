@@ -48,11 +48,11 @@ type Applier struct {
 	// `--parallel <N>` from the CLI. 0 = no override; YAML
 	// data migrations fall back to the migration's project-
 	// side `parallel:` field, then to datamigrate.DefaultParallel.
-	// Only meaningful for YAML data migrations (Phase E v2.1);
+	// Only meaningful for YAML data migrations;
 	// command-style bodies ignore it.
 	parallelOverride int
 
-	// Run-lock tunables (Q48-datamigrate-1). 0 = use the runlock
+	// Run-lock tunables. 0 = use the runlock
 	// package defaults; tests set them small to exercise the
 	// heartbeat / TTL paths without real-time waits.
 	lockTTL  time.Duration
@@ -87,7 +87,7 @@ func New(_ context.Context, dsn string) (*Applier, error) {
 // AppliedHead returns the newest applied-migration timestamp by
 // reading `HKEYS w17:migrations` and picking the max-by-lex
 // member. The bookkeeping hash is populated by
-// `applied.Redis()` (Phase C.2): every successful migration
+// `applied.Redis()`: every successful migration
 // HSETs `w17:migrations <ts> <hex(sha256)>`. Empty / missing
 // hash → empty string (= "no migrations applied yet"), which
 // the orchestrator interprets as "run every pending
@@ -115,7 +115,7 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 // has no transactional vs non-transactional distinction; the
 // migrator emits both fields uniformly).
 //
-// Phase E (D-iter3-15): bodies whose up_sql is a YAML data
+// Bodies whose up_sql is a YAML data
 // migration dispatch through applyYAMLDataMigration instead —
 // per-key SCAN+GET+modify+SET loop driven by the parsed
 // Operations[]. Detection via lib/datamigrate.LooksLikeYAML.
@@ -140,7 +140,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // down_sql; the user's down body (e.g. SCAN+UNLINK) lives
 // alongside.
 //
-// Phase E: YAML data migration bodies (forward up_sql is YAML)
+// YAML data migration bodies (forward up_sql is YAML)
 // dispatch through rollbackYAMLDataMigration. The down body is
 // either an auto-derived YAML inverse (RENAME swap, ADD
 // reverses to REMOVE) or a `# w17:irreversible:` comment block
@@ -181,7 +181,7 @@ func (a *Applier) Close() error {
 // override (fall through to the YAML migration's `parallel:`
 // field, then datamigrate.DefaultParallel).
 //
-// Only consulted by YAML data migrations (Phase E v2.1); the
+// Only consulted by YAML data migrations; the
 // command-style migration path runs sequentially regardless.
 func (a *Applier) SetParallelOverride(n int) {
 	a.parallelOverride = n

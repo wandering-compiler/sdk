@@ -13,7 +13,7 @@ import (
 // and returns a release closure. It serialises concurrent EnsureCerts
 // runs — two `w17ctl init` / `w17ctl certs` invocations pointed at the
 // same cert directory — so their check-then-write mint sequences cannot
-// interleave into a mismatched cert/key pair (Q56-tls-1).
+// interleave into a mismatched cert/key pair.
 //
 // The lock is an flock(2) on a `.certgen.lock` sentinel inside dir.
 // flock is held by the open file description and the kernel drops it

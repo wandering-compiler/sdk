@@ -102,7 +102,7 @@ func TestCORSMiddleware_Wildcard_NoCredentials(t *testing.T) {
 	}
 }
 
-// R-restgw-2 — wildcard + credentials is FORBIDDEN open
+// Wildcard + credentials is FORBIDDEN open
 // credentialed CORS (reflecting an arbitrary Origin with
 // Access-Control-Allow-Credentials: true lets any site make
 // credentialed cross-origin calls). The middleware must refuse
@@ -130,7 +130,7 @@ func TestCORSMiddleware_Wildcard_WithCredentials_DropsCredentials(t *testing.T) 
 	}
 }
 
-// R-restgw-2 — credentials with a CONCRETE origin allowlist is the
+// Credentials with a CONCRETE origin allowlist is the
 // legitimate, safe case and must keep working: the matched origin
 // is echoed and Access-Control-Allow-Credentials: true ships.
 func TestCORSMiddleware_ConcreteOrigin_WithCredentials_Kept(t *testing.T) {

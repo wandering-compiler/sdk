@@ -87,7 +87,7 @@ func TestWrap_RegistryHit_FK_EmitsFEFriendlyCode(t *testing.T) {
 	if d.GetField() != "parent_id" {
 		t.Errorf("Field = %q", d.GetField())
 	}
-	// T-grpcerr-1: a successfully-mapped constraint violation is a
+	// A successfully-mapped constraint violation is a
 	// routine, user-correctable failure — it must NOT be reported as
 	// an exception (the pre-fix code unconditionally CaptureException'd
 	// here, turning every dup/FK/CHECK into Sentry noise). The raw
@@ -250,7 +250,7 @@ func TestWrap_PgConstraint_RegistryMiss_FailedPrecondition(t *testing.T) {
 	}
 }
 
-// T-grpcerr-1: the registry-miss path is a genuine codegen gap (a
+// The registry-miss path is a genuine codegen gap (a
 // DB constraint exists that wasn't registered from the schema IR).
 // Unlike a mapped violation it MUST be reported as a real
 // exception so operators see the gap — assert the report fires
@@ -336,7 +336,7 @@ func TestWrap_SQLite_FK_MultiTableNoAttribution(t *testing.T) {
 }
 
 func TestWrap_SQLite_FK_SingleFKTableWithMultiFKElsewhere_NoAttribution(t *testing.T) {
-	// Q55-grpcerr-1 — one single-FK table sits in SoleFKByTable while a
+	// One single-FK table sits in SoleFKByTable while a
 	// multi-FK table (absent from the map → MultiFKPresent=true) also
 	// exists. A bare SQLite FK error (no table) must NOT be attributed to
 	// the lone entry: it could just as well be the multi-FK table's

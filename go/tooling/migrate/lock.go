@@ -29,7 +29,7 @@ var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run"
 // migrations include TRANSFORM_FIELD — a user Starlark script that
 // may be non-idempotent (`price = price * 1.1`) — and two apply runs
 // racing the same store would each run it, double-applying and
-// silently corrupting data (Q48-datamigrate-1). The op-granularity
+// silently corrupting data. The op-granularity
 // resume cursor only guards a single process resuming after a crash;
 // it is a read-check-write with no cross-process atomicity.
 //

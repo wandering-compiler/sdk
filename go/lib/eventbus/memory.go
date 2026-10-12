@@ -69,9 +69,6 @@ type MemoryBusOptions struct {
 // fires, but registering at runtime is supported (Dispatch
 // snapshots the handler slice under lock, so a concurrent
 // Subscribe doesn't race the iteration).
-//
-// Phase 10 ships MemoryBus only; NATS / Redis Streams adapters
-// (Phases 11 / 12) are parked.
 type MemoryBus struct {
 	mu       sync.Mutex
 	handlers map[string][]registeredHandler
@@ -312,8 +309,7 @@ func (m *MemoryBus) semaphoreFor(channel string) chan struct{} {
 }
 
 // recordDrop increments the per-channel drop counter under
-// the bus mutex. Phase E7 wires this into the observability
-// surface; E6 ships the counter only.
+// the bus mutex.
 func (m *MemoryBus) recordDrop(channel string) {
 	m.mu.Lock()
 	m.drops[channel]++

@@ -60,7 +60,7 @@ func TestResponseFormat(t *testing.T) {
 		{"application/protobuf, application/json", restgw.WireProto},
 		{"text/html, application/protobuf;q=0.9", restgw.WireProto},
 
-		// R-restgw-4 — q-weights are honoured, not just list order.
+		// Q-weights are honoured, not just list order.
 		// A higher-weighted type wins even when listed second.
 		{"application/protobuf;q=0.5, application/json;q=0.9", restgw.WireJSON},
 		{"application/json;q=0.2, application/protobuf;q=0.8", restgw.WireProto},
@@ -113,7 +113,7 @@ func TestWriteResponse_Protobuf(t *testing.T) {
 
 // DecodeRequest under a protobuf Content-Type reads a binary body
 // via proto.Unmarshal.
-// restgw-sec-2 regression: an over-limit body is rejected, not read into
+// An over-limit body is rejected, not read into
 // memory unbounded.
 func TestDecodeRequest_BodyTooLarge(t *testing.T) {
 	orig := restgw.MaxRequestBodyBytes

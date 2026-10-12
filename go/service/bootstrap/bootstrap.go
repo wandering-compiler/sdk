@@ -185,7 +185,7 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 		wg.Wait()
 		close(errCh)
 
-		// Phase 2 — resource teardown. Every component has fully returned,
+		// Second step: resource teardown. Every component has fully returned,
 		// so all transports have drained their in-flight work; only now is
 		// it safe to close the shared resources they depended on. The
 		// process ctx is already cancelled, so use a fresh bounded context.

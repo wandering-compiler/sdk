@@ -30,7 +30,7 @@
 //
 // DSN form: `nats://[user:pass@]host:port`. Parsed via
 // `nats.ParseURL`. Userinfo currently dropped at connect time
-// (auth lands in Phase G alongside console-side auth).
+// (NATS auth is not supported yet).
 //
 // **Lazy connect.** `New` validates the DSN + builds the
 // Applier without opening a TCP connection — `--dry-run`
@@ -55,7 +55,7 @@ import (
 )
 
 // trackerBucket is the well-known JetStream KV bucket name used
-// for applied-state bookkeeping (Phase C.3 + applied.NATS()).
+// for applied-state bookkeeping (see applied.NATS()).
 // AppliedHead reads its keys; the applied.NATS() Renderer's
 // CreateTracker / RecordVersion / RemoveVersion all reference
 // it by this exact name.

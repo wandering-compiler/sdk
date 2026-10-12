@@ -303,7 +303,7 @@ func (x *PageCursor) GetSortBy() uint32 {
 // The set tracks what the SQL emitter can produce from a
 // proto-typed column read out of the response message.
 //
-// Iter-2 lifts may extend this oneof; the schema_version
+// Later versions may extend this oneof; the schema_version
 // gate on PageCursor invalidates outstanding cursors on
 // any breaking shape change here.
 type KeysetValue struct {
@@ -429,7 +429,7 @@ type isKeysetValue_Value interface {
 type KeysetValue_IntV struct {
 	// int64 covers proto int32 / int64 / uint32. A proto
 	// uint64 sort key uses the dedicated `uint_v` arm below
-	// (added REV — OF-3) so values above int64 max are not
+	// so values above int64 max are not
 	// wrapped negative in the keyset SQL comparison.
 	IntV int64 `protobuf:"varint,1,opt,name=int_v,json=intV,proto3,oneof"`
 }

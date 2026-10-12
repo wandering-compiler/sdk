@@ -12,7 +12,7 @@ import (
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
-// G3i3-Misc-A — per-field REST alias support.
+// Per-field REST alias support.
 //
 // `(w17.field).rest_alias` renames a proto field on the REST
 // surface only. The proto / gRPC wire keeps the original
@@ -230,7 +230,7 @@ func restoreForRequest(node any, desc protoreflect.MessageDescriptor) (any, erro
 			reverse[alias] = string(fd.Name())
 		}
 	}
-	// Q66-restgw-1: reject a request that supplies BOTH a field's rest_alias
+	// Reject a request that supplies BOTH a field's rest_alias
 	// AND its canonical proto / json name. Both rewrite to the same output
 	// key, so merging them depends on map-iteration order (randomized) — the
 	// surviving value would be nondeterministic. Ambiguous input is a client

@@ -165,7 +165,7 @@ func TestHTTPStatusFromGRPCCode(t *testing.T) {
 		{codes.Unimplemented, http.StatusNotImplemented},
 		{codes.Internal, http.StatusInternalServerError},
 		{codes.Unavailable, http.StatusServiceUnavailable},
-		// G3-T-01: round out the remaining canonical codes that
+		// Round out the remaining canonical codes that
 		// were uncovered. Each of these maps to a non-trivial HTTP
 		// status that consumers check explicitly (504 retry hint,
 		// 499 close-on-cancel, 409-on-Aborted optimistic-lock
@@ -188,7 +188,7 @@ func TestHTTPStatusFromGRPCCode(t *testing.T) {
 	}
 }
 
-// G3-GW-06: WriteResponseFiltered clears named fields before
+// WriteResponseFiltered clears named fields before
 // marshal — internal-only fields stay populated on the source
 // proto (so other gRPC clients still see them) but never
 // reach the REST JSON output. FieldMask uses the well-known
@@ -216,7 +216,7 @@ func TestWriteResponseFiltered_ClearsNamedFields(t *testing.T) {
 	}
 }
 
-// G3-GW-06: empty omit list degenerates to plain WriteResponse —
+// Empty omit list degenerates to plain WriteResponse —
 // the field stays populated in the body. FieldMask renders the
 // paths as a comma-joined string under the WKT form.
 func TestWriteResponseFiltered_EmptyOmitList_PassThrough(t *testing.T) {
@@ -231,7 +231,7 @@ func TestWriteResponseFiltered_EmptyOmitList_PassThrough(t *testing.T) {
 	}
 }
 
-// G3-GW-06: unknown field name is silently ignored — runtime
+// Unknown field name is silently ignored — runtime
 // match-by-name returns nil descriptor which the helper
 // skips. Author typos surface at codegen time (parser
 // validate); the runtime stays defensive.
@@ -247,7 +247,7 @@ func TestWriteResponseFiltered_UnknownField_NoOp(t *testing.T) {
 	}
 }
 
-// G3-T-01: WriteGRPCError(nil) — the defensive branch that
+// WriteGRPCError(nil) — the defensive branch that
 // catches a caller passing a nil error. Surfaces as 500
 // `INTERNAL` so the consumer sees "something went wrong" instead of an
 // empty-200 success — with the code's catalog sentence, not the

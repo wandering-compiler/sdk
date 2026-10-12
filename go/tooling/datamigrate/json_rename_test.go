@@ -8,7 +8,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 )
 
-// R-datamigrate-1: RENAME_FIELD must not silently clobber a
+// RENAME_FIELD must not silently clobber a
 // pre-existing destination field. When both From and To are present
 // with DIFFERENT values, the rename would lose the destination value
 // — abort instead.

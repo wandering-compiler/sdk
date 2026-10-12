@@ -52,7 +52,7 @@ message MysqlField {
   //
   // Field number 10 matches PgField.custom_type for symmetry — the
   // 1-4 range stays reserved for future curated cross-dialect-ish
-  // flags following PG's D13 graduation pattern.
+  // flags following PG's graduation pattern.
   string custom_type = 10;
 
   reserved 1, 2, 3, 4;

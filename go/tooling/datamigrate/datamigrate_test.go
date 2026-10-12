@@ -46,7 +46,7 @@ func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
 }
 
 // TestUnmarshal_AcceptsProtobufEncoding — encoding=protobuf
-// is supported as of v2.2 (D-iter3-19); body must carry both
+// is supported as of v2.2; body must carry both
 // proto_descriptor + proto_message.
 func TestUnmarshal_AcceptsProtobufEncoding(t *testing.T) {
 	body := []byte(`version: 1
@@ -115,7 +115,7 @@ operations:
 }
 
 // TestUnmarshal_AcceptsTransformField — TRANSFORM_FIELD op
-// kind graduated to v2.3 (D-iter3-20). Body with a Starlark
+// kind graduated to v2.3. Body with a Starlark
 // script + matching script_lang must round-trip.
 func TestUnmarshal_AcceptsTransformField(t *testing.T) {
 	body := []byte(`version: 1

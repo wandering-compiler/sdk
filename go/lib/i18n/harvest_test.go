@@ -87,7 +87,7 @@ func TestMergePO_PreservesTranslatorEdits(t *testing.T) {
 }
 
 // TestMergePO_DropsObsoleteMsgids — msgids in prior but not in
-// the new set drop silently (iter-1 — no `#~ msgid` markup).
+// the new set drop silently (no `#~ msgid` markup).
 func TestMergePO_DropsObsoleteMsgids(t *testing.T) {
 	prior, _ := i18n.MarshalPO("cs", []i18n.POEntry{
 		{Msgid: "Active", Msgstr: "Aktivní"},

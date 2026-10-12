@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// R-grpcerr-1: a DB call aborted by ctx cancellation / deadline must
+// A DB call aborted by ctx cancellation / deadline must
 // map to the canonical gRPC code (Canceled / DeadlineExceeded) and
 // must NOT be reported to observx as an internal error (that path
 // generated Sentry noise on every client disconnect / slow query).

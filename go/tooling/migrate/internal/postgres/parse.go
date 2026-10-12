@@ -7,7 +7,7 @@ import (
 
 // Config is the parsed + validated postgres DSN. pgx accepts the
 // DSN directly so Config is a thin wrapper, but the per-dialect
-// type lives here per the D-iter3-10 contract (ParseDSN +
+// type lives here per the shared contract (ParseDSN +
 // Validate uniform across every apply/<dialect>/).
 type Config struct {
 	// DSN is the URL-form (`postgres://…`) or keyword-form (`host=

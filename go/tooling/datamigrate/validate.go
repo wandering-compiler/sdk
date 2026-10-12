@@ -32,7 +32,7 @@ func Validate(m *Migration) error {
 			return fmt.Errorf("encoding=json must not carry proto_descriptor / proto_message")
 		}
 	case EncodingProtobuf:
-		// v2.2 (D-iter3-19) graduated protobuf encoding from
+		// v2.2 graduated protobuf encoding from
 		// the deferred list. Both proto_descriptor (base64
 		// FileDescriptorSet) + proto_message (FQN) are
 		// required so the apply-side codec resolves to a
@@ -100,7 +100,7 @@ func validateOp(op Operation) error {
 			return fmt.Errorf("RENAME_FIELD: use from/to, not field/value")
 		}
 	case OpTransformField:
-		// Graduated to v2.3 (D-iter3-20). script + script_lang
+		// Graduated to v2.3. script + script_lang
 		// are required; field / from / to / value don't apply
 		// (the script is the whole transform).
 		if op.Script == "" {

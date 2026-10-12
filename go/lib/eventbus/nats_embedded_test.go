@@ -402,7 +402,7 @@ func TestNatsBus_CloseIdempotent_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (R-bus-3): a message that exhausts MaxDeliver is forwarded
+// INVARIANT: a message that exhausts MaxDeliver is forwarded
 // to the channel's dead-letter stream (`<channel>_dlq`, subject
 // `_dlq.<channel>.<topic>`) — payload + topic preserved — and only
 // THEN reported via Observer.OnDrop. Parity with the Redis adapter's
@@ -475,7 +475,7 @@ func TestNatsBus_DLQRouting_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (R-bus-2): draining concurrently with active delivery is
+// INVARIANT: draining concurrently with active delivery is
 // race-clean. The consume callback gates its per-message wg.Add on the
 // draining flag (under the subscriber mutex Drain also takes), so the
 // Add can never race Drain's wg.Wait across the zero counter — the
@@ -523,7 +523,7 @@ func TestNatsBus_DrainDuringDelivery_NoWaitGroupRace_Embedded(t *testing.T) {
 	pub.Wait()
 }
 
-// TestNatsBus_DrainOneSubscriberWhileSiblingDelivers_Embedded — Q36-bus-1.
+// TestNatsBus_DrainOneSubscriberWhileSiblingDelivers_Embedded.
 // Draining ONE subscriber while a SIBLING keeps delivering on the same bus
 // must not panic with "WaitGroup reused before Wait returned". Pre-fix both
 // subscribers Add to a bus-shared WaitGroup, so subA.Drain's Wait races
@@ -572,7 +572,7 @@ func TestNatsBus_DrainOneSubscriberWhileSiblingDelivers_Embedded(t *testing.T) {
 	pub.Wait()
 }
 
-// INVARIANT (R-bus-4): Dispatch detaches from the caller's ctx, so an
+// INVARIANT: Dispatch detaches from the caller's ctx, so an
 // emit issued on an already-cancelled RPC ctx is still published +
 // delivered (ensureStream + Publish both run on the detached ctx).
 func TestNatsBus_DispatchDetachesCanceledCtx_Embedded(t *testing.T) {
@@ -686,7 +686,7 @@ func TestNatsBus_MaxDeliverAdvisory_SingleReplicaRoutes_Embedded(t *testing.T) {
 	}
 }
 
-// TestNatsBus_SlowSuccessNotDropped_D1_Embedded — D1. A handler whose LAST
+// TestNatsBus_SlowSuccessNotDropped_Embedded. A handler whose LAST
 // (MaxDeliver-th) delivery overruns AckWait but ultimately SUCCEEDS must
 // not be DLQ-dropped. The server times the slow delivery out at AckWait and
 // fires the MAX_DELIVERIES advisory while the handler is still running;
@@ -694,7 +694,7 @@ func TestNatsBus_MaxDeliverAdvisory_SingleReplicaRoutes_Embedded(t *testing.T) {
 // fires OnDrop, so the one message is reported BOTH dropped and delivered.
 // With the guard the advisory defers to the consume path → exactly one
 // OnDeliverSuccess, zero OnDrop.
-func TestNatsBus_SlowSuccessNotDropped_D1_Embedded(t *testing.T) {
+func TestNatsBus_SlowSuccessNotDropped_Embedded(t *testing.T) {
 	obs := &recordingObserver{}
 	bus, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{
 		DSN:               startEmbeddedNATS(t),
@@ -731,16 +731,16 @@ func TestNatsBus_SlowSuccessNotDropped_D1_Embedded(t *testing.T) {
 	// Give a (wrong) advisory-driven drop time to land after the success.
 	time.Sleep(1 * time.Second)
 	if _, _, ds, _, drop := obs.snapshots(); drop != 0 {
-		t.Errorf("a message that succeeded (slowly) must not be DLQ-dropped; got drop=%d, deliverSuccess=%d (D1 incoherent drop+success)", drop, ds)
+		t.Errorf("a message that succeeded (slowly) must not be DLQ-dropped; got drop=%d, deliverSuccess=%d", drop, ds)
 	}
 }
 
-// TestNatsBus_SlowFailureAtCapStillDLQs_D1_Embedded — D1 companion. A
+// TestNatsBus_SlowFailureAtCapStillDLQs_Embedded is the companion. A
 // handler whose only delivery overruns AckWait then FAILS at the cap must
 // still reach the DLQ. The advisory fires mid-handler and is skipped
 // (in-flight), so the consume path must DLQ the poison message itself — a
 // naive skip with no consume-path DLQ would silently lose it.
-func TestNatsBus_SlowFailureAtCapStillDLQs_D1_Embedded(t *testing.T) {
+func TestNatsBus_SlowFailureAtCapStillDLQs_Embedded(t *testing.T) {
 	obs := &recordingObserver{}
 	bus, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{
 		DSN:               startEmbeddedNATS(t),
@@ -870,7 +870,7 @@ func TestNatsBus_AdvisoryWhileBuffered_NoDropPlusSuccess_Embedded(t *testing.T) 
 		t.Error("victim reached no terminal outcome at all")
 	}
 	if _, bd := topicOutcomes(obs, "blocker"); bd != 0 {
-		t.Errorf("blocker (handler mid-run past AckWait) was dropped %d times; want 0 (D1)", bd)
+		t.Errorf("blocker (handler mid-run past AckWait) was dropped %d times; want 0", bd)
 	}
 }
 

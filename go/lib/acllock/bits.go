@@ -49,7 +49,7 @@ func HasAnyPermission(ids []int32, wanted ...int32) bool {
 // miss. Empty `wanted` returns true (a check against the empty
 // set is vacuously satisfied).
 //
-// ⚠ SECURITY (acl-sec-3): the empty-`wanted` → true semantic is a
+// ⚠ SECURITY: the empty-`wanted` → true semantic is a
 // footgun for authorization gates that build `wanted` from runtime
 // data (a config/route map): a path that yields an EMPTY list grants
 // access to a principal with no matching permission. For an

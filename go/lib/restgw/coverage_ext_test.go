@@ -377,7 +377,7 @@ func TestTicketIssuer_StoreFailure500(t *testing.T) {
 
 // ---- upload.go --------------------------------------------------
 
-// TestWriteUploadError_MasksInternalError — Q36-restgw-1. A non-sentinel
+// TestWriteUploadError_MasksInternalError. A non-sentinel
 // (internal) error wraps driver / tmp-file failures that carry server
 // topology (S3 endpoint / creds, absolute FS paths); the response body
 // must NOT reflect it — only a generic message, like WriteGRPCError.

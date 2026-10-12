@@ -1,5 +1,4 @@
-// Package datamigrate — protobuf encoding (Phase E v2.2 —
-// D-iter3-19).
+// Package datamigrate — protobuf encoding.
 //
 // **Why dynamicpb.** Apply-tool runs deploy-time against KV
 // stores that hold proto-encoded values. The compiler can't
@@ -21,7 +20,7 @@
 // **What's NOT here (yet).** Producer-side emission of
 // `encoding: protobuf` migrations. The compiler today doesn't
 // have a way to declare "table X is stored as proto message Y
-// in KV"; that's iter-2 storage-layer territory. v2.2 ships
+// in KV"; that belongs to the storage layer. v2.2 ships
 // the consumer so manually-authored YAML data migrations or
 // future emit/* changes Just Work.
 package datamigrate

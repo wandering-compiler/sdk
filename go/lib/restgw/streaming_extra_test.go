@@ -20,7 +20,7 @@ import (
 )
 
 // WriteSSEGRPCErrorCtx carries the envelope's details[] — the SSE leg of the
-// B25-restgw-1 parity the unary and WS writers already had. On a stream this
+// parity the unary and WS writers already had. On a stream this
 // frame is the ONLY place a backend refusal can go (the 200 is already sent),
 // and it was dropping the stable code a client dispatches on: a consumer's
 // overload refusal arrived as bare RESOURCE_EXHAUSTED with PARSE_OVERLOADED
@@ -66,7 +66,7 @@ func TestWriteSSEGRPCErrorCtx_ForwardsDetails(t *testing.T) {
 }
 
 // WSWriteGRPCError forwards a backend status's *w17.ErrorDetail field
-// violations into the WS error envelope (B25-restgw-1 parity with the
+// violations into the WS error envelope (parity with the
 // unary path) — the details-bearing branch, distinct from the bare
 // status path already covered.
 func TestWSWriteGRPCError_ForwardsFieldViolations(t *testing.T) {

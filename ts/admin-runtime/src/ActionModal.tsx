@@ -4,15 +4,15 @@
 // the list; click opens a Mantine modal collecting the action's
 // declared extras + posts to the action endpoint.
 //
-// Walking-skeleton iter-2 scope:
+// Current scope:
 //   - LIST-target actions only (DETAIL-target parked next lift)
 //   - Explicit selection only: the action posts the picked rows'
 //     ids. There is no "all filtered rows" mode — nothing
 //     implements it (an empty ids[] reaches the storage method as
 //     `id = ANY('{}')`, matching no row), so the modal refuses to
 //     submit an empty selection and the button stays disabled.
-//   - Every extra field renders as a plain TextInput; iter-3
-//     introspects the proto descriptor for typed inputs.
+//   - Every extra field renders as a plain TextInput; typed
+//     inputs from the proto descriptor are not wired yet.
 //   - An action that declares a `result` shows the named response
 //     fields after it succeeds, in this same modal, until the operator
 //     closes it. A SECRET result is shown once: the values live only in
@@ -34,7 +34,7 @@ export interface ActionModalProps {
   onClose: () => void;
   onSuccess: () => void;
   // Selected row IDs. Empty array = "apply to all filtered rows".
-  // Walking-skeleton iter-2 always sends [] (selection UI parked).
+  // Currently always [] (no selection UI yet).
   selectedIds: string[];
 }
 

@@ -30,9 +30,8 @@ func buildTransformVMs(mig *datamigrate.Migration) (map[int]*datamigrate.Transfo
 }
 
 // dataCursorPrefix is the well-known object-prefix for the
-// per-migration op-completion side-channel (Phase E v2.1
-// resumability — D-iter3-15 §Resumability + D-iter3-17 follow-
-// up). One JSON object per migration id holding the list of
+// per-migration op-completion side-channel. One JSON object
+// per migration id holding the list of
 // completed op-indexes; consulted on each op start (skip if
 // already completed) and DELETE'd after the bookkeeping write
 // succeeds — a successful end-to-end run leaves no cursor
@@ -40,7 +39,7 @@ func buildTransformVMs(mig *datamigrate.Migration) (map[int]*datamigrate.Transfo
 const dataCursorPrefix = "w17-data-migrations/"
 
 // applyYAMLDataMigration handles migration bodies whose
-// `up_sql` is a YAML data migration (Phase E — D-iter3-15).
+// `up_sql` is a YAML data migration.
 // Mirrors apply/redis's path; the only difference is the I/O
 // (ListObjectsV2 + GetObject + PutObject instead of SCAN +
 // GET + SET).

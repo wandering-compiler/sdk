@@ -101,7 +101,7 @@ const (
 //   - Gateway-domain code (REST/MCP proxy + event emit) when
 //     that domain's generator lands.
 //
-// Not supported in M1:
+// Not supported:
 //   - Multi-op gRPC methods (one Query + one Mutation per
 //     method). The underlying generator returns
 //     FailedPrecondition for those.
@@ -908,7 +908,7 @@ func (c *codegenServiceClient) AdmissionStatus(ctx context.Context, in *Admissio
 //   - Gateway-domain code (REST/MCP proxy + event emit) when
 //     that domain's generator lands.
 //
-// Not supported in M1:
+// Not supported:
 //   - Multi-op gRPC methods (one Query + one Mutation per
 //     method). The underlying generator returns
 //     FailedPrecondition for those.

@@ -22,7 +22,7 @@ func forgedIncoming() context.Context {
 	))
 }
 
-// TestWithGatewayMD_SanitizesBothSides is the C8-F2 regression guard.
+// TestWithGatewayMD_SanitizesBothSides is a regression guard.
 //
 // The gateway's namespace strip protected the copy it forwards to the
 // backend and left ctx's INCOMING metadata untouched — still holding the

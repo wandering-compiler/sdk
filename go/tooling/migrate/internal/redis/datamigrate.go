@@ -18,9 +18,8 @@ import (
 )
 
 // dataMigrationCursorPrefix is the Redis key prefix for the
-// per-migration op-completion side-channel (Phase E v2.1
-// resumability — D-iter3-15 §Resumability + D-iter3-17 follow-
-// up). One Hash per migration id; fields are op-index strings
+// per-migration op-completion side-channel. One Hash per
+// migration id; fields are op-index strings
 // ("0", "1", …); values are "complete".
 //
 // Cursor is consulted on each op start (HEXISTS skips the op if
@@ -37,7 +36,7 @@ const dataMigrationCursorPrefix = "w17:data-migrations:"
 const dataRollbackCursorPrefix = "w17:data-rollbacks:"
 
 // applyYAMLDataMigration handles migration bodies whose `up_sql`
-// is a YAML data migration (Phase E — D-iter3-15) instead of a
+// is a YAML data migration instead of a
 // redis-cli-style command script. Flow:
 //
 //  1. Parse YAML via lib/datamigrate.Unmarshal (rejects

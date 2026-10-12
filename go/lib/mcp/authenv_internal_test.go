@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Q63-mcp-1: SetAuthEnvPrefix snapshots only `<prefix>_*` env vars (prefix
+// SetAuthEnvPrefix snapshots only `<prefix>_*` env vars (prefix
 // stripped, SCREAMING_SNAKE-keyed) onto every ConnectionInfo the server
 // builds — so stdio auth sources the token from env while the unscoped
 // environment is never forwarded. Asserted through connInfo +

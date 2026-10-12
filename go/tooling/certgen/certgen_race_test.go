@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Q56-tls-1: concurrent EnsureCerts on one directory must not interleave
+// Concurrent EnsureCerts on one directory must not interleave
 // two independent mint sequences into a mismatched cert/key pair.
 //
 // Before the directory lock, two `w17ctl init` / `w17ctl certs` processes
@@ -52,7 +52,7 @@ func TestEnsureCerts_ConcurrentMint_ConsistentPair(t *testing.T) {
 // verifyOnDiskPair re-loads the persisted CA + leaf and asserts they form
 // a coherent chain: each cert's public key matches its own private key,
 // and the leaf is genuinely signed by the on-disk CA. A mismatched pair
-// (the Q56-tls-1 race) trips exactly one of these.
+// (the concurrent-ensure race) trips exactly one of these.
 func verifyOnDiskPair(dir string) error {
 	caCert, caKey, err := loadCert(filepath.Join(dir, caFile), filepath.Join(dir, caKeyFile))
 	if err != nil {

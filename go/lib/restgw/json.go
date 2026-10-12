@@ -119,7 +119,7 @@ var (
 )
 
 // MaxRequestBodyBytes caps the request body DecodeRequest will read,
-// bounding the memory a single request can consume (restgw-sec-2).
+// bounding the memory a single request can consume.
 // 10 MiB is generous for JSON/proto request payloads; the generated
 // main may override it from an env knob at startup.
 var MaxRequestBodyBytes int64 = 10 << 20
@@ -160,8 +160,8 @@ func DecodeRequestRewrite(r *http.Request, msg proto.Message, rewriteJSON func([
 	buf := readBufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer readBufPool.Put(buf)
-	// Bound the read so an unbounded body can't exhaust memory
-	// (restgw-sec-2). Read one extra byte to detect overflow.
+	// Bound the read so an unbounded body can't exhaust memory.
+	// Read one extra byte to detect overflow.
 	n, err := buf.ReadFrom(io.LimitReader(r.Body, MaxRequestBodyBytes+1))
 	if err != nil {
 		return fmt.Errorf("reading request body: %w", err)
@@ -193,7 +193,7 @@ func DecodeRequestRewrite(r *http.Request, msg proto.Message, rewriteJSON func([
 // decoding semantics with the REST gateway.
 //
 // When the message's descriptor tree carries any
-// `(w17.field).rest_alias` annotation (G3i3-Misc-A), the
+// `(w17.field).rest_alias` annotation, the
 // helper accepts BOTH the alias and the proto name on the
 // wire — alias keys get rewritten back to proto names before
 // the protojson decode. Messages without aliases bypass the
@@ -217,8 +217,8 @@ func UnmarshalProto(data []byte, msg proto.Message) error {
 		if hasAnyAlias(desc) {
 			restored, err := restoreAliasesOnRequestJSON(payload, desc)
 			if err != nil {
-				// B27-restgw-1: the helper returns an error ONLY for the
-				// alias+canonical collision (Q66-restgw-1) — malformed JSON
+				// The helper returns an error ONLY for the
+				// alias+canonical collision — malformed JSON
 				// returns a nil error so protojson surfaces the parse error
 				// below. So a non-nil error here is the ambiguous-request case
 				// and MUST be surfaced; swallowing it let protojson silently
@@ -241,7 +241,7 @@ func UnmarshalProto(data []byte, msg proto.Message) error {
 // regardless of transport.
 //
 // When the message's descriptor tree carries any
-// `(w17.field).rest_alias` annotation (G3i3-Misc-A), the
+// `(w17.field).rest_alias` annotation, the
 // helper post-processes the output to rename the aliased
 // keys. Cached predicate (`hasAnyAlias`) means messages
 // without aliases bypass the rewrite entirely; the byte-
@@ -470,7 +470,7 @@ func WriteResponseFiltered(w http.ResponseWriter, status int, msg proto.Message,
 
 // FieldError carries one per-field validation failure inside
 // the error envelope's `details` list. Generated REST handlers
-// accumulate these during the validation prelude (G3-V emit)
+// accumulate these during the validation prelude
 // and ship the full set in a single 400 response so callers
 // can highlight every offending field at once instead of
 // fixing-then-resubmitting one error at a time.

@@ -26,7 +26,7 @@ func lockApplier(t *testing.T, mr *miniredis.Miniredis, ttl, beat time.Duration)
 	return a
 }
 
-// Q48-datamigrate-1 — the core invariant: while one apply run holds
+// The core invariant: while one apply run holds
 // the target's run-lock, a second concurrent run is refused
 // (migrate.ErrLockHeld) instead of being allowed to double-apply a
 // non-idempotent TRANSFORM_FIELD. Releasing frees it for the next.

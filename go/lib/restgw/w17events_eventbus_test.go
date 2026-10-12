@@ -300,7 +300,7 @@ func TestEventbusEventSource_LabelFiltering(t *testing.T) {
 }
 
 // TestEventbusEventSource_UnlabelledEventNoCrossTenant is the
-// mcpbus-sec-1 regression guard. With tenant isolation active (a
+// Regression guard. With tenant isolation active (a
 // principal-labels deriver configured), an UNLABELLED event must NOT
 // reach a label-bearing (tenant) principal — it would otherwise leak
 // across tenants (e.g. the unlabelled w17.invalidate carrying entity
@@ -351,7 +351,7 @@ func TestEventbusEventSource_UnlabelledEventNoCrossTenant(t *testing.T) {
 }
 
 // TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal is the
-// C8-F11 regression guard, and it is the OTHER half of mcpbus-sec-1.
+// other half of the unlabelled-event rule above.
 //
 // A label-less principal is not "the principal with no tenant"; under an
 // isolating surface it is most often the principal whose tenant could not be
@@ -456,7 +456,7 @@ func TestEventbusEventSource_NilTranscodeRefused(t *testing.T) {
 
 // drainRunsHandler stands in for a subscriber whose Drain is waiting on an
 // in-flight delivery: real Drain blocks on the subscriber's WaitGroup until
-// every handler callback has returned (nats.go's R-bus-2 discipline), so
+// every handler callback has returned (the discipline in nats.go), so
 // calling the handler from Drain is a faithful stand-in for that wait.
 type drainRunsHandler struct {
 	handler   eventbus.HandlerFunc

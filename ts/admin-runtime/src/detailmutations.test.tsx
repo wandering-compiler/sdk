@@ -143,7 +143,7 @@ describe("saving a detail row", () => {
 });
 
 describe("deleting a detail row", () => {
-  // `window.confirm` is the walking-skeleton gate the file says will become a modal.
+  // `window.confirm` is the current gate; it may become a modal.
   // Whatever it becomes, "declined" must mean nothing was sent — a delete that fires
   // on the way to asking is not recoverable.
   it("sends nothing when the confirmation is declined", async () => {

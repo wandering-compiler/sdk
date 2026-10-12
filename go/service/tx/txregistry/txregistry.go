@@ -11,7 +11,7 @@
 //
 // If the metadata is absent (or the registry is nil), the
 // generated handler opens its own tx scoped to the method call —
-// the slice 6H "always-fresh-tx" fallback. If a tx_id IS present
+// the "always-fresh-tx" fallback. If a tx_id IS present
 // but unusable — unknown to this registry ([ErrUnknownTxID]), or
 // opened on a DIFFERENT connection than the calling method
 // ([ErrConnectionMismatch]) — AdoptTx errors, and the generator
@@ -19,8 +19,7 @@
 // clear diagnostic instead of silently committing partial state
 // on a fresh tx.
 //
-// The Registry implementation lives per-domain. M2-B shipped
-// the single-connection default; M2-D extends Memory to dispatch
+// The Registry implementation lives per-domain. Memory dispatches
 // Begin / LookupTx by connection_name so multi-dialect domains
 // route correctly.
 package txregistry

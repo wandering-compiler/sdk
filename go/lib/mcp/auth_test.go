@@ -8,7 +8,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/mcp"
 )
 
-// G3i3-GW-MCP: DefaultAuthFunc forwards a key from the HTTP
+// DefaultAuthFunc forwards a key from the HTTP
 // header → gRPC metadata in lowercase form.
 func TestDefaultAuthFunc_HTTPHeader(t *testing.T) {
 	fn := mcp.DefaultAuthFunc("Session-Id")
@@ -23,7 +23,7 @@ func TestDefaultAuthFunc_HTTPHeader(t *testing.T) {
 	}
 }
 
-// G3i3-GW-MCP: env-var fallback for stdio transport. Key
+// Env-var fallback for stdio transport. Key
 // "session_id" → env "SESSION_ID".
 func TestDefaultAuthFunc_EnvFallback(t *testing.T) {
 	t.Setenv("SESSION_ID", "from-env")
@@ -38,7 +38,7 @@ func TestDefaultAuthFunc_EnvFallback(t *testing.T) {
 	}
 }
 
-// G3i3-GW-MCP: HTTPHeaders wins over env (stronger signal —
+// HTTPHeaders wins over env (stronger signal —
 // caller deliberately sent the header). Use the HTTP-form
 // key ("Session-Id") which canonicalises to itself; the env-
 // form ("SESSION_ID") is the ENV fallback.
@@ -56,7 +56,7 @@ func TestDefaultAuthFunc_HTTPWinsOverEnv(t *testing.T) {
 	}
 }
 
-// G3i3-GW-MCP: missing key → empty metadata (no error).
+// Missing key → empty metadata (no error).
 func TestDefaultAuthFunc_MissingKey(t *testing.T) {
 	fn := mcp.DefaultAuthFunc("missing")
 	md, err := fn(context.Background(), mcp.ConnectionInfo{})
@@ -68,7 +68,7 @@ func TestDefaultAuthFunc_MissingKey(t *testing.T) {
 	}
 }
 
-// G3i3-GW-MCP: HTTPHeadersFromContext returns nil for stdio
+// HTTPHeadersFromContext returns nil for stdio
 // path (no header value stashed).
 func TestHTTPHeadersFromContext_Empty(t *testing.T) {
 	if mcp.HTTPHeadersFromContext(context.Background()) != nil {

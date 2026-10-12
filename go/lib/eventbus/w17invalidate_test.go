@@ -112,8 +112,7 @@ func (c *capturingDispatcher) Dispatch(_ context.Context, channel, topic string,
 	return nil
 }
 
-// TestEmitInvalidate_LabelsFromRequestContext is the C8-F4 regression
-// guard.
+// TestEmitInvalidate_LabelsFromRequestContext is a regression guard.
 //
 // The reserved topic is dispatched as a bare InvalidateEvent, not inside
 // the per-domain Event envelope, so it never inherited the labelling rule

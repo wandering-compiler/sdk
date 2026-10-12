@@ -80,7 +80,7 @@ func TestWrap_MySQL_RegistryHit(t *testing.T) {
 	}
 }
 
-// Q47-grpc-1: a MySQL NOT_NULL error names only the column, not the table,
+// A MySQL NOT_NULL error names only the column, not the table,
 // so the table-keyed ByColumns lookup can't resolve it. The
 // SoleNotNullByColumn degraded fallback must attribute it (→ InvalidArgument
 // + structured detail) when exactly one table owns a NOT_NULL on that
@@ -103,7 +103,7 @@ func TestWrap_MySQL_NotNull_SoleColumnFallback(t *testing.T) {
 	}
 }
 
-// Q47-grpc-1 safety: an ambiguous column (NOT in SoleNotNullByColumn,
+// Safety: an ambiguous column (NOT in SoleNotNullByColumn,
 // because several tables share it) must NOT be misattributed — it stays a
 // FailedPrecondition rather than guessing the wrong field.
 func TestWrap_MySQL_NotNull_AmbiguousColumn_NoGuess(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
-// B25-restgw-1: WriteGRPCError must forward a backend status's *w17.ErrorDetail
+// WriteGRPCError must forward a backend status's *w17.ErrorDetail
 // field violations into the REST error envelope. grpcerr.Wrap attaches them for
 // DB constraint violations (e.g. a UNIQUE email) that gateway pre-flight can't
 // catch; dropping them leaves the client with an empty `details` array, unable

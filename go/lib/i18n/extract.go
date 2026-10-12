@@ -186,8 +186,8 @@ func MarshalJSON(lang string, entries []POEntry) ([]byte, error) {
 //     EN baseline (msgstr=msgid) when `lang ==
 //     CompileTimeDefaultLanguage` and empty msgstr otherwise,
 //   - obsolete entries (in `existing` but not in `msgids`)
-//     drop silently — iter-1 keeps the format tight; gettext's
-//     `#~ msgid` comment-out is a polish slice.
+//     drop silently, which keeps the format tight; gettext's
+//     `#~ msgid` comment-out is not emitted.
 //
 // Use this from codegen orchestrators that want regen to keep
 // adding new msgids over time without overwriting translations.
@@ -311,9 +311,9 @@ type DomainCatalogFile struct {
 // catalog root (typically `lock.EffectiveLanguagesDir(lk)`).
 //
 // `msgids` is the deduplicated msgid set the catalog covers —
-// iter-1 passes `validation.Defaults()` directly; future
-// slices may merge in per-domain author overrides + ACL /
-// cursor / parse vocab from Phase 2.
+// today it is `validation.Defaults()`; per-domain author
+// overrides and the ACL / cursor / parse vocabulary may be
+// merged in later.
 //
 // Empty `languages` collapses to `[CompileTimeDefaultLanguage]`
 // (the baseline-only catalog every project carries).
