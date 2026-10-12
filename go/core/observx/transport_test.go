@@ -159,6 +159,16 @@ func TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut(t *testing.T) {
 		t.Fatal("mesh on: telemetry was exported in plaintext")
 	}
 
+	// Mesh terminated at the platform: the exporter dials TLS too, so a
+	// plaintext collector is not reached either.
+	t.Setenv("W17_INTERNAL_TLS", "terminated")
+	before = col.exports.Load()
+	_ = exportOneSpan(t, addr, Config{})
+	if col.exports.Load() != before {
+		t.Fatal("mesh terminated: telemetry was exported in plaintext")
+	}
+	t.Setenv("W17_INTERNAL_TLS", "on")
+
 	// Mesh on, explicit opt-out through the env knob: plaintext, with a warning.
 	var buf bytes.Buffer
 	orig := log.Writer()
