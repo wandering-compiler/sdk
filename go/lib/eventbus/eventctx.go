@@ -130,8 +130,15 @@ func MetadataFromContext(ctx context.Context) map[string]string {
 // inherit the broker stack from an assertion. Both ends pin the same literal
 // instead; `txregistry.TestHeaderName_IsTheStrippedEnvelopeKey` fails on a
 // rename and points here.
+//
+// `w17-conn-id` travels with the transaction id: it is the routing token that
+// pins a call to the storage connection holding the transaction. Replayed into
+// a subscriber it would pin the subscriber's own storage calls to a
+// connection that belongs to a settled transaction. `distx.ConnIDHeader` is
+// pinned the same way (`TestConnIDHeader_IsTheStrippedEnvelopeKey`).
 var reservedMetadataKeys = map[string]bool{
-	"w17-tx-id": true,
+	"w17-tx-id":   true,
+	"w17-conn-id": true,
 }
 
 // credentialHeaders are request headers that carry a credential by
