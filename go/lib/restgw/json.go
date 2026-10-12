@@ -17,6 +17,7 @@ package restgw
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -326,7 +327,17 @@ func WriteJSON(w http.ResponseWriter, status int, data []byte) {
 // gateway template passes the request as the trailing arg. Marshal
 // failures (proto3 data corruption) surface as a 500 JSON envelope.
 func WriteResponse(w http.ResponseWriter, status int, msg proto.Message, rOpt ...*http.Request) {
-	writeNegotiated(w, responseFormatOpt(w, rOpt), status, msg)
+	writeNegotiated(requestContext(rOpt), w, responseFormatOpt(w, rOpt), status, msg)
+}
+
+// requestContext is the optional trailing request's context, or Background
+// when the caller passed none (the error sentence then stays in the source
+// locale, as for the other context-free writers).
+func requestContext(rOpt []*http.Request) context.Context {
+	if len(rOpt) > 0 && rOpt[0] != nil {
+		return rOpt[0].Context()
+	}
+	return context.Background()
 }
 
 // responseFormatOpt resolves the negotiated response format from
@@ -381,14 +392,16 @@ func addVary(h http.Header, token string) {
 // it with the given status. JSON goes through MarshalProto (so
 // REST aliases + proto-name casing apply); protobuf goes through
 // the binary marshaler with the protobuf media type. Both surface
-// marshal failures as a JSON 500 (errors are never negotiated).
-func writeNegotiated(w http.ResponseWriter, format WireFormat, status int, msg proto.Message) {
+// marshal failures as a JSON 500 (errors are never negotiated) carrying the
+// code's catalog sentence in the request's language; the marshal error goes
+// to the operator.
+func writeNegotiated(ctx context.Context, w http.ResponseWriter, format WireFormat, status int, msg proto.Message) {
 	if format == WireProto {
 		bp := pbMarshalBufPool.Get().(*[]byte)
 		data, err := proto.MarshalOptions{}.MarshalAppend((*bp)[:0], msg)
 		if err != nil {
 			pbMarshalBufPool.Put(bp)
-			WriteError(w, http.StatusInternalServerError, "INTERNAL", "failed to marshal response")
+			WriteInternal(ctx, w, "restgw: marshal protobuf response: "+err.Error())
 			return
 		}
 		w.Header()["Content-Type"] = ctProtobuf // shared slice — see ctProtobuf
@@ -407,7 +420,7 @@ func writeNegotiated(w http.ResponseWriter, format WireFormat, status int, msg p
 	if err != nil {
 		*bp = data
 		jsonBufPool.Put(bp)
-		WriteError(w, http.StatusInternalServerError, "INTERNAL", "failed to marshal response")
+		WriteInternal(ctx, w, "restgw: marshal JSON response: "+err.Error())
 		return
 	}
 	w.Header()["Content-Type"] = ctJSON // shared slice — see ctJSON
@@ -452,7 +465,7 @@ func WriteResponseFiltered(w http.ResponseWriter, status int, msg proto.Message,
 			refl.Clear(fd)
 		}
 	}
-	writeNegotiated(w, responseFormatOpt(w, rOpt), status, clone)
+	writeNegotiated(requestContext(rOpt), w, responseFormatOpt(w, rOpt), status, clone)
 }
 
 // FieldError carries one per-field validation failure inside

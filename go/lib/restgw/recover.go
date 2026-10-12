@@ -5,8 +5,8 @@
 // error envelope; the panic value + stack trace go to
 // `lib/observx.ReportError` (Sentry + OTel span tagged + log
 // fallback). The panic VALUE never escapes to the client —
-// envelope message stays generic ("internal error") matching
-// Phase C principle 2.
+// envelope message is the INTERNAL code's catalog sentence, in the
+// request's language.
 //
 // Wrap order: OUTERMOST in the gateway chain, before anything
 // else. A panic in CORS / Observability / handler all surface
@@ -73,7 +73,7 @@ func RecoverPanicMiddleware(next http.Handler) http.Handler {
 			// flushed any bytes the response is mangled
 			// anyway and there's nothing better we can do
 			// from here.
-			WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			WriteError(w, http.StatusInternalServerError, "INTERNAL", internalSentence(ctx))
 		}()
 		next.ServeHTTP(w, r)
 	})
