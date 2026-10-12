@@ -36,10 +36,18 @@ var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run"
 // NATS implements it too: its bodies are command lines with no
 // transaction around them, so two racing runs would both apply them.
 //
-// Postgres and SQLite do NOT implement it: their up_sql runs in a
-// transaction whose w17_migrations INSERT has the migration id as a
-// primary key, so a second concurrent run fails loudly on the unique
-// violation instead of double-applying.
+// SQLite does NOT implement it: its up_sql runs in a transaction whose
+// w17_migrations INSERT has the migration id as a primary key, so a second
+// concurrent run cannot double-apply.
+//
+// Postgres was in that sentence too, and the reasoning held only half-way.
+// The transaction does keep a racing run from applying twice, but the loser
+// does not fail on the ledger key: the body creates its objects first, so
+// it fails on the catalog (`duplicate key … "pg_type_typname_nsp_index"`),
+// which reads as a broken migration. With N replicas migrating at boot that
+// was N-1 alarming failures per deploy. Postgres implements RunLockCapable
+// now, via a session advisory lock, and the loser fails fast like
+// everywhere else.
 //
 // ⚠️ MySQL was in that sentence and should never have been. It
 // implicit-commits on DDL, which ENDS the body's transaction partway
@@ -56,8 +64,8 @@ var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run"
 // the label guarantees.
 //
 // The orchestrator type-asserts each applier; one that doesn't
-// implement RunLockCapable applies without a lock (the transactional
-// guarantee covers it).
+// implement RunLockCapable applies without a lock (SQLite: the
+// transactional guarantee covers it).
 type RunLockCapable interface {
 	// AcquireRunLock takes the target's apply run-lock. It is
 	// fail-fast, not blocking: it returns ErrLockHeld immediately

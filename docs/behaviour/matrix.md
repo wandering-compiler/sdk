@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-129 interactions; 32 have no test, 32 more are covered only in part.
+129 interactions; 20 have no test, 32 more are covered only in part.
 
 ## Server × Server
 
@@ -31,11 +31,11 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
 | Component supervisor (S1) | REST and MCP HTTP transports | Every transport drains in parallel on one context, each within its own bound; drain plus resource teardown together end within `W17_SHUTDOWN_DEADLINE_SECONDS` (default 20 s) from the start of shutdown, and an overrun is returned as an error naming the deadline. | `TestRun_ShutdownDeadlineBoundsAStuckComponent`, `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` (overall bound only; parallel drain of the HTTP transports: no test) |
-| gRPC panic recovery (S8) | Authentication and ACL interceptors | Authentication runs inside recovery and before the handler. | no test |
+| gRPC panic recovery (S8) | Authentication and ACL interceptors | Authentication runs inside recovery and before the handler. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors`; the authentication and ACL interceptors are caller interceptors |
 | gRPC health service (S11) | Authentication and ACL interceptors | Health is reachable without credentials. | `TestDefaultHealthServer` (status only) |
-| In-process gRPC bridge (S21) | REST gateway status mapping | The same failure maps to the same HTTP status in a composed and in a split deployment. | no test |
+| In-process gRPC bridge (S21) | REST gateway status mapping | The same failure maps to the same HTTP status in a composed and in a split deployment. | `TestConn_ErrorsMatchTheWire` |
 | In-process gRPC bridge (S21) | Per-client rate limiter | In-process callers are keyed per caller, not into one shared bucket. | no test |
-| Bounded HTTP stop and drain (S13) | MCP session sweeper | `StopWith` runs the sweeper, then a bounded `Shutdown` that force-closes on deadline. | no test |
+| Bounded HTTP stop and drain (S13) | MCP session sweeper | `StopWith` runs the sweeper, then a bounded `Shutdown` that force-closes on deadline. | `TestServeStreamableHTTP_ForceClosesAToolCallPastTheBound`, `TestServeStreamableHTTPDrainsWithOpenStream` |
 | Error and refusal reporting (S20) | Authentication and ACL refusals under load | Each refusal is recorded; the refusal log line is rate-limited per channel and the suppressed count is logged with the next written line and at shutdown. | `TestReportRefusal_RecordsWithoutRaising`, `TestReportRefusal_LogVolumeIsBounded`, `TestShutdown_ReportsPendingSuppressedLines` |
 | Internal-mesh TLS switch (S16, S17, S18) | Inter-tier dial (E31) | An unrecognised `W17_INTERNAL_TLS` value is refused by the listener, the dialer and the health check, and makes `grpcx.InternalTLSEnabled` dial TLS; no side reads it as plaintext. | `TestTLSServerOption_UnrecognisedSwitchIsRefused`, `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestRun_GRPCUnrecognisedTLSSwitchFails`, `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 | Client dial retry (S18, E30) | Non-idempotent handlers | Only `UNAVAILABLE` is retried, so a request is retried only when it never reached the server. | `TestDefaultServiceConfig_RetriesOnlyUnavailable` |
@@ -130,8 +130,8 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Auto-rollback interceptor (D7) | Transaction control plane (D5) | A failed Begin or Commit MUST NOT trigger an automatic rollback. | `controlplane_test.go` |
 | Transaction lifecycle (D3) | Client disconnect or deadline | Rollback runs on a detached context; no commit is made for a caller that is gone. | `TestRunRollsBackEvenWhenTheCallersContextIsDead`, `TestRunDoesNotCommitOnBehalfOfAVanishedCaller` |
 | Orphan timeout (D5) | Statement timeout | Per-method statement timeout stays below the finish wait (30 s), which stays below the orphan timeout (5 min); the watcher drains an expired entry even under a held lease. | `TestServer_Begin_DefaultTxTimeout_*`, `TestTimeoutWatcher_DrainsUnderALease` |
-| Transaction isolation (D5) | Database dialect | The declared level is pinned at Begin; an adopted weaker transaction is refused. | no test |
-| Transaction lifecycle (D3) | Deadlock or serialization failure | The error surfaces to the caller; inside a distributed transaction it discards the transaction, and the caller restarts the whole `Run`. | no test |
+| Transaction isolation (D5) | Database dialect | The declared level is pinned at Begin; an adopted weaker transaction is refused. | `TestBegin_IsolationIsHonoured_Live`, `TestAdoptTxIsolated_RefusesWeakerOrUnknownLevels`, `TestAdoptTxIsolated_RegistryThatCannotReportRefuses` |
+| Transaction lifecycle (D3) | Deadlock or serialization failure | The error surfaces to the caller; inside a distributed transaction it discards the transaction, and the caller restarts the whole `Run`. | `TestWrap_PgRetryable_Deadlock`, `TestWrap_PgRetryable_Serialization`, `TestWrap_MySQLRetryable`, `TestInterceptor_RollbacksOnError` |
 | Cursor paging (D9) | Admin sort selector (D10) | The cursor's sort selector is authoritative; changing the sort restarts at page one. | `TestEncodeDecode_SortSelectorRoundtrip` |
 | Cursor paging totals (D9) | Concurrent writes | The total is counted once per paging session and cached in the cursor. | no test |
 | Bounded materialization (D11) | Adopted transaction or locked query (D5) | Fetch windows run sequentially when the request carries `w17-tx-id` or the context is marked with `WithinTx`; generated locked-query fetches must mark the context for this to apply. | `TestFetchBatches_InsideATransactionRunsSequentially` |
@@ -149,7 +149,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | After-commit work (D6) | Event bus publish (cross-process) | A storage handler's emit is registered on commit, published after the coordinator's Commit, and dropped on rollback or drain; delivery is at-most-once. A Commit whose outcome cannot be settled returns `ErrCommitOutcomeUnknown`, does not run the parked emit and is reported. | `oncommit_test.go`, `phantom_emit_test.go`, `TestCommit_AnUnsettledTransportFailureIsReportedAsUnknown`; loss between commit and publish: no test |
 | After-commit work (D6) | Broker outage (I5, I6) | An emit on the committing goroutine is bounded by `PublishTimeout` (default 2 s) for the stream check, publish and acknowledgement together; a connection closed for good fails at once. | `TestNatsBus_PublishTimeoutBoundsOutage_Embedded` (NATS only) |
 | Transaction routing metadata (D4, D5) | Event bus subscriber context | Event envelopes MUST NOT carry transaction routing metadata (`w17-tx-id`, `w17-conn-id`) into a subscriber, so a subscriber is never a participant and its storage calls are not pinned to a settled transaction's connection. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
-| Cursor paging metadata (D9) | Principal relay (`ForwardToOutgoing`) | Paging headers are never relayed hop-to-hop. | no test in the data packages (relay tests live in `go/lib/principal`) |
+| Cursor paging metadata (D9) | Principal relay (`ForwardToOutgoing`) | Paging headers are never relayed hop-to-hop. | `TestForwardPrincipalUnaryInterceptor`, `TestDialOpts_StreamRelaysThePrincipalOnly` |
 | Secret values (D17) | Structured logging | A `Secret` redacts on every logging path, wherever it is held. | `TestSlogRedacts`, `TestStructRedacts`, `TestUnexportedFieldRedactsInEveryVerb`, `TestUnexportedFieldRedactsInSlog` |
 | Column encryption (D16) | Error layer and logs | Decryption errors carry no plaintext or key material. | `TestDecrypt_*` |
 | In-process transaction scope | In-memory transport (I4) | A memory subscriber does not inherit the emitter's transaction, metadata or context values; it runs on its subscription's context. | `TestMemoryBus_HandlerContextIsNotTheEmitters` |
@@ -172,7 +172,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Catalogs and formatting (I14, I15) | Event context (I8) | Subscriber messages use the requester's language and format locale. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` (metadata collapse only; rendering not asserted) |
 | Server-sent-events hub (I9) | Delivery modes (I3) | In fan-out mode every replica's hub receives every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent` |
 | Server-sent-events hub (I9) | NATS JetStream transport (I5) | The hub resumes delivery after a broker loss, including a recreated broker. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` (bus level; hub not exercised) |
-| Server-sent-events hub (I9) | Slow client | A slow client loses only its own frames; other clients are unaffected. | no test |
+| Server-sent-events hub (I9) | Slow client | A slow client loses only its own frames; other clients are unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | Server-sent-events hub (I9) | Client reconnect | The client reconnects automatically; events emitted during the gap are not replayed (deliberate). | no test |
 | Permission checks (I13) | Multi-domain auth response | A permission check uses the lock of the handler's own domain. | no test |
 | Handler panic recovery (I2) | Broker retry (I5, I6) and Observer (I7) | A handler panic is recovered, retried and dead-lettered at the cap; an Observer panic does not crash the emitter. | `TestRecoverHandler_PanicBecomesError` (handler); Observer: no test |
@@ -187,19 +187,19 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Apply run (T11), Postgres applier (T15) | Concurrent appliers (several replicas at boot) | Exactly one applies; the others skip under the head re-read or fail on the ledger key without reporting the deploy as failed. | no test |
+| Apply run (T11), Postgres applier (T15) | Concurrent appliers (several replicas at boot) | Exactly one applies; each other run either finds it applied or fails fast on the run lock, naming the run in progress (the next start finds the work done), never on what the body ran into. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live` |
 | MySQL applier and run lock (T15) | Concurrent appliers | `GET_LOCK` serialises; the loser fails fast; a lost lock session fails the run. | `TestRunLock_SurvivesAnIdleServerTimeout` (lock session only) |
 | Redis/S3 run lock (T15) | Long data migration (T16) | The lock is held for the whole migration; a holder that loses it stops before writing again and the run fails with `ErrLockLost`. | `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestRun_LostRunLockStopsBeforeTheNextMigration` |
 | Squash adopt (T10) | Rollback by another run while this one waits on the lock (T11) | A head that moved backward is refused. | `TestApply_RefusesWhenTheHeadMovedBACKWARD` |
 | Post-transaction resume (T11) | Crash between halves on each dialect (T15) | Postgres resumes only the post-transaction half; MySQL and SQLite warn at run time that the migration is not resumable. | `TestRun_ResumesPendingSkirt` (Postgres, stub applier) |
-| Drift gate (T13) | Console-emitted expectations | Every migration that carries a real expectation is compared; placeholders are skipped explicitly. | no test |
+| Drift gate (T13) | Console-emitted expectations | Every migration that carries a real expectation is compared; placeholders are skipped explicitly. | `TestPreFingerprint_SkipsFakePlaceholder`, `TestPreFingerprint_SkipsEmptyTargetFingerprint`, `TestPreFingerprint_StillRefusesRealDrift`, `TestPreFingerprint_RefusesWhenTargetDisagrees` |
 | Drift gate (T13) | Fake apply (T12) | The gate is skipped and the adopt preflight is the check; only integrity-checked preflight content is executed. | `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced` (the gate skip has no test) |
 | Extension preflight (T11) | Applier decorators | `Unwrap` reaches the Postgres applier through every decorator, or the run refuses. | `TestPreflightExtensions_SurvivesADecorator` |
-| Schema prep (T11) | Wipe (T15) | Wipe returns the store to empty, including namespaces schema prep created. | no test |
+| Schema prep (T11) | Wipe (T15) | Wipe returns the store to empty, including namespaces schema prep created. | `TestWipe_DropsDeclaredSchemasOnly_Live`, `TestWipeSQL_DropsDeclaredSchemas` |
 | `apply --fetch` (T4) | Read-only container | No disk writes; the same hash check as artefacts on disk. | `TestMigrationSetFS_RefusesATamperedBody` |
 | `migrate fetch` (T4) | Path guard (T28) | Every fetched artefact lands under `--migrations`. | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
 | Lock file (T2) | Artefact chain (T7, T8) | The pinned hash anchors the chain; only chained, hash-matching artefacts execute; a connection listed twice is refused. | `TestPlan_TargetHashMismatch`, `TestPlan_InsertedMigrationIsNotOnTheChain`, `TestRun_RefusesAConnectionListedTwice` |
-| Apply timeout (T2) | Data migration (T16) | A migration cut by the timeout leaves a state a later run resumes or refuses with a clear remedy. | no test |
+| Apply timeout (T2) | Data migration (T16) | A migration cut by the timeout leaves a state a later run resumes or refuses with a clear remedy. | `TestApply_YAMLApplyTimeoutLeavesAResumableState`, `TestApply_YAMLApplyTimeoutLeavesAResumableState_Live` |
 | Fixtures (T6) | Dialect appliers (T15) | Only stores that can seed (Postgres) are offered as seed targets; the group is one transaction. | `TestFixturesApply_TheWholeGroupIsOneUnitOfWork`, `TestSeedCandidate_MatchesSeedCapable`, `TestFixturesApply_StoresThatCannotSeedAreNotCandidates` |
 | Fixtures (T6) | Migrations (T11) | Seeding runs after the schema exists; the stale-render check compares fixtures with their render. | `TestFixturesApply_RefusesARenderOlderThanItsFixture` |
 | E2E credential step (T20) | Event awaits (T25) | Event visibility is asserted for the credential's principal. | no test |
