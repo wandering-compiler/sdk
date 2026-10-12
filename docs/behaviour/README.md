@@ -24,7 +24,7 @@ changing it.
 | [events-identity.md](events-identity.md) | 18 | 114 | 0 | 1 |
 | [tooling.md](tooling.md) | 29 | 170 | 0 | 0 |
 | **All areas** | **119** | **794** | **4** | **15** |
-| [matrix.md](matrix.md) | — | 129 interactions | 9 | 15 |
+| [matrix.md](matrix.md) | — | 129 interactions | 9 | 11 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of
 it says **no test**.
