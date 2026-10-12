@@ -70,7 +70,7 @@ type config struct {
 
 // WithParallel sets the operator-supplied `--parallel <N>` CLI
 // override. Forwarded to dialect Appliers that implement YAML
-// data migrations (Redis, S3 — Phase E v2.1). Other dialects
+// data migrations (Redis, S3). Other dialects
 // silently ignore.
 func WithParallel(n int) option {
 	return func(c *config) { c.parallel = n }

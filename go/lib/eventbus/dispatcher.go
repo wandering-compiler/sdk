@@ -1,10 +1,9 @@
 // Package eventbus is the runtime-side surface for the
-// compiler-generated emit interceptors (Phase 8) and
-// subscriber dispatchers (Phase 9). Phase 8 introduces the
-// Dispatcher contract — the small interface every transport
-// adapter implements + every generated emit helper calls
-// into. Phase 10 ships concrete implementations
-// (in-memory bufconn, NATS, Redis Streams).
+// compiler-generated emit interceptors and subscriber
+// dispatchers. The Dispatcher contract is the small interface
+// every transport adapter implements and every generated emit
+// helper calls into. Implementations: in-memory, NATS JetStream,
+// Redis Streams.
 //
 // Emit semantics are
 // fire-and-forget on RPC return: the interceptor builds the

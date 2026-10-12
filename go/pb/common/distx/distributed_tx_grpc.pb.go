@@ -42,9 +42,9 @@ const (
 // running binary's tx registry, and run their queries inside
 // the open *sql.Tx. If the metadata is absent (caller didn't
 // open a tx, or the id resolves to nothing), the handler opens
-// a per-method tx — the slice 6H "always-fresh-tx" fallback.
+// a per-method tx — the "always-fresh-tx" fallback.
 //
-// **Single-instance default (D-iter2-dql-11).** In the common
+// **Single-instance default.** In the common
 // case of one storage binary per domain, `conn_id` is a
 // redundant axis — every `tx_id` resolves on the sole live
 // binary. The single-instance impl returns conn_id as an empty
@@ -122,9 +122,9 @@ func (c *w17DistributedTransactionClient) Rollback(ctx context.Context, in *Roll
 // running binary's tx registry, and run their queries inside
 // the open *sql.Tx. If the metadata is absent (caller didn't
 // open a tx, or the id resolves to nothing), the handler opens
-// a per-method tx — the slice 6H "always-fresh-tx" fallback.
+// a per-method tx — the "always-fresh-tx" fallback.
 //
-// **Single-instance default (D-iter2-dql-11).** In the common
+// **Single-instance default.** In the common
 // case of one storage binary per domain, `conn_id` is a
 // redundant axis — every `tx_id` resolves on the sole live
 // binary. The single-instance impl returns conn_id as an empty

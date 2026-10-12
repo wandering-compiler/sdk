@@ -67,8 +67,8 @@ func pctIdx(n, p int) int {
 	return i
 }
 
-// String renders the report as a human block (the protobridge bench
-// shape): counts, throughput, then the latency distribution.
+// String renders the report as a human block: counts, throughput,
+// then the latency distribution.
 func (r *Report) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "--- stress: %s (%s, concurrency %d) ---\n", r.Label, r.Mode, r.Concurrency)

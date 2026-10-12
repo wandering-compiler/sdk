@@ -11,7 +11,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// G3i3-GW-F: header-only mode (default) forwards
+// Header-only mode (default) forwards
 // Authorization-bearing requests to Inner unchanged. No
 // ticket lookup attempted.
 func TestWSAuth_HeaderOnly_Passthrough(t *testing.T) {
@@ -33,7 +33,7 @@ func TestWSAuth_HeaderOnly_Passthrough(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: ticket mode — query carries ticket, store
+// Ticket mode — query carries ticket, store
 // redeems, recorded Authorization is replayed as a header.
 //
 // The replay lands on the CALLER'S request, not on a private clone.
@@ -76,7 +76,7 @@ func TestWSAuth_TicketMode_Replays(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: ticket-only + missing ticket → ErrWSAuthNoTicket.
+// Ticket-only + missing ticket → ErrWSAuthNoTicket.
 // Critical: must NOT forward to Inner with a stray
 // Authorization header attached.
 func TestWSAuth_TicketOnly_NoTicket_FailsFast(t *testing.T) {
@@ -105,7 +105,7 @@ func TestWSAuth_TicketOnly_NoTicket_FailsFast(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: header+ticket combo — Authorization wins when
+// Header+ticket combo — Authorization wins when
 // set, ticket ignored.
 func TestWSAuth_HeaderAndTicket_HeaderWins(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
@@ -139,7 +139,7 @@ func TestWSAuth_HeaderAndTicket_HeaderWins(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: header+ticket combo, neither present → forward
+// Header+ticket combo, neither present → forward
 // to Inner unchanged so Inner's missing-credentials branch
 // produces the 401.
 func TestWSAuth_HeaderAndTicket_NeitherForwards(t *testing.T) {
@@ -167,7 +167,7 @@ func TestWSAuth_HeaderAndTicket_NeitherForwards(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: invalid ticket → ErrTicketInvalid surfaces.
+// Invalid ticket → ErrTicketInvalid surfaces.
 func TestWSAuth_TicketMode_InvalidTicket(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
@@ -187,7 +187,7 @@ func TestWSAuth_TicketMode_InvalidTicket(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: WSAuthTicketPrincipal records Authorization;
+// WSAuthTicketPrincipal records Authorization;
 // missing → ErrWSAuthTicketNoHeader.
 func TestWSAuthTicketPrincipal(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
@@ -207,7 +207,7 @@ func TestWSAuthTicketPrincipal(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: nil Inner panics at NewWSAuth — startup-time
+// Nil Inner panics at NewWSAuth — startup-time
 // failure beats first-upgrade silent breakage.
 func TestNewWSAuth_NilInnerPanics(t *testing.T) {
 	defer func() {
@@ -218,7 +218,7 @@ func TestNewWSAuth_NilInnerPanics(t *testing.T) {
 	_ = restgw.NewWSAuth(restgw.WSAuthConfig{})
 }
 
-// G3i3-GW-F: ticket mode without a TicketStore panics.
+// Ticket mode without a TicketStore panics.
 func TestNewWSAuth_TicketWithoutStorePanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -232,7 +232,7 @@ func TestNewWSAuth_TicketWithoutStorePanics(t *testing.T) {
 	})
 }
 
-// G3i3-GW-F: unknown Modes value panics.
+// Unknown Modes value panics.
 func TestNewWSAuth_UnknownModePanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {

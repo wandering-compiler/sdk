@@ -15,7 +15,7 @@ import (
 // Header / signature comment lines (`# w17:expected_pre_fingerprint:
 // ...` / `# w17:content_signature: ...`) are NOT added here —
 // they're the `decorate` package's responsibility, layered over
-// the YAML body identically to how Phase D wraps SQL bodies. A
+// the YAML body identically to how SQL bodies are wrapped. A
 // raw Marshal output is the plain YAML doc; the registry-side
 // decorate pass adds header + footer.
 //

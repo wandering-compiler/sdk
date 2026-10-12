@@ -50,7 +50,7 @@ const (
 	serverKeyFile  = "server.key"
 	gitignoreFile  = ".gitignore"
 	// lockFile is the flock(2) sentinel that serialises concurrent
-	// EnsureCerts runs on one directory (Q56-tls-1). It is covered by
+	// EnsureCerts runs on one directory. It is covered by
 	// gitignoreBody's `*` ignore, so it never lands in a commit.
 	lockFile = ".certgen.lock"
 )
@@ -90,7 +90,7 @@ func EnsureCerts(dir string, sans []string) ([]string, error) {
 
 	// Serialise concurrent runs on this directory so two invocations
 	// can't interleave their check-then-write mint sequences into a
-	// mismatched cert/key pair (Q56-tls-1). Held for the whole ensure
+	// mismatched cert/key pair. Held for the whole ensure
 	// sequence; released on return.
 	unlock, err := lockDir(dir)
 	if err != nil {
@@ -216,7 +216,7 @@ func ensureLeaf(dir string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, s
 		}
 		return mintLeaf(certPath, keyPath, caCert, caKey, sans)
 	}
-	// No-clobber invariant (mirrors ensureCA, Q17-certgen-1): only mint a
+	// No-clobber invariant (mirrors ensureCA): only mint a
 	// fresh leaf when NEITHER half is present. If exactly one of server.crt /
 	// server.key exists, minting would overwrite the surviving half and
 	// silently invalidate the distributed/served cert. Refuse instead.

@@ -169,7 +169,7 @@ func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, code string, l
 // cancellation mid-stream unwinds the handler within one
 // heartbeat tick.
 func TestHandleW17Events_CtxCancelEndsHandler(t *testing.T) {
-	// Readiness-signalled instead of sleep-synced (R-restgw-6): the
+	// Readiness-signalled instead of sleep-synced: the
 	// source closes `subscribed` the instant the handler enters its
 	// streaming loop, so we cancel deterministically the moment the
 	// handler is actually streaming — no fixed delay to tune or flake.

@@ -37,7 +37,7 @@ func newTestDownload(t *testing.T) (*memory.Driver, restgw.DownloadConfig) {
 	return d, cfg
 }
 
-// TestServeDownload_NoContentSniffXSS — Q36-restgw-2. Uploaded bytes are
+// TestServeDownload_NoContentSniffXSS. Uploaded bytes are
 // served same-origin and the upload allowlist checks only the filename
 // extension, not the content. An object whose body is HTML must come back
 // as a non-renderable type + nosniff, NOT text/html — otherwise a
@@ -110,7 +110,7 @@ func TestServeDownload_PathTraversal404(t *testing.T) {
 	}
 }
 
-// R-restgw-6 — the traversal guard must be separator-agnostic.
+// The traversal guard must be separator-agnostic.
 // A '/'-only split lets a backslash-separated dot segment
 // (`avatars\..\..\etc\passwd`) slip past on a host where '\' is
 // also a path separator. The guard normalises '\' to '/' before

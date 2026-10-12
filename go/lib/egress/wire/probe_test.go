@@ -11,8 +11,7 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// Findings of the phase 3 review, one test each, on the hand-written
-// probe.proto.
+// One test per defect found in the hand-written probe.proto.
 
 func probeMsg(t *testing.T, name, protoJSON string) *dynamicpb.Message {
 	t.Helper()

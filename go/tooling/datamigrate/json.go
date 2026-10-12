@@ -11,7 +11,7 @@ import (
 // applying the field-level Operation (ADD_FIELD_DEFAULT,
 // REMOVE_FIELD, RENAME_FIELD). Used by encoding=json data
 // migrations on every KV dialect (apply/redis,
-// apply/s3 — Phase E v1).
+// apply/s3).
 //
 // Inputs:
 //

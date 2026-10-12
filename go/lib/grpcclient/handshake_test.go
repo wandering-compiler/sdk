@@ -23,7 +23,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/grpcclient"
 )
 
-// G3i3-GW-A handshake fixtures. The unit tests in tls_test.go
+// Handshake fixtures. The unit tests in tls_test.go
 // cover env parsing + branch dispatch; this file pins the
 // runtime behaviour against an ephemeral self-signed cert: the
 // DialOption produced by BackendDialOption actually completes a
@@ -169,7 +169,7 @@ func TestBackendDial_HandshakeWithCustomCA(t *testing.T) {
 	}
 }
 
-// G3i3-GW-A: internal TLS on, no CA pinned → handshake fails
+// Internal TLS on, no CA pinned → handshake fails
 // because the self-signed cert isn't in the system trust store.
 // There is no skip-verify escape hatch any more: when internal TLS
 // is on, verification is always real. Surfaces as a recognisable
@@ -204,7 +204,7 @@ func TestBackendDial_HandshakeFailsWithoutTrust(t *testing.T) {
 	}
 }
 
-// G3i3-GW-A: mTLS happy path. Server requires + verifies a
+// mTLS happy path. Server requires + verifies a
 // client cert presented during handshake; client supplies one
 // via _CLIENT_CERT + _CLIENT_KEY. Same self-signed cert acts as
 // both server cert AND client cert AND CA — simplifies the
@@ -252,7 +252,7 @@ func TestBackendDial_MTLSHandshake(t *testing.T) {
 	}
 }
 
-// G3i3-GW-A: mTLS server rejects a client that presents NO
+// mTLS server rejects a client that presents NO
 // client cert. The connection should fail at the handshake
 // step; the dial-side knobs aren't checking client-cert
 // presence (that's the server's job) — this test pins the

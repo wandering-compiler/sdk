@@ -7,10 +7,10 @@ import "google/protobuf/descriptor.proto";
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/pg;pgpb";
 
 // (w17.pg.module) — Postgres-specific module-level options. Lives next
-// to (w17.module) (dialect-agnostic) but holds PG-only state. Per
-// D32 each dialect has its own per-module proto extension; this is PG's.
+// to (w17.module) (dialect-agnostic) but holds PG-only state. Each
+// dialect has its own per-module proto extension; this is PG's.
 //
-// Today it carries the domain-level custom_types registry (D36): the
+// Today it carries the domain-level custom_types registry: the
 // list of custom PG types this domain registers + their conversion paths
 // + extension prerequisites. Field-level (w17.pg.field).custom_type
 // references entries here (or in (w17.pg.project), the project-wide
@@ -55,12 +55,12 @@ message PgModule {
 //   - extensions required by this type (`required_extensions` —
 //     manifest-aggregated)
 //   - conversion paths to / from other types (`convertible_to /
-//     convertible_from`) used by D33 engine USING-clause rendering
+//     convertible_from`) used by the engine's USING-clause rendering
 message CustomType {
   // Alias the field-level (w17.pg.field).custom_type references. Must
   // be a valid identifier, unique within the resolved registry (project
   // + domain merge), and must not collide with native PG type keywords
-  // (text / integer / jsonb / …) or with reserved D14 sem names.
+  // (text / integer / jsonb / …) or with reserved semantic type names.
   string alias = 1;
 
   // The raw PG SQL type expression — appears verbatim in CREATE TABLE
@@ -135,7 +135,7 @@ message CustomFunction {
 // Conversion — one cast / transformation entry inside CustomType's
 // `convertible_to` or `convertible_from` lists.
 //
-// The `cast` template is a Go text/template (matches D33 `using:`
+// The `cast` template is a Go text/template (matches the `using:`
 // templates) with these placeholders:
 //   {{.Col}}   — column name (post-rename)
 //   {{.Table}} — table name (no namespace qualifier)
@@ -158,7 +158,7 @@ message Conversion {
   // {{.Col}} + {{.Table}} context.
   string cast = 2;
 
-  // Human-readable rationale shown in D35 risk analysis when this
+  // Human-readable rationale shown in the risk analysis when this
   // conversion is used (e.g. "PG implicit cast preserves all values"
   // or "Pads with zeros to new dimension; lossy if author meant
   // re-inference").

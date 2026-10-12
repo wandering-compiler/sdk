@@ -10861,9 +10861,8 @@ type GatewayTarget struct {
 	// include every (w17.http)-annotated service in one
 	// bundle (legacy / cross-domain shape). Set to one
 	// domain name per target to emit per-domain gateway
-	// bundles (slice 2026-05-04 — every gateway binds to ONE
-	// business/facade tier, naming convention
-	// `<domain>-gateway`).
+	// bundles (every gateway binds to ONE business/facade
+	// tier, naming convention `<domain>-gateway`).
 	Domain string `protobuf:"bytes,4,opt,name=domain,proto3" json:"domain,omitempty"`
 	// I18nDir is the codegen-baked default for the
 	// `<EnvPrefix>_I18N_DIR` env var on the generated main.go.

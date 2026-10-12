@@ -177,9 +177,9 @@ func recoverLoopTick(ctx context.Context, label string) {
 type HandlerFunc func(ctx context.Context, topic string, envelope []byte) error
 
 // Subscriber attaches to one channel's transport and feeds
-// envelope deliveries to a HandlerFunc. Phase 10 ships the
-// concrete implementations (NATS JetStream, Redis Streams,
-// in-process MEMORY); Phase 9 only depends on the contract.
+// envelope deliveries to a HandlerFunc. Implementations: NATS
+// JetStream, Redis Streams, in-process memory; generated code
+// depends only on the contract.
 //
 // The Subscribe / Drain split mirrors the typical broker
 // client shape — Subscribe registers + starts feeding,
@@ -206,7 +206,7 @@ type Subscriber interface {
 // runtime env (`W17_QUEUE_<NAME>`) — the factory hides the
 // env lookup so generated code doesn't read env directly.
 //
-// Phase 10's SubscriberFactory implementation registers
+// The SubscriberFactory implementation registers
 // transport adapters keyed by Channel.Transport from the
 // parser's ChannelRegistry.
 type SubscriberFactory interface {

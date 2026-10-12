@@ -41,15 +41,15 @@ type Applier struct {
 	conn *pgx.Conn
 	dsn  string
 
-	// phaseColEnsured caches the idempotent Q52 bootstrap (ALTER TABLE
+	// phaseColEnsured caches the idempotent phase-column bootstrap (ALTER TABLE
 	// … ADD COLUMN IF NOT EXISTS post_tx_complete) so it runs at most
 	// once per connection. See ensurePhaseColumn.
 	phaseColEnsured bool
 }
 
 // Compile-time check the impl satisfies the migrate.Applier
-// contract + the optional FingerprintCapable for Phase D drift
-// detection + the optional ResumableApplier for Q52 two-phase
+// contract + the optional FingerprintCapable for drift
+// detection + the optional ResumableApplier for two-phase
 // crash recovery.
 var _ migrate.Applier = (*Applier)(nil)
 var _ migrate.Wiper = (*Applier)(nil)
@@ -158,7 +158,7 @@ func (a *Applier) hasPhaseColumn(ctx context.Context) (bool, error) {
 	return has, nil
 }
 
-// ensurePhaseColumn idempotently adds the Q52 `post_tx_complete`
+// ensurePhaseColumn idempotently adds the `post_tx_complete`
 // column to a pre-existing w17_migrations table (one created before
 // this feature shipped). Brand-new DBs get the column from the first
 // migration's CREATE TABLE (RenderW17MigrationsCreate), so the ALTER is
@@ -188,7 +188,7 @@ func (a *Applier) ensurePhaseColumn(ctx context.Context) error {
 	return nil
 }
 
-// MigrationPhase reports the Q52 applied-state phase of migration
+// MigrationPhase reports the applied-state phase of migration
 // `id` on this target (migrate.ResumableApplier). A missing table or
 // missing row reads as PhaseFresh (not an error) so a fresh DB / a
 // not-yet-applied migration flows through the normal Apply path.
@@ -257,7 +257,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	return a.applyPostTx(ctx, m)
 }
 
-// ApplyPostTx runs ONLY the migration's post-tx half — the Q52 resume
+// ApplyPostTx runs ONLY the migration's post-tx half — the resume
 // path (migrate.ResumableApplier). The orchestrator calls this for a
 // PhasePending migration whose up_sql already committed (its pending
 // w17_migrations row exists); re-running up_sql would wedge on the
@@ -270,7 +270,7 @@ func (a *Applier) ApplyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 }
 
 // postTxAdvisoryLockKey is the session-level advisory-lock key the
-// post-tx skirt serialises on (Q65-engine-1). A fixed key in the
+// post-tx skirt serialises on. A fixed key in the
 // migrator's own namespace — the skirt is rare + sequential, so a single
 // global key (rather than one per migration) is enough and simplest.
 const postTxAdvisoryLockKey int64 = 0x77313770737474 // "w17ptt"
@@ -279,7 +279,7 @@ const postTxAdvisoryLockKey int64 = 0x77313770737474 // "w17ptt"
 // SimpleProtocol. Each runs in its own autocommit so CONCURRENTLY
 // stays outside the implicit multi-statement transaction.
 //
-// Q65-engine-1: the skirt runs OUTSIDE any transaction (CONCURRENTLY
+// The skirt runs OUTSIDE any transaction (CONCURRENTLY
 // can't be wrapped), so the w17_migrations PK that serialises the in-tx
 // half does NOT protect it — two migrators both resuming the same
 // PhasePending migration would each run `DROP INDEX CONCURRENTLY IF

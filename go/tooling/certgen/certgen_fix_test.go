@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// R-certgen-1: no-clobber invariant. If exactly ONE of ca.crt /
+// No-clobber invariant. If exactly ONE of ca.crt /
 // ca.key is present, EnsureCerts must refuse rather than mint a fresh
 // CA over the surviving half (which would invalidate distributed
 // trust / any leaf the old key signed).
@@ -84,7 +84,7 @@ func TestEnsureCA_NeitherPresent_Mints(t *testing.T) {
 	}
 }
 
-// R-certgen-2: splitSANs must de-dup IPs (it already de-dups DNS).
+// splitSANs must de-dup IPs (it already de-dups DNS).
 // A caller-supplied loopback must not produce a duplicate entry when
 // the unconditional loopback pair is appended.
 
@@ -126,7 +126,7 @@ func TestSplitSANs_LoopbackAlwaysPresent(t *testing.T) {
 	}
 }
 
-// Q17-certgen-1: the no-clobber invariant must also hold for the LEAF
+// The no-clobber invariant must also hold for the LEAF
 // (server.crt/server.key), mirroring the CA guard. If exactly one half
 // survives, EnsureCerts must refuse rather than overwrite the survivor.
 func TestEnsureLeaf_HalfPresent_KeyMissing_Refused(t *testing.T) {

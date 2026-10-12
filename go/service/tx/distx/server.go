@@ -65,7 +65,7 @@ type Option func(*Server)
 // WithDefaultTxTimeout overrides [DefaultOrphanTimeout]. Pass
 // `0` to disable the fallback entirely (callers that pass
 // `tx_timeout_ms = 0` then register tx without any cleanup —
-// the pre-G3-DT-01 behaviour, restored only when the
+// the behaviour before the orphan guard, restored only when the
 // operator explicitly opts out).
 //
 // The override is enforcement-only: it doesn't shorten an
@@ -79,7 +79,7 @@ func WithDefaultTxTimeout(d time.Duration) Option {
 // registry — there's no useful default and a nil registry
 // would surface as silent NPEs on first request.
 //
-// G3-DT-01: applies [DefaultOrphanTimeout] to every Begin
+// Applies [DefaultOrphanTimeout] to every Begin
 // whose `tx_timeout_ms` is 0; tune via
 // [WithDefaultTxTimeout]. Audit closed 2026-05-05.
 func NewServer(reg *txregistry.Memory, opts ...Option) *Server {
@@ -131,7 +131,7 @@ func (s *Server) Begin(ctx context.Context, req *distxpb.BeginRequest) (*distxpb
 		// Caller-supplied bound — honoured verbatim.
 		opts.Timeout = time.Duration(req.GetTxTimeoutMs()) * time.Millisecond
 	case s.defaultTxTimeout > 0:
-		// G3-DT-01 orphan guard: fall back to the server's
+		// Orphan guard: fall back to the server's
 		// default when the caller didn't bound the tx. Without
 		// this, a caller crash between Begin and Commit would
 		// leak the *sql.Tx + its pooled connection forever

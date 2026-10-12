@@ -103,7 +103,7 @@ func isMissingTable(err error) bool {
 // through go-sql-driver's multi-statement path because we forced
 // `multiStatements=true` in the DSN.
 //
-// RESUME-GAP INVARIANT (Q52): unlike Postgres, MySQL has no
+// RESUME-GAP INVARIANT: unlike Postgres, MySQL has no
 // PhasePending recovery here — AppliedHead does not filter on a
 // `post_tx_complete` marker, and up_post_tx runs as a SEPARATE Exec
 // after up_sql has already committed. In the skirt layout the
@@ -235,8 +235,8 @@ func (a *Applier) Close() error {
 }
 
 // Fingerprint extracts the canonical MySQL schema state via
-// information_schema and returns its hex-encoded sha256
-// (Phase D — D-iter3-14). Excludes the w17_migrations
+// information_schema and returns its hex-encoded sha256.
+// Excludes the w17_migrations
 // bookkeeping table; sorted by name + columns. Schema scope is
 // the current `DATABASE()` (= the DB embedded in the DSN).
 func (a *Applier) Fingerprint(ctx context.Context) (string, error) {

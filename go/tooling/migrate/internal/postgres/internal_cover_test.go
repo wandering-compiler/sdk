@@ -43,7 +43,7 @@ func TestSplitStatements(t *testing.T) {
 	}
 }
 
-// Q65-engine-1: a migration with NO post-tx skirt must return early from
+// A migration with NO post-tx skirt must return early from
 // applyPostTx — before touching the connection — so the common no-skirt
 // migration never pays the advisory-lock round-trip. Constructed with a
 // nil conn so any conn use would panic, proving the early return fires.

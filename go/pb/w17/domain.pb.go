@@ -223,7 +223,7 @@ type PluginActivation struct {
 	// the orchestrator applies defaults (Authorization / Bearer)
 	// when the activation omits it.
 	AuthInput *AuthInput `protobuf:"bytes,5,opt,name=auth_input,json=authInput,proto3" json:"auth_input,omitempty"`
-	// Feature-tag set this activation enables (Phase G2). Wrapper
+	// Feature-tag set this activation enables. Wrapper
 	// semantics distinguish three states proto3's bare repeated
 	// can't:
 	//

@@ -382,7 +382,7 @@ const (
 	Type_JSON  Type = 7 // structured JSON; PG → JSONB, MySQL → JSON, SQLite → TEXT.
 	// Also valid on bytes carrier for when the caller holds a []byte.
 	Type_IP          Type = 8  // IP address (v4/v6); PG → INET, MySQL → VARCHAR(45), SQLite → TEXT
-	Type_TSEARCH     Type = 9  // full-text search document; PG → TSVECTOR, MySQL → TEXT + FULLTEXT index (iter-2), SQLite → TEXT + FTS5 (iter-2)
+	Type_TSEARCH     Type = 9  // full-text search document; PG → TSVECTOR, MySQL → TEXT + FULLTEXT index, SQLite → TEXT + FTS5
 	Type_MAC_ADDRESS Type = 60 // IEEE 802 MAC address; PG → MACADDR (native enforces format),
 	// Path-family presets (carrier: string). All three store as TEXT
 	// on PG and emit a `blank: false` CHECK by default. D22d.
@@ -577,7 +577,7 @@ const (
 	// CRYPTED_SECRET column and no key REFUSES TO BOOT rather than starting and
 	// failing on the first read.
 	Type_CRYPTED_SECRET Type = 68
-	// Numeric carriers (carrier: int32 / int64 / double — see D2 table)
+	// Numeric carriers (carrier: int32 / int64 / double)
 	Type_NUMBER     Type = 10
 	Type_ID         Type = 11
 	Type_COUNTER    Type = 12
@@ -717,7 +717,7 @@ func (Type) EnumDescriptor() ([]byte, []int) {
 
 // AutoDefault — dynamically resolved default value. Emitters render each
 // variant per dialect. IR builder rejects invalid carrier × AutoDefault
-// combinations (see D7 table).
+// combinations.
 type AutoDefault int32
 
 const (
@@ -732,7 +732,7 @@ const (
 	AutoDefault_UUID_V4 AutoDefault = 10
 	AutoDefault_UUID_V7 AutoDefault = 11
 	// JSON literals — valid on string carrier (stored as '[]' / '{}') and on
-	// JSONB carrier when JSONB lands (iter-2+). Reserved now for shape
+	// JSONB carrier when JSONB lands. Reserved now for shape
 	// stability.
 	AutoDefault_EMPTY_JSON_ARRAY  AutoDefault = 20
 	AutoDefault_EMPTY_JSON_OBJECT AutoDefault = 21
@@ -1213,21 +1213,21 @@ type Field struct {
 	// FILE_PATH with no extensions is an IR-time error.
 	Extensions []string `protobuf:"bytes,19,rep,name=extensions,proto3" json:"extensions,omitempty"`
 	// Author-supplied size hint, in bytes, that the cost-based optimizer
-	// (iter-2 §B1) reads when deciding JOIN-vs-prefetch for relations
+	// reads when deciding JOIN-vs-prefetch for relations
 	// that include this column. The hint matters for variable-size
 	// carriers (text / json / bytes); fixed-size carriers (bool, int,
 	// double, fixed-precision DECIMAL with precision) compute their
 	// size from the type, so the hint is a no-op there.
 	//
 	// Unset (0) on a variable-size column = "no information" → the
-	// optimizer applies its conservative default (4096 in iter-2 MVP).
+	// optimizer applies its conservative default (4096).
 	// Set this only when you know the typical row's payload differs
 	// materially from 4096 — e.g. `body_text` averaging 8 KiB or
 	// `kb_article_md` averaging 200 KiB. The number is the *average*
 	// size; outliers don't shift the decision because the optimizer
 	// sums over rows × Σ(field_avg) regardless.
 	EstimatedAvgBytes uint32 `protobuf:"varint,24,opt,name=estimated_avg_bytes,json=estimatedAvgBytes,proto3" json:"estimated_avg_bytes,omitempty"`
-	// custom_validator (G3-V-03) — escape hatch for validation
+	// custom_validator — escape hatch for validation
 	// rules the annotation surface can't express. Names a Go
 	// function the codegen calls before any other rule on the
 	// field; a non-nil returned error short-circuits the
@@ -1255,8 +1255,8 @@ type Field struct {
 	// Authors typically use one OR the other; combining is
 	// legal but unusual.
 	CustomValidator string `protobuf:"bytes,25,opt,name=custom_validator,json=customValidator,proto3" json:"custom_validator,omitempty"`
-	// rest_alias renames this field on the REST surface only
-	// (G3i3-Misc-A). The proto / gRPC wire keeps the original
+	// rest_alias renames this field on the REST surface only.
+	// The proto / gRPC wire keeps the original
 	// field name for compat; the gateway swaps it to the alias
 	// before writing JSON responses and accepts both names on
 	// request decode (so existing consumers don't break when
@@ -2108,8 +2108,8 @@ var (
 
 // Extension fields to descriptorpb.MessageOptions.
 var (
-	// (w17.validate) — message-level cross-field validation rules
-	// (G3-V-01). Companion to (w17.field): single-field constraints
+	// (w17.validate) — message-level cross-field validation rules.
+	// Companion to (w17.field): single-field constraints
 	// (max_len, gte, regex, …) belong on the field; rules that span
 	// MULTIPLE fields (`required_if`, `at_most_one`, `less_than`,
 	// `not_contains`, …) belong here.

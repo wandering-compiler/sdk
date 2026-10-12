@@ -1,6 +1,4 @@
-// Auth middleware shape for generated REST gateways
-// (G3-GW-03). Mirrors the protobridge `runtime/auth.go`
-// pattern that the conventions document calls out:
+// Auth middleware shape for generated REST gateways:
 //
 //   - HTTP request hits the gateway.
 //   - Auth function reads ALL request headers, calls the
@@ -196,9 +194,7 @@ func WriteUnauthorized(w http.ResponseWriter, scheme ...string) {
 }
 
 // userMetadataKey is the outgoing gRPC metadata key carrying
-// the base64-encoded AuthResp. Mirrors protobridge's
-// `x-protobridge-user` shape — different prefix to avoid
-// collisions when both stacks coexist in the same process.
+// the base64-encoded AuthResp.
 const userMetadataKey = "x-w17-user"
 
 // SetUserMetadata threads the marshaled AuthResp into the
@@ -337,7 +333,7 @@ func RequireAuth(authFn AuthFunc, next http.HandlerFunc) http.HandlerFunc {
 }
 
 // CachedAuthFunc wraps an inner AuthFunc with an in-memory TTL
-// cache (G3-GW-03 cache layer), keyed on the request's
+// cache, keyed on the request's
 // credential-bearing headers (default: Authorization / Cookie /
 // X-Api-Key — see [defaultAuthCacheKeyHeaders]). Hit returns the
 // cached userData without calling the inner func.

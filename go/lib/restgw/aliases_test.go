@@ -15,7 +15,7 @@ import (
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
-// G3i3-Misc-A: messages without (w17.field).rest_alias take
+// Messages without (w17.field).rest_alias take
 // the byte-for-byte fast path through MarshalProto. Pin the
 // behaviour with a representative descriptor proto (a real
 // w17 message we already depend on, so the test doesn't need
@@ -37,7 +37,7 @@ func TestMarshalProto_NoAliasFastPath(t *testing.T) {
 	}
 }
 
-// G3i3-Misc-A: with a (w17.field).rest_alias annotation on
+// With a (w17.field).rest_alias annotation on
 // the message descriptor, the JSON output renames the
 // aliased keys. Builds a synthetic proto file descriptor to
 // exercise the rewrite path without relying on a generated
@@ -62,7 +62,7 @@ func TestMarshalProto_AliasedFieldRenamesKey(t *testing.T) {
 	}
 }
 
-// G3i3-Misc-A: the JSON tree walker swaps aliased keys at
+// The JSON tree walker swaps aliased keys at
 // every nesting depth. Drives the helper directly with a
 // hand-rolled descriptor + JSON to keep the test independent
 // of any full proto compile.
@@ -171,7 +171,7 @@ func TestRestoreAliasesOnRequestJSON_AcceptsBoth(t *testing.T) {
 	}
 }
 
-// Q66-restgw-1: a request that supplies BOTH a field's rest_alias AND its
+// A request that supplies BOTH a field's rest_alias AND its
 // canonical proto/json name is ambiguous — both rewrite to the same key, so
 // the surviving value was nondeterministic (map-iteration order). Must be
 // rejected, deterministically, instead of silently picking one at random.
@@ -218,7 +218,7 @@ func TestRestoreAliasesOnRequestJSON_AliasAndCanonicalCollision_Rejected(t *test
 	}
 }
 
-// B27-restgw-1: the alias+canonical collision the helper rejects must ALSO be
+// The alias+canonical collision the helper rejects must ALSO be
 // surfaced by UnmarshalProto (the integration). UnmarshalProto previously did
 // `if err == nil { payload = restored }`, swallowing the collision error and
 // letting protojson DiscardUnknown silently drop one key — a partial-success on

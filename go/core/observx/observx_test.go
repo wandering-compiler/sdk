@@ -116,7 +116,7 @@ func TestReportError_AttachesToActiveOTelSpan(t *testing.T) {
 	}
 }
 
-// T-grpcerr-1: ReportEvent is the non-exception channel for
+// ReportEvent is the non-exception channel for
 // handled, user-correctable conditions. It is gated behind
 // W17_OBSERVX_DEBUG and is a no-op when the knob is off.
 func TestReportEvent_OffByDefault_NoOp(t *testing.T) {

@@ -1,6 +1,6 @@
 // Package fingerprint computes a deterministic hash of a target
-// database's schema state. The hash is the input to the Phase D
-// (D-iter3-14) drift-detection check: w17migrate computes the
+// database's schema state. The hash is the input to the
+// drift-detection check: w17migrate computes the
 // current target fingerprint before applying each migration and
 // compares against the migration's `expected_pre_fingerprint`
 // header.
@@ -9,7 +9,7 @@
 // KV / QUEUE / S3 are schemaless; the bookkeeping store IS the
 // schema state, and is already covered by AppliedHead. Drift
 // detection there is conceptually different (data drift, not
-// schema drift) and out of Phase D scope.
+// schema drift) and out of scope here.
 //
 // **Algorithm.** Query information_schema (or pg_catalog /
 // sqlite_master per dialect) for tables + columns; canonicalise
@@ -28,7 +28,7 @@
 // a per-dialect extension to the same Format.
 //
 // **Partial coverage, not a stub.** This package is the
-// apply-side fingerprinting half of Phase D. The comparison in
+// apply-side fingerprinting half of drift detection. The comparison in
 // w17migrate is LIVE: `checkPreFingerprint` extracts the real
 // schema and REFUSES the migration on a mismatch. What is still
 // missing is the compile-side half — console emitting a real
@@ -147,7 +147,7 @@ func (s Schema) FingerprintHex() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// excludedTables lists the bookkeeping tables Phase D
+// excludedTables lists the bookkeeping tables
 // fingerprinting must skip — they're an artifact of the
 // migrator itself, not the user's schema, and re-applying a
 // migration changes their content (the per-version row in

@@ -95,7 +95,7 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 // scoped; we use a single Conn so the OFF setting reaches the
 // BEGIN that follows.
 //
-// RESUME-GAP INVARIANT (Q52): unlike Postgres, SQLite has no
+// RESUME-GAP INVARIANT: unlike Postgres, SQLite has no
 // PhasePending recovery here — AppliedHead does not filter on a
 // `post_tx_complete` marker, and up_post_tx runs as a SEPARATE Exec
 // after up_sql has already committed. In the skirt layout the
@@ -274,7 +274,7 @@ func (a *Applier) Close() error {
 
 // Fingerprint extracts the canonical SQLite schema state via
 // sqlite_master + pragma_table_info and returns its hex-encoded
-// sha256 (Phase D — D-iter3-14). Excludes the w17_migrations
+// sha256. Excludes the w17_migrations
 // bookkeeping table + SQLite's internal sqlite_* tables; sorted
 // by name + columns.
 func (a *Applier) Fingerprint(ctx context.Context) (string, error) {

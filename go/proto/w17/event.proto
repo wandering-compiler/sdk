@@ -139,8 +139,7 @@ message Event {
   // public events are awaitable — an internal one never lands
   // there to be seen).
   //
-  // Original devlog's `protobridge.event.visibility: PUBLIC`
-  // maps directly to this. Internal events (lifecycle
+  // Internal events (lifecycle
   // triggers, orchestrator pipeline messages) stay
   // `public: false` so they're never wired to a public
   // frontend stream — only the backend durable consumers

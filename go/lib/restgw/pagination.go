@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// SetNextPageLink (G3-GW-08) writes a `Link: <url>; rel="next"`
+// SetNextPageLink writes a `Link: <url>; rel="next"`
 // header pointing at the next page of a cursor-paginated
 // list response. Authoring shape:
 //

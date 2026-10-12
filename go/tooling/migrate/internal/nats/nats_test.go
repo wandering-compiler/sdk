@@ -33,7 +33,7 @@ func TestDSNToServer_HostPort(t *testing.T) {
 }
 
 func TestDSNToServer_DropsUserInfo(t *testing.T) {
-	// Auth flags come in Phase G; for now user info on the URL
+	// NATS auth is not supported yet; user info on the URL
 	// is silently dropped (not in the --server form).
 	got, err := nats.DSNToServer("nats://user:pass@nats.local:4222")
 	if err != nil {

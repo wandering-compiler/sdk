@@ -12,7 +12,7 @@ import (
 )
 
 // resumableStub is a stub.Applier that also implements
-// migrate.ResumableApplier (Q52). It reports a configured per-id phase
+// migrate.ResumableApplier. It reports a configured per-id phase
 // and records which ids took the post-tx resume path vs the full
 // Apply path (the latter via the embedded stub's Calls()).
 type resumableStub struct {

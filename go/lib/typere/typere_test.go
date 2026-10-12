@@ -35,7 +35,7 @@ func TestValidEmail(t *testing.T) {
 	}
 }
 
-// TestValidEmail_RejectsControlChars — Q33-val-1. The byte-scan
+// TestValidEmail_RejectsControlChars. The byte-scan
 // replaced net/mail.ParseAddress, which rejected control characters;
 // the scan must keep doing so. A value carrying CR/LF/TAB/NUL is never
 // a valid email and, reaching an SMTP-header sink downstream, is a

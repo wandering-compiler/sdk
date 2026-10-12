@@ -100,13 +100,13 @@ func (x *PgModule) GetCustomFunctions() []*CustomFunction {
 //   - extensions required by this type (`required_extensions` —
 //     manifest-aggregated)
 //   - conversion paths to / from other types (`convertible_to /
-//     convertible_from`) used by D33 engine USING-clause rendering
+//     convertible_from`) used by the engine's USING-clause rendering
 type CustomType struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Alias the field-level (w17.pg.field).custom_type references. Must
 	// be a valid identifier, unique within the resolved registry (project
 	// + domain merge), and must not collide with native PG type keywords
-	// (text / integer / jsonb / …) or with reserved D14 sem names.
+	// (text / integer / jsonb / …) or with reserved semantic type names.
 	Alias string `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`
 	// The raw PG SQL type expression — appears verbatim in CREATE TABLE
 	// column clause and in ALTER TABLE … TYPE statements.
@@ -308,7 +308,7 @@ func (x *CustomFunction) GetIsAggregate() bool {
 // Conversion — one cast / transformation entry inside CustomType's
 // `convertible_to` or `convertible_from` lists.
 //
-// The `cast` template is a Go text/template (matches D33 `using:`
+// The `cast` template is a Go text/template (matches the `using:`
 // templates) with these placeholders:
 //
 //	{{.Col}}   — column name (post-rename)
@@ -333,7 +333,7 @@ type Conversion struct {
 	// engine generates an ALTER COLUMN TYPE statement; rendered with
 	// {{.Col}} + {{.Table}} context.
 	Cast string `protobuf:"bytes,2,opt,name=cast,proto3" json:"cast,omitempty"`
-	// Human-readable rationale shown in D35 risk analysis when this
+	// Human-readable rationale shown in the risk analysis when this
 	// conversion is used (e.g. "PG implicit cast preserves all values"
 	// or "Pads with zeros to new dimension; lossy if author meant
 	// re-inference").

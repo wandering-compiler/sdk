@@ -157,7 +157,7 @@ func TestRedisBus_HandlerErrorClaimRedelivers_Embedded(t *testing.T) {
 	})
 }
 
-// TestRedisBus_DrainOneOfTwoSubscribers_Embedded — Q36-bus-2. Draining
+// TestRedisBus_DrainOneOfTwoSubscribers_Embedded. Draining
 // ONE subscriber must not block on a SIBLING subscriber's still-running
 // loops. Pre-fix the consume+claim loops Add to a BUS-shared WaitGroup,
 // so subA.Drain (which Waits on that shared wg) can never reach zero
@@ -413,7 +413,7 @@ func TestRedisBus_CloseIdempotent_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (R-bus-1 + R-bus-6): a message whose handler is still
+// INVARIANT: a message whose handler is still
 // in-flight when its PEL delivery counter is already at MaxDeliver must
 // NOT be routed to the DLQ + XACK'd out from under the running handler.
 // The in-flight skip in claimPending runs BEFORE the max-deliver/DLQ
@@ -487,7 +487,7 @@ func TestRedisBus_InFlightAtCapNotDLQd_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (R-bus-4): Dispatch detaches from the caller's ctx, so an
+// INVARIANT: Dispatch detaches from the caller's ctx, so an
 // emit issued on an already-cancelled RPC ctx is still published +
 // delivered — fire-and-forget emits must not be lost just because the
 // originating request finished.
@@ -525,7 +525,7 @@ func TestRedisBus_DispatchDetachesCanceledCtx_Embedded(t *testing.T) {
 	}
 }
 
-// INVARIANT (R-bus-7): if the consumer group disappears under the bus
+// INVARIANT: if the consumer group disappears under the bus
 // — a Redis-as-cache FLUSHALL or a restart of a Redis without
 // persistence drops the stream + its groups — the consume loop must
 // recreate the group and resume delivery. The bug: XREADGROUP then

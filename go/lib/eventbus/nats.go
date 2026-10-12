@@ -112,7 +112,7 @@ type NatsBusOptions struct {
 // per-handle advisory subscription forwards the original payload
 // to the channel's dead-letter stream (`<channel>_dlq`, subjects
 // `_dlq.<channel>[.<topic>]`) and fires Observer.OnDrop — parity
-// with the Redis adapter's `<channel>.dlq` routing (R-bus-3).
+// with the Redis adapter's `<channel>.dlq` routing.
 type NatsBus struct {
 	opts NatsBusOptions
 
@@ -137,7 +137,7 @@ type NatsBus struct {
 	// for one channel share it and share the advisory queue group that feeds
 	// off it; per-object maps left each blind to the other's work, and one
 	// could dead-letter a message its sibling was still processing — the
-	// incoherent drop+success D1 closed, through the guard's blind spot. The
+	// incoherent drop+success the in-flight guard closed, through the guard's blind spot. The
 	// consumer stays in the key because a DIFFERENT consumer on the same
 	// stream has its own delivery budget: its exhausted message must still
 	// reach the DLQ, not be skipped because someone else is holding the same
@@ -315,7 +315,7 @@ func (b *NatsBus) Dispatch(ctx context.Context, channel, topic string, envelope 
 	}
 	// Detach from the caller's (cancellable) RPC ctx so a fire-and-forget
 	// emit isn't lost when the originating request ctx is already cancelled
-	// — mirrors MemoryBus.Dispatch (R-bus-4). Trace/baggage carry forward;
+	// — mirrors MemoryBus.Dispatch. Trace/baggage carry forward;
 	// cancellation does not. The emit runs on the committing goroutine, so
 	// the whole of it — stream check, publish, acknowledgement — is bounded
 	// by PublishTimeout: during an outage each event fails after that long
@@ -442,7 +442,7 @@ func applyNatsRetention(cfg *jetstream.StreamConfig, r StreamRetention, defaultA
 }
 
 // ensureDLQStream materialises the dead-letter stream that
-// receives messages a consumer drops past MaxDeliver (R-bus-3).
+// receives messages a consumer drops past MaxDeliver.
 // Its subjects (`_dlq.<channel>` + `_dlq.<channel>.>`) live in a
 // namespace disjoint from the main stream's `<channel>.>` filter,
 // so DLQ'd messages are NOT re-consumed by the same durable (which
@@ -546,20 +546,19 @@ type natsSubscriber struct {
 	// waits on it. Per-subscriber (not bus-shared) so draining one
 	// subscriber never races a SIBLING's wg.Add — a bus-shared
 	// WaitGroup panicked with "reused before Wait returned" when a
-	// second subscriber kept delivering during the first's drain
-	// (Q36-bus-1).
+	// second subscriber kept delivering during the first's drain.
 	wg sync.WaitGroup
 	// draining is set (under mu) when Drain begins, BEFORE the consume
 	// handles are Stop()'d. The Consume callback checks it (also under
 	// mu) and short-circuits without a wg.Add once draining — so THIS
 	// subscriber's per-message Add can't race its own Drain's wg.Wait
-	// across the zero counter (the WaitGroup-reuse panic R-bus-2).
+	// across the zero counter (the WaitGroup-reuse panic).
 	draining bool
 }
 
 // markInFlight records a stream sequence as being processed under (channel,
-// durable) and returns the release func (D1 — parity with the Redis adapter's
-// R-bus-1 guard). The MAX_DELIVERIES advisory can fire while a slow handler on
+// durable) and returns the release func (parity with the Redis adapter's
+// in-flight guard). The MAX_DELIVERIES advisory can fire while a slow handler on
 // the message's last delivery is still running (it overran AckWait); routing
 // that message to the DLQ then would drop + OnDrop a message that may yet
 // succeed (the handler later Acks + OnDeliverSuccess) — an incoherent
@@ -728,8 +727,8 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 	consumerCfg := natsConsumerConfig(s.bus.opts.Delivery, consumerName, s.channel, maxDeliver, ackWait)
 
 	// A dedicated DLQ stream receives poison messages past MaxDeliver so
-	// they're never silently dropped (R-bus-3 — parity with the Redis
-	// adapter's `<channel>.dlq`). Created before the advisory subscription
+	// they're never silently dropped (parity with the Redis adapter's
+	// `<channel>.dlq`). Created before the advisory subscription
 	// that feeds it.
 	if err := s.bus.ensureDLQStream(ctx, s.channel); err != nil {
 		return err
@@ -755,7 +754,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		// Gate new work on the draining flag under the subscriber mutex so
 		// the wg.Add below is atomic with the flag check — once Drain has
 		// set draining (also under mu) no further Add fires, so it can't
-		// race Drain's wg.Wait at the zero counter (R-bus-2). A message that
+		// race Drain's wg.Wait at the zero counter. A message that
 		// slips in mid-drain is Nak'd for redelivery, not silently acked.
 		s.mu.Lock()
 		if s.draining {
@@ -779,7 +778,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			return
 		}
 
-		// D1 — mark this stream sequence in-flight for the handler's
+		// Mark this stream sequence in-flight for the handler's
 		// lifetime so a MAX_DELIVERIES advisory that fires mid-handler
 		// (the slow-handler-past-AckWait race) defers the DLQ decision to
 		// us instead of dropping a message that may still succeed. meta is
@@ -821,7 +820,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))
 		if err != nil {
 			s.bus.opts.Observer.OnDeliverFailure(s.channel, topic, err)
-			// D1 — at the delivery cap THIS path owns the DLQ (it claimed the
+			// At the delivery cap THIS path owns the DLQ (it claimed the
 			// outcome above, or the claim errored and we fall back to the
 			// pre-claim behaviour). Nak'ing here and waiting for the server's
 			// MAX_DELIVERIES advisory is unsafe: while we were running past
@@ -1098,7 +1097,7 @@ type maxDeliverAdvisory struct {
 // routeToDLQ forwards a poison message (one that exhausted
 // MaxDeliver, surfaced by the server's MAX_DELIVERIES advisory)
 // to the channel's dead-letter stream, then fires Observer.OnDrop
-// — DLQ parity with the Redis adapter (R-bus-3). It fetches the
+// — DLQ parity with the Redis adapter. It fetches the
 // original payload from the main stream by the advisory's
 // stream_seq and republishes it to the `_dlq.<channel>[.<topic>]`
 // subject, preserving the dispatch-time topic.
@@ -1108,18 +1107,18 @@ type maxDeliverAdvisory struct {
 // fails, it surfaces OnDeliverFailure instead so a drop is never
 // reported for a message that didn't actually reach the DLQ.
 //
-// Q61-bus-1: the MAX_DELIVERIES advisory rides core NATS, which is
+// The MAX_DELIVERIES advisory rides core NATS, which is
 // fire-and-forget — there is no redelivery, so a transient broker
 // hiccup during the DLQ round-trip would otherwise permanently skip
 // the dead letter. Each broker op (source fetch + republish) is
 // therefore wrapped in a bounded retry so a momentary failure is
 // ridden out rather than dropping the poison message from the DLQ.
 // handleAdvisory is the MAX_DELIVERIES advisory callback. It mirrors the
-// consume callback's drain coordination (R-bus-2): gate new DLQ-routing work
+// consume callback's drain coordination: gate new DLQ-routing work
 // on the draining flag under the subscriber mutex so the wg.Add is atomic with
 // the flag check. Without this an advisory that arrives mid-Drain would run
 // routeToDLQ after Drain's wg.Wait returned — operating on a connection
-// Close() is about to tear down (B4-eventbus-2).
+// Close() is about to tear down.
 func (s *natsSubscriber) handleAdvisory(ctx context.Context, consumer string, payload []byte) {
 	// The advisory arrives on core NATS's async dispatcher, which likewise
 	// has no recovery of its own.
@@ -1144,12 +1143,12 @@ func (s *natsSubscriber) routeToDLQ(ctx context.Context, consumer string, adviso
 		return
 	}
 
-	// D1 — a handler in THIS process is still processing this sequence (it
+	// A handler in THIS process is still processing this sequence (it
 	// overran AckWait on its last delivery, which is why the advisory
 	// fired). Defer the DLQ decision to the consume path: on success it
 	// Acks (no DLQ); on failure at the cap it DLQs itself. Routing here
 	// would drop + OnDrop a message that may yet succeed. Mirrors the Redis
-	// in-flight guard (R-bus-1). This is only the local fast path — the
+	// in-flight guard. This is only the local fast path — the
 	// load-bearing, replica-agnostic guard is the claim below (A-P9-1).
 	if s.inFlightBusy(consumer, adv.StreamSeq) {
 		return
@@ -1216,7 +1215,7 @@ func (s *natsSubscriber) routeToDLQ(ctx context.Context, consumer string, adviso
 // OnDeliverFailure if the DLQ write can't be performed. It is the shared
 // DLQ-write step for both DLQ authorities: the advisory callback
 // (routeToDLQ, after fetching the payload by stream_seq) and the consume
-// path (D1, which already holds the payload when a handler fails at the
+// path (which already holds the payload when a handler fails at the
 // delivery cap). Returns true iff the payload reached the DLQ. The caller
 // supplies its own context deadline (the consume path inherits the handler
 // ctx; routeToDLQ wraps a 10s shutdown bound).
@@ -1234,7 +1233,7 @@ func (s *natsSubscriber) routeToDLQDirect(ctx context.Context, topic string, dat
 }
 
 // natsDLQRetryAttempts / natsDLQRetryBackoff bound the retry loop that
-// rides out a transient broker failure during DLQ routing (Q61-bus-1).
+// rides out a transient broker failure during DLQ routing.
 // Three attempts with a short fixed backoff stay well inside the 10s
 // round-trip deadline while covering a momentary broker hiccup.
 const (
@@ -1306,7 +1305,7 @@ func natsDLQSubject(channel, topic string) string {
 func (s *natsSubscriber) Drain(ctx context.Context) error {
 	s.mu.Lock()
 	// Set draining BEFORE stopping the handles so any callback that fires
-	// after this point short-circuits without a wg.Add (R-bus-2).
+	// after this point short-circuits without a wg.Add.
 	s.draining = true
 	handles := append([]*natsConsumeHandle(nil), s.handles...)
 	s.handles = nil

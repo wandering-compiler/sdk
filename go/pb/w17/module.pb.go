@@ -181,8 +181,8 @@ func (Dialect) EnumDescriptor() ([]byte, []int) {
 	return file_w17_module_proto_rawDescGZIP(), []int{1}
 }
 
-// Capability — what programming model a connection exposes
-// (D42). Each Dialect declares the set of capabilities it
+// Capability — what programming model a connection exposes.
+// Each Dialect declares the set of capabilities it
 // supports; `Connection.used_capability` picks one.
 //
 // RELATIONAL — table-shaped DDL, SQL DML. (PG, MySQL, SQLite.)
@@ -528,7 +528,7 @@ func (x *Module) GetBuildContextExcludes() []string {
 // uses. The name is the label used in `(w17.db.table).connection`
 // overrides AND the identity the migration writer buckets on —
 // artifacts land in `out/migrations/<connection-name>/` (bare
-// `out/migrations/` for the iter-1 single-default layout). The
+// `out/migrations/` for the single-default layout). The
 // dialect + capability + version triple is what the emitter
 // dispatches on.
 //
@@ -542,7 +542,7 @@ type Connection struct {
 	Name    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Dialect Dialect                `protobuf:"varint,2,opt,name=dialect,proto3,enum=w17.Dialect" json:"dialect,omitempty"`
 	Version string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	// Which capability of the dialect this connection uses (D42).
+	// Which capability of the dialect this connection uses.
 	// Required when the dialect has multiple capabilities (e.g.
 	// REDIS = KV or QUEUE); auto-filled to the dialect's sole
 	// capability when single-capability (e.g. POSTGRES =
@@ -552,7 +552,7 @@ type Connection struct {
 	// connection. Only meaningful for KV capability — relational
 	// dialects encode per-column via SQL types.
 	//
-	// PROTOBUF lands in v2.2 (D-iter3-19); JSON is today's
+	// PROTOBUF lands in v2.2; JSON is today's
 	// default + only encoding apply supports in v1 / v2.1.
 	Encoding StorageEncoding `protobuf:"varint,5,opt,name=encoding,proto3,enum=w17.StorageEncoding" json:"encoding,omitempty"`
 	// Per-query memory budget the optimizer respects when picking

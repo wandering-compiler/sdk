@@ -8,7 +8,7 @@ import (
 )
 
 // retryBrokerOp is the bounded retry that rides out a transient broker
-// failure during DLQ routing (Q61-bus-1). These cases pin its contract:
+// failure during DLQ routing. These cases pin its contract:
 // succeed-on-retry, exhaust-and-return-last-error, and ctx-cancel-abort.
 func TestRetryBrokerOp_SucceedsAfterTransientFailure(t *testing.T) {
 	calls := 0

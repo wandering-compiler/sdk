@@ -138,7 +138,7 @@ type RedisBusOptions struct {
 //   - Each Subscriber.Subscribe spawns one consume + one
 //     claim goroutine; Drain cancels both + waits via the
 //     subscriber's own WaitGroup (so draining one subscriber
-//     never blocks on a sibling — Q36-bus-2).
+//     never blocks on a sibling).
 //   - Close drains every tracked subscriber + closes the
 //     go-redis client.
 type RedisBus struct {
@@ -169,7 +169,7 @@ type RedisBus struct {
 	// bus for one channel share the group and the consumer name, so per-object
 	// maps left each blind to the other's work and one could DLQ+XACK a
 	// message mid-flight in its sibling — the incoherent drop+success
-	// mcpbus-sec-4/R-bus-1 closed, through the guard's blind spot. Keying by
+	// the guard exists to prevent, through the guard's blind spot. Keying by
 	// identity closes it for every subscriber in this process. Two PROCESSES
 	// that share an identity (equal GroupPrefix + equal ConsumerName, i.e. two
 	// replicas on one host with the hostname default) cannot be reconciled
@@ -322,7 +322,7 @@ func (b *RedisBus) Dispatch(ctx context.Context, channel, topic string, envelope
 	}
 	// Detach from the caller's (cancellable) RPC ctx so a fire-and-forget
 	// emit isn't lost when the originating request ctx is already cancelled
-	// — mirrors MemoryBus.Dispatch (R-bus-4). Trace/baggage carry forward;
+	// — mirrors MemoryBus.Dispatch. Trace/baggage carry forward;
 	// cancellation does not.
 	// Bounded by PublishTimeout: the emit runs on the committing goroutine.
 	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.opts.PublishTimeout)
@@ -520,11 +520,11 @@ type redisSubscriber struct {
 	// uncancellable pair that keeps consuming, then spins on the error
 	// backoff once the client closes), and the wg.Add(2) below cannot start
 	// from zero concurrently with Drain's wg.Wait — the WaitGroup-reuse
-	// misuse the NATS adapter's identical gate already covers (R-bus-2).
+	// misuse the NATS adapter's identical gate already covers.
 	draining bool
 
 	// wg tracks THIS subscriber's in-flight loop goroutines +
-	// per-message dispatches (Q36-bus-2). Drain waits on it, so
+	// per-message dispatches. Drain waits on it, so
 	// draining one subscriber never blocks on a sibling's loops —
 	// a bus-shared WaitGroup deadlocked Drain (and panicked NATS on
 	// the reuse race) when a second subscriber kept Add-ing.
@@ -532,7 +532,7 @@ type redisSubscriber struct {
 }
 
 // markInFlight records msgID as being held under this subscriber's PEL
-// identity and returns the release func (mcpbus-sec-4 / R-bus-1). The registry
+// identity and returns the release func. The registry
 // lives on the BUS, keyed by identity — see [RedisBus.inFlight] for why the
 // per-object map was the wrong scope. Cross-consumer redelivery remains
 // inherent to the at-least-once / competing-consumers model, so handlers with
@@ -704,7 +704,7 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 					// it present, so without this XREADGROUP would fail with
 					// NOGROUP on every iteration (a 100% CPU tight spin) and
 					// delivery would stall forever. Recreate it so delivery
-					// resumes (R-bus-7).
+					// resumes.
 					s.bus.recreateGroup(ctx, s.channel, s.group)
 				}
 				// Transient Redis hiccup (broker down, NOGROUP just handled,
@@ -726,7 +726,7 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 			// handler for it concurrently, or at MaxDeliver dead-letter and
 			// XACK it while this loop still goes on to deliver it
 			// successfully — one message both dropped and delivered, which
-			// is the incoherence R-bus-1 exists to prevent.
+			// is the incoherence the in-flight guard exists to prevent.
 			//
 			// This tick is the SOLE owner of the marks it takes: they are
 			// released here, once, when the whole batch is done — never
@@ -835,7 +835,7 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 	}
 	for _, p := range pendings {
 		// Skip a message this consumer is still processing BEFORE the
-		// max-deliver/DLQ branch (mcpbus-sec-4 + R-bus-1): a message whose
+		// max-deliver/DLQ branch: a message whose
 		// handler is still in-flight on its FINAL retry would otherwise be
 		// DLQ'd + XACK'd out from under the running handler — double-
 		// processing it (handler completes AND a copy lands on the DLQ) and
@@ -902,7 +902,7 @@ func (b *RedisBus) retryFor(channel string) (int, time.Duration) {
 // has to start when the message enters this process's PEL, not when its turn
 // to run comes. Both callers hold the mark across the whole unit of work they
 // acquired — the consume loop across its batch, the claim loop across the
-// entry it XCLAIM'd (mcpbus-sec-4 / R-bus-1). Marking here as well made
+// entry it XCLAIM'd. Marking here as well made
 // processMessage a second owner of the same unrefcounted key, and its release
 // then unmarked a message the batch was still holding. Do not reintroduce it.
 //

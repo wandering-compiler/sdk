@@ -1,4 +1,4 @@
-// Health endpoint for generated gateways (G3i3-GW-B). Always-
+// Health endpoint for generated gateways. Always-
 // on liveness probe independent of any backend service —
 // gateway responding to /healthz IS the health signal.
 // Backend reachability is a separate concern; consumers who

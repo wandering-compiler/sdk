@@ -22,8 +22,7 @@ func TestCORSConfigFromEnv_DefaultMaxAge(t *testing.T) {
 
 // Operators who explicitly want browser-default short cache
 // set _CORS_MAX_AGE=0 — explicit value MUST be respected
-// (Phase C principle: no surprise overrides of explicit
-// operator config).
+// (no surprise overrides of explicit operator config).
 func TestCORSConfigFromEnv_ExplicitZeroRespected(t *testing.T) {
 	cfg := restgw.CORSConfigFromEnv("X", lookup(map[string]string{
 		"X_CORS_ORIGINS": "https://example.com",

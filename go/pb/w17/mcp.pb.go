@@ -295,7 +295,7 @@ var file_w17_mcp_proto_extTypes = []protoimpl.ExtensionInfo{
 // Extension fields to descriptorpb.MethodOptions.
 var (
 	// (w17.mcp) — expose this RPC as an MCP tool in the
-	// generated MCP proxy (G3i3-GW-MCP). Tool name defaults to
+	// generated MCP proxy. Tool name defaults to
 	// snake_case of the method name; description from the
 	// proto leading comment (or `mcp_description` override).
 	// Streaming RPCs are rejected at parse time — MCP doesn't

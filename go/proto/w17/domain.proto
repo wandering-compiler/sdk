@@ -124,7 +124,7 @@ message PluginActivation {
   // when the activation omits it.
   AuthInput auth_input = 5;
 
-  // Feature-tag set this activation enables (Phase G2). Wrapper
+  // Feature-tag set this activation enables. Wrapper
   // semantics distinguish three states proto3's bare repeated
   // can't:
   //

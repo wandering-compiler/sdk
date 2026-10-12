@@ -33,7 +33,7 @@ type PgField struct {
 	// (w17.field) semantics — `null`, `unique`, bounds, CHECK constraints,
 	// defaults — still apply, and the proto carrier stays `string`.
 	//
-	// NOT raw SQL. D36 replaced the raw-string form with the registry
+	// NOT raw SQL. The raw-string form was replaced with the registry
 	// precisely because a bare type name carries no extension prerequisite
 	// and no conversion template, so a later type change had nothing to
 	// render an ALTER … USING clause from. An unregistered alias is a

@@ -1257,8 +1257,8 @@ type AdminDetail struct {
 	// That is deliberate rather than incidental: narrowing a
 	// create form to a subset while the mutation still
 	// persists the omitted fields is exactly the
-	// mass-assignment shape Q46-admin-1 / Q65-admin-1 refuse
-	// for update. Rendering the full create request keeps the
+	// mass-assignment shape the update form already
+	// refuses. Rendering the full create request keeps the
 	// form and the mutation in agreement by construction. A
 	// separate `create_fields` can narrow it later, with the
 	// matching guard.

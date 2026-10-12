@@ -36,7 +36,7 @@ func (f fakeRegistry) LookupTx(_ context.Context, id, connName string) (*sql.Tx,
 
 // TestAdoptTx_NilRegistry — nil registry short-circuits without
 // touching the metadata. Important: the handler scaffolding
-// passes s.txRegistry which is nil in the M1 default; we must
+// passes s.txRegistry which is nil by default; we must
 // not panic on the metadata read.
 func TestAdoptTx_NilRegistry(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(),

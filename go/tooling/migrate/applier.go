@@ -57,7 +57,7 @@ type Applier interface {
 	// AppliedHead returns the id of the most recently applied
 	// migration on the target (`w17_migrations`). Empty string
 	// = nothing applied yet (fresh DB / connection). Used by the
-	// offline orchestrator (D-iter3-7) as the lower bound when
+	// offline orchestrator as the lower bound when
 	// computing pending = filesystem ∩ (id > head, id ≤ target).
 	//
 	// Implementations:
@@ -87,7 +87,7 @@ type Applier interface {
 type ApplierFor func(connectionName string) (Applier, error)
 
 // Phase classifies how far a single migration has been applied on
-// the target — the Q52 two-phase ledger state read from
+// the target — the two-phase ledger state read from
 // `w17_migrations.post_tx_complete`.
 type Phase int
 
@@ -109,7 +109,7 @@ const (
 	PhaseComplete
 )
 
-// ResumableApplier is the optional Q52 capability a dialect
+// ResumableApplier is the optional resume capability a dialect
 // implements when its skirt path tracks per-migration phase for
 // crash recovery (today only Postgres, via `CREATE INDEX
 // CONCURRENTLY`). The orchestrator type-asserts for it: when present
@@ -154,11 +154,11 @@ type Wiper interface {
 
 // FingerprintCapable is an optional Applier capability: extract
 // a deterministic fingerprint of the target DB's current schema
-// state (Phase D — D-iter3-14). Relational dialects implement
+// state. Relational dialects implement
 // it (PG / MySQL / SQLite via information_schema introspection);
 // schemaless / non-relational dialects (Redis / NATS / S3)
 // don't — `drift detection` doesn't have a meaningful definition
-// against schemaless storage. The orchestrator's Phase D check
+// against schemaless storage. The orchestrator's drift check
 // type-asserts and skips appliers that don't implement.
 //
 // Implementations return:

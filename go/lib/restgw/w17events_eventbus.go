@@ -26,8 +26,7 @@ import (
 // domain whose public events span several (broker) channels
 // composes them here: every channel feeds the SAME hub, and the
 // domain-wide transcode dispatches each delivery by its topic
-// regardless of which channel carried it. This mirrors the
-// original devlog gateway's BroadcastHub: a small fixed number of
+// regardless of which channel carried it: a small fixed number of
 // long-lived bus subscriptions (one per channel) regardless of
 // how many browser tabs are open, instead of one subscription per
 // client. Each delivery is transcoded ONCE (not once per client)
@@ -390,7 +389,7 @@ func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string
 
 // entitled decides whether a connected principal receives an event.
 //
-// mcpbus-sec-1: when tenant isolation is active (a principal-labels
+// When tenant isolation is active (a principal-labels
 // deriver is configured — i.e. the surface declares the labels field it
 // partitions by), an UNLABELLED event is delivered to NOBODY. It cannot
 // be scoped to any tenant, so there is no principal it can be shown to
@@ -410,7 +409,7 @@ func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string
 //     a scoped model refuses for that caller — and this consumer then
 //     made that same caller the one audience for every unlabelled event
 //     in the deployment. `len(orgs) != 1` includes ZERO memberships, so
-//     the least-privileged principal was the widest audience (C8-F11).
+//     the least-privileged principal was the widest audience.
 //     Failing to resolve must never widen delivery.
 //
 // Consequence: on an isolating surface every event has to carry the

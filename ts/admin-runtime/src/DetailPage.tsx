@@ -1,7 +1,6 @@
 // Generic detail view — react-hook-form rendering an
-// arbitrary record's fields per spec. Walking-skeleton iter-1
-// handles flat fields + readonly_fields; iter-2 lifts
-// fieldsets rendering + per-field UI overrides.
+// arbitrary record's fields per spec. Handles flat fields,
+// readonly_fields, fieldsets and per-field UI overrides.
 
 import { useEffect, useState } from "react";
 import {
@@ -78,7 +77,7 @@ export interface DetailPageProps {
   onBack: () => void;
   // Called when an inline row's link column is clicked — the
   // child page becomes the current view. App.tsx threads the
-  // setView setter here; iter-1+ relies on in-memory routing.
+  // setView setter here; routing is in memory.
   onSelectInlineRow?: (childPageName: string, childId: string) => void;
 }
 
@@ -193,7 +192,7 @@ export function DetailPage({
 
   const onDelete = async () => {
     if (!detail.delete_endpoint) return;
-    // Walking-skeleton: simple confirm(); iter-2 wires Mantine modal.
+    // A plain confirm() for now, not a Mantine modal.
     if (!window.confirm(t("Delete this row?"))) return;
     setSaving(true);
     setError(null);

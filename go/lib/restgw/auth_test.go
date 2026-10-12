@@ -143,7 +143,7 @@ func TestWriteUnauthorized(t *testing.T) {
 	})
 }
 
-// G3-GW-03: NoAuth returns nil userData + nil err. Generators
+// NoAuth returns nil userData + nil err. Generators
 // wire this when no (w17.http_auth_method) is declared so the
 // handler shape stays uniform.
 func TestAuth_NoAuth_NilDataNilErr(t *testing.T) {
@@ -155,7 +155,7 @@ func TestAuth_NoAuth_NilDataNilErr(t *testing.T) {
 	}
 }
 
-// G3-GW-03: MakeAuthFunc passes every HTTP header into the
+// MakeAuthFunc passes every HTTP header into the
 // caller as map<string,string>. Multi-valued headers fold to
 // the first value (auth method's body splits if it cares).
 type capturingCaller struct {
@@ -203,7 +203,7 @@ func TestAuth_MakeAuthFunc_HeadersForwarded(t *testing.T) {
 	}
 }
 
-// G3-GW-03: caller error propagates unchanged. The handler-
+// Caller error propagates unchanged. The handler-
 // side WriteAuthError translates it to the canonical HTTP
 // status (this test pins the inner contract; the HTTP-side
 // translation is covered by the existing WriteGRPCError
@@ -227,7 +227,7 @@ func TestAuth_MakeAuthFunc_ErrorPropagates(t *testing.T) {
 	}
 }
 
-// G3-GW-03: SetUserMetadata threads marshaled bytes into
+// SetUserMetadata threads marshaled bytes into
 // outgoing gRPC metadata under x-w17-user. GetUserMetadata
 // recovers the bytes from incoming metadata. Round-trip
 // pins the (set → grpc-server-side recover) contract.
@@ -262,7 +262,7 @@ func TestAuth_SetGetUserMetadata_RoundTrip(t *testing.T) {
 	}
 }
 
-// G3-GW-03: nil / empty userData is a no-op — NoAuth path
+// Nil / empty userData is a no-op — NoAuth path
 // flows through SetUserMetadata without polluting metadata.
 func TestAuth_SetUserMetadata_NilNoOp(t *testing.T) {
 	ctx := restgw.SetUserMetadata(context.Background(), nil)
@@ -273,7 +273,7 @@ func TestAuth_SetUserMetadata_NilNoOp(t *testing.T) {
 	}
 }
 
-// G3-GW-03: GetUserMetadata returns (nil, false) on absent
+// GetUserMetadata returns (nil, false) on absent
 // or undecodable metadata.
 func TestAuth_GetUserMetadata_AbsentOrBad(t *testing.T) {
 	if _, ok := restgw.GetUserMetadata(context.Background()); ok {
@@ -285,7 +285,7 @@ func TestAuth_GetUserMetadata_AbsentOrBad(t *testing.T) {
 	}
 }
 
-// G3-GW-03 cache: identical request hits cache after first
+// Identical request hits cache after first
 // call. Counter on the inner func proves the cache short-
 // circuits the upstream RPC.
 func TestAuth_CachedAuthFunc_Hit(t *testing.T) {
@@ -309,7 +309,7 @@ func TestAuth_CachedAuthFunc_Hit(t *testing.T) {
 	}
 }
 
-// G3-GW-03 cache: distinct credentials never share a cache
+// Distinct credentials never share a cache
 // slot — the hash is keyed on every header → value pair.
 func TestAuth_CachedAuthFunc_DistinctHeadersDistinctSlots(t *testing.T) {
 	var calls int32
@@ -334,7 +334,7 @@ func TestAuth_CachedAuthFunc_DistinctHeadersDistinctSlots(t *testing.T) {
 	}
 }
 
-// restgw-sec-1 regression: an auth method may trust a credential in a
+// An auth method may trust a credential in a
 // header outside the recognized {Authorization, Cookie, X-Api-Key} set
 // (e.g. X-Session-Token). Such requests must NEVER share a cache slot —
 // otherwise two distinct principals collapse to one key and the second
@@ -369,7 +369,7 @@ func TestAuth_CachedAuthFunc_CustomCredentialHeader_NoCrossPrincipal(t *testing.
 	}
 }
 
-// G3-GW-03 cache: zero / negative TTL returns the inner
+// Zero / negative TTL returns the inner
 // AuthFunc unchanged (no caching layer at all).
 func TestAuth_CachedAuthFunc_ZeroTTL_Passthrough(t *testing.T) {
 	var calls int32
@@ -387,7 +387,7 @@ func TestAuth_CachedAuthFunc_ZeroTTL_Passthrough(t *testing.T) {
 	}
 }
 
-// G3-GW-03 cache: errors are NOT cached — failure path
+// Errors are NOT cached — failure path
 // re-fires on every retry until success populates the cache.
 // First two calls fail, third succeeds + caches; calls 4 and
 // 5 hit cache (counter stays at 3).
@@ -404,7 +404,7 @@ func TestAuth_CachedAuthFunc_ErrorsNotCached(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	// A recognized credential header makes the request cacheable (a
 	// credential-less request now bypasses the cache by design — see
-	// restgw-sec-1).
+	// TestAuth_CachedAuthFunc_CustomCredentialHeader_NoCrossPrincipal).
 	r.Header.Set("Authorization", "Bearer x")
 
 	// Calls 1 + 2 fail, call 3 succeeds + caches.
@@ -428,7 +428,7 @@ func TestAuth_CachedAuthFunc_ErrorsNotCached(t *testing.T) {
 	}
 }
 
-// G3-GW-03 cache: TTL expiry evicts the entry.
+// TTL expiry evicts the entry.
 func TestAuth_CachedAuthFunc_TTLExpiry(t *testing.T) {
 	var calls int32
 	inner := restgw.AuthFunc(func(_ context.Context, _ *http.Request) ([]byte, error) {
@@ -446,7 +446,7 @@ func TestAuth_CachedAuthFunc_TTLExpiry(t *testing.T) {
 	}
 }
 
-// G3-GW-03 env helper: positive int → duration; everything
+// Positive int → duration; everything
 // else (unset / zero / negative / non-numeric) → 0 (off).
 func TestAuth_AuthCacheTTLFromEnv(t *testing.T) {
 	cases := []struct {
@@ -473,7 +473,7 @@ func TestAuth_AuthCacheTTLFromEnv(t *testing.T) {
 	}
 }
 
-// R-restgw-3 — the dangerous collision: two principals share the
+// The dangerous collision: two principals share the
 // default credential header (Authorization) but differ in an
 // UNACCOUNTED header the auth method actually trusts (X-Tenant-Token).
 // Keying only on Authorization would serve them each other's identity.
@@ -509,7 +509,7 @@ func TestAuth_CachedAuthFunc_UnknownHeaderBypassesCache(t *testing.T) {
 	}
 }
 
-// R-restgw-3 — known non-credential headers (Accept, User-Agent) and
+// Known non-credential headers (Accept, User-Agent) and
 // per-request volatile ones (X-Request-Id) must NOT trip the bypass and
 // must NOT enter the key: two requests with the same credential but
 // different safe/volatile headers still hit one cache slot.
@@ -537,7 +537,7 @@ func TestAuth_CachedAuthFunc_KnownSafeHeadersStillCache(t *testing.T) {
 	}
 }
 
-// R-restgw-3 — naming the auth method's real credential header via
+// Naming the auth method's real credential header via
 // CachedAuthFuncWithKeyHeaders both keeps the cache correct (distinct
 // values → distinct slots, no cross-principal hit) AND restores cache
 // hits for that surface (re-issuing the same principal hits the cache).
@@ -571,7 +571,7 @@ func TestAuth_CachedAuthFuncWithKeyHeaders_CustomCredHeader(t *testing.T) {
 	}
 }
 
-// R-restgw-3 — env helper parses the CSV credential-header list,
+// Env helper parses the CSV credential-header list,
 // trimming blanks; unset → nil.
 func TestAuth_AuthCacheCredHeadersFromEnv(t *testing.T) {
 	got := restgw.AuthCacheCredHeadersFromEnv("X", func(k string) string {

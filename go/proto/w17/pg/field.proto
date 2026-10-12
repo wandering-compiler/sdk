@@ -13,11 +13,11 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/pg;pgpb";
 // dialect-extension pattern: one extension per dialect, read only by
 // that dialect's emitter.
 //
-// As of D13 (2026-04-21) the curated jsonb / inet / tsvector flags were
+// The curated jsonb / inet / tsvector flags were
 // lifted to core Type values (`type: JSON`, `type: IP`, `type: TSEARCH`)
 // because each one has a coherent cross-dialect semantic. hstore stays
-// here (PG-only; mapped to HSTORE via AUTO on map<string,string> in
-// iter-1.6) alongside the custom_type escape hatch and the extension
+// here (PG-only; mapped to HSTORE via AUTO on map<string,string>)
+// alongside the custom_type escape hatch and the extension
 // prerequisites list.
 //
 // Usage — `custom_type` names a REGISTERED ALIAS, not raw SQL. Register
@@ -54,7 +54,7 @@ message PgField {
   // (w17.field) semantics — `null`, `unique`, bounds, CHECK constraints,
   // defaults — still apply, and the proto carrier stays `string`.
   //
-  // NOT raw SQL. D36 replaced the raw-string form with the registry
+  // NOT raw SQL. The raw-string form was replaced with the registry
   // precisely because a bare type name carries no extension prerequisite
   // and no conversion template, so a later type change had nothing to
   // render an ALTER … USING clause from. An unregistered alias is a
@@ -88,8 +88,8 @@ message PgField {
   repeated string required_extensions = 11;
 
   // Field numbers 1 (jsonb), 2 (inet), 3 (tsvector), 4 (hstore) were curated
-  // flags that D13 migrated into core Types (JSON / IP / TSEARCH) and the
-  // iter-1.6 map-carrier AUTO dispatch (hstore). Reserved to prevent
+  // flags that moved into core Types (JSON / IP / TSEARCH) and the
+  // map-carrier AUTO dispatch (hstore). Reserved to prevent
   // accidental reuse with a different semantic.
   reserved 1, 2, 3, 4;
   reserved "jsonb", "inet", "tsvector", "hstore";

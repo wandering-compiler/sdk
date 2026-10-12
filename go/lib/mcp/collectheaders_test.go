@@ -7,7 +7,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/mcp"
 )
 
-// Q63-mcp-1: CollectAuthHeaders merges every identity source a
+// CollectAuthHeaders merges every identity source a
 // ConnectionInfo carries, so the generated MCP authFn works on stdio
 // (Env / InitializeParams) as well as HTTP (HTTPHeaders) — not just the
 // HTTP-header-only path that breaks stdio auth.

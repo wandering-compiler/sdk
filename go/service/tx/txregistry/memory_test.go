@@ -282,7 +282,7 @@ func TestMemory_ConcurrentBeginCommit(t *testing.T) {
 	}
 }
 
-// G3-T-01: concurrent double-close race. N goroutines race to
+// Concurrent double-close race. N goroutines race to
 // Commit the same tx_id; exactly one wins, all losers get
 // ErrUnknownTxID. The sequential variant (TestMemory_DoubleClose)
 // only proves the post-take state; this version exercises the
@@ -342,7 +342,7 @@ func TestMemory_ConcurrentDoubleCommit_OneWinner(t *testing.T) {
 	}
 }
 
-// G3-T-01: parallel Commit racing against parallel LookupTx —
+// Parallel Commit racing against parallel LookupTx —
 // once the winning Commit takes the entry, every Lookup that
 // arrives after must surface ErrUnknownTxID rather than a
 // stale handle. The race detector pins any read-during-take
@@ -423,10 +423,10 @@ func TestNewMemory_NilDB_Panics(t *testing.T) {
 	_ = txregistry.NewMemory(map[string]*sql.DB{"main": nil})
 }
 
-// Tier 2 (slice 6Q-F): BeginOptions.Timeout > 0 wraps the tx
+// BeginOptions.Timeout > 0 wraps the tx
 // ctx with WithTimeout. After the deadline fires the sql
-// package auto-rolls back the underlying tx AND the slice
-// 6Q-F follow-up background-watcher drains the registry
+// package auto-rolls back the underlying tx AND the
+// background watcher drains the registry
 // entry — subsequent Commit through the registry surfaces
 // ErrUnknownTxID, mapped by the gRPC server side as
 // `codes.NotFound` ("tx is gone, not just a failed Commit").
@@ -459,7 +459,7 @@ func TestMemory_Begin_TxTimeout_AutoRollback(t *testing.T) {
 	}
 }
 
-// Watcher (slice 6Q-F follow-up): the tx is drained on
+// Watcher: the tx is drained on
 // deadline expiry without any user Commit/Rollback call.
 // Active() drops eventually-but-soon-after the deadline.
 func TestMemory_Begin_TxTimeout_WatcherDrainsOnDeadline(t *testing.T) {

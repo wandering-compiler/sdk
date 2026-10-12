@@ -116,7 +116,7 @@ func TestEncodeDecode_SortSelectorIsNotSchemaVersion(t *testing.T) {
 	}
 }
 
-// R-bus-5: EncodeCursor's godoc promises the empty string when the
+// EncodeCursor's godoc promises the empty string when the
 // cursor would be meaningless (no page edge to encode). With no
 // boundary values it must return "" + nil — matching the doc and the
 // generated gateway handlers' `token != ""` guard — not a bogus token.
@@ -227,7 +227,7 @@ func TestEncode_PreservesDirection(t *testing.T) {
 	}
 }
 
-// TestDecodeCursor_RejectsForgedCursor — Q34-gw-1. A client cannot
+// TestDecodeCursor_RejectsForgedCursor. A client cannot
 // craft a cursor (which DecodeCursor unmarshals OVER the whole request)
 // to smuggle a request the server never minted: without the gateway's
 // HMAC key it cannot produce a valid tag, so DecodeCursor rejects it

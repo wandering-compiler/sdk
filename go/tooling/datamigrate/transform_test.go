@@ -7,7 +7,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 )
 
-// TestTransformVM_TopLevelInfiniteLoop_Bounded is the filegen-sec-2
+// TestTransformVM_TopLevelInfiniteLoop_Bounded is a
 // regression guard. The compile thread runs the script's top level
 // (FileOptions enables While/TopLevelControl). A top-level `while True`
 // must hit the step limit and ERROR — not hang the host process. If the

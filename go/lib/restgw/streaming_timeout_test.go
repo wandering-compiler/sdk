@@ -17,7 +17,7 @@ import (
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 )
 
-// G3-GW-09: bounded-write helpers. Real back-pressure
+// Bounded-write helpers. Real back-pressure
 // behaviour needs a slow-client TCP scenario which is
 // fiddly to drive in unit tests; the unit cases here cover
 // the helper contract — `timeout=0` is a no-op pass-through,
@@ -134,8 +134,8 @@ func TestWSWriteProtoWithTimeout_PassesTimeoutThrough(t *testing.T) {
 	}
 }
 
-// Q5-gw-1: error-path bounded-write helpers. Same contract as
-// the G3-GW-09 main-frame helpers above — `timeout=0` is a
+// Error-path bounded-write helpers. Same contract as
+// the main-frame helpers above — `timeout=0` is a
 // verbatim pass-through, `timeout>0` installs/derives the
 // deadline without altering the emitted error frame. Each case
 // asserts the WithTimeout helper produces byte-identical output

@@ -33,16 +33,16 @@ const BoundariesMDKey = "x-w17-paging-boundaries"
 const LimitMDKey = "x-w17-paging-limit"
 
 // TotalMDKey carries the cached row count from a resumed
-// cursor (iter-2 perf optimisation). When the gateway decodes
+// cursor. When the gateway decodes
 // a non-empty ?cursor=, it threads the cursor's `total` field
 // to storage via this header; the storage handler then sets
 // `resp.Paging.Total = <header>` and SKIPS the COUNT(*) query
 // it would otherwise run for first-page requests.
 //
 // Absent header (first page, no cursor) → storage runs
-// COUNT(*) over the filter as before. Iter-1 ran COUNT on
-// every page; iter-2 lifts that to "once per pagination
-// session, cached in the cursor."
+// COUNT(*) over the filter as before. COUNT runs once per
+// pagination session and is cached in the cursor, not on
+// every page.
 const TotalMDKey = "x-w17-paging-total"
 
 // boundaryListEnvelope is the wire shape of the metadata
@@ -190,7 +190,7 @@ func EncodeTotalMD(total uint64) string {
 // TotalFromIncomingMD reads the cached total from incoming
 // gRPC metadata. Returns `(0, false)` when the header is
 // absent or malformed — storage then runs the COUNT(*) query
-// as the iter-1 path did.
+// on every page.
 func TotalFromIncomingMD(ctx context.Context) (uint64, bool) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {

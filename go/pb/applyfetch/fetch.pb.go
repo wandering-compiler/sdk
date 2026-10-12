@@ -246,7 +246,7 @@ type Migration struct {
 	PrevContentSha256 string `protobuf:"bytes,10,opt,name=prev_content_sha256,json=prevContentSha256,proto3" json:"prev_content_sha256,omitempty"`
 	// supersedes lists the migration ids this one REPLACES — non-empty only
 	// on a squash baseline. It has to travel WITH the artifact because apply
-	// is offline (D-iter3-6): the client cannot ask the console at apply time
+	// is offline: the client cannot ask the console at apply time
 	// whether the baseline it is holding is equivalent to work the target
 	// database already did.
 	//

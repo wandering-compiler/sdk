@@ -51,7 +51,7 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17compiler;codegen
 //   - Gateway-domain code (REST/MCP proxy + event emit) when
 //     that domain's generator lands.
 //
-// Not supported in M1:
+// Not supported:
 //   - Multi-op gRPC methods (one Query + one Mutation per
 //     method). The underlying generator returns
 //     FailedPrecondition for those.
@@ -2866,9 +2866,8 @@ message GatewayTarget {
   // include every (w17.http)-annotated service in one
   // bundle (legacy / cross-domain shape). Set to one
   // domain name per target to emit per-domain gateway
-  // bundles (slice 2026-05-04 — every gateway binds to ONE
-  // business/facade tier, naming convention
-  // `<domain>-gateway`).
+  // bundles (every gateway binds to ONE business/facade
+  // tier, naming convention `<domain>-gateway`).
   string domain = 4;
 
   // I18nDir is the codegen-baked default for the

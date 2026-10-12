@@ -86,12 +86,12 @@ func (Isolation) EnumDescriptor() ([]byte, []int) {
 type BeginRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ConnectionName names a connection declared in the domain's
-	// schema (D26 unique identifier). Single-instance ignores
-	// this until M2 multi-connection lands; multi-instance
+	// schema (its unique identifier). Single-instance ignores
+	// this; multi-instance
 	// domains route Begin to the replica owning that connection.
 	ConnectionName string `protobuf:"bytes,1,opt,name=connection_name,json=connectionName,proto3" json:"connection_name,omitempty"`
 	// TxTimeoutMs — long-running transaction deadline in
-	// milliseconds (slice 6Q-F Tier 2). When > 0, the distx
+	// milliseconds (Tier 2 below). When > 0, the distx
 	// server wraps the tx's ctx with `context.WithTimeout`; on
 	// expiry the sql package auto-rolls back the underlying
 	// transaction. 0 (default) leaves the tx with the

@@ -86,9 +86,9 @@ func ObservabilityMiddleware(next http.Handler, serviceName string, requestIDCfg
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !disabled {
 			id := strings.TrimSpace(r.Header.Get(header))
-			// B40-restgw-1: validate the client-supplied id before echoing it
+			// Validate the client-supplied id before echoing it
 			// into the response header + correlating it into the span/logs — an
-			// unbounded / special-char value enables log-forging (restgw-sec-4).
+			// unbounded / special-char value enables log-forging.
 			// RequestIDMiddleware already guards this; the generated gateways
 			// wire THIS middleware, so it must enforce the same. A malformed (or
 			// empty) id is replaced with a fresh UUID.

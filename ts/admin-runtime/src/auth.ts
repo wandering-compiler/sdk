@@ -1,6 +1,5 @@
-// Token + identity helpers. Walking-skeleton iter-1 stores the
-// token in localStorage; iter-2 may swap for httpOnly cookies
-// once a CSRF strategy is picked.
+// Token + identity helpers. The token lives in localStorage;
+// httpOnly cookies need a CSRF strategy first.
 
 import type { AdminPageSpec } from "./types";
 

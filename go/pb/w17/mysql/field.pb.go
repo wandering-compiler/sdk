@@ -48,7 +48,7 @@ type MysqlField struct {
 	//
 	// Field number 10 matches PgField.custom_type for symmetry — the
 	// 1-4 range stays reserved for future curated cross-dialect-ish
-	// flags following PG's D13 graduation pattern.
+	// flags following PG's graduation pattern.
 	CustomType    string `protobuf:"bytes,10,opt,name=custom_type,json=customType,proto3" json:"custom_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

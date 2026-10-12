@@ -1,5 +1,5 @@
 // Package datamigrate is the format + validation layer for KV
-// data migrations (Phase E — D-iter3-15). The compiler emits
+// data migrations. The compiler emits
 // these as YAML bodies on the migration's `up_sql` field for
 // KV dialects (Redis, S3) when a field add / remove / rename
 // touches existing entries; the apply tool parses + dispatches

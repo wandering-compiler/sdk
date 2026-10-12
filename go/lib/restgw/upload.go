@@ -363,13 +363,12 @@ func WriteUploadErrorCtx(ctx context.Context, w http.ResponseWriter, err error) 
 	case errors.Is(err, ErrUploadBadExt):
 		httpStatus, code, msgid = http.StatusBadRequest, codes.InvalidArgument, MsgidUploadBadType
 	default:
-		// Q36-restgw-1: don't reflect the internal error to the client.
+		// Don't reflect the internal error to the client.
 		// The non-sentinel errors reaching here wrap driver / tmp-file
 		// failures that carry server topology — S3 endpoint / bucket /
 		// credentials (`restgw: driver put: …`) or absolute FS paths
 		// (`restgw: mkdir/create/close tmp: …`). Log it and return a
-		// generic message, matching WriteGRPCError / ServeDownload
-		// (restgw-sec-3).
+		// generic message, matching WriteGRPCError / ServeDownload.
 		observx.ReportError(ctx, err)
 		WriteError(w, http.StatusInternalServerError, "INTERNAL", internalSentence(ctx))
 		return

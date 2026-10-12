@@ -26,8 +26,7 @@ import (
 // With MaxDeliver reached it is worse than a double-run: the claim tick
 // dead-letters the sibling and XACKs it, and the consume loop then runs it
 // successfully anyway. One message, both dead-lettered and delivered, which
-// is precisely the incoherence the guard's own comment cites R-bus-1 as
-// preventing.
+// is precisely the incoherence the in-flight guard exists to prevent.
 //
 // Two concurrent actors, both inside one subscriber: its consumeLoop
 // goroutine and its claimLoop goroutine.

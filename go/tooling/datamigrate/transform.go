@@ -1,5 +1,5 @@
 // Package datamigrate — TRANSFORM_FIELD escape hatch via
-// embedded Starlark (Phase E v2.3 — D-iter3-20).
+// embedded Starlark.
 //
 // **Why Starlark.** Pure-Go embedded interpreter (used by Bazel /
 // Buildkite). The sandbox properties come from the language
@@ -98,7 +98,7 @@ func NewTransformVM(script, lang string) (*TransformVM, error) {
 	// top level, and FileOptions enables While/TopLevelControl, so a
 	// script with a top-level `while True:` would otherwise hang the host
 	// (deploy/migration) process indefinitely — the per-key exec limit
-	// alone doesn't cover compile time (filegen-sec-2).
+	// alone doesn't cover compile time.
 	thread.SetMaxExecutionSteps(transformMaxSteps)
 	predeclared := starlark.StringDict{
 		"json": json.Module,

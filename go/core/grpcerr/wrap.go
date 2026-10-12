@@ -95,15 +95,15 @@ type ConstraintRegistry struct {
 	// WHOLE service has exactly one FK. `len(SoleFKByTable) == 1`
 	// alone doesn't prove that — a single-FK table can coexist with a
 	// multi-FK table (which is absent from SoleFKByTable), and the
-	// lone entry would then capture the multi-FK table's failures too
-	// (Q55-grpcerr-1). The codegen sets this so the bare-FK fallback
+	// lone entry would then capture the multi-FK table's failures too.
+	// The codegen sets this so the bare-FK fallback
 	// stays off whenever attribution is ambiguous.
 	MultiFKPresent bool
 
 	// SoleNotNullByColumn key = column name. The MySQL NOT_NULL
 	// error ("Column 'x' cannot be null") names only the column,
 	// NOT the table, so the table-keyed ByColumns lookup can't
-	// resolve it (Q47-grpc-1). This degraded fallback attributes
+	// resolve it. This degraded fallback attributes
 	// a table-less NOT_NULL to a column when exactly ONE table in
 	// the bundle has a NOT_NULL on that single column (so there's
 	// no ambiguity); columns that several tables share stay absent
@@ -613,7 +613,7 @@ func lookupRegistry(r *ConstraintRegistry, ce *dialect.ConstraintError) (Constra
 			return info, true
 		}
 	}
-	// Q47-grpc-1: MySQL NOT_NULL names only the column (no table), so the
+	// MySQL NOT_NULL names only the column (no table), so the
 	// table-keyed ByColumns lookup above never matches. Attribute it to a
 	// column when exactly one table owns a NOT_NULL on that column (the
 	// codegen only populates SoleNotNullByColumn for unambiguous columns).
@@ -633,7 +633,7 @@ func lookupRegistry(r *ConstraintRegistry, ce *dialect.ConstraintError) (Constra
 	if ce.Kind == dialect.KindFK && ce.Table == "" && r.SoleFKByTable != nil {
 		// SQLite FK with no table info — only attribute when the
 		// service has exactly one FK across ALL tables: one entry in
-		// SoleFKByTable AND no multi-FK table elsewhere (Q55-grpcerr-1).
+		// SoleFKByTable AND no multi-FK table elsewhere.
 		// Otherwise the lone single-FK entry would mis-attribute a
 		// multi-FK table's failure; fall through to FailedPrecondition.
 		if len(r.SoleFKByTable) == 1 && !r.MultiFKPresent {

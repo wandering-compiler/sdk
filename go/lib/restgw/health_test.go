@@ -9,7 +9,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// G3i3-GW-B: HealthHandler returns 200 + JSON body
+// HealthHandler returns 200 + JSON body
 // `{"status":"ok"}`. Pinning the wire shape so k8s probes /
 // load balancer health checks have a stable contract.
 func TestHealthHandler_OKResponse(t *testing.T) {
@@ -33,7 +33,7 @@ func TestHealthHandler_OKResponse(t *testing.T) {
 	}
 }
 
-// G3i3-GW-B: handler doesn't care about the request method —
+// Handler doesn't care about the request method —
 // k8s probes default to GET, but cluster ingresses sometimes
 // fire HEAD on health paths. Both should respond OK rather
 // than 405.

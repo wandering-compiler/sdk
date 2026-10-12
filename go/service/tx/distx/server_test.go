@@ -23,7 +23,7 @@ import (
 // newClientServer wires a bufconn-backed gRPC server holding a
 // registry with two connections ("main" + "audit") so tests can
 // exercise both single-conn happy paths and the multi-conn
-// connection-routing semantics M2-D added.
+// connection-routing semantics.
 func newClientServer(t *testing.T, opts ...distx.Option) (distxpb.W17DistributedTransactionClient, *txregistry.Memory) {
 	t.Helper()
 	dbMain, err := sql.Open("sqlite", ":memory:")
@@ -152,10 +152,10 @@ func TestNewServer_NilRegistry_Panics(t *testing.T) {
 	_ = distx.NewServer(nil)
 }
 
-// Tier 2 (slice 6Q-F): Begin's tx_timeout_ms threads through
+// Begin's tx_timeout_ms threads through
 // to the registry's WithTimeout wrap. After the deadline, the
-// underlying tx auto-rolls back AND the slice 6Q-F follow-up
-// background-watcher drains the registry entry → subsequent
+// underlying tx auto-rolls back AND the background
+// watcher drains the registry entry → subsequent
 // Commit surfaces NotFound (the tx is gone, not just a failed
 // Commit attempt — clearer UX for the caller).
 func TestServer_Begin_TxTimeoutMs_AutoRollback(t *testing.T) {
@@ -185,8 +185,7 @@ func TestServer_Begin_TxTimeoutMs_AutoRollback(t *testing.T) {
 }
 
 // Negative tx_timeout_ms rejects at the gRPC boundary —
-// matches Method.timeout_ms's negative-rejection rule (slice
-// 6Q-F Tier 1).
+// matches Method.timeout_ms's negative-rejection rule.
 func TestServer_Begin_NegativeTxTimeoutMs_Rejected(t *testing.T) {
 	cl, _ := newClientServer(t)
 	_, err := cl.Begin(context.Background(), &distxpb.BeginRequest{
@@ -198,7 +197,7 @@ func TestServer_Begin_NegativeTxTimeoutMs_Rejected(t *testing.T) {
 	}
 }
 
-// G3-DT-01: a Begin with `tx_timeout_ms = 0` (the proto3
+// A Begin with `tx_timeout_ms = 0` (the proto3
 // default — typical for callers that don't set the field)
 // inherits the server's [DefaultOrphanTimeout] fallback. The
 // registry's Tier-2 watcher drains the entry when the
@@ -237,7 +236,7 @@ func TestServer_Begin_DefaultTxTimeout_OrphanCleanup(t *testing.T) {
 // Operators can opt out of the default fallback with
 // [distx.WithDefaultTxTimeout(0)] — tx with no caller-supplied
 // timeout then registers with no cleanup mechanism (the
-// pre-G3-DT-01 behaviour). Documented escape hatch for
+// behaviour before the orphan guard). Documented escape hatch for
 // deployments where every caller is trusted to drive
 // Commit/Rollback themselves.
 func TestServer_Begin_DefaultTxTimeout_OptOut(t *testing.T) {

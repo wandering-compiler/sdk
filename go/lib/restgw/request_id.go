@@ -1,4 +1,4 @@
-// X-Request-ID propagation middleware (G3i3-GW-Misc-D). On every
+// X-Request-ID propagation middleware. On every
 // request:
 //
 //   - Read the configured request-ID header from the incoming
@@ -101,7 +101,7 @@ func RequestIDMiddleware(cfg RequestIDConfig, next http.Handler) http.Handler {
 		id := strings.TrimSpace(r.Header.Get(header))
 		// Validate the client-supplied id before echoing it into the
 		// response header + correlating it into logs: an unbounded /
-		// special-char value enables log-forging (restgw-sec-4). A
+		// special-char value enables log-forging. A
 		// malformed id is replaced with a fresh UUID.
 		if !validRequestID(id) {
 			id = uuid.NewString()

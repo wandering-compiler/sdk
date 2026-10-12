@@ -136,13 +136,13 @@ export type SlotRegistry = Record<SlotKey, SlotComponent>;
 // { widget }, list column slots get { row, value, page }, etc.
 // The runtime threads the right props per slot point; here we
 // use a permissive `any` because TS can't narrow without per-
-// slot generics (iter-3 wires per-slot typed contracts).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional permissive prop type until per-slot typed contracts (iter-3); narrowing needs generics we don't have yet
+// slot generics.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional permissive prop type until per-slot typed contracts; narrowing needs generics we don't have yet
 export type SlotComponent = (props: any) => React.ReactNode;
 
 // Slot key helpers — admin runtime + custom JS use these to
 // build / look up slot keys consistently. Keeps the wire string
-// in one place so iter-3 evolutions can rename the schema.
+// in one place so the schema can be renamed later.
 export function overviewWidgetSlotKey(slotId: string): string {
   return "overview:widget:" + slotId;
 }
@@ -326,8 +326,8 @@ export interface AdminListSpec {
   // one search box bound to the FIRST search field; values
   // forward to that field via query params.
   search?: string[];
-  // Sortable item-field names from the response item — iter-3
-  // wires the column-header sort UI. Iter-2 emits but ignores.
+  // Sortable item-field names from the response item. Emitted
+  // but not used yet: there is no column-header sort UI.
   sortable?: string[];
   // FilterTypes maps a filter field name to its semantic /
   // scalar type ("DATE" / "DATETIME" / "TIME" / "EMAIL" / "URL"
@@ -554,9 +554,8 @@ export interface BootstrapOptions {
   spec: AdminSpec;
   root: HTMLElement;
   // Optional slot registry — developer-provided React components
-  // keyed by slot id. Walking-skeleton iter-2 wires only the
-  // overview:widget:<id> slot point; iter-3 fans out to list /
-  // detail slot points declared in the architecture ADR.
+  // keyed by slot id. Only the overview:widget:<id> slot point
+  // is wired; list / detail slot points are not yet.
   slots?: SlotRegistry;
   // Per-project binary-protobuf codecs, from the generated
   // `spa/src/codecs.js`. The runtime ships no per-message code, so

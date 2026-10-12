@@ -26,7 +26,7 @@ const mcpProtocolVersion = "2024-11-05"
 // the tool arguments; the tool result is unwrapped into the same
 // string-keyed object the matchers assert against.
 //
-// PROVISIONAL (iter-1): the concrete MCP transport + result envelope
+// PROVISIONAL: the concrete MCP transport + result envelope
 // are still an open decision in the spec. This implementation targets
 // the common shape — JSON-RPC over a single HTTP endpoint, result with
 // `structuredContent` (preferred) or a JSON text content block — and

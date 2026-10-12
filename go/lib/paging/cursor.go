@@ -82,7 +82,7 @@ func CallerKey(key []byte, caller ...string) []byte {
 // serialized PageCursor bytes to the gateway's per-deployment key.
 // The tag is appended to the token so a client cannot forge a cursor
 // (which DecodeCursor unmarshals OVER the whole request) to smuggle a
-// request the server never minted — see DecodeCursor (Q34-gw-1).
+// request the server never minted — see DecodeCursor.
 func cursorMAC(pcBytes, key []byte) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(pcBytes)
@@ -199,7 +199,7 @@ func EncodeCursor(
 // unmarshalled — a tampered or forged cursor returns
 // ErrCursorMalformed and never reaches `req`. This is what stops a
 // client from crafting a cursor that overwrites the request with
-// fields the server never validated/minted (Q34-gw-1).
+// fields the server never validated/minted.
 func DecodeCursor(
 	token string,
 	req proto.Message,

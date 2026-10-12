@@ -249,7 +249,7 @@ func TestUnmarshalEntity_EnumNumericFallback(t *testing.T) {
 	}
 }
 
-// TestMarshalEntity_Proto3OptionalPresence pins Q7-kvhash-1: a
+// TestMarshalEntity_Proto3OptionalPresence pins presence: a
 // proto3-`optional` scalar carries presence (synthetic oneof), so
 // an UNSET optional must be omitted from the HASH — distinguishing
 // it from an optional explicitly SET TO ZERO — while a plain proto3

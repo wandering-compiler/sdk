@@ -131,7 +131,7 @@ func lockApplier(t *testing.T, endpoint string, now func() time.Time, stale, bea
 	return a
 }
 
-// Q48-datamigrate-1 core invariant on S3: while one run holds the
+// Core invariant on S3: while one run holds the
 // lock object, a second run is refused; releasing deletes it so the
 // next run can acquire.
 func TestS3RunLock_MutualExclusion(t *testing.T) {

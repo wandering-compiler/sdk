@@ -24,10 +24,9 @@
 //     tokens from the supplied params map.
 //
 // Plurals, msgctxt context-keyed translations, and locale-
-// aware number / date formatting are out of scope for iter-1.
-// Each can lift in a follow-up REV when a fixture demands it
-// (gotext supports them natively — the wiring is just absent
-// here).
+// aware number / date formatting are not supported yet.
+// gotext supports them natively; the wiring is just absent
+// here.
 //
 // Catalogs and the default language are process-global: one
 // process carries one language policy, and the per-request

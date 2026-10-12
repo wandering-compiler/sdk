@@ -5,7 +5,7 @@
 // `endpoint=...` DSN parameter.
 //
 // **Renderer command shape.** The applied-state Renderer
-// (Phase C.4 + applied.S3()) emits a custom dialect-private
+// (applied.S3()) emits a custom dialect-private
 // shape for bookkeeping:
 //
 //   - `S3 PUT w17-migrations/<ts>.json {json}`  → PutObject
@@ -49,7 +49,7 @@ import (
 )
 
 // trackerPrefix is the well-known object-key prefix used for
-// applied-state bookkeeping (Phase C.4 + applied.S3()).
+// applied-state bookkeeping (see applied.S3()).
 // AppliedHead lists this prefix; the Renderer's RecordVersion
 // / RemoveVersion / DropTracker reference it by this exact
 // string.
@@ -71,11 +71,11 @@ type Applier struct {
 	// `--parallel <N>` from the CLI. 0 = no override; YAML
 	// data migrations fall back to the migration's project-
 	// side `parallel:` field, then to datamigrate.DefaultParallel.
-	// Only meaningful for YAML data migrations (Phase E v2.1);
+	// Only meaningful for YAML data migrations;
 	// command-style bodies ignore it.
 	parallelOverride int
 
-	// Run-lock tunables (Q48-datamigrate-1). nowFn defaults to
+	// Run-lock tunables. nowFn defaults to
 	// time.Now; lockStale / lockBeat default to the runlock package
 	// values. Tests inject a fake clock + short windows to exercise
 	// the stale-takeover / heartbeat paths deterministically.
@@ -149,7 +149,7 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 
 // Apply runs the migration body lines through the typed S3 API.
 //
-// Phase E (D-iter3-15): bodies whose up_sql is a YAML data
+// Bodies whose up_sql is a YAML data
 // migration dispatch through applyYAMLDataMigration instead —
 // per-object ListObjectsV2+GetObject+modify+PutObject loop
 // driven by parsed Operations[]. Detection via
@@ -175,7 +175,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // the down body; user-side down ops (DELETE_PREFIX etc.) live
 // alongside.
 //
-// Phase E: YAML data migration bodies dispatch through
+// YAML data migration bodies dispatch through
 // rollbackYAMLDataMigration. The down body is either an
 // auto-derived YAML inverse or a `# w17:irreversible:` comment
 // block — the latter is refused (no override).
@@ -207,7 +207,7 @@ func (a *Applier) Close() error {
 // override (fall through to the YAML migration's `parallel:`
 // field, then datamigrate.DefaultParallel).
 //
-// Only consulted by YAML data migrations (Phase E v2.1); the
+// Only consulted by YAML data migrations; the
 // command-style migration path runs sequentially regardless.
 func (a *Applier) SetParallelOverride(n int) {
 	a.parallelOverride = n

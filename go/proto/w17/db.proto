@@ -137,7 +137,7 @@ extend google.protobuf.MethodOptions {
 extend google.protobuf.EnumValueOptions {
 	// (w17.db.enum_value) — enum-value-level annotation. Per-value
 	// metadata that survives into the schema-driven codegen
-	// surface. Today only carries `sort_sql` for D-iter2-dql-9
+	// surface. Today only carries `sort_sql`
 	// (ORDER BY-by-enum); future enum-value uses (CHECK-list
 	// values, KV index keys) extend this message.
 	//
@@ -154,7 +154,7 @@ extend google.protobuf.EnumValueOptions {
 	// renders a static `CASE :<path> WHEN <num> THEN <sort_sql>
 	// ... END` expression. UNSPECIFIED with no annotation is the
 	// "no sort" value (CASE returns NULL → SQL falls back to the
-	// trailing ORDER BY items). Per D-iter2-dql-9 every non-zero
+	// trailing ORDER BY items). Every non-zero
 	// enum value used as a sort key MUST carry the annotation —
 	// codegen rejects values missing `sort_sql`.
 	//
@@ -364,7 +364,7 @@ extend google.protobuf.ServiceOptions {
 //   - resource entries must be unique — same model declared
 //     twice (even with the same kind) is rejected.
 //   - every resource must be the FROM entity of some SELECT in
-//     the method (Q49-lock-1). Listing a model that only ever
+//     the method. Listing a model that only ever
 //     appears in a JOIN is rejected rather than silently emitting
 //     no lock and leaving the author believing one is held.
 //   - a locked SELECT whose shape can't carry the suffix is
@@ -496,8 +496,8 @@ message Method {
   // require explicit execution_plan.
   repeated int32 execution_plan = 3;
 
-  // timeout_ms — per-method execution deadline in milliseconds
-  // (slice 6Q-F). When > 0, codegen wraps the method body with
+  // timeout_ms — per-method execution deadline in milliseconds.
+  // When > 0, codegen wraps the method body with
   // `context.WithTimeout(ctx, timeout); defer cancel()` so all
   // statements + (for OWNED tx) the tx itself auto-roll back
   // on deadline. 0 (default) leaves the caller's ctx
@@ -507,7 +507,7 @@ message Method {
   //   - timeout_ms = per-method deadline. Bounds the method's
   //     own statement work + (for OWNED tx) tx lifetime.
   //   - tx-wide threshold (separate, propagated from the
-  //     facade via distx Begin payload — out of M2 scope) =
+  //     facade via distx Begin payload) =
   //     long-running distributed-tx deadline. Bounds the tx
   //     entity across multiple method calls.
   //
@@ -525,7 +525,7 @@ message Method {
   int32 timeout_ms = 4;
 
   // tx_isolation — per-method SQL transaction isolation
-  // level (G3-D-DT-02). When set, the storage handler's
+  // level. When set, the storage handler's
   // `BeginTx` is called with `&sql.TxOptions{Isolation: ...}`
   // matching the requested level instead of the driver
   // default. UNSPECIFIED / unset leaves the driver default.
@@ -683,7 +683,7 @@ message Materialize {
 }
 
 // TxIsolation enumerates the SQL standard transaction
-// isolation levels (G3-DT-02). Mapped at codegen time to
+// isolation levels. Mapped at codegen time to
 // `database/sql.IsolationLevel` constants:
 //
 //   READ_UNCOMMITTED → sql.LevelReadUncommitted
@@ -869,7 +869,7 @@ message Table {
   repeated RawCheck raw_checks = 3;
   repeated RawIndex raw_indexes = 4;
 
-  // SQL-visible table comment (D22). Emits
+  // SQL-visible table comment. Emits
   // `COMMENT ON TABLE <table> IS '<text>';`. Defaults to the proto
   // message's leading comment when unset; authoring this field
   // overrides the default (e.g. when the proto comment is
@@ -878,7 +878,7 @@ message Table {
   // comment exists.
   string comment = 5;
 
-  // Per-table connection override (D26). Names a connection declared
+  // Per-table connection override. Names a connection declared
   // in some (w17.module).connection option in the same domain.
   // Empty = this table runs on its module's own connection. Use
   // cases: a domain's main proto declares `(postgres, 18)` but a
@@ -886,11 +886,11 @@ message Table {
   // registered by another module in the same domain.
   string connection = 6;
 
-  // Redis storage layout (G3-KV-04). Only meaningful when the
+  // Redis storage layout. Only meaningful when the
   // table's effective connection has REDIS dialect + KV
   // capability. Unset = JSON (the default — entity is protojson-
-  // marshaled into one Redis STRING under one key, the iter-2 MVP
-  // shape). HASH = entity is split per-field into a Redis HASH
+  // marshaled into one Redis STRING under one key). HASH =
+  // entity is split per-field into a Redis HASH
   // (HSET / HGETALL / HDEL); each scalar field lands in its own
   // hash field, encoded protojson-equivalent (string as-is, ints
   // decimal, bool "true"/"false", bytes base64, timestamp RFC3339,
@@ -1068,7 +1068,7 @@ message TableValidationMessage {
 
 // RedisLayout — how a Redis-backed table's entity values are
 // stored. JSON is the default (one STRING value per key holding
-// the protojson-marshaled entity, iter-2 MVP); HASH splits each
+// the protojson-marshaled entity); HASH splits each
 // scalar field into a hash entry under one key;
 // HASH_BUCKETED groups N children of a parent under ONE Redis
 // HASH — the bucket-shaped layout that enables native
@@ -1100,7 +1100,7 @@ enum RedisLayout {
 }
 
 // Index — structured index definition. Single authoring path; opaque
-// SQL bodies live on (w17.db.table).raw_indexes. D23.
+// SQL bodies live on (w17.db.table).raw_indexes.
 //
 // Authoring (simple):
 //   { fields: [{ name: "category_id" }, { name: "is_active" }] }
@@ -1169,7 +1169,7 @@ message Index {
   // `autosummarize`. w17gen passes through verbatim; PG validates at
   // apply time. Graduation path: if pilots repeat the same options,
   // typed per-method submessages can replace the map (parallel to
-  // D9's custom_type → curated-flags graduation).
+  // the custom_type → curated-flags graduation).
   map<string, string> storage = 6;
 
   // D-record A3b — build / drop the index outside the migration
@@ -1442,7 +1442,7 @@ message Column {
   // for adopting existing schemas with non-proto naming conventions.
   string name = 2;
 
-  // Foreign key. Moved here from (w17.field) in D8 rev 2026-04-21: FKs
+  // Foreign key. Lives here rather than on (w17.field): FKs
   // are a DB-level rule (like indexes and CHECK constraints), not a
   // general field semantic.
   //
@@ -1464,16 +1464,16 @@ message Column {
   // Unspecified infers from (w17.field).null:
   //   null: true  → ORPHAN (child survives, FK becomes NULL)
   //   null: false → CASCADE (child is deleted with parent)
-  // Explicit value wins over inference. See D12.
+  // Explicit value wins over inference.
   DeletionRule deletion_rule = 4;
 
   // Storage type override — orthogonal to (w17.field).type. When unset
-  // the field.type preset picks storage per dialect (D13 defaults); when
+  // the field.type preset picks storage per dialect; when
   // set, the enumerated DbType drives the SQL column type directly,
   // while field.type keeps driving CHECKs / validation. Lets the author
   // split data semantic from storage: e.g. `type: CHAR, max_len: 6000`
   // + `db_type: TEXT` keeps the char_length <= 6000 CHECK but stores as
-  // TEXT instead of VARCHAR(6000). See D14.
+  // TEXT instead of VARCHAR(6000).
   DbType db_type = 5;
 
   // Generated-column expression — when set, the column is emitted as
@@ -1493,10 +1493,10 @@ message Column {
   // Incompatible with (w17.field).default_* (the computed value IS the
   // value), `pk: true` (PG rejects generated columns as primary keys),
   // and `fk:` on the same column (generated columns can't be FK
-  // sources in PG). `unique:` and `null:` remain allowed. See D18.
+  // sources in PG). `unique:` and `null:` remain allowed.
   string generated_expr = 6;
 
-  // SQL-visible column comment (D22). Emits
+  // SQL-visible column comment. Emits
   // `COMMENT ON COLUMN <table>.<col> IS '<text>';`. Same
   // precedence as (w17.db.table).comment — defaults to the proto
   // field's leading comment, override here if the DB-facing text
@@ -1548,8 +1548,8 @@ message Column {
   bool fk_cross_scope = 9;
 }
 
-// EnumValueColumn is the body of `(w17.db.enum_value)` (D-iter2-
-// dql-9). Each non-zero value of an enum used as an ORDER BY
+// EnumValueColumn is the body of `(w17.db.enum_value)`.
+// Each non-zero value of an enum used as an ORDER BY
 // sort-key carries one — `sort_sql` is the SQL fragment the
 // codegen splices into the generated CASE expression. The
 // fragment is opaque (raw SQL): the author is responsible for
@@ -1559,7 +1559,7 @@ message Column {
 // has no fragment — its codegen path is the no-sort fallback.
 message EnumValueColumn {
   // SQL fragment placed inside `CASE <param> WHEN <num> THEN
-  // <fragment> ... END` for ORDER BY-by-enum (D-iter2-dql-9).
+  // <fragment> ... END` for ORDER BY-by-enum.
   // Required for every non-zero enum value used by a `:<path>`
   // ORDER BY clause; codegen rejects missing fragments at emit
   // time.

@@ -40,9 +40,9 @@ func TestObservabilityMiddleware_EchoesIncomingID(t *testing.T) {
 	}
 }
 
-// B40-restgw-1: ObservabilityMiddleware (the middleware generated gateways
+// ObservabilityMiddleware (the middleware generated gateways
 // actually wire) must validate the client X-Request-ID like RequestIDMiddleware
-// does — a special-char / overlong id enables log-forging (restgw-sec-4) once it
+// does — a special-char / overlong id enables log-forging once it
 // reaches RequestIDFromContext and any downstream log line. A malformed id must
 // be replaced with a fresh UUID, not echoed/correlated as-is.
 func TestObservabilityMiddleware_RejectsMalformedRequestID_B40(t *testing.T) {

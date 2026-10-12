@@ -21,7 +21,7 @@ import (
 // inbound pump sets (via context.WithCancelCause) when it has ALREADY
 // delivered a terminal error frame to the client (e.g. a per-frame
 // validation failure) before tearing down the stream context. The
-// outbound recv loop checks context.Cause(ctx) against it (Q66-stream-1):
+// outbound recv loop checks context.Cause(ctx) against it:
 // the loop's own stream.Recv() then returns context.Canceled, and without
 // this signal it would write a SECOND, misleading "canceled" error frame
 // on top of the terminal one the pump already sent. A real backend error
@@ -86,7 +86,7 @@ func WriteSSEHeaders(w http.ResponseWriter) (http.Flusher, bool) {
 // http.ResponseWriter (no internal queue) → SSE handler
 // goroutine. If the client stalls past a threshold the
 // goroutine pins indefinitely. Use [WriteSSEEventWithTimeout]
-// to bound write latency (G3-GW-09).
+// to bound write latency.
 func WriteSSEEvent(w http.ResponseWriter, flusher http.Flusher, msg proto.Message) error {
 	// Build the whole `data: <json>\n\n` frame in ONE pooled buffer so a
 	// registered generated marshaler makes the frame zero-allocation (the
@@ -112,7 +112,7 @@ func WriteSSEEvent(w http.ResponseWriter, flusher http.Flusher, msg proto.Messag
 	return nil
 }
 
-// WriteSSEEventWithTimeout (G3-GW-09) wraps WriteSSEEvent
+// WriteSSEEventWithTimeout wraps WriteSSEEvent
 // with a per-write deadline via [http.NewResponseController].
 // When the underlying TCP send buffer can't drain within
 // `timeout`, the write returns a deadline error; the caller
@@ -202,8 +202,8 @@ func WriteSSEGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, flusher ht
 		return
 	}
 	// Non-status (transport / unexpected): its text carries internal
-	// topology, so it is logged and genericised — the unary path's
-	// restgw-sec-3 posture, which this leg was emitting raw.
+	// topology, so it is logged and genericised — as the unary path
+	// does; this leg used to emit it raw.
 	observx.ReportError(ctx, err)
 	WriteSSEError(w, flusher, "INTERNAL", internalSentence(ctx))
 }
@@ -215,7 +215,7 @@ func WriteSSEGRPCErrorWithTimeout(w http.ResponseWriter, flusher http.Flusher, e
 }
 
 // WriteSSEGRPCErrorCtxWithTimeout wraps WriteSSEGRPCErrorCtx with a
-// per-write deadline (G3-GW-09 error-path sibling, Q5-gw-1) so the terminal
+// per-write deadline so the terminal
 // error frame can't pin the handler goroutine on a half-open client.
 // timeout of 0 disables the bound.
 func WriteSSEGRPCErrorCtxWithTimeout(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, err error, timeout time.Duration) {
@@ -467,7 +467,7 @@ func wsUnwrapJSONFrame(data []byte) ([]byte, error) {
 // Back-pressure: coder/websocket's Write respects ctx
 // cancellation, so passing a derived ctx with a timeout
 // bounds the write latency. See [WSWriteProtoWithTimeout]
-// for the bounded variant (G3-GW-09).
+// for the bounded variant.
 func WSWriteProto(ctx context.Context, conn *websocket.Conn, msg proto.Message, fmtOpt ...WireFormat) error {
 	if wsFormatOpt(fmtOpt) == WireProto {
 		// Pooled marshal → write → release, mirroring writeNegotiated's PB
@@ -512,7 +512,7 @@ func WSWriteProto(ctx context.Context, conn *websocket.Conn, msg proto.Message, 
 	return werr
 }
 
-// WSWriteProtoWithTimeout (G3-GW-09) wraps WSWriteProto
+// WSWriteProtoWithTimeout wraps WSWriteProto
 // with a derived ctx that has a per-write deadline. A slow
 // client whose receive window stalls past `timeout` gets
 // the write aborted with `context.DeadlineExceeded`; the
@@ -545,7 +545,7 @@ const defaultStreamWriteTimeout = 30 * time.Second
 // StreamWriteTimeoutFromEnv reads `<PREFIX>_STREAM_WRITE_TIMEOUT_SECONDS`
 // off `lookup` and returns the per-frame write deadline the generated
 // SSE/WS handlers pass to [WriteSSEEventWithTimeout] /
-// [WSWriteProtoWithTimeout] (G3-GW-09). Unset / unparseable falls back
+// [WSWriteProtoWithTimeout]. Unset / unparseable falls back
 // to defaultStreamWriteTimeout (30s) so out-of-the-box bundles are
 // bounded; an explicit value <= 0 disables the deadline (operator
 // opt-out, matching the WithTimeout `timeout == 0` passthrough).
@@ -575,7 +575,7 @@ func WSWriteError(ctx context.Context, conn *websocket.Conn, code, message strin
 // WSWriteErrorWithDetails sends the structured error envelope
 // (`{error: {code, message, details: [...]}}`) as a text
 // frame and then closes the conn. Used by generated WS
-// handlers for per-frame validation rejection (G3-V-02) so the
+// handlers for per-frame validation rejection so the
 // caller learns which fields were invalid before the WS
 // terminates. Mirrors [WriteErrorWithDetails] on the unary
 // HTTP side.
@@ -611,7 +611,7 @@ func wsCloseReason(reason string) string {
 }
 
 // WSWriteErrorWithDetailsWithTimeout wraps WSWriteErrorWithDetails with a
-// derived ctx deadline (Q5-gw-1) so the validation-rejection frame + close
+// derived ctx deadline so the validation-rejection frame + close
 // can't pin the goroutine. timeout of 0 disables the bound.
 func WSWriteErrorWithDetailsWithTimeout(ctx context.Context, conn *websocket.Conn, code, message string, details []FieldError, timeout time.Duration) {
 	if timeout > 0 {
@@ -630,7 +630,7 @@ func WSWriteGRPCError(ctx context.Context, conn *websocket.Conn, err error) {
 		return
 	}
 	if st, ok := status.FromError(err); ok {
-		// B25-restgw-1: forward the backend's field-violation details (parity
+		// Forward the backend's field-violation details (parity
 		// with the unary WriteGRPCError path).
 		if details := fieldErrorsFromStatus(st); len(details) > 0 {
 			reportByCode(ctx, st.Code(), err)
@@ -644,13 +644,13 @@ func WSWriteGRPCError(ctx context.Context, conn *websocket.Conn, err error) {
 		return
 	}
 	// Non-status (transport / unexpected): logged + genericised, matching
-	// the unary path (restgw-sec-3). This leg was emitting it raw.
+	// the unary path. This leg was emitting it raw.
 	observx.ReportError(ctx, err)
 	WSWriteError(ctx, conn, "INTERNAL", internalSentence(ctx))
 }
 
 // WSWriteGRPCErrorWithTimeout wraps WSWriteGRPCError with a derived ctx
-// deadline (Q5-gw-1) so the terminal error frame + close can't pin the
+// deadline so the terminal error frame + close can't pin the
 // goroutine. timeout of 0 disables the bound.
 func WSWriteGRPCErrorWithTimeout(ctx context.Context, conn *websocket.Conn, err error, timeout time.Duration) {
 	if timeout > 0 {

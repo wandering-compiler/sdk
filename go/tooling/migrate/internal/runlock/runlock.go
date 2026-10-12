@@ -2,7 +2,7 @@
 // "apply run-lock" that w17migrate takes before mutating a
 // non-transactional store (S3 / Redis / NATS). Two concurrent apply runs
 // against one target would otherwise double-apply a non-idempotent
-// TRANSFORM_FIELD data migration (Q48-datamigrate-1); the lock
+// TRANSFORM_FIELD data migration; the lock
 // serialises them.
 //
 // The store-specific acquire / refresh / release lives in each

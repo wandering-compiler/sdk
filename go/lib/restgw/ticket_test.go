@@ -13,7 +13,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
-// G3i3-GW-F: Issue + Redeem round-trip — happy path returns
+// Issue + Redeem round-trip — happy path returns
 // the same labels the caller stored.
 func TestTicket_IssueRedeem_RoundTrip(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
@@ -36,7 +36,7 @@ func TestTicket_IssueRedeem_RoundTrip(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: tickets are one-shot — second Redeem of the
+// Tickets are one-shot — second Redeem of the
 // same ticket fails. Critical security property: a leaked
 // ticket can't be replayed.
 func TestTicket_OneShot(t *testing.T) {
@@ -52,7 +52,7 @@ func TestTicket_OneShot(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: unknown ticket → ErrTicketInvalid (same as
+// Unknown ticket → ErrTicketInvalid (same as
 // expired / consumed — attacker shouldn't probe validity).
 func TestTicket_UnknownInvalid(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
@@ -63,7 +63,7 @@ func TestTicket_UnknownInvalid(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: empty ticket string also returns ErrTicketInvalid
+// Empty ticket string also returns ErrTicketInvalid
 // without hitting the store map.
 func TestTicket_EmptyInvalid(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
@@ -73,7 +73,7 @@ func TestTicket_EmptyInvalid(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: TTL expiry — past-TTL Redeem fails. Use a tiny
+// TTL expiry — past-TTL Redeem fails. Use a tiny
 // TTL + sleep instead of stubbing time so the real clock-
 // driven path runs.
 func TestTicket_TTLExpiry(t *testing.T) {
@@ -86,7 +86,7 @@ func TestTicket_TTLExpiry(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: NewTicketIssuer happy path — POST with valid
+// NewTicketIssuer happy path — POST with valid
 // Principal returns 200 + JSON body containing ticket +
 // expires_in. Vary + Cache-Control: no-store on the response.
 func TestTicketIssuer_HappyPOST(t *testing.T) {
@@ -130,7 +130,7 @@ func TestTicketIssuer_HappyPOST(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: non-POST → 405 with Allow header. Pin the
+// Non-POST → 405 with Allow header. Pin the
 // method-allowlist semantic so a future router rewrite
 // doesn't quietly accept GET (which would let a malicious
 // page issue tickets via <img> with the user's cookie).
@@ -152,7 +152,7 @@ func TestTicketIssuer_RejectsGET(t *testing.T) {
 	}
 }
 
-// G3i3-GW-F: Principal failure → 401 (not 500 — the failure
+// Principal failure → 401 (not 500 — the failure
 // IS the auth result for the issuer).
 func TestTicketIssuer_PrincipalFailure_401(t *testing.T) {
 	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{

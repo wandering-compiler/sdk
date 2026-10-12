@@ -8,7 +8,7 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
 // Domain-level REST registry. Replaces
 // the inline `(w17.http)` annotations on gRPC methods that
-// shipped through iter-1..3.
+// earlier versions used.
 //
 // Why a registry instead of inline annotations:
 //   - gRPC service definitions stay a pure behavior contract

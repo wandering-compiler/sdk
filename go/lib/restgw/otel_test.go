@@ -37,7 +37,7 @@ func TestOTelMiddleware_NoopPassThrough(t *testing.T) {
 	}
 }
 
-// G3i3-GW-C: MetricsHandler returns a non-nil handler that
+// MetricsHandler returns a non-nil handler that
 // responds with the Prometheus exposition format. Even
 // without observx EnableMetrics the handler serves the
 // global Go-runtime collectors — still a valid response.
@@ -47,7 +47,7 @@ func TestMetricsHandler_NotNil(t *testing.T) {
 	}
 }
 
-// G3i3-GW-C: MountMetricsListener with empty port returns
+// MountMetricsListener with empty port returns
 // empty addr (off path) — no goroutine spawned, no listen
 // error.
 func TestMountMetricsListener_EmptyPortOff(t *testing.T) {

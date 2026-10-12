@@ -186,7 +186,7 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 		r.Header.Del("If-Range")
 	}
 
-	// Q36-restgw-2 — these are user-UPLOADED bytes served same-origin,
+	// These are user-UPLOADED bytes served same-origin,
 	// and the upload allowlist validates only the filename extension,
 	// never the content. Without an explicit Content-Type,
 	// http.ServeContent sniffs the body (the empty `name` disables the
@@ -262,7 +262,7 @@ func BuildDownloadURL(urlForm, prefix, host, storageKey string) string {
 // request used, and on a Windows host '\' is also a path
 // separator. Splitting on '/' alone would let
 // `avatars\..\..\etc\passwd` slip past the guard, so '\' is
-// normalised to '/' before the segment scan. (R-restgw-6)
+// normalised to '/' before the segment scan.
 func hasDotSegment(p string) bool {
 	p = strings.ReplaceAll(p, "\\", "/")
 	for _, seg := range strings.Split(p, "/") {
