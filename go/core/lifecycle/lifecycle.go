@@ -86,7 +86,9 @@ type grpcStopper interface {
 }
 
 // StopGRPC stops srv gracefully, forcing a hard [grpc.Server.Stop] when
-// the drain overruns timeout. A timeout of 0 blocks indefinitely (the
+// the drain overruns timeout. The hard stop gets one more timeout; past
+// that StopGRPC returns without it (see forceStop), so a bounded stop takes
+// at most twice timeout. A timeout of 0 blocks indefinitely (the
 // documented opt-out).
 //
 // gRPC has no "tell open streams to wind down" hook — GracefulStop sends
@@ -121,7 +123,27 @@ func stopGRPC(srv grpcStopper, timeout time.Duration) {
 	case <-done:
 	case <-time.After(timeout):
 		log.Printf("shutdown: graceful stop exceeded %s; forcing hard stop (in-flight RPCs aborted)", timeout)
+		forceStop(srv, timeout)
+	}
+}
+
+// forceStop calls srv.Stop and waits for it at most timeout.
+//
+// Stop is not bounded by itself: it waits until every connection has been
+// torn down, and a connection whose handler ignores its cancelled context
+// can keep that wait going (seen with grpc-go 1.83 under load). The caller
+// asked for a bounded stop, so past the bound Stop is left to finish on its
+// own and the caller goes on; the handlers still running are its to report.
+func forceStop(srv grpcStopper, timeout time.Duration) {
+	stopped := make(chan struct{})
+	go func() {
 		srv.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(timeout):
+		log.Printf("shutdown: hard stop did not finish within %s; continuing with handlers still running", timeout)
 	}
 }
 

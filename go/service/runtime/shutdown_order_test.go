@@ -73,7 +73,11 @@ func TestGRPCComponent_ShutdownHooksWaitForHandlersAfterForcedStop(t *testing.T)
 		}},
 	})
 	conn := plainConn(t, addr)
-	go func() { _ = conn.Invoke(context.Background(), "/test.Hold/Hold", &emptypb.Empty{}, &emptypb.Empty{}) }()
+	// WaitForReady: the server may not be listening yet, and a call that
+	// fails fast never starts the handler the test waits for.
+	go func() {
+		_ = conn.Invoke(context.Background(), "/test.Hold/Hold", &emptypb.Empty{}, &emptypb.Empty{}, grpc.WaitForReady(true))
+	}()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
