@@ -2,7 +2,6 @@ package principal
 
 import (
 	"context"
-	"strings"
 
 	"google.golang.org/grpc/metadata"
 )
@@ -27,9 +26,21 @@ const LabelKeyPrefix = "w17-label-"
 // is its wire-side half.
 var gatewayOwnedPrefixes = []string{"x-w17-", LabelKeyPrefix}
 
+// gatewayOwnedKeys are the exact keys a client must never set beside the
+// prefixes: the transaction a storage call adopts (txregistry.HeaderName)
+// and the connection affinity it is routed by (distx.ConnIDHeader). Their
+// only legitimate writer is the transaction coordinator inside the bundle;
+// one forwarded from a client would make a storage call join another
+// request's open transaction, or pin its routing. Matched on the whole
+// name, so `w17-tx-id-hint` is an ordinary key.
+//
+// Literals, for the reason lib/eventbus keeps one: lib/ does not import
+// service/. service/tx pins both against [IsGatewayOwnedKey] in its tests.
+var gatewayOwnedKeys = []string{"w17-tx-id", "w17-conn-id"}
+
 // SanitizeGatewayMD returns a copy of ctx's INCOMING metadata with the
-// gateway-owned namespaces removed, ready for the caller to stamp its
-// verified principal onto and hand to [WithGatewayMD].
+// gateway-owned keys ([IsGatewayOwnedKey]) removed, ready for the caller to
+// stamp its verified principal onto and hand to [WithGatewayMD].
 //
 // Clearing rather than overwriting is the point. A gateway stamps
 // `x-w17-scope-<name>` once per scope the auth response actually returns,
@@ -49,12 +60,8 @@ func SanitizeGatewayMD(ctx context.Context) metadata.MD {
 		md = metadata.MD{}
 	}
 	for k := range md {
-		lk := strings.ToLower(k)
-		for _, p := range gatewayOwnedPrefixes {
-			if strings.HasPrefix(lk, p) {
-				delete(md, k)
-				break
-			}
+		if IsGatewayOwnedKey(k) {
+			delete(md, k)
 		}
 	}
 	return md

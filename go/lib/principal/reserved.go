@@ -2,9 +2,11 @@ package principal
 
 import "strings"
 
-// IsGatewayOwnedKey reports whether `key` targets one of the metadata
-// namespaces a public gateway OWNS — the ones it writes from the verified auth
-// response and every downstream tier trusts (`x-w17-*`, `w17-label-*`).
+// IsGatewayOwnedKey reports whether `key` targets metadata a public gateway
+// OWNS: the namespaces it writes from the verified auth response and every
+// downstream tier trusts (`x-w17-*`, `w17-label-*`), and the transaction
+// routing keys only the bundle's own transaction coordinator writes
+// (`w17-tx-id`, `w17-conn-id`, matched on the whole name). Case-insensitive.
 //
 // It is the key-at-a-time reading of the rule [SanitizeGatewayMD] applies to a
 // whole context, for the surfaces that assemble their metadata from something
@@ -13,7 +15,7 @@ import "strings"
 // env named in `W17_MCP_FORWARD_HEADERS`, so there is no incoming side to
 // sanitize — there is a list of keys to refuse.
 //
-// One rule, one list. The gateway parser refuses these prefixes in a declared
+// One rule, one list. The gateway parser refuses these keys in a declared
 // `metadata_binding` / `metadata_propagation`, and the gateway wire path strips
 // them; a surface that let one through would be the hole in a fence three other
 // surfaces maintain.
@@ -21,6 +23,11 @@ func IsGatewayOwnedKey(key string) bool {
 	k := strings.TrimSpace(key)
 	for _, p := range gatewayOwnedPrefixes {
 		if hasPrefixFold(k, p) {
+			return true
+		}
+	}
+	for _, name := range gatewayOwnedKeys {
+		if strings.EqualFold(k, name) {
 			return true
 		}
 	}
@@ -34,26 +41,14 @@ func IsGatewayOwnedKey(key string) bool {
 // propagation / rename / default-stamp middlewares, and the MCP transport's
 // forwarding and auth-header collection.
 //
-// It is [IsGatewayOwnedKey] widened by the keys that are not the principal but
-// are just as trusted by the tier that reads them:
+// It is [IsGatewayOwnedKey] widened by the spellings a client could reach a
+// trusted key by through a grpc-gateway in front of a backend:
 //
-//   - `w17-tx-id` and `w17-conn-id`, the transaction a storage call adopts and
-//     the connection affinity it is routed by. They are set by the service
-//     that opened the transaction, never by a caller at the edge; a forwarded
-//     one would let a request join someone else's transaction.
 //   - `grpcgateway-*`, the namespace grpc-gateway writes the permanent HTTP
 //     headers it forwards under (`grpcgateway-authorization`). A backend that
 //     reads one believes a gateway put it there.
-//   - the `Grpc-Metadata-<key>` HTTP form of any of the above, which
+//   - the `Grpc-Metadata-<key>` HTTP form of a gateway-owned key, which
 //     grpc-gateway turns into the bare `<key>`.
-//
-// Kept separate from IsGatewayOwnedKey because that one also decides what the
-// gateway itself may stamp and what an event envelope keeps; the transaction
-// keys belong to neither.
-//
-// The transaction key names are literals for the reason lib/eventbus keeps
-// one: lib/ does not import service/. service/tx pins both against this
-// predicate in its tests.
 func IsEdgeReservedKey(key string) bool {
 	k := strings.TrimSpace(key)
 	if hasPrefixFold(k, grpcGatewayPrefix) {
@@ -62,20 +57,8 @@ func IsEdgeReservedKey(key string) bool {
 	if hasPrefixFold(k, grpcMetadataHeaderPrefix) {
 		k = k[len(grpcMetadataHeaderPrefix):]
 	}
-	if IsGatewayOwnedKey(k) {
-		return true
-	}
-	for _, t := range transportKeys {
-		if strings.EqualFold(k, t) {
-			return true
-		}
-	}
-	return false
+	return IsGatewayOwnedKey(k)
 }
-
-// transportKeys are the transaction-routing keys [IsEdgeReservedKey] refuses
-// by exact name: txregistry.HeaderName and distx.ConnIDHeader.
-var transportKeys = []string{"w17-tx-id", "w17-conn-id"}
 
 const (
 	// grpcGatewayPrefix is the metadata namespace grpc-gateway forwards
