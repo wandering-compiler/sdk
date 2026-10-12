@@ -149,8 +149,10 @@ func sqliteSetting(entry string) (name, value string) {
 //     operator choice intact. The emitter escapes MySQL string literals
 //     for the default sql_mode: under NO_BACKSLASH_ESCAPES its doubling
 //     stops being a no-op and `'a\\b'` becomes the four-character `a\b`.
+//
 //   - parseTime — generated code scans DATETIME straight into
 //     time.Time, which the driver refuses without it.
+//
 //   - collation — this pin lived in the DEV DSN only, while
 //     go-sql-driver's default handshake collation is utf8mb4_general_ci:
 //     a string comparison no column anchors (literal↔literal,
@@ -159,6 +161,14 @@ func sqliteSetting(entry string) (name, value string) {
 //     pin and 1 without it, live on 8.4.10. Column comparisons were never
 //     exposed — DDL `COLLATE` anchors those, and the emitter appends
 //     `COLLATE` to every character-result cast.
+//
+//     It is pinned as the SESSION VARIABLE `collation_connection`, which the
+//     driver sends as `SET`, not as the driver's own `collation` parameter.
+//     That one only picks the handshake collation, from a table that holds
+//     no utf8mb4_0900_as_cs; for a name it does not know it falls back to
+//     utf8mb4_general_ci and says nothing, so the pin read as set while
+//     every session compared case- and accent-insensitively. An operator
+//     who names `collation` has chosen one, and keeps it.
 //
 // A parameter the DSN already names is left alone: these are safety pins
 // for an ACCIDENTAL setting, not a way to overrule a chosen one. The
@@ -169,8 +179,30 @@ func MySQLDSNParams() []string {
 	return []string{
 		"sql_mode=REPLACE(@@sql_mode,'NO_BACKSLASH_ESCAPES','')",
 		"parseTime=true",
-		"collation=utf8mb4_0900_as_cs",
+		"collation_connection=utf8mb4_0900_as_cs",
 	}
+}
+
+// mysqlPinAliases names, per pin, the other driver parameters that make the
+// same choice: an operator who set one of them has chosen, and the pin
+// would overrule them (`SET` runs after the handshake).
+var mysqlPinAliases = map[string][]string{
+	"collation_connection": {"collation"},
+}
+
+// MySQLParamChosen reports whether a DSN whose parameter names `has`
+// answers for already makes the choice pin `name` exists for — under that
+// name or an alias of it.
+func MySQLParamChosen(name string, has func(string) bool) bool {
+	if has(name) {
+		return true
+	}
+	for _, alias := range mysqlPinAliases[name] {
+		if has(alias) {
+			return true
+		}
+	}
+	return false
 }
 
 // ApplyMySQLDSNParams appends every parameter from [MySQLDSNParams] the
@@ -190,6 +222,10 @@ func ApplyMySQLDSNParams(dsn string) string {
 			if have != pinned {
 				reportKept("mysql", name, pinned)
 			}
+			continue
+		}
+		if MySQLParamChosen(name, func(n string) bool { _, ok := named[n]; return ok }) {
+			reportKept("mysql", name, pinned)
 			continue
 		}
 		dsn = appendQuery(dsn, hasQuery, p)

@@ -299,7 +299,7 @@ func URLToDriverDSN(urlDSN string) (string, error) {
 	// chosen one.
 	for _, p := range dbsession.MySQLDSNParams() {
 		name, value, _ := strings.Cut(p, "=")
-		if q.Has(name) {
+		if dbsession.MySQLParamChosen(name, q.Has) {
 			continue
 		}
 		q.Set(name, value)

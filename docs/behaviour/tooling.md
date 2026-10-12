@@ -7,8 +7,11 @@ the dialect appliers under `internal/`), `go/tooling/datamigrate`, `go/tooling/f
 `go/tooling/e2e/runner`, `go/tooling/e2e/internal/runtime`, `go/tooling/e2e/stress`,
 `go/tooling/certgen`, `go/tooling/pathguard`, `go/tooling/plugindigest`.
 
-Database-backed tests for Postgres and MySQL run only under the `dockertest` build tag or with
-`W17_PG_DSN` set; Redis and NATS tests use embedded servers.
+Database-backed tests for Postgres and MySQL run against the servers `W17_PG_DSN` and
+`W17_MYSQL_DSN` (`mysql://user:pass@host:port/db`) name, and skip without them unless
+`W17_REQUIRE_LIVE_MIGRATOR=1`, which CI sets so the lane cannot pass by skipping. Tests that
+need a specially configured server start their own under the `dockertest` build tag. Redis
+and NATS tests use embedded servers.
 
 ```
 <binary> migrate apply|status|fetch|rollback      <binary> fixtures apply
@@ -455,18 +458,18 @@ manual remedy. Postgres, SQLite and NATS have no checked run lock.
 |---|---|---|
 | T15.1 | Redis and S3 run locks MUST be mutually exclusive. | `TestRunLock_MutualExclusion`, `TestS3RunLock_MutualExclusion` |
 | T15.2 | A stale lock MUST be taken over; a refreshed lock MUST NOT be. | `TestRunLock_StaleTakeoverViaTTL`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp`, `TestS3RunLock_RefreshPreventsTakeover` |
-| T15.3 | Release MUST be owner-checked; a release that finds the lock held by another owner MUST return an error wrapping `ErrLockLost`. | `TestRunLock_ReleaseIsOwnerChecked`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp` (Redis and S3; MySQL not asserted) |
+| T15.3 | Release MUST be owner-checked; a release that finds the lock held by another owner MUST return an error wrapping `ErrLockLost`. | `TestRunLock_ReleaseIsOwnerChecked`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp`, `TestRunLock_CheckReportsALostLockSession_Live` |
 | T15.4 | The MySQL run lock MUST survive an idle server `wait_timeout`. | `TestRunLock_SurvivesAnIdleServerTimeout` (`dockertest`) |
 | T15.5 | SQLite foreign-key violations after a table rebuild MUST be caught. | `TestApply_RebuildFKViolation_Caught` |
 | T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | `TestNATSRunLock_MutualExclusion`, `TestNATSRunLock_ConcurrentAcquireHasOneWinner`, `TestNATSRunLock_RefreshPreventsTakeover`, `TestNATSRunLock_StaleTakeoverAndLostHolder` |
-| T15.7 | Postgres and MySQL apply, rollback, applied head, phase and the post-transaction advisory lock MUST behave as specified against a real database. | no test |
+| T15.7 | Postgres and MySQL apply, rollback, applied head, phase and the post-transaction advisory lock MUST behave as specified against a real database. | `TestApplier_ApplyPhaseHeadRollback_Live`, `TestApplier_PostTxWaitsForTheAdvisoryLockAndRechecks_Live`, `TestApplier_ApplyHeadRollback_Live` |
 | T15.8 | Errors MUST NOT contain credentials: a DSN named in an error (unknown scheme, unparseable URL, duplicate or empty `--target` entry) has its password and password-like parameters masked, and the error keeps its context. | `TestErrors_NeverPrintTheDSNPassword`, `TestString_MasksCredentials`, `TestErr_RedactsAURLError` |
 | T15.9 | A command line the applier does not recognise MUST fail the migration, not be skipped. | `TestApply_UnknownCommandFailsTheMigration_Live`, `TestRunOne_DispatchErrors_Live`, `TestApply_CommandErrors` |
 | T15.10 | Wipe MUST return the store to the empty state, including the namespaces the migration set declares (the ones schema prep creates), MUST NOT drop a schema the set does not declare even when the wiping role may, and MUST NOT change session settings that outlive it. | `TestWipe_DropsDeclaredSchemasOnly_Live`, `TestWipeSQL_DropsDeclaredSchemas`, `TestDeclaredNamespaces`, `TestWipe_RunsOnOneSessionAndRestoresFKChecks`, `TestWipe_AFailureStillRestoresFKChecks` |
 | T15.11 | NATS DSN user info is not used. | `TestDSNToServer_DropsUserInfo` |
 | T15.12 | A Redis or S3 run lock whose lease is no longer provably held (a refresh found another owner, or the lease ran out without a refresh) MUST report itself lost for good, and the applier MUST stop before its next write. | `TestRunLock_RefreshOfATakenOverLockReportsItLost`, `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestLease_HoldsUntilItsMarginThenRunsOut`, `TestLease_LostStaysLost`, `TestLease_RenewalExtendsFromWhenTheRefreshWasSent` |
 | T15.13 | The S3 run lock MUST judge staleness on the store's clock only, so a taker whose local clock runs ahead cannot take over a live lock; a store that reports no time MUST be refused, never judged on the local clock. | `TestS3RunLock_ClockSkewedTakerCannotTakeOverALiveLock`, `TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness` |
-| T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | no test |
+| T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | `TestRunLock_CheckReportsALostLockSession_Live` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.

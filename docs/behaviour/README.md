@@ -20,10 +20,10 @@ changing it.
 |---|---|---|---|---|
 | [server.md](server.md) | 21 | 164 | 2 | 26 |
 | [edges.md](edges.md) | 34 | 209 | 4 | 13 |
-| [data.md](data.md) | 17 | 134 | 6 | 5 |
+| [data.md](data.md) | 17 | 134 | 2 | 5 |
 | [events-identity.md](events-identity.md) | 18 | 114 | 0 | 16 |
-| [tooling.md](tooling.md) | 29 | 169 | 2 | 11 |
-| **All areas** | **119** | **790** | **14** | **71** |
+| [tooling.md](tooling.md) | 29 | 169 | 0 | 10 |
+| **All areas** | **119** | **790** | **8** | **70** |
 | [matrix.md](matrix.md) | — | 129 interactions | 31 | 32 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of

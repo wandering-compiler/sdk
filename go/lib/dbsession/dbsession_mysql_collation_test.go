@@ -24,7 +24,7 @@ import (
 func TestMySQLDSNParams_PinsCollation(t *testing.T) {
 	var found string
 	for _, p := range MySQLDSNParams() {
-		if strings.HasPrefix(p, "collation=") {
+		if strings.HasPrefix(p, "collation_connection=") {
 			found = p
 		}
 	}
@@ -38,7 +38,7 @@ func TestMySQLDSNParams_PinsCollation(t *testing.T) {
 
 func TestApplyMySQLDSNParams_AddsCollationToABareDSN(t *testing.T) {
 	got := ApplyMySQLDSNParams("user:pw@tcp(db:3306)/app")
-	if !strings.Contains(got, "collation=") {
+	if !strings.Contains(got, "collation_connection=utf8mb4_0900_as_cs") {
 		t.Errorf("an operator DSN must come out carrying the collation pin; got %q", got)
 	}
 }
@@ -53,5 +53,10 @@ func TestApplyMySQLDSNParams_KeepsAnOperatorCollation(t *testing.T) {
 	}
 	if !strings.Contains(got, "collation=utf8mb4_bin") {
 		t.Errorf("the operator's value was replaced: %q", got)
+	}
+	// The pin is a SET that runs after the handshake: appended, it would
+	// overrule the operator's handshake collation.
+	if strings.Contains(got, "collation_connection=") {
+		t.Errorf("the pin was added over an operator-chosen collation: %q", got)
 	}
 }

@@ -34,7 +34,7 @@ func TestApply_IsIdempotent(t *testing.T) {
 // inside a password is credentials, and must not suppress the pin.
 func TestApply_NameInsideAPasswordDoesNotSuppressThePin(t *testing.T) {
 	got := ApplyMySQLDSNParams("app:pw_collation=x@tcp(db:3306)/app")
-	if !strings.Contains(got, "/app?") || !strings.Contains(got[strings.LastIndex(got, "/"):], "collation=utf8mb4_0900_as_cs") {
+	if !strings.Contains(got, "/app?") || !strings.Contains(got[strings.LastIndex(got, "/"):], "collation_connection=utf8mb4_0900_as_cs") {
 		t.Errorf("MySQL: a password containing `collation=` suppressed the pin: %q", got)
 	}
 
