@@ -1056,6 +1056,17 @@ func (s *natsSubscriber) isDraining() bool {
 // stopConsumeHandle tears one handle down: advisory subscription first (so no
 // further advisory work is queued), then the consume loop. Shared by Drain and
 // by the late-Subscribe refusal, which must leave nothing running.
+// drainConsumeHandle is stopConsumeHandle for a subscriber going away:
+// prefetched messages still reach the consume callback (see Drain).
+func drainConsumeHandle(h *natsConsumeHandle) {
+	if h.advisorySub != nil {
+		_ = h.advisorySub.Unsubscribe()
+	}
+	if h.cctx != nil {
+		h.cctx.Drain()
+	}
+}
+
 func stopConsumeHandle(h *natsConsumeHandle) {
 	if h.advisorySub != nil {
 		_ = h.advisorySub.Unsubscribe()
@@ -1311,13 +1322,24 @@ func (s *natsSubscriber) Drain(ctx context.Context) error {
 	s.handles = nil
 	s.mu.Unlock()
 
+	// Drain, not Stop: Stop discards the messages the client has already
+	// prefetched, and the broker redelivers those only when AckWait runs
+	// out — every rolling restart parked them for up to 30s. Drain runs
+	// them through the callback, which Naks them (draining is set) so
+	// another replica gets them at once; Drain then waits until the buffer
+	// is empty, so none is left for Close to discard.
 	for _, h := range handles {
-		stopConsumeHandle(h)
+		drainConsumeHandle(h)
 	}
 
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
+		for _, h := range handles {
+			if h.cctx != nil {
+				<-h.cctx.Closed()
+			}
+		}
 		close(done)
 	}()
 	select {

@@ -59,7 +59,7 @@ the emit after the database commit.
 | I1.1 | A marshal or publish failure MUST be returned to the caller and reported to the configured Observer. | `TestRedisBus_DispatchError` |
 | I1.2 | The publish MUST be detached from the request's cancellation (`context.WithoutCancel`), so an emit after the RPC answered still goes out; on the broker transports it is bounded by `PublishTimeout` instead (I5.15, I6.10). | `TestNatsBus_DispatchDetachesCanceledCtx_Embedded`, `TestRedisBus_DispatchDetachesCanceledCtx_Embedded`, `TestMemoryBus_ContextDetached` |
 | I1.3 | The default Observer MUST log every emit failure, delivery failure and drop with channel and topic, and report it to the error reporter. Successes are silent. | `TestDefaultObserver_EmitFailureLeavesATrace`, `TestMemoryBus_ObserverNilDefaults` |
-| I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | `TestMemoryBus_DispatchAfterDrainIsRefused` (in-memory transport after drain only) |
+| I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | `TestMemoryBus_DispatchAfterDrainIsRefused`, `TestDispatchAfterClose_IsAnErrorOnEveryTransport`, `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I1.5 | An empty topic MUST be refused on every transport with `ErrInvalidTopic` and reported through `OnEmitFailure`. | `TestDispatch_EmptyTopicRefusedOnEveryTransport` |
 | I1.6 | A channel or topic that breaks the name rule MUST be refused identically on every transport, before any broker call, at both `Subscriber` and `Dispatch`; the names generated surfaces use MUST stay valid. | `TestChannelNameRefusedOnEveryTransport` |
 
@@ -213,6 +213,10 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
   looked up first and a transient error changes nothing; otherwise the stream, dead-letter stream
   and claim bucket are re-ensured, the consumer re-created and a new pull loop swapped into the
   subscription under the subscriber lock. Recovery retries until it succeeds or the subscriber drains.
+- `Drain` stops each pull loop by draining it, not stopping it: messages already prefetched into
+  the client still reach the consume callback, which Naks them, and `Drain` returns once that
+  buffer is empty (bounded by its context). They go back to the broker at once instead of waiting
+  out `AckWait`.
 - Broker down later: the client reconnects and logs each state change; when it
   gives up, a "closed for good" line is logged and an error reported, and every later
   `Dispatch` fails at once with `ErrConnectionClosed` through `OnEmitFailure`.
@@ -222,11 +226,11 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | ID | Guarantee | Test |
 |---|---|---|
 | I5.1 | Options MUST be validated at construction (DSN scheme, required prefix); naming MUST follow the mapping above. | `go/lib/eventbus/nats_test.go` |
-| I5.2 | Delivery MUST be at-least-once: a failed handler is redelivered up to `MaxDeliver`, with per-channel retry overrides. | `go/lib/eventbus/nats_embedded_test.go` (redelivery, retry override) |
-| I5.3 | `OnDrop(max_deliver_exceeded)` MUST fire only after the payload is in the DLQ; a failed DLQ write MUST report `OnDeliverFailure` and Nak instead. | `go/lib/eventbus/nats_embedded_test.go`, `go/lib/eventbus/nats_test.go` (DLQ routing and guards) |
-| I5.4 | Exactly one terminal outcome per message across replicas (DLQ or success), including for slow handlers. | `go/lib/eventbus/nats_embedded_test.go` (single-replica advisory, slow success not dropped, slow failure dead-lettered, cross-replica coherence) |
-| I5.5 | Deliveries that arrive during drain MUST be Nak'd for redelivery, not dropped. | `go/lib/eventbus/nats_embedded_test.go` (drain races), `go/lib/eventbus/nats_test.go` (advisory while draining) |
-| I5.6 | `Close` MUST drain all subscribers, then close the connection; it MUST be idempotent and MUST NOT produce error-level callbacks for its own close. | `TestNatsBus_CloseAtShutdownIsNotAnError`, `go/lib/eventbus/nats_embedded_test.go` (idempotent close) |
+| I5.2 | Delivery MUST be at-least-once: a failed handler is redelivered up to `MaxDeliver`, with per-channel retry overrides. | `TestNatsBus_HandlerErrorRedelivers_Embedded`, `TestNatsBus_ChannelRetriesOverride_Embedded` |
+| I5.3 | `OnDrop(max_deliver_exceeded)` MUST fire only after the payload is in the DLQ; a failed DLQ write MUST report `OnDeliverFailure` and Nak instead. | `TestNatsBus_DLQRouting_Embedded`, `TestNatsBus_FailedDLQWriteIsAFailureNotADrop_Embedded`, `TestNatsSubscriber_RouteToDLQ_BrokerFreeGuards` |
+| I5.4 | Exactly one terminal outcome per message across replicas (DLQ or success), including for slow handlers. | `TestNatsBus_MaxDeliverAdvisory_SingleReplicaRoutes_Embedded`, `TestNatsBus_SlowSuccessNotDropped_Embedded`, `TestNatsBus_SlowFailureAtCapStillDLQs_Embedded`, `TestNatsBus_AdvisoryWhileBuffered_NoDropPlusSuccess_Embedded`, `TestNatsBus_CrossReplicaAdvisory_NoDropPlusSuccess_Embedded` |
+| I5.5 | Deliveries that arrive during drain MUST be Nak'd for redelivery, not dropped. | `TestNatsBus_DeliveryDuringDrainIsHandedBack_Embedded`, `TestNatsBus_DrainDuringDelivery_NoWaitGroupRace_Embedded`, `TestNatsSubscriber_AdvisoryRespectsDraining` |
+| I5.6 | `Close` MUST drain all subscribers, then close the connection; it MUST be idempotent and MUST NOT produce error-level callbacks for its own close. | `TestNatsBus_CloseAtShutdownIsNotAnError`, `TestNatsBus_CloseIdempotent_Embedded` |
 | I5.7 | A broker outage MUST be logged. | `TestNatsBus_ABrokerOutageIsStillHeard` |
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
 | I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | `TestNewNatsBus_UnreachableBrokerFails` |
@@ -284,10 +288,10 @@ a timeout, before returning. Each append trims its stream to the retention limit
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I6.1 | Delivery MUST be at-least-once with up to `MaxDeliver` handler attempts, then dead-letter. | `go/lib/eventbus/redis_embedded_test.go` (claim redelivery, DLQ routing, retry override) |
-| I6.2 | The claim loop MUST NOT reclaim or dead-letter a message whose handler is still running, including queued siblings of the same batch; the guard is per consumer identity. | `go/lib/eventbus/redis_batch_inflight_test.go`, `TestRedisBus_InFlightGuardIsPerConsumerIdentity_Embedded`, `go/lib/eventbus/redis_embedded_test.go` (in-flight at cap not dead-lettered) |
-| I6.3 | A lost group (flush or non-persistent restart) MUST be recreated at `$`; entries between loss and recreation are skipped. | `go/lib/eventbus/redis_embedded_test.go` (lost-group recovery) |
-| I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent. | `go/lib/eventbus/redis_embedded_test.go` (drain one of two, idempotent close) |
+| I6.1 | Delivery MUST be at-least-once with up to `MaxDeliver` handler attempts, then dead-letter. | `TestRedisBus_HandlerErrorClaimRedelivers_Embedded`, `TestRedisBus_DLQRouting_Embedded`, `TestRedisBus_ChannelRetriesOverride_Embedded` |
+| I6.2 | The claim loop MUST NOT reclaim or dead-letter a message whose handler is still running, including queued siblings of the same batch; the guard is per consumer identity. | `TestRedisBus_BatchSiblingIsNotReclaimedWhileQueued`, `TestRedisBus_InFlightGuardIsPerConsumerIdentity_Embedded`, `TestRedisBus_InFlightAtCapNotDLQd_Embedded` |
+| I6.3 | A lost group (flush or non-persistent restart) MUST be recreated at `$`; entries between loss and recreation are skipped. | `TestRedisBus_RecoversFromLostGroup_Embedded` |
+| I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent. | `TestRedisBus_DrainOneOfTwoSubscribers_Embedded`, `TestRedisBus_CloseIdempotent_Embedded` |
 | I6.5 | `NewRedisBus` MUST fail when the broker is unreachable at construction, with any DSN password redacted from the error. | `TestNewRedisBus_UnreachableBrokerFails` |
 | I6.6 | Consume-loop and pending-scan errors MUST be logged and reported once per outage, and the recovery logged. | `TestRedisSubscriber_LoopFailuresAreReported` |
 | I6.7 | `ReadBatch` and pending pages larger than 100 entries MUST be handled without loss. | `TestRedisBus_ReadBatchAbove100LosesNothing`; pending pages: holds by construction (every claim tick re-reads the pending list from its start); no test |
@@ -405,9 +409,9 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.1 | Events MUST be forwarded by topic across one or several channels, through a single shared subscriber per channel. | `go/lib/restgw/w17events_eventbus_test.go` |
 | I9.2 | The audience rule MUST hold: label filtering, unlabelled denied, unresolved principal denied, broadcast without isolation. | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEvent*`, `go/lib/restgw/w17events_eventbus_test.go` |
 | I9.3 | Every replica MUST receive every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent`, `go/lib/restgw/w17events_replicas_test.go` |
-| I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `go/lib/restgw/w17events_ensureopen_test.go`, `go/lib/restgw/w17events_eventbus_test.go` (partial open) |
+| I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `TestEventbusEventSource_FailedOpenDrainsWhatItOpened`, `TestEventbusEventSource_PartialOpenDrainsWithoutHoldingTheHubLock`, `TestEventbusEventSource_FailedOpenDrainIsBoundedAtTenSeconds` |
 | I9.5 | Streams MUST end on client disconnect or server drain. | `TestW17EventsEndsOnDrain`, `go/lib/restgw/w17events_drain_test.go` |
-| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `go/lib/restgw/w17events_eventbus_test.go` (transcode skip) |
+| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeError`, `TestEventbusEventSource_TranscodeSkip` |
 | I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | I9.8 | A write to a stalled client MUST end within the write deadline. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
 | I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | `TestEventbusEventSource_ResumesAfterTheBrokerRecreatesItsConsumer` |
@@ -564,9 +568,9 @@ untranslated. Substitution is one left-to-right pass over the translated text.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I14.1 | Translation and substitution MUST work; the default catalog MUST be the fallback; a missing locale MUST give the msgid. | `go/lib/i18n/i18n_test.go` (translate and substitute, default fallback, missing locale, no default catalog) |
-| I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing. | `go/lib/i18n/i18n_test.go` (multi-value, region to base, last value wins, outgoing metadata, incoming beats outgoing) |
-| I14.3 | Unknown placeholders MUST survive verbatim; an empty msgid MUST return "" so the `.po` header never leaks. | `go/lib/i18n/i18n_test.go` (unknown placeholder, empty msgid) |
+| I14.1 | Translation and substitution MUST work; the default catalog MUST be the fallback; a missing locale MUST give the msgid. | `TestT_RegisteredLocale_TranslatesAndSubstitutes`, `TestT_DefaultLocaleFallback`, `TestT_RequestedLocaleMissing_FallsBackToDefault`, `TestT_NoCatalogForDefaultLanguage_ReturnsMsgid` |
+| I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing. | `TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31`, `TestT_AcceptLanguageRegion_FallsBackToBase_B31`, `TestLocaleFromContext_LastValueWins`, `TestLocaleFromContext_OutgoingMetadata`, `TestLocaleFromContext_IncomingBeatsOutgoing` |
+| I14.3 | Unknown placeholders MUST survive verbatim; an empty msgid MUST return "" so the `.po` header never leaks. | `TestSubstitute_UnknownPlaceholderPassesThrough`, `TestT_EmptyMsgid_ReturnsEmpty` |
 | I14.4 | Concurrent use MUST be safe. | `go/lib/i18n/i18n_extra_test.go` |
 | I14.5 | A msgid missing from the requested catalog, or present with an empty `msgstr`, MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | `TestT_FallbackIsPerMessage`, `TestT_EmptyMsgstrFallsThrough` |
 | I14.6 | Substitution MUST be deterministic and MUST NOT expand placeholder tokens inside parameter values. | `TestSubstitute_DeterministicSinglePass`, `TestSubstitute_BraceEdges` |
