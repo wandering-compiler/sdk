@@ -55,9 +55,32 @@ const Name = "W17_UNICODE"
 var collators = sync.Pool{New: func() any { return collate.New(language.Und) }}
 
 // Compare is the collation function: the Unicode Collation Algorithm root
-// order, accent- and case-sensitive. Exported so callers (and tests) can reuse
-// exactly the ordering the registered SQLite collation applies.
+// order, accent- and case-sensitive, with strings the UCA ranks equal
+// ordered by their bytes. Exported so callers (and tests) can reuse exactly
+// the ordering the registered SQLite collation applies.
+//
+// The byte tie-break is what makes equality DETERMINISTIC, the way
+// PostgreSQL's deterministic collations (every collation it creates by
+// default) are: two strings compare equal only when they are the same
+// bytes. The UCA alone ranks canonically equivalent forms (NFC `café` and
+// NFD `café`) equal, and gives ignorable characters (U+200B ZERO WIDTH
+// SPACE, U+0000) no weight at all, so `a<ZWSP>b` equalled `ab`. Under the
+// plain UCA a `UNIQUE COLLATE W17_UNICODE` column refused the NFD form of a
+// stored NFC name and `WHERE name = ?` matched the other spelling — on
+// SQLite only, while PostgreSQL kept them apart. Ordering is unchanged
+// except among such ties, which now sort by bytes instead of arbitrarily.
+//
+// MySQL's utf8mb4_0900_as_cs has no tie-break and still treats those pairs
+// as equal; the two engines that agree now are SQLite and PostgreSQL.
 func Compare(a, b string) int {
+	if r := ucaCompare(a, b); r != 0 {
+		return r
+	}
+	return strings.Compare(a, b)
+}
+
+// ucaCompare is the plain UCA root comparison, without the byte tie-break.
+func ucaCompare(a, b string) int {
 	c := collators.Get().(*collate.Collator)
 	defer collators.Put(c)
 	return c.CompareString(a, b)

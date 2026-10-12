@@ -158,6 +158,13 @@ func (s *Scope) Committed() (panics []any) {
 	return panics
 }
 
+// Pending returns how much work is parked waiting for the commit.
+func (s *Scope) Pending() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.hooks)
+}
+
 // Discarded ends the scope as rolled back and drops the parked work.
 func (s *Scope) Discarded() {
 	s.mu.Lock()

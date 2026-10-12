@@ -182,7 +182,7 @@ func TestFingerprint_StableAndOrderingDerived(t *testing.T) {
 	if first != sqlitecollate.Fingerprint() {
 		t.Error("fingerprint is not stable within a build — every connect would read as drift")
 	}
-	if !strings.HasPrefix(first, "w17c1:") {
+	if !strings.HasPrefix(first, "w17c2:") {
 		t.Errorf("fingerprint lost its scheme prefix: %q", first)
 	}
 	// Diagnosable, not just detectable: the two Unicode table versions

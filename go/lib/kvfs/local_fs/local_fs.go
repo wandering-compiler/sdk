@@ -44,10 +44,15 @@ type Driver struct {
 }
 
 // errEscapesRoot is returned by [Driver.containedPath] when a key
-// resolves outside the bucket root (a `..` traversal). Read paths
-// translate it to [kvfs.ErrNotFound] so the boundary isn't leaked;
-// write/delete paths propagate it as a hard reject.
+// resolves outside the bucket root (a `..` traversal) or to the root
+// itself (“, `.`, `a/..`). Read paths translate it to
+// [kvfs.ErrNotFound] so the boundary isn't leaked; write/delete paths
+// propagate it as a hard reject.
 var errEscapesRoot = errors.New("local_fs: key escapes bucket root")
+
+// errNotAnObject is returned by Delete for a key that names a directory —
+// a sub-bucket, not a stored object.
+var errNotAnObject = errors.New("local_fs: key names a directory, not an object")
 
 // containedPath joins the bucket root with `key` and verifies the
 // result stays inside the root. filepath.Join CLEANS `..` segments,
@@ -55,10 +60,14 @@ var errEscapesRoot = errors.New("local_fs: key escapes bucket root")
 // otherwise resolve to an absolute path outside d.root — an arbitrary
 // file read/write/delete. Callers MUST route every key through here
 // rather than calling filepath.Join directly.
+//
+// A key that cleans to the root itself is refused too: it names no
+// object, and passing it through let Open hand back the bucket
+// directory and Delete remove an empty bucket root.
 func (d *Driver) containedPath(key string) (string, error) {
 	final := filepath.Join(d.root, filepath.FromSlash(key))
 	rel, err := filepath.Rel(d.root, final)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", errEscapesRoot
 	}
 	return final, nil
@@ -187,12 +196,9 @@ func (d *Driver) Open(_ context.Context, key string) (io.ReadCloser, error) {
 		// Escape attempt: report as missing, don't leak the boundary.
 		return nil, kvfs.ErrNotFound
 	}
-	f, err := os.Open(final)
+	f, err := openObject(final)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, kvfs.ErrNotFound
-		}
-		return nil, fmt.Errorf("local_fs: open %s: %w", final, err)
+		return nil, err
 	}
 	return f, nil
 }
@@ -214,6 +220,9 @@ func (d *Driver) Stat(_ context.Context, key string) (kvfs.Info, error) {
 		}
 		return kvfs.Info{}, fmt.Errorf("local_fs: stat %s: %w", final, err)
 	}
+	if fi.IsDir() {
+		return kvfs.Info{}, kvfs.ErrNotFound
+	}
 	return kvfs.Info{Size: fi.Size(), ModTime: fi.ModTime()}, nil
 }
 
@@ -228,6 +237,16 @@ func (d *Driver) OpenSeekable(_ context.Context, key string) (io.ReadSeekCloser,
 	if err != nil {
 		return nil, kvfs.ErrNotFound
 	}
+	f, err := openObject(final)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// openObject opens a stored object. A directory — a sub-bucket the key
+// happens to name — is not an object and reads as [kvfs.ErrNotFound].
+func openObject(final string) (*os.File, error) {
 	f, err := os.Open(final)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -235,10 +254,18 @@ func (d *Driver) OpenSeekable(_ context.Context, key string) (io.ReadSeekCloser,
 		}
 		return nil, fmt.Errorf("local_fs: open %s: %w", final, err)
 	}
+	if fi, err := f.Stat(); err != nil || fi.IsDir() {
+		_ = f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("local_fs: stat %s: %w", final, err)
+		}
+		return nil, kvfs.ErrNotFound
+	}
 	return f, nil
 }
 
-// Delete removes the file. Idempotent on missing keys.
+// Delete removes the file. Idempotent on missing keys; a key naming the
+// bucket root or a directory is refused.
 func (d *Driver) Delete(_ context.Context, key string) error {
 	if d.root == "" {
 		return errors.New("local_fs: driver not initialised (root is empty)")
@@ -246,6 +273,9 @@ func (d *Driver) Delete(_ context.Context, key string) error {
 	final, err := d.containedPath(key)
 	if err != nil {
 		return fmt.Errorf("local_fs: delete %q: %w", key, err)
+	}
+	if fi, err := os.Lstat(final); err == nil && fi.IsDir() {
+		return fmt.Errorf("local_fs: delete %q: %w", key, errNotAnObject)
 	}
 	err = os.Remove(final)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

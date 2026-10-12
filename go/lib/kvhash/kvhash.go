@@ -61,7 +61,11 @@ import (
 // optional scalars (which live in a synthetic oneof) — are omitted
 // when unset so the set/unset distinction survives the round-trip
 // (see the omit guard below). Nested-message fields other than the
-// supported WKTs (Timestamp, Duration) are an error.
+// supported WKTs (Timestamp, Duration) are an error, and so is a
+// Timestamp or Duration outside the range its text form can carry.
+//
+// Writing the result over an existing hash with HSET keeps the fields this
+// omits — see [ClearedFields].
 func MarshalEntity(m proto.Message) ([]any, error) {
 	if m == nil {
 		return nil, fmt.Errorf("kvhash: nil message")
@@ -96,6 +100,34 @@ func MarshalEntity(m proto.Message) ([]any, error) {
 			return nil, fmt.Errorf("kvhash: encode %s: %w", fd.Name(), err)
 		}
 		out = append(out, string(fd.Name()), val)
+	}
+	return out, nil
+}
+
+// ClearedFields returns the hash field names [MarshalEntity] omits for m:
+// its unset presence-bearing fields (unset Timestamp/Duration, unset proto3
+// `optional` scalars).
+//
+// HSET merges into an existing hash, so writing MarshalEntity's output over
+// a stored entity leaves the previous value of every field the new one
+// cleared, and it reads back on the next HGETALL. A write that replaces an
+// entity must either DEL the key before the HSET, or HDEL these fields — in
+// the same MULTI/EXEC as the HSET, so no reader sees half of it.
+func ClearedFields(m proto.Message) ([]string, error) {
+	if m == nil {
+		return nil, fmt.Errorf("kvhash: nil message")
+	}
+	desc := m.ProtoReflect().Descriptor()
+	rm := m.ProtoReflect()
+	var out []string
+	for i := 0; i < desc.Fields().Len(); i++ {
+		fd := desc.Fields().Get(i)
+		if err := checkFlatField(fd); err != nil {
+			return nil, err
+		}
+		if fd.HasPresence() && !rm.Has(fd) {
+			out = append(out, string(fd.Name()))
+		}
 	}
 	return out, nil
 }
@@ -184,6 +216,14 @@ func encodeField(fd protoreflect.FieldDescriptor, v protoreflect.Value) (string,
 		msg := v.Message().Interface()
 		switch m := msg.(type) {
 		case *timestamppb.Timestamp:
+			// Refused, not stored: RFC 3339 has four-digit years, so a
+			// Timestamp outside 0001-01-01..9999-12-31 formats as text
+			// time.Parse rejects ("10000-01-02T00:00:00Z"), and every
+			// later read of the entity would fail — the same bricking
+			// the Duration path refuses (see durationText).
+			if err := m.CheckValid(); err != nil {
+				return "", fmt.Errorf("kvhash: timestamp (seconds=%d nanos=%d) cannot be stored as RFC 3339: %w", m.GetSeconds(), m.GetNanos(), err)
+			}
 			t := m.AsTime().UTC()
 			return t.Format(time.RFC3339Nano), nil
 		case *durationpb.Duration:

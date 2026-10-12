@@ -41,21 +41,36 @@ import (
 // of divergence), and characters whose upper/lower mappings are famously
 // locale- and version-sensitive.
 func Fingerprint() string {
-	probe := []string{
-		"a", "A", "á", "Á", "ä", "Ä", "z", "Z",
-		"café", "café", // NFC vs NFD of the same word
-		"Straße", "STRASSE",
-		"ı", "I", "i", "İ", // dotted/dotless i
-		"ǅ", "Ǆ", "ǆ", // titlecase-bearing digraph
-		"日本", "にほん", "ﾆﾎﾝ",
-		"Ω", "ω", "Ω", // greek capital omega vs ohm sign
-		"é", "é",
-	}
+	return fingerprint("w17c2", append(append([]string{}, fingerprintProbe...),
+		// Pairs only the byte tie-break tells apart: a canonically
+		// equivalent pair is already above; these are the ignorables.
+		"ab", "a\u200bb", "a", "a\x00",
+	), Compare)
+}
 
+// legacyFingerprint is what a database stamped by a build that compared
+// with the plain UCA (no byte tie-break) carries, from this build's Unicode
+// tables. EnsureStamp recognises it to rebuild such a database's indexes.
+func legacyFingerprint() string {
+	return fingerprint("w17c1", fingerprintProbe, ucaCompare)
+}
+
+var fingerprintProbe = []string{
+	"a", "A", "á", "Á", "ä", "Ä", "z", "Z",
+	"café", "cafe\u0301", // NFC vs NFD of the same word
+	"Straße", "STRASSE",
+	"ı", "I", "i", "İ", // dotted/dotless i
+	"ǅ", "Ǆ", "ǆ", // titlecase-bearing digraph
+	"日本", "にほん", "ﾆﾎﾝ",
+	"Ω", "ω", "Ω", // greek capital omega vs ohm sign
+	"é", "e\u0301",
+}
+
+func fingerprint(scheme string, probe []string, cmp func(a, b string) int) string {
 	ordered := make([]string, len(probe))
 	copy(ordered, probe)
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return Compare(ordered[i], ordered[j]) < 0
+		return cmp(ordered[i], ordered[j]) < 0
 	})
 
 	h := sha256.New()
@@ -78,6 +93,6 @@ func Fingerprint() string {
 		h.Write([]byte{0})
 	}
 
-	return "w17c1:" + unicode.Version + ":" + norm.Version + ":" +
+	return scheme + ":" + unicode.Version + ":" + norm.Version + ":" +
 		hex.EncodeToString(h.Sum(nil))[:16]
 }

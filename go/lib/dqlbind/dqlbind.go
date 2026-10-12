@@ -14,6 +14,8 @@
 package dqlbind
 
 import (
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -30,23 +32,30 @@ import (
 // shape always emits `IN (?)`, so the surrounding parens
 // stay intact and the result reads `IN (?, ?, ?)`).
 //
-// `n=0` rewrites to `NULL` instead of `()` because empty
-// `IN ()` is a SQL syntax error in MySQL and a conformant
-// SQLite empty list produces `unrecognized token`. `IN
-// (NULL)` matches no rows, which is the intended semantic
-// for an empty filter list — the caller should still pass
-// zero args.
+// `n=0` rewrites to [EmptyList], a subquery that returns no
+// rows, because empty `IN ()` is a SQL syntax error in MySQL.
+// It used to be `NULL`, which is right for `x IN (NULL)` only by
+// accident: that predicate is UNKNOWN, not false, so its
+// negation is UNKNOWN too, and `x NOT IN (NULL)` (or `NOT (x IN
+// (NULL))`) matched no rows where an empty exclusion list must
+// exclude nothing. Against an empty subquery `IN` is FALSE and
+// `NOT IN` is TRUE for every row, including a NULL `x`, on both
+// MySQL and SQLite. The caller should still pass zero args.
 //
 // Behaviour:
 //
 //   - n > 0 and the n-th `?` is found → replace with
 //     `?, ?, ?` (n times, comma-separated, no surrounding
 //     parens).
-//   - n == 0 → replace with `NULL` (empty-list semantic).
+//   - n == 0 → replace with [EmptyList] (empty-list semantic).
 //   - the n-th `?` doesn't exist → return sql unchanged
 //     (caller passed the wrong index; deferred to the
 //     SQL driver to surface a "wrong number of args"
 //     error rather than silent corruption).
+//
+// The list length is not checked here; [ExpandInChecked] refuses
+// a statement that would bind more values than every supported
+// database accepts, before building it.
 //
 // `occurrence` is 1-indexed to match the codegen convention
 // (`arrayBindIdx` is the 1-indexed position in the binding
@@ -74,7 +83,7 @@ func ExpandIn(sql string, occurrence int, n int) string {
 		return sql
 	}
 	if n == 0 {
-		return sql[:idx] + "NULL" + sql[idx+1:]
+		return sql[:idx] + EmptyList + sql[idx+1:]
 	}
 	if n == 1 {
 		return sql
@@ -88,6 +97,103 @@ func ExpandIn(sql string, occurrence int, n int) string {
 	}
 	b.WriteString(sql[idx+1:])
 	return b.String()
+}
+
+// EmptyList is what [ExpandIn] writes for an empty list: a subquery that
+// returns no rows, valid on MySQL and SQLite. A constant — no caller data.
+const EmptyList = "SELECT NULL FROM (SELECT 1) AS w17_empty_list WHERE 1 = 0"
+
+// MaxPlaceholders is the most bind parameters one expanded statement may
+// carry: SQLite's default limit, the lowest of the supported databases
+// (MySQL and PostgreSQL accept 65 535). A list that takes a statement past
+// it fails in the driver, after the statement was built, as an error that
+// reads like a server fault; the Checked expansions refuse it first, with
+// [ErrTooManyValues].
+const MaxPlaceholders = 32766
+
+// ErrTooManyValues reports a request whose lists would make a statement bind
+// more values than [MaxPlaceholders]. It is the caller's request that is too
+// large, not a server fault; the generated error mapping answers it as an
+// invalid argument.
+var ErrTooManyValues = errors.New("dqlbind: the request carries more values than one statement can bind")
+
+// ExpandInChecked is [ExpandIn] that refuses, with [ErrTooManyValues] and
+// before allocating anything, an expansion that would leave the statement
+// with more than [MaxPlaceholders] placeholders. Placeholders already in sql
+// count, so expanding several lists into one statement is bounded as a whole.
+func ExpandInChecked(sql string, occurrence int, n int) (string, error) {
+	if n > 1 {
+		if total := countQM(sql) - 1 + n; total > MaxPlaceholders {
+			return "", tooMany(total)
+		}
+	}
+	return ExpandIn(sql, occurrence, n), nil
+}
+
+// ExpandValuesQMChecked is [ExpandValuesQM] with the [ExpandInChecked]
+// bound: n rows of tupleSize placeholders, plus any outside the tuple.
+func ExpandValuesQMChecked(sql string, tupleSize, n int) (string, error) {
+	if n > 1 && tupleSize > 0 {
+		if total := countQM(sql) + (n-1)*tupleSize; total > MaxPlaceholders {
+			return "", tooMany(total)
+		}
+	}
+	return ExpandValuesQM(sql, tupleSize, n), nil
+}
+
+// ExpandValuesPGChecked is [ExpandValuesPG] with the [ExpandInChecked]
+// bound, counted on the highest `$k` the expanded statement would carry.
+func ExpandValuesPGChecked(sql string, tupleSize, n int) (string, error) {
+	if n > 1 && tupleSize > 0 {
+		if total := maxPG(sql) + (n-1)*tupleSize; total > MaxPlaceholders {
+			return "", tooMany(total)
+		}
+	}
+	return ExpandValuesPG(sql, tupleSize, n), nil
+}
+
+func tooMany(total int) error {
+	return fmt.Errorf("%w: %d placeholders, at most %d", ErrTooManyValues, total, MaxPlaceholders)
+}
+
+// countQM counts the `?` placeholders outside string literals.
+func countQM(sql string) int {
+	n := 0
+	scanSQL(sql, func(_ int, c byte, code bool) bool {
+		if code && c == '?' {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// maxPG returns the highest `$k` outside string literals.
+func maxPG(sql string) int {
+	hi := 0
+	cur, in := 0, false
+	scanSQL(sql, func(_ int, c byte, code bool) bool {
+		switch {
+		case in && code && c >= '0' && c <= '9':
+			if cur < MaxPlaceholders*2 {
+				cur = cur*10 + int(c-'0')
+			}
+			return true
+		case in:
+			if cur > hi {
+				hi = cur
+			}
+			in = false
+		}
+		if code && c == '$' {
+			in, cur = true, 0
+		}
+		return true
+	})
+	if in && cur > hi {
+		hi = cur
+	}
+	return hi
 }
 
 // ExpandValuesPG clones the single `VALUES ( ... )` tuple in

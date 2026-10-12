@@ -14,11 +14,13 @@ import (
 	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/dqlbind"
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
+	sqlitelib "modernc.org/sqlite"
 )
 
 // ConstraintInfo is one registry entry — the payload Wrap
@@ -172,6 +174,7 @@ const (
 	CodeCanceled        = "REQUEST_CANCELED"
 	CodeTimeout         = "TIMEOUT"
 	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
+	CodeTooManyValues   = "TOO_MANY_VALUES"
 	CodeInternal        = "INTERNAL"
 
 	// The ACL gate's three refusals. All three are PERMISSION_DENIED on the
@@ -462,6 +465,15 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		return forCaller(ctx, codes.InvalidArgument, method,
 			"a value does not fit the column it was written to", CodeValueOutOfRange, UserMsgid(codes.InvalidArgument), nil)
 	}
+	// A statement with more bind values than the database accepts: the
+	// caller sent a list too long for one query. Refused by the Checked
+	// expansions in lib/dqlbind before the statement is built, and
+	// recognised here when the driver is the one that says it, so either
+	// way it answers as the request's fault and not as a 500.
+	if isTooManyValues(err, d) {
+		return forCaller(ctx, codes.InvalidArgument, method,
+			"the request carries more values than one statement can bind", CodeTooManyValues, UserMsgid(codes.InvalidArgument), nil)
+	}
 	ce, ok := parseByDialect(err, d)
 	if !ok {
 		// Not a constraint error — internal failure.
@@ -676,6 +688,31 @@ func isDataException(err error, d Dialect) bool {
 			//  1292 ER_TRUNCATED_WRONG_VALUE (bad datetime / number literal)
 			return me.Number == 1406 || me.Number == 1264 || me.Number == 1366 || me.Number == 1292
 		}
+	}
+	return false
+}
+
+// isTooManyValues reports a statement refused for carrying more bind
+// parameters than the database (or its wire protocol) accepts.
+func isTooManyValues(err error, d Dialect) bool {
+	if errors.Is(err, dqlbind.ErrTooManyValues) {
+		return true
+	}
+	switch d {
+	case DialectPostgres:
+		// Neither driver reaches the server: pgx and lib/pq both refuse
+		// past 65 535 parameters client-side, with a plain error.
+		msg := err.Error()
+		return strings.Contains(msg, "extended protocol limited to") ||
+			strings.Contains(msg, "only supports 65535 parameters")
+	case DialectMySQL:
+		var me *mysql.MySQLError
+		// 1390 ER_PS_MANY_PARAM — "Prepared statement contains too many
+		// placeholders".
+		return errors.As(err, &me) && me.Number == 1390
+	case DialectSQLite:
+		var se *sqlitelib.Error
+		return errors.As(err, &se) && strings.Contains(se.Error(), "too many SQL variables")
 	}
 	return false
 }

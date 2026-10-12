@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
@@ -39,6 +42,27 @@ var ErrNestedMismatch = errors.New("distx: cannot join the transaction already o
 // no longer holds the id, and answered NotFound — indistinguishable from a
 // transaction that was lost.
 var ErrHandleFinished = errors.New("distx: this transaction handle was already used")
+
+// ErrCommitOutcomeUnknown is returned by a Commit whose call failed in
+// transport — unavailable, timed out, cancelled — after which the
+// transaction could not be rolled back either, because it was no longer
+// open. The commit may have landed: the server may have committed and the
+// reply been lost. The caller must not assume the write failed (retrying a
+// non-idempotent write could apply it twice) nor that it succeeded.
+//
+// The work parked to run after the commit (an emit) is not run — delivery
+// after commit is at-most-once, and announcing a write that may not exist is
+// the worse failure — and the drop is reported through observx, with the
+// transaction id, so an operator can reconcile.
+//
+// When the transport failed BEFORE the commit took effect, Commit finds out:
+// its Rollback of the still-open transaction succeeds, and Commit returns an
+// ordinary failure, the transaction rolled back.
+var ErrCommitOutcomeUnknown = errors.New("distx: the commit's outcome is unknown")
+
+// outcomeProbeTimeout bounds the Rollback a Commit sends to settle an
+// ambiguous outcome.
+var outcomeProbeTimeout = 10 * time.Second
 
 // ConnIDHeader is the gRPC metadata header carrying the storage
 // proxy's routing token. The Rust storage proxy (srcrs/storage-
@@ -207,7 +231,9 @@ func join(ctx context.Context, root *TxHandle, req *distxpb.BeginRequest) (*TxHa
 // The work parked on this transaction (an emit waiting for it to be durable)
 // runs after a successful commit and is dropped otherwise. A JOINED handle
 // commits nothing: the root does. A root whose nested part rolled back is
-// rolled back here instead, and Commit returns [ErrRollbackOnly].
+// rolled back here instead, and Commit returns [ErrRollbackOnly]. A
+// commit call that fails in transport is settled with a Rollback; when
+// that cannot settle it, Commit returns [ErrCommitOutcomeUnknown].
 func (h *TxHandle) Commit(ctx context.Context) error {
 	if h.joined {
 		return nil
@@ -227,6 +253,9 @@ func (h *TxHandle) Commit(ctx context.Context) error {
 		return ErrRollbackOnly
 	}
 	_, err = h.client.Commit(h.attach(ctx), &distxpb.CommitRequest{TxId: h.txID})
+	if err != nil && outcomeUnknown(err) {
+		err = h.settleAmbiguousCommit(ctx, err)
+	}
 	if err == nil {
 		h.ended = "committed"
 	}
@@ -249,6 +278,50 @@ func (h *TxHandle) Commit(ctx context.Context) error {
 			fmt.Errorf("distx: work parked on committed transaction %s panicked: %v", h.txID, p))
 	}
 	return nil
+}
+
+// outcomeUnknown reports a Commit failure that does not say whether the
+// server committed: the call failed in transport or was abandoned, rather
+// than answered. Every answer the coordinator gives (NotFound, Aborted,
+// FailedPrecondition, Internal for a failed database commit) means it did
+// not commit.
+func outcomeUnknown(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	}
+	return false
+}
+
+// settleAmbiguousCommit is called with the handle held, after a Commit
+// whose outcome is unknown. It rolls the transaction back on a context
+// detached from the caller's: if that succeeds the transaction was still
+// open, so the commit never took effect and is now definitively undone.
+// Otherwise the transaction is gone — committed, or ended some other way —
+// and the caller gets [ErrCommitOutcomeUnknown].
+func (h *TxHandle) settleAmbiguousCommit(ctx context.Context, commitErr error) error {
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeProbeTimeout)
+	defer cancel()
+	_, rerr := h.client.Rollback(h.attach(pctx), &distxpb.RollbackRequest{TxId: h.txID})
+	if rerr == nil {
+		h.ended = "rolled back"
+		return fmt.Errorf("distx: the commit of transaction %s did not take effect and it was rolled back: %w", h.txID, commitErr)
+	}
+	pending := 0
+	if h.scope != nil {
+		pending = h.scope.Pending()
+	}
+	observx.ReportError(context.WithoutCancel(ctx), fmt.Errorf(
+		"distx: the outcome of committing transaction %s is unknown — the commit call failed (%v) and the transaction could no longer be rolled back (%v); its writes may have landed, and %d piece(s) of work waiting for the commit were not run",
+		h.txID, commitErr, rerr, pending))
+	return fmt.Errorf("%w: transaction %s: %w", ErrCommitOutcomeUnknown, h.txID, commitErr)
 }
 
 // Rollback discards the transaction. Like [TxHandle.Commit], it
