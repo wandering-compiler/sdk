@@ -25,6 +25,9 @@ type echoServer struct {
 }
 
 func (s *echoServer) Echo(ctx context.Context, in *wrapperspb.StringValue) (*wrapperspb.StringValue, error) {
+	if in.GetValue() == "panic" {
+		panic("echo handler blew up: secret-internal-state")
+	}
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if v := md.Get("x-w17-user"); len(v) > 0 {
 			s.sawIncoming = v[0]
