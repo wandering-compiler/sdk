@@ -33,6 +33,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -98,6 +99,11 @@ func Run(parent context.Context, obs observx.Config, comps ...Component) error {
 // caller-defined — close dependents before their dependencies (e.g. the
 // business tier before the storage tier it calls).
 //
+// A component whose bounded stop abandoned handlers that were still
+// running says so with [HoldResources]; the closers are then skipped and
+// the skip is reported, because closing a resource under a running request
+// is the failure this phase exists to prevent.
+//
 // Standalone binaries pass no resources (Run) — each single component
 // already owns its own teardown inside Run (e.g. runtime.GRPCComponent
 // closes DB pools in its post-GracefulStop shutdown hooks), so the
@@ -133,6 +139,8 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	notifySignals(sigCh)
 	defer signal.Stop(sigCh)
 	go watchSignals(sigCh, cancel, finished)
+	gate := &teardownGate{}
+	ctx = context.WithValue(ctx, teardownGateKey{}, gate)
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(comps))
@@ -181,7 +189,15 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 		// so all transports have drained their in-flight work; only now is
 		// it safe to close the shared resources they depended on. The
 		// process ctx is already cancelled, so use a fresh bounded context.
-		if len(resources) > 0 {
+		//
+		// Unless a component returned with request work still running on
+		// resources it could not stop (see HoldResources): closing them then
+		// would pull a pool or a bus out from under a handler mid-request.
+		// The process is about to exit, which releases them anyway; what is
+		// lost by skipping is a clean close, and that is reported.
+		if held := gate.reasons(); len(held) > 0 && len(resources) > 0 {
+			observx.ReportError(context.Background(), fmt.Errorf("bootstrap: resource teardown skipped, request work still running: %s", strings.Join(held, "; ")))
+		} else if len(resources) > 0 {
 			drainCtx, dcancel := context.WithTimeout(teardownCtx, 30*time.Second)
 			for i, closeRes := range resources {
 				if closeRes == nil {
@@ -304,4 +320,38 @@ func watchSignals(sigCh <-chan os.Signal, cancel context.CancelFunc, finished <-
 		forceExit(1)
 	case <-finished:
 	}
+}
+
+// HoldResources tells the supervisor running ctx's component that request
+// work it started may still be using the shared resources when the
+// component returns, so [RunGraceful] must not close them. reason says what
+// is still running; it is reported together with the skipped teardown.
+//
+// A transport calls it when its bounded stop had to abandon handlers that
+// did not return in time (a gRPC server's forced stop does not wait for
+// them). Outside a supervisor — ctx not derived from one — it does nothing.
+func HoldResources(ctx context.Context, reason string) {
+	if g, ok := ctx.Value(teardownGateKey{}).(*teardownGate); ok {
+		g.hold(reason)
+	}
+}
+
+// teardownGate collects the HoldResources calls of one RunGraceful.
+type teardownGate struct {
+	mu   sync.Mutex
+	held []string
+}
+
+type teardownGateKey struct{}
+
+func (g *teardownGate) hold(reason string) {
+	g.mu.Lock()
+	g.held = append(g.held, reason)
+	g.mu.Unlock()
+}
+
+func (g *teardownGate) reasons() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.held...)
 }

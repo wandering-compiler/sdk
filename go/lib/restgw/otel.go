@@ -70,9 +70,13 @@ import (
 // here.
 //
 // Disabled-RequestID path (`requestIDCfg.Disabled = true`)
-// skips the header generation + ctx attach but still wraps
+// skips the header generation, echo + ctx attach but still wraps
 // otelhttp. Gateway operators turn the request-ID off when
-// fronted by infra that already injects one.
+// fronted by infra that already injects one. The request-id
+// header is still handed on only in the accepted shape — the
+// fronting layer's id passes unchanged, a malformed client value
+// is removed so header propagation cannot carry it to the backend
+// (see [dropMalformedRequestID]).
 func ObservabilityMiddleware(next http.Handler, serviceName string, requestIDCfg RequestIDConfig) http.Handler {
 	header := requestIDCfg.Header
 	if header == "" {
@@ -96,6 +100,8 @@ func ObservabilityMiddleware(next http.Handler, serviceName string, requestIDCfg
 			if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
 				span.SetAttributes(attribute.String("request_id", id))
 			}
+		} else {
+			r = dropMalformedRequestID(r, header)
 		}
 		next.ServeHTTP(w, r)
 	})

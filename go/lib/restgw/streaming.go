@@ -205,7 +205,7 @@ func WriteSSEGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, flusher ht
 	// topology, so it is logged and genericised — the unary path's
 	// restgw-sec-3 posture, which this leg was emitting raw.
 	observx.ReportError(ctx, err)
-	WriteSSEError(w, flusher, "INTERNAL", "internal error")
+	WriteSSEError(w, flusher, "INTERNAL", internalSentence(ctx))
 }
 
 // WriteSSEGRPCErrorWithTimeout is [WriteSSEGRPCErrorCtxWithTimeout] without
@@ -646,7 +646,7 @@ func WSWriteGRPCError(ctx context.Context, conn *websocket.Conn, err error) {
 	// Non-status (transport / unexpected): logged + genericised, matching
 	// the unary path (restgw-sec-3). This leg was emitting it raw.
 	observx.ReportError(ctx, err)
-	WSWriteError(ctx, conn, "INTERNAL", "internal error")
+	WSWriteError(ctx, conn, "INTERNAL", internalSentence(ctx))
 }
 
 // WSWriteGRPCErrorWithTimeout wraps WSWriteGRPCError with a derived ctx

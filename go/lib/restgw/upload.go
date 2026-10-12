@@ -371,7 +371,7 @@ func WriteUploadErrorCtx(ctx context.Context, w http.ResponseWriter, err error) 
 		// generic message, matching WriteGRPCError / ServeDownload
 		// (restgw-sec-3).
 		observx.ReportError(ctx, err)
-		WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		WriteError(w, http.StatusInternalServerError, "INTERNAL", internalSentence(ctx))
 		return
 	}
 	reportByCode(ctx, code, status.Error(code, err.Error()))

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 	"github.com/wandering-compiler/sdk/go/lib/grpcclient"
@@ -200,11 +201,19 @@ func TestGRPCComponent_RecoveryWrapsCallerInterceptors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			addr := freeAddr(t)
 			cfg.Addr = addr
-			cfg.RegisterServices = func(*grpc.Server) error { return nil }
+			// An ordinary method: health calls leave the chain ahead of the
+			// caller's interceptors (health.go), so they cannot probe them.
+			cfg.RegisterServices = func(s *grpc.Server) error {
+				s.RegisterService(&pingDesc, struct{}{})
+				return nil
+			}
 			stop := runComponent(t, cfg)
 			conn := plainConn(t, addr)
 			for i := 0; i < 2; i++ { // the second call proves the server survived
-				if _, err := checkHealth(conn); status.Code(err) != codes.Internal {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := conn.Invoke(ctx, "/test.Ping/Ping", &emptypb.Empty{}, &emptypb.Empty{})
+				cancel()
+				if status.Code(err) != codes.Internal {
 					t.Fatalf("call %d = %v, want Internal from the recovery net", i, err)
 				}
 			}

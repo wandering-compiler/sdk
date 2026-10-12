@@ -1,8 +1,12 @@
 package txregistry_test
 
 import (
+	"context"
 	"testing"
 
+	"google.golang.org/grpc/metadata"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
 
@@ -26,5 +30,19 @@ func TestHeaderName_IsTheStrippedEnvelopeKey(t *testing.T) {
 			"(reservedMetadataKeys in eventctx.go) — update it in the same commit, or events "+
 			"emitted inside a transaction will start failing delivery in silence",
 			txregistry.HeaderName, "w17-tx-id")
+	}
+}
+
+// The gateways refuse to take this key from a client, matching it by the
+// same literal (gatewayOwnedKeys in lib/principal/gateway.go); a rename must
+// move both, or a client could name the transaction a storage call adopts.
+func TestHeaderName_IsGatewayOwned(t *testing.T) {
+	if !principal.IsGatewayOwnedKey(txregistry.HeaderName) || !principal.IsEdgeReservedKey(txregistry.HeaderName) {
+		t.Fatalf("principal does not treat %q as gateway-owned — update gatewayOwnedKeys in lib/principal/gateway.go",
+			txregistry.HeaderName)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(txregistry.HeaderName, "forged"))
+	if v := principal.SanitizeGatewayMD(ctx).Get(txregistry.HeaderName); len(v) != 0 {
+		t.Fatalf("SanitizeGatewayMD kept %s = %v", txregistry.HeaderName, v)
 	}
 }

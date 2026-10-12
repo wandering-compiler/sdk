@@ -19,6 +19,8 @@ import (
 // which carry no per-handler `defer grpcerr.RecoverPanic`. For
 // grpcgen handlers it is a harmless second line of defence.
 //
+// It is also where health calls leave the chain: see health.go.
+//
 // On panic it captures the value + stack, routes both through observx
 // (Sentry + OTel active span, stderr fallback) tagged with the failing
 // method, and returns a generic codes.Internal — the panic value never
@@ -41,6 +43,9 @@ func recoveryUnaryInterceptor(
 			err = status.Errorf(codes.Internal, "%s: internal error", info.FullMethod)
 		}
 	}()
+	if resp, ok, err := serveHealthUnary(ctx, req, info); ok {
+		return resp, err
+	}
 	return handler(ctx, req)
 }
 
@@ -64,6 +69,9 @@ func recoveryStreamInterceptor(
 			err = status.Errorf(codes.Internal, "%s: internal error", info.FullMethod)
 		}
 	}()
+	if ok, err := serveHealthStream(srv, ss, info); ok {
+		return err
+	}
 	return handler(srv, ss)
 }
 

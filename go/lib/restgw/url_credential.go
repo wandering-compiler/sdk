@@ -45,6 +45,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // CredentialHeader is the reserved request-header slot carrying a
@@ -72,14 +74,19 @@ const CredentialMetadataKey = "x-w17-credential" // #nosec G101 -- lower-cased f
 // distinguish a malformed link from a revoked one.
 var ErrMissingURLCredential = status.Error(codes.Unauthenticated, "missing credential")
 
-// reservedInboundHeaders lists every header the gateway sets for
-// itself and must therefore never accept from a client.
+// isReservedInboundHeader reports whether a client-sent header names a slot
+// the gateway sets for itself and must therefore never accept from a client:
+// the URL-credential slot ([CredentialHeader]) and every other key
+// [principal.IsEdgeReservedKey] reserves — the principal (`X-W17-User`), its
+// data scopes (`X-W17-Scope-*`) and broadcast labels (`W17-Label-*`), the
+// transaction keys, and grpc-gateway's forwarded-header forms.
 //
-// Add to this list — do not add a second scrub elsewhere. A
-// forgeable-channel bug is silent, and the way it usually arrives
-// is a second copy of the guard that a later reader mistakes for
-// the only one.
-var reservedInboundHeaders = []string{CredentialHeader}
+// Extend the predicate — do not add a second scrub elsewhere. A
+// forgeable-channel bug is silent, and the way it usually arrives is a
+// second copy of the guard that a later reader mistakes for the only one.
+func isReservedInboundHeader(name string) bool {
+	return principal.IsEdgeReservedKey(name)
+}
 
 // StripReservedHeadersMiddleware removes gateway-reserved headers
 // from the inbound request before passing it down the chain.
@@ -88,17 +95,19 @@ var reservedInboundHeaders = []string{CredentialHeader}
 // propagation, observability, the handlers themselves — so no
 // layer can observe a client-supplied value. The generated main
 // wraps it directly inside the panic recovery, i.e. the first
-// thing after the request enters the API chain.
+// thing after the request enters the API chain, so it covers every
+// route the API router serves: unary, SSE, WebSocket, the event
+// hub, uploads and downloads alike, authenticated or not.
 //
 // Requests almost never carry these headers, so the common path
-// is a lookup miss and the original request is passed through
-// untouched; only a request that actually carries one pays for a
-// header-map clone.
+// is a scan that finds nothing and the original request is passed
+// through untouched; only a request that actually carries one pays
+// for a header-map clone.
 func StripReservedHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		present := false
-		for _, name := range reservedInboundHeaders {
-			if _, ok := r.Header[name]; ok {
+		for name := range r.Header {
+			if isReservedInboundHeader(name) {
 				present = true
 				break
 			}
@@ -114,8 +123,10 @@ func StripReservedHeadersMiddleware(next http.Handler) http.Handler {
 		// of aliasing bug that only shows under a specific test
 		// ordering.
 		scrubbed := r.Clone(r.Context())
-		for _, name := range reservedInboundHeaders {
-			scrubbed.Header.Del(name)
+		for name := range scrubbed.Header {
+			if isReservedInboundHeader(name) {
+				delete(scrubbed.Header, name)
+			}
 		}
 		next.ServeHTTP(w, scrubbed)
 	})

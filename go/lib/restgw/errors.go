@@ -143,12 +143,14 @@ func WriteGRPCError(w http.ResponseWriter, err error) {
 // WriteGRPCErrorCtx is WriteGRPCError with the request's context, so the
 // fallback sentence is translated too.
 func WriteGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
-	if err == nil {
-		WriteError(w, http.StatusInternalServerError, "INTERNAL", "nil error")
-		return
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err == nil {
+		// A caller bug, not a backend answer: the client gets the code's
+		// sentence like any other internal failure, the operator the reason.
+		WriteInternal(ctx, w, "restgw: WriteGRPCErrorCtx called with a nil error")
+		return
 	}
 	c, message, details := ClientError(ctx, err)
 
@@ -180,12 +182,12 @@ func WriteGRPCErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
 // can carry backend addresses or driver detail) reads as INTERNAL with a
 // generic message.
 func ClientError(ctx context.Context, err error) (codes.Code, string, []FieldError) {
-	if err == nil {
-		return codes.Internal, "nil error", nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	st, ok := status.FromError(err)
-	if !ok {
-		return codes.Internal, "internal error", nil
+	if err == nil || !ok {
+		return codes.Internal, internalSentence(ctx), nil
 	}
 	// Carry the backend's *w17.ErrorDetail field violations into
 	// the envelope. grpcerr.Wrap attaches them for DB constraint violations a
@@ -265,6 +267,16 @@ func clientFacing(ctx context.Context, st *status.Status, details []FieldError) 
 // instead. See [PreflightSentence].
 func ClientSentence(ctx context.Context, c codes.Code) string {
 	return i18n.T(ctx, grpcerr.UserMsgid(c), nil)
+}
+
+// internalSentence is the sentence every gateway-side internal failure shows:
+// the INTERNAL code's, translated — never a developer string such as the
+// marshal error or "nil error" that used to stand in its place.
+func internalSentence(ctx context.Context) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ClientSentence(ctx, codes.Internal)
 }
 
 // PreflightSentence is what a person sees when the GATEWAY refused the request

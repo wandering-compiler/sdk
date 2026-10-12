@@ -23,10 +23,13 @@
 package restgw
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
 	"google.golang.org/grpc/metadata"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // MetadataPropagationMiddleware forwards a configured set of
@@ -42,7 +45,20 @@ import (
 //
 // Headers absent / blank on the incoming request are skipped —
 // the middleware never injects empty metadata keys.
+//
+// A header whose metadata key is reserved for the gateway
+// ([principal.IsEdgeReservedKey]: `x-w17-user`, `x-w17-scope-*`,
+// `w17-label-*`, the transaction keys, `grpcgateway-*`) is never
+// forwarded, whatever the list says, and is logged once here. Those
+// keys reach the backend only from the gateway's own stamping of the
+// verified auth response; forwarded from a client they would be a
+// principal or tenant scope the caller chose — on a route without
+// auth nothing overwrites them, and on one with auth a scope or label
+// the response omits keeps the client's value, which the backend reads
+// first. The generator refuses such a list too; this is the runtime
+// half, for every gateway that does not come from it.
 func MetadataPropagationMiddleware(headers []string, next http.Handler) http.Handler {
+	headers = withoutReservedHeaders(headers)
 	if len(headers) == 0 {
 		return next
 	}
@@ -92,4 +108,31 @@ func headerValue(r *http.Request, header string) string {
 		return r.Host
 	}
 	return r.Header.Get(header)
+}
+
+// withoutReservedHeaders drops the propagation entries whose metadata key
+// the gateway reserves, logging each one. Returns headers itself when
+// nothing is dropped.
+func withoutReservedHeaders(headers []string) []string {
+	for i, h := range headers {
+		if !principal.IsEdgeReservedKey(metadataKeyFor(h)) {
+			continue
+		}
+		kept := append(make([]string, 0, len(headers)-1), headers[:i]...)
+		for _, h := range headers[i:] {
+			if principal.IsEdgeReservedKey(metadataKeyFor(h)) {
+				logReservedMetadataKey("propagation header", h)
+				continue
+			}
+			kept = append(kept, h)
+		}
+		return kept
+	}
+	return headers
+}
+
+// logReservedMetadataKey reports a configuration entry that targets a
+// gateway-reserved metadata key and is therefore ignored.
+func logReservedMetadataKey(what, key string) {
+	log.Printf("restgw: metadata %s %q targets a gateway-reserved key and is ignored; x-w17-*, w17-label-*, the transaction keys and grpcgateway-* are set only by the gateway itself, never from a client header", what, key)
 }

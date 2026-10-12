@@ -393,8 +393,8 @@ func TestWriteUploadError_MasksInternalError(t *testing.T) {
 			t.Errorf("response body leaks internal detail %q:\n%s", leak, body)
 		}
 	}
-	if !strings.Contains(body, "internal error") {
-		t.Errorf("body should carry the generic message; got %s", body)
+	if want := restgw.ClientSentence(context.Background(), codes.Internal); !strings.Contains(body, want) {
+		t.Errorf("body should carry the INTERNAL catalog sentence %q; got %s", want, body)
 	}
 }
 

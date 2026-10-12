@@ -2,6 +2,7 @@ package restgw_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -248,8 +249,9 @@ func TestWriteResponseFiltered_UnknownField_NoOp(t *testing.T) {
 
 // G3-T-01: WriteGRPCError(nil) — the defensive branch that
 // catches a caller passing a nil error. Surfaces as 500
-// `INTERNAL` with the diagnostic body so the consumer sees
-// "something went wrong" instead of an empty-200 success.
+// `INTERNAL` so the consumer sees "something went wrong" instead of an
+// empty-200 success — with the code's catalog sentence, not the
+// developer's "nil error".
 func TestWriteGRPCError_NilErr(t *testing.T) {
 	rec := httptest.NewRecorder()
 	restgw.WriteGRPCError(rec, nil)
@@ -260,8 +262,11 @@ func TestWriteGRPCError_NilErr(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "INTERNAL") {
 		t.Errorf("body should carry INTERNAL code; got %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "nil error") {
-		t.Errorf("body should carry the diagnostic message; got %s", rec.Body.String())
+	if want := restgw.ClientSentence(context.Background(), codes.Internal); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("body should carry the INTERNAL catalog sentence %q; got %s", want, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "nil error") {
+		t.Errorf("developer text reached the client: %s", rec.Body.String())
 	}
 }
 
