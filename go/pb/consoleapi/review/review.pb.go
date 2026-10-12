@@ -10,7 +10,7 @@
 // services, wire-compatible with the server (same package, service +
 // method names, field numbers). w17ctl calls these directly; the review
 // lifecycle + prod-mode compat gate are client-side orchestration. Same
-// hand-mirror seam as the initiatives contract (GAPS.md G2).
+// hand-mirror seam as the initiatives contract.
 
 package reviewpb
 

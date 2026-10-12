@@ -142,9 +142,8 @@ func WriteForbiddenCtx(ctx context.Context, w http.ResponseWriter, perm string) 
 	// too narrow, a membership missing, and a mistyped path all became
 	// `{"code":"PERMISSION_DENIED","message":"You do not have access to this."}`
 	// with no details, so a caller could not tell them apart and a test
-	// asserting on that sentence could not fail — it is per-code. A consumer
-	// measured it live and their seven ACL checks lost their only real
-	// assertion (2026-09-28).
+	// asserting on that sentence could not fail — it is per-code. Measured
+	// live, a suite of seven ACL checks lost their only real assertion.
 	//
 	// ⚠️ And the NAME still does not travel. The first version of this fix
 	// interpolated it into the sentence, and an existing test refused — because

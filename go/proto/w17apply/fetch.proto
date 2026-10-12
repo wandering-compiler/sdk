@@ -154,7 +154,7 @@ message Migration {
   // with part of the schema already written.
   //
   // JSON rather than the typed message on purpose. planpb is private and the
-  // client may not import it (public-split); shipping the bytes lets the
+  // client may not import it; shipping the bytes lets the
   // client read the one repeated string it needs without learning the
   // compiler's types. A client that cannot parse it simply has nothing to
   // check — an additive field must never turn into a refused apply.

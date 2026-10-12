@@ -95,18 +95,15 @@ service CodegenService {
   }
 
   // GenerateCi renders the opt-in CI configs for the requested providers
-  // from the project's lock data (providers + connection names) — the
-  // first of the seam-D generator family moved off w17ctl's in-process
-  // migrator/cmd/cli onto a sibling codegen RPC (thin-client refactor
-  // Step 3a). Returns the rendered files (relative paths + contents); the
+  // from the project's lock data (providers + connection names) on the
+  // console rather than in w17ctl. Returns the rendered files (relative paths + contents); the
   // client writes them under the project's CI tree (executable bit by
   // .sh suffix). CI generation needs no proto set — it's pure lock-driven
   // templating.
   rpc GenerateCi(GenerateCiRequest) returns (GenerateCiResponse);
 
   // GenerateEventbus renders the per-domain subscriber bundle(s) + the
-  // events lock from the project's proto set (seam-D generator family,
-  // thin-client refactor Step 3a). Distinct from the emit-interceptor
+  // events lock from the project's proto set. Distinct from the emit-interceptor
   // code Generate folds into the storage bundle: this is the standalone
   // `<domain>-eventbus/` module (main.go, dispatch, channels, Dockerfile,
   // …). The server stages the uploaded protos and runs the same
@@ -115,7 +112,7 @@ service CodegenService {
   rpc GenerateEventbus(GenerateEventbusRequest) returns (stream GeneratedFile);
 
   // GenerateGrpcClients renders the typed gRPC client package(s) from the
-  // project's services (seam-D, thin-client refactor Step 3a). Proto-only
+  // project's services. Proto-only
   // (no generated-Go-tree read). Drives both the per-domain project-pb
   // clients and the w17/stubs partitioned clients (the request's `out` +
   // `w17_stubs_pb` select which). The server runs the same generator the
@@ -124,36 +121,35 @@ service CodegenService {
   rpc GenerateGrpcClients(GenerateGrpcClientsRequest) returns (stream GeneratedFile);
 
   // GenerateMcp renders the per-domain MCP-server bundle(s) from the
-  // project's MCP surface (seam-D, thin-client refactor Step 3a).
+  // project's MCP surface.
   // Proto-only. The client passes the bundle's replace-path knobs
   // (srcgo_rel / sdk_go_rel) it computes locally; the server runs the
   // generator and returns the bundle files.
   rpc GenerateMcp(GenerateMcpRequest) returns (stream GeneratedFile);
 
   // GenerateAcl refreshes the per-domain ACL permission lock
-  // (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface (seam-D,
-  // thin-client refactor Step 3a). Proto-only, no knobs — the generator
+  // (`w17.lock.acl.proto`) from the project's `(w17.acl)` surface.
+  // Proto-only, no knobs — the generator
   // resolves the w17 vocab from the server's own proto root. Returns the
   // regenerated lock(s); the client writes them back into the proto tree.
   rpc GenerateAcl(GenerateAclRequest) returns (stream GeneratedFile);
 
   // GenerateBusiness renders the generated <domain>-business bundle(s)
   // (the binary w17 builds for a domain when the project opts in via the
-  // lock's business_bundles) (seam-D, thin-client refactor Step 3a).
+  // lock's business_bundles).
   // Proto-only apart from reading the project's gen-dir go.mod for the
   // grpc version, which the client uploads in `go_mod`.
   rpc GenerateBusiness(GenerateBusinessRequest) returns (stream GeneratedFile);
 
   // GenerateProjectMap renders the AI navigation map (w17/map/*.map +
-  // w17/AGENTS.md) from the project's proto surface (seam-D, thin-client
-  // refactor Step 3a). Best-effort. The grpc-client cross-domain edges are
+  // w17/AGENTS.md) from the project's proto surface. Best-effort. The grpc-client cross-domain edges are
   // derived from the generated Go tree, which the client uploads in
   // `gen_files` (empty = proto-only map, those edges omitted).
   rpc GenerateProjectMap(GenerateProjectMapRequest) returns (stream GeneratedFile);
 
   // GenerateE2e scaffolds the generated e2e test skeletons (one
   // gRPC-shaped test per REST/MCP endpoint, generate-if-missing) from the
-  // project's surface (seam-D, thin-client refactor Step 3a). Proto-only.
+  // project's surface. Proto-only.
   rpc GenerateE2e(GenerateE2eRequest) returns (stream GeneratedFile);
 
   // GenerateProject runs the WHOLE codegen pipeline server-side and streams
@@ -205,8 +201,8 @@ service CodegenService {
 
   // VerifyAcl / VerifyEventbus recompute the committed lock from the
   // uploaded proto set (which includes the committed lock) and report
-  // whether it still matches — the CI drift hook (`w17ctl verify`),
-  // thin-client refactor Step 3a. Drift is reported as `ok=false` +
+  // whether it still matches — the CI drift hook (`w17ctl verify`).
+  // Drift is reported as `ok=false` +
   // a message, NOT a gRPC error (it's an expected outcome).
   rpc VerifyAcl(VerifyRequest) returns (VerifyResult);
   rpc VerifyEventbus(VerifyRequest) returns (VerifyResult);
@@ -231,8 +227,8 @@ service CodegenService {
   rpc VerifyEgressClient(VerifyEgressClientRequest) returns (VerifyResult);
 
   // VerifyLock checks the committed `w17/lock.yaml` signature server-side
-  // — the client performs ZERO cryptography (public-split boundary §4: no
-  // signing key in the public binary). The thin client ships the on-disk
+  // — the client performs ZERO cryptography (no signing key in the public
+  // binary). The thin client ships the on-disk
   // lock bytes; the console (which holds the verifier) confirms the
   // signature + canonical form. The CI consistency hook (`w17ctl verify`):
   // a hand-edited / tampered / unsigned committed lock is reported as
@@ -241,8 +237,8 @@ service CodegenService {
 
   // Classify runs the compat engine (lib/compat — the DB/WIRE/API
   // breaking-change classifier) over two compiled IR states base→head and
-  // returns the findings + the dev/prod gate decision (public-split: the
-  // engine is a COMPILER concern, so the thin client classifies over the
+  // returns the findings + the dev/prod gate decision (the engine is a
+  // COMPILER concern, so the thin client classifies over the
   // API instead of holding lib/compat or the IR type). base/head are the
   // opaque marshalled IR bytes the client already carries (a snapshot's
   // `ir_schema` or a fresh CompileIR output) — like CompileIRResponse.schema,
@@ -275,8 +271,7 @@ service CodegenService {
   rpc DumpFixtures(DumpFixturesRequest) returns (DumpFixturesResponse);
 
   // GenerateClient renders the FE client tree(s) (TS/JS/React/Vue)
-  // declared in the lock's generated_code.clients[] (seam-D, thin-client
-  // refactor Step 3a — the last generator off the in-process toolchain).
+  // declared in the lock's generated_code.clients[].
   // The server runs the FE client generator against the staged proto set
   // + lock; the client writes the returned trees under each client's
   // output_root.
@@ -291,8 +286,7 @@ service CodegenService {
   // DiscoverPluginSandboxes returns each activated plugin's dev-only
   // sandbox declarations (image services the project's compose tree
   // wires in) — discovering activations needs the proto loader, so a
-  // thin client asks the console instead of parsing locally (thin-client
-  // refactor Step 3a). The client folds the result into its
+  // thin client asks the console instead of parsing locally. The client folds the result into its
   // (loader-free) compose render.
   rpc DiscoverPluginSandboxes(DiscoverPluginSandboxesRequest) returns (PluginSandboxes);
 
@@ -326,8 +320,8 @@ service CodegenService {
   rpc RenderProjectScaffold(RenderProjectScaffoldRequest) returns (stream GeneratedFile);
 
   // EditLock applies one editor INTENT to the lock and returns the
-  // re-signed bytes (public-split Block 2 §8.2). The console owns the
-  // lock: a dumb client must not sign (boundary §4) and editing requires
+  // re-signed bytes. The console owns the lock: a dumb client must not
+  // sign and editing requires
   // re-signing, so editor commands ship the current lock bytes + a typed
   // intent rather than constructing lockpb themselves. The server decodes,
   // applies the intent, validates (dup names, default conflicts, …),
@@ -337,7 +331,7 @@ service CodegenService {
   rpc EditLock(EditLockRequest) returns (EditLockResponse);
 
   // DescribeLock decodes the lock and returns the routing fields the thin
-  // client reads (public-split Block 2 §8.2) — replacing client-side
+  // client reads — replacing client-side
   // lock.Effective* / lockpb parsing. The console address (w17_url) is NOT
   // here: you can't dial the console to learn where it is, so that one
   // field is sourced from flag / env / registry / compiled default instead.
@@ -349,7 +343,7 @@ service CodegenService {
   // thin client uploads the raw manifest bytes + the installed-plugin set and
   // gets back the identity (name/version) it records + any requirement
   // warnings to print. Replaces the client-side console/plugins ParseManifest
-  // / CheckRequires (public-split Block 3). A parse / validation failure is a
+  // / CheckRequires. A parse / validation failure is a
   // gRPC INVALID_ARGUMENT — the client surfaces it as the install/update
   // refusal.
   rpc InspectPluginManifest(InspectPluginManifestRequest) returns (InspectPluginManifestResponse);
@@ -483,8 +477,7 @@ message InspectPluginManifestRequest {
   // The client computes the digest itself (`plugindigest.Of` lives in the
   // public SDK precisely so both ends get the same answer, and hashing is not
   // trust cryptography — `stack build` hashes today). It never checks the
-  // signature: public-split §4 puts anything that verifies an artefact on the
-  // console, the same rule that put VerifyLock there.
+  // signature: anything that verifies an artefact belongs on the console, the same rule that put VerifyLock there.
   //
   // `signature` is the BODY of the tree's plugin.sig, verbatim — not a bare
   // hex signature. The console parses it, because the console wrote it.

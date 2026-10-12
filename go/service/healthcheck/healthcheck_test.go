@@ -304,8 +304,8 @@ func writeLeaf(t *testing.T, dir, dnsName string) (certPath, keyPath string) {
 
 // A binary whose only command is `health` (business, admin, a standalone
 // gateway) answers --help and refuses an unknown word instead of starting
-// its server — a consumer's `<business> migrate status` and `--help` both
-// bound the port and hung (2026-10-01). Without Final, every word but
+// its server — `<business> migrate status` and `--help` both bound the
+// port and hung. Without Final, every word but
 // `health` is left to the next dispatcher, as before.
 func TestDispatch_FinalOwnsTheCommandTable(t *testing.T) {
 	var out strings.Builder

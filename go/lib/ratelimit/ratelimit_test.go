@@ -223,8 +223,7 @@ func newTestCtx(peerAddr string, xff ...string) context.Context {
 
 // TestLimiter_IPv6BucketsByPrefixNotByAddress — an IPv6 /64 is one caller.
 //
-// Hosted review 2026-08-30, HOST-A-4, and these are the measured numbers the
-// finding was filed on: 1000 attempts from one /64 produced ZERO refusals
+// Measured before the fix: 1000 attempts from one /64 produced ZERO refusals
 // while 1000 from a single IPv4 produced 990. Every ordinary IPv6 assignment
 // is a /64 or shorter, so keying the full /128 gave an attacker 2^64 free
 // buckets — the limiter was absent exactly where credential stuffing comes
@@ -268,7 +267,7 @@ func TestLimiter_IPv6BucketsByPrefixNotByAddress(t *testing.T) {
 // TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket — the control must
 // not invert silently.
 //
-// Hosted review 2026-08-30, HOST-A-3, measured: behind a trusted terminator
+// Measured: behind a trusted terminator
 // that forwards no address, two distinct external clients key to ONE bucket,
 // and draining it refuses a victim's SignIn. That is the protection turned
 // into the attack — any single client can lock the whole surface out of the

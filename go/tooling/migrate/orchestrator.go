@@ -26,9 +26,7 @@ import (
 // ConnTarget pins one connection's apply ceiling — the lock's
 // per-connection target_migration_id (+ its content hash for a keyless
 // integrity check). The caller (the apply CLI) reads these from its local
-// lock and passes them in, so the apply tier depends on no lock proto
-// (public-split: the apply tier moves into w17ctl's own module, importing
-// zero private srcgo).
+// lock and passes them in, so the apply tier depends on no lock proto.
 type ConnTarget struct {
 	// Connection is the connection name (the lock connection's name).
 	Connection string
@@ -491,8 +489,8 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		}
 
 		// No client-side signature verify: migrations are fetched
-		// pre-verified from the console (public-split — the client holds
-		// no verifier key); loadConnectionMigrations already did the
+		// pre-verified from the console (the client holds no verifier
+		// key); loadConnectionMigrations already did the
 		// keyless content_sha256 integrity check.
 
 		started := time.Now()
@@ -1201,8 +1199,8 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 		}
 
 		// No client-side signature verify: the fetched migrations were
-		// verified server-side by the console (public-split — the client holds no
-		// verifier key), including the DOWN direction (fetch.go verifies both up and
+		// verified server-side by the console (the client holds no verifier
+		// key), including the DOWN direction (fetch.go verifies both up and
 		// down ed25519 signatures at fetch time). The client-side keyless
 		// content_sha256 check (loadConnectionMigrations) anchors ALL four segments
 		// — up_sql, up_post_tx, down_pre_tx, down_sql — via migrate.ContentHash

@@ -1520,7 +1520,7 @@ type RestEndpoint struct {
 	// absence is unexplained, so new fields take fresh numbers
 	// rather than gamble on wire history.)
 	Credential *Credential `protobuf:"bytes,17,opt,name=credential,proto3" json:"credential,omitempty"`
-	// BrowserRedirect (2026-09-21) — this endpoint finishes a flow the
+	// BrowserRedirect — this endpoint finishes a flow the
 	// BROWSER is walking, so it answers with a 302 instead of a body.
 	//
 	// The case it exists for: an OAuth / OIDC callback. The identity
@@ -1535,7 +1535,7 @@ type RestEndpoint struct {
 	// back — the value made the whole round trip and was echoed into a
 	// JSON field nobody could act on. This is the missing half.
 	BrowserRedirect *BrowserRedirect `protobuf:"bytes,18,opt,name=browser_redirect,json=browserRedirect,proto3" json:"browser_redirect,omitempty"`
-	// org_from_path (2026-10-04) — the path segment `{<name>}` names the
+	// org_from_path — the path segment `{<name>}` names the
 	// organization this request acts in, as the `W17-Org` header does. The
 	// gateway puts its value in that header BEFORE authentication, so the
 	// auth plugin resolves and validates it like any header value (membership,
