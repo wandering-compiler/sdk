@@ -43,7 +43,9 @@ const MsgidMalformedValue = "This value is not in the expected format."
 // Harvested into each project's `.po` next to grpcerr's and the validation
 // defaults', so these sentences are translatable rather than permanently
 // English. A msgid with no catalog entry falls back to itself.
-func Vocabulary() []string { return []string{MsgidMalformedValue} }
+func Vocabulary() []string {
+	return []string{MsgidMalformedValue, MsgidUploadMissing, MsgidUploadTooLarge, MsgidUploadBadType}
+}
 
 // WriteRefusal writes the canonical envelope for a refusal the gateway itself
 // decided.

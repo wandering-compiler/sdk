@@ -1,38 +1,22 @@
 package restgw
 
 import (
+	"crypto/tls"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
-// TestNextPageURL pins the scheme resolution + cursor injection: a
-// comma-separated X-Forwarded-Proto takes the first token, an invalid
-// proto falls back to http, TLS implies https, and the cursor is set on
-// the query.
+// TestNextPageURL pins the link shape: origin-relative, the cursor set on
+// the query, and nothing taken from X-Forwarded-Proto, TLS or Host.
 func TestNextPageURL(t *testing.T) {
-	mk := func(xfp string) string {
+	for _, xfp := range []string{"", "https", "https, http", "ftp"} {
 		r := httptest.NewRequest("GET", "http://api.example/v1/tasks?limit=10", nil)
 		if xfp != "" {
 			r.Header.Set("X-Forwarded-Proto", xfp)
 		}
-		return nextPageURL(r, "cur123")
-	}
-	// comma-separated list → first token (https), and cursor injected.
-	got := mk("https, http")
-	if !strings.HasPrefix(got, "https://") || !strings.Contains(got, "cursor=cur123") {
-		t.Errorf("comma XFP = %q, want https + cursor", got)
-	}
-	// single valid proto.
-	if !strings.HasPrefix(mk("https"), "https://") {
-		t.Errorf("single https XFP not honored")
-	}
-	// invalid proto → http fallback.
-	if !strings.HasPrefix(mk("ftp"), "http://") {
-		t.Errorf("invalid XFP must fall back to http")
-	}
-	// no header, no TLS → http.
-	if !strings.HasPrefix(mk(""), "http://") {
-		t.Errorf("no XFP/TLS must be http")
+		r.TLS = &tls.ConnectionState{}
+		if got, want := nextPageURL(r, "cur123"), "/v1/tasks?cursor=cur123&limit=10"; got != want {
+			t.Errorf("XFP %q: nextPageURL = %q, want %q", xfp, got, want)
+		}
 	}
 }

@@ -16,7 +16,7 @@ func TestSetNextPageLink_BasicHeader(t *testing.T) {
 	restgw.SetNextPageLink(rr, req, "abc123")
 
 	got := rr.Header().Get("Link")
-	want := `<http://api.example.com/users?cursor=abc123>; rel="next"`
+	want := `</users?cursor=abc123>; rel="next"`
 	if got != want {
 		t.Errorf("Link header\n  got:  %q\n  want: %q", got, want)
 	}
@@ -78,18 +78,17 @@ func TestSetNextPageLink_EmptyCursor_NoHeader(t *testing.T) {
 	}
 }
 
-func TestSetNextPageLink_HonoursXForwardedProto(t *testing.T) {
-	// Behind a TLS-terminating LB the gateway sees plaintext
-	// HTTP but X-Forwarded-Proto: https — the next-page URL
-	// must keep the public-facing scheme.
+func TestSetNextPageLink_IgnoresXForwardedProto(t *testing.T) {
+	// X-Forwarded-Proto is a header any caller can write; the link is
+	// origin-relative, so it needs no scheme and takes none from it.
 	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/users", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rr := httptest.NewRecorder()
 
 	restgw.SetNextPageLink(rr, req, "abc")
 
-	if got := rr.Header().Get("Link"); !strings.HasPrefix(got, "<https://") {
-		t.Errorf("expected https scheme from X-Forwarded-Proto; got %q", got)
+	if got := rr.Header().Get("Link"); got != `</users?cursor=abc>; rel="next"` {
+		t.Errorf("Link = %q, want the origin-relative form", got)
 	}
 }
 

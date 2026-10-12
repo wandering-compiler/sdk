@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -325,16 +326,55 @@ func WriteJSON(w http.ResponseWriter, status int, data []byte) {
 // gateway template passes the request as the trailing arg. Marshal
 // failures (proto3 data corruption) surface as a 500 JSON envelope.
 func WriteResponse(w http.ResponseWriter, status int, msg proto.Message, rOpt ...*http.Request) {
-	writeNegotiated(w, responseFormatOpt(rOpt), status, msg)
+	writeNegotiated(w, responseFormatOpt(w, rOpt), status, msg)
 }
 
 // responseFormatOpt resolves the negotiated response format from
 // the optional trailing request (JSON when absent / nil).
-func responseFormatOpt(rOpt []*http.Request) WireFormat {
+//
+// A negotiated response says so with `Vary: Accept`, whichever format won:
+// the body depends on the request's Accept, and a shared cache that did not
+// know that would serve one client's protobuf to the next client's JSON
+// request for the same URL.
+func responseFormatOpt(w http.ResponseWriter, rOpt []*http.Request) WireFormat {
 	if len(rOpt) > 0 && rOpt[0] != nil {
+		addVary(w.Header(), "Accept")
 		return ResponseFormat(rOpt[0])
 	}
 	return WireJSON
+}
+
+// varyAccept / varyOrigin are shared, never-mutated header values for the
+// common case of a response with no Vary yet (see ctJSON for the pattern).
+var (
+	varyAccept = []string{"Accept"}
+	varyOrigin = []string{"Origin"}
+)
+
+// addVary adds token to the response's Vary header unless it (or `*`) is
+// already listed, so stacked writers never repeat a token.
+func addVary(h http.Header, token string) {
+	vals := h["Vary"]
+	if len(vals) == 0 {
+		switch token {
+		case "Accept":
+			h["Vary"] = varyAccept
+		case "Origin":
+			h["Vary"] = varyOrigin
+		default:
+			h["Vary"] = []string{token}
+		}
+		return
+	}
+	for _, v := range vals {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p == "*" || strings.EqualFold(p, token) {
+				return
+			}
+		}
+	}
+	// A fresh slice: the existing one may be a shared value above.
+	h["Vary"] = append(append(make([]string, 0, len(vals)+1), vals...), token)
 }
 
 // writeNegotiated encodes msg in the chosen WireFormat and writes
@@ -412,7 +452,7 @@ func WriteResponseFiltered(w http.ResponseWriter, status int, msg proto.Message,
 			refl.Clear(fd)
 		}
 	}
-	writeNegotiated(w, responseFormatOpt(rOpt), status, clone)
+	writeNegotiated(w, responseFormatOpt(w, rOpt), status, clone)
 }
 
 // FieldError carries one per-field validation failure inside

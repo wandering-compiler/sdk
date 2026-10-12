@@ -1,9 +1,14 @@
 package restgw
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"google.golang.org/grpc/codes"
+
+	"github.com/wandering-compiler/sdk/go/core/observx"
 )
 
 // WriteBrowserRedirect answers a request the BROWSER is walking with a
@@ -58,8 +63,12 @@ func writeBrowserRedirect(w http.ResponseWriter, r *http.Request, target, fallba
 		dest = fallback
 	}
 	if !redirectTargetOK(dest, external) {
-		WriteError(w, http.StatusBadGateway, "INTERNAL",
-			"the upstream handler returned a redirect target this gateway will not send a browser to")
+		// The reason is about this gateway and its handler, so it is the
+		// operator's; the browser's user gets the code's catalog sentence.
+		ctx := r.Context()
+		observx.ReportError(ctx, fmt.Errorf(
+			"restgw: the handler returned a redirect target this gateway will not send a browser to: %q", dest))
+		WriteError(w, http.StatusBadGateway, GRPCCodeName(codes.Internal), ClientSentence(ctx, codes.Internal))
 		return
 	}
 	if token != "" {

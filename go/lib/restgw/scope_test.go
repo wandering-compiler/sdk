@@ -29,10 +29,8 @@ func TestScopeKey(t *testing.T) {
 	}
 }
 
-// WriteMissingScope writes 403 PERMISSION_DENIED
-// with the canonical message format. Generated storage
-// handlers call this when a required scope is absent from
-// the incoming gRPC metadata.
+// WriteMissingScope writes 403 PERMISSION_DENIED with the code's catalog
+// sentence. The scope's name is configuration and goes to the operator only.
 func TestWriteMissingScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	restgw.WriteMissingScope(rec, "tenant_id")
@@ -43,7 +41,10 @@ func TestWriteMissingScope(t *testing.T) {
 	if !strings.Contains(body, "PERMISSION_DENIED") {
 		t.Errorf("body = %q, want PERMISSION_DENIED", body)
 	}
-	if !strings.Contains(body, "missing required scope: tenant_id") {
-		t.Errorf("body = %q, want canonical missing-scope message", body)
+	if strings.Contains(body, "tenant_id") {
+		t.Errorf("body = %q, the scope name must not reach the client", body)
+	}
+	if !strings.Contains(body, "You do not have access to this.") {
+		t.Errorf("body = %q, want the code's catalog sentence", body)
 	}
 }

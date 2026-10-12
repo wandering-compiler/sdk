@@ -222,17 +222,16 @@ func TestSetPrevPageLink_EmptyCursorNoOp(t *testing.T) {
 	}
 }
 
-// nextPageURL derives the https scheme from a TLS connection when no
-// X-Forwarded-Proto header is present.
-func TestSetNextPageLink_TLSDerivesHTTPS(t *testing.T) {
+// A TLS connection does not make the Link absolute: it is origin-relative,
+// so it is right whatever scheme and host the client reached us on.
+func TestSetNextPageLink_TLSStaysRelative(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/list?limit=10", nil)
 	r.TLS = &tls.ConnectionState{}
 	r.Host = "api.example.com"
 	restgw.SetNextPageLink(rec, r, "cursor-2")
-	link := rec.Header().Get("Link")
-	if !strings.HasPrefix(link, "<https://api.example.com/list?") {
-		t.Errorf("TLS request should produce an https Link; got %q", link)
+	if link := rec.Header().Get("Link"); link != `</list?cursor=cursor-2&limit=10>; rel="next"` {
+		t.Errorf("Link = %q, want the origin-relative form", link)
 	}
 }
 

@@ -2,7 +2,6 @@ package restgw
 
 import (
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -23,18 +22,17 @@ import (
 // produces the cursor; this helper only worries about the
 // header shape.
 //
-// URL construction:
-//   - Scheme + host come from `r.Host` + the X-Forwarded-Proto
-//     header (when behind a reverse proxy that handles TLS;
-//     defaults to http otherwise — operators put the gateway
-//     behind a TLS-terminating LB and configure it to set
-//     X-Forwarded-Proto correctly).
-//   - Path is the request path, untouched.
-//   - Query: every existing key/value is preserved EXCEPT
-//     `cursor` (which gets replaced with the new value).
-//     This keeps the user's filters / sort / limit on the
-//     same page.
+// URL construction: the link is ORIGIN-RELATIVE — the request's path with
+// its query, every existing key/value preserved EXCEPT `cursor` (which gets
+// replaced with the new value), so the user's filters / sort / limit stay on
+// the same page. A client resolves it against the URL it requested (RFC
+// 8288 §3.2), which is the URL the next page lives at too.
 //
+// There is no scheme and no host in it on purpose. Both would come from the
+// request — `Host` and `X-Forwarded-Proto` — and any caller can write those;
+// the gateway cannot tell a terminating proxy's value from a client's. A
+// link built from them advertises whatever origin the caller named, which a
+// cache that does not key on those headers then serves to everybody else.
 // Why a header (not a `next_cursor` proto field): same
 // pagination shape composes across every list RPC without
 // needing to thread a cursor field through every response
@@ -70,40 +68,20 @@ func SetPrevPageLink(w http.ResponseWriter, r *http.Request, cursor string) {
 	w.Header().Set("Link", link)
 }
 
-// nextPageURL rebuilds the request URL with the cursor
-// query parameter replaced. Other query parameters are
-// preserved.
+// nextPageURL rebuilds the request URL, origin-relative, with the cursor
+// query parameter replaced. Other query parameters are preserved.
 func nextPageURL(r *http.Request, cursor string) string {
-	scheme := "http"
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		// X-Forwarded-Proto can be a comma-separated list across chained
-		// proxies ("https, http") — take the first token, and accept only
-		// http/https so a multi-value or spoofed header can't inject a
-		// malformed scheme into the emitted Link URL.
-		first := proto
-		if i := strings.IndexByte(proto, ','); i >= 0 {
-			first = proto[:i]
-		}
-		switch s := strings.ToLower(strings.TrimSpace(first)); s {
-		case "http", "https":
-			scheme = s
-		}
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
 	q := r.URL.Query()
 	q.Set("cursor", cursor)
-
-	// NOTE (restgw-sec-4): the Link URL uses the request Host. The
-	// generated service is expected to sit behind an ingress/proxy that
-	// sets/validates Host; without one, a client-spoofed Host header is
-	// reflected into the advertised next-page URL (Link/cache-poisoning
-	// risk for an intermediary that trusts it).
-	u := &url.URL{
-		Scheme:   scheme,
-		Host:     r.Host,
-		Path:     r.URL.Path,
-		RawQuery: q.Encode(),
+	// EscapedPath percent-encodes a backslash, which some clients read as
+	// a slash. A path that starts with `//` would read as a host, so it is
+	// written as `/.//…`, which resolves to the same path on this origin.
+	path := r.URL.EscapedPath()
+	switch {
+	case path == "":
+		path = "/"
+	case strings.HasPrefix(path, "//"):
+		path = "/." + path
 	}
-	return u.String()
+	return path + "?" + q.Encode()
 }

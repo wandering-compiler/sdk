@@ -1,7 +1,10 @@
 package restgw
 
 import (
+	"context"
 	"net/http"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
@@ -24,7 +27,7 @@ import (
 func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (http.ResponseWriter, func(), bool) {
 	allowed, settle := l.ReserveRequest(r)
 	if !allowed {
-		WriteTooManyRequests(w)
+		WriteTooManyRequestsCtx(r.Context(), w)
 		return w, func() {}, false
 	}
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -39,17 +42,29 @@ func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (
 // own. A nil limiter admits everything.
 func AdmitPublicStream(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) bool {
 	if !l.AllowRequest(r) {
-		WriteTooManyRequests(w)
+		WriteTooManyRequestsCtx(r.Context(), w)
 		return false
 	}
 	return true
 }
 
 // WriteTooManyRequests answers a refused caller: 429, RESOURCE_EXHAUSTED and
-// a Retry-After the client can honour.
+// a Retry-After the client can honour. Without a request in scope the
+// sentence stays in the source locale; prefer [WriteTooManyRequestsCtx].
 func WriteTooManyRequests(w http.ResponseWriter) {
+	WriteTooManyRequestsCtx(context.Background(), w)
+}
+
+// WriteTooManyRequestsCtx is WriteTooManyRequests with the request's context,
+// so the sentence is the catalog's, in the caller's language.
+//
+// Nothing is reported: a refused request carries no operator detail (the
+// limiter warns about the deployment conditions worth a look), and a report
+// per refusal would turn a flood into a flood of reports.
+func WriteTooManyRequestsCtx(ctx context.Context, w http.ResponseWriter) {
 	w.Header().Set("Retry-After", "60")
-	WriteError(w, http.StatusTooManyRequests, "RESOURCE_EXHAUSTED", "too many requests; try again shortly")
+	WriteError(w, http.StatusTooManyRequests, GRPCCodeName(codes.ResourceExhausted),
+		ClientSentence(ctx, codes.ResourceExhausted))
 }
 
 // statusRecorder remembers the status a handler wrote. Unwrap lets
