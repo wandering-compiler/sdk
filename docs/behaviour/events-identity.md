@@ -320,7 +320,7 @@ explicit silent opt-out. Callbacks run on the hot path.
 | I7.1 | Callbacks MUST fire for each outcome; drops MUST fire `OnDrop`. | `TestMemoryBus_ObserverCallbacks`, `TestMemoryBus_ObserverDropFires` |
 | I7.2 | The latency hook MUST fire on both success and failure, and only for observers that implement it. | `TestMemoryBus_ObserverLatencyFiresOnBothPaths`, `TestMemoryBus_PlainObserverSkipsLatencyHook` |
 | I7.3 | `NopObserver` MUST be silent. | `TestNopObserver_*` |
-| I7.4 | A panicking Observer callback MUST NOT crash the emitting goroutine. | no test |
+| I7.4 | A panicking Observer callback MUST NOT crash the emitting goroutine. | `TestMemoryBus_PanickingObserverDoesNotBreakEmit`, `TestNatsBus_PanickingObserverDoesNotBreakEmit_Embedded`, `TestRedisBus_PanickingObserverDoesNotBreakEmit_Embedded` |
 
 ---
 
@@ -337,6 +337,14 @@ trace and correlation context and custom propagated headers. It drops every key
 `ReservedMetadataKey` reports: the transport-internal `w17-tx-id` and
 `w17-conn-id`, and credential-bearing keys. Generated subscriber dispatch filters
 the replayed map with the same predicate.
+
+On delivery the bus itself refuses an envelope whose metadata carries
+`w17-tx-id` or `w17-conn-id`: every transport reads the envelope's metadata map
+(field 50001, `EnvelopeMetadataField`, the slot every generated envelope uses)
+without decoding the envelope type, and fails the delivery with
+`ErrTransactionKeyInEnvelope` before any handler runs. The refusal holds for a
+subscriber that does not use the generated dispatch and for an envelope from a
+publisher outside the SDK.
 
 Credential rule: `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and
 `x-w17-credential` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
@@ -361,8 +369,11 @@ extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
 | I8.3 | An emit outside a labelled request MUST be unlabelled; invalidate events MUST take labels from incoming or outgoing metadata. | `TestEmitInvalidate_*` |
 | I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel. | `TestMetadataFromContext_DropsCredentials` |
 | I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` |
+| I8.6 | A delivery whose envelope metadata carries `w17-tx-id` or `w17-conn-id` (any letter case) MUST be refused on every transport before any handler runs, reported, and dead-lettered through the transport's normal failure path; the key as a value, in labels, or as part of a longer name MUST NOT be refused. | `TestEnvelopeGuard_Memory`, `TestEnvelopeGuard_NATS_Embedded`, `TestEnvelopeGuard_Redis_Embedded`, `TestEnvelopeGuard_RefusedEnvelopeIsDeadLettered_Redis`, `TestEnvelopeGuard_RefusedKeysAreStrippedOnEmit` |
 
 **Deliberate limits.**
+- The delivery refusal reads field 50001 only. A hand-written envelope that keeps its metadata elsewhere is not checked.
+- An internal service that sends `w17-tx-id` straight to storage over gRPC is not an event; that caller is inside the service mesh, where trust between services applies, not this check.
 - The credential rule is a denylist, not an allowlist, because declared metadata propagation uses arbitrary header names. A credential under a name that matches neither an exact name nor a flagged segment travels with the event.
 
 ---
@@ -439,10 +450,12 @@ scope, and `w17-label-<name>` per broadcast label.
 **Code.** `go/lib/principal/gateway.go` — `SanitizeGatewayMD`, `WithGatewayMD`; `go/lib/principal/reserved.go` — `IsGatewayOwnedKey`; `go/lib/principal/orgscope.go`
 
 **Purpose.** Strips every client-supplied key in the gateway-owned namespaces
-`x-w17-*` and `w17-label-*` (case-insensitive) before the gateway stamps the verified
+`x-w17-*` and `w17-label-*`, and the transaction keys `w17-tx-id` and `w17-conn-id`
+(whole name), all case-insensitive, before the gateway stamps the verified
 principal, then installs the result on both incoming and outgoing sides as
 independent copies. `IsGatewayOwnedKey` is the per-key form for surfaces that build
-metadata from headers. `w17-org` is a client-supplied, untrusted organization
+metadata from headers; `IsEdgeReservedKey` adds `grpcgateway-*` and the
+`Grpc-Metadata-` header form for the HTTP edges. `w17-org` is a client-supplied, untrusted organization
 selector, deliberately outside the namespace.
 
 **Guarantees.**
@@ -452,7 +465,8 @@ selector, deliberately outside the namespace.
 | I11.1 | A scope or label the auth response omits MUST NOT be suppliable by the client. | `TestWithGatewayMD_SanitizesBothSides` |
 | I11.2 | Unauthenticated paths MUST be sanitised too. | `TestWithGatewayMD_UnauthenticatedPathAlsoSanitized` |
 | I11.3 | The incoming and outgoing copies MUST NOT alias. | `TestWithGatewayMD_SidesDoNotAlias` |
-| I11.4 | `IsGatewayOwnedKey` MUST classify exactly the two namespaces, case-insensitively. | no test |
+| I11.4 | `IsGatewayOwnedKey` MUST classify exactly the two namespaces and the two transaction keys (whole name only), case-insensitively. | `TestIsGatewayOwnedKey`, `TestIsEdgeReservedKey` |
+| I11.5 | `SanitizeGatewayMD` MUST strip the transaction keys a client sends on the rpc gateway. | `TestSanitizeGatewayMD_StripsTransactionKeys` |
 
 ---
 
@@ -509,7 +523,7 @@ check helpers. `IDByString` accepts the enum value name or the cascade code.
 |---|---|---|
 | I13.1 | `Allocate` MUST keep existing IDs, give new permissions the smallest positive unused, unreserved ID, move removed IDs to `Reserved`, skip empty strings, and be deterministic for a given input order. | `TestAllocate_EmptyPrev`, `TestAllocate_PreservesExisting`, `TestAllocate_RemovedGoesToReserved`, `go/lib/acllock/allocator_internal_test.go` |
 | I13.2 | A reserved ID MUST never be reused, across any number of generations. | no test (single generation only) |
-| I13.3 | `Allocate` MUST NOT consume an ID without assigning or reserving it (for example on duplicate input entries). | no test |
+| I13.3 | `Allocate` MUST NOT consume an ID without assigning or reserving it (for example on duplicate input entries). | `TestAllocate_DuplicateEntryConsumesNoID`, `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
 | I13.4 | Checks MUST deny by default and never grant on error; no helper returns an error. | `TestHasPermission`, `TestHasAllPermissions`, `go/lib/acllock/strict_test.go` |
 | I13.5 | `HasAnyPermission` with empty `wanted` MUST return false. | `TestHasAnyPermission` (non-empty input; empty: no test) |
 | I13.6 | `GrantAll` MUST return every current, non-reserved ID. | `TestGrantAll` |
@@ -608,7 +622,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 |---|---|---|
 | I17.1 | `ValidEmail` MUST require one `@`, a non-empty local part and a domain with an inner dot, and reject any byte `<= 0x20` or `0x7f`. | `TestValidEmail`, `TestValidEmail_RejectsControlChars` |
 | I17.2 | `FitsDecimal(s, precision, scale)` MUST be value preserving, reject exponent and NaN, and accept empty input. | `TestFitsDecimal` |
-| I17.3 | `FitsDecimal` MUST agree with the database for every column shape the declaration validator admits (including scale greater than precision and negative scale). | no test |
+| I17.3 | `FitsDecimal` MUST agree with the database for every column shape the declaration validator admits (including scale greater than precision and negative scale). | `TestFitsDecimal_AgreesWithPostgresOnEveryScale` |
 | I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` MUST match their documented shapes. | no test |
 
 **Deliberate limits.**

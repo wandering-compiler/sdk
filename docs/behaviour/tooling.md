@@ -123,7 +123,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.4 | No flag MUST accept a DSN or a token. | `TestFlags_OfferNoWayToPassADSN` |
 | T2.5 | A bundle that matches no lock connection MUST fail instead of reporting "nothing pending". | `TestBuildConfig_NoMatchingConnectionIsAnError` |
 | T2.6 | Fetched artefacts MUST pass the same loader and hash check as artefacts on disk. | `TestMigrationSetFS_RefusesATamperedBody` |
-| T2.7 | Two distinct connections MUST NOT resolve to the same DSN variable. | no test |
+| T2.7 | Two distinct connections MUST NOT resolve to the same DSN variable. | `TestDSNVariable_TwoConnectionsCannotShareOne`, `TestDSNVariable_DistinctNamesPass` |
 | T2.8 | A connection listed twice in the lock MUST be refused by planning and rollback planning before any applier is used. | `TestRun_RefusesAConnectionListedTwice` |
 | T2.9 | Every flag a verb accepts MUST take effect on that verb. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` (`--allow-no-dsn` only) |
 | T2.10 | `--allow-no-dsn` on any verb other than `fixtures apply` MUST be refused with a message naming where it applies. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` |
@@ -179,7 +179,7 @@ contacted.
 | T4.3 | An `Unauthenticated` reply MUST produce a message naming `W17_TOKEN`. | no test |
 | T4.4 | Fetched artefacts MUST be written only under `--migrations`: a connection name or migration id that is not one plain path segment (no separator, `:`, `.`/`..` or control character) MUST be refused before anything is written, and every write MUST pass the path guard (T28). | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
 | T4.6 | An in-memory fetch (`--fetch`) MUST apply the same segment rule to connection names and ids as a fetch to disk. | `TestWriteMigration_RefusesPathShapedNames` |
-| T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | no test |
+| T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | `TestFetch_KeepsOnlyRequestedConnections`, `TestFetch_RefusesADuplicateMigration`, `TestMigrationSetFS_RefusesADuplicate` |
 
 ## T5. `migrate rollback` (CLI)
 
@@ -231,7 +231,7 @@ contacted.
 | T6.4 | No DSN anywhere MUST be an error unless `--allow-no-dsn`. | `TestFixturesApply_NoDSNAnywhereIsAnError` |
 | T6.5 | Two seedable connections MUST require `--connection`. | `TestFixturesApply_TwoSeedableConnectionsMustBeDisambiguated` |
 | T6.6 | Only connections whose applier can seed MUST be nominated as seed candidates; the candidate rule MUST stay in step with the appliers that implement seeding. | `TestSeedCandidate_MatchesSeedCapable`, `TestFixturesApply_StoresThatCannotSeedAreNotCandidates`, `TestFixturesApply_AKVConnectionIsNotACandidate` |
-| T6.7 | An unknown `fixtures` subcommand MUST print the fixtures usage. | no test |
+| T6.7 | An unknown `fixtures` subcommand MUST print the fixtures usage. | `TestFixtures_UnknownSubcommandPrintsFixturesUsage` |
 | T6.8 | A bundle whose only candidate store cannot seed MUST be refused with a message that fixtures seed into Postgres only, before the store is opened; an explicit `--connection` naming such a store MUST be refused. | `TestFixturesApply_OnlyAStoreThatCannotSeedIsRefusedClearly`, `TestFixturesApply_ExplicitConnectionThatCannotSeedIsRefused` |
 
 **Deliberate limits.**
@@ -458,11 +458,11 @@ manual remedy. Postgres, SQLite and NATS have no checked run lock.
 | T15.3 | Release MUST be owner-checked; a release that finds the lock held by another owner MUST return an error wrapping `ErrLockLost`. | `TestRunLock_ReleaseIsOwnerChecked`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp` (Redis and S3; MySQL not asserted) |
 | T15.4 | The MySQL run lock MUST survive an idle server `wait_timeout`. | `TestRunLock_SurvivesAnIdleServerTimeout` (`dockertest`) |
 | T15.5 | SQLite foreign-key violations after a table rebuild MUST be caught. | `TestApply_RebuildFKViolation_Caught` |
-| T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | no test |
+| T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | `TestNATSRunLock_MutualExclusion`, `TestNATSRunLock_ConcurrentAcquireHasOneWinner`, `TestNATSRunLock_RefreshPreventsTakeover`, `TestNATSRunLock_StaleTakeoverAndLostHolder` |
 | T15.7 | Postgres and MySQL apply, rollback, applied head, phase and the post-transaction advisory lock MUST behave as specified against a real database. | no test |
 | T15.8 | Errors MUST NOT contain credentials: a DSN named in an error (unknown scheme, unparseable URL, duplicate or empty `--target` entry) has its password and password-like parameters masked, and the error keeps its context. | `TestErrors_NeverPrintTheDSNPassword`, `TestString_MasksCredentials`, `TestErr_RedactsAURLError` |
 | T15.9 | A command line the applier does not recognise MUST fail the migration, not be skipped. | no test |
-| T15.10 | Wipe MUST return the store to the empty state, including namespaces created by schema prep, and MUST NOT change session settings that outlive it. | no test |
+| T15.10 | Wipe MUST return the store to the empty state, including the namespaces the migration set declares (the ones schema prep creates), MUST NOT drop a schema the set does not declare even when the wiping role may, and MUST NOT change session settings that outlive it. | `TestWipe_DropsDeclaredSchemasOnly_Live`, `TestWipeSQL_DropsDeclaredSchemas`, `TestDeclaredNamespaces`, `TestWipe_RunsOnOneSessionAndRestoresFKChecks`, `TestWipe_AFailureStillRestoresFKChecks` |
 | T15.11 | NATS DSN user info is not used. | `TestDSNToServer_DropsUserInfo` |
 | T15.12 | A Redis or S3 run lock whose lease is no longer provably held (a refresh found another owner, or the lease ran out without a refresh) MUST report itself lost for good, and the applier MUST stop before its next write. | `TestRunLock_RefreshOfATakenOverLockReportsItLost`, `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestLease_HoldsUntilItsMarginThenRunsOut`, `TestLease_LostStaysLost`, `TestLease_RenewalExtendsFromWhenTheRefreshWasSent` |
 | T15.13 | The S3 run lock MUST judge staleness on the store's clock only, so a taker whose local clock runs ahead cannot take over a live lock; a store that reports no time MUST be refused, never judged on the local clock. | `TestS3RunLock_ClockSkewedTakerCannotTakeOverALiveLock`, `TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness` |
@@ -529,8 +529,8 @@ Empty (fingerprint of the empty schema) or Populated. Snapshots dump and restore
 | ID | Guarantee | Test |
 |---|---|---|
 | T17.1 | The baseline MUST be recorded inside the schema transaction; a `COMMIT` inside a literal MUST be ignored. | `TestDevApplySQL_RecordsTheBaselineInsideTheSchemaTransaction`, `TestDevApplySQL_IgnoresACommitInsideALiteral` |
-| T17.2 | Schema and extension names MUST be quoted with embedded quotes escaped. | no test |
-| T17.3 | Statement rewriting MUST NOT alter text inside dollar-quoted bodies and MUST recognise `COMMIT` in any case. | no test |
+| T17.2 | Schema and extension names MUST be quoted with embedded quotes escaped. | `TestDevApplySQL_QuotesSchemaAndExtensionNames`, `TestPGQuoteIdent`, `TestExtensionPreflightSQL_TagAvoidsTheNames` |
+| T17.3 | Statement rewriting MUST NOT alter text inside dollar-quoted bodies and MUST recognise `COMMIT` in any case. | `TestDevApplySQL_IgnoresACommitInsideADollarQuotedBody`, `TestDevApplySQL_RecognisesCommitInAnyCase`, `TestStripConcurrently_LeavesDollarQuotedBodiesAlone`, `TestScanSQL_OpaqueForms`, `TestSplitStatements_QuotedIdentifiersAndEscapeStrings` |
 | T17.4 | Postgres and MySQL snapshot tools MUST receive a URL DSN's password through the environment, not argv. | `TestSnapshotter_ConnFlagsAndChildEnv` |
 | T17.5 | A missing fixture source root MUST read as "cannot tell", not stale. | `TestStaleRenders_CannotTellIsNotStale` |
 
@@ -601,7 +601,7 @@ Streams refuse a `Credential`.
 | T20.3 | Static headers MUST NOT set `Authorization`. | `TestAHeaderMapStillCannotOverrideAuthorization` |
 | T20.4 | A capability-link step MUST NOT borrow the scenario token. | `TestRunStep_CapabilityLink_DoesNotBorrowScenarioToken` |
 | T20.5 | A step MUST be able to call an auth-required endpoint with no credential, so a signed-out refusal can be asserted. | `TestAnonymousStep_SendsNoCredential` |
-| T20.6 | Event subscriptions for a step that presents its own `Credential` MUST use that credential's principal. | no test |
+| T20.6 | Event subscriptions for a step that presents its own `Credential` MUST use that credential's principal. | `TestAwaitEvent_CredentialStepSubscribesAsTheCredential`, `TestAwaitEvent_CredentialStepNeedsACredentialSubscriber` |
 | T20.7 | A step that expects `UNAUTHENTICATED` while carrying the session token only by default MUST fail before sending. | `TestImplicitSessionToken_CannotAssertUnauthenticated` |
 | T20.8 | `TokenFrom` MUST present the named capture; an unbound or empty capture MUST fail the step before sending. | `TestTokenFrom_UsesTheNamedCapture`, `TestTokenFrom_UnboundOrEmptyFailsBeforeSending` |
 | T20.9 | A sign-in that returns no token MUST fail at the capture, so no later step sends an empty or placeholder bearer. | `TestSignInWithoutToken_FailsAtTheCapture` |
@@ -659,9 +659,9 @@ absent field fails and binds nothing.
 | T22.4 | `eq 0` against a field absent from proto3 JSON MUST fail with an explanation of presence. | `TestExactMatcher_ZeroAgainstAnAbsentFieldExplainsPresence` |
 | T22.5 | `capture` of an absent field MUST fail and bind nothing, also with an inner matcher that accepts absence. | `TestCapture_AbsentFieldFails` |
 | T22.6 | `count == 0`, `empty`, `distinct` and `eq null` MUST accept an absent field as empty. | `TestCountMatcher`, `TestEmptyMatcher`, `TestExactMatcherAbsentVsNil` (`distinct` not asserted) |
-| T22.7 | Matchers within one `expect` MUST evaluate in a deterministic order, and a capture used by a sibling matcher MUST resolve. | no test |
+| T22.7 | Matchers within one `expect` MUST evaluate in a deterministic order, and a capture used by a sibling matcher MUST resolve. | `TestMatchExpect_ASiblingSeesTheCapture`, `TestMatchExpect_ReportsTheSameFailureEveryRun` |
 | T22.8 | Every spec the matcher messages suggest (the `unwritten` placeholder, the vacuous-count refusal) MUST be one that decode accepts. | `TestMatcherAdvice_Decodes` |
-| T22.9 | `regex` MUST stringify a numeric response value the way interpolation does (no exponent) before matching it. | no test |
+| T22.9 | `regex` MUST stringify a numeric response value the way interpolation does (no exponent) before matching it. | `TestRegex_NumericValueHasNoExponent` |
 | T22.10 | A numeric capture interpolated into a `regex` pattern MUST be written the way interpolation writes it (no exponent) and quoted as a literal. | `TestRegexPatternWithANumericCapture`, `TestRegexPatternQuotesTheCapturedValue` |
 
 **Deliberate limits.**
@@ -727,9 +727,9 @@ topics and times out after 5 s by default.
 |---|---|---|
 | T25.1 | Stream frames MUST match in order, and the close and error rules MUST hold. | `TestExpectStream_*` |
 | T25.2 | Event awaits MUST honour topic, timeout and error frames. | `TestAwaitEvent_*` |
-| T25.3 | An awaited event MUST be attributable to this step's call, not an earlier step's. | no test |
-| T25.4 | A suite MUST be able to assert that an event is not delivered (for example to another tenant). | no test |
-| T25.5 | A frame whose `data:` is not JSON MUST fail the step, not yield empty data. | no test |
+| T25.3 | An awaited event MUST be attributable to this step's call, not an earlier step's. | `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent`, `TestSSESubscription_IgnoresFramesBeforeTheMark` |
+| T25.4 | A suite MUST be able to assert that an event is not delivered (for example to another tenant). | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_AbsentCannotCapture` |
+| T25.5 | A frame whose `data:` is not JSON MUST fail the step, not yield empty data. | `TestAwaitEvent_NonJSONDataFailsTheStep`, `TestExpectStream_NonJSONFrameFailsTheStep` |
 
 **Deliberate limits.**
 - Client-streaming and bidirectional (WebSocket) streams are not supported.
@@ -755,7 +755,7 @@ time. Teardown failure is non-fatal. The report gives p50/p95/p99/max and checks
 |---|---|---|
 | T26.1 | A run that measured no requests MUST fail its configured thresholds. | `TestCheck_ZeroMeasuredRequestsFails` |
 | T26.2 | `error_rate: 0` MUST mean "no errors allowed" when `ErrorRateSet` marks it configured. | `TestCheck_ErrorRateZeroWhenSetAllowsNoErrors` |
-| T26.3 | The load phase MUST NOT send the bearer to capability-link endpoints. | no test |
+| T26.3 | The load phase MUST NOT send the bearer to capability-link endpoints. | `TestFireOp_CapabilityLinkGetsNoBearer` |
 
 **Deliberate limits.**
 - Load success is status < 400; response bodies are not checked.

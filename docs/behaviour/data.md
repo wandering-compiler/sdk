@@ -425,7 +425,7 @@ Stamp table: `w17_collation`.
 | D13.1 | Readers MUST NOT observe a partially written object (same-filesystem rename; the cross-device fallback copies into a temp file in the destination directory, then renames). | `TestPutFromTempFile_CrossFS_ReaderNeverSeesPartialBody` |
 | D13.2 | A failed cross-device publish MUST NOT truncate or delete an existing object. | `TestPutFromTempFile_CrossFS_CopyErrorPreservesPublishedObject` |
 | D13.3 | Keys resolving outside the root MUST be refused: reads report `ErrNotFound`, writes and deletes error. | `TestLocalFS_PathTraversalContained` |
-| D13.4 | A key MUST NOT reach outside the root through a symlink. | no test |
+| D13.4 | A key MUST NOT reach outside the root through a symlink. | `TestLocalFS_DirectorySymlinkOutOfRootIsContained`, `TestLocalFS_NestedSymlinkOutOfRootIsContained`, `TestLocalFS_DanglingSymlinkOutOfRootIsRefused`, `TestLocalFS_ObjectSymlinkOutOfRootIsContained`, `TestLocalFS_SymlinksInsideRootStillWork`, `TestLocalFS_StagingDirSymlinkOutOfRootIsRefused` |
 | D13.5 | A key that names the bucket root (empty, `.`, `a/..`) or a directory MUST NOT be treated as an object: Open, OpenSeekable and Stat return `ErrNotFound`, and Delete refuses it. | `TestLocalFS_RootAndDirectoryKeysAreNotObjects` |
 | D13.6 | Delete MUST be idempotent; Open, Stat and OpenSeekable of a missing key MUST return `ErrNotFound`. | `local_fs_test.go`, `memory/*_test.go` |
 | D13.7 | Keys MUST NOT carry a leading `/`, so upload and download paths agree across drivers. | `kvfs_test.go` |

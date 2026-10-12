@@ -24,7 +24,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | In-process gRPC bridge (S21) | Component supervisor shutdown (S1) | A call on a cancelled context is refused; teardown uses a fresh context. | `TestInvoke_RefusesADoneContextLikeTheWire` |
 | Observability bootstrap (S19) | Panic containment and recovery (S3, S8, S21) | A panic is reported with its stack; the client sees only a generic message. | `TestRecoveryUnaryInterceptor_RecoversPanic` (client side) |
 | Error and event reporting (S20) | Concurrent requests | Each reported event carries only its own request's context and breadcrumbs: the recovery interceptors, the HTTP panic middleware and MCP tool calls give each request its own scope, and without a scope no breadcrumb is recorded. | `TestReportError_DoesNotCarryAnotherRequestsBreadcrumbs`, `TestRequestScope_KeepsBreadcrumbsPerRequest`, `TestRecoveryInterceptors_GiveEachRequestItsOwnScope` |
-| Observability bootstrap (S19) | Several supervisors in one process (tests, composed binaries) | One init per process; a second init must not silently swap state under running components. | no test |
+| Observability bootstrap (S19) | Several supervisors in one process (tests, composed binaries) | One init per process; a second supervisor with the same configuration shares it and one with a different configuration is refused (`ErrHeld`), so state is never swapped under running components. | `TestRun_SecondSupervisorDoesNotSwapObservability`, `TestAcquire_HeldStateIsNotReplaced`, `TestAcquire_SameConfigSharesUntilLastRelease` |
 
 ## Server × Edges
 

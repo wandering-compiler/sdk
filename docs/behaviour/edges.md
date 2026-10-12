@@ -254,7 +254,7 @@ re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which
 | E5.4 | `RequireAuth` MUST stash user data on the context for streaming handlers | `TestRequireAuth_StashesPrincipal` |
 | E5.5 | `GetUserMetadata` MUST treat absent, empty and non-base64 values as "no principal" | `TestAuth_GetUserMetadata_AbsentOrBad`, `TestGetUserMetadata_EmptyValueIsAbsent` |
 | E5.6 | A handler MUST NOT run after a failed auth (per-RPC routes: generated handler; mounted streams: `RequireAuth`) | no test |
-| E5.7 | A client MUST NOT be able to set `x-w17-user` through the REST surface, on any route | no test |
+| E5.7 | A client MUST NOT be able to set `x-w17-user` through the REST surface, on any route | `TestEdge_ClientCannotSetReservedMetadataOnAnySurface`, `TestMetadataMiddlewares_RefuseReservedKeysWithoutTheScrub` |
 
 **Deliberate limits.**
 - `RequireAuth`'s non-ticket errors use the context-free writer (source locale).
@@ -389,7 +389,7 @@ returns `next` unchanged. `Host` travels as `x-forwarded-host`, `User-Agent` as
 | E10.2 | Existing outgoing metadata MUST be preserved (append, never overwrite) | `TestMetadataPropagationMiddleware_PreservesIncomingMetadata` |
 | E10.3 | The default stamp MUST write only keys nobody wrote | `TestMetadataDefaultStampMiddleware_SkipsAlreadySetKey` |
 | E10.4 | Host and User-Agent MUST reach the backend under their forwarded names | `TestMetadataPropagationMiddleware_HostAndUserAgentTravelForwarded` |
-| E10.5 | A gateway-owned key (`x-w17-*`, `w17-label-*`) MUST NOT be forwarded from a client header | no test |
+| E10.5 | A gateway-owned key (`x-w17-*`, `w17-label-*`, `w17-tx-id`, `w17-conn-id`, `grpcgateway-*`, also in the `Grpc-Metadata-` form) MUST NOT be forwarded from a client header on any edge (REST, MCP, rpc gateway), including through a configured propagation, rename or default-stamp entry | `TestEdge_ClientCannotSetReservedMetadataOnAnySurface`, `TestMetadataMiddlewares_RefuseReservedKeysWithoutTheScrub`, `TestServeStreamableHTTP_ClientCannotSetReservedMetadata`, `TestCollectAuthHeaders_DropsReservedKeysFromEverySource`, `TestIsEdgeReservedKey`, `TestSanitizeGatewayMD_StripsTransactionKeys`, `TestHeaderName_IsGatewayOwned`, `TestConnIDHeader_IsGatewayOwned` |
 
 **Deliberate limits.**
 - Only the first header value is forwarded.
@@ -417,7 +417,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 |---|---|---|
 | E11.1 | A client id MUST be used only if it is 1–128 characters of `[A-Za-z0-9-_.:]`; otherwise it is replaced | `TestObservabilityMiddleware_RejectsMalformedRequestID_*` |
 | E11.2 | The chosen id MUST be echoed in the response header | `TestObservabilityMiddleware_EchoesIncomingID`, `TestRequestIDMiddleware_PropagatesIncoming` |
-| E11.3 | Disabled MUST mean no response header written and no context value; the request is passed on with its headers as received (the span is still created) | `TestObservabilityMiddleware_DisabledSkipsRequestID` (response header and context value; the unchanged request header has no test) |
+| E11.3 | Disabled MUST mean no response header written and no context value; the request is passed on with a well-formed request-id header unchanged and a malformed, over-long or repeated one removed (the span is still created) | `TestObservabilityMiddleware_DisabledSkipsRequestID`, `TestRequestID_DisabledHandsOnOnlyAWellFormedHeader` |
 | E11.4 | A metrics listener failure MUST NOT fail startup | `TestMountMetricsListener_UnsetAndBindError` |
 | E11.5 | The request handed on MUST carry the chosen id as the only value of the request-id header, so header propagation (E10) forwards the validated or generated id, never the raw client value; the caller's header map MUST NOT be modified | `TestObservabilityMiddleware_BackendReceivesTheValidatedID` |
 

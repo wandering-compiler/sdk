@@ -165,11 +165,11 @@ after every transport has drained, so in-flight requests keep their pools.
 | S4.3 | `nil` closers MUST be skipped. | `TestRunGraceful_NilResourceSkipped` |
 | S4.4 | Closers MUST run even when a component failed. | no test |
 | S4.5 | The whole phase MUST be bounded by 30s and by the shutdown deadline (S1.9), whose passing cancels the closers' context; Run returns at the deadline even when a closer ignores its context. | `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` (30s bound not covered) |
-| S4.6 | A resource MUST NOT be closed while a request still uses it. | no test |
+| S4.6 | A resource MUST NOT be closed while a request still uses it. | `TestGRPCComponent_AbandonedHandlerHoldsResources`, `TestRunGraceful_HeldResourcesAreNotClosed`, `TestGRPCComponent_ShutdownHooksWaitForHandlersAfterForcedStop` |
 | S4.7 | A closer's error MUST be reported through `observx.ReportError`; later closers still run and Run's result stays the components' verdict. | `TestRunGraceful_ResourceCloserErrorIsReported` |
 
 **Deliberate limits.**
-- After a forced gRPC stop (S12), handler goroutines are not waited for; this is documented on `lifecycle.StopGRPC`.
+- After a forced gRPC stop (S12) the component waits a short grace (5s) for handlers to return. A handler still running then is abandoned: the component's hooks are skipped, it calls `bootstrap.HoldResources`, and the closers are skipped and reported. The process exits next, which releases them; what is lost is a clean close.
 
 ## S5. gRPC service component
 
@@ -213,7 +213,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | S5.4 | `ObservxConfig()` MUST copy every observability field, including `OTelTLS`. | `TestObservxConfig_Projection` |
 | S5.5 | `Serve` MUST run one component under the supervisor and return on context cancel. | `TestServe_StandaloneLifecycle` |
 | S5.6 | A clean, context-driven stop MUST return `nil` (the `Component` contract) from `GRPCComponent`, `Serve` and `bootstrap.Run` with a gRPC component. | `TestGRPCComponent_CleanStopReturnsNil` |
-| S5.7 | A shutdown that has to force-stop (S12) MUST still run `Shutdowns`. | no test |
+| S5.7 | A shutdown that has to force-stop (S12) MUST still run `Shutdowns` once the handlers have returned; when a handler is still running after the grace, the hooks MUST be skipped and reported rather than run under it (S4.6). | `TestGRPCComponent_ShutdownHooksWaitForHandlersAfterForcedStop`, `TestGRPCComponent_AbandonedHandlerHoldsResources` |
 | S5.8 | The server MUST NOT start serving before `RegisterServices` succeeded. | holds by construction; no test |
 | S5.9 | The listener MUST NOT leak on a registration error. | `TestRun_RegisterError` |
 | S5.10 | A failing shutdown hook MUST be reported through `observx.ReportError`, and the later hooks still run. | `TestGRPCComponent_ShutdownHookErrorIsReported` |
@@ -363,7 +363,7 @@ The same three fields exist on `runtime.Config` (S5).
 | S11.1 | The root service MUST answer SERVING once `Serve` starts. | `TestDefaultHealthServer`; end to end through the S16 tests |
 | S11.2 | Health is liveness, not readiness: it MUST NOT consult a dependency. | holds by construction; no test |
 | S11.3 | Health MUST report NOT_SERVING for every service once shutdown has begun, before the drain finishes. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
-| S11.4 | Health MUST be reachable without credentials. | no test |
+| S11.4 | Health MUST be reachable without credentials. | `TestHealth_ReachableWithoutCredentialsPastCallerInterceptors`, `TestHealth_StaysInsideRecovery` |
 
 ## S12. Bounded gRPC stop
 
@@ -375,20 +375,20 @@ The same three fields exist on `runtime.Config` (S5).
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `timeout` | — | `<= 0` waits without bound; `> 0` starts a graceful stop and calls `Stop()` when it passes, logging the forced stop to stderr |
+| `timeout` | — | `<= 0` waits without bound; `> 0` starts a graceful stop and calls `Stop()` when it passes, logging the forced stop to stderr; `Stop()` gets one more `timeout`, after which the call returns without it |
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
 | S12.1 | With nothing in flight, it MUST return promptly. | `TestStopGRPCReturnsImmediatelyWhenIdle` |
-| S12.2 | With an RPC held open, it MUST return within roughly the timeout and abort that RPC. | `TestStopGRPCForcesHardStopOnHeldRPC`, `TestGracefulStop_TimeoutHardStop` |
+| S12.2 | With an RPC held open, it MUST return within roughly the timeout and abort that RPC; when the hard stop itself does not return (a handler ignoring its cancelled context), it MUST still return within twice the timeout. | `TestStopGRPCForcesHardStopOnHeldRPC`, `TestGracefulStop_TimeoutHardStop`, `TestStopGRPCBoundsAHardStopThatDoesNotReturn` |
 | S12.3 | `0` and negative values MUST mean unbounded. | `TestStopGRPCZeroTimeoutIsUnbounded`, `TestStopGRPCNegativeTimeoutIsUnbounded`, `TestGracefulStop_ZeroBlocks` |
 | S12.4 | The forced path MUST NOT fail the process. | holds by construction (no return value) |
-| S12.5 | The graceful-stop goroutine MUST NOT leak. | holds by construction; no test |
+| S12.5 | The graceful-stop and hard-stop goroutines MUST NOT outlive the handlers they wait for. | holds by construction; no test |
 
 **Deliberate limits.**
-- After a forced stop, handler goroutines are not waited for (`WaitForHandlers` is deliberately unset). Abandoned handlers can overlap the teardown that follows; documented in the source.
+- After a forced stop, handler goroutines are not waited for (`WaitForHandlers` is deliberately unset), and a hard stop past its bound is left to finish on its own. The component (S5) gives handlers a grace and skips the teardown under one that is still running (S4.6).
 
 ## S13. Bounded HTTP stop and drain signal
 
