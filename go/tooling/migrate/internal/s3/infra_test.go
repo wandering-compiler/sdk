@@ -32,6 +32,7 @@ type fakeS3 struct {
 	failPut     map[string]int               // key -> HTTP status to return on PUT
 	failDelete  map[string]int               // key -> HTTP status to return on DELETE
 	failList    bool                         // make every ListObjectsV2 return 500
+	repeatList  bool                         // every page also repeats the previous page's key
 
 	// Batch-delete (POST ?delete) fault hooks:
 	failBatchDelete int      // >0 → return this HTTP status for the whole batch
@@ -133,7 +134,10 @@ func (f *fakeS3) handleList(w http.ResponseWriter, q url.Values) {
 	if len(keys) > 0 {
 		k := keys[0]
 		res.Contents = []lbrContents{{Key: k, Size: int64(len(f.objects[k]))}}
-		res.KeyCount = 1
+		if prev, ok := f.objects[token]; ok && f.repeatList {
+			res.Contents = append([]lbrContents{{Key: token, Size: int64(len(prev))}}, res.Contents...)
+		}
+		res.KeyCount = len(res.Contents)
 		if len(keys) > 1 {
 			res.IsTruncated = true
 			res.NextContinuationToken = k

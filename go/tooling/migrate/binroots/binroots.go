@@ -22,9 +22,9 @@ var Reserved = map[string]string{
 	"migrate": "a generated binary that owns a database answers `migrate` itself (apply / fetch / rollback / status), " +
 		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
 		"shadowed silently rather than refused",
-	"schema": "a generated binary that owns a database answers `schema` itself (apply), " +
-		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
-		"shadowed silently rather than refused",
+	"schema": "`schema` was a built-in of every generated binary that owns a database, until the binary came to carry " +
+		"its own migrations; it still answers `schema`, to say the command is gone and point at `migrate apply`, " +
+		"before any project command is consulted — so a project command of the same name would never be reached",
 	"fixtures": "a generated binary that owns a database answers `fixtures` itself (apply), " +
 		"dispatching on it before any project command is consulted — so a project command of the same name would be " +
 		"shadowed silently rather than refused",

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A hop that forwards the connection without appending to X-Forwarded-For
@@ -79,5 +80,39 @@ func TestTrustedProxyMatchesMappedPeer(t *testing.T) {
 	l := New(Config{PerMinute: 60, Burst: 5, TrustedProxies: prefixes(t, "10.0.0.0/8")})
 	if got := l.RequestKey(reqFrom("[::ffff:10.0.0.5]:1", "203.0.113.9")); got != "203.0.113.9" {
 		t.Errorf("key = %q, want the forwarded client", got)
+	}
+}
+
+// The warning about a private peer's ignored X-Forwarded-For is printed
+// once, then at most once an hour, however many requests carry it.
+func TestUntrustedForwarderWarningIsHourly(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := New(FromEnv("RL_HOURLY_WARN_TEST"))
+	l.now = func() time.Time { return now }
+	warnings := func() int { return strings.Count(buf.String(), "TRUSTED_PROXIES") }
+	send := func() {
+		for i := 0; i < 20; i++ {
+			l.AllowRequest(reqFrom("172.17.0.1:5555", fmt.Sprintf("203.0.113.%d", i)))
+		}
+	}
+
+	send()
+	if n := warnings(); n != 1 {
+		t.Fatalf("first burst: %d warnings, want 1", n)
+	}
+	now = now.Add(59 * time.Minute)
+	send()
+	if n := warnings(); n != 1 {
+		t.Fatalf("within the hour: %d warnings, want still 1", n)
+	}
+	now = now.Add(2 * time.Minute)
+	send()
+	if n := warnings(); n != 2 {
+		t.Fatalf("after the hour: %d warnings, want 2", n)
 	}
 }

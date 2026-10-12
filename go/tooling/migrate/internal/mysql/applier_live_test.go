@@ -190,3 +190,54 @@ func TestRunLock_CheckReportsALostLockSession_Live(t *testing.T) {
 		t.Fatalf("Release after the lock session was killed = %v; want ErrLockLost", err)
 	}
 }
+
+// Reading the applied head is what `status` and every plan do: it must not
+// wait behind a migration in flight, and it must not change the ledger.
+func TestAppliedHead_IsReadOnlyAndDoesNotWaitBehindAMigration_Live(t *testing.T) {
+	dsn, admin := liveMySQL(t)
+	schema := strings.TrimPrefix(mustURL(t, dsn).Path, "/")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a, err := mysql.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = a.Close() }()
+
+	// A fresh database: reading the head creates nothing.
+	if head, err := a.AppliedHead(ctx); err != nil || head != "" {
+		t.Fatalf("fresh AppliedHead = %q, %v", head, err)
+	}
+	if tableExists(t, ctx, admin, schema, "w17_migrations") {
+		t.Fatal("reading the head created the ledger")
+	}
+
+	first := mysqlMigration("20260101T000000Z", "authors")
+	if err := a.Apply(ctx, first); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// A migration in flight: its transaction has written the next ledger
+	// row and holds it until it commits.
+	inflight, err := admin.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = inflight.Close() }()
+	if _, err := inflight.ExecContext(ctx, "START TRANSACTION"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = inflight.ExecContext(context.Background(), "ROLLBACK") }()
+	if _, err := inflight.ExecContext(ctx, "INSERT INTO "+schema+".w17_migrations VALUES ('20260201T000000Z', 'bb')"); err != nil {
+		t.Fatalf("in-flight ledger write: %v", err)
+	}
+
+	probe, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
+	head, err := a.AppliedHead(probe)
+	cancelProbe()
+	if err != nil {
+		t.Fatalf("AppliedHead behind an in-flight migration = %v; a read must not queue behind the ledger's writers", err)
+	}
+	if head != first.Id {
+		t.Errorf("head = %q, want %s (the in-flight row is not applied yet)", head, first.Id)
+	}
+}
