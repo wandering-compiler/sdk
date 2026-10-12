@@ -91,7 +91,7 @@ logged, naming the dialect, the parameter and the pinned value, never the DSN.
 |---|---|---|
 | D2.1 | A database that is already up MUST cost one ping and no sleep. | `TestPing_ReadyDatabaseIsImmediate` |
 | D2.2 | A database that comes up within the budget MUST be accepted. | `TestPing_RetriesUntilTheDatabaseComesUp` |
-| D2.3 | Each attempt MUST be bounded by the overall deadline, so a hanging dial cannot outlive the budget. | no test |
+| D2.3 | Each attempt MUST be bounded by the overall deadline, so a hanging dial cannot outlive the budget. | `TestPing_HangingAttemptIsBoundedByTheBudget` |
 | D2.4 | Exactly one "not ready" and one "accepted after" log line MUST be written, not one per attempt. | `TestPing_AnnouncesOnceNotPerAttempt` |
 | D2.5 | The final error MUST name the label, the time waited, the attempt count and the last driver error, and wrap it for `errors.Is`. | `TestPing_GivesUpAndSaysWhat` |
 | D2.6 | Cancelling the parent context MUST stop the wait immediately. | `TestPing_CancelledContextStopsTheWait` |
@@ -191,7 +191,7 @@ its own per-method transaction when no header is present.
 | D5.8 | Recently drained ids (last 256) MUST remember why they are gone, so a later NotFound names the cause. | `outcome_test.go` |
 | D5.9 | `AdoptTxIsolated` MUST refuse a transaction whose isolation is weaker than, or unknown relative to, the method's declared level (`ErrIsolationTooWeak`). | `TestAdoptTxIsolated_RefusesWeakerOrUnknownLevels`, `TestAdoptTxIsolated_RegistryThatCannotReportRefuses`, `TestAdoptTxIsolated_MemoryReportsTheOpenedLevel`, `TestAdoptTxIsolated_NoTransactionIdOpensFresh` |
 | D5.10 | Isolation levels MUST be honoured on PostgreSQL and MySQL. | no test (needs a server) |
-| D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | no test |
+| D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | `TestSanitizeGatewayMD_StripsTransactionKeys`, `TestHeaderName_IsGatewayOwned`, `TestConnIDHeader_IsGatewayOwned` (no edge forwards a client's transaction id; keeping the storage port internal is deployment and not covered) |
 | D5.12 | A Rollback MUST doom the transaction before it waits for the lease. A doomed transaction refuses Commit (`ErrTxDoomed`) and new adoptions, and is rolled back by whoever reaches it first: the rollback itself, a Commit that finds it idle, the release of the last lease, or the timeout watcher. A rollback that cannot run at once returns `ErrTxDoomed` wrapping `ErrTxBusy`, whatever the state of its context or the finish wait. | `TestRollbackBehindALease_CancelledContext_DoomsTheTransaction`, `TestRollbackBehindALease_ZeroFinishWait_DoomsTheTransaction`, `TestDoom_ACommitQueuedBeforeTheRollbackDoesNotCommit` |
 | D5.13 | The coordinator server MUST answer a Commit of a doomed transaction with `Aborted` (not retryable) and a Rollback of one with success, since the rollback is already decided. | `TestServer_DoomedTransaction_CommitAbortsAndRollbackSucceeds` |
 
@@ -276,8 +276,8 @@ the registry dooms the transaction before waiting (D5.12).
 | D8.11 | `grpcerr.Wrap` MUST map `ErrTooManyValues`, and each driver's own too-many-parameters error, to InvalidArgument with detail code `TOO_MANY_VALUES`, not to Internal. | `TestWrap_TooManyBindValuesIsTheCallersFault` |
 | D8.4 | KV multi-fetch multiplicity MUST equal SQL's. | `TestDedupKeys` |
 | D8.5 | `NullIfEmpty` and `TimestampOrNull` MUST bind NULL for empty values. | `TestNullIfEmpty`, `TestTimestampOrNull` |
-| D8.6 | `Arr` and `Bytes` MUST NOT bind NULL into NOT NULL array or bytea columns. | no test |
-| D8.7 | `EnumFieldOrNull` MUST bind NULL for an unset enum under an absent parent message. | no test |
+| D8.6 | `Arr` and `Bytes` MUST NOT bind NULL into NOT NULL array or bytea columns. | `TestArr_EmptyBindsTheEmptyArrayNotNull`, `TestBytes_EmptyIsStoredInANotNullColumn` |
+| D8.7 | `EnumFieldOrNull` MUST bind NULL for an unset enum under an absent parent message. | `TestEnumFieldOrNull_AbsentParentAndUnsetFieldAreNull` |
 | D8.8 | Expanded SQL MUST execute correctly on MySQL. | no test (needs a server) |
 
 **Deliberate limits.**
@@ -315,7 +315,7 @@ serialized request, boundary values, total, direction, schema version and sort s
 | D9.5 | `uint64` keys above `MaxInt64` MUST round-trip without sign wrap. | `keyset_uint64_test.go` |
 | D9.6 | COUNT(*) MUST run on the first page only; resumed pages reuse the total cached in the signed cursor. | `metadata_test.go` |
 | D9.7 | Empty boundaries MUST produce an empty token (no next/previous link). | `cursor_test.go` |
-| D9.8 | Paging metadata MUST NOT be forwarded hop-to-hop by the principal relay. | no test in this package (see the principal relay tests) |
+| D9.8 | Paging metadata MUST NOT be forwarded hop-to-hop by the principal relay. | `TestForwardToOutgoing_ExcludesNonPrincipal` in `go/lib/principal` |
 | D9.9 | The limit MUST be clamped to the configured maximum, and never above `MaxLimit` even when the endpoint declares no maximum. | `TestClampLimit` |
 | D9.10 | Each resumed page MUST re-apply authorization and data scopes from the caller's verified identity, never from request fields carried in the cursor. | no test |
 | D9.11 | No caller MUST receive an unbounded result set: the storage side clamps the `x-w17-paging-limit` header to `MaxLimit` and treats `0` as absent, whoever sent it. | `TestLimitFromIncomingMD_ClampsToMaxLimit`, `TestClampLimit` |
@@ -339,9 +339,9 @@ index in metadata `x-w17-sort-by`: `0` default, `2i+1` ascending, `2i+2` descend
 
 | ID | Guarantee | Test |
 |---|---|---|
-| D10.1 | An unknown field MUST map to `0` (default order). | no test |
-| D10.2 | A malformed or negative header MUST map to `0`. | no test |
-| D10.3 | Only an index travels, never a column name. | no test |
+| D10.1 | An unknown field MUST map to `0` (default order). | `TestIndexForField_UnknownFieldIsTheDefaultOrder` |
+| D10.2 | A malformed or negative header MUST map to `0`. | `TestSortByFromIncomingMD_MalformedOrNegativeIsTheDefault` |
+| D10.3 | Only an index travels, never a column name. | `TestEncodeSortByMD_OnlyAnIndexTravels` |
 
 **Deliberate limits.**
 - Storage evaluates the sort through a `CASE` expression in ORDER BY, which cannot use an index: every sorted admin page sorts the whole filtered set.
@@ -394,11 +394,11 @@ Stamp table: `w17_collation`.
 | ID | Guarantee | Test |
 |---|---|---|
 | D12.1 | `'Foo' != 'foo'`, `'a' != 'á'`, ordering follows UCA root (as MySQL `utf8mb4_0900_as_cs`), and `upper('café') = 'CAFÉ'`. | `TestRegister_UnicodeOrderingAndEquality`, `TestRegister_UnicodeUpperLower`, `TestCompare`, `TestFoldCase_TypeHandling` |
-| D12.2 | Comparisons MUST be safe for concurrent use. | no test |
-| D12.3 | A database built with different Unicode tables MUST be reported with both fingerprints and a fix; an unstamped database is accepted. | no test in this package (exercised by the SQLite migration driver) |
+| D12.2 | Comparisons MUST be safe for concurrent use. | `TestCompare_SafeForConcurrentUse` |
+| D12.3 | A database built with different Unicode tables MUST be reported with both fingerprints and a fix; an unstamped database is accepted. | `TestVerifyStamp_UnstampedAcceptedForeignTablesReported` |
 | D12.4 | The fingerprint MUST derive from behaviour, not from a module version. | `TestFingerprint_StableAndOrderingDerived` |
 | D12.5 | Equality and UNIQUE behaviour for canonically equivalent (NFC/NFD) strings and for strings differing only in ignorable characters MUST match PostgreSQL's deterministic collations: ties under UCA are broken by bytes. | `TestCompare_EqualityIsDeterministic` |
-| D12.6 | `EnsureStamp` MUST recognise a database stamped by the comparison without the byte tie-break (same Unicode tables), rebuild every index using the collation and restamp it in one transaction; `VerifyStamp` MUST report such a database as a mismatch until then. | `TestEnsureStamp_UpgradesAPlainUCADatabase`, `TestLegacyFingerprint_IsThePlainUCABuildsStamp` (`VerifyStamp` side not asserted) |
+| D12.6 | `EnsureStamp` MUST recognise a database stamped by the comparison without the byte tie-break (same Unicode tables), rebuild every index using the collation and restamp it in one transaction; `VerifyStamp` MUST report such a database as a mismatch until then. | `TestEnsureStamp_UpgradesAPlainUCADatabase`, `TestLegacyFingerprint_IsThePlainUCABuildsStamp` |
 
 **Deliberate limits.**
 - SQLite does not order like PostgreSQL, which follows the database locale.
@@ -430,7 +430,7 @@ Stamp table: `w17_collation`.
 | D13.6 | Delete MUST be idempotent; Open, Stat and OpenSeekable of a missing key MUST return `ErrNotFound`. | `local_fs_test.go`, `memory/*_test.go` |
 | D13.7 | Keys MUST NOT carry a leading `/`, so upload and download paths agree across drivers. | `kvfs_test.go` |
 | D13.8 | The published mode MUST NOT depend on which publish branch ran. | `TestPutFromTempFile_PublishedModeIsBranchIndependent` |
-| D13.9 | Readers (business tier) MUST receive only the `Reader` half; only the gateway writes. | no test |
+| D13.9 | Readers (business tier) MUST receive only the `Reader` half; only the gateway writes. | `TestReader_CarriesNoWriteMethod` (the interface; the generated business `ClientSet` is not covered here) |
 
 **Deliberate limits.**
 - No `fsync` before or after rename; durability across power loss is not guaranteed.
@@ -468,7 +468,7 @@ Stamp table: `w17_collation`.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| D15.1 | The check MUST only warn and never block boot; an unreadable policy logs at debug level only. | no test |
+| D15.1 | The check MUST only warn and never block boot; an unreadable policy logs at debug level only. | `TestWarnIfEvicting_UnreadablePolicyLogsAtDebugOnly` |
 | D15.2 | A nil client MUST be a no-op. | `TestWarnIfEvicting_NilClientIsSafe` |
 | D15.3 | Policy matching MUST be case- and space-insensitive. | `TestEvictsUntaggedKeys` |
 

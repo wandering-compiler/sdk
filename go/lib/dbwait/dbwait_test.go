@@ -117,3 +117,29 @@ func TestPing_AnnouncesOnceNotPerAttempt(t *testing.T) {
 		t.Errorf("a ready database logged %v", quiet)
 	}
 }
+
+// hangingPinger is a dial that never answers on its own: it returns only
+// when its context ends.
+type hangingPinger struct{}
+
+func (hangingPinger) PingContext(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A hanging attempt is cut at the overall deadline, so the wait ends within
+// the budget instead of with the dial.
+func TestPing_HangingAttemptIsBoundedByTheBudget(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		done <- Ping(context.Background(), hangingPinger{}, "orders-postgres", 300*time.Millisecond, nil)
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a database that never answered was reported ready")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ping did not return within 5s of a 300ms budget; the hanging attempt outlived it")
+	}
+}

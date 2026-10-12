@@ -168,11 +168,15 @@ func TestRequireAuth_TransportError500(t *testing.T) {
 	authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
 		return nil, errors.New("store unreachable")
 	})
-	h := restgw.RequireAuth(authFn, func(http.ResponseWriter, *http.Request) {})
+	called := false
+	h := restgw.RequireAuth(authFn, func(http.ResponseWriter, *http.Request) { called = true })
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/stream", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("transport error = %d, want 500", rec.Code)
+	}
+	if called {
+		t.Error("next should not run when authentication could not be checked")
 	}
 }
 

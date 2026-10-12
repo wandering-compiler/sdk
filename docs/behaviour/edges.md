@@ -107,12 +107,12 @@ writers.
 | E1.1 | A body longer than `MaxRequestBodyBytes` MUST be refused without reading more than limit + 1 bytes | `TestDecodeRequest_BodyTooLarge` |
 | E1.2 | Empty, whitespace-only and `null` JSON bodies MUST leave the message untouched and succeed | `TestDecodeRequest_EmptyNoop` |
 | E1.3 | An empty protobuf body MUST succeed; a malformed one MUST be an error | `TestDecodeRequest_ProtobufEmptyAndBad` |
-| E1.4 | Unknown JSON fields MUST be ignored | no test (only indirectly via `TestDecodeRequest_RoundTrip`) |
+| E1.4 | Unknown JSON fields MUST be ignored | `TestDecodeRequest_IgnoresUnknownFields` |
 | E1.5 | The response format MUST follow the highest-q, most specific, earliest `Accept` entry | `TestResponseFormat`, `TestNegotiation_HTTPRoundTrip` |
 | E1.6 | A marshal failure MUST be a JSON 500 envelope, never a partial body, in either format | `TestWriteResponse_MarshalErrorIs500` |
-| E1.7 | `WriteResponseFiltered` MUST NOT mutate the caller's message | no test (`TestWriteResponseFiltered_ClearsNamedFields` checks output only) |
+| E1.7 | `WriteResponseFiltered` MUST NOT mutate the caller's message | `TestWriteResponseFiltered_ClearsNamedFields` |
 | E1.8 | A JSON key rewrite hook MUST NOT be called for protobuf or empty bodies | `TestDecodeRequestRewrite` |
-| E1.9 | Decode errors MUST NOT reach the client as decoder prose; callers route them through `WriteInvalidRequest` (E4) | no test |
+| E1.9 | Decode errors MUST NOT reach the client as decoder prose; callers route them through `WriteInvalidRequest` (E4) | `TestWriteInvalidRequest_KeepsDecoderProseFromTheClient` |
 | E1.10 | A negotiated response (a request passed to `WriteResponse`) MUST carry `Vary: Accept`, whichever format won, so a shared cache never serves one format to a request for the other | `TestWriteResponse_NegotiatedResponseVariesOnAccept` |
 
 **Deliberate limits.**
@@ -143,14 +143,14 @@ the alias rewrite. SSE and WS writers use `MarshalProtoAppend`.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E2.1 | Enums MUST be written as integers; names and numbers MUST both be accepted on input | `oneof_test.go`, `queryenum_test.go` (query side); no test pins integer enums on the REST response path |
+| E2.1 | Enums MUST be written as integers; names and numbers MUST both be accepted on input | `oneof_test.go`, `queryenum_test.go`, `TestWriteResponse_EnumsAreNumbers` |
 | E2.2 | A message with no alias and no oneof MUST be byte-identical to protojson | `TestOneof_NoOneof_ByteIdenticalToProtojson`, `TestMarshalProto_NoAliasFastPath` |
 | E2.3 | Aliased fields MUST be written under the alias; input MUST accept the alias or the proto name | `TestMarshalProto_AliasedFieldRenamesKey`, `TestRestoreAliasesOnRequestJSON_AcceptsBoth` |
 | E2.4 | A body giving the same field under both alias and canonical name MUST be refused | `TestUnmarshalProto_AliasAndCanonicalCollision_Rejected` |
 | E2.5 | A registered generated marshaler MUST be preferred over protojson | `TestMarshalProto_PrefersRegisteredMarshaler` |
 | E2.6 | Invalid UTF-8 in a string field MUST be a marshal error, not mangled output | `TestMarshalProto_InvalidUTF8Errors` |
 | E2.7 | Decoding MUST NOT lose numeric precision on input: a 64-bit integer sent as a JSON number keeps its value on every message, including messages reshaped for a oneof or a `rest_alias` | `TestUnmarshalProto_KeepsSixtyFourBitNumbersExact`, `TestDecodeRequest_KeepsSixtyFourBitNumbersExact`, `TestRestoreAliasesOnRequestJSON_KeepsNumbersExact` |
-| E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message | no test (per-type codec tests only) |
+| E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message | `TestFastPathEncoders_MatchTheReflectivePath` (the well-known-type encoders; per-message marshalers are generated and not covered here) |
 
 **Deliberate limits.**
 - The reflective alias and oneof rewrite re-encodes through `encoding/json`, which HTML-escapes
@@ -253,7 +253,7 @@ re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which
 | E5.3 | `RequireAuth` MUST map a missing or invalid ticket to 401 and other failures through `WriteAuthError` (status → mapped, non-status → 500) | `TestRequireAuth_TicketSentinel401`, `TestRequireAuth_TransportError500` |
 | E5.4 | `RequireAuth` MUST stash user data on the context for streaming handlers | `TestRequireAuth_StashesPrincipal` |
 | E5.5 | `GetUserMetadata` MUST treat absent, empty and non-base64 values as "no principal" | `TestAuth_GetUserMetadata_AbsentOrBad`, `TestGetUserMetadata_EmptyValueIsAbsent` |
-| E5.6 | A handler MUST NOT run after a failed auth (per-RPC routes: generated handler; mounted streams: `RequireAuth`) | no test |
+| E5.6 | A handler MUST NOT run after a failed auth (per-RPC routes: generated handler; mounted streams: `RequireAuth`) | `TestRequireAuth_TicketSentinel401`, `TestRequireAuth_TransportError500` (mounted streams; per-RPC routes are generated and not covered here) |
 | E5.7 | A client MUST NOT be able to set `x-w17-user` through the REST surface, on any route | `TestEdge_ClientCannotSetReservedMetadataOnAnySurface`, `TestMetadataMiddlewares_RefuseReservedKeysWithoutTheScrub` |
 
 **Deliberate limits.**
@@ -341,7 +341,7 @@ normal auth path by copying the URL value into a reserved header slot that clien
 |---|---|---|
 | E8.1 | The path org MUST be set as the `W17-Org` header on a clone | `TestWithOrgFromPath_SetsTheHeader` |
 | E8.2 | A conflicting `W17-Org` header MUST be refused (`ErrOrgPathConflict`) | `TestWithOrgFromPath_RefusesAConflictingHeader` |
-| E8.3 | An empty path value MUST be an error | no test |
+| E8.3 | An empty path value MUST be an error | `TestWithOrgFromPath_EmptySegmentIsRefused` |
 
 **Deliberate limits.**
 - The returned errors contain both values; callers must not echo them. The HTTP answer is left
@@ -671,8 +671,8 @@ label isolation.
 | E18.2 | With isolation on (a labels deriver set), an unlabelled event MUST reach nobody and a labelled event MUST reach only principals holding every label | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEventNoCrossTenant`, `TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal` |
 | E18.3 | There MUST be one bus subscription per channel regardless of client count | `TestEventbusEventSource_SharedHubSingleSubscriber` |
 | E18.4 | A failed lazy open MUST NOT wedge the hub and MUST drain what it opened | `w17events_ensureopen_test.go` (all four) |
-| E18.5 | A slow client MAY lose frames but MUST NOT block other clients | no test |
-| E18.6 | The handler MUST return on client disconnect, on drain, and on a write error or deadline | `w17events_drain_test.go` (both), `TestHandleW17Events_CtxCancelEndsHandler` (partial: no stalled-client case) |
+| E18.5 | A slow client MAY lose frames but MUST NOT block other clients | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
+| E18.6 | The handler MUST return on client disconnect, on drain, and on a write error or deadline | `w17events_drain_test.go` (both), `TestHandleW17Events_CtxCancelEndsHandler`, `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
 | E18.7 | Every replica MUST receive every event | `w17events_replicas_test.go` |
 | E18.8 | A subscribe failure MUST NOT reveal internal detail to the client: it answers 503 `UNAVAILABLE` in the envelope, without broker channel names or broker error text | `TestHandleW17Events_SubscribeError`, `TestHandleW17Events_NoSource` |
 | E18.9 | A revoked credential or removed membership MUST stop delivery on an open connection: under the re-auth watchdog (E17), a refusal ends the stream, and `EventbusEventSource` ends a client whose labels, derived again from the latest verdict, differ from those at connect | `TestW17Events_RevokedCredentialEndsTheStream`, `TestW17Events_ChangedMembershipEndsTheStream` |
@@ -1127,8 +1127,8 @@ statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message
 | E33.4 | A bare SQLite FK failure MUST be attributed only when the whole service has exactly one FK | `TestWrap_SQLite_FK_SingleFKTableWithMultiFKElsewhere_NoAttribution` |
 | E33.5 | Every fallback sentence MUST be in `Vocabulary()` | `vocabulary_completeness_test.go` |
 | E33.6 | Panic recovery (`RecoverPanic`, the interceptors, `RecoverPump`) MUST return a generic Internal and report the stack | `recover_test.go`, `recover_interceptor_test.go` |
-| E33.7 | `Wrap` MUST NOT retry on its own; Aborted is the caller's signal | no test |
-| E33.8 | Constraint and table names MUST NOT reach a client on any surface | no test |
+| E33.7 | `Wrap` MUST NOT retry on its own; Aborted is the caller's signal | holds by construction (`Wrap` takes an error, not an operation it could run again); no test |
+| E33.8 | Constraint and table names MUST NOT reach a client on any surface | `TestConstraintFailure_NamesNoConstraintOrTableToTheClient` (REST and the MCP reading; the generated rpc surface is not covered here) |
 
 **Deliberate limits.**
 - `RecoverPump` blocks if its error channel is unbuffered and nobody reads it.
