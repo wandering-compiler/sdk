@@ -174,9 +174,9 @@ contacted.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T4.1 | The default transport MUST be TLS with system roots. | no test |
-| T4.2 | The bearer MUST NOT be sent in clear by default. | no test |
-| T4.3 | An `Unauthenticated` reply MUST produce a message naming `W17_TOKEN`. | no test |
+| T4.1 | The default transport MUST be TLS with system roots. | `TestFetch_DefaultTransportIsTLSWithSystemRoots` |
+| T4.2 | The bearer MUST NOT be sent in clear by default. | `TestFetch_BearerIsNotSentInClearByDefault` |
+| T4.3 | An `Unauthenticated` reply MUST produce a message naming `W17_TOKEN`. | `TestFetch_UnauthenticatedNamesW17Token` |
 | T4.4 | Fetched artefacts MUST be written only under `--migrations`: a connection name or migration id that is not one plain path segment (no separator, `:`, `.`/`..` or control character) MUST be refused before anything is written, and every write MUST pass the path guard (T28). | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
 | T4.6 | An in-memory fetch (`--fetch`) MUST apply the same segment rule to connection names and ids as a fetch to disk. | `TestWriteMigration_RefusesPathShapedNames` |
 | T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | `TestFetch_KeepsOnlyRequestedConnections`, `TestFetch_RefusesADuplicateMigration`, `TestMigrationSetFS_RefusesADuplicate` |
@@ -281,7 +281,7 @@ target execute.
 | T8.4 | Ids MUST increase along the chain. | `TestPlan_RelabelledIdIsRefused` |
 | T8.5 | An unchained legacy set with pending migrations below the target MUST be refused. | `TestPlan_UnchainedArtifactSetIsRefused` |
 | T8.6 | The pinned target MUST carry a hash, and the artefact MUST match it. | `TestPlan_PinnedTargetEmptyHash_Refused`, `TestPlan_TargetHashMismatch` |
-| T8.7 | The walk MUST terminate on a cycle. | no test |
+| T8.7 | The walk MUST terminate on a cycle. | `TestChainFromTarget_RefusesACycleAndTerminates` |
 
 **Deliberate limits.**
 - The lock file is trusted input; integrity of the chain is anchored on the pinned hash in the lock.
@@ -356,7 +356,7 @@ is adopted (recorded through `adopt_sql`, no DDL).
 | T11.5 | A head that moved backward under the lock MUST be refused. | `TestApply_RefusesWhenTheHeadMovedBACKWARD` |
 | T11.6 | A second run against a store with a run lock MUST fail fast with "run-lock held", never wait. | `TestRun_LockHeldAbortsFailFast` |
 | T11.7 | On Postgres, a migration whose in-transaction half committed but whose post-transaction half did not MUST resume only the post-transaction half. | `TestRun_ResumesPendingSkirt`, `TestPreFingerprint_DoesNotWedgeAResume` |
-| T11.8 | A migration MUST NOT be applied twice within one run. | no test |
+| T11.8 | A migration MUST NOT be applied twice within one run. | `TestRun_RefusesAConnectionListedTwice`, `TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued` |
 | T11.9 | The run MUST NOT report success for work not done; the closing count MUST include only migrations this run applied, and report adopted, fake-recorded and skipped migrations separately. | `TestRun_ClosingLineCountsOnlyWhatThisRunApplied` |
 | T11.10 | Losing the run lock during a run MUST fail the run before the next migration, in apply and in rollback, with an error wrapping `ErrLockLost`. | `TestRun_LostRunLockStopsBeforeTheNextMigration`, `TestRunRollback_LostRunLockStopsBeforeTheNextMigration` |
 | T11.11 | A release that finds the run lock lost MUST fail the run; any other release failure MUST stay a warning. | `TestRun_ReleaseOfALostLockFailsTheRun`, `TestRun_OrdinaryReleaseFailureStaysAWarning` |
@@ -373,9 +373,9 @@ the check, and it runs only when the artefact's digest covers it (T7).
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T12.1 | An empty preflight or empty `adopt_sql` MUST be refused. | no test |
+| T12.1 | An empty preflight or empty `adopt_sql` MUST be refused. | `TestFake_EmptyPreflightOrAdoptSQLIsRefused` |
 | T12.2 | Preflight and ledger write MUST run as one unit, so a failing check leaves no ledger row. | `TestFake_BoundPreflightRuns` (one body, preflight first; a failing check on a real database has no test) |
-| T12.3 | `--fake` together with `--dry-run` MUST be refused. | no test |
+| T12.3 | `--fake` together with `--dry-run` MUST be refused. | `TestApply_FakeWithDryRunIsRefused` |
 | T12.4 | A drift refusal MUST name the fake apply as the remedy. | `TestDriftRefusal_NamesTheFakeApply` |
 | T12.5 | A migration whose digest does not cover its preflight MUST be refused before anything executes; a replaced or stripped bound preflight MUST be refused as a content mismatch. | `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced`, `TestFake_BoundPreflightCannotBeStripped` |
 | T12.6 | A normal apply MUST NOT require the preflight to be bound, since it never runs it. | `TestApply_UnboundPreflightStillAppliesForReal` |
@@ -461,7 +461,7 @@ manual remedy. Postgres, SQLite and NATS have no checked run lock.
 | T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | `TestNATSRunLock_MutualExclusion`, `TestNATSRunLock_ConcurrentAcquireHasOneWinner`, `TestNATSRunLock_RefreshPreventsTakeover`, `TestNATSRunLock_StaleTakeoverAndLostHolder` |
 | T15.7 | Postgres and MySQL apply, rollback, applied head, phase and the post-transaction advisory lock MUST behave as specified against a real database. | no test |
 | T15.8 | Errors MUST NOT contain credentials: a DSN named in an error (unknown scheme, unparseable URL, duplicate or empty `--target` entry) has its password and password-like parameters masked, and the error keeps its context. | `TestErrors_NeverPrintTheDSNPassword`, `TestString_MasksCredentials`, `TestErr_RedactsAURLError` |
-| T15.9 | A command line the applier does not recognise MUST fail the migration, not be skipped. | no test |
+| T15.9 | A command line the applier does not recognise MUST fail the migration, not be skipped. | `TestApply_UnknownCommandFailsTheMigration_Live`, `TestRunOne_DispatchErrors_Live`, `TestApply_CommandErrors` |
 | T15.10 | Wipe MUST return the store to the empty state, including the namespaces the migration set declares (the ones schema prep creates), MUST NOT drop a schema the set does not declare even when the wiping role may, and MUST NOT change session settings that outlive it. | `TestWipe_DropsDeclaredSchemasOnly_Live`, `TestWipeSQL_DropsDeclaredSchemas`, `TestDeclaredNamespaces`, `TestWipe_RunsOnOneSessionAndRestoresFKChecks`, `TestWipe_AFailureStillRestoresFKChecks` |
 | T15.11 | NATS DSN user info is not used. | `TestDSNToServer_DropsUserInfo` |
 | T15.12 | A Redis or S3 run lock whose lease is no longer provably held (a refresh found another owner, or the lease ran out without a refresh) MUST report itself lost for good, and the applier MUST stop before its next write. | `TestRunLock_RefreshOfATakenOverLockReportsItLost`, `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestLease_HoldsUntilItsMarginThenRunsOut`, `TestLease_LostStaysLost`, `TestLease_RenewalExtendsFromWhenTheRefreshWasSent` |
@@ -502,11 +502,12 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 | T16.4 | Key TTL and S3 object metadata MUST be preserved. | `TestApply_YAMLPreservesTTL_Live`, `TestApply_YAMLPreservesObjectMetadata` |
 | T16.5 | `RENAME_FIELD` MUST NOT overwrite a differing destination; a destination already holding the same value is benign. | `TestJSONApplyOp_RenameField_ClobberRefused`, `TestJSONApplyOp_RenameField_SameValueDestination_Benign`, `TestProtoCodec_RenameField_RefusesClobber` |
 | T16.6 | Inverse ops MUST be derived; `REMOVE_FIELD` and `TRANSFORM_FIELD` MUST be irreversible. | `TestInverseOperations_*`, `TestRollback_YAMLIrreversibleRefused` |
-| T16.7 | A stored value that is not a JSON object MUST be refused with an error. | no test |
+| T16.7 | A stored value that is not exactly one JSON object (an array, a scalar, or an object followed by more data) MUST be refused with an error. | `TestJSONApplyOp_NotAJSONObjectIsRefused` |
 | T16.8 | A `TRANSFORM_FIELD` op MUST hand each key to its workers at most once per run, even when the store's scan returns a key more than once. | `TestApply_YAMLTransformAppliesOncePerKeyDespiteScanRepeats` (Redis; S3 not asserted) |
 | T16.9 | Refusal messages MUST name only flags that exist; the irreversible-rollback refusal names the migration and a rollback target (`--to`) that keeps it applied. | `TestRollback_YAMLIrreversibleRefused` (Redis and S3) |
-| T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | no test |
+| T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | `TestApply_YAMLApplyTimeoutLeavesAResumableState_Live`, `TestApply_YAMLApplyTimeoutLeavesAResumableState` |
 | T16.11 | A stored JSON `null` MUST be treated like an empty value: every op is a no-op on it and none panics. | `TestJSONApplyOp_NullValueIsANoOp` |
+| T16.12 | A data migration body MUST be exactly one YAML document; a body with more is refused. | `TestUnmarshal_MoreThanOneDocumentIsRefused` |
 
 **Deliberate limits.**
 - Values are rewritten per key with GET then SET, not compare-and-set; run a data migration while
@@ -549,7 +550,7 @@ Empty (fingerprint of the empty schema) or Populated. Snapshots dump and restore
 |---|---|---|
 | T18.1 | The fingerprint MUST NOT depend on column or table order. | `TestFingerprintHex_IndependentOfColumnAndTableOrder` |
 | T18.2 | A column change MUST change the fingerprint. | `TestFingerprintHex_DistinguishesColumnChange` |
-| T18.3 | A dialect without `Observe` MUST be reported as "could not look" (the `Schemaless` marker), never as an empty schema. | no test |
+| T18.3 | A dialect without `Observe` MUST be reported as "could not look" (the `Schemaless` marker), never as an empty schema. | `TestDialects_SchemalessOnlyWhereThereIsNoSchema`; the refusal of a schema-ful store that cannot observe is the caller's |
 
 **Deliberate limits.**
 - Fingerprints are comparable within one dialect only; type spellings differ between dialects.

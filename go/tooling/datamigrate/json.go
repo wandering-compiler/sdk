@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 )
 
@@ -58,6 +59,12 @@ func JSONApplyOp(raw []byte, op Operation) ([]byte, bool, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&doc); err != nil {
 		return nil, false, fmt.Errorf("decode JSON: %w", err)
+	}
+	// One object, and nothing after it. The decoder stops at the end of the
+	// first value, so `{"a":1} more` decoded cleanly — and the rewrite then
+	// stored the object alone, dropping the rest of the value in silence.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false, fmt.Errorf("decode JSON: the stored value holds more than one JSON object")
 	}
 	// A stored JSON `null` decodes into a nil map without error. It holds no
 	// fields, so like an empty value there is nothing to mutate — and writing

@@ -3,6 +3,7 @@ package datamigrate
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -54,6 +55,13 @@ func Unmarshal(body []byte) (*Migration, error) {
 	dec.KnownFields(false) // forward-compat: ignore unknown fields v2+ might add
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("datamigrate.Unmarshal: yaml decode: %w", err)
+	}
+	// One document. The decoder reads the first and stops, so the operations
+	// of a second `---` document were never validated and never ran, while
+	// the migration recorded itself as applied.
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("datamigrate.Unmarshal: the body holds more than one YAML document; a data migration is exactly one")
 	}
 	if err := Validate(&m); err != nil {
 		return nil, fmt.Errorf("datamigrate.Unmarshal: %w", err)
