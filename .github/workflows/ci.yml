@@ -16,8 +16,31 @@ jobs:
     defaults:
       run:
         working-directory: go
+    # The appliers, session pins, isolation levels and expanded SQL are
+    # tested against real servers. REQUIRE turns a missing DSN into a
+    # failure, so this lane cannot go green by skipping them.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: pw
+          POSTGRES_DB: w17
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: pw
+          MYSQL_DATABASE: w17
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ppw"
+          --health-interval 2s --health-timeout 5s --health-retries 60
     env:
       GOFLAGS: -buildvcs=false
+      W17_PG_DSN: postgres://postgres:pw@postgres:5432/w17?sslmode=disable
+      W17_MYSQL_DSN: mysql://root:pw@mysql:3306/w17
+      W17_REQUIRE_LIVE_MIGRATOR: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: gofmt
