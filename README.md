@@ -38,9 +38,6 @@ further language gets its own top-level directory and README when it lands.
 - `make pb` regenerates `go/pb` from the protos in `go/proto` (protoc pinned in
   `tools/protoc`, run in Docker); `make check-pb` fails when the committed code
   differs.
-- `scripts/check-leaks.sh [path…]` fails when a comment, test or file name
-  carries a reference that only makes sense inside the project that develops
-  the SDK, rather than the technical reason itself.
 
 ## What lives here vs. not
 
