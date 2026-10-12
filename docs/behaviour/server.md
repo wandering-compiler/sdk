@@ -263,7 +263,7 @@ client settings are paired so pings are never rejected as `too_many_pings`.
 | ID | Guarantee | Test |
 |---|---|---|
 | S7.1 | The client ping interval (30s) MUST be at least the server `MinTime` (10s). | `TestDefaultClientKeepalive_PairsWithServerEnforcement` (client side, against a literal) |
-| S7.2 | The server MUST ping idle clients every 30s and drop them after 10s without an ack. | no test |
+| S7.2 | The server MUST ping idle clients every 30s and drop them after 10s without an ack. | `TestGRPCComponent_PingsAnIdleClientAndDropsItWithoutAnAck` |
 
 ## S8. gRPC panic recovery interceptors
 
@@ -689,7 +689,7 @@ directly, with behaviour equivalent to a wire hop.
 | S21.6 | Stream interceptors MUST run in chain order, and a rejection MUST surface. | `TestConn_StreamInterceptor_Runs`, `TestConn_WithStreamInterceptors_ChainOrder`, `TestConn_StreamInterceptor_RejectionSurfaces`, `TestConn_WithStreamInterceptors_Empty` |
 | S21.7 | Headers and trailers MUST work for unary and streams; `Header()` MUST be released when the handler ends silently. | `TestConn_Invoke_HonoursHeaderAndTrailerCallOptions`, `TestConn_Invoke_NoHeaderSet_IsEmptyNotBroken`, `TestConn_Stream_HeaderAndTrailer`, `TestConn_Stream_HeaderUnblocksWhenHandlerEndsSilently` |
 | S21.8 | A stream handler panic MUST become `Internal`, and the process survives. | `TestConn_Streaming_PanicRecovered` |
-| S21.9 | A unary handler panic MUST become a generic `Internal`, and the process survives. | no test in this package; the helper is covered by `TestRecoverPanic_AssignsInternalStatus` (`go/core/grpcerr`) |
+| S21.9 | A unary handler panic MUST become a generic `Internal`, and the process survives. | `TestConn_UnaryPanicBecomesInternalAndTheProcessSurvives`, `TestRecoverPanic_AssignsInternalStatus` |
 | S21.10 | A late send from a spawned goroutine MUST return an error instead of panicking. | `TestServerStream_LateSendFromASpawnedGoroutineDoesNotPanic` |
 | S21.11 | A client send after the handler returned MUST NOT hang. | `TestConn_Streaming_SendAfterServerDoneDoesNotHang` |
 | S21.12 | Caller cancellation MUST reach the handler. | `TestConn_Streaming_CallerCancel` |

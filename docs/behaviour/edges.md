@@ -477,7 +477,7 @@ goroutines.
 | E13.1 | A panic MUST become 500 `INTERNAL` / "internal error"; the panic value MUST NOT appear in the body | `TestRecoverPanicMiddleware_CatchesPanic` |
 | E13.2 | `http.ErrAbortHandler` MUST be re-panicked | `TestRecoverPanicMiddleware_RepanicsAbortHandler` |
 | E13.3 | A pump panic MUST close the socket with `StatusInternalError` instead of crashing the process | `TestRecoverWSPump_NilContextFallback` (partial: nil-context arm only) |
-| E13.4 | Each request MUST run with its own reporting scope, so breadcrumbs recorded by one request never reach another request's report | no test at this layer (the scope itself: `TestRequestScope_KeepsBreadcrumbsPerRequest` in `go/core/observx`) |
+| E13.4 | Each request MUST run with its own reporting scope, so breadcrumbs recorded by one request never reach another request's report | `TestRecoverPanicMiddleware_GivesEachRequestItsOwnScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 
 **Deliberate limits.**
 - A panic after headers were sent (for example mid-SSE) appends a JSON envelope to the stream.
@@ -939,7 +939,7 @@ unary gRPC call using the w17 JSON dialect.
 | E27.8 | Every `CallUnary` error MUST be a gRPC status carrying the code, the sentence a REST client reads for the same failure, and its field details; a non-status error MUST read as `INTERNAL` | `TestCallUnary_BackendErrorIsSanitised`, `TestCallUnary_PermissionDeniedIsAStatus`, `TestCallUnary_NonStatusErrorIsInternal` |
 | E27.9 | Tool arguments MUST keep 64-bit integers exact over HTTP and stdio: the raw arguments are captured before the MCP library decodes them and handed to `CallUnary`; a refused call leaves no captured arguments behind | `TestServeStreamableHTTP_ToolArgumentsKeepSixtyFourBitNumbers`, `TestHandleMessage_ScopedContextKeepsSixtyFourBitNumbers`, `TestHandleMessage_RefusedCallLeavesNoCapture` |
 | E27.10 | A backend error MUST be reported by code as E3.7: refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
-| E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | no test at this layer (the scope itself: `TestRequestScope_KeepsBreadcrumbsPerRequest` in `go/core/observx`) |
+| E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | `TestAddTool_EachCallRunsInItsOwnReportingScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 
 **Deliberate limits.**
 - Unary tools only.
