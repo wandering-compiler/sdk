@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-129 interactions; 19 have no test, 32 more are covered only in part.
+129 interactions; 10 have no test (9 of them owned by generated code or the deployment), 33 more are covered only in part.
 
 ## Server × Server
 
@@ -34,13 +34,13 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | gRPC panic recovery (S8) | Authentication and ACL interceptors | Authentication runs inside recovery and before the handler. | `TestGRPCComponent_RecoveryWrapsCallerInterceptors`; the authentication and ACL interceptors are caller interceptors |
 | gRPC health service (S11) | Authentication and ACL interceptors | Health is reachable without credentials. | `TestDefaultHealthServer` (status only) |
 | In-process gRPC bridge (S21) | REST gateway status mapping | The same failure maps to the same HTTP status in a composed and in a split deployment. | `TestConn_ErrorsMatchTheWire` |
-| In-process gRPC bridge (S21) | Per-client rate limiter | In-process callers are keyed per caller, not into one shared bucket. | no test |
+| In-process gRPC bridge (S21) | Per-client rate limiter | In-process callers are keyed per caller, not into one shared bucket. | no test in the SDK: the per-caller limiter on an in-process hop is wired by generated code — covered from the examples side |
 | Bounded HTTP stop and drain (S13) | MCP session sweeper | `StopWith` runs the sweeper, then a bounded `Shutdown` that force-closes on deadline. | `TestServeStreamableHTTP_ForceClosesAToolCallPastTheBound`, `TestServeStreamableHTTPDrainsWithOpenStream` |
 | Error and refusal reporting (S20) | Authentication and ACL refusals under load | Each refusal is recorded; the refusal log line is rate-limited per channel and the suppressed count is logged with the next written line and at shutdown. | `TestReportRefusal_RecordsWithoutRaising`, `TestReportRefusal_LogVolumeIsBounded`, `TestShutdown_ReportsPendingSuppressedLines` |
 | Internal-mesh TLS switch (S16, S17, S18) | Inter-tier dial (E31) | An unrecognised `W17_INTERNAL_TLS` value is refused by the listener, the dialer and the health check, and makes `grpcx.InternalTLSEnabled` dial TLS; no side reads it as plaintext. | `TestTLSServerOption_UnrecognisedSwitchIsRefused`, `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestRun_GRPCUnrecognisedTLSSwitchFails`, `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 | Client dial retry (S18, E30) | Non-idempotent handlers | Only `UNAVAILABLE` is retried, so a request is retried only when it never reached the server. | `TestDefaultServiceConfig_RetriesOnlyUnavailable` |
 | Bounded HTTP stop and drain (S13) | `w17-events` (E18), MCP GET stream (E27), per-RPC SSE/WS (E14, E15) | `w17-events` and the MCP GET stream end at drain start, so shutdown is fast and clients reconnect to another instance; per-RPC streams end by the HTTP server's force-close. | `TestStopHTTPDrainAwareStreamEndsImmediately`, `TestW17EventsEndsOnDrain`, `w17events_drain_test.go`, `serve_shutdown_test.go` (per-RPC streams: no test) |
-| Server TLS posture | MCP HTTP listener (E27) | MCP follows the same TLS posture and limits as the other surfaces. | no test |
+| Server TLS posture | MCP HTTP listener (E27) | MCP follows the same TLS posture and limits as the other surfaces. | no test in the SDK: neither listener terminates TLS here; the posture is the generated main's and the deployment's — covered from the examples side |
 
 ## Server × Data
 
@@ -48,7 +48,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 |---|---|---|---|
 | Ordered resource teardown (S4) | Event bus publish and flush | The bus is flushed after transports drain; a flush failure is reported. | `TestRunGraceful_ResourcesCloseAfterComponentsDrain`, `TestRunGraceful_ResourceCloserErrorIsReported`, `TestGRPCComponent_ShutdownHookErrorIsReported` (generic closers, not the bus) |
 | In-process gRPC bridge (S21) | Distributed transactions | A nested call does not inherit the caller's transaction. | `TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver` |
-| Graceful shutdown, `Shutdowns` hooks (S5) | Transaction registry (D5) | Pools close after the server stops and before the orchestrator's kill deadline; open distributed transactions are not RPCs and are not drained, so process exit rolls them back and their parked after-commit work is dropped. | no test |
+| Graceful shutdown, `Shutdowns` hooks (S5) | Transaction registry (D5) | Pools close after the server stops and before the orchestrator's kill deadline; open distributed transactions are not RPCs and are not drained, so process exit rolls them back and their parked after-commit work is dropped. | no test in the SDK: the hook order is the generated binary's composition — covered from the examples side |
 | Graceful shutdown | Wait for the database at boot (D2) | A SIGTERM during the boot wait MUST stop the wait through context cancellation. | `TestPing_CancelledContextStopsTheWait` |
 
 ## Server × Events and identity
@@ -58,7 +58,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | In-process gRPC bridge (S21) | Principal propagation | The gateway stamps (user, scopes, labels) are relayed as on the wire, nothing more. | `TestConn_UnauthenticatedCaller_StaysUnauthenticated`, metadata isolation tests in `go/service/inprocgrpc` |
 | In-process gRPC bridge (S21) | i18n language metadata | `w17-language` set as outgoing by the caller reaches the handler as incoming; a language present only on the caller's incoming side is not relayed, as on the wire. | `TestConn_CallerWithNoOutgoingMetadata_DoesNotLeakItsIncoming` |
 | Process shutdown | Bus subscribers (I2, I4–I6) | `Close` drains every subscriber on every transport; registrations after close or drain are refused. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded`, `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused`, `TestMemoryBus_DispatchAfterDrainIsRefused` |
-| Internal-mesh TLS | Principal read side (I10) | Backend tiers that trust the principal metadata are reachable only from authenticated tiers. | no test |
+| Internal-mesh TLS | Principal read side (I10) | Backend tiers that trust the principal metadata are reachable only from authenticated tiers. | no test in the SDK: which tiers can reach which is deployment |
 
 ## Server × Tooling
 
@@ -73,21 +73,21 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 |---|---|---|---|
 | Per-client rate limiter (E26) | Proxy in front of the gateway | The key is the rightmost untrusted `X-Forwarded-For` hop when the peer is a configured proxy (none by default), else the peer; IPv6 per /64; a client MUST NOT be able to choose its bucket. | `TestForwardedPicksRightmostUntrusted`, `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestForwardedUnparseableHopStopsTheWalk`, `TestLimiter_WarnsWhenEveryCallerCollapsesIntoOneBucket` |
 | Per-client rate limiter (E26) | SSE and WebSocket streams (E14, E15) | Public streams are charged once per open, not per frame; authenticated streams are not limited. | `TestAdmitPublicStream_ChargesEveryStream` (partial: no per-client concurrent-stream cap test) |
-| Authentication hook (E5) | Header → metadata propagation (E10) on auth-excluded routes | Public routes skip auth and carry no `x-w17-user`; no client header can reach the backend as a gateway-owned key. | no test |
+| Authentication hook (E5) | Header → metadata propagation (E10) on auth-excluded routes | Public routes skip auth and carry no `x-w17-user`; no client header can reach the backend as a gateway-owned key. | `TestEdge_ClientCannotSetReservedMetadataOnAnySurface`, `TestMetadataMiddlewares_RefuseReservedKeysWithoutTheScrub`; which routes skip authentication (`exclude_auth`) is the generated router's |
 | Public-method rate-limit adapters (E19) | Auth outcome / handler status | A unary public method stays charged on status ≥ 400 or when it wrote nothing, and a success returns its token; concurrent requests MUST NOT exceed the budget. | `TestAdmitPublic_ChargesFailuresPerClient`, `TestAdmitPublic_SuccessReturnsItsToken`, `TestAdmitPublic_NothingWrittenIsCharged`, `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 | Stream re-auth watchdog (E17) | `w17-events` channel (E18) and per-RPC streams (E14, E15) | Every authenticated stream is re-probed every interval; only a definite refusal ends it, and an auth-backend outage does not. On `w17-events` a verdict whose labels differ from those at connect ends the stream, so the client reconnects under its current entitlement. | `TestWatchStreamAuth_DefiniteRefusalsCancel`, `TestWatchStreamAuth_FastBackendFailureIsNotARevocation`, `TestW17Events_RevokedCredentialEndsTheStream`, `TestW17Events_ChangedMembershipEndsTheStream`, `TestW17Events_SameLabelsKeepTheStream`, `TestW17Events_AuthOutageKeepsTheStream` |
-| CORS (E12) | WebSocket helpers (E15) | Browser access to WebSocket routes follows the documented same-origin rule, independent of the CORS allowlist. | no test |
-| Auth result cache (E6) | Stream re-auth watchdog (E17) | Revocation becomes visible within `max(reauth interval, TTL)`. | no test |
+| CORS (E12) | WebSocket helpers (E15) | Browser access to WebSocket routes follows the documented same-origin rule, independent of the CORS allowlist. | `TestAcceptWebSocket_SameOriginRuleIgnoresTheCORSAllowlist` |
+| Auth result cache (E6) | Stream re-auth watchdog (E17) | Revocation becomes visible within `max(reauth interval, TTL)`. | `TestWatchStreamAuth_RevocationLandsThroughTheCacheTTL`, `TestWatchStreamAuth_RevocationLandsAfterTheOutage` |
 | URL-carried credentials (E7) | Request tracing (E11), pagination links (E23), browser redirects (E22) | The credential reaches auth only through the reserved slot. | no test |
 | URL-carried credentials (E7) | Auth result cache (E6) | Distinct capability tokens never share a cache slot (the slot is a key header). | `TestAuth_CachedAuthFunc_DistinctHeadersDistinctSlots` (partial: no explicit two-token test) |
 | Organization from the path (E8) | Auth result cache (E6) | A request with `W17-Org` bypasses the cache, so every org-scoped call makes a full auth call. | `TestAuth_CachedAuthFunc_UnknownHeaderBypassesCache` (indirect) |
-| Browser stream tickets (E16) | Multiple gateway replicas | Issue and redeem happen on the same process (documented limit: per-process store); each replica's store is bounded on its own. | no test |
+| Browser stream tickets (E16) | Multiple gateway replicas | Issue and redeem happen on the same process (documented limit: per-process store); each replica's store is bounded on its own. | `TestTicketStore_ReplicasAreIndependent`, `TestTicketIssuer_FloodIsBounded` |
 | Database error mapping (E33) | Model Context Protocol surface (E27) | Constraint and table names appear only in the operator message, never in a client-visible result. | `TestCallUnary_BackendErrorIsSanitised` |
-| Multipart uploads (E20) | Request body limits (E1, generated `MaxBytesReader`) | The per-file cap applies here and the request cap comes from generated code; an unbounded body is never spilled to disk. | no test |
+| Multipart uploads (E20) | Request body limits (E1, generated `MaxBytesReader`) | The per-file cap applies here and the request cap comes from generated code; an unbounded body is never spilled to disk. | no test in the SDK: the request cap is the generated `MaxBytesReader` — covered from the examples side |
 | Multipart uploads (E20) | Downloads (E21) | Both sides use the same key shape (`<sha256>-<suffix>` under the hash-sharded bucket path); authorization is per endpoint, not per object. | `TestDownloadURLRoundTrip` |
 | JSON dialect (E2) | Oneof collapse and expand (E29) | Values decoded through the alias and oneof reshaping are exactly the values protojson would decode, on every surface (REST and MCP); the reshape renames keys and keeps every number exact, including 64-bit integers. | `TestExpand_KeepsNumbersExact`, `TestCollapse_KeepsNumbersExact`, `TestUnmarshalProto_KeepsSixtyFourBitNumbersExact`, `TestDecodeRequest_KeepsSixtyFourBitNumbersExact`, `TestRestoreAliasesOnRequestJSON_KeepsNumbersExact`, `TestServeStreamableHTTP_ToolArgumentsKeepSixtyFourBitNumbers` |
 | MCP server (E27) | MCP auth translation (E28) per transport | stdio uses the environment identity; HTTP uses request headers only. | `TestConnInfo_HTTPCallerGetsNoEnvIdentity`, `TestDefaultAuthFunc_HTTPHasNoEnvFallback`, `TestServeStreamableHTTP_AnonymousCallerGetsNoEnvIdentity` |
-| HTTP panic recovery (E13) | Public-method rate limit (E19), SSE (E14) | A panic yields a 500 envelope and an operator report; a panicking public method is still charged. | no test |
+| HTTP panic recovery (E13) | Public-method rate limit (E19), SSE (E14) | A panic yields a 500 envelope and an operator report; a panicking public method is still charged. | `TestPublicMethodPanic_Is500ReportedAndCharged`, `TestRecoverPanicMiddleware_GivesEachRequestItsOwnScope` |
 | Auth result cache (E6) | Browser stream tickets (E16) promotion | Probes after promotion keep working; the promotion marker forces a cache bypass. | `TestWatchStreamAuth_TicketStreamSurvivesTheTick` (behaviour, not cache) |
 | Connection pool health watch (E32) | Long-lived callers | A pooled connection is replaced only once it is shut down; a transient failure resets its backoff and keeps the connection a caller holds. | `TestPool_HealthWatch_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_ReplacesAClosedConnection` |
 | WebSocket helpers (E15) | Request body limits (E1) | A WebSocket frame may be as large as a REST body: the read limit is `MaxWebSocketMessageBytes`, which defaults to `MaxRequestBodyBytes`; a refusal's close reason always fits the close frame. | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable`, `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly` |
@@ -133,11 +133,11 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Transaction isolation (D5) | Database dialect | The declared level is pinned at Begin; an adopted weaker transaction is refused. | `TestBegin_IsolationIsHonoured_Live`, `TestAdoptTxIsolated_RefusesWeakerOrUnknownLevels`, `TestAdoptTxIsolated_RegistryThatCannotReportRefuses` |
 | Transaction lifecycle (D3) | Deadlock or serialization failure | The error surfaces to the caller; inside a distributed transaction it discards the transaction, and the caller restarts the whole `Run`. | `TestWrap_PgRetryable_Deadlock`, `TestWrap_PgRetryable_Serialization`, `TestWrap_MySQLRetryable`, `TestInterceptor_RollbacksOnError` |
 | Cursor paging (D9) | Admin sort selector (D10) | The cursor's sort selector is authoritative; changing the sort restarts at page one. | `TestEncodeDecode_SortSelectorRoundtrip` |
-| Cursor paging totals (D9) | Concurrent writes | The total is counted once per paging session and cached in the cursor. | no test |
+| Cursor paging totals (D9) | Concurrent writes | The total is counted once per paging session and cached in the cursor. | `TestEncodeDecode_Roundtrip`, `TestEncodeTotalMD_AndDecodeRoundtrip`; skipping the count on a resumed page is the generated storage handler's |
 | Bounded materialization (D11) | Adopted transaction or locked query (D5) | Fetch windows run sequentially when the request carries `w17-tx-id` or the context is marked with `WithinTx`; generated locked-query fetches must mark the context for this to apply. | `TestFetchBatches_InsideATransactionRunsSequentially` |
-| Bounded materialization (D11) | Cursor paging (D9) | The guard bounds intermediate rows independently of page size. | no test |
+| Bounded materialization (D11) | Cursor paging (D9) | The guard bounds intermediate rows independently of page size. | no test in the SDK: what the guard counts is the generated plan's — covered from the examples side |
 | Column encryption (D16) | UNIQUE index and equality lookups | Deterministic mode keeps the index and `WHERE col = :x` working, including across key rotation (deterministic values stay on the lowest key version). | `TestDeterministic_StableAcrossRotation` |
-| Column encryption (D16) | Cursor paging (D9) | A crypted column used as a keyset key orders by ciphertext; whether to allow it is the generator's decision. | no test |
+| Column encryption (D16) | Cursor paging (D9) | A crypted column used as a keyset key orders by ciphertext; whether to allow it is the generator's decision. | no test in the SDK: the generator's decision — covered from the examples side |
 | SQLite collation (D12) | Session pins (D1) | Every process that opens the database registers the collation and applies the same session pins; equality is deterministic and matches PostgreSQL. | `TestRegister_UnicodeOrderingAndEquality`, `TestCompare_EqualityIsDeterministic` (collation only; the pairing with session pins is not asserted) |
 | Redis HASH codec (D14) | KV multi-fetch (`DedupKeys`, D8) | Multi-fetch multiplicity equals SQL `IN`. | `TestDedupKeys` |
 | Redis HASH codec (D14) | Redis eviction check (D15) | Entities live on a non-evicting Redis; an `allkeys-*` policy produces a boot warning. | `TestEvictsUntaggedKeys` (classification) |
@@ -173,15 +173,15 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Server-sent-events hub (I9) | Delivery modes (I3) | In fan-out mode every replica's hub receives every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent` |
 | Server-sent-events hub (I9) | NATS JetStream transport (I5) | The hub resumes delivery after a broker loss, including a recreated broker. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` (bus level; hub not exercised) |
 | Server-sent-events hub (I9) | Slow client | A slow client loses only its own frames; other clients are unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
-| Server-sent-events hub (I9) | Client reconnect | The client reconnects automatically; events emitted during the gap are not replayed (deliberate). | no test |
-| Permission checks (I13) | Multi-domain auth response | A permission check uses the lock of the handler's own domain. | no test |
+| Server-sent-events hub (I9) | Client reconnect | The client reconnects automatically; events emitted during the gap are not replayed (deliberate). | no test in the SDK: reconnecting is the browser's EventSource |
+| Permission checks (I13) | Multi-domain auth response | A permission check uses the lock of the handler's own domain. | no test in the SDK: which domain's lock a handler loads is generated — covered from the examples side |
 | Handler panic recovery (I2) | Broker retry (I5, I6) and Observer (I7) | A handler panic is recovered, retried and dead-lettered at the cap; an Observer panic does not crash the emitter. | `TestRecoverHandler_PanicBecomesError` (handler); Observer: no test |
 
 ## Events and identity × Tooling
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Event fan-out with tenant scoping | E2E event awaits (T25) | A suite can assert that tenant B does not receive tenant A's event, and an await matches only this step's event. | no test |
+| Event fan-out with tenant scoping | E2E event awaits (T25) | A suite can assert that tenant B does not receive tenant A's event, and an await matches only this step's event. | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent` |
 
 ## Tooling × Tooling
 
@@ -202,8 +202,8 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Apply timeout (T2) | Data migration (T16) | A migration cut by the timeout leaves a state a later run resumes or refuses with a clear remedy. | `TestApply_YAMLApplyTimeoutLeavesAResumableState`, `TestApply_YAMLApplyTimeoutLeavesAResumableState_Live` |
 | Fixtures (T6) | Dialect appliers (T15) | Only stores that can seed (Postgres) are offered as seed targets; the group is one transaction. | `TestFixturesApply_TheWholeGroupIsOneUnitOfWork`, `TestSeedCandidate_MatchesSeedCapable`, `TestFixturesApply_StoresThatCannotSeedAreNotCandidates` |
 | Fixtures (T6) | Migrations (T11) | Seeding runs after the schema exists; the stale-render check compares fixtures with their render. | `TestFixturesApply_RefusesARenderOlderThanItsFixture` |
-| E2E credential step (T20) | Event awaits (T25) | Event visibility is asserted for the credential's principal. | no test |
+| E2E credential step (T20) | Event awaits (T25) | Event visibility is asserted for the credential's principal. | `TestAwaitEvent_CredentialStepSubscribesAsTheCredential`, `TestAwaitEvent_CredentialStepNeedsACredentialSubscriber`, `TestAwaitEvent_SubscribeKeepsItsOwnCredential` |
 | E2E `${seq}` (T21) | Several runner processes on one database | Generated values stay unique per process; parallel processes need distinct data. | `TestSeqGlobalAcrossScopes` (in-process) |
 | E2E matchers (T22) | Proto3 JSON zero values | An absent field is the encoding of an empty one: `count == 0`, `empty`, `distinct` and `eq null` accept it; `eq 0` explains presence; `capture` fails on it and binds nothing. | `TestExactMatcher_ZeroAgainstAnAbsentFieldExplainsPresence`, `TestCapture_AbsentFieldFails`, `TestCountMatcher`, `TestEmptyMatcher` (`distinct` not asserted) |
-| Stress (T26) | E2E runner routing (T23) | Load requests are routed like runner requests (`ResolveREST`) and carry the same credentials. | no test |
+| Stress (T26) | E2E runner routing (T23) | Load requests are routed like runner requests (`ResolveREST`) and carry the same credentials. | `TestFire_SendsTheRequestTheRunnerSends`, `TestFireOp_CapabilityLinkGetsNoBearer` |
 | Plugin digest (T29) | Code generation | Every compiled file is covered by the digest or regenerated from covered input, provided the consumer refuses a tree that `Uncovered` reports or calls `Prune` before regenerating into it or compiling it. | `TestOf_IgnoresRegeneratedPb`, `TestUncovered_NamesEveryFileOutsideTheDigest`, `TestPrune_LeavesOnlyCoveredContent`, `TestPrune_DoesNotFollowSymlinks` |
