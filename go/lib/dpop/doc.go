@@ -31,11 +31,15 @@
 // # Verifier
 //
 // [Verifier.Verify] runs the checks in this order: proof header (count,
-// size, alg, typ, jwk), signature, nonce (or iat when nonces are off), jti,
-// htm and htu, ath, then the key thumbprint against the binding the caller
-// expects. Each cause has its own error ([ErrMissingProof], [ErrBadAlg], …);
-// a stale or missing nonce is a [*NonceError] carrying the fresh nonce the
-// caller must send back with `use_dpop_nonce`.
+// size, alg, typ, jwk), signature, nonce (or iat when nonces are off), htm
+// and htu, ath, the key thumbprint against the binding the caller expects,
+// and last the jti. Each cause has its own error ([ErrMissingProof],
+// [ErrBadAlg], …); a stale or missing nonce is a [*NonceError] carrying the
+// fresh nonce the caller must send back with `use_dpop_nonce`.
+//
+// The header and the claims are decoded strictly: member names are matched
+// exactly (case-sensitive), a duplicate member is malformed, and nothing may
+// follow the JSON object.
 //
 // The htu is compared against [Config.Origin] plus the request path, never
 // against the Host header, so a proof cannot be redirected by a client that
@@ -46,7 +50,12 @@
 // issued is accepted by all of them. The current and the previous bucket are
 // valid.
 //
-// Replay protection records every accepted jti in a [JTIStore]. The
+// Replay protection records the jti of every accepted proof in a [JTIStore],
+// and only of accepted ones: the insert is the last step, so a proof refused
+// for any reason takes no room. The store bounds its entries in total and
+// per key thumbprint. A mint endpoint (no access token, no binding) accepts
+// a proof from any key, so anyone can mint keys and fill the store there:
+// mint endpoints need rate limiting in front of the verifier. The
 // in-memory [MemoryJTIStore] is per process and is correct only for a single
 // replica: with two or more, a proof accepted by one replica can be replayed
 // against another. A multi-replica deployment needs a shared store.

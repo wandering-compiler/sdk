@@ -286,3 +286,58 @@ func TestRefusal_HTTPEnvelope(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Credentials go only to allowed origins: by default the first request's,
+// otherwise the configured list. A redirect to another host carries neither
+// the token nor a proof.
+func TestTransport_OtherOriginsGetNoCredentials(t *testing.T) {
+	type seen struct{ auth, proof string }
+	var mu sync.Mutex
+	var atB []seen
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		atB = append(atB, seen{r.Header.Get("Authorization"), r.Header.Get("DPoP")})
+		mu.Unlock()
+	}))
+	defer b.Close()
+	var atA []seen
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		atA = append(atA, seen{r.Header.Get("Authorization"), r.Header.Get("DPoP")})
+		mu.Unlock()
+		http.Redirect(w, r, b.URL+"/elsewhere", http.StatusFound)
+	}))
+	defer a.Close()
+
+	c := &http.Client{Transport: &dpopclient.Transport{Signer: mustKey(t), Token: token("tok")}}
+	readAll(t, do(t, c, "GET", a.URL+"/start", ""))
+	mu.Lock()
+	if len(atA) != 1 || atA[0].auth != "DPoP tok" || atA[0].proof == "" {
+		t.Fatalf("the first origin got %+v, want the token and a proof", atA)
+	}
+	if len(atB) != 1 || atB[0] != (seen{}) {
+		t.Fatalf("the redirect target got %+v, want no credentials", atB)
+	}
+	mu.Unlock()
+
+	// A configured list replaces the default: only b is allowed.
+	var fetched atomic.Int32
+	tr := &dpopclient.Transport{Signer: mustKey(t), Origins: []string{b.URL}, Token: func(context.Context) (string, error) {
+		fetched.Add(1)
+		return "tok", nil
+	}}
+	c = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	readAll(t, do(t, c, "GET", a.URL+"/start", ""))
+	readAll(t, do(t, c, "GET", b.URL+"/direct", ""))
+	mu.Lock()
+	defer mu.Unlock()
+	if atA[1] != (seen{}) {
+		t.Fatalf("an origin outside Origins got %+v", atA[1])
+	}
+	if last := atB[len(atB)-1]; last.auth != "DPoP tok" || last.proof == "" {
+		t.Fatalf("the configured origin got %+v", last)
+	}
+	if fetched.Load() != 1 {
+		t.Fatalf("token fetched %d times, want once (only for the allowed origin)", fetched.Load())
+	}
+}

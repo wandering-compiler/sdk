@@ -1197,10 +1197,12 @@ gRPC metadata and answers refusals itself.
 | `Config.SignatureCacheEntries` | 10 000 | A full cache stops caching; it never refuses |
 | `Config.Now` | `time.Now` | — |
 | `NewHMACNonces(key, ...)` | bucket 5 min | Key shorter than 32 bytes → error; the key is copied; `WithNonceBucket(d)` below 1 s → 1 s, `d <= 0` keeps the default |
-| `NewMemoryJTIStore(n)` | 200 000 entries | `n <= 0` keeps the default; a full store sweeps expired entries, then refuses with `ErrJTIStoreFull` |
+| `NewMemoryJTIStore(n, ...)` | 200 000 entries | `n <= 0` keeps the default; expired entries leave in expiry order (a min-heap, never a scan); a full store refuses with `ErrJTIStoreFull` |
+| `WithMaxJTIsPerKey(n)` | 10 000 entries per key thumbprint | `n <= 0` keeps the default; a key at its share is refused with `ErrJTIStoreFull`, other keys are not affected |
 | `MaxProofBytes` / `MaxJTIBytes` | 8 KiB / 256 bytes | Longer → `ErrMalformed` |
 | `GenerateKey(kt)` | `KeyP256` | `KeyEd25519`; anything else → `ErrUnsupportedKey` |
 | `Request.AccessToken` / `Request.Binding` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed) |
+| `Request.Path` | required | Must start with `/`; anything else → `ErrHTUMismatch` |
 
 **Shares.** Nothing with other features yet. Every replica configured with the same nonce key
 shares the nonce space by construction; a `JTIStore` shared between replicas is the caller's.
@@ -1215,7 +1217,7 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 | E35.4 | `typ` MUST be `dpop+jwt`; the `jwk` MUST be present, hold no private member, and fit `alg`; otherwise `ErrBadType` / `ErrBadKey` | `TestVerify_RefusalCauses` |
 | E35.5 | A proof whose signature does not verify with its embedded key MUST be refused with `ErrBadSignature` | `TestVerify_RefusalCauses` |
 | E35.6 | Each refusal MUST match exactly one cause: missing, malformed (two headers, oversized, missing or mistyped claims, overlong jti), alg, typ, key, signature, nonce, stale iat, replay, htm, htu, ath, binding | `TestVerify_RefusalCauses` |
-| E35.7 | Checks MUST run in the order header, signature, nonce, jti, htm/htu, ath, binding; a proof refused before the jti check MUST NOT spend its jti | `TestVerify_CheckOrder` |
+| E35.7 | Checks MUST run in the order header, signature, nonce, htm/htu, ath, binding, and the jti last; a proof refused by any earlier check MUST NOT spend its jti | `TestVerify_CheckOrder` |
 | E35.8 | With nonces on, a missing, forged, expired or other-key nonce MUST be a `*NonceError` (`ErrUseNonce`) carrying a fresh nonce that then works | `TestVerify_RefusalCauses`, `TestVerify_NonceChallengeCarriesFreshNonce` |
 | E35.9 | A nonce MUST be valid in its own and the next bucket only, never before its bucket, bound to its thumbprint, and unforgeable without the key | `TestHMACNonces_RotationAcrossBuckets`, `TestHMACNonces_KeyRequirements` |
 | E35.10 | Replicas sharing the nonce key MUST accept each other's nonces with no shared state; a replica with another key MUST NOT | `TestHMACNonces_SharedKeyAcrossReplicas` |
@@ -1227,14 +1229,22 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 | E35.16 | Concurrent presentations of one proof with reuse off MUST yield exactly one acceptance | `TestVerify_ConcurrentSameProofOneWinnerWithoutReuse` |
 | E35.17 | htu MUST equal the configured origin plus the request path after normalisation (scheme and host case, default port, no query or fragment); a gRPC call MUST be POST to origin + full method name | `TestVerify_HTUNormalisation`, `TestNormalizeHTU`, `TestVerify_GRPCTarget`, `TestVerify_RefusalCauses` |
 | E35.18 | `ath` MUST match the presented token, MUST be present when a token is, and MUST be absent when none is; a token presented with no binding to check MUST be refused | `TestVerify_RefusalCauses` |
-| E35.19 | A full jti store MUST fail closed with a non-refusal error (`ErrJTIStoreFull`), never accept unrecorded; expired entries MUST free room | `TestVerify_FullJTIStoreFailsClosed` |
+| E35.19 | A full jti store MUST fail closed with a non-refusal error (`ErrJTIStoreFull`), never accept unrecorded; expired entries MUST free room, in expiry order, without scanning the store | `TestVerify_FullJTIStoreFailsClosed`, `TestMemoryJTIStore_ExpiresInOrder` |
 | E35.20 | Invalid configuration (no origin, origin with a path, reuse window above 300 s, negative iat window) MUST be refused at construction | `TestNewVerifier_Config` |
 | E35.21 | A refusal MUST map to the RFC 9449 challenge: `use_dpop_nonce` plus `DPoP-Nonce` for a nonce refusal, `invalid_token` for ath and binding, `invalid_dpop_proof` otherwise, `no-store`; gRPC carries the same values in the trailer | `TestChallenge_Headers`, `TestIsUseNonceChallenge`, `TestAccessToken` |
 | E35.22 | Keys MUST be P-256 or Ed25519 (others refused); a saved key MUST be mode 0600, replacing any existing file atomically; any `crypto.Signer` (KMS, HSM) MUST be usable as the signer | `TestKey_GenerateBothTypes`, `TestKey_UnsupportedKeysRefused`, `TestKey_SaveLoadRoundTrip`, `TestSigner_ExternalCryptoSigner` |
+| E35.23 | Proofs refused for any reason (wrong htu, ath or binding, signed with the sender's own key and fresh jtis) MUST take no room in the jti store, so they cannot lock out legitimate proofs | `TestVerify_RefusedProofsDoNotFillJTIStore` |
+| E35.24 | One key MUST NOT hold more than its share of the jti store; other keys MUST keep working, and the share MUST free as its entries expire | `TestMemoryJTIStore_PerKeyCap` |
+| E35.25 | The protected header, the jwk and the claims MUST be decoded strictly: exact member names, no duplicate member, nothing after the object, string members not null; private jwk members are refused in any case | `TestVerify_StrictDecoding` |
+| E35.26 | A request path that does not start with `/` MUST be refused (`ErrHTUMismatch`), even where origin + path would normalise to the proof's htu | `TestVerify_StrictDecoding` |
+| E35.27 | `Verify` and `NormalizeHTU` MUST NOT panic on any input; a normalised htu MUST normalise to itself, and an htu with an empty host MUST be refused | `FuzzVerify`, `FuzzNormalizeHTU` (seeds and corpus run in `go test`), `TestNormalizeHTU` |
 
 **Deliberate limits.**
 - `MemoryJTIStore` is per process. With more than one replica a proof accepted by one can be
   replayed against another until a shared `JTIStore` (Redis, a database) is configured.
+- A mint endpoint (no access token, no binding) accepts a proof from any key, and keys cost
+  nothing to make: there the per-key share does not bound a flood, so mint endpoints need rate
+  limiting in front of the verifier.
 - The verifier does not answer the request; the caller sets the challenge with `SetChallenge` or
   `ChallengeMetadata` and writes its own status and body.
 - `Request.Path` is compared as given; percent-encoding case is not normalised.
@@ -1254,6 +1264,7 @@ fresh nonce.
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `Transport.Base` | `http.DefaultTransport` | — |
+| `Transport.Origins` | the origin of the first request | Origins that may receive the token and proofs; a request anywhere else passes through untouched |
 | `Transport.Signer`, `Credentials.Signer` | required | nil → every request fails |
 | `Transport.Token`, `Credentials.Token` | nil (no token, no `ath`) | An error fails the request |
 | `Credentials.Origin` | required | The origin the server is configured with; htu = origin + full method |
@@ -1276,6 +1287,7 @@ fresh nonce.
 | E36.9 | `DEVICE_REVOKED` and `SESSION_EXPIRED` refusals MUST come back as `*RefusedError` matching `ErrDeviceRevoked` / `ErrSessionExpired`, keeping the gRPC status; any other refusal MUST stay the plain status | `TestCredentials_RefusalTyped` |
 | E36.10 | `Refusal` MUST recognise those reasons in a 401 or 403 error envelope and leave the body readable from the start | `TestRefusal_HTTPEnvelope` |
 | E36.11 | The gRPC credentials MUST require transport security unless `AllowInsecure` is set | `TestCredentials_RequireTransportSecurity` |
+| E36.12 | The token and proofs MUST go only to allowed origins (default: the first request's); a redirect to another host MUST carry neither, and the token MUST NOT be fetched for it | `TestTransport_OtherOriginsGetNoCredentials` |
 
 **Deliberate limits.**
 - Only 401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"` triggers the HTTP retry; a 400

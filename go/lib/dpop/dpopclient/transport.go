@@ -46,9 +46,16 @@ type Transport struct {
 	Signer dpop.Signer
 	// Token supplies the access token; nil means no token.
 	Token TokenFunc
+	// Origins are the origins (scheme://host[:port]) the token and proofs
+	// may be sent to. Empty means the origin of the first request this
+	// Transport carries. A request to any other origin — a redirect to
+	// another host, for instance — goes to Base untouched: no Authorization,
+	// no proof, and the token is not even fetched.
+	Origins []string
 
-	mu     sync.Mutex
-	nonces map[string]string // origin → last nonce
+	mu      sync.Mutex
+	nonces  map[string]string // origin → last nonce
+	allowed map[string]bool
 }
 
 func (t *Transport) base() http.RoundTripper {
@@ -58,8 +65,38 @@ func (t *Transport) base() http.RoundTripper {
 	return http.DefaultTransport
 }
 
+// originOf is the normalised origin of a URL: lower-case scheme and host, no
+// default port. "" when the URL has none.
 func originOf(u *url.URL) string {
-	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+	o, err := dpop.NormalizeHTU(u.Scheme + "://" + u.Host)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(o, "/")
+}
+
+// mayCarry reports whether credentials may go to origin, fixing the default
+// allowlist (the first origin seen) on first use.
+func (t *Transport) mayCarry(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.allowed == nil {
+		t.allowed = make(map[string]bool)
+		for _, o := range t.Origins {
+			if u, err := url.Parse(o); err == nil {
+				if n := originOf(u); n != "" {
+					t.allowed[n] = true
+				}
+			}
+		}
+		if len(t.Origins) == 0 {
+			t.allowed[origin] = true
+		}
+	}
+	return t.allowed[origin]
 }
 
 func (t *Transport) nonce(origin string) string {
@@ -95,6 +132,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		closeBody()
 		return nil, errors.New("dpopclient: Transport has no Signer")
 	}
+	origin := originOf(req.URL)
+	if !t.mayCarry(origin) {
+		return t.base().RoundTrip(req)
+	}
 	token := ""
 	if t.Token != nil {
 		var err error
@@ -103,7 +144,6 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 	}
-	origin := originOf(req.URL)
 	used := t.nonce(origin)
 	out, err := t.prepare(req, req.Body, token, used)
 	if err != nil {

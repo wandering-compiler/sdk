@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -129,7 +130,8 @@ type Request struct {
 	// Method is the HTTP method; POST for gRPC.
 	Method string
 	// Path is the request path as sent (r.URL.EscapedPath()), or the full
-	// gRPC method name ("/package.Service/Method"). A query is ignored.
+	// gRPC method name ("/package.Service/Method"). It must start with "/";
+	// a query is ignored.
 	Path string
 	// Proofs are all values of the DPoP header (gRPC: the `dpop` metadata).
 	// Exactly one is required.
@@ -222,14 +224,12 @@ func (v *Verifier) Nonce(thumbprint string) (string, error) {
 	return v.nonces.Issue(thumbprint)
 }
 
-// claimsIn mirrors Claims with pointers, to tell absent from empty.
+// claimsIn mirrors Claims with pointers, to tell absent from empty. It is
+// filled member by member from a strictly decoded object (exact key case, no
+// duplicates), never by encoding/json's case-insensitive field matching.
 type claimsIn struct {
-	JTI   *string `json:"jti"`
-	HTM   *string `json:"htm"`
-	HTU   *string `json:"htu"`
-	IAT   *int64  `json:"iat"`
-	ATH   *string `json:"ath"`
-	Nonce *string `json:"nonce"`
+	JTI, HTM, HTU, ATH, Nonce *string
+	IAT                       *int64
 }
 
 // privateJWKMembers are the JWK members that only a private or symmetric key
@@ -314,19 +314,10 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 		}
 	}
 
-	// 4. jti: new, or the same proof again inside its reuse window.
-	key := thumb + "\x00" + *c.JTI
-	got, created, err := v.jtis.Record(ctx, key, JTIRecord{ProofHash: hash, FirstSeen: now}, v.jtiTTL)
-	if err != nil {
-		return "", fmt.Errorf("dpop: jti store: %w", err)
+	// 4. htm and htu.
+	if !strings.HasPrefix(req.Path, "/") {
+		return "", fmt.Errorf("%w: request path %q does not start with /", ErrHTUMismatch, req.Path)
 	}
-	if !created {
-		if got.ProofHash != hash || v.reuse <= 0 || now.Sub(got.FirstSeen) >= v.reuse {
-			return "", ErrReplay
-		}
-	}
-
-	// 5. htm and htu.
 	if *c.HTM != req.Method {
 		return "", fmt.Errorf("%w: htm %q, request %q", ErrHTMMismatch, *c.HTM, req.Method)
 	}
@@ -339,7 +330,7 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 		return "", fmt.Errorf("%w: htu %q, want %q", ErrHTUMismatch, *c.HTU, want)
 	}
 
-	// 6. ath.
+	// 5. ath.
 	if req.AccessToken != "" {
 		if c.ATH == nil || subtle.ConstantTimeCompare([]byte(*c.ATH), []byte(AccessTokenHash(req.AccessToken))) != 1 {
 			return "", ErrATHMismatch
@@ -348,7 +339,7 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 		return "", fmt.Errorf("%w: ath present without an access token", ErrATHMismatch)
 	}
 
-	// 7. Binding.
+	// 6. Binding.
 	switch {
 	case req.Binding != "":
 		if subtle.ConstantTimeCompare([]byte(req.Binding), []byte(thumb)) != 1 {
@@ -356,6 +347,21 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 		}
 	case req.AccessToken != "":
 		return "", fmt.Errorf("%w: access token presented with no binding to check", ErrBindingMismatch)
+	}
+
+	// 7. jti, last: only a proof that passed every other check is recorded,
+	// so refused proofs never take room in the store. The insert is atomic;
+	// a jti already there is a replay unless it is this very proof inside
+	// its reuse window.
+	rec := JTIRecord{Thumbprint: thumb, ProofHash: hash, FirstSeen: now}
+	got, created, err := v.jtis.Record(ctx, thumb+"\x00"+*c.JTI, rec, v.jtiTTL)
+	if err != nil {
+		return "", fmt.Errorf("dpop: jti store: %w", err)
+	}
+	if !created {
+		if got.ProofHash != hash || v.reuse <= 0 || now.Sub(got.FirstSeen) >= v.reuse {
+			return "", ErrReplay
+		}
 	}
 
 	if !verified {
@@ -377,30 +383,103 @@ func checkHeader(proof string) (jose.SignatureAlgorithm, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
 	}
-	var h struct {
-		Alg string                     `json:"alg"`
-		Typ string                     `json:"typ"`
-		JWK map[string]json.RawMessage `json:"jwk"`
-	}
-	if err := json.Unmarshal(raw, &h); err != nil {
+	h, err := strictObject(raw)
+	if err != nil {
 		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
 	}
-	alg := jose.SignatureAlgorithm(h.Alg)
+	algName, err := optString(h, "alg")
+	if err != nil {
+		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+	}
+	alg := jose.SignatureAlgorithm(algName)
 	if alg != jose.ES256 && alg != jose.EdDSA {
-		return "", fmt.Errorf("%w: %q", ErrBadAlg, h.Alg)
+		return "", fmt.Errorf("%w: %q", ErrBadAlg, algName)
 	}
-	if !strings.EqualFold(h.Typ, ProofType) {
-		return "", fmt.Errorf("%w: %q", ErrBadType, h.Typ)
+	typ, err := optString(h, "typ")
+	if err != nil {
+		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
 	}
-	if h.JWK == nil {
+	if !strings.EqualFold(typ, ProofType) {
+		return "", fmt.Errorf("%w: %q", ErrBadType, typ)
+	}
+	rawJWK, ok := h["jwk"]
+	if !ok {
 		return "", fmt.Errorf("%w: no jwk", ErrBadKey)
 	}
-	for _, m := range privateJWKMembers {
-		if _, ok := h.JWK[m]; ok {
-			return "", fmt.Errorf("%w: jwk carries private member %q", ErrBadKey, m)
+	jwk, err := strictObject(rawJWK)
+	if err != nil {
+		return "", fmt.Errorf("%w: jwk: %v", ErrBadKey, err)
+	}
+	for member := range jwk {
+		for _, m := range privateJWKMembers {
+			if strings.EqualFold(member, m) {
+				return "", fmt.Errorf("%w: jwk carries private member %q", ErrBadKey, member)
+			}
 		}
 	}
 	return alg, nil
+}
+
+// strictObject decodes one JSON object with exact, case-sensitive keys. It
+// refuses duplicate keys (which encoding/json would resolve silently, last
+// one winning) and anything after the object.
+func strictObject(raw []byte) (map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, errors.New("not a JSON object")
+	}
+	out := make(map[string]json.RawMessage)
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, errors.New("object key is not a string")
+		}
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("duplicate key %q", key)
+		}
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, err
+		}
+		out[key] = val
+	}
+	if _, err := dec.Token(); err != nil { // the closing brace
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("data after the JSON object")
+	}
+	return out, nil
+}
+
+// optString reads an optional string member; absent gives "", any other JSON
+// type an error.
+func optString(m map[string]json.RawMessage, key string) (string, error) {
+	p, err := optStringPtr(m, key)
+	if err != nil || p == nil {
+		return "", err
+	}
+	return *p, nil
+}
+
+func optStringPtr(m map[string]json.RawMessage, key string) (*string, error) {
+	raw, ok := m[key]
+	if !ok {
+		return nil, nil
+	}
+	var s string
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &s) != nil {
+		return nil, fmt.Errorf("%s is not a string", key)
+	}
+	return &s, nil
 }
 
 func keyFitsAlg(key any, alg jose.SignatureAlgorithm) bool {
@@ -414,10 +493,22 @@ func keyFitsAlg(key any, alg jose.SignatureAlgorithm) bool {
 }
 
 func parseClaims(payload []byte) (*claimsIn, error) {
-	var c claimsIn
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	if err := dec.Decode(&c); err != nil {
+	m, err := strictObject(payload)
+	if err != nil {
 		return nil, fmt.Errorf("%w: claims: %v", ErrMalformed, err)
+	}
+	var c claimsIn
+	for key, dst := range map[string]**string{"jti": &c.JTI, "htm": &c.HTM, "htu": &c.HTU, "ath": &c.ATH, "nonce": &c.Nonce} {
+		if *dst, err = optStringPtr(m, key); err != nil {
+			return nil, fmt.Errorf("%w: claims: %v", ErrMalformed, err)
+		}
+	}
+	if raw, ok := m["iat"]; ok {
+		var iat int64
+		if err := json.Unmarshal(raw, &iat); err != nil {
+			return nil, fmt.Errorf("%w: claims: iat is not an integer", ErrMalformed)
+		}
+		c.IAT = &iat
 	}
 	switch {
 	case c.JTI == nil || *c.JTI == "":
