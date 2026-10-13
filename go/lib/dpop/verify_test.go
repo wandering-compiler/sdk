@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/cryptosigner"
+	"google.golang.org/grpc/codes"
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 )
@@ -600,6 +602,7 @@ func TestNormalizeHTU(t *testing.T) {
 }
 
 func TestNewVerifier_Config(t *testing.T) {
+	shared := dpop.NewMemoryJTIStore(0)
 	for _, cfg := range []dpop.Config{
 		{},
 		{Origin: "api.example.com"},
@@ -607,6 +610,8 @@ func TestNewVerifier_Config(t *testing.T) {
 		{Origin: testOrigin + "/base/"},
 		{Origin: testOrigin, ReuseWindow: dpop.MaxReuseWindow + time.Second},
 		{Origin: testOrigin, IATWindow: -time.Second},
+		{Origin: testOrigin, JTIs: shared},
+		{Origin: testOrigin, JTIs: shared, MintJTIs: shared},
 	} {
 		if _, err := dpop.NewVerifier(cfg); err == nil {
 			t.Errorf("NewVerifier(%+v) accepted", cfg)
@@ -633,7 +638,7 @@ func TestNewVerifier_Config(t *testing.T) {
 func TestVerify_FullJTIStoreFailsClosed(t *testing.T) {
 	c := newClock()
 	store := dpop.NewMemoryJTIStore(1)
-	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = store })
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = dpop.NewMemoryJTIStore(0); cfg.MintJTIs = store })
 	k := mustKey(t)
 	cl := claims(c, "")
 	if _, err := v.Verify(context.Background(), get(sign(t, k, cl))); err != nil {
@@ -641,8 +646,16 @@ func TestVerify_FullJTIStoreFailsClosed(t *testing.T) {
 	}
 	cl.JTI = "another"
 	_, err := v.Verify(context.Background(), get(sign(t, k, cl)))
-	if !errors.Is(err, dpop.ErrJTIStoreFull) {
-		t.Fatalf("full store = %v, want ErrJTIStoreFull", err)
+	if !errors.Is(err, dpop.ErrJTIStoreFull) || !errors.Is(err, dpop.ErrUnavailable) {
+		t.Fatalf("full store = %v, want ErrUnavailable wrapping ErrJTIStoreFull", err)
+	}
+	if dpop.HTTPStatus(err) != 503 || dpop.GRPCCode(err) != codes.Unavailable {
+		t.Fatalf("full store maps to %d / %v, want 503 / Unavailable", dpop.HTTPStatus(err), dpop.GRPCCode(err))
+	}
+	h := http.Header{}
+	dpop.SetChallenge(h, err)
+	if h.Get("Retry-After") == "" || h.Get("WWW-Authenticate") != "" {
+		t.Fatalf("full store headers = %v, want Retry-After and no challenge", h)
 	}
 	// Once the first jti expires (2 × iat window without nonces) there is room.
 	c.Advance(2*dpop.DefaultIATWindow + time.Second)
@@ -687,8 +700,8 @@ func TestVerify_ConcurrentSameProofOneWinnerWithoutReuse(t *testing.T) {
 // them.
 func TestVerify_RefusedProofsDoNotFillJTIStore(t *testing.T) {
 	c := newClock()
-	store := dpop.NewMemoryJTIStore(100)
-	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = store })
+	store, mint := dpop.NewMemoryJTIStore(100), dpop.NewMemoryJTIStore(100)
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = store; cfg.MintJTIs = mint })
 	attacker := mustKey(t)
 	victim := mustKey(t)
 	ctx := context.Background()
@@ -715,8 +728,8 @@ func TestVerify_RefusedProofsDoNotFillJTIStore(t *testing.T) {
 			t.Fatalf("flood proof %d = %v, want %v", i, err, want)
 		}
 	}
-	if n := store.Len(); n != 0 {
-		t.Fatalf("refused proofs left %d entries in the jti store", n)
+	if n := store.Len() + mint.Len(); n != 0 {
+		t.Fatalf("refused proofs left %d entries in the jti stores", n)
 	}
 	if _, err := v.Verify(ctx, get(sign(t, victim, claims(c, "")))); err != nil {
 		t.Fatalf("legitimate proof after the flood: %v", err)
@@ -728,7 +741,7 @@ func TestVerify_RefusedProofsDoNotFillJTIStore(t *testing.T) {
 func TestMemoryJTIStore_PerKeyCap(t *testing.T) {
 	c := newClock()
 	store := dpop.NewMemoryJTIStore(100, dpop.WithMaxJTIsPerKey(2))
-	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = store })
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = dpop.NewMemoryJTIStore(0); cfg.MintJTIs = store })
 	greedy, other := mustKey(t), mustKey(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
@@ -848,5 +861,65 @@ func TestVerify_StrictDecoding(t *testing.T) {
 	}
 	if _, err := v.Verify(ctx, get(signRaw(t, k, `{"jti":"z",`+body+`}`))); err != nil {
 		t.Fatalf("a strict, valid raw proof: %v", err)
+	}
+}
+
+// A mint flood — unbound proofs from throwaway keys — fills only the mint
+// store: authenticated (bound) requests keep working, and minting recovers
+// as entries expire.
+func TestVerify_MintFloodCannotStarveBoundProofs(t *testing.T) {
+	c := newClock()
+	mint := dpop.NewMemoryJTIStore(50)
+	v := newVerifier(t, nil, func(cfg *dpop.Config) {
+		cfg.Now = c.Now
+		cfg.JTIs = dpop.NewMemoryJTIStore(50)
+		cfg.MintJTIs = mint
+	})
+	ctx := context.Background()
+	for i := 0; ; i++ {
+		_, err := v.Verify(ctx, get(sign(t, mustKey(t), claims(c, ""))))
+		if errors.Is(err, dpop.ErrUnavailable) {
+			if i != 50 {
+				t.Fatalf("mint store full after %d proofs, want 50", i)
+			}
+			break
+		}
+		if err != nil {
+			t.Fatalf("mint proof %d: %v", i, err)
+		}
+	}
+	k := mustKey(t)
+	cl := claims(c, "")
+	cl.ATH = dpop.AccessTokenHash("tok")
+	req := get(sign(t, k, cl))
+	req.AccessToken, req.Binding = "tok", k.Thumbprint()
+	if _, err := v.Verify(ctx, req); err != nil {
+		t.Fatalf("bound proof during a mint flood: %v", err)
+	}
+	c.Advance(2*dpop.DefaultIATWindow + time.Second)
+	if _, err := v.Verify(ctx, get(sign(t, mustKey(t), claims(c, "")))); err != nil {
+		t.Fatalf("minting after the flood expired: %v", err)
+	}
+}
+
+func TestHTTPStatusAndGRPCCode(t *testing.T) {
+	cases := []struct {
+		err  error
+		http int
+		code codes.Code
+	}{
+		{nil, 200, codes.OK},
+		{dpop.ErrReplay, 401, codes.Unauthenticated},
+		{&dpop.NonceError{Nonce: "n"}, 401, codes.Unauthenticated},
+		{fmt.Errorf("%w: %w", dpop.ErrUnavailable, dpop.ErrJTIStoreFull), 503, codes.Unavailable},
+		{errors.New("other"), 500, codes.Internal},
+	}
+	for _, tc := range cases {
+		if got := dpop.HTTPStatus(tc.err); got != tc.http {
+			t.Errorf("HTTPStatus(%v) = %d, want %d", tc.err, got, tc.http)
+		}
+		if got := dpop.GRPCCode(tc.err); got != tc.code {
+			t.Errorf("GRPCCode(%v) = %v, want %v", tc.err, got, tc.code)
+		}
 	}
 }

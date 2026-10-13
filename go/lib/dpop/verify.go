@@ -59,6 +59,14 @@ var (
 	ErrBindingMismatch = errors.New("dpop: proof key does not match the credential binding")
 )
 
+// ErrUnavailable is not a verdict on the proof: the replay store could not
+// record it — it is full ([ErrJTIStoreFull], also matched) or failing. The
+// request is refused, never accepted unrecorded, and the caller answers
+// 503 Service Unavailable with Retry-After (gRPC: codes.Unavailable), which
+// [HTTPStatus], [GRPCCode] and [SetChallenge] do. Entries expire within a
+// nonce lifetime, so the condition clears by itself.
+var ErrUnavailable = errors.New("dpop: replay store unavailable; retry later")
+
 // NonceError is the [ErrUseNonce] refusal. The caller answers it with
 // `use_dpop_nonce` and Nonce ([SetChallenge], [ChallengeMetadata]).
 type NonceError struct {
@@ -93,6 +101,8 @@ const (
 	DefaultIATWindow = 60 * time.Second
 	// DefaultSignatureCacheEntries bounds the reuse cache.
 	DefaultSignatureCacheEntries = 10_000
+	// DefaultMaxMintJTIs bounds the default store of unbound (mint) proofs.
+	DefaultMaxMintJTIs = 50_000
 )
 
 // AllowedAlgs are the proof algorithms the verifier accepts.
@@ -107,9 +117,17 @@ type Config struct {
 	// Nonces issues and checks server nonces. nil turns nonces off: then
 	// iat must lie within IATWindow of the verifier's clock.
 	Nonces NonceSource
-	// JTIs records accepted proofs. nil means a [MemoryJTIStore] with the
-	// default limit, which is correct only for a single replica.
+	// JTIs records accepted bound proofs (Request.Binding set). nil means a
+	// [MemoryJTIStore] with the default limits, correct only for a single
+	// replica.
 	JTIs JTIStore
+	// MintJTIs records accepted unbound proofs (a mint endpoint: no token,
+	// no binding). It is kept apart from JTIs because anyone can sign an
+	// unbound proof with a throwaway key: a mint flood can fill MintJTIs and
+	// stall minting, but never the store authenticated requests need. nil
+	// means a [MemoryJTIStore] of [DefaultMaxMintJTIs] when JTIs is nil too;
+	// setting JTIs without MintJTIs, or both to the same store, is an error.
+	MintJTIs JTIStore
 	// ReuseWindow is how long a proof may be presented again byte for byte.
 	// 0 means [DefaultReuseWindow]; a negative value turns reuse off (every
 	// repeat is a replay); more than [MaxReuseWindow] is an error.
@@ -152,6 +170,7 @@ type Verifier struct {
 	origin   string
 	nonces   NonceSource
 	jtis     JTIStore
+	mintJTIs JTIStore
 	reuse    time.Duration
 	iat      time.Duration
 	jtiTTL   time.Duration
@@ -172,6 +191,7 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		origin:   strings.TrimSuffix(origin, "/"),
 		nonces:   cfg.Nonces,
 		jtis:     cfg.JTIs,
+		mintJTIs: cfg.MintJTIs,
 		reuse:    cfg.ReuseWindow,
 		iat:      cfg.IATWindow,
 		now:      cfg.Now,
@@ -192,8 +212,17 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	case v.iat < 0:
 		return nil, fmt.Errorf("dpop: IATWindow %s is negative", cfg.IATWindow)
 	}
+	switch {
+	case cfg.JTIs != nil && cfg.MintJTIs == nil:
+		return nil, errors.New("dpop: JTIs set without MintJTIs: unbound proofs need their own store")
+	case cfg.JTIs != nil && cfg.MintJTIs == cfg.JTIs:
+		return nil, errors.New("dpop: MintJTIs is the same store as JTIs: a mint flood would fill both")
+	}
 	if v.jtis == nil {
 		v.jtis = NewMemoryJTIStore(0)
+	}
+	if v.mintJTIs == nil {
+		v.mintJTIs = NewMemoryJTIStore(DefaultMaxMintJTIs)
 	}
 	if v.now == nil {
 		v.now = time.Now
@@ -353,10 +382,14 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 	// so refused proofs never take room in the store. The insert is atomic;
 	// a jti already there is a replay unless it is this very proof inside
 	// its reuse window.
+	store := v.jtis
+	if req.Binding == "" {
+		store = v.mintJTIs // unbound: kept apart, see Config.MintJTIs
+	}
 	rec := JTIRecord{Thumbprint: thumb, ProofHash: hash, FirstSeen: now}
-	got, created, err := v.jtis.Record(ctx, thumb+"\x00"+*c.JTI, rec, v.jtiTTL)
+	got, created, err := store.Record(ctx, thumb+"\x00"+*c.JTI, rec, v.jtiTTL)
 	if err != nil {
-		return "", fmt.Errorf("dpop: jti store: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if !created {
 		if got.ProofHash != hash || v.reuse <= 0 || now.Sub(got.FirstSeen) >= v.reuse {

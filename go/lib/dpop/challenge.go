@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -74,16 +75,61 @@ func WWWAuthenticate(err error) string {
 	return AuthScheme + ` error="` + code + `", ` + algsParam
 }
 
-// SetChallenge sets the headers of a 401 answering err: WWW-Authenticate,
-// DPoP-Nonce when err is a [*NonceError], and Cache-Control: no-store. The
-// caller writes the status and body.
+// HTTPStatus is the status answering an error from [Verifier.Verify]: 503
+// for [ErrUnavailable] (the replay store is full or failing; retry), 401 for
+// every refusal of the proof, 500 for anything else.
+func HTTPStatus(err error) int {
+	switch {
+	case err == nil:
+		return http.StatusOK
+	case errors.Is(err, ErrUnavailable):
+		return http.StatusServiceUnavailable
+	case isRefusal(err):
+		return http.StatusUnauthorized
+	}
+	return http.StatusInternalServerError
+}
+
+// GRPCCode is [HTTPStatus] for gRPC: Unavailable, Unauthenticated or
+// Internal.
+func GRPCCode(err error) codes.Code {
+	switch HTTPStatus(err) {
+	case http.StatusOK:
+		return codes.OK
+	case http.StatusServiceUnavailable:
+		return codes.Unavailable
+	case http.StatusUnauthorized:
+		return codes.Unauthenticated
+	}
+	return codes.Internal
+}
+
+func isRefusal(err error) bool {
+	for _, r := range []error{ErrMissingProof, ErrMalformed, ErrBadAlg, ErrBadType, ErrBadKey, ErrBadSignature,
+		ErrUseNonce, ErrStaleProof, ErrReplay, ErrHTMMismatch, ErrHTUMismatch, ErrATHMismatch, ErrBindingMismatch} {
+		if errors.Is(err, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetChallenge sets the response headers answering err. For a refusal (a
+// 401): WWW-Authenticate, DPoP-Nonce when err is a [*NonceError], and
+// Cache-Control: no-store. For [ErrUnavailable] (a 503): Retry-After: 1 and
+// no challenge, since the proof itself was fine. The caller writes the
+// status ([HTTPStatus]) and body.
 func SetChallenge(h http.Header, err error) {
+	h.Set("Cache-Control", "no-store")
+	if errors.Is(err, ErrUnavailable) {
+		h.Set("Retry-After", "1")
+		return
+	}
 	h.Set(HeaderWWWAuthenticate, WWWAuthenticate(err))
 	var ne *NonceError
 	if errors.As(err, &ne) {
 		h.Set(HeaderNonce, ne.Nonce)
 	}
-	h.Set("Cache-Control", "no-store")
 }
 
 // ChallengeMetadata is the gRPC trailer answering err: the challenge under

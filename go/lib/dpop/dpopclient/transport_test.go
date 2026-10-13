@@ -119,7 +119,7 @@ func readAll(t *testing.T, resp *http.Response) string {
 func TestTransport_NonceRetryOnce(t *testing.T) {
 	k := mustKey(t)
 	s := newServer(t, k.Thumbprint())
-	c := &http.Client{Transport: &dpopclient.Transport{Signer: k, Token: token("tok")}}
+	c := &http.Client{Transport: &dpopclient.Transport{Signer: k, Token: token("tok"), Origins: []string{s.URL}}}
 
 	resp := do(t, c, "POST", s.URL+"/things?x=1", "payload")
 	if got := readAll(t, resp); resp.StatusCode != 200 || got != "ok:"+k.Thumbprint() {
@@ -150,7 +150,7 @@ func TestTransport_RetriesExactlyOnce(t *testing.T) {
 	k := mustKey(t)
 	s := newServer(t, k.Thumbprint())
 	s.alwaysNonce = true
-	c := &http.Client{Transport: &dpopclient.Transport{Signer: k, Token: token("tok")}}
+	c := &http.Client{Transport: &dpopclient.Transport{Signer: k, Token: token("tok"), Origins: []string{s.URL}}}
 	resp := do(t, c, "GET", s.URL+"/r", "")
 	readAll(t, resp)
 	if resp.StatusCode != http.StatusUnauthorized || s.hits.Load() != 2 {
@@ -162,7 +162,7 @@ func TestTransport_RetriesExactlyOnce(t *testing.T) {
 func TestTransport_UnreplayableBodyNotRetried(t *testing.T) {
 	k := mustKey(t)
 	s := newServer(t, k.Thumbprint())
-	c := &http.Client{Transport: &dpopclient.Transport{Signer: k, Token: token("tok")}}
+	c := &http.Client{Transport: &dpopclient.Transport{Signer: k, Token: token("tok"), Origins: []string{s.URL}}}
 	req, _ := http.NewRequest("POST", s.URL+"/r", io.NopCloser(strings.NewReader("once")))
 	req.GetBody = nil
 	resp, err := c.Do(req)
@@ -193,7 +193,7 @@ func TestTransport_NoTokenNoATH(t *testing.T) {
 		}
 		return http.DefaultTransport.RoundTrip(r)
 	})
-	c := &http.Client{Transport: &dpopclient.Transport{Base: base, Signer: k}}
+	c := &http.Client{Transport: &dpopclient.Transport{Base: base, Signer: k, Origins: []string{s.URL}}}
 	resp := do(t, c, "POST", s.URL+"/token", "")
 	readAll(t, resp)
 	if resp.StatusCode != 200 || sawAuth.Load() {
@@ -217,7 +217,7 @@ func TestTransport_LearnsNonceFromSuccess(t *testing.T) {
 		w.Header().Set("DPoP-Nonce", fmt.Sprintf("n-%d", n))
 	}))
 	defer srv.Close()
-	c := &http.Client{Transport: &dpopclient.Transport{Signer: mustKey(t)}}
+	c := &http.Client{Transport: &dpopclient.Transport{Signer: mustKey(t), Origins: []string{srv.URL}}}
 	for i := 0; i < 3; i++ {
 		readAll(t, do(t, c, "GET", srv.URL+"/r", ""))
 	}
@@ -232,7 +232,7 @@ func TestTransport_LearnsNonceFromSuccess(t *testing.T) {
 func TestTransport_DoesNotMutateRequest(t *testing.T) {
 	k := mustKey(t)
 	s := newServer(t, k.Thumbprint())
-	tr := &dpopclient.Transport{Signer: k, Token: token("tok")}
+	tr := &dpopclient.Transport{Signer: k, Token: token("tok"), Origins: []string{s.URL}}
 	req, _ := http.NewRequest("GET", s.URL+"/r", nil)
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestTransport_DoesNotMutateRequest(t *testing.T) {
 
 func TestTransport_TokenErrorAndNoSigner(t *testing.T) {
 	boom := errors.New("boom")
-	tr := &dpopclient.Transport{Signer: mustKey(t), Token: func(context.Context) (string, error) { return "", boom }}
+	tr := &dpopclient.Transport{Signer: mustKey(t), Origins: []string{"https://api.example.com"}, Token: func(context.Context) (string, error) { return "", boom }}
 	req, _ := http.NewRequest("GET", "https://api.example.com/r", nil)
 	if _, err := tr.RoundTrip(req); !errors.Is(err, boom) {
 		t.Fatalf("token error = %v", err)
@@ -287,57 +287,67 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// Credentials go only to allowed origins: by default the first request's,
-// otherwise the configured list. A redirect to another host carries neither
-// the token nor a proof.
+// Credentials go only to the configured origins. A redirect to another host
+// fails before anything reaches it, and a Transport without origins refuses
+// to send anything: there is no implicit pinning.
 func TestTransport_OtherOriginsGetNoCredentials(t *testing.T) {
-	type seen struct{ auth, proof string }
-	var mu sync.Mutex
-	var atB []seen
-	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		atB = append(atB, seen{r.Header.Get("Authorization"), r.Header.Get("DPoP")})
-		mu.Unlock()
-	}))
+	var bHits atomic.Int32
+	b := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { bHits.Add(1) }))
 	defer b.Close()
-	var atA []seen
+	var aAuth atomic.Value
 	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		atA = append(atA, seen{r.Header.Get("Authorization"), r.Header.Get("DPoP")})
-		mu.Unlock()
+		aAuth.Store(r.Header.Get("Authorization"))
 		http.Redirect(w, r, b.URL+"/elsewhere", http.StatusFound)
 	}))
 	defer a.Close()
+	ctx := context.Background()
 
-	c := &http.Client{Transport: &dpopclient.Transport{Signer: mustKey(t), Token: token("tok")}}
-	readAll(t, do(t, c, "GET", a.URL+"/start", ""))
-	mu.Lock()
-	if len(atA) != 1 || atA[0].auth != "DPoP tok" || atA[0].proof == "" {
-		t.Fatalf("the first origin got %+v, want the token and a proof", atA)
-	}
-	if len(atB) != 1 || atB[0] != (seen{}) {
-		t.Fatalf("the redirect target got %+v, want no credentials", atB)
-	}
-	mu.Unlock()
-
-	// A configured list replaces the default: only b is allowed.
 	var fetched atomic.Int32
-	tr := &dpopclient.Transport{Signer: mustKey(t), Origins: []string{b.URL}, Token: func(context.Context) (string, error) {
-		fetched.Add(1)
-		return "tok", nil
-	}}
-	c = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	readAll(t, do(t, c, "GET", a.URL+"/start", ""))
-	readAll(t, do(t, c, "GET", b.URL+"/direct", ""))
-	mu.Lock()
-	defer mu.Unlock()
-	if atA[1] != (seen{}) {
-		t.Fatalf("an origin outside Origins got %+v", atA[1])
+	tok := func(context.Context) (string, error) { fetched.Add(1); return "tok", nil }
+	tr, err := dpopclient.NewTransport(nil, mustKey(t), tok, a.URL)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if last := atB[len(atB)-1]; last.auth != "DPoP tok" || last.proof == "" {
-		t.Fatalf("the configured origin got %+v", last)
+	c := &http.Client{Transport: tr}
+	req, _ := http.NewRequestWithContext(ctx, "GET", a.URL+"/start", nil)
+	_, err = c.Do(req)
+	if !errors.Is(err, dpopclient.ErrOriginNotAllowed) {
+		t.Fatalf("redirect to another host = %v, want ErrOriginNotAllowed", err)
 	}
-	if fetched.Load() != 1 {
-		t.Fatalf("token fetched %d times, want once (only for the allowed origin)", fetched.Load())
+	if got, _ := aAuth.Load().(string); got != "DPoP tok" {
+		t.Fatalf("the allowed origin got Authorization %q", got)
 	}
+	if bHits.Load() != 0 || fetched.Load() != 1 {
+		t.Fatalf("the other host was hit %d times; token fetched %d times (want 0, 1)", bHits.Load(), fetched.Load())
+	}
+
+	// No origins: nothing is sent, nothing is pinned.
+	for _, tr := range []*dpopclient.Transport{
+		{Signer: mustKey(t), Token: tok},
+		{Signer: mustKey(t), Token: tok, Origins: []string{"not a url", b.URL + "/with/path"}},
+	} {
+		req, _ := http.NewRequestWithContext(ctx, "GET", b.URL+"/x", nil)
+		if _, err := tr.RoundTrip(req); !errors.Is(err, dpopclient.ErrNoOrigins) {
+			t.Fatalf("Transport with Origins %q = %v, want ErrNoOrigins", tr.Origins, err)
+		}
+	}
+	if bHits.Load() != 0 || fetched.Load() != 1 {
+		t.Fatalf("a Transport without origins sent a request or fetched the token")
+	}
+	for _, bad := range [][]string{nil, {"ftp://x"}, {b.URL + "/p"}, {"https://x?q"}} {
+		if _, err := dpopclient.NewTransport(nil, mustKey(t), tok, bad...); !errors.Is(err, dpopclient.ErrNoOrigins) {
+			t.Fatalf("NewTransport(%q) = %v, want ErrNoOrigins", bad, err)
+		}
+	}
+	if _, err := dpopclient.NewTransport(nil, nil, tok, a.URL); err == nil {
+		t.Fatal("NewTransport without a signer succeeded")
+	}
+	// Default port and case are normalised on both sides.
+	tr2, _ := dpopclient.NewTransport(nil, mustKey(t), nil, strings.ToUpper(b.URL))
+	req, _ = http.NewRequestWithContext(ctx, "GET", b.URL+"/x", nil)
+	resp, err := tr2.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("origin in other case: %v", err)
+	}
+	readAll(t, resp)
 }
