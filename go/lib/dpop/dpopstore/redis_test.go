@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -126,6 +127,121 @@ func TestRedisJTIStore_FloodStaysWithinTheCap(t *testing.T) {
 			t.Fatalf("bound record %d after the flood: %v %v", i, created, err)
 		}
 	}
+}
+
+// The total set and the jti key are in different hash slots, so a jti can be
+// recorded while its total-set member is gone (the record landed, the client
+// saw an error and released). On a full store, a repeat of that jti must
+// still come back as the stored record (a replay), never as "full" — which
+// MintFullAcceptUnrecorded would accept.
+func TestRedisJTIStore_FullStoreStillAnswersForARecordedJTI(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	s, err := dpopstore.NewRedisJTIStore(client, dpopstore.WithRedisPrefix("w17:t:"), dpopstore.WithRedisMaxEntries(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Now()
+	a := dpop.JTIRecord{Thumbprint: "a", ProofHash: "ha", FirstSeen: now}
+	if _, created, err := s.Record(ctx, "a\x00j", a, time.Minute); err != nil || !created {
+		t.Fatal(created, err)
+	}
+	// Lose a's member, then fill the store with b.
+	if n, err := mr.ZMembers("w17:t:{all}:n"); err != nil || len(n) != 1 {
+		t.Fatalf("total set = %v (%v), want one member", n, err)
+	}
+	if _, err := mr.ZRem("w17:t:{all}:n", mustMember(t, mr)); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := s.Record(ctx, "b\x00j", dpop.JTIRecord{Thumbprint: "b", ProofHash: "hb", FirstSeen: now}, time.Minute); err != nil || !created {
+		t.Fatal(created, err)
+	}
+	got, created, err := s.Record(ctx, "a\x00j", dpop.JTIRecord{Thumbprint: "a", ProofHash: "other", FirstSeen: now}, time.Minute)
+	if err != nil || created || got.ProofHash != "ha" {
+		t.Fatalf("repeat of a recorded jti on a full store = (%+v, %v, %v), want the stored record", got, created, err)
+	}
+	if _, _, err := s.Record(ctx, "c\x00j", dpop.JTIRecord{Thumbprint: "c", ProofHash: "hc", FirstSeen: now}, time.Minute); !errors.Is(err, dpop.ErrJTIStoreFull) {
+		t.Fatalf("a new jti on a full store = %v, want ErrJTIStoreFull", err)
+	}
+
+	// Through the verifier with MintFullAcceptUnrecorded: a replay, not an
+	// unrecorded acceptance.
+	mint, err := dpopstore.NewRedisJTIStore(client, dpopstore.WithRedisPrefix("w17:m:"), dpopstore.WithRedisMaxEntries(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := dpop.NewVerifier(dpop.Config{Origin: "https://api.example.com", JTIs: dpop.NewMemoryJTIStore(0), MintJTIs: mint,
+		MintFull: dpop.MintFullAcceptUnrecorded, ReuseWindow: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbound := func() dpop.Request {
+		k, err := dpop.GenerateKey(dpop.KeyP256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := dpop.NewProof(k, http.MethodPost, "https://api.example.com/v1/sign-in", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dpop.Request{Method: http.MethodPost, Path: "/v1/sign-in", Proofs: []string{p}}
+	}
+	first := unbound()
+	if r, err := v.VerifyResult(ctx, first); err != nil || r.MintUnrecorded {
+		t.Fatalf("first mint proof = (%+v, %v)", r, err)
+	}
+	members, _ := mr.ZMembers("w17:m:{all}:n")
+	for _, m := range members {
+		if _, err := mr.ZRem("w17:m:{all}:n", m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r, err := v.VerifyResult(ctx, unbound()); err != nil || r.MintUnrecorded {
+		t.Fatalf("second mint proof = (%+v, %v), want recorded", r, err)
+	}
+	if r, err := v.VerifyResult(ctx, first); !errors.Is(err, dpop.ErrReplay) {
+		t.Fatalf("replay on a full mint store = (%+v, %v), want ErrReplay", r, err)
+	}
+}
+
+// A reservation for a jti that turns out to be recorded already is released:
+// the repeat takes no place under the total cap.
+func TestRedisJTIStore_RepeatReleasesItsReservation(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	s, err := dpopstore.NewRedisJTIStore(client, dpopstore.WithRedisPrefix("w17:t:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	rec := dpop.JTIRecord{Thumbprint: "a", ProofHash: "ha", FirstSeen: time.Now()}
+	if _, created, err := s.Record(ctx, "a\x00j", rec, time.Minute); err != nil || !created {
+		t.Fatal(created, err)
+	}
+	if _, err := mr.ZRem("w17:t:{all}:n", mustMember(t, mr)); err != nil {
+		t.Fatal(err)
+	}
+	// The member is gone, so the reservation succeeds; the record script
+	// then finds the jti stored.
+	if _, created, err := s.Record(ctx, "a\x00j", rec, time.Minute); err != nil || created {
+		t.Fatalf("repeat = (%v, %v), want the stored record", created, err)
+	}
+	if n, err := client.ZCard(ctx, "w17:t:{all}:n").Result(); err != nil || n != 0 {
+		t.Fatalf("total set holds %d members (%v) after a repeat, want 0: the reservation leaked", n, err)
+	}
+}
+
+// mustMember returns the one member of the w17:t: total set.
+func mustMember(t *testing.T, mr *miniredis.Miniredis) string {
+	t.Helper()
+	m, err := mr.ZMembers("w17:t:{all}:n")
+	if err != nil || len(m) != 1 {
+		t.Fatalf("total set = %v (%v), want one member", m, err)
+	}
+	return m[0]
 }
 
 // A Redis that does not answer fails the Record; the verifier then refuses

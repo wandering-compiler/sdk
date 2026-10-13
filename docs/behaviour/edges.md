@@ -1203,7 +1203,7 @@ the HTTP request or gRPC metadata and answers refusals itself.
 | `Config.Nonces` | nil (nonces off) | nil → `iat` must lie within `IATWindow`; set → `iat` is not checked and every proof needs a valid nonce |
 | `Config.JTIs` | `NewMemoryJTIStore(0)` | Records bound proofs. The memory store is per process: correct only with one replica |
 | `Config.MintJTIs` | `NewMemoryJTIStore(DefaultMaxMintJTIs)` = 50 000 | Records unbound (mint) proofs, apart from `JTIs`. `JTIs` set without `MintJTIs`, or both the same store → error at construction |
-| `Config.MintFull` | `MintFullRefuse` | `MintFullAcceptUnrecorded`: an unbound proof the full mint store cannot record (`ErrJTIStoreFull`) is accepted unrecorded and `Result.MintUnrecorded` is set; never for bound proofs or a failing store. Any other value → error at construction |
+| `Config.MintFull` | `MintFullRefuse` (recommended) | `MintFullAcceptUnrecorded`: an unbound proof the full mint store cannot record (`ErrJTIStoreFull`) is accepted unrecorded and `Result.MintUnrecorded` is set; never for bound proofs or a failing store. Any other value → error at construction |
 | `Config.ReuseWindow` | 30 s | Negative → reuse off; above 300 s → error at construction |
 | `Config.IATWindow` | 60 s | Negative → error; ignored with nonces |
 | `Config.SignatureCacheEntries` | 10 000 | A full cache stops caching; it never refuses |
@@ -1265,7 +1265,11 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
   need rate limiting in front of the verifier. `MintFullAcceptUnrecorded` keeps minting up
   through such a flood at the price of best-effort replay protection for unbound proofs: a
   proof accepted unrecorded can be presented again while the store stays full. That replay
-  yields only a credential bound to a key the replayer does not hold.
+  yields only a credential bound to a key the replayer does not hold, but it re-runs the mint
+  handler and everything it does: a one-time or MFA code is burned, lockout counters move,
+  Device rows are written, events are emitted. `MintFullRefuse` is the default and the
+  recommended setting; use `MintFullAcceptUnrecorded` only behind per-address limits on the
+  mint endpoints, with an alert on `Result.MintUnrecorded`.
 - The verifier does not answer the request; the caller sets the challenge with `SetChallenge` or
   `ChallengeMetadata` and writes its own status and body.
 - `Request.Path` is compared as given; percent-encoding case is not normalised.
@@ -1428,8 +1432,8 @@ uses the repository's `go-redis` client; the SQL store `database/sql` with the c
 | E38.5 | Two verifiers sharing the stores MUST refuse a proof the other accepted (`ErrReplay`) | same contract tests (`replicas sharing the store refuse a replay`) |
 | E38.6 | A failing backend MUST return an error and never report a record as created; it MUST NOT read as a full store | `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
 | E38.7 | Invalid configuration (nil client or db, unknown dialect, unsafe table name) MUST be refused at construction | `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
-| E38.8 | A store MUST NOT exceed its total cap (`ErrJTIStoreFull`), MUST still return the stored record for a key it holds when full, and MUST free room as entries expire (on SQL within `SQLRecountEvery`, counting its own inserts in between) | same contract tests (`total cap`), `TestSQLJTIStore_TotalCapBetweenRecounts` |
-| E38.9 | A record refused by the per-key share MUST NOT take a place under the total cap | same contract tests (`a refused record takes no place under the total cap`) |
+| E38.8 | A store MUST NOT exceed its total cap (`ErrJTIStoreFull`), MUST still return the stored record for a key it holds when full — on Redis also when the key's total-set member was lost, so a replay is never read as full (and never accepted unrecorded) — and MUST free room as entries expire (on SQL within `SQLRecountEvery`, counting its own inserts in between) | same contract tests (`total cap`), `TestSQLJTIStore_TotalCapBetweenRecounts`, `TestRedisJTIStore_FullStoreStillAnswersForARecordedJTI` |
+| E38.9 | A record refused by the per-key share, or a repeat of a recorded jti, MUST NOT take a place under the total cap | same contract tests (`a refused record takes no place under the total cap`), `TestRedisJTIStore_RepeatReleasesItsReservation` |
 | E38.10 | A flood of unbound proofs from throwaway keys MUST fill only the mint store: bound proofs MUST keep passing through the same backend, `MintFullAcceptUnrecorded` MUST keep minting; on Redis the flood MUST leave at most the mint cap's keys (refused proofs none), so a `noeviction` Redis keeps the memory the bound store needs | same contract tests (`a mint flood fills only the mint store`), `TestRedisJTIStore_FloodStaysWithinTheCap` |
 
 **Deliberate limits.**
@@ -1437,7 +1441,9 @@ uses the repository's `go-redis` client; the SQL store `database/sql` with the c
   reopens a replay window early; the total caps of the stores on it bound what each can take
   of its memory, so size `maxmemory` for both caps. The cap is reserved in a Lua script of its
   own (the total set lives in its own cluster hash slot) before the record script runs; an
-  unused reservation is released, and one left by a crash expires with the entry's ttl.
+  unused reservation (refused, failed, or a repeat of a recorded jti) is released, and one
+  left by a crash expires with the entry's ttl. Because the reservation cannot see the jti
+  key (another slot), a full answer is checked against the jti key before it is returned.
   Redis keys expire on the server's clock; the per-key count, the total and the SQL store
   judge expiry by `rec.FirstSeen`, the verifier's clock.
 - The SQL total cap is judged against a count each replica keeps, recounted every

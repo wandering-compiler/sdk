@@ -59,7 +59,10 @@
 // proofs are recorded in a store of their own ([Config.MintJTIs]), so such a
 // flood can stall minting but never authenticated requests; with
 // [Config.MintFull] set to [MintFullAcceptUnrecorded] it does not even stall
-// minting, at the cost of best-effort replay protection for unbound proofs.
+// minting, at the cost of best-effort replay protection for unbound proofs:
+// a replay re-runs the mint handler, so keep the default ([MintFullRefuse])
+// unless per-address mint limits and an alert on [Result.MintUnrecorded] are
+// in place.
 // A full or failing store is [ErrUnavailable], answered 503 ([HTTPStatus]). The
 // in-memory [MemoryJTIStore] is per process and is correct only for a single
 // replica: with two or more, a proof accepted by one replica can be replayed

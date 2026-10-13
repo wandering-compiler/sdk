@@ -139,6 +139,13 @@ type Config struct {
 	// may prefer to a mint outage, since a replayed unbound proof only yields
 	// a token bound to a key the replayer does not hold. It never applies to
 	// bound proofs, nor to a store that fails rather than being full.
+	//
+	// MintFullRefuse is the recommended setting. Under
+	// MintFullAcceptUnrecorded a replayed unbound proof reaches the mint
+	// handler again, so everything that handler does runs again: a one-time
+	// or MFA code is burned, lockout counters move, Device rows are written,
+	// events are emitted. Use it only behind per-address limits on the mint
+	// endpoints, with an alert on Result.MintUnrecorded.
 	MintFull MintFullPolicy
 	// ReuseWindow is how long a proof may be presented again byte for byte.
 	// 0 means [DefaultReuseWindow]; a negative value turns reuse off (every
@@ -160,10 +167,13 @@ type MintFullPolicy int
 
 const (
 	// MintFullRefuse refuses an unbound proof the full mint store cannot
-	// record ([ErrUnavailable] wrapping [ErrJTIStoreFull]). The default.
+	// record ([ErrUnavailable] wrapping [ErrJTIStoreFull]). The default, and
+	// the recommended setting.
 	MintFullRefuse MintFullPolicy = iota
 	// MintFullAcceptUnrecorded accepts an unbound proof the full mint store
 	// cannot record, without recording it, and sets [Result.MintUnrecorded].
+	// A replay then re-runs the mint handler (see [Config.MintFull]); use it
+	// only behind per-address mint limits, alerting on MintUnrecorded.
 	MintFullAcceptUnrecorded
 )
 

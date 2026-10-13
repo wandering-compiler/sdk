@@ -47,7 +47,9 @@ const DefaultRedisPrefix = "w17:dpop:jti:"
 // Record runs two Lua scripts, each atomic: the first reserves a place under
 // the total cap (or refuses with [dpop.ErrJTIStoreFull]), the second records
 // the jti under the per-key share. A reservation the second script does not
-// use — the key's share is full, or the script failed — is released; one
+// use — the key's share is full, the jti was already recorded, or the script
+// failed — is released; a full total set is checked against the jti key
+// itself, so a recorded jti is answered as a repeat even when full; one
 // left behind by a crash expires with the entry's ttl. The total set lives
 // in one hash slot of its own, apart from the jti keys, which is why the
 // two steps are separate scripts.
@@ -128,6 +130,9 @@ end
 return 1
 `)
 
+// storedScript: KEYS[1] the jti key. Returns its stored record, or nil.
+var storedScript = redis.NewScript(`return redis.call('GET', KEYS[1])`)
+
 // releaseScript: KEYS[1] the store's total set, ARGV[1] the jti key.
 var releaseScript = redis.NewScript(`return redis.call('ZREM', KEYS[1], ARGV[1])`)
 
@@ -177,7 +182,19 @@ func (s *RedisJTIStore) Record(ctx context.Context, key string, rec dpop.JTIReco
 	case err != nil:
 		return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis reserve: %w", err)
 	case reserved == 2:
-		return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
+		// The total set and the jti key live in different hash slots, so
+		// the reservation could not see the jti itself. A jti can be
+		// recorded while its member is gone (the record landed but the
+		// client saw an error and released), so a full store still answers
+		// for what it holds: a stored jti is a repeat, never "full".
+		raw, err := storedScript.Run(ctx, s.rdb, []string{jtiKey}).Text()
+		switch {
+		case errors.Is(err, redis.Nil):
+			return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
+		case err != nil:
+			return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis read: %w", err)
+		}
+		return decodeStored(raw)
 	}
 	// release gives back a reservation the record below did not use. A
 	// failed release leaves the place taken until the entry's ttl.
@@ -204,18 +221,25 @@ func (s *RedisJTIStore) Record(ctx context.Context, key string, rec dpop.JTIReco
 		release()
 		return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
 	case 0:
+		// Already recorded: the place reserved for it is not needed.
+		release()
 		if len(res) < 2 {
 			return dpop.JTIRecord{}, false, errors.New("dpopstore: redis record: no stored record")
 		}
 		raw, _ := res[1].(string)
-		var got redisRecord
-		if err := json.Unmarshal([]byte(raw), &got); err != nil {
-			return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis record: stored value: %w", err)
-		}
-		return dpop.JTIRecord{Thumbprint: got.Thumbprint, ProofHash: got.ProofHash, FirstSeen: time.Unix(0, got.FirstSeen)}, false, nil
+		return decodeStored(raw)
 	}
 	release()
 	return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis record: unexpected reply %v", res)
+}
+
+// decodeStored reads a stored record: the repeat answer of Record.
+func decodeStored(raw string) (dpop.JTIRecord, bool, error) {
+	var got redisRecord
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis record: stored value: %w", err)
+	}
+	return dpop.JTIRecord{Thumbprint: got.Thumbprint, ProofHash: got.ProofHash, FirstSeen: time.Unix(0, got.FirstSeen)}, false, nil
 }
 
 // hashTag is the cluster hash tag of a thumbprint: its SHA-256, hex, so it
