@@ -20,7 +20,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I7 | Bus observability | `go/lib/eventbus/observability.go` — `Observer`, `ObserverWithLatency`, `DefaultObserver`, `NopObserver` |
 | I8 | Event context: metadata, labels, invalidate | `go/lib/eventbus/eventctx.go` — `MetadataFromContext`, `LabelsFromContext`; `go/lib/eventbus/w17invalidate.go` — `EmitInvalidate` |
 | I9 | Server-sent-events fan-out hub | `go/lib/restgw/w17events_eventbus.go` — `EventbusEventSource`, `entitled`; `go/lib/restgw/w17events.go` — `HandleW17Events` |
-| I10 | Principal, read side | `go/lib/principal/principal.go` — `UserID`, `Envelope`, `Scope`, `Label` |
+| I10 | Principal, read side | `go/lib/principal/principal.go` — `UserID`, `Envelope`, `Scope`, `Label`; `go/lib/principal/device.go` — `DeviceID` |
 | I11 | Principal, gateway side | `go/lib/principal/gateway.go` — `SanitizeGatewayMD`, `WithGatewayMD`; `go/lib/principal/reserved.go` — `IsGatewayOwnedKey` |
 | I12 | Principal relay | `go/lib/principal/principal.go` — `ForwardToOutgoing` |
 | I13 | Permission lock and checks | `go/lib/acllock/allocator.go` — `Allocate`; `go/lib/acllock/bits.go` — `HasPermission`, `HasAnyPermission`, `HasAllPermissions`, `HasAllPermissionsStrict`, `GrantAll`, `IDByString` |
@@ -425,11 +425,13 @@ the principal's labels. A client whose principal cannot be resolved receives not
 
 ## I10. Principal, read side
 
-**Code.** `go/lib/principal/principal.go` — `UserID`, `Envelope`, `Scope`, `ScopeKey`, `Label`, `LabelKey`, `ErrNoPrincipal`
+**Code.** `go/lib/principal/principal.go` — `UserID`, `Envelope`, `Scope`, `ScopeKey`, `Label`, `LabelKey`, `ErrNoPrincipal`; `go/lib/principal/device.go` — `DeviceID`, `DeviceMetadataKey`
 
 **Purpose.** Reads the gateway-verified caller from incoming gRPC metadata:
 `x-w17-user` (base64 of the auth response proto), `x-w17-scope-<name>` per declared
-scope, and `w17-label-<name>` per broadcast label.
+scope, `w17-label-<name>` per broadcast label, and `x-w17-device`, the verified DPoP device
+id (the RFC 7638 thumbprint of the key whose proof the gateway checked), which a gateway
+without DPoP never stamps.
 
 **Guarantees.**
 
@@ -440,6 +442,7 @@ scope, and `w17-label-<name>` per broadcast label.
 | I10.3 | `Envelope` and `Scope` MUST report "not present" on absent or empty values. | `TestEnvelope_FullClaims`, `TestEnvelope_FailsClosed`, `TestScope`, `TestScopeKey` |
 | I10.4 | `Label` and `LabelKey` MUST report "not present" on absent or empty values. | `TestLabel_AbsentOrEmptyIsNotPresent` |
 | I10.5 | Only incoming metadata MUST be read; the first value of a multi-valued key wins. | `TestUserID_FromScope`, `TestReaders_IgnoreOutgoingMetadata`, `TestReaders_FirstValueWins` |
+| I10.6 | `DeviceID` MUST report a device only for exactly one non-empty incoming `x-w17-device` value; absent, empty, doubled or outgoing-only values MUST read as no device. | `TestDeviceID_ReadsTheStamp` |
 
 **Deliberate limits.**
 - The envelope is not signed. Its integrity rests on the gateway stripping
@@ -451,7 +454,7 @@ scope, and `w17-label-<name>` per broadcast label.
 
 ## I11. Principal, gateway side
 
-**Code.** `go/lib/principal/gateway.go` — `SanitizeGatewayMD`, `WithGatewayMD`; `go/lib/principal/reserved.go` — `IsGatewayOwnedKey`; `go/lib/principal/orgscope.go`
+**Code.** `go/lib/principal/gateway.go` — `SanitizeGatewayMD`, `WithGatewayMD`; `go/lib/principal/reserved.go` — `IsGatewayOwnedKey`; `go/lib/principal/orgscope.go`; `go/lib/principal/device.go` — `SetDeviceID`
 
 **Purpose.** Strips every client-supplied key in the gateway-owned namespaces
 `x-w17-*` and `w17-label-*`, and the transaction keys `w17-tx-id` and `w17-conn-id`
@@ -471,6 +474,7 @@ selector, deliberately outside the namespace.
 | I11.3 | The incoming and outgoing copies MUST NOT alias. | `TestWithGatewayMD_SidesDoNotAlias` |
 | I11.4 | `IsGatewayOwnedKey` MUST classify exactly the two namespaces and the two transaction keys (whole name only), case-insensitively. | `TestIsGatewayOwnedKey`, `TestIsEdgeReservedKey` |
 | I11.5 | `SanitizeGatewayMD` MUST strip the transaction keys a client sends on the rpc gateway. | `TestSanitizeGatewayMD_StripsTransactionKeys` |
+| I11.6 | A client MUST NOT be able to supply `x-w17-device` on any spelling: it is stripped with the namespace, `SetDeviceID` stamps only the gateway's value and removes the key for an empty id; no REST surface forwards a client's copy to a backend. | `TestDeviceID_ClientCannotInject`, `TestEdge_ClientCannotSetReservedMetadataOnAnySurface` |
 
 ---
 
@@ -478,7 +482,7 @@ selector, deliberately outside the namespace.
 
 **Code.** `go/lib/principal/principal.go` — `ForwardToOutgoing`
 
-**Purpose.** Relays exactly `x-w17-user`, `x-w17-scope-*` and `w17-label-*` from
+**Purpose.** Relays exactly `x-w17-user`, `x-w17-device`, `x-w17-scope-*` and `w17-label-*` from
 incoming to outgoing metadata for the next gRPC hop. It is installed on every
 inter-tier dial and on the in-process path. When the incoming side carries any of
 these keys, the verified principal wins: the outgoing copy of the whole relayed set
@@ -496,6 +500,7 @@ directly, or an unauthenticated call) is returned unchanged.
 | I12.2 | Non-principal metadata MUST NOT be relayed. | `TestForwardToOutgoing_ExcludesNonPrincipal` |
 | I12.3 | With an incoming principal, the relayed set MUST replace the outgoing copy (overwritten values, outgoing-only relayed keys dropped) while other outgoing keys are kept; values MUST NOT be duplicated and the call MUST be idempotent. | `TestForwardToOutgoing_VerifiedPrincipalWins` |
 | I12.4 | A context without an incoming principal MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched` |
+| I12.5 | The device id MUST be relayed on every path the principal takes — `ForwardToOutgoing`, the `grpcx.DialOpts` unary and stream interceptors over a real connection, and the in-process bridge at any depth — and a stale outgoing device MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysDevice`, `TestDialOpts_RelaysTheDeviceID`, `TestConn_NestedCall_RelaysTheDeviceID`, `TestConn_IncomingDeviceIsRelayed` |
 
 **Deliberate limits.**
 - Calling a downstream tier as a different principal is an explicit act: drop the incoming

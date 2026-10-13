@@ -665,10 +665,21 @@ func sortedSetKeys(set map[string]struct{}) []string {
 // byte that can't appear in HTTP header values per RFC 9110 §5.5, so it
 // doesn't risk a collision between "a, b" and ["a", "b"]).
 func hashHeaders(h http.Header, keyHeaders map[string]struct{}, sortedNames []string) (key string, cacheable bool) {
+	return hashHeadersExcept(h, keyHeaders, sortedNames, "")
+}
+
+// hashHeadersExcept is [hashHeaders] with one more header (canonical name,
+// "" for none) neither keyed on nor treated as unknown. [CachedDPoPAuthFunc]
+// passes the DPoP proof header: it changes on every request, and the cache
+// keys on the thumbprint the gate verified from it instead.
+func hashHeadersExcept(h http.Header, keyHeaders map[string]struct{}, sortedNames []string, except string) (key string, cacheable bool) {
 	// Reject up front if any header is neither a credential-key header nor
 	// a known-safe one — it might be an unaccounted credential.
 	for name := range h {
 		canon := http.CanonicalHeaderKey(name)
+		if except != "" && canon == except {
+			continue
+		}
 		if _, ok := keyHeaders[canon]; ok {
 			continue
 		}
