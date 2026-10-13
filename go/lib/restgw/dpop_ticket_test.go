@@ -478,3 +478,60 @@ func TestDPoPWSAuth_RefusedByInnerIsNotMarked(t *testing.T) {
 		t.Errorf("second pass over a refused ticket stream: %v, want the spent ticket refused", err)
 	}
 }
+
+// The WS header path marks a stream only for a token-bound proof: a cookie
+// upgrade with a fresh key's unbound proof is accepted (Inner decides) but
+// reports no device, and Verified is false.
+func TestDPoPWSAuth_UnboundHeaderProofIsNoDevice(t *testing.T) {
+	g := dpGate(t, dpVerifier(t, nil), &bindings{})
+	inner := &innerSeen{}
+	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: g})
+	r := dpReq(t, dpKey(t), http.MethodGet, "/v1/notes/live", "", "")
+	r.Header.Set("Cookie", "session=s1")
+	if _, err := a.AuthFunc()(r.Context(), r); err != nil {
+		t.Fatalf("cookie upgrade: %v", err)
+	}
+	if dev, ok := a.Thumbprint(r); ok {
+		t.Errorf("an unbound proof marked the stream with device %q", dev)
+	}
+	if _, ok := a.Verified(r); ok {
+		t.Error("Verified reports a device for an unbound proof")
+	}
+
+	// A bound upgrade reports the device and the token for SetDeviceMetadata.
+	key := dpKey(t)
+	b := &bindings{}
+	b.set("tok-1", key.Thumbprint())
+	ab := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: dpGate(t, dpVerifier(t, nil), b)})
+	br := dpReq(t, key, http.MethodGet, "/v1/notes/live", "tok-1", "")
+	if _, err := ab.AuthFunc()(br.Context(), br); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := ab.Verified(br); !ok || v.DeviceID() != key.Thumbprint() || v.AccessToken != "tok-1" {
+		t.Errorf("Verified = (%+v, %v)", v, ok)
+	}
+}
+
+// An unbound ticket (no thumbprint label) holding a DPoP token did not come
+// from the bound issuer; replaying it unbound would skip its binding, so it
+// is refused even when the gate is optional.
+func TestDPoPTicket_UnboundTicketWithDPoPTokenRefused(t *testing.T) {
+	g := dpGate(t, dpVerifier(t, nil), &bindings{})
+	store := restgw.NewMemoryTicketStore()
+	defer store.Close()
+	inner := &innerSeen{}
+	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+		WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
+		Gate:         g,
+	})
+	for _, auth := range []string{"DPoP tok-1", "dpop tok-1", "DPoP"} {
+		ticket, _ := store.Issue(context.Background(), map[string]string{restgw.WSAuthTicketHeaderLabel: auth}, time.Minute)
+		r := upgrade(ticket)
+		if _, err := a.AuthFunc()(r.Context(), r); !errors.Is(err, restgw.ErrTicketInvalid) {
+			t.Errorf("unbound ticket with %q: %v, want ErrTicketInvalid", auth, err)
+		}
+	}
+	if inner.calls.Load() != 0 {
+		t.Error("inner ran for an unbound ticket carrying a DPoP token")
+	}
+}

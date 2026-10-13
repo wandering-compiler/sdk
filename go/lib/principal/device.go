@@ -20,10 +20,12 @@ import (
 const DeviceMetadataKey = "x-w17-device"
 
 // DeviceID returns the verified device id of the caller: the thumbprint of
-// the device key the gateway checked a DPoP proof against. It reports false
-// when the request carries none — a gateway without DPoP, a bearer request,
-// or a call that bypassed the gateway. Fail closed on false: an absent device
-// is never "any device".
+// the device key the gateway checked a DPoP proof against, for a proof bound
+// to the request's access token. The gateway never stamps one for an unbound
+// proof (a key the client may have just generated). It reports false when the
+// request carries none — a gateway without DPoP, a bearer or cookie request,
+// an unbound proof, or a call that bypassed the gateway. Fail closed on false:
+// an absent device is never "any device".
 //
 //	dev, ok := principal.DeviceID(ctx)
 //	if !ok {

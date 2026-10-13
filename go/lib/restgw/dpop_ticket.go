@@ -72,13 +72,15 @@ const thumbprintHeader = "X-W17-Dpop-Jkt"
 //   - Header mode: the upgrade's DPoP material is verified by the gate (or
 //     taken from [DPoPFromContext] when the gate's middleware already ran);
 //     a refusal is a [*DPoPError] (401 / 503 through [WriteAuthError]).
+//     Only a token-bound proof marks the stream with a device; an unbound
+//     proof (a key the client may have just made) marks nothing.
 //   - Ticket mode: a ticket must carry [WSAuthTicketThumbprintLabel] and a
 //     DPoP-scheme Authorization, and the token must still be bound to that
 //     thumbprint ([DPoPBindingFunc]); otherwise the redemption is
 //     [ErrTicketInvalid]. One-shot redemption stands in for the proof the
 //     browser cannot send. An unbound ticket (from [WSAuthTicketPrincipal])
 //     is accepted, with no device, only when the gate is not
-//     [WithDPoPRequired].
+//     [WithDPoPRequired] and its credential is not a DPoP token.
 //
 // Panics on the same configuration errors as NewWSAuth, and on a nil Gate.
 func NewDPoPWSAuth(cfg DPoPWSAuthConfig) *DPoPWSAuth {
@@ -107,13 +109,29 @@ func NewDPoPWSAuth(cfg DPoPWSAuthConfig) *DPoPWSAuth {
 }
 
 // Thumbprint returns the device thumbprint this wrapper bound r's stream to,
-// after its AuthFunc accepted r. A value a client sent is never returned.
+// after its AuthFunc accepted r: only a token-bound proof or a bound ticket
+// binds a stream. A value a client sent is never returned.
 func (a *DPoPWSAuth) Thumbprint(r *http.Request) (string, bool) {
 	if r.Header.Get(promotedHeader) != a.marker {
 		return "", false
 	}
 	t := r.Header.Get(thumbprintHeader)
 	return t, t != ""
+}
+
+// Verified returns what this wrapper established for r's stream, for
+// [SetDeviceMetadata]: the bound thumbprint and the DPoP token it is bound
+// to. ok is false when the stream is not bound to a device.
+func (a *DPoPWSAuth) Verified(r *http.Request) (DPoPVerified, bool) {
+	thumb, ok := a.Thumbprint(r)
+	if !ok {
+		return DPoPVerified{}, false
+	}
+	token, ok := dpop.AccessToken(r.Header.Get("Authorization"))
+	if !ok {
+		return DPoPVerified{}, false
+	}
+	return DPoPVerified{Thumbprint: thumb, AccessToken: token}, true
 }
 
 // AuthFunc returns the decorated AuthFunc.
@@ -157,7 +175,9 @@ func (a *DPoPWSAuth) viaHeader(ctx context.Context, r *http.Request) ([]byte, er
 			return nil, &DPoPError{Err: err}
 		}
 	}
-	if v.Thumbprint == "" {
+	if !v.Bound() {
+		// No proof, or an unbound one: a key the client may have just made
+		// is no device, so the stream is not marked with it.
 		return a.cfg.Inner(ctx, r)
 	}
 	return a.innerThenMark(ctx, r, v.Thumbprint)
@@ -175,7 +195,9 @@ func (a *DPoPWSAuth) viaTicket(ctx context.Context, r *http.Request, ticket stri
 	}
 	thumb := labels[WSAuthTicketThumbprintLabel]
 	if thumb == "" {
-		if a.cfg.Gate.required {
+		// A DPoP token in a ticket without a thumbprint did not come from the
+		// bound issuer; replaying it unbound would skip its binding.
+		if a.cfg.Gate.required || isDPoPScheme(auth) {
 			return nil, ErrTicketInvalid
 		}
 		r.Header.Set("Authorization", auth)

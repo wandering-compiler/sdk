@@ -331,7 +331,7 @@ func TestDPoPGate_OptionalAndMint(t *testing.T) {
 // for an empty thumbprint, without touching the caller's metadata.
 func TestSetDeviceMetadata(t *testing.T) {
 	base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-w17-user", "env", principal.DeviceMetadataKey, "stale"))
-	ctx := restgw.SetDeviceMetadata(base, "jkt-1")
+	ctx := restgw.SetDeviceMetadata(base, restgw.DPoPVerified{Thumbprint: "jkt-1", AccessToken: "tok-1"})
 	md, _ := metadata.FromOutgoingContext(ctx)
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 1 || got[0] != "jkt-1" {
 		t.Errorf("device = %v, want [jkt-1]", got)
@@ -343,11 +343,11 @@ func TestSetDeviceMetadata(t *testing.T) {
 	if got := orig.Get(principal.DeviceMetadataKey); got[0] != "stale" {
 		t.Errorf("caller's metadata modified: %v", got)
 	}
-	md, _ = metadata.FromOutgoingContext(restgw.SetDeviceMetadata(base, ""))
+	md, _ = metadata.FromOutgoingContext(restgw.SetDeviceMetadata(base, restgw.DPoPVerified{}))
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 0 {
 		t.Errorf("empty thumbprint left %v", got)
 	}
-	md, _ = metadata.FromOutgoingContext(restgw.SetDeviceMetadata(context.Background(), "jkt-2"))
+	md, _ = metadata.FromOutgoingContext(restgw.SetDeviceMetadata(context.Background(), restgw.DPoPVerified{Thumbprint: "jkt-2", AccessToken: "tok-2"}))
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 1 || got[0] != "jkt-2" {
 		t.Errorf("no prior metadata: device = %v", got)
 	}
@@ -515,5 +515,34 @@ func TestCachedDPoPAuthFunc_BearerAndOff(t *testing.T) {
 	_, _ = off(r.Context(), r)
 	if inner.calls.Load() != before+2 {
 		t.Error("ttl 0 still cached")
+	}
+}
+
+// A proof with no token — a cookie request, or no credential at all — proves
+// only that the client holds a key it may have generated a moment ago. It
+// must never become a device id: DeviceID is empty, SetDeviceMetadata stamps
+// nothing (and removes a stale copy), and principal.DeviceID reads false.
+func TestDPoPGate_UnboundProofIsNoDevice(t *testing.T) {
+	g := dpGate(t, dpVerifier(t, nil), &bindings{})
+	fresh := dpKey(t)
+	r := dpReq(t, fresh, http.MethodGet, "/v1/notes", "", "")
+	r.Header.Set("Cookie", "session=s1")
+	rec, seen := serve(g, r)
+	if rec.Code != http.StatusOK || seen == nil {
+		t.Fatalf("cookie + unbound proof: status %d", rec.Code)
+	}
+	if seen.DeviceID() != "" {
+		t.Errorf("an unbound proof yields device id %q", seen.DeviceID())
+	}
+	base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(principal.DeviceMetadataKey, "stale"))
+	md, _ := metadata.FromOutgoingContext(restgw.SetDeviceMetadata(base, *seen))
+	if got := md.Get(principal.DeviceMetadataKey); len(got) != 0 {
+		t.Fatalf("SetDeviceMetadata stamped %v for a key the client just generated", got)
+	}
+	if dev, ok := principal.DeviceID(metadata.NewIncomingContext(context.Background(), md)); ok {
+		t.Errorf("principal.DeviceID = %q for an unbound proof", dev)
+	}
+	if (restgw.DPoPVerified{Thumbprint: "jkt", AccessToken: "tok"}).DeviceID() != "jkt" {
+		t.Error("a bound verification lost its device id")
 	}
 }

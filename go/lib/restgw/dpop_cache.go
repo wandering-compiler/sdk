@@ -77,9 +77,16 @@ func carriesDPoP(r *http.Request) bool {
 		return true
 	}
 	for _, a := range r.Header.Values("Authorization") {
-		if scheme, _, _ := strings.Cut(strings.TrimSpace(a), " "); strings.EqualFold(scheme, dpop.AuthScheme) {
+		if isDPoPScheme(a) {
 			return true
 		}
 	}
 	return false
+}
+
+// isDPoPScheme reports whether an Authorization value uses the DPoP scheme,
+// with or without a token.
+func isDPoPScheme(authorization string) bool {
+	scheme, _, _ := strings.Cut(strings.TrimSpace(authorization), " ")
+	return strings.EqualFold(scheme, dpop.AuthScheme)
 }

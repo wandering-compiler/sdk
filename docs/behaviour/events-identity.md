@@ -430,8 +430,8 @@ the principal's labels. A client whose principal cannot be resolved receives not
 **Purpose.** Reads the gateway-verified caller from incoming gRPC metadata:
 `x-w17-user` (base64 of the auth response proto), `x-w17-scope-<name>` per declared
 scope, `w17-label-<name>` per broadcast label, and `x-w17-device`, the verified DPoP device
-id (the RFC 7638 thumbprint of the key whose proof the gateway checked), which a gateway
-without DPoP never stamps.
+id (the RFC 7638 thumbprint of the key whose token-bound proof the gateway checked), which
+a gateway without DPoP, or a request with only an unbound proof, never carries.
 
 **Guarantees.**
 

@@ -88,8 +88,10 @@ func NewDPoPGate(v *dpop.Verifier, opts ...DPoPOption) (*DPoPGate, error) {
 
 // DPoPVerified is what the gate established for one request.
 type DPoPVerified struct {
-	// Thumbprint is the RFC 7638 thumbprint of the key whose proof verified:
-	// the device id.
+	// Thumbprint is the RFC 7638 thumbprint of the key whose proof verified.
+	// On its own it proves only possession of a key — any client can make
+	// one — so it is a device id only when the proof was bound to a token
+	// ([DPoPVerified.DeviceID]).
 	Thumbprint string
 	// AccessToken is the DPoP-bound token the proof was checked against, or
 	// "" for an unbound proof (a mint request: no token yet).
@@ -98,6 +100,17 @@ type DPoPVerified struct {
 
 // Bound reports whether the proof was checked against a token's binding.
 func (v DPoPVerified) Bound() bool { return v.AccessToken != "" }
+
+// DeviceID is the device id this verification establishes: the thumbprint
+// of a proof bound to a token, and "" for an unbound (mint) proof, whose key
+// the client may have generated a moment ago. A mint endpoint that needs the
+// new key's thumbprint to bind a token reads Thumbprint; nothing else should.
+func (v DPoPVerified) DeviceID() string {
+	if !v.Bound() {
+		return ""
+	}
+	return v.Thumbprint
+}
 
 type dpopVerifiedKey struct{}
 
@@ -246,18 +259,19 @@ func (e *DPoPError) GRPCStatus() *status.Status {
 	return status.New(dpop.GRPCCode(e.Err), "dpop: "+e.Err.Error())
 }
 
-// SetDeviceMetadata stamps a verified thumbprint as the device id
-// (principal.DeviceMetadataKey) on ctx's outgoing metadata, next to
-// [SetUserMetadata]'s envelope. An empty thumbprint removes any copy, so an
-// unverified request never carries one. Pass only a thumbprint the gate
-// verified for this request ([DPoPFromContext], [DPoPWSAuth.Thumbprint]).
-func SetDeviceMetadata(ctx context.Context, thumbprint string) context.Context {
+// SetDeviceMetadata stamps the device id of v ([DPoPVerified.DeviceID]) on
+// ctx's outgoing metadata (principal.DeviceMetadataKey), next to
+// [SetUserMetadata]'s envelope. Only a proof bound to a token yields a
+// device id: for an unbound proof, or the zero value, any copy is removed, so
+// a key a client just generated never becomes a device. Pass what the gate
+// verified for this request ([DPoPFromContext], [DPoPWSAuth.Verified]).
+func SetDeviceMetadata(ctx context.Context, v DPoPVerified) context.Context {
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if ok {
 		md = md.Copy()
 	} else {
 		md = metadata.MD{}
 	}
-	principal.SetDeviceID(md, thumbprint)
+	principal.SetDeviceID(md, v.DeviceID())
 	return metadata.NewOutgoingContext(ctx, md)
 }

@@ -1314,12 +1314,13 @@ fresh nonce.
 
 ## E37. DPoP at the REST edge
 
-**Code.** `go/lib/restgw/dpop_gate.go` (`DPoPGate`, `NewDPoPGate`, `WithDPoPBinding`, `WithDPoPRequired`, `DPoPBindingFunc`, `DPoPVerified`, `DPoPFromContext`, `DPoPError`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedDPoPAuthFunc`), `dpop_ticket.go` (`DPoPTicketPrincipal`, `NewDPoPWSAuth`, `DPoPWSAuthConfig`, `DPoPWSAuth`, `WSAuthTicketThumbprintLabel`, `ErrDPoPTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `DPoPBindingCheck`); `go/lib/restgw/cors.go` (`WithDPoPCORS`).
+**Code.** `go/lib/restgw/dpop_gate.go` (`DPoPGate`, `NewDPoPGate`, `WithDPoPBinding`, `WithDPoPRequired`, `DPoPBindingFunc`, `DPoPVerified`, `DPoPFromContext`, `DPoPError`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedDPoPAuthFunc`), `dpop_ticket.go` (`DPoPTicketPrincipal`, `NewDPoPWSAuth`, `DPoPWSAuthConfig`, `DPoPWSAuth` (`Thumbprint`, `Verified`), `WSAuthTicketThumbprintLabel`, `ErrDPoPTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `DPoPBindingCheck`); `go/lib/restgw/cors.go` (`WithDPoPCORS`).
 
 **Purpose.** Opt-in wiring of E35 into the REST gateway. The gate verifies
 `Authorization: DPoP <token>` + `DPoP: <proof>`, answers refusals with the RFC 9449 challenge,
-and records the verified thumbprint, which `SetDeviceMetadata` stamps as the device id
-(`x-w17-device`, I10). Streams are verified at set-up: a header upgrade by its own proof, a
+and records the verified thumbprint. Only a proof bound to a token makes that thumbprint a
+device id (`DPoPVerified.DeviceID`), which `SetDeviceMetadata` stamps as `x-w17-device` (I10);
+an unbound proof proves only possession of a key any client can generate. Streams are verified at set-up: a header upgrade by its own proof, a
 browser stream by a ticket bound to the thumbprint of the signed request that obtained it,
 whose one-shot redemption stands in for the proof. The stream watchdog asks a binding-only
 question instead of replaying a proof. A gateway that builds none of this behaves as before.
@@ -1349,7 +1350,7 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 | E37.2 | Every refusal MUST be answered by the gate — `WWW-Authenticate` per E35.21, the error envelope, 401 or 503 (`Retry-After`, no challenge) — and `next` MUST NOT run: a token without a proof, another key than the binding, an unbound token, no binding lookup, a refused or unanswered lookup, a proof next to a bearer token, two `Authorization` headers, a proof for another path, a replay, a required gate without DPoP material | `TestDPoPGate_RefusalsCarryTheChallenge` |
 | E37.3 | With nonces on, a proof without a nonce MUST be answered `use_dpop_nonce` with `DPoP-Nonce`; the retry with it MUST pass, and a verified response MUST carry a fresh nonce | `TestDPoPGate_NonceChallengeAndRotation` |
 | E37.4 | A gate that is not required MUST pass a request without DPoP material unchanged and unverified; a proof without `Authorization` MUST verify as unbound | `TestDPoPGate_OptionalAndMint` |
-| E37.5 | `SetDeviceMetadata` MUST stamp the thumbprint on a copy of the outgoing metadata and remove the key for an empty thumbprint | `TestSetDeviceMetadata` |
+| E37.5 | `SetDeviceMetadata` MUST stamp the device id on a copy of the outgoing metadata and remove the key when there is none | `TestSetDeviceMetadata` |
 | E37.6 | A `DPoPError` MUST keep its cause for `errors.Is` and carry the status `dpop.GRPCCode` gives, so `WriteAuthError` answers 401 / 503 | `TestDPoPError_Status` |
 | E37.7 | The DPoP auth cache MUST key a verified request on the verified thumbprint: one key's fresh proofs hit its entry, another key with the same credential headers MUST NOT read it | `TestCachedDPoPAuthFunc_KeysOnTheVerifiedThumbprint` |
 | E37.8 | A request carrying DPoP material that was not verified on this request MUST NOT be answered from the cache nor fill it, on any presentation | `TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest` |
@@ -1362,6 +1363,9 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 | E37.15 | A watched stream with no binding to check MUST end at once; a disabled watchdog MUST return ctx unchanged | `TestWatchStreamBinding_NoBindingEndsTheStream` |
 | E37.16 | `WithDPoPCORS` MUST allow `DPoP` and expose `DPoP-Nonce` and `WWW-Authenticate` to allowed origins only, keep the default and operator headers without duplicates, leave its argument and the defaults unchanged | `TestWithDPoPCORS` |
 | E37.17 | A stream `Inner` refuses MUST NOT be marked: no device is reported and the spent ticket is not trusted on a second pass | `TestDPoPWSAuth_RefusedByInnerIsNotMarked` |
+| E37.18 | An unbound proof (a cookie or credential-less request signed by any key) MUST NOT yield a device id: `DeviceID` is empty, `SetDeviceMetadata` stamps nothing and removes a stale copy, `principal.DeviceID` reads false | `TestDPoPGate_UnboundProofIsNoDevice` |
+| E37.19 | A WS header upgrade MUST mark the stream with a device only for a token-bound proof; `Verified` MUST report the device and token of a bound stream only | `TestDPoPWSAuth_UnboundHeaderProofIsNoDevice` |
+| E37.20 | An unbound ticket whose credential uses the DPoP scheme MUST be refused (`ErrTicketInvalid`) even when the gate is optional | `TestDPoPTicket_UnboundTicketWithDPoPTokenRefused` |
 
 **Deliberate limits.**
 - The gate does not decide what a token is worth; `DPoPBindingFunc` and the auth method do.
