@@ -84,6 +84,11 @@ func TestFake_RefusesAPreflightTheDigestDoesNotCover(t *testing.T) {
 	if !strings.Contains(err.Error(), "does not cover its adopt preflight") {
 		t.Errorf("refusal does not name the cause: %v", err)
 	}
+	// Re-fetching returns the stored digest unchanged, so advice that stops
+	// at "fetch again" sends the operator round in a circle.
+	if !strings.Contains(err.Error(), "squash") || !strings.Contains(err.Error(), "Apply it for real") {
+		t.Errorf("refusal does not name a way out that works for a stored migration: %v", err)
+	}
 	if n := len(st.Calls()); n != 0 {
 		t.Errorf("%d body(ies) executed despite the refusal", n)
 	}

@@ -629,7 +629,7 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		// with a check that always passes.
 		err := fmt.Errorf("fake apply %s/%s: this migration's content_sha256 does not cover its adopt preflight, so the preflight cannot be trusted to be the one the console rendered\n"+
 			"  why: --fake executes the preflight and records the migration on its result, so the preflight has to be bound by the digest like every other body that runs\n"+
-			"  fix: fetch the migration again from a console that binds the preflight in content_sha256, or apply it for real",
+			"  fix: a digest is minted once and stored, so re-fetching returns the same one: a migration stored before its console bound the preflight can never be faked. Apply it for real, or squash the history (`w17ctl migrate squash`) so the console mints a baseline whose digest binds it",
 			p.Connection, p.Migration.GetId())
 		logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), err)
 		return err
