@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-135 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
+136 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
 
 ## Server × Server
 
@@ -97,6 +97,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | DPoP gate (E37) | Stream re-auth watchdog (E17) | A DPoP stream is watched by `dpopgw.WatchStreamBinding`, which asks a binding-only question and never replays the set-up proof or a spent ticket; refusals and outages are split as in E17. | `TestWatchStreamBinding_AsksTheBindingQuestion`, `TestWatchStreamBinding_RefusedVersusUnanswered`, `TestWatchStreamBinding_NoBindingEndsTheStream` |
 | DPoP gate (E37) | CORS (E12) | `WithDPoPCORS` lets a browser send `DPoP` and read `DPoP-Nonce` / `WWW-Authenticate`; the defaults stay unchanged. | `TestWithDPoPCORS` |
 | Shared replay stores (E38) | DPoP verifier (E35) | Replicas sharing the stores refuse each other's accepted proofs; a failing store is an error the verifier turns into 503, never an acceptance. | `TestRedisJTIStore_Contract`, `TestSQLJTIStore_Contract_SQLite`, `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
+| DPoP TypeScript client (E39) | DPoP verifier (E35), DPoP gate (E37) | Proofs the TypeScript client signs, directly and through its nonce retry to the ticket issuer, verify with the Go verifier under the thumbprint the client computed, and are refused once their nonce, method, path, token, binding or signature changes. | `TestTSProofsVerify`, `TestTSProofsRefusedWhenTheirBindingsChange`, `TestTSThumbprintsMatch` |
 
 ## Edges × Data
 
