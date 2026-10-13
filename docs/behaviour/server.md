@@ -262,7 +262,7 @@ client settings are paired so pings are never rejected as `too_many_pings`.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S7.1 | The client ping interval (30s) MUST be at least the server `MinTime` (10s). | `TestDefaultClientKeepalive_PairsWithServerEnforcement` (client side, against a literal) |
+| S7.1 | The client ping interval (30s) MUST be at least the server `MinTime` (10s). | `TestDefaultClientKeepalive_PairsWithServerEnforcement`, `TestGRPCComponent_PermitsTheClientsKeepalivePingsOnAnIdleConnection`, `TestDefaultClientKeepalive_MatchesTheLibraryClient` |
 | S7.2 | The server MUST ping idle clients every 30s and drop them after 10s without an ack. | `TestGRPCComponent_PingsAnIdleClientAndDropsItWithoutAnAck` |
 
 ## S8. gRPC panic recovery interceptors
@@ -412,7 +412,7 @@ to end at the start of the drain.
 | S13.2 | Idle shutdown MUST return immediately. | `TestStopHTTPIdleReturnsImmediately` |
 | S13.3 | When the deadline passes, request contexts MUST be cancelled, the server force-closed, and `Stop` returns `nil`. | `TestStopHTTPForcesCloseAndReportsNoError`, `TestStopHTTPForcedPathCancelsRequestContexts` |
 | S13.4 | `Draining(ctx)` MUST return nil when no drain was attached. | `TestDrainingAbsentIsNilChannel` |
-| S13.5 | Per-listener base contexts MUST be cancelled on every stop path. | `TestStopHTTP_GracefulStopCancelsBaseContexts`, `TestStopHTTPForcedPathCancelsRequestContexts` |
+| S13.5 | Per-listener base contexts MUST be cancelled on every stop path. | `TestStopHTTP_GracefulStopCancelsBaseContexts`, `TestStopHTTPForcedPathCancelsRequestContexts`, `TestPerRPCWebSocketStream_EndsWhenTheServerStops` |
 | S13.6 | The drain channel MUST be closed at most once, even with repeated `Shutdown` calls or a force-close. | `TestStopHTTP_DrainClosedOnceAcrossRepeatedStops` |
 | S13.7 | An existing `BaseContext` MUST be composed with, not replaced. | `TestBindHTTP_ComposesAnExistingBaseContext` |
 | S13.8 | A server error other than the deadline MUST be returned and MUST NOT force-close. | `TestStopHTTP_NonDeadlineErrorIsReturnedWithoutForceClose` |
@@ -685,7 +685,7 @@ directly, with behaviour equivalent to a wire hop.
 | S21.2 | An unknown unary or stream method MUST return `Unimplemented`. | `TestConn_UnknownMethod_Unimplemented`, `TestConn_Streaming_Unregistered_Unimplemented` |
 | S21.3 | A done context MUST be refused as on the wire, before the method lookup. | `TestInvoke_RefusesADoneContextLikeTheWire`, `TestInvoke_DoneContextWinsOverAnUnknownMethod`, `TestNewStream_RefusesADoneContext`, `TestInvoke_LiveContextStillDispatches` |
 | S21.4 | A nested call MUST see only what a wire hop delivers: no transaction id, no leak of the caller's incoming metadata, and an unauthenticated caller stays unauthenticated. | `TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver`, `TestConn_Handler_StartsWithACleanOutgoingSide`, `TestConn_CallerWithNoOutgoingMetadata_DoesNotLeakItsIncoming`, `TestConn_UnauthenticatedCaller_StaysUnauthenticated`, `TestConn_Stream_NestedCall_SeesOnlyWhatAWireHopWouldDeliver` |
-| S21.5 | The unary chain MUST run outermost first. | `TestConn_WithUnaryInterceptors_ChainOrder`, `TestChainUnary_Single`, `TestConn_WithUnaryInterceptors_Empty`, `TestConn_NoInterceptor_StillDispatches` |
+| S21.5 | The unary chain MUST run outermost first. | `TestConn_WithUnaryInterceptors_ChainOrder`, `TestTierChain_RunsTheSameComposedAndSplit`, `TestChainUnary_Single`, `TestConn_WithUnaryInterceptors_Empty`, `TestConn_NoInterceptor_StillDispatches` |
 | S21.6 | Stream interceptors MUST run in chain order, and a rejection MUST surface. | `TestConn_StreamInterceptor_Runs`, `TestConn_WithStreamInterceptors_ChainOrder`, `TestConn_StreamInterceptor_RejectionSurfaces`, `TestConn_WithStreamInterceptors_Empty` |
 | S21.7 | Headers and trailers MUST work for unary and streams; `Header()` MUST be released when the handler ends silently. | `TestConn_Invoke_HonoursHeaderAndTrailerCallOptions`, `TestConn_Invoke_NoHeaderSet_IsEmptyNotBroken`, `TestConn_Stream_HeaderAndTrailer`, `TestConn_Stream_HeaderUnblocksWhenHandlerEndsSilently` |
 | S21.8 | A stream handler panic MUST become `Internal`, and the process survives. | `TestConn_Streaming_PanicRecovered` |
