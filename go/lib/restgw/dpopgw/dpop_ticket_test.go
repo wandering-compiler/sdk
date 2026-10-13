@@ -1,4 +1,4 @@
-package restgw_test
+package dpopgw_test
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,13 +15,14 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
+	"github.com/wandering-compiler/sdk/go/lib/restgw/dpopgw"
 )
 
 // issueBoundTicket runs the issuer behind the gate, as a DPoP surface mounts
 // it, and returns the ticket (or the refusal status).
-func issueBoundTicket(t *testing.T, g *restgw.DPoPGate, store restgw.TicketStore, r *http.Request) (string, int) {
+func issueBoundTicket(t *testing.T, g *dpopgw.Gate, store restgw.TicketStore, r *http.Request) (string, int) {
 	t.Helper()
-	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{Principal: restgw.DPoPTicketPrincipal, Store: store})
+	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{Principal: dpopgw.TicketPrincipal, Store: store})
 	rec := httptest.NewRecorder()
 	g.Middleware(issuer).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
@@ -69,7 +69,7 @@ func TestDPoPTicket_BoundFlow(t *testing.T) {
 	}
 
 	inner := &innerSeen{}
-	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+	a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 		WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
 		Gate:         g,
 	})
@@ -116,7 +116,7 @@ func TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest(t *testing.T) {
 
 	b := &bindings{}
 	b.set("tok-1", key.Thumbprint())
-	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{Principal: restgw.DPoPTicketPrincipal, Store: store})
+	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{Principal: dpopgw.TicketPrincipal, Store: store})
 	rec := httptest.NewRecorder()
 	issuer.ServeHTTP(rec, dpReq(t, key, http.MethodPost, "/w17-ticket", "tok-1", ""))
 	if rec.Code != http.StatusUnauthorized {
@@ -144,8 +144,8 @@ func TestDPoPTicket_RedemptionChecksTheBinding(t *testing.T) {
 			store := restgw.NewMemoryTicketStore()
 			defer store.Close()
 			labels := map[string]string{
-				restgw.WSAuthTicketHeaderLabel:     "DPoP tok-1",
-				restgw.WSAuthTicketThumbprintLabel: key.Thumbprint(),
+				restgw.WSAuthTicketHeaderLabel: "DPoP tok-1",
+				dpopgw.TicketThumbprintLabel:   key.Thumbprint(),
 			}
 			mutate(b, labels)
 			ticket, err := store.Issue(context.Background(), labels, time.Minute)
@@ -153,7 +153,7 @@ func TestDPoPTicket_RedemptionChecksTheBinding(t *testing.T) {
 				t.Fatal(err)
 			}
 			inner := &innerSeen{}
-			a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+			a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 				WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
 				Gate:         g,
 			})
@@ -178,9 +178,9 @@ func TestDPoPTicket_RedemptionChecksTheBinding(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
 	ticket, _ := store.Issue(context.Background(), map[string]string{
-		restgw.WSAuthTicketHeaderLabel: "DPoP tok-1", restgw.WSAuthTicketThumbprintLabel: key.Thumbprint(),
+		restgw.WSAuthTicketHeaderLabel: "DPoP tok-1", dpopgw.TicketThumbprintLabel: key.Thumbprint(),
 	}, time.Minute)
-	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+	a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 		WSAuthConfig: restgw.WSAuthConfig{Inner: (&innerSeen{}).fn, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
 		Gate:         g,
 	})
@@ -195,14 +195,14 @@ func TestDPoPTicket_RedemptionChecksTheBinding(t *testing.T) {
 // gate is optional, and refused when it is required.
 func TestDPoPTicket_UnboundTicket(t *testing.T) {
 	for _, required := range []bool{false, true} {
-		var opts []restgw.DPoPOption
+		var opts []dpopgw.Option
 		if required {
-			opts = append(opts, restgw.WithDPoPRequired())
+			opts = append(opts, dpopgw.WithRequired())
 		}
 		g := dpGate(t, dpVerifier(t, nil), &bindings{}, opts...)
 		store := restgw.NewMemoryTicketStore()
 		ticket, _ := store.Issue(context.Background(), map[string]string{restgw.WSAuthTicketHeaderLabel: "Bearer tok-1"}, time.Minute)
-		a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+		a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 			WSAuthConfig: restgw.WSAuthConfig{Inner: (&innerSeen{}).fn, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
 			Gate:         g,
 		})
@@ -228,7 +228,7 @@ func TestDPoPWSAuth_HeaderModeAndForgery(t *testing.T) {
 	b.set("tok-1", key.Thumbprint())
 	g := dpGate(t, dpVerifier(t, nil), b)
 	inner := &innerSeen{}
-	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+	a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 		WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn},
 		Gate:         g,
 	})
@@ -244,7 +244,7 @@ func TestDPoPWSAuth_HeaderModeAndForgery(t *testing.T) {
 
 	bad := dpReq(t, dpKey(t), http.MethodGet, "/v1/notes/live", "tok-1", "")
 	_, err := authFn(bad.Context(), bad)
-	var de *restgw.DPoPError
+	var de *dpopgw.Error
 	if !errors.As(err, &de) || status.Code(err) != codes.Unauthenticated || !errors.Is(err, dpop.ErrBindingMismatch) {
 		t.Errorf("wrong key: %v, want a 401-class DPoPError for a binding mismatch", err)
 	}
@@ -264,7 +264,7 @@ func TestDPoPWSAuth_HeaderModeAndForgery(t *testing.T) {
 	}
 
 	// Another instance's marker is not this one's.
-	other := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: g})
+	other := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: g})
 	if _, ok := other.Thumbprint(r); ok {
 		t.Error("one wrapper trusted another wrapper's promotion")
 	}
@@ -276,7 +276,7 @@ func TestNewDPoPWSAuth_PanicsWithoutGate(t *testing.T) {
 			t.Error("no panic without a gate")
 		}
 	}()
-	restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: (&innerSeen{}).fn}})
+	dpopgw.NewWSAuth(dpopgw.WSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: (&innerSeen{}).fn}})
 }
 
 // --- binding watchdog ---
@@ -302,7 +302,7 @@ func TestWatchStreamBinding_AsksTheBindingQuestion(t *testing.T) {
 		}
 		return nil
 	}
-	ctx, stop := restgw.WatchStreamBinding(context.Background(), check, boundStreamReq("tok-1"), "jkt-1", 5*time.Millisecond)
+	ctx, stop := dpopgw.WatchStreamBinding(context.Background(), check, boundStreamReq("tok-1"), "jkt-1", 5*time.Millisecond)
 	defer stop()
 	if !waitCancelled(ctx, 2*time.Second) {
 		t.Fatal("a revoked device kept streaming")
@@ -315,14 +315,13 @@ func TestWatchStreamBinding_AsksTheBindingQuestion(t *testing.T) {
 // Every definite refusal ends the stream; an outage keeps it open and
 // re-asks, as the auth watchdog does.
 func TestWatchStreamBinding_RefusedVersusUnanswered(t *testing.T) {
-	defer restgw.SetStreamReauthRetryMinForTest(time.Millisecond)()
 	for name, refusal := range map[string]error{
 		"unauthenticated":   status.Error(codes.Unauthenticated, "revoked"),
 		"permission denied": status.Error(codes.PermissionDenied, "device revoked"),
 		"binding mismatch":  dpop.ErrBindingMismatch,
 	} {
 		t.Run(name, func(t *testing.T) {
-			ctx, stop := restgw.WatchStreamBinding(context.Background(),
+			ctx, stop := dpopgw.WatchStreamBinding(context.Background(),
 				func(context.Context, string, string) error { return refusal }, boundStreamReq("tok-1"), "jkt-1", 5*time.Millisecond)
 			defer stop()
 			if !waitCancelled(ctx, 2*time.Second) {
@@ -331,7 +330,7 @@ func TestWatchStreamBinding_RefusedVersusUnanswered(t *testing.T) {
 		})
 	}
 	var calls atomic.Int32
-	ctx, stop := restgw.WatchStreamBinding(context.Background(), func(context.Context, string, string) error {
+	ctx, stop := dpopgw.WatchStreamBinding(context.Background(), func(context.Context, string, string) error {
 		calls.Add(1)
 		return status.Error(codes.Unavailable, "down")
 	}, boundStreamReq("tok-1"), "jkt-1", 5*time.Millisecond)
@@ -356,86 +355,22 @@ func TestWatchStreamBinding_NoBindingEndsTheStream(t *testing.T) {
 		"bearer token":     {func() *http.Request { r := boundStreamReq(""); r.Header.Set("Authorization", "Bearer x"); return r }(), "jkt-1"},
 		"empty thumbprint": {boundStreamReq("tok-1"), ""},
 	} {
-		ctx, stop := restgw.WatchStreamBinding(context.Background(), never, tc.r, tc.thumb, time.Millisecond)
+		ctx, stop := dpopgw.WatchStreamBinding(context.Background(), never, tc.r, tc.thumb, time.Millisecond)
 		if ctx.Err() == nil {
 			t.Errorf("%s: stream left open with nothing to check", name)
 		}
 		stop()
 	}
 	base := context.Background()
-	if ctx, stop := restgw.WatchStreamBinding(base, never, boundStreamReq("tok-1"), "jkt-1", 0); ctx != base {
+	if ctx, stop := dpopgw.WatchStreamBinding(base, never, boundStreamReq("tok-1"), "jkt-1", 0); ctx != base {
 		t.Error("interval 0 did not return ctx unchanged")
 	} else {
 		stop()
 	}
-	if ctx, stop := restgw.WatchStreamBinding(base, nil, boundStreamReq("tok-1"), "jkt-1", time.Second); ctx != base {
+	if ctx, stop := dpopgw.WatchStreamBinding(base, nil, boundStreamReq("tok-1"), "jkt-1", time.Second); ctx != base {
 		t.Error("nil check did not return ctx unchanged")
 	} else {
 		stop()
-	}
-}
-
-// --- CORS ---
-
-func TestWithDPoPCORS(t *testing.T) {
-	base := restgw.CORSConfig{AllowedOrigins: []string{"https://app.example.com"}}
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-
-	pre := func(cfg restgw.CORSConfig) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodOptions, "/v1/notes", nil)
-		r.Header.Set("Origin", "https://app.example.com")
-		r.Header.Set("Access-Control-Request-Method", "POST")
-		rec := httptest.NewRecorder()
-		restgw.CORSMiddleware(cfg, next).ServeHTTP(rec, r)
-		return rec
-	}
-	simple := func(cfg restgw.CORSConfig, origin string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodGet, "/v1/notes", nil)
-		r.Header.Set("Origin", origin)
-		rec := httptest.NewRecorder()
-		restgw.CORSMiddleware(cfg, next).ServeHTTP(rec, r)
-		return rec
-	}
-
-	// Defaults unchanged: no DPoP, nothing exposed.
-	if h := pre(base).Header().Get("Access-Control-Allow-Headers"); strings.Contains(h, "DPoP") {
-		t.Errorf("default config allows DPoP: %q", h)
-	}
-	if h := simple(base, "https://app.example.com").Header().Get("Access-Control-Expose-Headers"); h != "" {
-		t.Errorf("default config exposes %q", h)
-	}
-
-	cfg := restgw.WithDPoPCORS(base)
-	allow := pre(cfg).Header().Get("Access-Control-Allow-Headers")
-	for _, want := range []string{"DPoP", "Authorization", "Content-Type", "W17-Org"} {
-		if !strings.Contains(strings.ToLower(allow), strings.ToLower(want)) {
-			t.Errorf("Allow-Headers %q lacks %s", allow, want)
-		}
-	}
-	expose := simple(cfg, "https://app.example.com").Header().Get("Access-Control-Expose-Headers")
-	if !strings.Contains(expose, "DPoP-Nonce") || !strings.Contains(expose, "WWW-Authenticate") {
-		t.Errorf("Expose-Headers %q", expose)
-	}
-	if h := simple(cfg, "https://evil.example.com").Header().Get("Access-Control-Expose-Headers"); h != "" {
-		t.Errorf("a disallowed origin got Expose-Headers %q", h)
-	}
-
-	// Operator headers are kept, nothing is doubled, the input is not
-	// modified, and no origins stays CORS-off.
-	custom := restgw.CORSConfig{AllowedOrigins: base.AllowedOrigins, AllowedHeaders: []string{"X-Tenant", "dpop"}, ExposedHeaders: []string{"X-Total"}}
-	got := restgw.WithDPoPCORS(restgw.WithDPoPCORS(custom))
-	if strings.Join(got.AllowedHeaders, ",") != "X-Tenant,dpop" {
-		t.Errorf("AllowedHeaders = %v", got.AllowedHeaders)
-	}
-	if strings.Join(got.ExposedHeaders, ",") != "X-Total,DPoP-Nonce,WWW-Authenticate" {
-		t.Errorf("ExposedHeaders = %v", got.ExposedHeaders)
-	}
-	if len(custom.ExposedHeaders) != 1 || len(custom.AllowedHeaders) != 2 {
-		t.Error("WithDPoPCORS modified its argument")
-	}
-	off := restgw.WithDPoPCORS(restgw.CORSConfig{})
-	if rec := simple(off, "https://app.example.com"); rec.Header().Get("Access-Control-Allow-Origin") != "" || rec.Header().Get("Access-Control-Expose-Headers") != "" {
-		t.Error("a config with no origins turned CORS on")
 	}
 }
 
@@ -449,7 +384,7 @@ func TestDPoPWSAuth_RefusedByInnerIsNotMarked(t *testing.T) {
 	refuse := func(context.Context, *http.Request) ([]byte, error) {
 		return nil, status.Error(codes.Unauthenticated, "session revoked")
 	}
-	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: refuse}, Gate: g})
+	a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: refuse}, Gate: g})
 	r := dpReq(t, key, http.MethodGet, "/v1/notes/live", "tok-1", "")
 	if _, err := a.AuthFunc()(r.Context(), r); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("err = %v, want Inner's refusal", err)
@@ -461,9 +396,9 @@ func TestDPoPWSAuth_RefusedByInnerIsNotMarked(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
 	ticket, _ := store.Issue(context.Background(), map[string]string{
-		restgw.WSAuthTicketHeaderLabel: "DPoP tok-1", restgw.WSAuthTicketThumbprintLabel: key.Thumbprint(),
+		restgw.WSAuthTicketHeaderLabel: "DPoP tok-1", dpopgw.TicketThumbprintLabel: key.Thumbprint(),
 	}, time.Minute)
-	at := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+	at := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 		WSAuthConfig: restgw.WSAuthConfig{Inner: refuse, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
 		Gate:         g,
 	})
@@ -485,7 +420,7 @@ func TestDPoPWSAuth_RefusedByInnerIsNotMarked(t *testing.T) {
 func TestDPoPWSAuth_UnboundHeaderProofIsNoDevice(t *testing.T) {
 	g := dpGate(t, dpVerifier(t, nil), &bindings{})
 	inner := &innerSeen{}
-	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: g})
+	a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: g})
 	r := dpReq(t, dpKey(t), http.MethodGet, "/v1/notes/live", "", "")
 	r.Header.Set("Cookie", "session=s1")
 	if _, err := a.AuthFunc()(r.Context(), r); err != nil {
@@ -502,7 +437,7 @@ func TestDPoPWSAuth_UnboundHeaderProofIsNoDevice(t *testing.T) {
 	key := dpKey(t)
 	b := &bindings{}
 	b.set("tok-1", key.Thumbprint())
-	ab := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: dpGate(t, dpVerifier(t, nil), b)})
+	ab := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn}, Gate: dpGate(t, dpVerifier(t, nil), b)})
 	br := dpReq(t, key, http.MethodGet, "/v1/notes/live", "tok-1", "")
 	if _, err := ab.AuthFunc()(br.Context(), br); err != nil {
 		t.Fatal(err)
@@ -520,7 +455,7 @@ func TestDPoPTicket_UnboundTicketWithDPoPTokenRefused(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
 	inner := &innerSeen{}
-	a := restgw.NewDPoPWSAuth(restgw.DPoPWSAuthConfig{
+	a := dpopgw.NewWSAuth(dpopgw.WSAuthConfig{
 		WSAuthConfig: restgw.WSAuthConfig{Inner: inner.fn, TicketStore: store, Modes: []string{restgw.WSAuthModeTicket}},
 		Gate:         g,
 	})
@@ -533,5 +468,15 @@ func TestDPoPTicket_UnboundTicketWithDPoPTokenRefused(t *testing.T) {
 	}
 	if inner.calls.Load() != 0 {
 		t.Error("inner ran for an unbound ticket carrying a DPoP token")
+	}
+}
+
+// waitCancelled reports whether ctx is done within the deadline.
+func waitCancelled(ctx context.Context, within time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-time.After(within):
+		return false
 	}
 }

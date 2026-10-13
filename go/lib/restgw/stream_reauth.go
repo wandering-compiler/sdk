@@ -140,13 +140,6 @@ func WatchStreamAuth(ctx context.Context, authFn AuthFunc, r *http.Request, inte
 	if interval <= 0 || authFn == nil || r == nil {
 		return ctx, func() {}
 	}
-	return watchStream(ctx, authFn, r, interval, isAuthRefusal)
-}
-
-// watchStream is the watchdog loop behind [WatchStreamAuth] and
-// [WatchStreamBinding]: probe is asked every interval, refused decides which
-// errors are a verdict. The caller has checked its arguments.
-func watchStream(ctx context.Context, authFn AuthFunc, r *http.Request, interval time.Duration, refused func(error) bool) (context.Context, context.CancelFunc) {
 	watched, cancel := context.WithCancel(ctx)
 	principal := &streamPrincipal{
 		userData: AuthUserDataFromContext(r.Context()),
@@ -184,7 +177,7 @@ func watchStream(ctx context.Context, authFn AuthFunc, r *http.Request, interval
 					unanswered = 0
 					principal.publish(userData)
 					timer.Reset(interval)
-				case refused(err):
+				case isAuthRefusal(err):
 					cancel()
 					return
 				default:

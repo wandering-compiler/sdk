@@ -1,4 +1,4 @@
-package restgw_test
+package dpopgw_test
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
+	"github.com/wandering-compiler/sdk/go/lib/restgw/dpopgw"
 )
 
 const dpOrigin = "https://api.example.com"
@@ -83,12 +84,12 @@ func (b *bindings) lookup(_ context.Context, token string) (string, error) {
 	return b.m[token], nil
 }
 
-func dpGate(t *testing.T, v *dpop.Verifier, b *bindings, opts ...restgw.DPoPOption) *restgw.DPoPGate {
+func dpGate(t *testing.T, v *dpop.Verifier, b *bindings, opts ...dpopgw.Option) *dpopgw.Gate {
 	t.Helper()
 	if b != nil {
-		opts = append(opts, restgw.WithDPoPBinding(b.lookup))
+		opts = append(opts, dpopgw.WithBinding(b.lookup))
 	}
-	g, err := restgw.NewDPoPGate(v, opts...)
+	g, err := dpopgw.NewGate(v, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +98,10 @@ func dpGate(t *testing.T, v *dpop.Verifier, b *bindings, opts ...restgw.DPoPOpti
 
 // serve runs r through the gate's middleware and reports the response and
 // what next saw (nil when next did not run).
-func serve(g *restgw.DPoPGate, r *http.Request) (*httptest.ResponseRecorder, *restgw.DPoPVerified) {
-	var seen *restgw.DPoPVerified
+func serve(g *dpopgw.Gate, r *http.Request) (*httptest.ResponseRecorder, *dpopgw.Verified) {
+	var seen *dpopgw.Verified
 	h := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		v, _ := restgw.DPoPFromContext(r.Context())
+		v, _ := dpopgw.FromContext(r.Context())
 		seen = &v
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -110,7 +111,7 @@ func serve(g *restgw.DPoPGate, r *http.Request) (*httptest.ResponseRecorder, *re
 }
 
 func TestNewDPoPGate_NeedsAVerifier(t *testing.T) {
-	if _, err := restgw.NewDPoPGate(nil); err == nil {
+	if _, err := dpopgw.NewGate(nil); err == nil {
 		t.Fatal("a gate without a verifier was built")
 	}
 }
@@ -140,7 +141,7 @@ func TestDPoPGate_RefusalsCarryTheChallenge(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		gate       func(b *bindings) *restgw.DPoPGate
+		gate       func(b *bindings) *dpopgw.Gate
 		req        func() *http.Request
 		wantStatus int
 		wantChall  string // substring of WWW-Authenticate; "" = header absent
@@ -162,13 +163,13 @@ func TestDPoPGate_RefusalsCarryTheChallenge(t *testing.T) {
 		},
 		{
 			name:       "no binding lookup configured",
-			gate:       func(*bindings) *restgw.DPoPGate { return dpGate(t, dpVerifier(t, nil), nil) },
+			gate:       func(*bindings) *dpopgw.Gate { return dpGate(t, dpVerifier(t, nil), nil) },
 			req:        func() *http.Request { return dpReq(t, key, http.MethodGet, "/v1/notes", "tok-1", "") },
 			wantStatus: http.StatusUnauthorized, wantChall: `error="invalid_token"`,
 		},
 		{
 			name: "binding lookup refuses the token",
-			gate: func(b *bindings) *restgw.DPoPGate {
+			gate: func(b *bindings) *dpopgw.Gate {
 				b.err = status.Error(codes.Unauthenticated, "revoked")
 				return dpGate(t, dpVerifier(t, nil), b)
 			},
@@ -177,7 +178,7 @@ func TestDPoPGate_RefusalsCarryTheChallenge(t *testing.T) {
 		},
 		{
 			name: "binding lookup cannot answer",
-			gate: func(b *bindings) *restgw.DPoPGate {
+			gate: func(b *bindings) *dpopgw.Gate {
 				b.err = status.Error(codes.Unavailable, "auth down")
 				return dpGate(t, dpVerifier(t, nil), b)
 			},
@@ -213,8 +214,8 @@ func TestDPoPGate_RefusalsCarryTheChallenge(t *testing.T) {
 		},
 		{
 			name: "required gate, no DPoP material",
-			gate: func(b *bindings) *restgw.DPoPGate {
-				return dpGate(t, dpVerifier(t, nil), b, restgw.WithDPoPRequired())
+			gate: func(b *bindings) *dpopgw.Gate {
+				return dpGate(t, dpVerifier(t, nil), b, dpopgw.WithRequired())
 			},
 			req: func() *http.Request {
 				r := httptest.NewRequest(http.MethodGet, "/v1/notes", nil)
@@ -331,7 +332,7 @@ func TestDPoPGate_OptionalAndMint(t *testing.T) {
 // for an empty thumbprint, without touching the caller's metadata.
 func TestSetDeviceMetadata(t *testing.T) {
 	base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-w17-user", "env", principal.DeviceMetadataKey, "stale"))
-	ctx := restgw.SetDeviceMetadata(base, restgw.DPoPVerified{Thumbprint: "jkt-1", AccessToken: "tok-1"})
+	ctx := dpopgw.SetDeviceMetadata(base, dpopgw.Verified{Thumbprint: "jkt-1", AccessToken: "tok-1"})
 	md, _ := metadata.FromOutgoingContext(ctx)
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 1 || got[0] != "jkt-1" {
 		t.Errorf("device = %v, want [jkt-1]", got)
@@ -343,11 +344,11 @@ func TestSetDeviceMetadata(t *testing.T) {
 	if got := orig.Get(principal.DeviceMetadataKey); got[0] != "stale" {
 		t.Errorf("caller's metadata modified: %v", got)
 	}
-	md, _ = metadata.FromOutgoingContext(restgw.SetDeviceMetadata(base, restgw.DPoPVerified{}))
+	md, _ = metadata.FromOutgoingContext(dpopgw.SetDeviceMetadata(base, dpopgw.Verified{}))
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 0 {
 		t.Errorf("empty thumbprint left %v", got)
 	}
-	md, _ = metadata.FromOutgoingContext(restgw.SetDeviceMetadata(context.Background(), restgw.DPoPVerified{Thumbprint: "jkt-2", AccessToken: "tok-2"}))
+	md, _ = metadata.FromOutgoingContext(dpopgw.SetDeviceMetadata(context.Background(), dpopgw.Verified{Thumbprint: "jkt-2", AccessToken: "tok-2"}))
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 1 || got[0] != "jkt-2" {
 		t.Errorf("no prior metadata: device = %v", got)
 	}
@@ -365,7 +366,7 @@ func TestDPoPError_Status(t *testing.T) {
 		{dpop.ErrUnavailable, codes.Unavailable, http.StatusServiceUnavailable},
 		{errors.New("boom"), codes.Internal, http.StatusInternalServerError},
 	} {
-		e := &restgw.DPoPError{Err: tc.err}
+		e := &dpopgw.Error{Err: tc.err}
 		if !errors.Is(e, tc.err) {
 			t.Errorf("errors.Is lost the cause %v", tc.err)
 		}
@@ -388,13 +389,13 @@ type dpCountingAuth struct{ calls atomic.Int32 }
 
 func (c *dpCountingAuth) fn(_ context.Context, r *http.Request) ([]byte, error) {
 	c.calls.Add(1)
-	v, _ := restgw.DPoPFromContext(r.Context())
+	v, _ := dpopgw.FromContext(r.Context())
 	return []byte("principal-for:" + v.Thumbprint), nil
 }
 
 // authThrough runs the cached AuthFunc behind the gate, the way a generated
 // route mounts them, and returns what it answered.
-func authThrough(t *testing.T, g *restgw.DPoPGate, authFn restgw.AuthFunc, r *http.Request) (int, string) {
+func authThrough(t *testing.T, g *dpopgw.Gate, authFn restgw.AuthFunc, r *http.Request) (int, string) {
 	t.Helper()
 	var got string
 	h := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +416,7 @@ func authThrough(t *testing.T, g *restgw.DPoPGate, authFn restgw.AuthFunc, r *ht
 func TestCachedDPoPAuthFunc_KeysOnTheVerifiedThumbprint(t *testing.T) {
 	g := dpGate(t, dpVerifier(t, nil), &bindings{})
 	inner := &dpCountingAuth{}
-	cached := restgw.CachedDPoPAuthFunc(inner.fn, time.Minute, nil)
+	cached := dpopgw.CachedAuthFunc(inner.fn, time.Minute, nil)
 
 	a, b := dpKey(t), dpKey(t)
 	mint := func(k *dpop.Key) *http.Request {
@@ -447,7 +448,7 @@ func TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest(t *testing.T) {
 	b.set("tok-1", key.Thumbprint())
 	g := dpGate(t, dpVerifier(t, nil), b)
 	inner := &dpCountingAuth{}
-	cached := restgw.CachedDPoPAuthFunc(inner.fn, time.Minute, nil)
+	cached := dpopgw.CachedAuthFunc(inner.fn, time.Minute, nil)
 
 	if code, _ := authThrough(t, g, cached, dpReq(t, key, http.MethodGet, "/v1/notes", "tok-1", "")); code != http.StatusOK {
 		t.Fatalf("priming request: %d", code)
@@ -496,7 +497,7 @@ func TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest(t *testing.T) {
 // caches it, and ttl <= 0 is no cache at all.
 func TestCachedDPoPAuthFunc_BearerAndOff(t *testing.T) {
 	inner := &dpCountingAuth{}
-	cached := restgw.CachedDPoPAuthFunc(inner.fn, time.Minute, nil)
+	cached := dpopgw.CachedAuthFunc(inner.fn, time.Minute, nil)
 	for range 3 {
 		r := httptest.NewRequest(http.MethodGet, "/v1/notes", nil)
 		r.Header.Set("Authorization", "Bearer tok-1")
@@ -507,7 +508,7 @@ func TestCachedDPoPAuthFunc_BearerAndOff(t *testing.T) {
 	if n := inner.calls.Load(); n != 1 {
 		t.Errorf("bearer requests: inner called %d times, want 1", n)
 	}
-	off := restgw.CachedDPoPAuthFunc(inner.fn, 0, nil)
+	off := dpopgw.CachedAuthFunc(inner.fn, 0, nil)
 	r := httptest.NewRequest(http.MethodGet, "/v1/notes", nil)
 	r.Header.Set("Authorization", "Bearer tok-1")
 	before := inner.calls.Load()
@@ -535,14 +536,14 @@ func TestDPoPGate_UnboundProofIsNoDevice(t *testing.T) {
 		t.Errorf("an unbound proof yields device id %q", seen.DeviceID())
 	}
 	base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(principal.DeviceMetadataKey, "stale"))
-	md, _ := metadata.FromOutgoingContext(restgw.SetDeviceMetadata(base, *seen))
+	md, _ := metadata.FromOutgoingContext(dpopgw.SetDeviceMetadata(base, *seen))
 	if got := md.Get(principal.DeviceMetadataKey); len(got) != 0 {
 		t.Fatalf("SetDeviceMetadata stamped %v for a key the client just generated", got)
 	}
 	if dev, ok := principal.DeviceID(metadata.NewIncomingContext(context.Background(), md)); ok {
 		t.Errorf("principal.DeviceID = %q for an unbound proof", dev)
 	}
-	if (restgw.DPoPVerified{Thumbprint: "jkt", AccessToken: "tok"}).DeviceID() != "jkt" {
+	if (dpopgw.Verified{Thumbprint: "jkt", AccessToken: "tok"}).DeviceID() != "jkt" {
 		t.Error("a bound verification lost its device id")
 	}
 }

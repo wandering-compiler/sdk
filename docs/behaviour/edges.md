@@ -4,7 +4,7 @@ Everything between a caller and a generated service's handlers, plus the outgoin
 service: the REST gateway runtime, the per-client rate limiter, the MCP proxy runtime, the
 w17 JSON dialect, the gRPC dial helpers, the database-error mapper, the egress JSON codec and
 DPoP proof of possession.
-Packages: `go/lib/restgw`, `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
+Packages: `go/lib/restgw` (with `go/lib/restgw/dpopgw`), `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
 `go/lib/grpcclient` (dial side; server TLS is in [server.md](server.md)), `go/lib/egress/wire`,
 `go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`, `go/lib/dpop` (with
 `go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`).
@@ -28,13 +28,13 @@ http.Server
                  └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
                      └─ chi router
                          ├─ per-RPC handler: [AdmitPublic] → [WithURLCredential / WithOrgFromPath]
-                         │      → [DPoPGate.Middleware] → AuthFunc (optionally CachedAuthFunc,
-                         │        or CachedDPoPAuthFunc behind the gate) → SetUserMetadata
+                         │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
+                         │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
                          │        [+ SetDeviceMetadata] → scopes
                          │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
                          │      → WriteResponse / WriteGRPCErrorCtx
                          ├─ SSE / WS handlers: [AdmitPublicStream] → auth → WatchStreamAuth
-                         │      (DPoP: NewDPoPWSAuth → WatchStreamBinding)
+                         │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
                          ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
                          ├─ ticket issuer (POST): NewTicketIssuer
                          └─ downloads: auth → ServeDownload
@@ -83,7 +83,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E34 | Egress JSON and form codec | `go/lib/egress/wire` — `plan.go`, `marshal.go`, `unmarshal.go`, `form.go`, `union.go` |
 | E35 | DPoP proofs and verifier | `go/lib/dpop` — `Verifier`, `NewProof`, `Thumbprint`, `HMACNonces`, `MemoryJTIStore` |
 | E36 | DPoP client helpers | `go/lib/dpop/dpopclient` — `Transport`, `Credentials`, `Refusal` |
-| E37 | DPoP at the REST edge | `go/lib/restgw/dpop_gate.go`, `dpop_cache.go`, `dpop_ticket.go`, `dpop_reauth.go` — `DPoPGate`, `CachedDPoPAuthFunc`, `NewDPoPWSAuth`, `WatchStreamBinding`; `cors.go` — `WithDPoPCORS` |
+| E37 | DPoP at the REST edge | `go/lib/restgw/dpopgw` — `Gate`, `CachedAuthFunc`, `NewWSAuth`, `WatchStreamBinding`; `go/lib/restgw` — `CachedAuthFuncWithDecision`, `WithDPoPCORS` |
 | E38 | Shared DPoP replay stores | `go/lib/dpop/dpopstore` — `RedisJTIStore`, `SQLJTIStore` |
 
 ---
@@ -1314,12 +1314,12 @@ fresh nonce.
 
 ## E37. DPoP at the REST edge
 
-**Code.** `go/lib/restgw/dpop_gate.go` (`DPoPGate`, `NewDPoPGate`, `WithDPoPBinding`, `WithDPoPRequired`, `DPoPBindingFunc`, `DPoPVerified`, `DPoPFromContext`, `DPoPError`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedDPoPAuthFunc`), `dpop_ticket.go` (`DPoPTicketPrincipal`, `NewDPoPWSAuth`, `DPoPWSAuthConfig`, `DPoPWSAuth` (`Thumbprint`, `Verified`), `WSAuthTicketThumbprintLabel`, `ErrDPoPTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `DPoPBindingCheck`); `go/lib/restgw/cors.go` (`WithDPoPCORS`).
+**Code.** `go/lib/restgw/dpopgw` — `dpop_gate.go` (`Gate`, `NewGate`, `WithBinding`, `WithRequired`, `BindingFunc`, `Verified` (`DeviceID`), `FromContext`, `Error`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedAuthFunc`), `dpop_ticket.go` (`TicketPrincipal`, `NewWSAuth`, `WSAuthConfig`, `WSAuth` (`Thumbprint`, `Verified`), `TicketThumbprintLabel`, `ErrTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `BindingCheck`); `go/lib/restgw` — `authcache_decision.go` (`CachedAuthFuncWithDecision`, `AuthCacheDecision`, the hook `dpopgw.CachedAuthFunc` is built on), `cors.go` (`WithDPoPCORS`). `lib/restgw` and every other pre-existing package import nothing of `lib/dpop` or go-jose: a consumer that does not use DPoP gets no new dependency.
 
 **Purpose.** Opt-in wiring of E35 into the REST gateway. The gate verifies
 `Authorization: DPoP <token>` + `DPoP: <proof>`, answers refusals with the RFC 9449 challenge,
 and records the verified thumbprint. Only a proof bound to a token makes that thumbprint a
-device id (`DPoPVerified.DeviceID`), which `SetDeviceMetadata` stamps as `x-w17-device` (I10);
+device id (`dpopgw.Verified.DeviceID`), which `dpopgw.SetDeviceMetadata` stamps as `x-w17-device` (I10);
 an unbound proof proves only possession of a key any client can generate. Streams are verified at set-up: a header upgrade by its own proof, a
 browser stream by a ticket bound to the thumbprint of the signed request that obtained it,
 whose one-shot redemption stands in for the proof. The stream watchdog asks a binding-only
@@ -1329,13 +1329,13 @@ question instead of replaying a proof. A gateway that builds none of this behave
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `NewDPoPGate(v, ...)` | — | nil verifier → error |
-| `WithDPoPBinding(fn)` | none | Without it every `Authorization: DPoP` request is refused (`invalid_token`). `fn` returning `""` → not bound (401); UNAUTHENTICATED / PERMISSION_DENIED or a dpop refusal → 401 `invalid_token`; any other error → 503 |
-| `WithDPoPRequired()` | off | Off: a request with neither a proof nor a DPoP token passes unverified. On: refused with the bare `DPoP` challenge |
+| `dpopgw.NewGate(v, ...)` | — | nil verifier → error |
+| `dpopgw.WithBinding(fn)` | none | Without it every `Authorization: DPoP` request is refused (`invalid_token`). `fn` returning `""` → not bound (401); UNAUTHENTICATED / PERMISSION_DENIED or a dpop refusal → 401 `invalid_token`; any other error → 503 |
+| `dpopgw.WithRequired()` | off | Off: a request with neither a proof nor a DPoP token passes unverified. On: refused with the bare `DPoP` challenge |
 | Proof next to another `Authorization` scheme, or a DPoP token among several `Authorization` headers | — | Refused as malformed (`invalid_dpop_proof`) |
-| `CachedDPoPAuthFunc(inner, ttl, extra)` | — | `ttl <= 0` → inner unchanged; `extra` as in E6 |
-| `NewDPoPWSAuth` | — | nil `Gate` or the E16 configuration errors → panic |
-| `WatchStreamBinding(ctx, check, r, thumbprint, interval)` | — | `interval <= 0` or nil `check` → ctx unchanged; no DPoP token on `r` or empty thumbprint → the stream ends at once |
+| `dpopgw.CachedAuthFunc(inner, ttl, extra)` | — | `ttl <= 0` → inner unchanged; `extra` as in E6 |
+| `dpopgw.NewWSAuth` | — | nil `Gate` or the E16 configuration errors → panic |
+| `dpopgw.WatchStreamBinding(ctx, check, r, thumbprint, interval)` | — | `interval <= 0` or nil `check` → ctx unchanged; no DPoP token on `r` or empty thumbprint → the stream ends at once |
 | `WithDPoPCORS(cfg)` | — | Adds `DPoP` to the allowed headers (from the defaults when none are set) and `DPoP-Nonce`, `WWW-Authenticate` to `ExposedHeaders`; no duplicates; `cfg` with no origins stays CORS-off |
 
 **Shares.** E35 (verifier, challenge, status mapping), E6 (the cache's key and eviction code),
@@ -1346,33 +1346,35 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E37.1 | A bound request whose proof verifies and whose key is the token's binding MUST reach `next` with `DPoPFromContext` holding the thumbprint and the token | `TestDPoPGate_VerifiesABoundRequest` |
+| E37.1 | A bound request whose proof verifies and whose key is the token's binding MUST reach `next` with `dpopgw.FromContext` holding the thumbprint and the token | `TestDPoPGate_VerifiesABoundRequest` |
 | E37.2 | Every refusal MUST be answered by the gate — `WWW-Authenticate` per E35.21, the error envelope, 401 or 503 (`Retry-After`, no challenge) — and `next` MUST NOT run: a token without a proof, another key than the binding, an unbound token, no binding lookup, a refused or unanswered lookup, a proof next to a bearer token, two `Authorization` headers, a proof for another path, a replay, a required gate without DPoP material | `TestDPoPGate_RefusalsCarryTheChallenge` |
 | E37.3 | With nonces on, a proof without a nonce MUST be answered `use_dpop_nonce` with `DPoP-Nonce`; the retry with it MUST pass, and a verified response MUST carry a fresh nonce | `TestDPoPGate_NonceChallengeAndRotation` |
 | E37.4 | A gate that is not required MUST pass a request without DPoP material unchanged and unverified; a proof without `Authorization` MUST verify as unbound | `TestDPoPGate_OptionalAndMint` |
-| E37.5 | `SetDeviceMetadata` MUST stamp the device id on a copy of the outgoing metadata and remove the key when there is none | `TestSetDeviceMetadata` |
-| E37.6 | A `DPoPError` MUST keep its cause for `errors.Is` and carry the status `dpop.GRPCCode` gives, so `WriteAuthError` answers 401 / 503 | `TestDPoPError_Status` |
+| E37.5 | `dpopgw.SetDeviceMetadata` MUST stamp the device id on a copy of the outgoing metadata and remove the key when there is none | `TestSetDeviceMetadata` |
+| E37.6 | A `dpopgw.Error` MUST keep its cause for `errors.Is` and carry the status `dpop.GRPCCode` gives, so `WriteAuthError` answers 401 / 503 | `TestDPoPError_Status` |
 | E37.7 | The DPoP auth cache MUST key a verified request on the verified thumbprint: one key's fresh proofs hit its entry, another key with the same credential headers MUST NOT read it | `TestCachedDPoPAuthFunc_KeysOnTheVerifiedThumbprint` |
 | E37.8 | A request carrying DPoP material that was not verified on this request MUST NOT be answered from the cache nor fill it, on any presentation | `TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest` |
 | E37.9 | A request without DPoP material MUST be cached as E6 caches it; `ttl <= 0` MUST disable the cache | `TestCachedDPoPAuthFunc_BearerAndOff` |
 | E37.10 | A bound ticket MUST be issued only for a request the gate verified as bound, and record its thumbprint; redemption MUST promote the token, report the thumbprint, survive re-auth, and stay one-shot | `TestDPoPTicket_BoundFlow`, `TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest`, `TestDPoPTicketPrincipal_RefusesAnUnboundVerification` |
 | E37.11 | Redemption MUST re-check the binding: a token rebound, unbound or revoked, or a bound ticket holding a non-DPoP credential, MUST be `ErrTicketInvalid` and run nothing; a lookup that cannot answer MUST be a 503-class error, not a refusal | `TestDPoPTicket_RedemptionChecksTheBinding` |
 | E37.12 | An unbound ticket MUST be accepted with no device only when the gate is not required | `TestDPoPTicket_UnboundTicket` |
-| E37.13 | A header upgrade MUST be verified by the gate; a bad proof MUST be a 401-class `DPoPError`; a client MUST NOT make `Thumbprint` report a device through its own headers, and one wrapper MUST NOT trust another's promotion | `TestDPoPWSAuth_HeaderModeAndForgery` |
+| E37.13 | A header upgrade MUST be verified by the gate; a bad proof MUST be a 401-class `dpopgw.Error`; a client MUST NOT make `Thumbprint` report a device through its own headers, and one wrapper MUST NOT trust another's promotion | `TestDPoPWSAuth_HeaderModeAndForgery` |
 | E37.14 | The binding watchdog MUST ask the binding check with the stream's token and thumbprint, never the auth function, and end the stream on a refusal (including a dpop binding refusal); an outage MUST keep it open and re-ask | `TestWatchStreamBinding_AsksTheBindingQuestion`, `TestWatchStreamBinding_RefusedVersusUnanswered` |
 | E37.15 | A watched stream with no binding to check MUST end at once; a disabled watchdog MUST return ctx unchanged | `TestWatchStreamBinding_NoBindingEndsTheStream` |
 | E37.16 | `WithDPoPCORS` MUST allow `DPoP` and expose `DPoP-Nonce` and `WWW-Authenticate` to allowed origins only, keep the default and operator headers without duplicates, leave its argument and the defaults unchanged | `TestWithDPoPCORS` |
 | E37.17 | A stream `Inner` refuses MUST NOT be marked: no device is reported and the spent ticket is not trusted on a second pass | `TestDPoPWSAuth_RefusedByInnerIsNotMarked` |
-| E37.18 | An unbound proof (a cookie or credential-less request signed by any key) MUST NOT yield a device id: `DeviceID` is empty, `SetDeviceMetadata` stamps nothing and removes a stale copy, `principal.DeviceID` reads false | `TestDPoPGate_UnboundProofIsNoDevice` |
+| E37.18 | An unbound proof (a cookie or credential-less request signed by any key) MUST NOT yield a device id: `DeviceID` is empty, `dpopgw.SetDeviceMetadata` stamps nothing and removes a stale copy, `principal.DeviceID` reads false | `TestDPoPGate_UnboundProofIsNoDevice` |
 | E37.19 | A WS header upgrade MUST mark the stream with a device only for a token-bound proof; `Verified` MUST report the device and token of a bound stream only | `TestDPoPWSAuth_UnboundHeaderProofIsNoDevice` |
 | E37.20 | An unbound ticket whose credential uses the DPoP scheme MUST be refused (`ErrTicketInvalid`) even when the gate is optional | `TestDPoPTicket_UnboundTicketWithDPoPTokenRefused` |
+| E37.21 | Only `lib/dpop`, its subpackages and `lib/restgw/dpopgw` MAY import `lib/dpop` or go-jose; every other package MUST NOT, so the DPoP dependency stays opt-in | `TestDPoPImportsStayInsideTheOptInPackages` |
+| E37.22 | `CachedAuthFuncWithDecision` MUST bypass without reading or filling, keep namespaces apart from each other and from un-namespaced entries, neither key on nor be defeated by `IgnoreHeader`, and behave as `CachedAuthFuncWithKeyHeaders` for the zero decision or a nil hook | `TestCachedAuthFuncWithDecision` |
 
 **Deliberate limits.**
-- The gate does not decide what a token is worth; `DPoPBindingFunc` and the auth method do.
+- The gate does not decide what a token is worth; `dpopgw.BindingFunc` and the auth method do.
   The gate only refuses a proof that does not fit the binding the lookup reports.
-- An `AuthFunc` cannot set response headers: a refusal raised inside `NewDPoPWSAuth` reaches the
-  client without the challenge. Mount `DPoPGate.Middleware` in front for the challenge.
-- `WatchStreamBinding` keeps the principal the stream was set up with; a binding check says yes
+- An `AuthFunc` cannot set response headers: a refusal raised inside `dpopgw.NewWSAuth` reaches the
+  client without the challenge. Mount `dpopgw.Gate.Middleware` in front for the challenge.
+- `dpopgw.WatchStreamBinding` keeps the principal the stream was set up with; a binding check says yes
   or no, it does not re-derive the principal.
 - The generated gateway decides where the gate is mounted; nothing here mounts itself.
 
