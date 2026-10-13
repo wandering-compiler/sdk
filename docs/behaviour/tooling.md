@@ -634,7 +634,7 @@ without exponent).
 
 | ID | Guarantee | Test |
 |---|---|---|
-| T21.1 | `${seq}` MUST be global across scopes within a process. | `TestSeqGlobalAcrossScopes` |
+| T21.1 | `${seq}` MUST be global across scopes within a process. | `TestSeqGlobalAcrossScopes`, `TestSeq_UniqueAcrossConcurrentRunsAndScopes` |
 | T21.2 | `${once}` MUST NOT be shared between scopes. | `TestOnce_ScopesDoNotShare` |
 | T21.3 | An unresolved reference MUST be an error. | `TestUnresolvedRefErrors` |
 | T21.4 | An embedded numeric capture MUST render without exponent. | `TestEmbeddedNumericCaptureHasNoExponent` |
