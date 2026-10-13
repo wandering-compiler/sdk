@@ -1,0 +1,474 @@
+package dpop
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
+)
+
+// Refusal causes. Every error [Verifier.Verify] returns for a bad request
+// matches exactly one of these with errors.Is; any other error (a failing
+// [JTIStore], for instance) is a server fault, not a verdict on the proof.
+var (
+	// ErrMissingProof: the request has no DPoP header.
+	ErrMissingProof = errors.New("dpop: missing proof")
+	// ErrMalformed: more than one DPoP header, an oversized proof, a value
+	// that is not a compact JWS, or claims that are missing or mistyped.
+	ErrMalformed = errors.New("dpop: malformed proof")
+	// ErrBadAlg: alg is not ES256 or EdDSA.
+	ErrBadAlg = errors.New("dpop: proof algorithm not allowed")
+	// ErrBadType: typ is not dpop+jwt.
+	ErrBadType = errors.New("dpop: proof typ is not dpop+jwt")
+	// ErrBadKey: jwk is missing, carries private members, or does not fit
+	// alg.
+	ErrBadKey = errors.New("dpop: proof key not acceptable")
+	// ErrBadSignature: the signature does not verify with the embedded key.
+	ErrBadSignature = errors.New("dpop: proof signature invalid")
+	// ErrUseNonce: the nonce is missing or no longer valid. The error is a
+	// [*NonceError] holding the fresh nonce to send back.
+	ErrUseNonce = errors.New("dpop: proof needs a fresh nonce")
+	// ErrStaleProof: with nonces off, iat is outside the accepted window.
+	ErrStaleProof = errors.New("dpop: proof iat outside the accepted window")
+	// ErrReplay: this jti was already used by a different proof, or the same
+	// proof's reuse window has closed.
+	ErrReplay = errors.New("dpop: proof replayed")
+	// ErrHTMMismatch: htm is not the request method.
+	ErrHTMMismatch = errors.New("dpop: proof htm does not match the request")
+	// ErrHTUMismatch: htu is not the configured origin plus the request path.
+	ErrHTUMismatch = errors.New("dpop: proof htu does not match the request")
+	// ErrATHMismatch: ath is not the hash of the presented access token, is
+	// missing while a token is presented, or is present while none is.
+	ErrATHMismatch = errors.New("dpop: proof ath does not match the access token")
+	// ErrBindingMismatch: the proof's key is not the key the credential is
+	// bound to.
+	ErrBindingMismatch = errors.New("dpop: proof key does not match the credential binding")
+)
+
+// NonceError is the [ErrUseNonce] refusal. The caller answers it with
+// `use_dpop_nonce` and Nonce ([SetChallenge], [ChallengeMetadata]).
+type NonceError struct {
+	// Nonce is a fresh nonce for the proof's key.
+	Nonce string
+	// Missing is true when the proof carried no nonce at all.
+	Missing bool
+}
+
+func (e *NonceError) Error() string {
+	if e.Missing {
+		return ErrUseNonce.Error() + ": nonce missing"
+	}
+	return ErrUseNonce.Error() + ": nonce invalid or expired"
+}
+
+// Is makes errors.Is(err, ErrUseNonce) hold.
+func (e *NonceError) Is(target error) bool { return target == ErrUseNonce }
+
+// Limits and defaults of the verifier.
+const (
+	// MaxProofBytes bounds a DPoP header value; a longer one is malformed
+	// before any parsing.
+	MaxProofBytes = 8 << 10
+	// MaxJTIBytes bounds the jti claim.
+	MaxJTIBytes = 256
+	// DefaultReuseWindow is how long the same proof may be presented again.
+	DefaultReuseWindow = 30 * time.Second
+	// MaxReuseWindow is the longest reuse window [NewVerifier] accepts.
+	MaxReuseWindow = 300 * time.Second
+	// DefaultIATWindow is the accepted |now - iat| when nonces are off.
+	DefaultIATWindow = 60 * time.Second
+	// DefaultSignatureCacheEntries bounds the reuse cache.
+	DefaultSignatureCacheEntries = 10_000
+)
+
+// AllowedAlgs are the proof algorithms the verifier accepts.
+var AllowedAlgs = []jose.SignatureAlgorithm{jose.ES256, jose.EdDSA}
+
+// Config configures a [Verifier].
+type Config struct {
+	// Origin is the public origin clients address, scheme://host[:port]
+	// (e.g. https://api.example.com). Required. htu is compared against
+	// Origin + Request.Path, never against a Host header.
+	Origin string
+	// Nonces issues and checks server nonces. nil turns nonces off: then
+	// iat must lie within IATWindow of the verifier's clock.
+	Nonces NonceSource
+	// JTIs records accepted proofs. nil means a [MemoryJTIStore] with the
+	// default limit, which is correct only for a single replica.
+	JTIs JTIStore
+	// ReuseWindow is how long a proof may be presented again byte for byte.
+	// 0 means [DefaultReuseWindow]; a negative value turns reuse off (every
+	// repeat is a replay); more than [MaxReuseWindow] is an error.
+	ReuseWindow time.Duration
+	// IATWindow is the accepted clock difference when nonces are off. 0
+	// means [DefaultIATWindow]; negative is an error. Ignored with nonces.
+	IATWindow time.Duration
+	// SignatureCacheEntries bounds the reuse cache; 0 means
+	// [DefaultSignatureCacheEntries]. A full cache stops caching; it never
+	// refuses a request.
+	SignatureCacheEntries int
+	// Now is the clock; nil means time.Now.
+	Now func() time.Time
+}
+
+// Request is what the verifier needs from one request.
+type Request struct {
+	// Method is the HTTP method; POST for gRPC.
+	Method string
+	// Path is the request path as sent (r.URL.EscapedPath()), or the full
+	// gRPC method name ("/package.Service/Method"). A query is ignored.
+	Path string
+	// Proofs are all values of the DPoP header (gRPC: the `dpop` metadata).
+	// Exactly one is required.
+	Proofs []string
+	// AccessToken is the token from `Authorization: DPoP <token>`, or ""
+	// when the request carries none (a mint endpoint); then ath must be
+	// absent.
+	AccessToken string
+	// Binding is the thumbprint the presented credential is bound to, or ""
+	// on a mint endpoint, where no binding exists yet. A request with an
+	// AccessToken and no Binding is refused (fail closed): a caller that
+	// verifies a token must say which key it is bound to.
+	Binding string
+}
+
+// Verifier checks DPoP proofs. It is safe for concurrent use.
+type Verifier struct {
+	origin   string
+	nonces   NonceSource
+	jtis     JTIStore
+	reuse    time.Duration
+	iat      time.Duration
+	jtiTTL   time.Duration
+	now      func() time.Time
+	cacheMax int
+
+	mu    sync.Mutex
+	cache map[string]time.Time // proof hash → end of its reuse window
+}
+
+// NewVerifier validates cfg and returns a verifier.
+func NewVerifier(cfg Config) (*Verifier, error) {
+	origin, err := NormalizeHTU(cfg.Origin)
+	if err != nil || !strings.HasSuffix(origin, "/") || strings.Count(origin, "/") != 3 {
+		return nil, fmt.Errorf("dpop: Origin %q: want scheme://host[:port] with no path", cfg.Origin)
+	}
+	v := &Verifier{
+		origin:   strings.TrimSuffix(origin, "/"),
+		nonces:   cfg.Nonces,
+		jtis:     cfg.JTIs,
+		reuse:    cfg.ReuseWindow,
+		iat:      cfg.IATWindow,
+		now:      cfg.Now,
+		cacheMax: cfg.SignatureCacheEntries,
+		cache:    make(map[string]time.Time),
+	}
+	switch {
+	case v.reuse == 0:
+		v.reuse = DefaultReuseWindow
+	case v.reuse < 0:
+		v.reuse = 0
+	case v.reuse > MaxReuseWindow:
+		return nil, fmt.Errorf("dpop: ReuseWindow %s exceeds %s", cfg.ReuseWindow, MaxReuseWindow)
+	}
+	switch {
+	case v.iat == 0:
+		v.iat = DefaultIATWindow
+	case v.iat < 0:
+		return nil, fmt.Errorf("dpop: IATWindow %s is negative", cfg.IATWindow)
+	}
+	if v.jtis == nil {
+		v.jtis = NewMemoryJTIStore(0)
+	}
+	if v.now == nil {
+		v.now = time.Now
+	}
+	if v.cacheMax <= 0 {
+		v.cacheMax = DefaultSignatureCacheEntries
+	}
+	// A jti must be remembered for as long as its proof could be accepted.
+	if v.nonces != nil {
+		v.jtiTTL = v.nonces.Lifetime()
+	} else {
+		v.jtiTTL = 2 * v.iat
+	}
+	v.jtiTTL = max(v.jtiTTL, v.reuse)
+	return v, nil
+}
+
+// Origin returns the normalised configured origin.
+func (v *Verifier) Origin() string { return v.origin }
+
+// Nonce returns a fresh nonce for a key, for a response that rotates the
+// nonce (DPoP-Nonce on a success) or a mint endpoint that hands one out
+// first. It fails when nonces are off.
+func (v *Verifier) Nonce(thumbprint string) (string, error) {
+	if v.nonces == nil {
+		return "", errors.New("dpop: nonces are off")
+	}
+	return v.nonces.Issue(thumbprint)
+}
+
+// claimsIn mirrors Claims with pointers, to tell absent from empty.
+type claimsIn struct {
+	JTI   *string `json:"jti"`
+	HTM   *string `json:"htm"`
+	HTU   *string `json:"htu"`
+	IAT   *int64  `json:"iat"`
+	ATH   *string `json:"ath"`
+	Nonce *string `json:"nonce"`
+}
+
+// privateJWKMembers are the JWK members that only a private or symmetric key
+// has (RFC 7518 §6.2.2, §6.3.2, §6.4.1; RFC 8037 §2).
+var privateJWKMembers = []string{"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+
+// Verify checks one request's proof and returns the RFC 7638 thumbprint of
+// the key that signed it. See the package documentation for the order of the
+// checks and [ErrMissingProof] and its siblings for the refusals.
+func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
+	now := v.now()
+
+	// 1. Header.
+	switch {
+	case len(req.Proofs) == 0 || (len(req.Proofs) == 1 && req.Proofs[0] == ""):
+		return "", ErrMissingProof
+	case len(req.Proofs) > 1:
+		return "", fmt.Errorf("%w: %d DPoP headers", ErrMalformed, len(req.Proofs))
+	}
+	proof := req.Proofs[0]
+	if len(proof) > MaxProofBytes {
+		return "", fmt.Errorf("%w: proof longer than %d bytes", ErrMalformed, MaxProofBytes)
+	}
+	alg, err := checkHeader(proof)
+	if err != nil {
+		return "", err
+	}
+	jws, err := jose.ParseSignedCompact(proof, AllowedAlgs)
+	if err != nil {
+		var unexpected *jose.ErrUnexpectedSignatureAlgorithm
+		if errors.As(err, &unexpected) {
+			return "", fmt.Errorf("%w: %v", ErrBadAlg, err)
+		}
+		return "", fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if len(jws.Signatures) != 1 {
+		return "", fmt.Errorf("%w: want one signature", ErrMalformed)
+	}
+	jwk := jws.Signatures[0].Header.JSONWebKey
+	if jwk == nil {
+		return "", fmt.Errorf("%w: no jwk", ErrBadKey)
+	}
+	if !keyFitsAlg(jwk.Key, alg) {
+		return "", fmt.Errorf("%w: %T does not fit %s", ErrBadKey, jwk.Key, alg)
+	}
+	thumb, err := Thumbprint(jwk.Key)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrBadKey, err)
+	}
+	sum := sha256.Sum256([]byte(proof))
+	hash := hex.EncodeToString(sum[:])
+
+	// 2. Signature: a cached verdict for these exact bytes, or the check.
+	var payload []byte
+	verified := v.cached(hash, now)
+	if verified {
+		payload = jws.UnsafePayloadWithoutVerification()
+	} else {
+		payload, err = jws.Verify(jwk)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrBadSignature, err)
+		}
+	}
+	c, err := parseClaims(payload)
+	if err != nil {
+		return "", err
+	}
+
+	// 3. Nonce, or iat when nonces are off.
+	if v.nonces != nil {
+		if c.Nonce == nil || *c.Nonce == "" || !v.nonces.Valid(*c.Nonce, thumb) {
+			fresh, err := v.nonces.Issue(thumb)
+			if err != nil {
+				return "", fmt.Errorf("dpop: issue nonce: %w", err)
+			}
+			return "", &NonceError{Nonce: fresh, Missing: c.Nonce == nil || *c.Nonce == ""}
+		}
+	} else {
+		iat := time.Unix(*c.IAT, 0)
+		if d := now.Sub(iat); d > v.iat || d < -v.iat {
+			return "", fmt.Errorf("%w: iat %s from now", ErrStaleProof, -d)
+		}
+	}
+
+	// 4. jti: new, or the same proof again inside its reuse window.
+	key := thumb + "\x00" + *c.JTI
+	got, created, err := v.jtis.Record(ctx, key, JTIRecord{ProofHash: hash, FirstSeen: now}, v.jtiTTL)
+	if err != nil {
+		return "", fmt.Errorf("dpop: jti store: %w", err)
+	}
+	if !created {
+		if got.ProofHash != hash || v.reuse <= 0 || now.Sub(got.FirstSeen) >= v.reuse {
+			return "", ErrReplay
+		}
+	}
+
+	// 5. htm and htu.
+	if *c.HTM != req.Method {
+		return "", fmt.Errorf("%w: htm %q, request %q", ErrHTMMismatch, *c.HTM, req.Method)
+	}
+	path, _, _ := strings.Cut(req.Path, "?")
+	want, err := NormalizeHTU(v.origin + path)
+	if err != nil {
+		return "", fmt.Errorf("%w: request path %q: %v", ErrHTUMismatch, req.Path, err)
+	}
+	if gotHTU, err := NormalizeHTU(*c.HTU); err != nil || gotHTU != want {
+		return "", fmt.Errorf("%w: htu %q, want %q", ErrHTUMismatch, *c.HTU, want)
+	}
+
+	// 6. ath.
+	if req.AccessToken != "" {
+		if c.ATH == nil || subtle.ConstantTimeCompare([]byte(*c.ATH), []byte(AccessTokenHash(req.AccessToken))) != 1 {
+			return "", ErrATHMismatch
+		}
+	} else if c.ATH != nil {
+		return "", fmt.Errorf("%w: ath present without an access token", ErrATHMismatch)
+	}
+
+	// 7. Binding.
+	switch {
+	case req.Binding != "":
+		if subtle.ConstantTimeCompare([]byte(req.Binding), []byte(thumb)) != 1 {
+			return "", ErrBindingMismatch
+		}
+	case req.AccessToken != "":
+		return "", fmt.Errorf("%w: access token presented with no binding to check", ErrBindingMismatch)
+	}
+
+	if !verified {
+		v.remember(hash, now)
+	}
+	return thumb, nil
+}
+
+// checkHeader reads the protected header before go-jose parses the JWS, to
+// tell the header refusals apart: alg outside the allowlist, a typ other than
+// dpop+jwt, and a jwk with private members. The JWS itself is parsed and
+// verified by go-jose.
+func checkHeader(proof string) (jose.SignatureAlgorithm, error) {
+	seg, _, ok := strings.Cut(proof, ".")
+	if !ok {
+		return "", fmt.Errorf("%w: not a compact JWS", ErrMalformed)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(seg)
+	if err != nil {
+		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+	}
+	var h struct {
+		Alg string                     `json:"alg"`
+		Typ string                     `json:"typ"`
+		JWK map[string]json.RawMessage `json:"jwk"`
+	}
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+	}
+	alg := jose.SignatureAlgorithm(h.Alg)
+	if alg != jose.ES256 && alg != jose.EdDSA {
+		return "", fmt.Errorf("%w: %q", ErrBadAlg, h.Alg)
+	}
+	if !strings.EqualFold(h.Typ, ProofType) {
+		return "", fmt.Errorf("%w: %q", ErrBadType, h.Typ)
+	}
+	if h.JWK == nil {
+		return "", fmt.Errorf("%w: no jwk", ErrBadKey)
+	}
+	for _, m := range privateJWKMembers {
+		if _, ok := h.JWK[m]; ok {
+			return "", fmt.Errorf("%w: jwk carries private member %q", ErrBadKey, m)
+		}
+	}
+	return alg, nil
+}
+
+func keyFitsAlg(key any, alg jose.SignatureAlgorithm) bool {
+	switch k := key.(type) {
+	case *ecdsa.PublicKey:
+		return alg == jose.ES256 && k.Curve == elliptic.P256()
+	case ed25519.PublicKey:
+		return alg == jose.EdDSA && len(k) == ed25519.PublicKeySize
+	}
+	return false
+}
+
+func parseClaims(payload []byte) (*claimsIn, error) {
+	var c claimsIn
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("%w: claims: %v", ErrMalformed, err)
+	}
+	switch {
+	case c.JTI == nil || *c.JTI == "":
+		return nil, fmt.Errorf("%w: no jti", ErrMalformed)
+	case len(*c.JTI) > MaxJTIBytes:
+		return nil, fmt.Errorf("%w: jti longer than %d bytes", ErrMalformed, MaxJTIBytes)
+	case c.HTM == nil || *c.HTM == "":
+		return nil, fmt.Errorf("%w: no htm", ErrMalformed)
+	case c.HTU == nil || *c.HTU == "":
+		return nil, fmt.Errorf("%w: no htu", ErrMalformed)
+	case c.IAT == nil:
+		return nil, fmt.Errorf("%w: no iat", ErrMalformed)
+	}
+	return &c, nil
+}
+
+// cached reports whether a proof with this hash verified inside its reuse
+// window.
+func (v *Verifier) cached(hash string, now time.Time) bool {
+	if v.reuse <= 0 {
+		return false
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	until, ok := v.cache[hash]
+	if !ok {
+		return false
+	}
+	if !now.Before(until) {
+		delete(v.cache, hash)
+		return false
+	}
+	return true
+}
+
+// remember caches a verified signature until the end of the reuse window.
+func (v *Verifier) remember(hash string, now time.Time) {
+	if v.reuse <= 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.cache) >= v.cacheMax {
+		for h, until := range v.cache {
+			if !now.Before(until) {
+				delete(v.cache, h)
+			}
+		}
+		if len(v.cache) >= v.cacheMax {
+			return
+		}
+	}
+	v.cache[hash] = now.Add(v.reuse)
+}
