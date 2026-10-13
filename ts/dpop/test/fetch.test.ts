@@ -7,8 +7,9 @@ import {
   isDeviceRevoked,
   isSessionExpired,
   isUseNonceChallenge,
+  MAX_REFUSAL_BODY,
 } from "../src/fetch";
-import { MemoryKeyStore, type KeyStore } from "../src/key";
+import { dpopKey, MemoryKeyStore, type KeyStore } from "../src/key";
 import { accessTokenHash } from "../src/proof";
 import { json, scriptedFetch, useNonce, verifyProof, type Reply } from "./helpers";
 
@@ -312,5 +313,140 @@ describe("createDpopFetch: refusals", () => {
       const r = await f(`${ORIGIN}/r`);
       expect(r.status).toBeGreaterThanOrEqual(401);
     }
+  });
+});
+
+describe("createDpopFetch: the origin check sees what is sent", () => {
+  it("checks a URL-like object that is not a URL by what the Request resolves", async () => {
+    const { f, server, getToken } = setup();
+    // Another realm's URL, a polyfill, or any object with toString: not
+    // `instanceof URL`, and without a `url` member.
+    const urlLike = { toString: () => "https://evil.example/steal" } as unknown as URL;
+    const err: unknown = await f(urlLike).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DpopOriginError);
+    expect((err as DpopOriginError).origin).toBe("https://evil.example");
+    expect(getToken).not.toHaveBeenCalled();
+    expect(server.sent).toHaveLength(0);
+
+    await f({ toString: () => `${ORIGIN}/ok` } as unknown as URL);
+    expect(server.sent[0]!.req.url).toBe(`${ORIGIN}/ok`);
+  });
+
+  it("checks a relative URL as the Request resolves it, not against location", async () => {
+    // The page is on an allowed origin, but the document base (an injected
+    // <base href>) points elsewhere, and Request resolves against the base.
+    class BasedRequest extends Request {
+      constructor(input: RequestInfo | URL, init?: RequestInit) {
+        super(
+          typeof input === "string" && input.startsWith("/")
+            ? new URL(input, "https://evil.example/").href
+            : input,
+          init,
+        );
+      }
+    }
+    vi.stubGlobal("location", { href: `${ORIGIN}/app/` });
+    vi.stubGlobal("Request", BasedRequest);
+    try {
+      const { f, server, getToken } = setup();
+      const err: unknown = await f("/v1/things").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DpopOriginError);
+      expect((err as DpopOriginError).origin).toBe("https://evil.example");
+      expect(getToken).not.toHaveBeenCalled();
+      expect(server.sent).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("createDpopFetch: discarding a key", () => {
+  const revoked = () =>
+    json(401, { error: { code: "UNAUTHENTICATED", details: [{ code: "DEVICE_REVOKED" }] } });
+
+  it("tags a refusal with the key it was raised for", async () => {
+    const { f } = setup(() => revoked());
+    const err = (await f(`${ORIGIN}/r`).catch((e: unknown) => e)) as DpopRefusedError;
+    expect(err.thumbprint).toBe((await f.key()).thumbprint);
+  });
+
+  it("does not let a stale refusal discard a newer key", async () => {
+    const { f, store } = setup((_req, n) => (n === 1 ? revoked() : ok()));
+    const stale = (await f(`${ORIGIN}/r`).catch((e: unknown) => e)) as DpopRefusedError;
+    await stale.discardKey();
+    await f(`${ORIGIN}/r`); // signs in on a new key
+    const newer = (await f.key()).thumbprint;
+    expect(newer).not.toBe(stale.thumbprint);
+
+    await stale.discardKey(); // late, a second time: the new key must survive
+    expect((await f.key()).thumbprint).toBe(newer);
+    const stored = await store.load();
+    expect(stored).toBeDefined();
+    expect((await dpopKey(stored!)).thumbprint).toBe(newer);
+  });
+
+  it("makes requests wait for a discard instead of reloading the revoked key", async () => {
+    const inner = new MemoryKeyStore();
+    let release!: () => void;
+    const clearing = new Promise<void>((r) => (release = r));
+    const store: KeyStore = {
+      load: () => inner.load(),
+      save: (p) => inner.save(p),
+      // The delete commits only when released: a concurrent request must not
+      // load the pair in the meantime.
+      clear: async () => {
+        await clearing;
+        await inner.clear();
+      },
+    };
+    const server = scriptedFetch(() => ok());
+    const f = createDpopFetch({ origins: [ORIGIN], keyStore: store, fetch: server.fetch });
+    const revokedKey = (await f.key()).thumbprint;
+
+    const discarding = f.discardKey(revokedKey);
+    const during = f(`${ORIGIN}/during`);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(server.sent).toHaveLength(0); // still waiting for the discard
+    release();
+    await discarding;
+    await during;
+
+    const now = (await f.key()).thumbprint;
+    expect(now).not.toBe(revokedKey);
+    expect((await dpopKey((await inner.load())!)).thumbprint).toBe(now);
+    expect(server.sent[0]!.proof!.header.jwk).toEqual((await f.key()).jwk);
+  });
+
+  it("discards unconditionally without a thumbprint", async () => {
+    const { f, store } = setup();
+    const before = (await f.key()).thumbprint;
+    await f.discardKey();
+    expect(await store.load()).toBeUndefined();
+    expect((await f.key()).thumbprint).not.toBe(before);
+  });
+});
+
+describe("createDpopFetch: refusal body size", () => {
+  it("does not parse a refusal body over the cap, and leaves it readable", async () => {
+    const big = {
+      pad: "x".repeat(MAX_REFUSAL_BODY),
+      error: { details: [{ code: "DEVICE_REVOKED" }] },
+    };
+    const { f } = setup(() => json(401, big));
+    const resp = await f(`${ORIGIN}/r`);
+    expect(resp.status).toBe(401);
+    expect(((await resp.json()) as typeof big).pad.length).toBe(MAX_REFUSAL_BODY);
+  });
+
+  it("still recognises a refusal just under the cap", async () => {
+    const body = (pad: string) =>
+      JSON.stringify({ pad, error: { details: [{ code: "DEVICE_REVOKED" }] } });
+    const pad = "x".repeat(MAX_REFUSAL_BODY - body("").length);
+    expect(body(pad).length).toBe(MAX_REFUSAL_BODY);
+    const { f } = setup(
+      () =>
+        new Response(body(pad), { status: 401, headers: { "Content-Type": "application/json" } }),
+    );
+    await expect(f(`${ORIGIN}/r`)).rejects.toBeInstanceOf(DpopRefusedError);
   });
 });

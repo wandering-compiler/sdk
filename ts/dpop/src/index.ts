@@ -37,6 +37,7 @@ export {
   isDeviceRevoked,
   isSessionExpired,
   isUseNonceChallenge,
+  MAX_REFUSAL_BODY,
   type DpopFetch,
   type DpopFetchOptions,
   type RefusalReason,

@@ -1,7 +1,7 @@
 // A fetch wrapper that attaches DPoP proofs, follows server nonces, and
 // retries once when the server asks for a fresh one.
 
-import { loadOrCreateKey, type DpopKey, type KeyStore } from "./key";
+import { dpopKey, loadOrCreateKey, type DpopKey, type KeyStore } from "./key";
 import { createProof } from "./proof";
 
 /** Header names (RFC 9449 §4.1, §8). */
@@ -38,9 +38,15 @@ export interface DpopFetch {
   /**
    * Forgets the device key (in the store and in memory) and every nonce, so
    * the next request makes a new key. Call it after a {@link DpopRefusedError}
-   * with reason DEVICE_REVOKED, before the user signs in again.
+   * with reason DEVICE_REVOKED, before the user signs in again; that error's
+   * own `discardKey` is the safer call, since it discards only the key it was
+   * raised for.
+   *
+   * With `thumbprint`, only a key with that thumbprint is discarded: a newer
+   * key is left alone. Requests made while a discard is in progress wait for
+   * it, so none of them signs with, or reloads, the key being discarded.
    */
-  discardKey(): Promise<void>;
+  discardKey(thumbprint?: string): Promise<void>;
 }
 
 /** A request to an origin outside {@link DpopFetchOptions.origins}. Nothing was sent. */
@@ -70,20 +76,32 @@ export class DpopRefusedError extends Error {
   readonly reason: RefusalReason;
   readonly status: number;
   readonly response: Response;
-  private readonly discard: () => Promise<void>;
+  /** The thumbprint of the key the refused request was signed with. */
+  readonly thumbprint: string;
+  private readonly discard: (thumbprint: string) => Promise<void>;
 
-  constructor(reason: RefusalReason, response: Response, discard: () => Promise<void>) {
+  constructor(
+    reason: RefusalReason,
+    response: Response,
+    thumbprint: string,
+    discard: (thumbprint: string) => Promise<void>,
+  ) {
     super(`dpop: refused: ${reason} (HTTP ${response.status})`);
     this.name = "DpopRefusedError";
     this.reason = reason;
     this.status = response.status;
     this.response = response;
+    this.thumbprint = thumbprint;
     this.discard = discard;
   }
 
-  /** Forgets the device key, as {@link DpopFetch.discardKey} does. */
+  /**
+   * Forgets the key this refusal was raised for ({@link thumbprint}), as
+   * {@link DpopFetch.discardKey} does. A key made since then is kept, so a
+   * stale error cannot wipe a new device key.
+   */
   discardKey(): Promise<void> {
-    return this.discard();
+    return this.discard(this.thumbprint);
   }
 }
 
@@ -123,14 +141,6 @@ function configuredOrigin(o: string): string | undefined {
   return u.origin;
 }
 
-/** The URL a fetch input addresses, resolved against the page when relative. */
-function inputURL(input: RequestInfo | URL): URL {
-  if (input instanceof URL) return input;
-  const raw = typeof input === "string" ? input : input.url;
-  const base = (globalThis as { location?: { href?: string } }).location?.href;
-  return new URL(raw, base);
-}
-
 /**
  * Whether a WWW-Authenticate value holds a DPoP challenge with
  * error="use_dpop_nonce". Several challenges may share one value (and
@@ -151,12 +161,55 @@ export function isUseNonceChallenge(value: string | null): boolean {
   return false;
 }
 
-/** The refusal reason a 401/403 JSON envelope names, if any. Never throws. */
+/** The most of a refusal body {@link refusalReason} reads. */
+export const MAX_REFUSAL_BODY = 64 << 10;
+
+/**
+ * Reads a body up to `limit` bytes; undefined when it is longer (the rest is
+ * cancelled, not read) or unreadable.
+ */
+async function readCapped(body: ReadableStream<Uint8Array> | null, limit: number) {
+  if (!body) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        // Not awaited: cancelling one branch of a tee'd body settles only
+        // once the other branch (the caller's response) is cancelled too.
+        void reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return undefined;
+  }
+  const all = new Uint8Array(size);
+  let o = 0;
+  for (const c of chunks) {
+    all.set(c, o);
+    o += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
+
+/**
+ * The refusal reason a 401/403 JSON envelope names, if any. Reads at most
+ * {@link MAX_REFUSAL_BODY} bytes of a clone; a longer body is not a refusal
+ * this client recognises. Never throws.
+ */
 async function refusalReason(resp: Response): Promise<RefusalReason | undefined> {
   if (resp.status !== 401 && resp.status !== 403) return undefined;
   if (!/\bjson\b/i.test(resp.headers.get("Content-Type") ?? "")) return undefined;
   try {
-    const env = (await resp.clone().json()) as { error?: { details?: unknown } } | null;
+    const text = await readCapped(resp.clone().body, MAX_REFUSAL_BODY);
+    if (text === undefined) return undefined;
+    const env = JSON.parse(text) as { error?: { details?: unknown } } | null;
     const details = env?.error?.details;
     if (!Array.isArray(details)) return undefined;
     for (const d of details as unknown[]) {
@@ -203,10 +256,14 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     opts.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
   const nonces = new Map<string, string>();
   let keyPromise: Promise<DpopKey> | undefined;
+  // Discards run one after another, and a key load starts only after every
+  // discard requested before it has finished: a request can never reload the
+  // pair a discard is about to delete.
+  let discards: Promise<void> = Promise.resolve();
 
   const key = (): Promise<DpopKey> => {
     if (!keyPromise) {
-      const p = loadOrCreateKey(store);
+      const p = discards.then(() => loadOrCreateKey(store));
       keyPromise = p;
       // A failed load must not stick: the next request tries again.
       p.catch(() => {
@@ -216,10 +273,29 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     return keyPromise;
   };
 
-  const discardKey = async (): Promise<void> => {
-    keyPromise = undefined;
-    nonces.clear();
-    await store.clear();
+  const discardKey = (thumbprint?: string): Promise<void> => {
+    const held = keyPromise;
+    const op = discards.then(async () => {
+      if (thumbprint !== undefined) {
+        // Discard only the key the caller means: the one in memory, or, when
+        // none is loaded, the one in the store.
+        let current = held ? await held.catch(() => undefined) : undefined;
+        if (!current) {
+          const stored = await store.load();
+          current = stored ? await dpopKey(stored) : undefined;
+        }
+        if (current?.thumbprint !== thumbprint) {
+          if (keyPromise === undefined && held) keyPromise = held; // keep the newer key
+          return;
+        }
+      }
+      nonces.clear();
+      await store.clear();
+    });
+    discards = op.catch(() => undefined);
+    // Requests from now on wait for this discard (see key()).
+    if (keyPromise === held) keyPromise = undefined;
+    return op;
   };
 
   const attempt = async (
@@ -248,12 +324,17 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
   };
 
   const dpopFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const origin = inputURL(input).origin;
-    if (!allowed.has(origin)) throw new DpopOriginError(origin);
-
     // A Request of our own, so the caller's object is never modified. The
-    // first attempt and the retry each send a clone of it.
+    // first attempt and the retry each send a clone of it. The origin check
+    // reads the URL this Request resolved, never the input: a URL-like object
+    // that is not a URL, or a relative URL under a <base href>, resolves only
+    // here, and the check must see exactly what will be sent.
     const req = new Request(input, { ...init, redirect: "error" });
+    const origin = new URL(req.url).origin;
+    if (!allowed.has(origin)) {
+      await req.body?.cancel().catch(() => undefined);
+      throw new DpopOriginError(origin);
+    }
     if (req.mode === "no-cors") {
       // no-cors silently drops non-safelisted headers: the proof would vanish.
       throw new Error("dpop: a no-cors request cannot carry a DPoP proof");
@@ -276,7 +357,7 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     }
 
     const reason = await refusalReason(resp);
-    if (reason) throw new DpopRefusedError(reason, resp, discardKey);
+    if (reason) throw new DpopRefusedError(reason, resp, k.thumbprint, discardKey);
     return resp;
   };
 
