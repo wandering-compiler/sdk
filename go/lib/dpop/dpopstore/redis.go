@@ -7,13 +7,17 @@
 // Both keep the [dpop.JTIStore] contract: Record is an atomic
 // insert-if-absent that returns the stored record when the key is already
 // there, entries expire after their ttl as judged by rec.FirstSeen (the
-// verifier's clock), and one key thumbprint may hold only its share of the
-// store ([dpop.ErrJTIStoreFull] beyond it). A failing backend returns its
+// verifier's clock), one key thumbprint may hold only its share of the
+// store, and the store as a whole only its total cap ([dpop.ErrJTIStoreFull]
+// beyond either). A failing backend returns its
 // error; the verifier then refuses the request with dpop.ErrUnavailable (503),
 // never accepting a proof it could not record.
 //
 // Configure one store for bound proofs and a separate one (another key prefix
-// or table) for unbound mint proofs, as [dpop.Config.MintJTIs] requires.
+// or table) for unbound mint proofs, as [dpop.Config.MintJTIs] requires. The
+// total cap is per store, so a flood of unbound proofs from throwaway keys
+// fills only the mint store; give that one a smaller cap
+// ([dpop.DefaultMaxMintJTIs] is the in-memory default).
 package dpopstore
 
 import (
@@ -36,17 +40,29 @@ const DefaultRedisPrefix = "w17:dpop:jti:"
 // RedisJTIStore is a [dpop.JTIStore] in Redis, shared by every replica that
 // talks to the same Redis. Each accepted proof is one key with a TTL; one
 // sorted set per thumbprint counts the key's live entries for the per-key
-// share. Both keys of a thumbprint share a hash tag, so the store works on a
-// Redis Cluster, and Record runs as one Lua script, so it is atomic.
+// share, and one sorted set per store (per prefix) counts every live entry
+// for the total cap. Both keys of a thumbprint share a hash tag, so the
+// store works on a Redis Cluster.
+//
+// Record runs two Lua scripts, each atomic: the first reserves a place under
+// the total cap (or refuses with [dpop.ErrJTIStoreFull]), the second records
+// the jti under the per-key share. A reservation the second script does not
+// use — the key's share is full, or the script failed — is released; one
+// left behind by a crash expires with the entry's ttl. The total set lives
+// in one hash slot of its own, apart from the jti keys, which is why the
+// two steps are separate scripts.
 //
 // Expiry runs on the Redis server's clock (each jti key carries its ttl);
-// the per-key count is judged by rec.FirstSeen. The total size is bounded by
-// Redis memory, not by the store: run it on a Redis whose maxmemory-policy
-// is noeviction, since an evicted jti is a replay window reopened early.
+// the per-key count and the total are judged by rec.FirstSeen. Run it on a
+// Redis whose maxmemory-policy is noeviction, since an evicted jti is a
+// replay window reopened early; the total caps of the stores sharing that
+// Redis bound what they can take of its memory, so a flood that fills the
+// mint store leaves the memory the bound store needs.
 type RedisJTIStore struct {
-	rdb    redis.Scripter
-	prefix string
-	maxKey int
+	rdb      redis.Scripter
+	prefix   string
+	maxKey   int
+	maxTotal int
 }
 
 // RedisOption configures [NewRedisJTIStore].
@@ -72,18 +88,48 @@ func WithRedisMaxPerKey(n int) RedisOption {
 	}
 }
 
+// WithRedisMaxEntries bounds the live entries of the whole store (default
+// [dpop.DefaultMaxJTIs]); n <= 0 keeps the default. Size it for the peak
+// rate of proofs times the jti ttl (the nonce lifetime, or twice the iat
+// window); a full store refuses with [dpop.ErrJTIStoreFull].
+func WithRedisMaxEntries(n int) RedisOption {
+	return func(s *RedisJTIStore) {
+		if n > 0 {
+			s.maxTotal = n
+		}
+	}
+}
+
 // NewRedisJTIStore returns a store over rdb (a *redis.Client,
 // *redis.ClusterClient or any redis.UniversalClient).
 func NewRedisJTIStore(rdb redis.Scripter, opts ...RedisOption) (*RedisJTIStore, error) {
 	if rdb == nil {
 		return nil, errors.New("dpopstore: NewRedisJTIStore needs a client")
 	}
-	s := &RedisJTIStore{rdb: rdb, prefix: DefaultRedisPrefix, maxKey: dpop.DefaultMaxJTIsPerKey}
+	s := &RedisJTIStore{rdb: rdb, prefix: DefaultRedisPrefix, maxKey: dpop.DefaultMaxJTIsPerKey, maxTotal: dpop.DefaultMaxJTIs}
 	for _, o := range opts {
 		o(s)
 	}
 	return s, nil
 }
+
+// reserveScript: KEYS[1] the store's total set. ARGV: the jti key (the
+// member), now ms, max entries, expiry ms, ttl ms. Returns 1 reserved, 0
+// already counted (the jti is recorded or being recorded), 2 the store is
+// full.
+var reserveScript = redis.NewScript(`
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[2])
+if redis.call('ZSCORE', KEYS[1], ARGV[1]) then return 0 end
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then return 2 end
+redis.call('ZADD', KEYS[1], ARGV[4], ARGV[1])
+if redis.call('PTTL', KEYS[1]) < tonumber(ARGV[5]) then
+  redis.call('PEXPIRE', KEYS[1], ARGV[5])
+end
+return 1
+`)
+
+// releaseScript: KEYS[1] the store's total set, ARGV[1] the jti key.
+var releaseScript = redis.NewScript(`return redis.call('ZREM', KEYS[1], ARGV[1])`)
 
 // recordScript: KEYS[1] the jti key, KEYS[2] the thumbprint's counter set.
 // ARGV: record JSON, ttl ms, now ms, max per key, expiry ms.
@@ -121,19 +167,41 @@ func (s *RedisJTIStore) Record(ctx context.Context, key string, rec dpop.JTIReco
 	tag := "{" + hashTag(rec.Thumbprint) + "}"
 	jtiKey := s.prefix + tag + ":" + hex.EncodeToString(sum[:])
 	setKey := s.prefix + tag + ":n"
+	totalKey := s.prefix + "{all}:n"
 	now := rec.FirstSeen.UnixMilli()
+	exp := now + ttl.Milliseconds()
+
+	reserved, err := reserveScript.Run(ctx, s.rdb, []string{totalKey},
+		jtiKey, now, s.maxTotal, exp, ttl.Milliseconds()).Int64()
+	switch {
+	case err != nil:
+		return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis reserve: %w", err)
+	case reserved == 2:
+		return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
+	}
+	// release gives back a reservation the record below did not use. A
+	// failed release leaves the place taken until the entry's ttl.
+	release := func() {
+		if reserved == 1 {
+			_ = releaseScript.Run(context.WithoutCancel(ctx), s.rdb, []string{totalKey}, jtiKey).Err()
+		}
+	}
+
 	res, err := recordScript.Run(ctx, s.rdb, []string{jtiKey, setKey},
-		string(body), ttl.Milliseconds(), now, s.maxKey, now+ttl.Milliseconds()).Slice()
+		string(body), ttl.Milliseconds(), now, s.maxKey, exp).Slice()
 	if err != nil {
+		release()
 		return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis record: %w", err)
 	}
 	if len(res) == 0 {
+		release()
 		return dpop.JTIRecord{}, false, errors.New("dpopstore: redis record: empty reply")
 	}
 	switch code, _ := res[0].(int64); code {
 	case 1:
 		return rec, true, nil
 	case 2:
+		release()
 		return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
 	case 0:
 		if len(res) < 2 {
@@ -146,6 +214,7 @@ func (s *RedisJTIStore) Record(ctx context.Context, key string, rec dpop.JTIReco
 		}
 		return dpop.JTIRecord{Thumbprint: got.Thumbprint, ProofHash: got.ProofHash, FirstSeen: time.Unix(0, got.FirstSeen)}, false, nil
 	}
+	release()
 	return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: redis record: unexpected reply %v", res)
 }
 

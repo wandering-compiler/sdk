@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,10 +29,11 @@ func randomSuffix(t *testing.T) string {
 
 func redisHarness(client *redis.Client, advance func(t *testing.T, d time.Duration)) harness {
 	return harness{
-		newStore: func(t *testing.T, maxPerKey int) dpop.JTIStore {
+		newStore: func(t *testing.T, maxPerKey, maxTotal int) dpop.JTIStore {
 			s, err := dpopstore.NewRedisJTIStore(client,
 				dpopstore.WithRedisPrefix("w17:test:dpop:"+randomSuffix(t)+":"),
-				dpopstore.WithRedisMaxPerKey(maxPerKey))
+				dpopstore.WithRedisMaxPerKey(maxPerKey),
+				dpopstore.WithRedisMaxEntries(maxTotal))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,8 +64,8 @@ func TestRedisJTIStore_KeysCarryTheTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := mr.Keys()
-	if len(keys) != 2 {
-		t.Fatalf("keys = %v, want the jti key and the per-key set", keys)
+	if len(keys) != 3 {
+		t.Fatalf("keys = %v, want the jti key, the per-key set and the total set", keys)
 	}
 	for _, k := range keys {
 		if ttl := mr.TTL(k); ttl <= 0 || ttl > time.Minute {
@@ -72,6 +75,56 @@ func TestRedisJTIStore_KeysCarryTheTTL(t *testing.T) {
 	mr.FastForward(time.Minute + time.Second)
 	if keys := mr.Keys(); len(keys) != 0 {
 		t.Errorf("keys outlived the ttl: %v", keys)
+	}
+}
+
+// A flood of unbound proofs from throwaway keys, each a new thumbprint, takes
+// at most the mint store's total cap of Redis — refused proofs leave no key
+// behind — so the memory a noeviction Redis has left for the bound store is
+// not consumed, and the bound store keeps recording.
+func TestRedisJTIStore_FloodStaysWithinTheCap(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	const mintCap = 50
+	mint, err := dpopstore.NewRedisJTIStore(client, dpopstore.WithRedisPrefix("w17:mint:"), dpopstore.WithRedisMaxEntries(mintCap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := dpopstore.NewRedisJTIStore(client, dpopstore.WithRedisPrefix("w17:bound:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Now()
+	full := 0
+	for i := range 10 * mintCap {
+		tp := fmt.Sprint("throwaway-", i)
+		_, _, err := mint.Record(ctx, tp+"\x00j", dpop.JTIRecord{Thumbprint: tp, ProofHash: "h", FirstSeen: now}, time.Minute)
+		switch {
+		case errors.Is(err, dpop.ErrJTIStoreFull):
+			full++
+		case err != nil:
+			t.Fatal(err)
+		}
+	}
+	if full != 9*mintCap {
+		t.Fatalf("%d of %d flood records refused, want %d", full, 10*mintCap, 9*mintCap)
+	}
+	mintKeys := 0
+	for _, k := range mr.Keys() {
+		if strings.HasPrefix(k, "w17:mint:") {
+			mintKeys++
+		}
+	}
+	// One jti key and one per-key set per recorded proof, plus the total set.
+	if mintKeys > 2*mintCap+1 {
+		t.Fatalf("the flood left %d mint keys, want at most %d", mintKeys, 2*mintCap+1)
+	}
+	for i := range 3 {
+		if _, created, err := bound.Record(ctx, fmt.Sprint("dev\x00", i), dpop.JTIRecord{Thumbprint: "dev", ProofHash: fmt.Sprint(i), FirstSeen: now}, time.Minute); err != nil || !created {
+			t.Fatalf("bound record %d after the flood: %v %v", i, created, err)
+		}
 	}
 }
 

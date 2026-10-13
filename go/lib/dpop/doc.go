@@ -57,8 +57,10 @@
 // a proof from any key, so anyone can mint keys and fill the store there:
 // mint endpoints need rate limiting in front of the verifier. Unbound
 // proofs are recorded in a store of their own ([Config.MintJTIs]), so such a
-// flood can stall minting but never authenticated requests. A full or
-// failing store is [ErrUnavailable], answered 503 ([HTTPStatus]). The
+// flood can stall minting but never authenticated requests; with
+// [Config.MintFull] set to [MintFullAcceptUnrecorded] it does not even stall
+// minting, at the cost of best-effort replay protection for unbound proofs.
+// A full or failing store is [ErrUnavailable], answered 503 ([HTTPStatus]). The
 // in-memory [MemoryJTIStore] is per process and is correct only for a single
 // replica: with two or more, a proof accepted by one replica can be replayed
 // against another. A multi-replica deployment needs a shared store.

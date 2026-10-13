@@ -23,9 +23,9 @@ import (
 // moving.
 func sqlHarness(db *sql.DB, dialect dpopstore.Dialect) harness {
 	return harness{
-		newStore: func(t *testing.T, maxPerKey int) dpop.JTIStore {
+		newStore: func(t *testing.T, maxPerKey, maxTotal int) dpop.JTIStore {
 			table := "w17_dpop_jti_test_" + randomSuffix(t)
-			s, err := dpopstore.NewSQLJTIStore(db, dialect, dpopstore.WithSQLTable(table), dpopstore.WithSQLMaxPerKey(maxPerKey), dpopstore.WithSQLPruneEvery(1))
+			s, err := dpopstore.NewSQLJTIStore(db, dialect, dpopstore.WithSQLTable(table), dpopstore.WithSQLMaxPerKey(maxPerKey), dpopstore.WithSQLMaxEntries(maxTotal), dpopstore.WithSQLPruneEvery(1))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
+	"github.com/wandering-compiler/sdk/go/lib/dpop/dpopstore"
 )
 
 // harness is one backend under the shared contract: a fresh store with the
-// given per-key share, and a way to move time forward for both the records'
+// given per-key share and total cap (0: the defaults), and a way to move time forward for both the records'
 // FirstSeen and, where the backend expires by its own clock, the backend.
 type harness struct {
-	newStore func(t *testing.T, maxPerKey int) dpop.JTIStore
+	newStore func(t *testing.T, maxPerKey, maxTotal int) dpop.JTIStore
 	advance  func(t *testing.T, d time.Duration)
 }
 
@@ -26,7 +27,7 @@ func runContract(t *testing.T, h harness) {
 	base := time.Now().Truncate(time.Millisecond)
 
 	t.Run("insert if absent", func(t *testing.T) {
-		s := h.newStore(t, 0)
+		s := h.newStore(t, 0, 0)
 		rec := dpop.JTIRecord{Thumbprint: "tp", ProofHash: "h1", FirstSeen: base}
 		got, created, err := s.Record(ctx, "tp\x00j1", rec, time.Minute)
 		if err != nil || !created || got != rec {
@@ -43,7 +44,7 @@ func runContract(t *testing.T, h harness) {
 	})
 
 	t.Run("expiry frees the key", func(t *testing.T) {
-		s := h.newStore(t, 0)
+		s := h.newStore(t, 0, 0)
 		ttl := 200 * time.Millisecond
 		rec := dpop.JTIRecord{Thumbprint: "tp", ProofHash: "h1", FirstSeen: base}
 		if _, created, err := s.Record(ctx, "tp\x00j", rec, ttl); err != nil || !created {
@@ -58,7 +59,7 @@ func runContract(t *testing.T, h harness) {
 	})
 
 	t.Run("per-key share", func(t *testing.T) {
-		s := h.newStore(t, 3)
+		s := h.newStore(t, 3, 0)
 		ttl := 200 * time.Millisecond
 		for i := range 3 {
 			rec := dpop.JTIRecord{Thumbprint: "greedy", ProofHash: fmt.Sprint(i), FirstSeen: base}
@@ -80,8 +81,111 @@ func runContract(t *testing.T, h harness) {
 		}
 	})
 
+	t.Run("total cap", func(t *testing.T) {
+		s := h.newStore(t, 0, 3)
+		ttl := 200 * time.Millisecond
+		for i := range 3 {
+			tp := fmt.Sprint("tp", i)
+			if _, created, err := s.Record(ctx, tp+"\x00j", dpop.JTIRecord{Thumbprint: tp, ProofHash: tp, FirstSeen: base}, ttl); err != nil || !created {
+				t.Fatalf("entry %d: %v %v", i, created, err)
+			}
+		}
+		_, _, err := s.Record(ctx, "tp9\x00j", dpop.JTIRecord{Thumbprint: "tp9", ProofHash: "x", FirstSeen: base}, ttl)
+		if !errors.Is(err, dpop.ErrJTIStoreFull) {
+			t.Fatalf("over the total cap: %v, want ErrJTIStoreFull", err)
+		}
+		// A full store still answers for what it holds: a replay is a replay.
+		got, created, err := s.Record(ctx, "tp1\x00j", dpop.JTIRecord{Thumbprint: "tp1", ProofHash: "other", FirstSeen: base}, ttl)
+		if err != nil || created || got.ProofHash != "tp1" {
+			t.Fatalf("stored key on a full store = (%+v, %v, %v), want the stored record", got, created, err)
+		}
+		// Room frees with expiry (the SQL store counts again within
+		// SQLRecountEvery).
+		wait := ttl + dpopstore.SQLRecountEvery
+		h.advance(t, wait)
+		if _, created, err := s.Record(ctx, "tp9\x00j", dpop.JTIRecord{Thumbprint: "tp9", ProofHash: "x", FirstSeen: base.Add(wait)}, ttl); err != nil || !created {
+			t.Fatalf("the total cap did not free with expiry: %v %v", created, err)
+		}
+	})
+
+	t.Run("a refused record takes no place under the total cap", func(t *testing.T) {
+		s := h.newStore(t, 1, 2)
+		rec := func(tp, jti string) error {
+			_, _, err := s.Record(ctx, tp+"\x00"+jti, dpop.JTIRecord{Thumbprint: tp, ProofHash: jti, FirstSeen: base}, time.Minute)
+			return err
+		}
+		if err := rec("a", "1"); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 5 {
+			if err := rec("a", fmt.Sprint("more", i)); !errors.Is(err, dpop.ErrJTIStoreFull) {
+				t.Fatalf("over the per-key share: %v, want ErrJTIStoreFull", err)
+			}
+		}
+		if err := rec("b", "1"); err != nil {
+			t.Fatalf("records refused by the per-key share took places under the total cap: %v", err)
+		}
+		if err := rec("c", "1"); !errors.Is(err, dpop.ErrJTIStoreFull) {
+			t.Fatalf("over the total cap: %v, want ErrJTIStoreFull", err)
+		}
+	})
+
+	t.Run("a mint flood fills only the mint store", func(t *testing.T) {
+		const mintCap = 5
+		bound, mint := h.newStore(t, 0, 0), h.newStore(t, 0, mintCap)
+		verifier := func(policy dpop.MintFullPolicy) *dpop.Verifier {
+			v, err := dpop.NewVerifier(dpop.Config{Origin: "https://api.example.com", JTIs: bound, MintJTIs: mint, MintFull: policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+		v := verifier(dpop.MintFullRefuse)
+		unbound := func() dpop.Request {
+			k, err := dpop.GenerateKey(dpop.KeyP256)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := dpop.NewProof(k, http.MethodPost, "https://api.example.com/v1/sign-in", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return dpop.Request{Method: http.MethodPost, Path: "/v1/sign-in", Proofs: []string{p}}
+		}
+		for i := 0; ; i++ {
+			_, err := v.Verify(ctx, unbound())
+			if errors.Is(err, dpop.ErrUnavailable) {
+				if !errors.Is(err, dpop.ErrJTIStoreFull) || i != mintCap {
+					t.Fatalf("mint store refused after %d proofs with %v, want full after %d", i, err, mintCap)
+				}
+				break
+			}
+			if err != nil || i > mintCap {
+				t.Fatalf("mint proof %d: %v", i, err)
+			}
+		}
+		key, err := dpop.GenerateKey(dpop.KeyP256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range 3 {
+			proof, err := dpop.NewProof(key, http.MethodGet, "https://api.example.com/v1/notes", "tok", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := dpop.Request{Method: http.MethodGet, Path: "/v1/notes", Proofs: []string{proof}, AccessToken: "tok", Binding: key.Thumbprint()}
+			if _, err := v.Verify(ctx, req); err != nil {
+				t.Fatalf("bound proof %d during a mint flood: %v", i, err)
+			}
+		}
+		r, err := verifier(dpop.MintFullAcceptUnrecorded).VerifyResult(ctx, unbound())
+		if err != nil || !r.MintUnrecorded {
+			t.Fatalf("accept-unrecorded on the full mint store = (%+v, %v)", r, err)
+		}
+	})
+
 	t.Run("concurrent writers, one winner", func(t *testing.T) {
-		s := h.newStore(t, 0)
+		s := h.newStore(t, 0, 0)
 		const n = 16
 		var wg sync.WaitGroup
 		results := make([]dpop.JTIRecord, n)
@@ -116,7 +220,7 @@ func runContract(t *testing.T, h harness) {
 	})
 
 	t.Run("replicas sharing the store refuse a replay", func(t *testing.T) {
-		bound, mint := h.newStore(t, 0), h.newStore(t, 0)
+		bound, mint := h.newStore(t, 0, 0), h.newStore(t, 0, 0)
 		replica := func() *dpop.Verifier {
 			v, err := dpop.NewVerifier(dpop.Config{Origin: "https://api.example.com", JTIs: bound, MintJTIs: mint, ReuseWindow: -1})
 			if err != nil {

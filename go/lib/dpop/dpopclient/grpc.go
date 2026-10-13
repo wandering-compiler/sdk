@@ -21,7 +21,9 @@ import (
 // read `dpop-nonce` from response headers and trailers.
 //
 // The proof of a call has htm POST and htu Origin + the full method name
-// ("/package.Service/Method").
+// ("/package.Service/Method"). As with [Transport], a call gets DPoP only
+// when Token returns a token or its context is marked with [MintContext];
+// any other call carries no DPoP metadata.
 //
 // Unary calls refused with codes.Unauthenticated, a `www-authenticate`
 // trailer holding `use_dpop_nonce` and a new `dpop-nonce` are retried once.
@@ -67,6 +69,9 @@ func (c *Credentials) GetRequestMetadata(ctx context.Context, _ ...string) (map[
 		if token, err = c.Token(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if token == "" && !IsMint(ctx) {
+		return map[string]string{}, nil
 	}
 	proof, err := dpop.NewProof(c.Signer, "POST", strings.TrimSuffix(c.Origin, "/")+method, token, c.currentNonce())
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,10 @@ const DefaultSQLTable = "w17_dpop_jti"
 // expired rows.
 const DefaultSQLPruneEvery = 256
 
+// SQLRecountEvery is the longest a [SQLJTIStore] trusts its count of live
+// rows (by rec.FirstSeen) before counting again for the total cap.
+const SQLRecountEvery = time.Second
+
 var sqlIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 // SQLJTIStore is a [dpop.JTIStore] in a SQL table shared by every replica
@@ -48,15 +53,30 @@ var sqlIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 // one on demand). The per-key share is counted before the insert, so
 // concurrent Records of one key may overshoot it by the number in flight;
 // the share bounds a key, it is not a quota.
+//
+// The total cap ([WithSQLMaxEntries]) is judged against a count of live rows
+// each replica keeps: counted again every [SQLRecountEvery] or every
+// pruneEvery records, whichever comes first, and raised by each of its own
+// inserts in between. Counting the table on every Record would cost a scan
+// per proof. Other replicas' inserts since the last count are not seen, so
+// the table may overshoot the cap by what they insert in that interval; it
+// stays bounded, which is what keeps a mint flood from filling the database.
 type SQLJTIStore struct {
 	db         *sql.DB
 	dialect    Dialect
 	table      string
 	maxKey     int
+	maxTotal   int
 	pruneEvery int64
 	n          atomic.Int64
 
-	qDeleteExpiredKey, qCount, qInsert, qSelect, qPrune string
+	tmu       sync.Mutex
+	total     int       // live rows at countedAt, plus our inserts since
+	countedAt time.Time // zero: never counted
+	since     int64     // our inserts since countedAt
+	counting  bool
+
+	qDeleteExpiredKey, qCount, qCountAll, qInsert, qSelect, qPrune string
 }
 
 // SQLOption configures [NewSQLJTIStore].
@@ -74,6 +94,18 @@ func WithSQLMaxPerKey(n int) SQLOption {
 	return func(s *SQLJTIStore) {
 		if n > 0 {
 			s.maxKey = n
+		}
+	}
+}
+
+// WithSQLMaxEntries bounds the live rows of the whole table (default
+// [dpop.DefaultMaxJTIs]); n <= 0 keeps the default. Size it for the peak
+// rate of proofs times the jti ttl; a full table refuses with
+// [dpop.ErrJTIStoreFull]. See [SQLJTIStore] for how closely it holds.
+func WithSQLMaxEntries(n int) SQLOption {
+	return func(s *SQLJTIStore) {
+		if n > 0 {
+			s.maxTotal = n
 		}
 	}
 }
@@ -100,7 +132,7 @@ func NewSQLJTIStore(db *sql.DB, dialect Dialect, opts ...SQLOption) (*SQLJTIStor
 	default:
 		return nil, fmt.Errorf("dpopstore: unknown dialect %q", dialect)
 	}
-	s := &SQLJTIStore{db: db, dialect: dialect, table: DefaultSQLTable, maxKey: dpop.DefaultMaxJTIsPerKey, pruneEvery: DefaultSQLPruneEvery}
+	s := &SQLJTIStore{db: db, dialect: dialect, table: DefaultSQLTable, maxKey: dpop.DefaultMaxJTIsPerKey, maxTotal: dpop.DefaultMaxJTIs, pruneEvery: DefaultSQLPruneEvery}
 	for _, o := range opts {
 		o(s)
 	}
@@ -110,6 +142,7 @@ func NewSQLJTIStore(db *sql.DB, dialect Dialect, opts ...SQLOption) (*SQLJTIStor
 	t := s.table
 	s.qDeleteExpiredKey = s.bind("DELETE FROM " + t + " WHERE key_hash = ? AND expires_at <= ?")
 	s.qCount = s.bind("SELECT COUNT(*) FROM " + t + " WHERE thumbprint = ? AND expires_at > ?")
+	s.qCountAll = s.bind("SELECT COUNT(*) FROM " + t + " WHERE expires_at > ?")
 	insert := "INSERT INTO " + t + " (key_hash, thumbprint, proof_hash, first_seen, expires_at) VALUES (?, ?, ?, ?, ?)"
 	if dialect == MySQL {
 		insert += " ON DUPLICATE KEY UPDATE key_hash = key_hash"
@@ -203,8 +236,18 @@ func (s *SQLJTIStore) Record(ctx context.Context, key string, rec dpop.JTIRecord
 		if live >= s.maxKey {
 			return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
 		}
-		if _, err := s.db.ExecContext(ctx, s.qInsert, keyHash, rec.Thumbprint, rec.ProofHash, now, exp); err != nil {
+		switch full, err := s.totalFull(ctx, rec.FirstSeen); {
+		case err != nil:
+			return dpop.JTIRecord{}, false, err
+		case full:
+			return dpop.JTIRecord{}, false, dpop.ErrJTIStoreFull
+		}
+		res, err := s.db.ExecContext(ctx, s.qInsert, keyHash, rec.Thumbprint, rec.ProofHash, now, exp)
+		if err != nil {
 			return dpop.JTIRecord{}, false, fmt.Errorf("dpopstore: record: insert: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n > 0 {
+			s.inserted()
 		}
 		// Read back: the row is ours exactly when it holds what we wrote.
 		// Two presentations of one proof at the same nanosecond both read
@@ -223,6 +266,41 @@ func (s *SQLJTIStore) Record(ctx context.Context, key string, rec dpop.JTIRecord
 		return got, false, nil
 	}
 	return dpop.JTIRecord{}, false, errors.New("dpopstore: record: row kept changing under concurrent writers")
+}
+
+// totalFull reports whether the table is at its total cap at now, by the
+// kept count (see [SQLJTIStore]), counting again when that is stale. One
+// Record counts at a time; the others use the count they find.
+func (s *SQLJTIStore) totalFull(ctx context.Context, now time.Time) (bool, error) {
+	s.tmu.Lock()
+	stale := !s.counting && (s.countedAt.IsZero() || now.Sub(s.countedAt) >= SQLRecountEvery ||
+		now.Before(s.countedAt) || s.since >= s.pruneEvery)
+	if stale {
+		s.counting = true
+	}
+	total := s.total
+	s.tmu.Unlock()
+	if !stale {
+		return total >= s.maxTotal, nil
+	}
+	var live int
+	err := s.db.QueryRowContext(ctx, s.qCountAll, now.UnixNano()).Scan(&live)
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	s.counting = false
+	if err != nil {
+		return false, fmt.Errorf("dpopstore: record: count all: %w", err)
+	}
+	s.total, s.countedAt, s.since = live, now, 0
+	return live >= s.maxTotal, nil
+}
+
+// inserted adds one of our inserts to the kept count.
+func (s *SQLJTIStore) inserted() {
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	s.total++
+	s.since++
 }
 
 // read returns the live row of keyHash at now.

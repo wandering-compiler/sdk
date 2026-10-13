@@ -116,6 +116,35 @@ it("writes the cross-language fixture", async () => {
     proof: captured[1]!,
   });
 
+  // A mint call through the fetch wrapper: no token, marked `mint: true`, so
+  // it carries an unbound proof (a call with neither carries none). The
+  // first attempt is challenged, the retry carries the fixture nonce.
+  const minted: (string | null)[] = [];
+  const mintServer = (input: RequestInfo | URL): Promise<Response> => {
+    minted.push((input as Request).headers.get("DPoP"));
+    return Promise.resolve(
+      minted.length === 1
+        ? new Response("{}", {
+            status: 401,
+            headers: { "WWW-Authenticate": 'DPoP error="use_dpop_nonce"', "DPoP-Nonce": NONCE },
+          })
+        : new Response("{}"),
+    );
+  };
+  const mintFetch = createDpopFetch({ origins: [ORIGIN], keyStore: store, fetch: mintServer });
+  await mintFetch(`${ORIGIN}/v1/sign-in`, { method: "POST", mint: true });
+  await mintFetch(`${ORIGIN}/v1/public`);
+  if (minted.length !== 3 || !minted[1] || minted[2] !== null) {
+    throw new Error(`want a challenged mint call, its signed retry, then an unsigned call`);
+  }
+  cases.push({
+    name: "fetch wrapper mint call, no token",
+    method: "POST",
+    path: "/v1/sign-in",
+    token: "",
+    proof: minted[1],
+  });
+
   // Thumbprints the Go side recomputes: this run's key and the RFC 9449 key.
   const rfc9449 = {
     kty: "EC",

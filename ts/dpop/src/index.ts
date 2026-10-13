@@ -40,6 +40,7 @@ export {
   MAX_REFUSAL_BODY,
   type DpopFetch,
   type DpopFetchOptions,
+  type DpopRequestInit,
   type RefusalReason,
   type TokenSource,
 } from "./fetch";
