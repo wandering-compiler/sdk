@@ -858,7 +858,7 @@ origin-relative references (`</path?cursor=…>`, RFC 8288 §3.2).
 
 ## E26. Per-client rate limiter
 
-**Code.** `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`, `Allow`, `Reserve`, `ReserveRequest`, `AllowChargeable`, `TrustPrivateRanges`.
+**Code.** `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`, `Allow`, `Reserve`, `ReserveRequest`, `AllowChargeable`, `OpenStream`, `TrustPrivateRanges`; `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`.
 
 **Purpose.** A token bucket per client address for methods that take no credential, so guessing
 is bounded without a global cap.
@@ -870,6 +870,7 @@ is bounded without a global cap.
 | `<PREFIX>_RATELIMIT_PER_MINUTE` | 30 | float; `<= 0` disables |
 | `<PREFIX>_RATELIMIT_BURST` | 10 | int > 0 |
 | `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | none: every caller is keyed by its connection's address | Comma-separated CIDRs or bare addresses; `private` adds the loopback and RFC 1918 ranges (combinable with CIDRs); `none` states the default; any other entry is logged once and skipped. List exactly the hops that terminate HTTP and append to `X-Forwarded-For` |
+| `<PREFIX>_RATELIMIT_MAX_STREAMS` | 0: no cap | Opt-in cap on the public streams one client holds open at once; a value that is not a whole number `>= 0` is logged once and caps nothing. Too many streams is an overload, not a breach, so nothing is capped unasked |
 | `FromEnvScope(prefix, scope, transport)` | `<PREFIX>_<SCOPE>_RATELIMIT_*` | The unscoped `<PREFIX>_RATELIMIT_*` form is read with a one-time warning; `_<TRANSPORT>_PER_MINUTE` / `_BURST` override per transport; an off limiter is logged once |
 | `TTL` | 10 min | Struct field only |
 | `MaxKeys` | 10 000 | Struct field only; reaching it evicts the least recently seen bucket |
@@ -896,6 +897,7 @@ is bounded without a global cap.
 | E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback and private ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
 | E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestUntrustedForwarderWarningIsHourly` |
 | E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
+| E26.15 | Without `MAX_STREAMS` no stream is capped. With it, a client already holding that many open public streams (SSE and WebSocket together) MUST be refused with 429 without spending a token, other clients MUST be unaffected, and a stream MUST stop counting once its handler returned; a release frees exactly one slot | `TestFromEnv_MaxStreamsIsOffUnlessSet`, `TestOpenStream_NoCapAdmitsEveryStream`, `TestOpenStream_CapsOpenStreamsPerClient`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault` |
 
 **Deliberate limits.**
 - The limiter is in-process: N replicas give N times the budget.

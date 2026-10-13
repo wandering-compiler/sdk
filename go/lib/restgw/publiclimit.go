@@ -40,11 +40,23 @@ func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (
 // every opened stream is charged, because its outcome is not a status, and
 // the writer is left unwrapped so flushing and upgrades reach the server's
 // own. A nil limiter admits everything.
+//
+// With [ratelimit.Config.MaxStreams] set, a client already holding that many
+// open streams is refused too, without spending a token; an admitted stream
+// stops counting when its request ends (the handler returned), so the call
+// site needs nothing more.
 func AdmitPublicStream(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) bool {
-	if !l.AllowRequest(r) {
+	open, release := l.OpenStream(r)
+	if !open {
 		WriteTooManyRequestsCtx(r.Context(), w)
 		return false
 	}
+	if !l.AllowRequest(r) {
+		release()
+		WriteTooManyRequestsCtx(r.Context(), w)
+		return false
+	}
+	context.AfterFunc(r.Context(), release)
 	return true
 }
 

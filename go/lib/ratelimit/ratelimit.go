@@ -96,6 +96,14 @@ type Config struct {
 	// logs a warning when it sees a forwarded header from a private-range
 	// peer it does not trust, naming the variable to set.
 	TrustedProxies []netip.Prefix
+
+	// MaxStreams caps the streams one client may hold open at once on the
+	// methods this limiter guards (see [Limiter.OpenStream]). Zero, the
+	// default, means no cap: an open stream costs a token when it opens and
+	// nothing while it stays open. Opt in where the load of many concurrent
+	// streams per address is not one the deployment plans for; too many
+	// streams is an overload, not a breach, so nothing is capped unasked.
+	MaxStreams int
 }
 
 // FromEnv reads `<PREFIX>_RATELIMIT_*` and returns the resolved config.
@@ -103,6 +111,7 @@ type Config struct {
 //	<PREFIX>_RATELIMIT_PER_MINUTE      float, <=0 disables      (default 30)
 //	<PREFIX>_RATELIMIT_BURST           int                      (default 10)
 //	<PREFIX>_RATELIMIT_TRUSTED_PROXIES comma-separated CIDRs    (default none)
+//	<PREFIX>_RATELIMIT_MAX_STREAMS     int, open streams per client (default 0: no cap)
 //
 // TRUSTED_PROXIES lists the proxies whose X-Forwarded-For is believed; see
 // [Config.TrustedProxies]. The keyword [TrustPrivateRanges] (`private`)
@@ -118,7 +127,8 @@ func FromEnv(prefix string) Config {
 	return cfg
 }
 
-// fromEnvNamed resolves `<base>_PER_MINUTE`, `_BURST` and `_TRUSTED_PROXIES`.
+// fromEnvNamed resolves `<base>_PER_MINUTE`, `_BURST`, `_TRUSTED_PROXIES` and
+// `_MAX_STREAMS`.
 // A variable unset under base is read under legacy (when given), with a
 // warning that names the new spelling. perMinuteFrom is the variable that
 // set PerMinute, empty when the default stands.
@@ -157,6 +167,13 @@ func fromEnvNamed(base, legacy string) (cfg Config, perMinuteFrom string) {
 	}
 	raw, from := lookup("_TRUSTED_PROXIES")
 	cfg.TrustedProxies = parseTrustedProxies(raw, from)
+	if v, from := lookup("_MAX_STREAMS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.MaxStreams = n
+		} else if _, warned := legacyWarned.LoadOrStore("bad:"+from+"="+v, true); !warned {
+			log.Printf("ratelimit: %s: %q is not a whole number >= 0 — no stream cap", from, v)
+		}
+	}
 	return cfg, perMinuteFrom
 }
 
@@ -218,6 +235,7 @@ var offLogged, legacyWarned sync.Map
 //	<PREFIX>_<SCOPE>_RATELIMIT_PER_MINUTE      float, <=0 disables  (default 30)
 //	<PREFIX>_<SCOPE>_RATELIMIT_BURST           int                  (default 10)
 //	<PREFIX>_<SCOPE>_RATELIMIT_TRUSTED_PROXIES CIDRs                (default none; see [FromEnv])
+//	<PREFIX>_<SCOPE>_RATELIMIT_MAX_STREAMS     int                  (default 0: no cap; see [Config.MaxStreams])
 //
 // The gateway's scope is PUBLIC, the methods that take no credential (a
 // sign-in, a registration, a reset request, a code check) and nothing else:
@@ -333,6 +351,12 @@ type Limiter struct {
 	// wrong, and a line printed per request is a line nobody reads.
 	collapsedAt time.Time
 	untrustedAt time.Time
+
+	// streams counts the open streams per client key while MaxStreams caps
+	// them. Apart from the buckets: a bucket may be evicted, an open stream
+	// must stay counted until it closes.
+	streamsMu sync.Mutex
+	streams   map[string]int
 }
 
 // New builds a Limiter, or returns nil when the config disables it.
@@ -353,7 +377,36 @@ func New(cfg Config) *Limiter {
 		cfg:     cfg,
 		perSec:  cfg.PerMinute / 60.0,
 		buckets: make(map[string]*bucket),
+		streams: make(map[string]int),
 		now:     time.Now,
+	}
+}
+
+// OpenStream counts one more stream open for the client of r against
+// [Config.MaxStreams]. It reports false, counting nothing, when the client
+// already holds that many; otherwise release must be called once the stream
+// ends (later calls do nothing). It spends no token. A nil limiter, or one
+// without a cap, admits every stream.
+func (l *Limiter) OpenStream(r *http.Request) (ok bool, release func()) {
+	if l == nil || l.cfg.MaxStreams <= 0 {
+		return true, func() {}
+	}
+	key := l.resolve(l.requestKey(r))
+	l.streamsMu.Lock()
+	defer l.streamsMu.Unlock()
+	if l.streams[key] >= l.cfg.MaxStreams {
+		return false, func() {}
+	}
+	l.streams[key]++
+	var once sync.Once
+	return true, func() {
+		once.Do(func() {
+			l.streamsMu.Lock()
+			defer l.streamsMu.Unlock()
+			if l.streams[key]--; l.streams[key] <= 0 {
+				delete(l.streams, key)
+			}
+		})
 	}
 }
 
