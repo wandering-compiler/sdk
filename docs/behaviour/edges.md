@@ -7,7 +7,8 @@ DPoP proof of possession.
 Packages: `go/lib/restgw` (with `go/lib/restgw/dpopgw`), `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
 `go/lib/grpcclient` (dial side; server TLS is in [server.md](server.md)), `go/lib/egress/wire`,
 `go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`, `go/lib/dpop` (with
-`go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`).
+`go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`); the TypeScript DPoP client is
+`ts/dpop` (`@w17/dpop`).
 
 Much of the gateway's behaviour is decided by the generated code that calls these helpers:
 which middleware is mounted and in which order, which routes skip authentication, and whether a
@@ -85,6 +86,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E36 | DPoP client helpers | `go/lib/dpop/dpopclient` — `Transport`, `Credentials`, `Refusal` |
 | E37 | DPoP at the REST edge | `go/lib/restgw/dpopgw` — `Gate`, `CachedAuthFunc`, `NewWSAuth`, `WatchStreamBinding`; `go/lib/restgw` — `CachedAuthFuncWithDecision`, `WithDPoPCORS` |
 | E38 | Shared DPoP replay stores | `go/lib/dpop/dpopstore` — `RedisJTIStore`, `SQLJTIStore` |
+| E39 | DPoP TypeScript client | `ts/dpop` — `createDpopFetch`, `createProof`, `jwkThumbprint`, `IndexedDBKeyStore`, `issueStreamTicket` |
 
 ---
 
@@ -1423,3 +1425,68 @@ uses the repository's `go-redis` client; the SQL store `database/sql` with the c
   can overshoot it by the number in flight.
 - Live tests run against the servers named by `W17_REDIS_ADDR`, `W17_PG_DSN` and
   `W17_MYSQL_DSN`; CI requires them (`W17_REQUIRE_LIVE_REDIS`, `W17_REQUIRE_LIVE_MIGRATOR`).
+
+---
+
+## E39. DPoP TypeScript client
+
+**Code.** `ts/dpop/src` (`@w17/dpop`) — `jwk.ts` (`jwkThumbprint`, `canonicalJwk`, `publicJwk`), `key.ts` (`generateKeyPair`, `dpopKey`, `loadOrCreateKey`, `KeyStore`, `MemoryKeyStore`, `IndexedDBKeyStore`), `proof.ts` (`createProof`, `signClaims`, `normalizeHTU`, `accessTokenHash`), `fetch.ts` (`createDpopFetch`, `DpopOriginError`, `DpopRefusedError`, `isDeviceRevoked`, `isSessionExpired`, `isUseNonceChallenge`), `ticket.ts` (`issueStreamTicket`, `withTicket`, `DpopTicketError`), `base64url.ts`; `node.ts` (`@w17/dpop/node`: `FileKeyStore`). No runtime dependency: signing and hashing are WebCrypto (`globalThis.crypto.subtle`, browsers and Node >= 20); the package assembles the JWS and JWK JSON only. Tests are vitest under `ts/dpop/test`, named below as `file › test`; the cross-language tests are Go tests in `go/lib/dpop/ts_fixture_test.go`.
+
+**Purpose.** The client side of E35 for browsers and Node: an ES256 device key held by
+WebCrypto, its RFC 7638 thumbprint (the device id), RFC 9449 proofs, and a fetch wrapper that
+attaches `Authorization: DPoP <token>` and a proof, follows `DPoP-Nonce`, retries once on
+`use_dpop_nonce`, and turns `DEVICE_REVOKED` / `SESSION_EXPIRED` refusals into typed errors.
+The generated TypeScript transport and the admin runtime are meant to embed this source.
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `createDpopFetch({ origins })` | required | Each must be a bare `http(s)://host[:port]` (a trailing `/` allowed); empty, a path, a query, user info or another scheme → throws at construction |
+| `keyStore` | required | `MemoryKeyStore`, `IndexedDBKeyStore`, `FileKeyStore` or the caller's own `KeyStore` |
+| `getToken` | none (no `Authorization`, no `ath`) | An empty string counts as no token; a throw fails the request |
+| `fetch` | `globalThis.fetch` | — |
+| `IndexedDBKeyStore({ dbName, storeName, key, indexedDB })` | `w17-dpop`, `keys`, `device`, `globalThis.indexedDB` | No IndexedDB → every call rejects |
+| `FileKeyStore(path, { exportPrivateKey: true })` | — | Anything but `exportPrivateKey: true`, or an empty path → throws: the store writes the private key to disk and the caller must say so. For servers, CLIs and tests |
+| `issueStreamTicket(fetch, baseUrl, { path })` | `/api/ws/ticket` | Appended to `baseUrl` without its trailing `/` |
+
+**Shares.** E35 (the wire it produces: header, claims, `NormalizeHTU`, the challenge), E36
+(the same retry and refusal rules as `dpopclient`), E37 (the ticket the gateway issues to a
+bound request), E3 (the error envelope a refusal is read from).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E39.1 | The thumbprint MUST be RFC 7638: the required members only, sorted, no whitespace, SHA-256, base64url; it MUST reproduce the RFC 7638 RSA example and the RFC 9449 EC key's jkt | `jwk.test.ts › matches the RFC 7638 RSA example`, `› matches the RFC 9449 EC example's jkt`, `› hashes only the required members…`, `› is independent of member order and extra members` |
+| E39.2 | A generated device key MUST be ECDSA P-256 with a non-extractable private key unless the store asks for an extractable one; a key that is not ECDSA P-256 MUST be refused | `jwk.test.ts › generates a non-extractable private key by default`, `› refuses a key that is not ECDSA P-256`, `keystore.test.ts › generates an extractable key only for a store that asks` |
+| E39.3 | A proof header MUST be exactly `typ: dpop+jwt`, `alg: ES256` and a `jwk` with only `kty`, `crv`, `x`, `y` | `proof.test.ts › has the RFC 9449 header…`, `jwk.test.ts › exports exactly the four public members` |
+| E39.4 | The claims MUST be `jti` (fresh, 128 random bits), `htm`, `htu`, `iat` (seconds), plus `ath` only with a non-empty token (the RFC 9449 example value) and `nonce` only when one is known | `proof.test.ts › carries jti, htm, htu and iat…`, `› sets ath to the token hash…`, `› draws a fresh 128-bit jti per proof`, `› computes the RFC's ath` |
+| E39.5 | The signature MUST be the raw 64-byte r‖s that WebCrypto verifies against the embedded key, and MUST NOT verify once a claim or the key changes; the test's verifier MUST accept the RFC 9449 example proofs and refuse one with a flipped bit | `proof.test.ts › is signed with a raw 64-byte r‖s…`, `› does not verify once a claim is changed`, `› does not verify under another key`, `› verifies the RFC's example proofs`, `› refuses an RFC proof with one bit of its signature flipped` |
+| E39.6 | `normalizeHTU` MUST agree with the Go `NormalizeHTU` table: lower-case scheme and host, no default port, `/` for an empty path, no query or fragment, user info and a missing authority refused | `proof.test.ts › normalises like the Go verifier`, `› refuses what the Go verifier refuses` |
+| E39.7 | The Go verifier MUST accept proofs this package made — direct, and through the fetch wrapper's nonce retry to the ticket issuer — and return the thumbprint the TypeScript side computed; it MUST refuse each of them with another nonce, method, path, token, binding or signature | `TestTSProofsVerify`, `TestTSProofsRefusedWhenTheirBindingsChange`, `TestTSThumbprintsMatch` (fixture `go/lib/dpop/testdata/ts_proofs.json`, regenerated with `npm run fixture` in `ts/dpop`) |
+| E39.8 | A request to an allowed origin MUST carry `Authorization: DPoP <token>` and a proof for its method and URL (no query or fragment) with the token's `ath`; without a token, neither `Authorization` nor `ath` | `fetch.test.ts › attaches Authorization: DPoP and a proof…`, `› sends no Authorization and no ath without a token` |
+| E39.9 | A request to any other origin (another host, a suffix host, another scheme or port) MUST throw `DpopOriginError` before anything is sent or the token is read; the origin checked MUST be the one the built `Request` resolved (a URL-like object that is not a `URL`, a relative URL under a document base), never the input; a configuration without a valid origin MUST throw | `fetch.test.ts › throws for any other origin before sending or reading the token`, `› checks a URL-like object that is not a URL by what the Request resolves`, `› checks a relative URL as the Request resolves it, not against location`, `› matches origins after normalisation`, `› refuses a configuration without a valid origin` |
+| E39.10 | A 401 with `use_dpop_nonce` and a new `DPoP-Nonce` MUST be retried exactly once, with a new proof carrying that nonce and the same body, a streamed body included; a second refusal MUST be returned and its nonce learned | `fetch.test.ts › retries a use_dpop_nonce refusal once…`, `› re-sends a streamed body on the retry`, `› retries exactly once against a server that keeps asking` |
+| E39.11 | A 401 without the challenge, without a nonce, or naming the nonce the proof already carried MUST NOT be retried; the challenge MUST be recognised only as the DPoP scheme | `fetch.test.ts › does not retry without a challenge…`, `› finds the DPoP challenge alone or among others`, `› ignores other errors, other schemes and look-alikes` |
+| E39.12 | A nonce sent on any response MUST be used by the next proof to that origin, and only that origin | `fetch.test.ts › learns a nonce from a success and keeps nonces per origin` |
+| E39.13 | The caller's `Request` MUST NOT be modified; the sent request MUST refuse redirects; a `no-cors` request MUST be refused | `fetch.test.ts › does not modify the caller's Request, and refuses redirects`, `› refuses a no-cors request…` |
+| E39.14 | Concurrent first requests MUST share one generated key; a failed key load MUST NOT be remembered | `fetch.test.ts › generates one key for concurrent first requests and keeps it`, `› retries the key load after a failing store…` |
+| E39.15 | A 401 or 403 whose JSON envelope names `DEVICE_REVOKED` or `SESSION_EXPIRED` in `error.details[].code` MUST throw `DpopRefusedError` with the reason, status and a still-readable response; anything else MUST be returned as is; `discardKey` MUST clear the store and the nonces so the next request signs with a new key | `fetch.test.ts › throws DEVICE_REVOKED as a typed error that can discard the key`, `› throws SESSION_EXPIRED, from a 403 too`, `› returns every other refusal as a plain response`, `› forgets nonces with the key`, `› discards unconditionally without a thumbprint` |
+| E39.16 | `IndexedDBKeyStore` MUST persist the CryptoKeyPair itself, so a reload gets the same non-extractable key, still able to sign; `FileKeyStore` MUST write PKCS #8 PEM (the format of Go `dpop.Key.SaveFile`) with mode 0600, replacing an existing file | `keystore.test.ts › persists a non-extractable key across store instances…`, `› keeps keys under different record keys apart`, `› writes a PKCS #8 PEM with mode 0600…`, `› replaces an existing file…`, `› must be told it writes the private key out` |
+| E39.17 | `issueStreamTicket` MUST make a signed, token-bound POST to the issuer path (following a nonce challenge) and return the ticket; a refusal or a body without a ticket MUST throw `DpopTicketError`, a revoked device `DpopRefusedError` | `ticket.test.ts › POSTs a signed, token-bound request…`, `› takes a configured path…`, `› throws DpopTicketError…`, `› lets a revoked device surface as DpopRefusedError` |
+| E39.18 | A refusal MUST carry the thumbprint of the key that signed the refused request, and its `discardKey` MUST discard only that key: a key made since then MUST survive a stale refusal; a request made while a discard is in progress MUST wait for it and MUST NOT sign with or reload the key being discarded | `fetch.test.ts › tags a refusal with the key it was raised for`, `› does not let a stale refusal discard a newer key`, `› makes requests wait for a discard instead of reloading the revoked key` |
+| E39.19 | A refusal body MUST be read only up to `MAX_REFUSAL_BODY` (64 KiB) before parsing; a longer one MUST be returned as a plain response with its body intact | `fetch.test.ts › does not parse a refusal body over the cap, and leaves it readable`, `› still recognises a refusal just under the cap` |
+
+**Deliberate limits.**
+- ES256 only. The Go verifier also accepts EdDSA, but Ed25519 in WebCrypto is not available in
+  every browser.
+- Redirects are refused, not followed: a proof is bound to the URL it was made for, so the
+  redirect target would refuse it, and following would hand it the token.
+- Only a 401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"` triggers the retry, as in E36.
+- Nonces live in memory per `createDpopFetch` instance, per origin.
+- Refusal reasons are read only from `error.details[].code` of a JSON 401 or 403 of at most 64 KiB.
+- The key is never discarded on its own: after `DEVICE_REVOKED` the caller decides when to
+  call `discardKey`.
+- `IndexedDBKeyStore` is tested against `fake-indexeddb` in Node, not in a browser.
+- `FileKeyStore` writes the private key unencrypted (mode 0600); a browser has no use for it.

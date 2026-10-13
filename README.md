@@ -22,13 +22,22 @@ own package manager and versioning:
 | Language | Module / path | README |
 |---|---|---|
 | **Go** | `go/` (`github.com/wandering-compiler/sdk/go`) | [`go/README.md`](go/README.md) |
-| **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`) | — |
+| **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`), `ts/dpop/` (`@w17/dpop`) | — |
 
-The TypeScript side holds one package today: `@w17/admin-runtime`, the React
-(Mantine) runtime behind a generated admin SPA. The scaffold the compiler emits
-imports `bootstrap` from it and hands it the embedded admin spec; list, detail,
-create, inline and overview pages are all rendered from that spec. Its tests run
-with `npm test` (vitest) inside `ts/admin-runtime/`.
+The TypeScript side holds two packages:
+
+- `@w17/admin-runtime`, the React (Mantine) runtime behind a generated admin SPA.
+  The scaffold the compiler emits imports `bootstrap` from it and hands it the
+  embedded admin spec; list, detail, create, inline and overview pages are all
+  rendered from that spec.
+- `@w17/dpop`, the DPoP (RFC 9449) client: a WebCrypto device key kept in
+  IndexedDB, its RFC 7638 thumbprint, proofs, a `fetch` wrapper that follows
+  server nonces and types `DEVICE_REVOKED` / `SESSION_EXPIRED` refusals, and the
+  stream-ticket helper. It has no runtime dependencies. Its proofs are verified by
+  the Go verifier from a committed fixture (`go/lib/dpop/testdata/ts_proofs.json`,
+  regenerated with `npm run fixture` inside `ts/dpop/`).
+
+Each package's tests run with `npm test` (vitest) inside its directory.
 
 The generated front-end clients are emitted per project, not shipped here. A
 further language gets its own top-level directory and README when it lands.
