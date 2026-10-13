@@ -69,7 +69,9 @@ func TestRunLock_LostLockStopsTheNextWrite(t *testing.T) {
 		t.Fatal("the command ran after the lock was lost")
 	}
 
-	mr.Set("item:1", `{"a":1}`)
+	if err := mr.Set("item:1", `{"a":1}`); err != nil {
+		t.Fatal(err)
+	}
 	body := `version: 1
 encoding: json
 operations:
@@ -128,8 +130,12 @@ func (scanRepeater) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
 func TestApply_YAMLTransformAppliesOncePerKeyDespiteScanRepeats(t *testing.T) {
 	a, mr := liveApplier(t)
 	a.AddHookForTest(scanRepeater{})
-	mr.Set("item:1", "a")
-	mr.Set("item:2", "b")
+	if err := mr.Set("item:1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mr.Set("item:2", "b"); err != nil {
+		t.Fatal(err)
+	}
 	body := `version: 1
 encoding: json
 operations:

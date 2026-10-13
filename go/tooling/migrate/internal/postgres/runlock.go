@@ -58,7 +58,7 @@ func (l *runLock) Release(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("postgres run lock: release: %w", err)
 		}
-		return fmt.Errorf("postgres run lock: %w: the lock session could not release it, so it had already ended: %v", migrate.ErrLockLost, err)
+		return fmt.Errorf("postgres run lock: %w: the lock session could not release it, so it had already ended: %w", migrate.ErrLockLost, err)
 	}
 	if !released {
 		return fmt.Errorf("postgres run lock: %w: this session no longer held it at release", migrate.ErrLockLost)
@@ -73,7 +73,7 @@ func (l *runLock) Check(ctx context.Context) error {
 		WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
 		  AND classid = $1::int4::oid AND objid = $2::int4::oid AND objsubid = 2)`, runLockClass, runLockObj).Scan(&held)
 	if err != nil {
-		return fmt.Errorf("postgres run lock: %w: the lock session could not be asked whether it still holds the lock: %v", migrate.ErrLockLost, err)
+		return fmt.Errorf("postgres run lock: %w: the lock session could not be asked whether it still holds the lock: %w", migrate.ErrLockLost, err)
 	}
 	if !held {
 		return fmt.Errorf("postgres run lock: %w: this run's session no longer holds it", migrate.ErrLockLost)

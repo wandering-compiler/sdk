@@ -319,7 +319,7 @@ func (h *TxHandle) settleAmbiguousCommit(ctx context.Context, commitErr error) e
 		pending = h.scope.Pending()
 	}
 	observx.ReportError(context.WithoutCancel(ctx), fmt.Errorf(
-		"distx: the outcome of committing transaction %s is unknown — the commit call failed (%v) and the transaction could no longer be rolled back (%v); its writes may have landed, and %d piece(s) of work waiting for the commit were not run",
+		"distx: the outcome of committing transaction %s is unknown — the commit call failed (%w) and the transaction could no longer be rolled back (%w); its writes may have landed, and %d piece(s) of work waiting for the commit were not run",
 		h.txID, commitErr, rerr, pending))
 	return fmt.Errorf("%w: transaction %s: %w", ErrCommitOutcomeUnknown, h.txID, commitErr)
 }

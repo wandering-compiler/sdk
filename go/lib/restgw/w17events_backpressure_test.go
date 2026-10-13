@@ -76,13 +76,13 @@ func TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetReadBuffer(4 << 10)
 	}

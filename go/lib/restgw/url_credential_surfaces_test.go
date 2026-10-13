@@ -55,7 +55,7 @@ func TestURLCredential_NeverReachesTheTrace(t *testing.T) {
 	for _, s := range spans {
 		seen := s.Name()
 		for _, a := range s.Attributes() {
-			seen += fmt.Sprintf(" %s=%s", a.Key, a.Value.Emit())
+			seen += fmt.Sprintf(" %s=%s", a.Key, a.Value.String())
 		}
 		if strings.Contains(seen, pathSecret) || strings.Contains(seen, querySecret) {
 			t.Errorf("span carries a URL credential: %s", seen)
@@ -113,7 +113,7 @@ func TestURLCredential_NeverReachesAPanicReport(t *testing.T) {
 	for _, s := range sr.Ended() {
 		for _, e := range s.Events() {
 			for _, a := range e.Attributes {
-				out += " " + a.Value.Emit()
+				out += " " + a.Value.String()
 			}
 		}
 	}

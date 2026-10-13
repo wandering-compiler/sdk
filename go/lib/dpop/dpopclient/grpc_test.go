@@ -65,7 +65,7 @@ func (g *grpcServer) check(ctx context.Context, fullMethod string) error {
 		Method: "POST", Path: fullMethod, Proofs: md.Get(dpop.MetadataProof), AccessToken: tok, Binding: binding,
 	})
 	if err == nil && g.alwaysNonce.Load() {
-		n, _ := g.v.Nonce(tp + string(rune('a'+g.hits.Load())))
+		n, _ := g.v.Nonce(tp + string('a'+g.hits.Load()))
 		err = &dpop.NonceError{Nonce: n}
 	}
 	if err != nil {

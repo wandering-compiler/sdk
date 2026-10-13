@@ -44,6 +44,9 @@ func ids(t *testing.T, db *sql.DB, query string, args ...any) []int {
 		}
 		got = append(got, id)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return got
 }
 
@@ -81,7 +84,7 @@ func TestExpandInChecked_RefusesPastTheBindLimit(t *testing.T) {
 	for i := range args {
 		args[i] = i
 	}
-	if _, err := db.Query(ExpandIn(query, 2, n), args...); err == nil {
+	if err := runQuery(db, ExpandIn(query, 2, n), args...); err == nil {
 		t.Fatalf("the driver accepted %d placeholders; MaxPlaceholders is not a real limit", n+1)
 	}
 
@@ -92,7 +95,7 @@ func TestExpandInChecked_RefusesPastTheBindLimit(t *testing.T) {
 	if err != nil || countQM(got) != MaxPlaceholders {
 		t.Fatalf("exactly at the limit: %d placeholders, %v", countQM(got), err)
 	}
-	if _, err := db.Query(got, args[:MaxPlaceholders]...); err != nil {
+	if err := runQuery(db, got, args[:MaxPlaceholders]...); err != nil {
 		t.Errorf("the driver refused a statement at the limit: %v", err)
 	}
 	if got, err := ExpandInChecked(query, 2, 0); err != nil || !strings.Contains(got, EmptyList) {
@@ -109,4 +112,17 @@ func TestExpandInChecked_RefusesPastTheBindLimit(t *testing.T) {
 	if got, err := ExpandValuesPGChecked("INSERT INTO t (id, b) VALUES ($1, '$9999999')", 1, 3); err != nil || got != "INSERT INTO t (id, b) VALUES ($1, '$9999999'), ($2, '$9999999'), ($3, '$9999999')" {
 		t.Errorf("PG VALUES within the limit: %q, %v (a $k inside a literal is data)", got, err)
 	}
+}
+
+// runQuery runs a query to completion and closes it: what the driver says
+// about the statement, without leaving its rows open.
+func runQuery(db *sql.DB, query string, args ...any) error {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+	}
+	return rows.Err()
 }

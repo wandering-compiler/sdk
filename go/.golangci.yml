@@ -1,0 +1,79 @@
+# golangci-lint configuration for the SDK's Go module. CI runs it (the lint
+# job); govulncheck is a separate job.
+version: "2"
+
+run:
+  tests: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - errcheck
+    - gosec
+    - errorlint
+    - ineffassign
+    - unconvert
+    - bodyclose
+    - sqlclosecheck
+    - bidichk
+    - makezero
+    - rowserrcheck
+    - wastedassign
+    - errname
+    - gocheckcompilerdirectives
+    - protogetter
+    - gocritic
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+    gosec:
+      excludes:
+        - G115
+        - G204
+        - G301
+        - G304
+        - G302
+        - G306
+        - G702
+        - G703
+        - G122
+        - G602
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - bodyclose
+          - errorlint
+          - protogetter
+          - gocritic
+      - linters:
+          - staticcheck
+        text: "QF1001"
+      - linters:
+          - staticcheck
+        text: "ST1005"
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax

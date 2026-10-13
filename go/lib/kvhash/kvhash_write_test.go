@@ -53,7 +53,7 @@ func TestClearedFields_AnUpdateThatClearsAFieldRemovesIt(t *testing.T) {
 
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	ctx := context.Background()
 
 	write := func(m protoreflect.ProtoMessage) {

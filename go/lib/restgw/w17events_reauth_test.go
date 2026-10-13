@@ -137,7 +137,7 @@ func TestW17Events_SameLabelsKeepTheStream(t *testing.T) {
 	var calls atomic.Int32
 	authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
 		n := calls.Add(1)
-		return []byte("alpha|" + string(rune('a'+n%26))), nil
+		return []byte("alpha|" + string('a'+n%26)), nil
 	})
 	done, rec, dispatch := eventsUnderReauth(t, authFn)
 	if endsWithin(done, 150*time.Millisecond) {

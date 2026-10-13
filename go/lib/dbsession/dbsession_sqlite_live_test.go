@@ -21,7 +21,7 @@ func TestApplySQLitePragmas_LiveConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1)
 
 	var fk, like int
@@ -46,7 +46,7 @@ func TestApplySQLitePragmas_LiveConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer op.Close()
+	defer func() { _ = op.Close() }()
 	if err := op.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 0 {
 		t.Errorf("operator foreign_keys(0): connection runs with %d, %v; want 0", fk, err)
 	}
