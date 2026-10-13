@@ -2,10 +2,12 @@
 
 Everything between a caller and a generated service's handlers, plus the outgoing side of a
 service: the REST gateway runtime, the per-client rate limiter, the MCP proxy runtime, the
-w17 JSON dialect, the gRPC dial helpers, the database-error mapper and the egress JSON codec.
+w17 JSON dialect, the gRPC dial helpers, the database-error mapper, the egress JSON codec and
+DPoP proof of possession.
 Packages: `go/lib/restgw`, `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
 `go/lib/grpcclient` (dial side; server TLS is in [server.md](server.md)), `go/lib/egress/wire`,
-`go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`.
+`go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`, `go/lib/dpop` (with
+`go/lib/dpop/dpopclient`).
 
 Much of the gateway's behaviour is decided by the generated code that calls these helpers:
 which middleware is mounted and in which order, which routes skip authentication, and whether a
@@ -76,6 +78,8 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E32 | Connection pool | `go/core/grpcx/pool.go` — `Pool`, `Connect`, `ConnectScaled` |
 | E33 | Database error → gRPC status | `go/core/grpcerr/wrap.go`, `go/core/grpcerr/dialect` — `Wrap`, `RecoverPanic` |
 | E34 | Egress JSON and form codec | `go/lib/egress/wire` — `plan.go`, `marshal.go`, `unmarshal.go`, `form.go`, `union.go` |
+| E35 | DPoP proofs and verifier | `go/lib/dpop` — `Verifier`, `NewProof`, `Thumbprint`, `HMACNonces`, `MemoryJTIStore` |
+| E36 | DPoP client helpers | `go/lib/dpop/dpopclient` — `Transport`, `Credentials`, `Refusal` |
 
 ---
 
@@ -1168,3 +1172,115 @@ code.
 **Deliberate limits.**
 - No input size cap: the caller bounds the response body.
 - Plans are cached per descriptor without eviction (the generated set is fixed).
+
+---
+
+## E35. DPoP proofs and verifier
+
+**Code.** `go/lib/dpop` — `key.go` (`Signer`, `Key`, `GenerateKey`, `NewKey`, `ParseKeyPEM`, `LoadKeyFile`, `Key.SaveFile`, `Thumbprint`, `AccessTokenHash`), `proof.go` (`NewProof`, `SignClaims`, `NormalizeHTU`), `verify.go` (`Verifier`, `Config`, `Request`, `NonceError`, the `Err*` refusal causes), `nonce.go` (`NonceSource`, `HMACNonces`), `jti.go` (`JTIStore`, `MemoryJTIStore`), `challenge.go` (`SetChallenge`, `ChallengeMetadata`, `WWWAuthenticate`, `IsUseNonceChallenge`, `AccessToken`). JWS and JWK handling is `github.com/go-jose/go-jose/v4`.
+
+**Purpose.** Binds a credential to a device key per RFC 9449. The device id is the RFC 7638
+thumbprint of the device's public key; every request carries a proof signed with that key, and
+the verifier checks it and returns the thumbprint for the caller to compare with the credential's
+binding. Not wired into any gateway yet: a caller builds a `Request` from the HTTP request or
+gRPC metadata and answers refusals itself.
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `Config.Origin` | required | The public `scheme://host[:port]` clients address; htu is compared against it plus the request path, never against `Host`. Missing, relative, or with a path → error at construction |
+| `Config.Nonces` | nil (nonces off) | nil → `iat` must lie within `IATWindow`; set → `iat` is not checked and every proof needs a valid nonce |
+| `Config.JTIs` | `NewMemoryJTIStore(0)` | The memory store is per process: correct only with one replica |
+| `Config.ReuseWindow` | 30 s | Negative → reuse off; above 300 s → error at construction |
+| `Config.IATWindow` | 60 s | Negative → error; ignored with nonces |
+| `Config.SignatureCacheEntries` | 10 000 | A full cache stops caching; it never refuses |
+| `Config.Now` | `time.Now` | — |
+| `NewHMACNonces(key, ...)` | bucket 5 min | Key shorter than 32 bytes → error; the key is copied; `WithNonceBucket(d)` below 1 s → 1 s, `d <= 0` keeps the default |
+| `NewMemoryJTIStore(n)` | 200 000 entries | `n <= 0` keeps the default; a full store sweeps expired entries, then refuses with `ErrJTIStoreFull` |
+| `MaxProofBytes` / `MaxJTIBytes` | 8 KiB / 256 bytes | Longer → `ErrMalformed` |
+| `GenerateKey(kt)` | `KeyP256` | `KeyEd25519`; anything else → `ErrUnsupportedKey` |
+| `Request.AccessToken` / `Request.Binding` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed) |
+
+**Shares.** Nothing with other features yet. Every replica configured with the same nonce key
+shares the nonce space by construction; a `JTIStore` shared between replicas is the caller's.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E35.1 | The thumbprint MUST be RFC 7638's (SHA-256, base64url) and `ath` RFC 9449's, matching the RFCs' example values | `TestThumbprint_RFC7638Vector`, `TestThumbprint_RFC9449KeyMatchesJKT`, `TestAccessTokenHash_RFC9449Vector` |
+| E35.2 | The example proofs printed in RFC 9449 MUST verify and yield the RFC's `jkt` | `TestVerify_RFC9449Examples` |
+| E35.3 | Only ES256 and EdDSA MUST be accepted; `none`, HS256, RS256 and ES384 MUST be refused with `ErrBadAlg` | `TestVerify_RefusalCauses` |
+| E35.4 | `typ` MUST be `dpop+jwt`; the `jwk` MUST be present, hold no private member, and fit `alg`; otherwise `ErrBadType` / `ErrBadKey` | `TestVerify_RefusalCauses` |
+| E35.5 | A proof whose signature does not verify with its embedded key MUST be refused with `ErrBadSignature` | `TestVerify_RefusalCauses` |
+| E35.6 | Each refusal MUST match exactly one cause: missing, malformed (two headers, oversized, missing or mistyped claims, overlong jti), alg, typ, key, signature, nonce, stale iat, replay, htm, htu, ath, binding | `TestVerify_RefusalCauses` |
+| E35.7 | Checks MUST run in the order header, signature, nonce, jti, htm/htu, ath, binding; a proof refused before the jti check MUST NOT spend its jti | `TestVerify_CheckOrder` |
+| E35.8 | With nonces on, a missing, forged, expired or other-key nonce MUST be a `*NonceError` (`ErrUseNonce`) carrying a fresh nonce that then works | `TestVerify_RefusalCauses`, `TestVerify_NonceChallengeCarriesFreshNonce` |
+| E35.9 | A nonce MUST be valid in its own and the next bucket only, never before its bucket, bound to its thumbprint, and unforgeable without the key | `TestHMACNonces_RotationAcrossBuckets`, `TestHMACNonces_KeyRequirements` |
+| E35.10 | Replicas sharing the nonce key MUST accept each other's nonces with no shared state; a replica with another key MUST NOT | `TestHMACNonces_SharedKeyAcrossReplicas` |
+| E35.11 | With nonces on, `iat` MUST NOT be checked (client clock skew is irrelevant); with nonces off, `iat` MUST lie within ±`IATWindow` | `TestVerify_ClockSkewIrrelevantWithNonces`, `TestVerify_IATWindowWithoutNonces` |
+| E35.12 | A jti MUST NOT be accepted twice for different proofs, and MUST be remembered for as long as its proof could be accepted (the nonce lifetime, or twice the iat window) | `TestVerify_ReplayRefused`, `TestMemoryJTIStore_RecordAndExpiry` |
+| E35.13 | The same proof MUST be accepted again while its reuse window lasts and refused after it; with reuse off every repeat MUST be a replay | `TestVerify_ReuseWindow`, `TestVerify_ReplayRefused` |
+| E35.14 | A reused proof MUST still pass the nonce and target checks: only the signature result is cached | `TestVerify_ReuseStillChecksNonceAndTarget` |
+| E35.15 | The signature cache MUST be keyed by the hash of the whole proof: altered claims under a cached proof's signature MUST be verified afresh and refused | `TestVerify_SignatureCacheKeyedByProofHash` |
+| E35.16 | Concurrent presentations of one proof with reuse off MUST yield exactly one acceptance | `TestVerify_ConcurrentSameProofOneWinnerWithoutReuse` |
+| E35.17 | htu MUST equal the configured origin plus the request path after normalisation (scheme and host case, default port, no query or fragment); a gRPC call MUST be POST to origin + full method name | `TestVerify_HTUNormalisation`, `TestNormalizeHTU`, `TestVerify_GRPCTarget`, `TestVerify_RefusalCauses` |
+| E35.18 | `ath` MUST match the presented token, MUST be present when a token is, and MUST be absent when none is; a token presented with no binding to check MUST be refused | `TestVerify_RefusalCauses` |
+| E35.19 | A full jti store MUST fail closed with a non-refusal error (`ErrJTIStoreFull`), never accept unrecorded; expired entries MUST free room | `TestVerify_FullJTIStoreFailsClosed` |
+| E35.20 | Invalid configuration (no origin, origin with a path, reuse window above 300 s, negative iat window) MUST be refused at construction | `TestNewVerifier_Config` |
+| E35.21 | A refusal MUST map to the RFC 9449 challenge: `use_dpop_nonce` plus `DPoP-Nonce` for a nonce refusal, `invalid_token` for ath and binding, `invalid_dpop_proof` otherwise, `no-store`; gRPC carries the same values in the trailer | `TestChallenge_Headers`, `TestIsUseNonceChallenge`, `TestAccessToken` |
+| E35.22 | Keys MUST be P-256 or Ed25519 (others refused); a saved key MUST be mode 0600, replacing any existing file atomically; any `crypto.Signer` (KMS, HSM) MUST be usable as the signer | `TestKey_GenerateBothTypes`, `TestKey_UnsupportedKeysRefused`, `TestKey_SaveLoadRoundTrip`, `TestSigner_ExternalCryptoSigner` |
+
+**Deliberate limits.**
+- `MemoryJTIStore` is per process. With more than one replica a proof accepted by one can be
+  replayed against another until a shared `JTIStore` (Redis, a database) is configured.
+- The verifier does not answer the request; the caller sets the challenge with `SetChallenge` or
+  `ChallengeMetadata` and writes its own status and body.
+- `Request.Path` is compared as given; percent-encoding case is not normalised.
+
+---
+
+## E36. DPoP client helpers
+
+**Code.** `go/lib/dpop/dpopclient` — `transport.go` (`Transport`, `TokenFunc`), `grpc.go` (`Credentials`, `UnaryClientInterceptor`, `StreamClientInterceptor`, `DialOptions`), `refusal.go` (`RefusedError`, `Refusal`, `ErrDeviceRevoked`, `ErrSessionExpired`).
+
+**Purpose.** Attaches `Authorization: DPoP <token>` and a fresh proof to every outgoing HTTP
+request or gRPC call, follows the server's nonces, and retries once when the server asks for a
+fresh nonce.
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `Transport.Base` | `http.DefaultTransport` | — |
+| `Transport.Signer`, `Credentials.Signer` | required | nil → every request fails |
+| `Transport.Token`, `Credentials.Token` | nil (no token, no `ath`) | An error fails the request |
+| `Credentials.Origin` | required | The origin the server is configured with; htu = origin + full method |
+| `Credentials.AllowInsecure` | false | false → gRPC refuses to send the credentials over a connection without transport security |
+
+**Shares.** E35 (proof builder, challenge parsing, header and metadata names).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E36.1 | An HTTP `use_dpop_nonce` refusal with a new nonce MUST be retried once with that nonce and the same body; later requests MUST carry the nonce from the start | `TestTransport_NonceRetryOnce` |
+| E36.2 | A server that keeps asking for a nonce MUST get exactly one retry; the second refusal is returned | `TestTransport_RetriesExactlyOnce`, `TestCredentials_UnaryRetriesExactlyOnce` |
+| E36.3 | A request whose body cannot be replayed MUST NOT be retried, but its nonce MUST still be learned | `TestTransport_UnreplayableBodyNotRetried` |
+| E36.4 | A nonce sent on a success MUST be used by the next proof | `TestTransport_LearnsNonceFromSuccess` |
+| E36.5 | Without a token no `Authorization` MUST be sent and the proof MUST carry no `ath` | `TestTransport_NoTokenNoATH` |
+| E36.6 | The caller's request MUST NOT be modified | `TestTransport_DoesNotMutateRequest` |
+| E36.7 | A gRPC unary `Unauthenticated` refusal with `use_dpop_nonce` and `dpop-nonce` in the trailer MUST be retried once; the proof MUST be POST to origin + full method name | `TestCredentials_UnaryNonceRetryOnce` |
+| E36.8 | A gRPC stream MUST NOT be retried, but the nonce from its refusal MUST be learned for the next call | `TestCredentials_StreamLearnsNonce` |
+| E36.9 | `DEVICE_REVOKED` and `SESSION_EXPIRED` refusals MUST come back as `*RefusedError` matching `ErrDeviceRevoked` / `ErrSessionExpired`, keeping the gRPC status; any other refusal MUST stay the plain status | `TestCredentials_RefusalTyped` |
+| E36.10 | `Refusal` MUST recognise those reasons in a 401 or 403 error envelope and leave the body readable from the start | `TestRefusal_HTTPEnvelope` |
+| E36.11 | The gRPC credentials MUST require transport security unless `AllowInsecure` is set | `TestCredentials_RequireTransportSecurity` |
+
+**Deliberate limits.**
+- Only 401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"` triggers the HTTP retry; a 400
+  JSON `use_dpop_nonce` body is not read.
+- gRPC streams are not retried: the refusal surfaces on the first receive, after the caller may
+  have sent.
+- The HTTP nonce is remembered per origin; the gRPC nonce per `Credentials`.
+- Refusal reasons are read from the `w17.ErrorDetail` code only.
