@@ -58,10 +58,12 @@ export function scriptedFetch(reply: Reply) {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const req = input instanceof Request && init === undefined ? input : new Request(input, init);
     const proofRaw = req.headers.get("DPoP");
-    const copy = req.clone();
+    // Read the body itself, as a real fetch does: a request sent twice would
+    // fail here the second time.
+    const body = await req.text();
     sent.push({
       req,
-      body: await copy.text(),
+      body,
       proof: proofRaw ? decodeProof(proofRaw) : undefined,
       proofRaw,
     });
