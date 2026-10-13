@@ -36,11 +36,18 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -ppw"
           --health-interval 2s --health-timeout 5s --health-retries 60
+      redis:
+        image: redis:8
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 5s --health-retries 30
     env:
       GOFLAGS: -buildvcs=false
       W17_PG_DSN: postgres://postgres:pw@postgres:5432/w17?sslmode=disable
       W17_MYSQL_DSN: mysql://root:pw@mysql:3306/w17
       W17_REQUIRE_LIVE_MIGRATOR: "1"
+      W17_REDIS_ADDR: redis:6379
+      W17_REQUIRE_LIVE_REDIS: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: gofmt

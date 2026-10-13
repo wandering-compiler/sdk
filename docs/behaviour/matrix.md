@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-129 interactions; 9 have no test (all owned by generated code or the deployment), 15 more are covered only in part.
+129 interactions; 9 have no test (all owned by generated code or the deployment), 11 more are covered only in part.
 
 ## Server × Server
 
@@ -46,7 +46,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Ordered resource teardown (S4) | Event bus publish and flush | The bus is flushed after transports drain; a flush failure is reported. | `TestRunGraceful_ResourcesCloseAfterComponentsDrain`, `TestRunGraceful_ResourceCloserErrorIsReported`, `TestGRPCComponent_ShutdownHookErrorIsReported` (generic closers, not the bus) |
+| Ordered resource teardown (S4) | Event bus publish and flush | The bus is closed only after transports drain, so an event a draining request emits is still published; a close failure is reported. Every transport publishes synchronously, so there is no buffer to flush. | `TestRunGraceful_EventBusClosesAfterTheLastDrainingEmit`, `TestRunGraceful_ResourcesCloseAfterComponentsDrain`, `TestRunGraceful_ResourceCloserErrorIsReported` |
 | In-process gRPC bridge (S21) | Distributed transactions | A nested call does not inherit the caller's transaction. | `TestConn_NestedCall_SeesOnlyWhatAWireHopWouldDeliver` |
 | Graceful shutdown, `Shutdowns` hooks (S5) | Transaction registry (D5) | Pools close after the server stops and before the orchestrator's kill deadline; open distributed transactions are not RPCs and are not drained, so process exit rolls them back and their parked after-commit work is dropped. | no test in the SDK: the hook order is the generated binary's composition — covered from the examples side |
 | Graceful shutdown | Wait for the database at boot (D2) | A SIGTERM during the boot wait MUST stop the wait through context cancellation. | `TestPing_CancelledContextStopsTheWait` |
@@ -91,7 +91,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Auth result cache (E6) | Browser stream tickets (E16) promotion | Probes after promotion keep working; the promotion marker forces a cache bypass. | `TestCachedAuth_OrgScopedAndPromotedRequestsBypassTheCache`, `TestWatchStreamAuth_TicketStreamSurvivesTheTick` |
 | Connection pool health watch (E32) | Long-lived callers | A pooled connection is replaced only once it is shut down; a transient failure resets its backoff and keeps the connection a caller holds. | `TestPool_HealthWatch_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_ReplacesAClosedConnection` |
 | WebSocket helpers (E15) | Request body limits (E1) | A WebSocket frame may be as large as a REST body: the read limit is `MaxWebSocketMessageBytes`, which defaults to `MaxRequestBodyBytes`; a refusal's close reason always fits the close frame. | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable`, `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly` |
-| `w17-events` channel (E18) | SSE write deadline (E14) and slow clients | A stalled client is dropped after the write deadline; the hub never blocks. | `w17events_drain_test.go` (partial: no stalled-client test) |
+| `w17-events` channel (E18) | SSE write deadline (E14) and slow clients | A stalled client is dropped after the write deadline; the hub never blocks. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline`, `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames`, `w17events_drain_test.go` |
 
 ## Edges × Data
 
@@ -138,9 +138,9 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Bounded materialization (D11) | Cursor paging (D9) | The guard bounds intermediate rows independently of page size. | no test in the SDK: what the guard counts is the generated plan's — covered from the examples side |
 | Column encryption (D16) | UNIQUE index and equality lookups | Deterministic mode keeps the index and `WHERE col = :x` working, including across key rotation (deterministic values stay on the lowest key version). | `TestDeterministic_StableAcrossRotation` |
 | Column encryption (D16) | Cursor paging (D9) | A crypted column used as a keyset key orders by ciphertext; whether to allow it is the generator's decision. | no test in the SDK: the generator's decision — covered from the examples side |
-| SQLite collation (D12) | Session pins (D1) | Every process that opens the database registers the collation and applies the same session pins; equality is deterministic and matches PostgreSQL. | `TestRegister_UnicodeOrderingAndEquality`, `TestCompare_EqualityIsDeterministic` (collation only; the pairing with session pins is not asserted) |
+| SQLite collation (D12) | Session pins (D1) | Every process that opens the database registers the collation and applies the same session pins; equality is deterministic and matches PostgreSQL. | `TestNew_EveryPooledConnectionCarriesThePinsAndTheCollation`, `TestRegister_UnicodeOrderingAndEquality`, `TestCompare_EqualityIsDeterministic` (applier side; the runtime opens the database in generated code: examples) |
 | Redis HASH codec (D14) | KV multi-fetch (`DedupKeys`, D8) | Multi-fetch multiplicity equals SQL `IN`. | `TestDedupKeys` |
-| Redis HASH codec (D14) | Redis eviction check (D15) | Entities live on a non-evicting Redis; an `allkeys-*` policy produces a boot warning. | `TestEvictsUntaggedKeys` (classification) |
+| Redis HASH codec (D14) | Redis eviction check (D15) | Entities live on a non-evicting Redis; an `allkeys-*` policy produces a boot warning. | `TestWarnIfEvicting_ReadsTheServersPolicy_Live`, `TestEvictsUntaggedKeys`, `TestWarnIfEvicting_UnreadablePolicyLogsAtDebugOnly` |
 
 ## Data × Events and identity
 
@@ -159,7 +159,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
 | SQLite collation stamp (D12) | Migration applier | The applier stamps; the runtime verifies and refuses a known mismatch. | tested in the SQLite migration driver, not in-package |
-| Session pins (D1) | Migration applier and runtime | Applier and runtime open the database with identical pins, parsed per driver; an operator's own value is kept and logged once. | `TestApplyMySQLDSNParams_KeepsAnOperatorCollation`, `TestMySQLDSNParams_PinsCollation`, `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` (shared pin functions; the two call sites are not asserted) |
+| Session pins (D1) | Migration applier and runtime | Applier and runtime open the database with identical pins, parsed per driver; an operator's own value is kept and logged once. | `TestNew_ConnectionCarriesTheSessionPins_Live`, `TestNew_EveryPooledConnectionCarriesTheSessionPins_Live`, `TestNew_EveryPooledConnectionCarriesThePinsAndTheCollation`, `TestApplyMySQLDSNParams_KeepsAnOperatorCollation`, `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` (applier side, read back from each server; the runtime opens the database in generated code: examples) |
 
 ## Events and identity × Events and identity
 
@@ -171,7 +171,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Principal relay (I12) | Dispatcher (I1) | An emit reached through several tiers keeps its scopes and labels. | `TestForwardToOutgoing_SecondHopKeepsTheLabel` |
 | Catalogs and formatting (I14, I15) | Event context (I8) | Subscriber messages use the requester's language and format locale. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` (metadata collapse only; rendering not asserted) |
 | Server-sent-events hub (I9) | Delivery modes (I3) | In fan-out mode every replica's hub receives every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent` |
-| Server-sent-events hub (I9) | NATS JetStream transport (I5) | The hub resumes delivery after a broker loss, including a recreated broker. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` (bus level; hub not exercised) |
+| Server-sent-events hub (I9) | NATS JetStream transport (I5) | The hub resumes delivery after a broker loss, including a recreated broker. | `TestEventbusEventSource_ResumesAfterTheBrokerLosesTheStream_Embedded`, `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
 | Server-sent-events hub (I9) | Slow client | A slow client loses only its own frames; other clients are unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | Server-sent-events hub (I9) | Client reconnect | The client reconnects automatically; events emitted during the gap are not replayed (deliberate). | no test in the SDK: reconnecting is the browser's EventSource |
 | Permission checks (I13) | Multi-domain auth response | A permission check uses the lock of the handler's own domain. | no test in the SDK: which domain's lock a handler loads is generated — covered from the examples side |
