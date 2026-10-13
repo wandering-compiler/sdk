@@ -57,6 +57,8 @@ func forgedHeaders() http.Header {
 	h.Set("Grpcgateway-Authorization", "forged")
 	h.Set("Grpc-Metadata-X-W17-User", "forged")
 	h.Set("X-W17-Credential", "forged-capability")
+	h.Set("X-W17-Device", "forged-device")
+	h.Set("Grpc-Metadata-X-W17-Device", "forged-device")
 	// Benign headers that rename rules route INTO reserved keys.
 	h.Set("X-Who", "forged-principal")
 	h.Set("X-Org", "forged-org")
@@ -72,7 +74,7 @@ func forgedHeaders() http.Header {
 var reservedKeys = []string{
 	"x-w17-user", "x-w17-scope-tenant_id", "x-w17-scope-org_id", "w17-label-tenant",
 	"w17-tx-id", "w17-conn-id", "grpcgateway-authorization",
-	"grpc-metadata-x-w17-user", "x-w17-credential",
+	"grpc-metadata-x-w17-user", "x-w17-credential", "x-w17-device", "grpc-metadata-x-w17-device",
 }
 
 // edgeChain wraps router exactly as the generated main does, with every
@@ -93,7 +95,7 @@ func edgeChain(router http.Handler) http.Handler {
 		"X-Request-Id", "X-Tenant-Hint",
 		"X-W17-User", "X-W17-Scope-Tenant_id", "W17-Label-Tenant",
 		"W17-Tx-Id", "W17-Conn-Id", "Grpcgateway-Authorization",
-		"Grpc-Metadata-X-W17-User", "X-W17-Credential",
+		"Grpc-Metadata-X-W17-User", "X-W17-Credential", "X-W17-Device", "Grpc-Metadata-X-W17-Device",
 	}, renamed)
 	observed := restgw.ObservabilityMiddleware(propagated, "edge-test", restgw.RequestIDConfig{})
 	return restgw.RecoverPanicMiddleware(restgw.StripReservedHeadersMiddleware(observed))

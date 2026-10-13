@@ -4,10 +4,10 @@ Everything between a caller and a generated service's handlers, plus the outgoin
 service: the REST gateway runtime, the per-client rate limiter, the MCP proxy runtime, the
 w17 JSON dialect, the gRPC dial helpers, the database-error mapper, the egress JSON codec and
 DPoP proof of possession.
-Packages: `go/lib/restgw`, `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
+Packages: `go/lib/restgw` (with `go/lib/restgw/dpopgw`), `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
 `go/lib/grpcclient` (dial side; server TLS is in [server.md](server.md)), `go/lib/egress/wire`,
 `go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`, `go/lib/dpop` (with
-`go/lib/dpop/dpopclient`).
+`go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`).
 
 Much of the gateway's behaviour is decided by the generated code that calls these helpers:
 which middleware is mounted and in which order, which routes skip authentication, and whether a
@@ -28,10 +28,13 @@ http.Server
                  └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
                      └─ chi router
                          ├─ per-RPC handler: [AdmitPublic] → [WithURLCredential / WithOrgFromPath]
-                         │      → AuthFunc (optionally CachedAuthFunc) → SetUserMetadata → scopes
+                         │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
+                         │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
+                         │        [+ SetDeviceMetadata] → scopes
                          │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
                          │      → WriteResponse / WriteGRPCErrorCtx
                          ├─ SSE / WS handlers: [AdmitPublicStream] → auth → WatchStreamAuth
+                         │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
                          ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
                          ├─ ticket issuer (POST): NewTicketIssuer
                          └─ downloads: auth → ServeDownload
@@ -80,6 +83,8 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E34 | Egress JSON and form codec | `go/lib/egress/wire` — `plan.go`, `marshal.go`, `unmarshal.go`, `form.go`, `union.go` |
 | E35 | DPoP proofs and verifier | `go/lib/dpop` — `Verifier`, `NewProof`, `Thumbprint`, `HMACNonces`, `MemoryJTIStore` |
 | E36 | DPoP client helpers | `go/lib/dpop/dpopclient` — `Transport`, `Credentials`, `Refusal` |
+| E37 | DPoP at the REST edge | `go/lib/restgw/dpopgw` — `Gate`, `CachedAuthFunc`, `NewWSAuth`, `WatchStreamBinding`; `go/lib/restgw` — `CachedAuthFuncWithDecision`, `WithDPoPCORS` |
+| E38 | Shared DPoP replay stores | `go/lib/dpop/dpopstore` — `RedisJTIStore`, `SQLJTIStore` |
 
 ---
 
@@ -435,7 +440,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 
 ## E12. CORS
 
-**Code.** `go/lib/restgw/cors.go` — `CORSMiddleware`, `matchOrigin`.
+**Code.** `go/lib/restgw/cors.go` — `CORSMiddleware`, `matchOrigin`, `CORSConfig.ExposedHeaders`, `WithDPoPCORS`.
 
 **Purpose.** Opt-in CORS for browser frontends on another origin.
 
@@ -448,6 +453,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 | `<PREFIX>_CORS_HEADERS` | `Content-Type, Authorization, W17-Org` | — |
 | `<PREFIX>_CORS_ALLOW_CREDENTIALS` | false | `1/true/yes/on` → true |
 | `<PREFIX>_CORS_MAX_AGE` | 600 | `0` → header omitted; negative or invalid → 600 |
+| `CORSConfig.ExposedHeaders` | empty → no `Access-Control-Expose-Headers` | Set in code (no env var); `WithDPoPCORS` (E37) adds the DPoP response headers |
 
 **Shares.** Preflight is answered before auth, rate limiting and routing.
 
@@ -460,6 +466,8 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 | E12.3 | A preflight (OPTIONS + `Access-Control-Request-Method`) MUST answer 204 without calling `next`; a plain OPTIONS MUST pass through | `TestCORSMiddleware_Preflight`, `TestCORSMiddleware_PlainOptions_NotSwallowed` |
 | E12.4 | The org header MUST be in the default allowed headers | `TestPreflightAdvertisesOrgScopeHeaderByDefault` |
 | E12.5 | Every response the middleware handles MUST carry `Vary: Origin`: with no `Origin`, a disallowed one, a match, and preflights | `TestCORSMiddleware_EveryResponseVariesOnOrigin` |
+| E12.6 | The default configuration MUST NOT allow `DPoP` nor send `Access-Control-Expose-Headers` | `TestWithDPoPCORS` |
+| E12.7 | `ExposedHeaders` MUST be sent on non-preflight responses to an allowed origin only | `TestWithDPoPCORS` |
 
 **Deliberate limits.**
 - Disallowed origins are still served; the browser enforces CORS.
@@ -1182,8 +1190,8 @@ code.
 **Purpose.** Binds a credential to a device key per RFC 9449. The device id is the RFC 7638
 thumbprint of the device's public key; every request carries a proof signed with that key, and
 the verifier checks it and returns the thumbprint for the caller to compare with the credential's
-binding. Not wired into any gateway yet: a caller builds a `Request` from the HTTP request or
-gRPC metadata and answers refusals itself.
+binding. The REST gateway wires it in opt-in (E37); elsewhere a caller builds a `Request` from
+the HTTP request or gRPC metadata and answers refusals itself.
 
 **Configuration.**
 
@@ -1205,7 +1213,7 @@ gRPC metadata and answers refusals itself.
 | `Request.AccessToken` / `Request.Binding` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed) |
 | `Request.Path` | required | Must start with `/`; anything else → `ErrHTUMismatch` |
 
-**Shares.** Nothing with other features yet. Every replica configured with the same nonce key
+**Shares.** E37 (the REST wiring), E38 (shared stores). Every replica configured with the same nonce key
 shares the nonce space by construction; a `JTIStore` shared between replicas is the caller's.
 
 **Guarantees.**
@@ -1245,7 +1253,7 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 
 **Deliberate limits.**
 - `MemoryJTIStore` is per process. With more than one replica a proof accepted by one can be
-  replayed against another until a shared `JTIStore` (Redis, a database) is configured.
+  replayed against another until a shared `JTIStore` (Redis, a database: E38) is configured.
 - A mint endpoint (no access token, no binding) accepts a proof from any key, and keys cost
   nothing to make: there the per-key share does not bound a flood. Such a flood can only fill
   the mint store (stalling minting, never authenticated requests), but mint endpoints still
@@ -1301,3 +1309,117 @@ fresh nonce.
   have sent.
 - The HTTP nonce is remembered per origin; the gRPC nonce per `Credentials`.
 - Refusal reasons are read from the `w17.ErrorDetail` code only.
+
+---
+
+## E37. DPoP at the REST edge
+
+**Code.** `go/lib/restgw/dpopgw` — `dpop_gate.go` (`Gate`, `NewGate`, `WithBinding`, `WithRequired`, `BindingFunc`, `Verified` (`DeviceID`), `FromContext`, `Error`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedAuthFunc`), `dpop_ticket.go` (`TicketPrincipal`, `NewWSAuth`, `WSAuthConfig`, `WSAuth` (`Thumbprint`, `Verified`), `TicketThumbprintLabel`, `ErrTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `BindingCheck`); `go/lib/restgw` — `authcache_decision.go` (`CachedAuthFuncWithDecision`, `AuthCacheDecision`, the hook `dpopgw.CachedAuthFunc` is built on), `cors.go` (`WithDPoPCORS`). `lib/restgw` and every other pre-existing package import nothing of `lib/dpop` or go-jose: a consumer that does not use DPoP gets no new dependency.
+
+**Purpose.** Opt-in wiring of E35 into the REST gateway. The gate verifies
+`Authorization: DPoP <token>` + `DPoP: <proof>`, answers refusals with the RFC 9449 challenge,
+and records the verified thumbprint. Only a proof bound to a token makes that thumbprint a
+device id (`dpopgw.Verified.DeviceID`), which `dpopgw.SetDeviceMetadata` stamps as `x-w17-device` (I10);
+an unbound proof proves only possession of a key any client can generate. Streams are verified at set-up: a header upgrade by its own proof, a
+browser stream by a ticket bound to the thumbprint of the signed request that obtained it,
+whose one-shot redemption stands in for the proof. The stream watchdog asks a binding-only
+question instead of replaying a proof. A gateway that builds none of this behaves as before.
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `dpopgw.NewGate(v, ...)` | — | nil verifier → error |
+| `dpopgw.WithBinding(fn)` | none | Without it every `Authorization: DPoP` request is refused (`invalid_token`). `fn` returning `""` → not bound (401); UNAUTHENTICATED / PERMISSION_DENIED or a dpop refusal → 401 `invalid_token`; any other error → 503 |
+| `dpopgw.WithRequired()` | off | Off: a request with neither a proof nor a DPoP token passes unverified. On: refused with the bare `DPoP` challenge |
+| Proof next to another `Authorization` scheme, or a DPoP token among several `Authorization` headers | — | Refused as malformed (`invalid_dpop_proof`) |
+| `dpopgw.CachedAuthFunc(inner, ttl, extra)` | — | `ttl <= 0` → inner unchanged; `extra` as in E6 |
+| `dpopgw.NewWSAuth` | — | nil `Gate` or the E16 configuration errors → panic |
+| `dpopgw.WatchStreamBinding(ctx, check, r, thumbprint, interval)` | — | `interval <= 0` or nil `check` → ctx unchanged; no DPoP token on `r` or empty thumbprint → the stream ends at once |
+| `WithDPoPCORS(cfg)` | — | Adds `DPoP` to the allowed headers (from the defaults when none are set) and `DPoP-Nonce`, `WWW-Authenticate` to `ExposedHeaders`; no duplicates; `cfg` with no origins stays CORS-off |
+
+**Shares.** E35 (verifier, challenge, status mapping), E6 (the cache's key and eviction code),
+E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS), I10–I12
+(`x-w17-device`).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E37.1 | A bound request whose proof verifies and whose key is the token's binding MUST reach `next` with `dpopgw.FromContext` holding the thumbprint and the token | `TestDPoPGate_VerifiesABoundRequest` |
+| E37.2 | Every refusal MUST be answered by the gate — `WWW-Authenticate` per E35.21, the error envelope, 401 or 503 (`Retry-After`, no challenge) — and `next` MUST NOT run: a token without a proof, another key than the binding, an unbound token, no binding lookup, a refused or unanswered lookup, a proof next to a bearer token, two `Authorization` headers, a proof for another path, a replay, a required gate without DPoP material | `TestDPoPGate_RefusalsCarryTheChallenge` |
+| E37.3 | With nonces on, a proof without a nonce MUST be answered `use_dpop_nonce` with `DPoP-Nonce`; the retry with it MUST pass, and a verified response MUST carry a fresh nonce | `TestDPoPGate_NonceChallengeAndRotation` |
+| E37.4 | A gate that is not required MUST pass a request without DPoP material unchanged and unverified; a proof without `Authorization` MUST verify as unbound | `TestDPoPGate_OptionalAndMint` |
+| E37.5 | `dpopgw.SetDeviceMetadata` MUST stamp the device id on a copy of the outgoing metadata and remove the key when there is none | `TestSetDeviceMetadata` |
+| E37.6 | A `dpopgw.Error` MUST keep its cause for `errors.Is` and carry the status `dpop.GRPCCode` gives, so `WriteAuthError` answers 401 / 503 | `TestDPoPError_Status` |
+| E37.7 | The DPoP auth cache MUST key a verified request on the verified thumbprint: one key's fresh proofs hit its entry, another key with the same credential headers MUST NOT read it | `TestCachedDPoPAuthFunc_KeysOnTheVerifiedThumbprint` |
+| E37.8 | A request carrying DPoP material that was not verified on this request MUST NOT be answered from the cache nor fill it, on any presentation | `TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest` |
+| E37.9 | A request without DPoP material MUST be cached as E6 caches it; `ttl <= 0` MUST disable the cache | `TestCachedDPoPAuthFunc_BearerAndOff` |
+| E37.10 | A bound ticket MUST be issued only for a request the gate verified as bound, and record its thumbprint; redemption MUST promote the token, report the thumbprint, survive re-auth, and stay one-shot | `TestDPoPTicket_BoundFlow`, `TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest`, `TestDPoPTicketPrincipal_RefusesAnUnboundVerification` |
+| E37.11 | Redemption MUST re-check the binding: a token rebound, unbound or revoked, or a bound ticket holding a non-DPoP credential, MUST be `ErrTicketInvalid` and run nothing; a lookup that cannot answer MUST be a 503-class error, not a refusal | `TestDPoPTicket_RedemptionChecksTheBinding` |
+| E37.12 | An unbound ticket MUST be accepted with no device only when the gate is not required | `TestDPoPTicket_UnboundTicket` |
+| E37.13 | A header upgrade MUST be verified by the gate; a bad proof MUST be a 401-class `dpopgw.Error`; a client MUST NOT make `Thumbprint` report a device through its own headers, and one wrapper MUST NOT trust another's promotion | `TestDPoPWSAuth_HeaderModeAndForgery` |
+| E37.14 | The binding watchdog MUST ask the binding check with the stream's token and thumbprint, never the auth function, and end the stream on a refusal (including a dpop binding refusal); an outage MUST keep it open and re-ask | `TestWatchStreamBinding_AsksTheBindingQuestion`, `TestWatchStreamBinding_RefusedVersusUnanswered` |
+| E37.15 | A watched stream with no binding to check MUST end at once; a disabled watchdog MUST return ctx unchanged | `TestWatchStreamBinding_NoBindingEndsTheStream` |
+| E37.16 | `WithDPoPCORS` MUST allow `DPoP` and expose `DPoP-Nonce` and `WWW-Authenticate` to allowed origins only, keep the default and operator headers without duplicates, leave its argument and the defaults unchanged | `TestWithDPoPCORS` |
+| E37.17 | A stream `Inner` refuses MUST NOT be marked: no device is reported and the spent ticket is not trusted on a second pass | `TestDPoPWSAuth_RefusedByInnerIsNotMarked` |
+| E37.18 | An unbound proof (a cookie or credential-less request signed by any key) MUST NOT yield a device id: `DeviceID` is empty, `dpopgw.SetDeviceMetadata` stamps nothing and removes a stale copy, `principal.DeviceID` reads false | `TestDPoPGate_UnboundProofIsNoDevice` |
+| E37.19 | A WS header upgrade MUST mark the stream with a device only for a token-bound proof; `Verified` MUST report the device and token of a bound stream only | `TestDPoPWSAuth_UnboundHeaderProofIsNoDevice` |
+| E37.20 | An unbound ticket whose credential uses the DPoP scheme MUST be refused (`ErrTicketInvalid`) even when the gate is optional | `TestDPoPTicket_UnboundTicketWithDPoPTokenRefused` |
+| E37.21 | Only `lib/dpop`, its subpackages and `lib/restgw/dpopgw` MAY import `lib/dpop` or go-jose; every other package MUST NOT, so the DPoP dependency stays opt-in | `TestDPoPImportsStayInsideTheOptInPackages` |
+| E37.22 | `CachedAuthFuncWithDecision` MUST bypass without reading or filling, keep namespaces apart from each other and from un-namespaced entries, neither key on nor be defeated by `IgnoreHeader`, and behave as `CachedAuthFuncWithKeyHeaders` for the zero decision or a nil hook | `TestCachedAuthFuncWithDecision` |
+
+**Deliberate limits.**
+- The gate does not decide what a token is worth; `dpopgw.BindingFunc` and the auth method do.
+  The gate only refuses a proof that does not fit the binding the lookup reports.
+- An `AuthFunc` cannot set response headers: a refusal raised inside `dpopgw.NewWSAuth` reaches the
+  client without the challenge. Mount `dpopgw.Gate.Middleware` in front for the challenge.
+- `dpopgw.WatchStreamBinding` keeps the principal the stream was set up with; a binding check says yes
+  or no, it does not re-derive the principal.
+- The generated gateway decides where the gate is mounted; nothing here mounts itself.
+
+---
+
+## E38. Shared DPoP replay stores
+
+**Code.** `go/lib/dpop/dpopstore` — `redis.go` (`RedisJTIStore`, `NewRedisJTIStore`, `WithRedisPrefix`, `WithRedisMaxPerKey`), `sql.go` (`SQLJTIStore`, `NewSQLJTIStore`, `Dialect`, `Postgres`, `MySQL`, `SQLite`, `WithSQLTable`, `WithSQLMaxPerKey`, `WithSQLPruneEvery`, `Schema`, `EnsureSchema`, `Prune`).
+
+**Purpose.** `dpop.JTIStore` implementations shared by every replica, so a proof accepted by one
+replica is a replay on all of them (E35's memory store is per process).
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `NewRedisJTIStore(rdb, ...)` | — | nil client → error. Any `redis.Scripter` (client, cluster client) |
+| `WithRedisPrefix` | `w17:dpop:jti:` | Use another prefix for the mint store |
+| `WithRedisMaxPerKey` / `WithSQLMaxPerKey` | `dpop.DefaultMaxJTIsPerKey` = 10 000 | `n <= 0` keeps the default |
+| `NewSQLJTIStore(db, dialect, ...)` | — | nil db or unknown dialect → error |
+| `WithSQLTable` | `w17_dpop_jti` | Must match `[a-z_][a-z0-9_]{0,62}` or construction fails |
+| `WithSQLPruneEvery` | 256 records | `n <= 0` keeps the default |
+| Schema | not created | `EnsureSchema` creates it (idempotent); `Schema()` gives the DDL for migrations |
+
+**Shares.** E35 (`JTIStore` contract, `ErrJTIStoreFull`, `ErrUnavailable`). The Redis store
+uses the repository's `go-redis` client; the SQL store `database/sql` with the caller's driver.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E38.1 | `Record` MUST insert if absent and otherwise return the stored record unchanged | `TestRedisJTIStore_Contract`, `TestSQLJTIStore_Contract_SQLite`, `TestRedisJTIStore_Contract_Live`, `TestSQLJTIStore_Contract_PostgresLive`, `TestSQLJTIStore_Contract_MySQLLive` |
+| E38.2 | An expired entry MUST free its key; Redis keys MUST carry the ttl and vanish after it; expired SQL rows MUST be swept | same contract tests, `TestRedisJTIStore_KeysCarryTheTTL`, `TestSQLJTIStore_PrunesExpiredRows` |
+| E38.3 | One thumbprint MUST NOT exceed its share (`ErrJTIStoreFull`); other keys MUST keep working and the share MUST free with expiry | same contract tests (`per-key share`) |
+| E38.4 | Concurrent `Record`s of one key MUST have exactly one winner, and every loser MUST see the winner's record, on MySQL also with `CLIENT_FOUND_ROWS` | same contract tests (`concurrent writers, one winner`), `TestSQLJTIStore_LostRaceReadsTheWinner` |
+| E38.5 | Two verifiers sharing the stores MUST refuse a proof the other accepted (`ErrReplay`) | same contract tests (`replicas sharing the store refuse a replay`) |
+| E38.6 | A failing backend MUST return an error and never report a record as created; it MUST NOT read as a full store | `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
+| E38.7 | Invalid configuration (nil client or db, unknown dialect, unsafe table name) MUST be refused at construction | `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
+
+**Deliberate limits.**
+- The Redis store is bounded by Redis memory, not by a total count; it needs a Redis whose
+  `maxmemory-policy` is `noeviction`, since an evicted jti reopens a replay window early.
+  Redis keys expire on the server's clock; the per-key count and the SQL store judge expiry by
+  `rec.FirstSeen`, the verifier's clock.
+- The SQL per-key share is counted before the insert: concurrent `Record`s of one thumbprint
+  can overshoot it by the number in flight.
+- Live tests run against the servers named by `W17_REDIS_ADDR`, `W17_PG_DSN` and
+  `W17_MYSQL_DSN`; CI requires them (`W17_REQUIRE_LIVE_REDIS`, `W17_REQUIRE_LIVE_MIGRATOR`).

@@ -65,6 +65,61 @@ type CORSConfig struct {
 	// typically 5 seconds, which spams preflight). 600 is a
 	// sane default; consumers tune via env.
 	MaxAgeSeconds int
+
+	// ExposedHeaders is the response headers a browser script may read,
+	// sent as `Access-Control-Expose-Headers` on every non-preflight
+	// response to an allowed origin. Empty (the default) sends no such
+	// header. [WithDPoPCORS] adds the DPoP response headers.
+	ExposedHeaders []string
+}
+
+// defaultCORSAllowedHeaders is the request-header allowlist used when
+// [CORSConfig.AllowedHeaders] is empty.
+func defaultCORSAllowedHeaders() []string {
+	// principal.OrgScopeHeader is in the DEFAULT, not left to the
+	// operator, because it is not a domain-specific header — it is how
+	// this platform scopes a request to an organization, so every
+	// deployment with org membership needs it and none of them chose it.
+	//
+	// Omitting it does not produce an error anybody can act on: the
+	// preflight still answers 204, the browser silently refuses to send
+	// the request, and the caller sees "Failed to fetch" with no status
+	// and no server-side log line (w17.app, 2026-09-11 — the members and
+	// invites screens were unreachable while /auth/orgs, which needs no
+	// org header, worked).
+	return []string{"Content-Type", "Authorization", principal.OrgScopeHeader}
+}
+
+// WithDPoPCORS returns cfg opened for DPoP (RFC 9449) browser clients: the
+// `DPoP` request header is added to the allowed headers (starting from the
+// defaults when cfg names none, so they are kept), and `DPoP-Nonce` and
+// `WWW-Authenticate` to the exposed ones, so a script can read the nonce and
+// the challenge it must retry with. Names already present are not repeated.
+// cfg itself is not modified; a cfg with no origins stays CORS-off.
+func WithDPoPCORS(cfg CORSConfig) CORSConfig {
+	allowed := cfg.AllowedHeaders
+	if len(allowed) == 0 {
+		allowed = defaultCORSAllowedHeaders()
+	}
+	cfg.AllowedHeaders = appendHeaderNames(nil, allowed...)
+	cfg.AllowedHeaders = appendHeaderNames(cfg.AllowedHeaders, "DPoP")
+	cfg.ExposedHeaders = appendHeaderNames(appendHeaderNames(nil, cfg.ExposedHeaders...), "DPoP-Nonce", "WWW-Authenticate")
+	return cfg
+}
+
+// appendHeaderNames appends each name not already in list
+// (case-insensitively).
+func appendHeaderNames(list []string, names ...string) []string {
+next:
+	for _, n := range names {
+		for _, have := range list {
+			if strings.EqualFold(have, n) {
+				continue next
+			}
+		}
+		list = append(list, n)
+	}
+	return list
 }
 
 // CORSMiddleware returns an http.Handler that wraps `next`
@@ -116,21 +171,11 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	}
 	headers := cfg.AllowedHeaders
 	if len(headers) == 0 {
-		// principal.OrgScopeHeader is in the DEFAULT, not left to the
-		// operator, because it is not a domain-specific header — it is how
-		// this platform scopes a request to an organization, so every
-		// deployment with org membership needs it and none of them chose it.
-		//
-		// Omitting it does not produce an error anybody can act on: the
-		// preflight still answers 204, the browser silently refuses to send
-		// the request, and the caller sees "Failed to fetch" with no status
-		// and no server-side log line (w17.app, 2026-09-11 — the members and
-		// invites screens were unreachable while /auth/orgs, which needs no
-		// org header, worked).
-		headers = []string{"Content-Type", "Authorization", principal.OrgScopeHeader}
+		headers = defaultCORSAllowedHeaders()
 	}
 	methodsHdr := strings.Join(methods, ", ")
 	headersHdr := strings.Join(headers, ", ")
+	exposeHdr := strings.Join(cfg.ExposedHeaders, ", ")
 	maxAgeHdr := ""
 	if cfg.MaxAgeSeconds > 0 {
 		maxAgeHdr = strconv.Itoa(cfg.MaxAgeSeconds)
@@ -143,7 +188,8 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 		// a disallowed Origin) and hand it to an allowed origin, whose
 		// browser then refuses it.
 		addVary(w.Header(), "Origin")
-		if allow := matchOrigin(origin, cfg.AllowedOrigins, allowCredentials); allow != "" {
+		allow := matchOrigin(origin, cfg.AllowedOrigins, allowCredentials)
+		if allow != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allow)
 			if allowCredentials {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -157,6 +203,9 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 			}
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		if exposeHdr != "" && allow != "" {
+			w.Header().Set("Access-Control-Expose-Headers", exposeHdr)
 		}
 		next.ServeHTTP(w, r)
 	})

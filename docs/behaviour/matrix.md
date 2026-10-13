@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-129 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
+135 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
 
 ## Server × Server
 
@@ -92,6 +92,11 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Connection pool health watch (E32) | Long-lived callers | A pooled connection is replaced only once it is shut down; a transient failure resets its backoff and keeps the connection a caller holds. | `TestPool_HealthWatch_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_KeepsATransientFailureConnOpen`, `TestPool_Reconnect_ReplacesAClosedConnection` |
 | WebSocket helpers (E15) | Request body limits (E1) | A WebSocket frame may be as large as a REST body: the read limit is `MaxWebSocketMessageBytes`, which defaults to `MaxRequestBodyBytes`; a refusal's close reason always fits the close frame. | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable`, `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly` |
 | `w17-events` channel (E18) | SSE write deadline (E14) and slow clients | A stalled client is dropped after the write deadline; the hub never blocks. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline`, `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames`, `w17events_drain_test.go` |
+| DPoP gate (E37) | Auth result cache (E6) | A DPoP surface caches through `dpopgw.CachedAuthFunc`: a verified request is keyed on the verified thumbprint, and DPoP material not verified on this request is never answered from the cache nor fills it; bearer requests keep the E6 behaviour. The E6 cache itself treats the `DPoP` header as unknown and bypasses. | `TestCachedDPoPAuthFunc_KeysOnTheVerifiedThumbprint`, `TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest`, `TestCachedDPoPAuthFunc_BearerAndOff` |
+| DPoP gate (E37) | Browser stream tickets (E16) | A bound ticket is issued only for a verified bound request and records its thumbprint; redemption re-checks the binding and stays one-shot; an unbound ticket carries no device and is refused when the gate is required. | `TestDPoPTicket_BoundFlow`, `TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest`, `TestDPoPTicket_RedemptionChecksTheBinding`, `TestDPoPTicket_UnboundTicket` |
+| DPoP gate (E37) | Stream re-auth watchdog (E17) | A DPoP stream is watched by `dpopgw.WatchStreamBinding`, which asks a binding-only question and never replays the set-up proof or a spent ticket; refusals and outages are split as in E17. | `TestWatchStreamBinding_AsksTheBindingQuestion`, `TestWatchStreamBinding_RefusedVersusUnanswered`, `TestWatchStreamBinding_NoBindingEndsTheStream` |
+| DPoP gate (E37) | CORS (E12) | `WithDPoPCORS` lets a browser send `DPoP` and read `DPoP-Nonce` / `WWW-Authenticate`; the defaults stay unchanged. | `TestWithDPoPCORS` |
+| Shared replay stores (E38) | DPoP verifier (E35) | Replicas sharing the stores refuse each other's accepted proofs; a failing store is an error the verifier turns into 503, never an acceptance. | `TestRedisJTIStore_Contract`, `TestSQLJTIStore_Contract_SQLite`, `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
 
 ## Edges × Data
 
@@ -110,6 +115,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 |---|---|---|---|
 | Error envelope (E3), refusals (E4), database error mapping (E33) | i18n locale | Detail sentences are translated with the request locale; the context-free writers answer in the source locale. | `constraint_locale_test.go`, `TestPreflightSentence_AgreesWithTheDemotionUnderALocale`, `TestWriteMissingScopeCtx_NameReachesTheOperatorOnly`, `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestAdmitPublic_RefusalIsTheCatalogSentence`, `TestContextFreeWriters_AnswerInTheSourceLocale` |
 | Inter-tier principal relay (E31) | Event labels and data scopes | The business tier forwards principal, scopes and labels to storage, for unary and stream calls. | `TestForwardPrincipalUnaryInterceptor`, `TestDialOpts_StreamRelaysThePrincipalOnly` |
+| DPoP gate (E37), inter-tier relay (E31) | Principal, all sides (I10–I12) | The thumbprint of a token-bound proof (never an unbound one) is stamped as `x-w17-device` only by the gateway, a client's copy is stripped on every surface, and the device reaches every tier over the wire and in-process. | `TestSetDeviceMetadata`, `TestDPoPGate_UnboundProofIsNoDevice`, `TestDeviceID_ClientCannotInject`, `TestEdge_ClientCannotSetReservedMetadataOnAnySurface`, `TestDialOpts_RelaysTheDeviceID`, `TestConn_NestedCall_RelaysTheDeviceID` |
 | Gateway tier rendering | Catalogs and formatting (I14, I15) | Gateway-rendered messages use the caller's language and explicit format locale from outgoing metadata. | `TestLocaleFromContext_OutgoingMetadata`, `TestFormatLocaleFromContext_OutgoingMetadata` |
 
 ## Edges × Tooling
