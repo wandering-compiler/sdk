@@ -466,16 +466,20 @@ func TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest(t *testing.T) {
 			return r
 		}(),
 	} {
-		before := inner.calls.Load()
-		data, err := cached(r.Context(), r)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(data) == "principal-for:"+key.Thumbprint() {
-			t.Errorf("%s: answered with the cached principal of the real device", name)
-		}
-		if inner.calls.Load() != before+1 {
-			t.Errorf("%s: inner not called; an unverified request was served from the cache", name)
+		// Twice: the second presentation must not be served from an entry
+		// the first one filled.
+		for range 2 {
+			before := inner.calls.Load()
+			data, err := cached(r.Context(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) == "principal-for:"+key.Thumbprint() {
+				t.Errorf("%s: answered with the cached principal of the real device", name)
+			}
+			if inner.calls.Load() != before+1 {
+				t.Errorf("%s: inner not called; an unverified request was served from the cache", name)
+			}
 		}
 	}
 	// And they did not fill the cache: the verified device still hits.

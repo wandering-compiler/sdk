@@ -176,3 +176,34 @@ func TestSQLJTIStore_Contract_MySQLLive(t *testing.T) {
 	t.Cleanup(func() { _ = found.Close() })
 	t.Run("client found rows", func(t *testing.T) { runContract(t, sqlHarness(found, dpopstore.MySQL)) })
 }
+
+// A writer that loses the race between its first read and its insert (another
+// replica inserted the same jti in between) must report the winner's record,
+// not "created". A BEFORE INSERT trigger plays the other replica, so the race
+// is lost every time instead of by chance.
+func TestSQLJTIStore_LostRaceReadsTheWinner(t *testing.T) {
+	db := openSQLite(t)
+	s, err := dpopstore.NewSQLJTIStore(db, dpopstore.SQLite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TRIGGER other_replica BEFORE INSERT ON `+dpopstore.DefaultSQLTable+`
+		WHEN NEW.proof_hash = 'loser'
+		BEGIN
+			INSERT INTO `+dpopstore.DefaultSQLTable+` (key_hash, thumbprint, proof_hash, first_seen, expires_at)
+			VALUES (NEW.key_hash, NEW.thumbprint, 'winner', NEW.first_seen - 1, NEW.expires_at);
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	got, created, err := s.Record(ctx, "tp\x00j", dpop.JTIRecord{Thumbprint: "tp", ProofHash: "loser", FirstSeen: time.Now()}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || got.ProofHash != "winner" {
+		t.Fatalf("lost race = (%+v, created %v), want the winner's record and not created", got, created)
+	}
+}
