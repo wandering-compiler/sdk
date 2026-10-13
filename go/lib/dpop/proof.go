@@ -102,7 +102,7 @@ func NormalizeHTU(raw string) (string, error) {
 	if scheme != "http" && scheme != "https" {
 		return "", fmt.Errorf("dpop: htu %q: want an absolute http or https URI", raw)
 	}
-	if u.Host == "" || u.User != nil || u.Opaque != "" {
+	if u.Hostname() == "" || u.User != nil || u.Opaque != "" {
 		return "", fmt.Errorf("dpop: htu %q: want scheme://host[:port]/path", raw)
 	}
 	host := strings.ToLower(u.Hostname())

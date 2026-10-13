@@ -16,6 +16,7 @@ package dpopclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -46,9 +47,16 @@ type Transport struct {
 	Signer dpop.Signer
 	// Token supplies the access token; nil means no token.
 	Token TokenFunc
+	// Origins are the origins (scheme://host[:port]) the token and proofs
+	// may be sent to. Required: there is no implicit default. A request to
+	// any other origin — a redirect to another host, for instance — fails
+	// with [ErrOriginNotAllowed] before anything is sent or the token is
+	// fetched.
+	Origins []string
 
-	mu     sync.Mutex
-	nonces map[string]string // origin → last nonce
+	mu      sync.Mutex
+	nonces  map[string]string // origin → last nonce
+	allowed map[string]bool
 }
 
 func (t *Transport) base() http.RoundTripper {
@@ -58,8 +66,68 @@ func (t *Transport) base() http.RoundTripper {
 	return http.DefaultTransport
 }
 
+// originOf is the normalised origin of a URL: lower-case scheme and host, no
+// default port. "" when the URL has none.
 func originOf(u *url.URL) string {
-	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+	o, err := dpop.NormalizeHTU(u.Scheme + "://" + u.Host)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(o, "/")
+}
+
+// ErrOriginNotAllowed is returned for a request to an origin outside
+// [Transport.Origins], including a redirect target on another host.
+var ErrOriginNotAllowed = errors.New("dpopclient: origin not in Transport.Origins")
+
+// ErrNoOrigins is returned by a Transport whose Origins holds no valid origin.
+var ErrNoOrigins = errors.New("dpopclient: Transport.Origins is empty or invalid")
+
+// NewTransport returns a Transport that sends the token and proofs to the
+// given origins only. It fails when origins holds no origin or an invalid
+// one.
+func NewTransport(base http.RoundTripper, signer dpop.Signer, token TokenFunc, origins ...string) (*Transport, error) {
+	if signer == nil {
+		return nil, errors.New("dpopclient: Transport needs a Signer")
+	}
+	if len(origins) == 0 {
+		return nil, ErrNoOrigins
+	}
+	for _, o := range origins {
+		if normOrigin(o) == "" {
+			return nil, fmt.Errorf("%w: %q is not scheme://host[:port]", ErrNoOrigins, o)
+		}
+	}
+	return &Transport{Base: base, Signer: signer, Token: token, Origins: origins}, nil
+}
+
+// normOrigin normalises a configured origin; "" when it is not a bare
+// scheme://host[:port].
+func normOrigin(o string) string {
+	u, err := url.Parse(o)
+	if err != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return ""
+	}
+	return originOf(u)
+}
+
+// mayCarry reports whether credentials may go to origin.
+func (t *Transport) mayCarry(origin string) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.allowed == nil {
+		allowed := make(map[string]bool)
+		for _, o := range t.Origins {
+			if n := normOrigin(o); n != "" {
+				allowed[n] = true
+			}
+		}
+		if len(allowed) == 0 {
+			return false, ErrNoOrigins
+		}
+		t.allowed = allowed
+	}
+	return origin != "" && t.allowed[origin], nil
 }
 
 func (t *Transport) nonce(origin string) string {
@@ -95,6 +163,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		closeBody()
 		return nil, errors.New("dpopclient: Transport has no Signer")
 	}
+	origin := originOf(req.URL)
+	switch ok, err := t.mayCarry(origin); {
+	case err != nil:
+		closeBody()
+		return nil, err
+	case !ok:
+		closeBody()
+		return nil, fmt.Errorf("%w: %s", ErrOriginNotAllowed, origin)
+	}
 	token := ""
 	if t.Token != nil {
 		var err error
@@ -103,7 +180,6 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 	}
-	origin := originOf(req.URL)
 	used := t.nonce(origin)
 	out, err := t.prepare(req, req.Body, token, used)
 	if err != nil {

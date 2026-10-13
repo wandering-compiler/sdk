@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/cryptosigner"
+	"google.golang.org/grpc/codes"
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 )
@@ -372,10 +374,14 @@ func TestVerify_CheckOrder(t *testing.T) {
 	if _, err := v.Verify(ctx, get(sign(t, k, cl))); err != nil {
 		t.Fatalf("the jti refused by the nonce check was spent: %v", err)
 	}
-	// Replay with a wrong htu → replay.
+	// Replay with a wrong htu → htu: the jti is checked last.
 	cl.HTU = testOrigin + "/elsewhere"
+	if _, err := v.Verify(ctx, get(sign(t, k, cl))); !errors.Is(err, dpop.ErrHTUMismatch) {
+		t.Fatalf("replay + wrong htu = %v, want ErrHTUMismatch", err)
+	}
+	cl.HTU = testOrigin + "/r"
 	if _, err := v.Verify(ctx, get(sign(t, k, cl))); !errors.Is(err, dpop.ErrReplay) {
-		t.Fatalf("replay + wrong htu = %v, want ErrReplay", err)
+		t.Fatalf("replay = %v, want ErrReplay", err)
 	}
 	// Wrong htu and wrong ath → htu.
 	cl2 := claims(c, nonce)
@@ -588,7 +594,7 @@ func TestNormalizeHTU(t *testing.T) {
 			t.Errorf("NormalizeHTU(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"/p", "ftp://a/p", "https://user@a/p", "https:///p", "::"} {
+	for _, bad := range []string{"/p", "ftp://a/p", "https://user@a/p", "https:///p", "::", "http://:", "https://:443/p"} {
 		if _, err := dpop.NormalizeHTU(bad); err == nil {
 			t.Errorf("NormalizeHTU(%q) accepted", bad)
 		}
@@ -596,6 +602,7 @@ func TestNormalizeHTU(t *testing.T) {
 }
 
 func TestNewVerifier_Config(t *testing.T) {
+	shared := dpop.NewMemoryJTIStore(0)
 	for _, cfg := range []dpop.Config{
 		{},
 		{Origin: "api.example.com"},
@@ -603,6 +610,8 @@ func TestNewVerifier_Config(t *testing.T) {
 		{Origin: testOrigin + "/base/"},
 		{Origin: testOrigin, ReuseWindow: dpop.MaxReuseWindow + time.Second},
 		{Origin: testOrigin, IATWindow: -time.Second},
+		{Origin: testOrigin, JTIs: shared},
+		{Origin: testOrigin, JTIs: shared, MintJTIs: shared},
 	} {
 		if _, err := dpop.NewVerifier(cfg); err == nil {
 			t.Errorf("NewVerifier(%+v) accepted", cfg)
@@ -629,7 +638,7 @@ func TestNewVerifier_Config(t *testing.T) {
 func TestVerify_FullJTIStoreFailsClosed(t *testing.T) {
 	c := newClock()
 	store := dpop.NewMemoryJTIStore(1)
-	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = store })
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = dpop.NewMemoryJTIStore(0); cfg.MintJTIs = store })
 	k := mustKey(t)
 	cl := claims(c, "")
 	if _, err := v.Verify(context.Background(), get(sign(t, k, cl))); err != nil {
@@ -637,8 +646,16 @@ func TestVerify_FullJTIStoreFailsClosed(t *testing.T) {
 	}
 	cl.JTI = "another"
 	_, err := v.Verify(context.Background(), get(sign(t, k, cl)))
-	if !errors.Is(err, dpop.ErrJTIStoreFull) {
-		t.Fatalf("full store = %v, want ErrJTIStoreFull", err)
+	if !errors.Is(err, dpop.ErrJTIStoreFull) || !errors.Is(err, dpop.ErrUnavailable) {
+		t.Fatalf("full store = %v, want ErrUnavailable wrapping ErrJTIStoreFull", err)
+	}
+	if dpop.HTTPStatus(err) != 503 || dpop.GRPCCode(err) != codes.Unavailable {
+		t.Fatalf("full store maps to %d / %v, want 503 / Unavailable", dpop.HTTPStatus(err), dpop.GRPCCode(err))
+	}
+	h := http.Header{}
+	dpop.SetChallenge(h, err)
+	if h.Get("Retry-After") == "" || h.Get("WWW-Authenticate") != "" {
+		t.Fatalf("full store headers = %v, want Retry-After and no challenge", h)
 	}
 	// Once the first jti expires (2 × iat window without nonces) there is room.
 	c.Advance(2*dpop.DefaultIATWindow + time.Second)
@@ -674,5 +691,235 @@ func TestVerify_ConcurrentSameProofOneWinnerWithoutReuse(t *testing.T) {
 	wg.Wait()
 	if ok != 1 {
 		t.Fatalf("%d concurrent presentations accepted, want 1", ok)
+	}
+}
+
+// The reproduction of the store-filling attack: proofs signed with the
+// attacker's own key and random jtis, refused for a wrong htu, wrong ath or
+// wrong binding, must take no room; a legitimate proof is accepted after
+// them.
+func TestVerify_RefusedProofsDoNotFillJTIStore(t *testing.T) {
+	c := newClock()
+	store, mint := dpop.NewMemoryJTIStore(100), dpop.NewMemoryJTIStore(100)
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = store; cfg.MintJTIs = mint })
+	attacker := mustKey(t)
+	victim := mustKey(t)
+	ctx := context.Background()
+	for i := 0; i < 300; i++ {
+		cl := claims(c, "")
+		cl.JTI = fmt.Sprintf("flood-%d", i)
+		req := get("")
+		var want error
+		switch i % 3 {
+		case 0:
+			cl.HTU = testOrigin + "/wrong"
+			want = dpop.ErrHTUMismatch
+		case 1:
+			cl.ATH = dpop.AccessTokenHash("other")
+			req.AccessToken, req.Binding = "tok", attacker.Thumbprint()
+			want = dpop.ErrATHMismatch
+		case 2:
+			cl.ATH = dpop.AccessTokenHash("tok")
+			req.AccessToken, req.Binding = "tok", victim.Thumbprint()
+			want = dpop.ErrBindingMismatch
+		}
+		req.Proofs = []string{sign(t, attacker, cl)}
+		if _, err := v.Verify(ctx, req); !errors.Is(err, want) {
+			t.Fatalf("flood proof %d = %v, want %v", i, err, want)
+		}
+	}
+	if n := store.Len() + mint.Len(); n != 0 {
+		t.Fatalf("refused proofs left %d entries in the jti stores", n)
+	}
+	if _, err := v.Verify(ctx, get(sign(t, victim, claims(c, "")))); err != nil {
+		t.Fatalf("legitimate proof after the flood: %v", err)
+	}
+}
+
+// One key cannot hold more than its share of the store; other keys keep
+// working.
+func TestMemoryJTIStore_PerKeyCap(t *testing.T) {
+	c := newClock()
+	store := dpop.NewMemoryJTIStore(100, dpop.WithMaxJTIsPerKey(2))
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now; cfg.JTIs = dpop.NewMemoryJTIStore(0); cfg.MintJTIs = store })
+	greedy, other := mustKey(t), mustKey(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		cl := claims(c, "")
+		cl.JTI = fmt.Sprintf("g-%d", i)
+		_, err := v.Verify(ctx, get(sign(t, greedy, cl)))
+		if i < 2 && err != nil {
+			t.Fatalf("proof %d of the greedy key: %v", i, err)
+		}
+		if i == 2 && !errors.Is(err, dpop.ErrJTIStoreFull) {
+			t.Fatalf("third proof of the greedy key = %v, want ErrJTIStoreFull", err)
+		}
+	}
+	if _, err := v.Verify(ctx, get(sign(t, other, claims(c, "")))); err != nil {
+		t.Fatalf("another key while the greedy one is capped: %v", err)
+	}
+	// The greedy key's share frees as its entries expire.
+	c.Advance(2*dpop.DefaultIATWindow + time.Second)
+	cl := claims(c, "")
+	cl.JTI = "g-later"
+	if _, err := v.Verify(ctx, get(sign(t, greedy, cl))); err != nil {
+		t.Fatalf("greedy key after expiry: %v", err)
+	}
+}
+
+// Entries leave in expiry order regardless of insertion order, a re-recorded
+// key keeps its new entry, and a full store frees room as entries expire.
+func TestMemoryJTIStore_ExpiresInOrder(t *testing.T) {
+	s := dpop.NewMemoryJTIStore(3)
+	ctx := context.Background()
+	t0 := time.Unix(1000, 0)
+	rec := func(at time.Duration) dpop.JTIRecord {
+		return dpop.JTIRecord{Thumbprint: "tp", ProofHash: "h", FirstSeen: t0.Add(at)}
+	}
+	mustRecord := func(key string, r dpop.JTIRecord, ttl time.Duration) {
+		t.Helper()
+		if _, created, err := s.Record(ctx, key, r, ttl); err != nil || !created {
+			t.Fatalf("Record(%s) = %v, %v", key, created, err)
+		}
+	}
+	mustRecord("long", rec(0), time.Hour)
+	mustRecord("short", rec(0), time.Second)
+	mustRecord("mid", rec(0), time.Minute)
+	if _, _, err := s.Record(ctx, "x", rec(0), time.Second); !errors.Is(err, dpop.ErrJTIStoreFull) {
+		t.Fatalf("full store = %v", err)
+	}
+	mustRecord("x", rec(2*time.Second), time.Second) // "short" expired: room
+	// At 3 s "x" has expired and is recorded again, for an hour.
+	mustRecord("x", rec(3*time.Second), time.Hour)
+	if s.Len() != 3 {
+		t.Fatalf("Len = %d, want 3", s.Len())
+	}
+	// At 61 s "mid" has expired; the re-recorded "x" and "long" have not.
+	if _, created, _ := s.Record(ctx, "x", rec(61*time.Second), time.Hour); created {
+		t.Fatal("the re-recorded key was dropped with its old expiry")
+	}
+	if s.Len() != 2 {
+		t.Fatalf("Len at 61 s = %d, want 2", s.Len())
+	}
+}
+
+// headerEdit rewrites the raw protected-header JSON text of a proof.
+func headerEdit(t *testing.T, proof string, f func(string) string) string {
+	t.Helper()
+	parts := strings.Split(proof, ".")
+	return base64.RawURLEncoding.EncodeToString([]byte(f(string(b64(t, parts[0]))))) + "." + parts[1] + "." + parts[2]
+}
+
+// The header and the claims are decoded strictly: exact member names, no
+// duplicates, nothing after the object; the request path must be absolute.
+func TestVerify_StrictDecoding(t *testing.T) {
+	c := newClock()
+	v := newVerifier(t, nil, func(cfg *dpop.Config) { cfg.Now = c.Now })
+	k := mustKey(t)
+	ctx := context.Background()
+	good := sign(t, k, claims(c, ""))
+	repl := func(old, new string) func(string) string {
+		return func(h string) string {
+			if !strings.Contains(h, old) {
+				t.Fatalf("header %s has no %s", h, old)
+			}
+			return strings.Replace(h, old, new, 1)
+		}
+	}
+	iat := fmt.Sprint(c.Now().Unix())
+	body := `"htm":"GET","htu":"` + testOrigin + `/r","iat":` + iat
+	cases := []struct {
+		name  string
+		proof string
+		path  string
+		want  error
+	}{
+		{"duplicate alg", headerEdit(t, good, repl(`"alg":"ES256"`, `"alg":"HS256","alg":"ES256"`)), "/r", dpop.ErrMalformed},
+		{"alg in other case", headerEdit(t, good, repl(`"alg":"ES256"`, `"ALG":"ES256"`)), "/r", dpop.ErrBadAlg},
+		{"typ in other case", headerEdit(t, good, repl(`"typ"`, `"TYP"`)), "/r", dpop.ErrBadType},
+		{"alg not a string", headerEdit(t, good, repl(`"alg":"ES256"`, `"alg":256`)), "/r", dpop.ErrMalformed},
+		{"data after the header", headerEdit(t, good, func(h string) string { return h + "{}" }), "/r", dpop.ErrMalformed},
+		{"duplicate jwk member", headerEdit(t, good, repl(`"kty":"EC"`, `"kty":"EC","kty":"EC"`)), "/r", dpop.ErrBadKey},
+		{"private member in other case", headerEdit(t, good, repl(`"kty":"EC"`, `"kty":"EC","D":"AAAA"`)), "/r", dpop.ErrBadKey},
+		{"duplicate jti", signRaw(t, k, `{"jti":"a","jti":"b",`+body+`}`), "/r", dpop.ErrMalformed},
+		{"jti in other case", signRaw(t, k, `{"JTI":"a",`+body+`}`), "/r", dpop.ErrMalformed},
+		{"data after the claims", signRaw(t, k, `{"jti":"a",`+body+`} {}`), "/r", dpop.ErrMalformed},
+		{"iat fractional", signRaw(t, k, `{"jti":"a","htm":"GET","htu":"`+testOrigin+`/r","iat":1.5}`), "/r", dpop.ErrMalformed},
+		{"jti null", signRaw(t, k, `{"jti":null,`+body+`}`), "/r", dpop.ErrMalformed},
+		{"relative path", good, "r", dpop.ErrHTUMismatch},
+		{"empty path against a root htu", signRaw(t, k, `{"jti":"root","htm":"GET","htu":"`+testOrigin+`/","iat":`+iat+`}`), "", dpop.ErrHTUMismatch},
+		{"empty path", good, "", dpop.ErrHTUMismatch},
+	}
+	for _, tc := range cases {
+		_, err := v.Verify(ctx, dpop.Request{Method: "GET", Path: tc.path, Proofs: []string{tc.proof}})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: Verify = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	if _, err := v.Verify(ctx, get(good)); err != nil {
+		t.Fatalf("the unedited proof: %v", err)
+	}
+	if _, err := v.Verify(ctx, get(signRaw(t, k, `{"jti":"z",`+body+`}`))); err != nil {
+		t.Fatalf("a strict, valid raw proof: %v", err)
+	}
+}
+
+// A mint flood — unbound proofs from throwaway keys — fills only the mint
+// store: authenticated (bound) requests keep working, and minting recovers
+// as entries expire.
+func TestVerify_MintFloodCannotStarveBoundProofs(t *testing.T) {
+	c := newClock()
+	mint := dpop.NewMemoryJTIStore(50)
+	v := newVerifier(t, nil, func(cfg *dpop.Config) {
+		cfg.Now = c.Now
+		cfg.JTIs = dpop.NewMemoryJTIStore(50)
+		cfg.MintJTIs = mint
+	})
+	ctx := context.Background()
+	for i := 0; ; i++ {
+		_, err := v.Verify(ctx, get(sign(t, mustKey(t), claims(c, ""))))
+		if errors.Is(err, dpop.ErrUnavailable) {
+			if i != 50 {
+				t.Fatalf("mint store full after %d proofs, want 50", i)
+			}
+			break
+		}
+		if err != nil {
+			t.Fatalf("mint proof %d: %v", i, err)
+		}
+	}
+	k := mustKey(t)
+	cl := claims(c, "")
+	cl.ATH = dpop.AccessTokenHash("tok")
+	req := get(sign(t, k, cl))
+	req.AccessToken, req.Binding = "tok", k.Thumbprint()
+	if _, err := v.Verify(ctx, req); err != nil {
+		t.Fatalf("bound proof during a mint flood: %v", err)
+	}
+	c.Advance(2*dpop.DefaultIATWindow + time.Second)
+	if _, err := v.Verify(ctx, get(sign(t, mustKey(t), claims(c, "")))); err != nil {
+		t.Fatalf("minting after the flood expired: %v", err)
+	}
+}
+
+func TestHTTPStatusAndGRPCCode(t *testing.T) {
+	cases := []struct {
+		err  error
+		http int
+		code codes.Code
+	}{
+		{nil, 200, codes.OK},
+		{dpop.ErrReplay, 401, codes.Unauthenticated},
+		{&dpop.NonceError{Nonce: "n"}, 401, codes.Unauthenticated},
+		{fmt.Errorf("%w: %w", dpop.ErrUnavailable, dpop.ErrJTIStoreFull), 503, codes.Unavailable},
+		{errors.New("other"), 500, codes.Internal},
+	}
+	for _, tc := range cases {
+		if got := dpop.HTTPStatus(tc.err); got != tc.http {
+			t.Errorf("HTTPStatus(%v) = %d, want %d", tc.err, got, tc.http)
+		}
+		if got := dpop.GRPCCode(tc.err); got != tc.code {
+			t.Errorf("GRPCCode(%v) = %v, want %v", tc.err, got, tc.code)
+		}
 	}
 }
