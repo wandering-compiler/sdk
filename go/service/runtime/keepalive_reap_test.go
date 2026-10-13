@@ -75,7 +75,7 @@ func TestGRPCComponent_PingsAnIdleClientAndDropsItWithoutAnAck(t *testing.T) {
 
 func writeFrame(t *testing.T, c net.Conn, typ, flags byte, payload []byte) {
 	t.Helper()
-	h := make([]byte, 9)
+	h := make([]byte, 9, 9+len(payload)) // the 9-byte HTTP/2 frame header, then the payload
 	h[0], h[1], h[2] = byte(len(payload)>>16), byte(len(payload)>>8), byte(len(payload))
 	h[3], h[4] = typ, flags
 	if _, err := c.Write(append(h, payload...)); err != nil {

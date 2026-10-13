@@ -74,7 +74,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		AccessToken: tok, Binding: binding,
 	})
 	if err == nil && s.alwaysNonce {
-		n, _ := s.v.Nonce(tp + string(rune('a'+s.hits.Load())))
+		n, _ := s.v.Nonce(tp + string('a'+s.hits.Load()))
 		err = &dpop.NonceError{Nonce: n}
 	}
 	if err != nil {
@@ -109,7 +109,7 @@ func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
 
 func readAll(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
 }

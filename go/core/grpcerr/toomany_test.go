@@ -25,7 +25,7 @@ func TestWrap_TooManyBindValuesIsTheCallersFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	n := dqlbind.MaxPlaceholders + 1
 	args := make([]any, n)
 	for i := range args {

@@ -57,6 +57,19 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
 
+  lint:
+    runs-on: ubuntu-latest
+    container: golang:1.26
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: go mod tidy -diff
+      - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+
   vuln:
     runs-on: ubuntu-latest
     container: golang:1.26

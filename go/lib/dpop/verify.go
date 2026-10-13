@@ -290,9 +290,9 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 	if err != nil {
 		var unexpected *jose.ErrUnexpectedSignatureAlgorithm
 		if errors.As(err, &unexpected) {
-			return "", fmt.Errorf("%w: %v", ErrBadAlg, err)
+			return "", fmt.Errorf("%w: %w", ErrBadAlg, err)
 		}
-		return "", fmt.Errorf("%w: %v", ErrMalformed, err)
+		return "", fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 	if len(jws.Signatures) != 1 {
 		return "", fmt.Errorf("%w: want one signature", ErrMalformed)
@@ -306,7 +306,7 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 	}
 	thumb, err := Thumbprint(jwk.Key)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrBadKey, err)
+		return "", fmt.Errorf("%w: %w", ErrBadKey, err)
 	}
 	sum := sha256.Sum256([]byte(proof))
 	hash := hex.EncodeToString(sum[:])
@@ -319,7 +319,7 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 	} else {
 		payload, err = jws.Verify(jwk)
 		if err != nil {
-			return "", fmt.Errorf("%w: %v", ErrBadSignature, err)
+			return "", fmt.Errorf("%w: %w", ErrBadSignature, err)
 		}
 	}
 	c, err := parseClaims(payload)
@@ -353,7 +353,7 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 	path, _, _ := strings.Cut(req.Path, "?")
 	want, err := NormalizeHTU(v.origin + path)
 	if err != nil {
-		return "", fmt.Errorf("%w: request path %q: %v", ErrHTUMismatch, req.Path, err)
+		return "", fmt.Errorf("%w: request path %q: %w", ErrHTUMismatch, req.Path, err)
 	}
 	if gotHTU, err := NormalizeHTU(*c.HTU); err != nil || gotHTU != want {
 		return "", fmt.Errorf("%w: htu %q, want %q", ErrHTUMismatch, *c.HTU, want)
@@ -414,15 +414,15 @@ func checkHeader(proof string) (jose.SignatureAlgorithm, error) {
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(seg)
 	if err != nil {
-		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+		return "", fmt.Errorf("%w: header: %w", ErrMalformed, err)
 	}
 	h, err := strictObject(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+		return "", fmt.Errorf("%w: header: %w", ErrMalformed, err)
 	}
 	algName, err := optString(h, "alg")
 	if err != nil {
-		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+		return "", fmt.Errorf("%w: header: %w", ErrMalformed, err)
 	}
 	alg := jose.SignatureAlgorithm(algName)
 	if alg != jose.ES256 && alg != jose.EdDSA {
@@ -430,7 +430,7 @@ func checkHeader(proof string) (jose.SignatureAlgorithm, error) {
 	}
 	typ, err := optString(h, "typ")
 	if err != nil {
-		return "", fmt.Errorf("%w: header: %v", ErrMalformed, err)
+		return "", fmt.Errorf("%w: header: %w", ErrMalformed, err)
 	}
 	if !strings.EqualFold(typ, ProofType) {
 		return "", fmt.Errorf("%w: %q", ErrBadType, typ)
@@ -441,7 +441,7 @@ func checkHeader(proof string) (jose.SignatureAlgorithm, error) {
 	}
 	jwk, err := strictObject(rawJWK)
 	if err != nil {
-		return "", fmt.Errorf("%w: jwk: %v", ErrBadKey, err)
+		return "", fmt.Errorf("%w: jwk: %w", ErrBadKey, err)
 	}
 	for member := range jwk {
 		for _, m := range privateJWKMembers {
@@ -528,12 +528,12 @@ func keyFitsAlg(key any, alg jose.SignatureAlgorithm) bool {
 func parseClaims(payload []byte) (*claimsIn, error) {
 	m, err := strictObject(payload)
 	if err != nil {
-		return nil, fmt.Errorf("%w: claims: %v", ErrMalformed, err)
+		return nil, fmt.Errorf("%w: claims: %w", ErrMalformed, err)
 	}
 	var c claimsIn
 	for key, dst := range map[string]**string{"jti": &c.JTI, "htm": &c.HTM, "htu": &c.HTU, "ath": &c.ATH, "nonce": &c.Nonce} {
 		if *dst, err = optStringPtr(m, key); err != nil {
-			return nil, fmt.Errorf("%w: claims: %v", ErrMalformed, err)
+			return nil, fmt.Errorf("%w: claims: %w", ErrMalformed, err)
 		}
 	}
 	if raw, ok := m["iat"]; ok {

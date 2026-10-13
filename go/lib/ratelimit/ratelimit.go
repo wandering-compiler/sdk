@@ -265,7 +265,9 @@ func FromEnvScope(prefix, scope, transport string) Config {
 	}
 	if cfg.PerMinute <= 0 {
 		if _, logged := offLogged.LoadOrStore(name, true); !logged {
-			log.Printf("ratelimit: %s is OFF (%s=%v) — %s", name, from, cfg.PerMinute, scopeMeaning(scope))
+			// name and from are the caller's env names, PerMinute a parsed number:
+			// nothing an outside caller writes reaches this line.
+			log.Printf("ratelimit: %s is OFF (%s=%v) — %s", name, from, cfg.PerMinute, scopeMeaning(scope)) //nolint:gosec // G706: no outside input, see above
 		}
 	}
 	return cfg

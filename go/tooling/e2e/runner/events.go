@@ -262,7 +262,7 @@ func (s *sseSub) stale(f sseFrame) bool {
 // empty payload would read as "an event with no fields", which a Match
 // asserting nothing accepts — a green over a frame nobody could read.
 func notJSON(ev Event, err error) error {
-	return fmt.Errorf("frame on topic %q carries data that is not a JSON object (%v): %q", ev.Topic, err, ev.Raw)
+	return fmt.Errorf("frame on topic %q carries data that is not a JSON object (%w): %q", ev.Topic, err, ev.Raw)
 }
 
 // read parses SSE frames (`event:` / `data:` lines, blank-line separated)

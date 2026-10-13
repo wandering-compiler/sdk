@@ -25,7 +25,7 @@ func TestString_MasksCredentials(t *testing.T) {
 }
 
 func TestErr_RedactsAURLError(t *testing.T) {
-	_, err := url.Parse("postgres://app:s3cret@db:bad port/x")
+	_, err := url.Parse("postgres://app:s3cret@db:bad port/x") //nolint:staticcheck // SA1007: an invalid URL is the input under test
 	if err == nil {
 		t.Fatal("expected a parse error")
 	}

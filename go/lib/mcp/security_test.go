@@ -287,7 +287,7 @@ func TestServeStreamableHTTP_RefusesOversizedBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status %d, want 413: %s", resp.StatusCode, b)
@@ -312,7 +312,7 @@ func startHTTP(t *testing.T, s *Server) string {
 	base := "http://" + addr
 	for i := 0; i < 200; i++ {
 		if resp, err := http.Get(base + healthz.Path); err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return base
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -338,7 +338,7 @@ func postMCP(t *testing.T, url, session, body string, extra ...http.Header) (*ht
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp, string(b)
 }

@@ -2,6 +2,7 @@ package datamigrate
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
@@ -60,7 +61,7 @@ func Unmarshal(body []byte) (*Migration, error) {
 	// of a second `---` document were never validated and never ran, while
 	// the migration recorded itself as applied.
 	var extra yaml.Node
-	if err := dec.Decode(&extra); err != io.EOF {
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("datamigrate.Unmarshal: the body holds more than one YAML document; a data migration is exactly one")
 	}
 	if err := Validate(&m); err != nil {

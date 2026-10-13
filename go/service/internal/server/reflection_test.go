@@ -75,7 +75,7 @@ func listServices(t *testing.T, addr string, md metadata.MD) (v1, v1alpha error)
 
 	s2, err := reflectionv1alpha.NewServerReflectionClient(conn).ServerReflectionInfo(ctx)
 	if err == nil {
-		_ = s2.Send(&reflectionv1alpha.ServerReflectionRequest{MessageRequest: &reflectionv1alpha.ServerReflectionRequest_ListServices{}})
+		_ = s2.Send(&reflectionv1alpha.ServerReflectionRequest{MessageRequest: &reflectionv1alpha.ServerReflectionRequest_ListServices{}}) //nolint:staticcheck // SA1019: the deprecated v1alpha service is the one under test
 		_, err = s2.Recv()
 	}
 	v1alpha = err
@@ -125,11 +125,11 @@ func TestRun_ReflectionAuthGuardsBothVersions(t *testing.T) {
 	}
 }
 
-var errBadToken = errorString("token rejected by the auth backend")
+var errBadToken = stringError("token rejected by the auth backend")
 
-type errorString string
+type stringError string
 
-func (e errorString) Error() string { return string(e) }
+func (e stringError) Error() string { return string(e) }
 
 // A guard that returns a gRPC status has that status passed through.
 func TestRun_ReflectionAuthStatusPassesThrough(t *testing.T) {

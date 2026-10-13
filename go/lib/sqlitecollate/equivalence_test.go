@@ -17,9 +17,9 @@ import (
 // UNIQUE index — while ordering still follows the UCA.
 func TestCompare_EqualityIsDeterministic(t *testing.T) {
 	pairs := [][2]string{
-		{"café", "café"}, // NFC vs NFD
-		{"ab", "a​b"},     // zero width space
-		{"a", "a\x00"},    // NUL
+		{"café", "café"},  // NFC vs NFD
+		{"ab", "a\u200bb"}, // zero width space
+		{"a", "a\x00"},     // NUL
 	}
 	for _, p := range pairs {
 		if Compare(p[0], p[1]) == 0 || Compare(p[1], p[0]) != -Compare(p[0], p[1]) {
@@ -38,7 +38,7 @@ func TestCompare_EqualityIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(`CREATE TABLE t (name TEXT COLLATE ` + Name + ` UNIQUE)`); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestEnsureStamp_UpgradesAPlainUCADatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	for _, stmt := range []string{
 		`CREATE TABLE ` + StampTable + ` (id INTEGER PRIMARY KEY CHECK (id = 1), fingerprint TEXT NOT NULL)`,
 		`CREATE TABLE t (name TEXT COLLATE ` + Name + ` UNIQUE)`,
@@ -98,7 +98,7 @@ func TestEnsureStamp_UpgradesAPlainUCADatabase(t *testing.T) {
 	if err := VerifyStamp(ctx, db); err != nil {
 		t.Errorf("after the upgrade: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO t VALUES (?), (?)`, "café", "a​b"); err != nil {
+	if _, err := db.Exec(`INSERT INTO t VALUES (?), (?)`, "café", "a\u200bb"); err != nil {
 		t.Fatalf("insert look-alikes after the upgrade: %v", err)
 	}
 	var n int

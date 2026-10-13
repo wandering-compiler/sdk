@@ -109,7 +109,7 @@ func (l *Lease) Lose(reason error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.lost == nil {
-		l.lost = fmt.Errorf("%w: %v", migrate.ErrLockLost, reason)
+		l.lost = fmt.Errorf("%w: %w", migrate.ErrLockLost, reason)
 	}
 }
 

@@ -47,7 +47,7 @@ func TestCheckInternalTLS(t *testing.T) {
 			t.Errorf("%q: %v, want accepted", v, err)
 		}
 	}
-	for _, v := range []string{"enabled", "required", "tls", "maybe", "o n", "on​"} {
+	for _, v := range []string{"enabled", "required", "tls", "maybe", "o n", "on\u200b"} {
 		err := CheckInternalTLS(v)
 		if err == nil {
 			t.Errorf("%q accepted, want refused", v)

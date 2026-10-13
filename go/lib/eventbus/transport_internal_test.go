@@ -226,8 +226,10 @@ func TestRedisSubscriber_RouteToDLQ_BrokerDown_NoSilentDrop(t *testing.T) {
 func TestRedisSubscriber_ClaimPending_PendingError(t *testing.T) {
 	bus := deadRedisBus(t, &countObserver{})
 	sub := &redisSubscriber{bus: bus, channel: "default", group: "g"}
-	// Must not panic / block; just exercises the error-return path.
-	sub.subscription(sub.group, "**").claimPending(context.Background(), func(context.Context, string, []byte) error { return nil }, 2, 20*time.Millisecond)
+	// Must not panic or block, and the XPENDING failure is returned.
+	if err := sub.subscription(sub.group, "**").claimPending(context.Background(), func(context.Context, string, []byte) error { return nil }, 2, 20*time.Millisecond); err == nil {
+		t.Error("claimPending against a dead broker returned no error")
+	}
 }
 
 // ensureGroup short-circuits when the (channel, group) pair is

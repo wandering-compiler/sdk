@@ -66,7 +66,7 @@ func TestReflection_UnderMutualTLSIsStillGuarded(t *testing.T) {
 	}
 	s2, err := reflectionv1alpha.NewServerReflectionClient(conn).ServerReflectionInfo(ctx)
 	if err == nil {
-		_ = s2.Send(&reflectionv1alpha.ServerReflectionRequest{MessageRequest: &reflectionv1alpha.ServerReflectionRequest_ListServices{}})
+		_ = s2.Send(&reflectionv1alpha.ServerReflectionRequest{MessageRequest: &reflectionv1alpha.ServerReflectionRequest_ListServices{}}) //nolint:staticcheck // SA1019: the deprecated v1alpha service is the one under test
 		_, err = s2.Recv()
 	}
 	if status.Code(err) != codes.PermissionDenied {

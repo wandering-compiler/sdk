@@ -111,7 +111,9 @@ func (c *Credentials) learn(mds ...metadata.MD) string {
 func (c *Credentials) UnaryClientInterceptor() grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		var hdr, trl metadata.MD
-		call := append(opts[:len(opts):len(opts)], grpc.Header(&hdr), grpc.Trailer(&trl))
+		call := make([]grpc.CallOption, 0, len(opts)+2)
+		call = append(call, opts...)
+		call = append(call, grpc.Header(&hdr), grpc.Trailer(&trl))
 		used := c.currentNonce()
 		err := invoker(ctx, method, req, reply, cc, call...)
 		fresh := c.learn(hdr, trl)
@@ -164,9 +166,9 @@ func (s *nonceStream) RecvMsg(m any) error {
 	if err != nil {
 		s.once.Do(func() {
 			if md, herr := s.ClientStream.Header(); herr == nil {
-				s.c.learn(md, s.ClientStream.Trailer())
+				s.c.learn(md, s.Trailer())
 			} else {
-				s.c.learn(s.ClientStream.Trailer())
+				s.c.learn(s.Trailer())
 			}
 		})
 		return refusal(err)

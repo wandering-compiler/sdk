@@ -176,7 +176,7 @@ func TestPreflightExtensions_DoesNotProbeANonPostgresConnection(t *testing.T) {
 	}}
 
 	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard, 0)
-	defer ac.closeAll()
+	defer func() { _ = ac.closeAll() }()
 
 	if err := preflightExtensions(context.Background(), ac, pending); err != nil {
 		t.Fatalf("a non-Postgres connection was probed with Postgres syntax and refused: %v", err)
@@ -191,7 +191,7 @@ func TestPreflightExtensions_DoesNotProbeANonPostgresConnection(t *testing.T) {
 	// probed and still refuse, or this fix would have disabled the check.
 	pgFake := &extFake{failOn: "pg_extension"}
 	pgAc := newRunApplierCache(func(string) (Applier, error) { return pgFake, nil }, io.Discard, 0)
-	defer pgAc.closeAll()
+	defer func() { _ = pgAc.closeAll() }()
 	if err := preflightExtensions(context.Background(), pgAc, pending); err == nil {
 		t.Error("a Postgres connection missing a declared extension was NOT refused — the preflight stopped working")
 	}
@@ -242,7 +242,7 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 	inner := &extFake{failOn: "pg_extension"}
 	wrapped := wrappedFake{Applier: inner, unwrappable: true}
 	ac := newRunApplierCache(func(string) (Applier, error) { return wrapped, nil }, io.Discard, 0)
-	defer ac.closeAll()
+	defer func() { _ = ac.closeAll() }()
 
 	if err := preflightExtensions(context.Background(), ac, pending); err == nil {
 		t.Fatal("a WRAPPED Postgres applier was not probed — the preflight goes dark behind any decorator, against a real Postgres server")
@@ -253,7 +253,7 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 	innerMy := &extFake{failOn: "pg_extension", notPG: true}
 	wrappedMy := wrappedFake{Applier: innerMy, unwrappable: true}
 	myAc := newRunApplierCache(func(string) (Applier, error) { return wrappedMy, nil }, io.Discard, 0)
-	defer myAc.closeAll()
+	defer func() { _ = myAc.closeAll() }()
 	if err := preflightExtensions(context.Background(), myAc, pending); err != nil {
 		t.Errorf("a wrapped non-Postgres connection was probed with Postgres syntax: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 	// Postgres on a guess.
 	opaque := wrappedFake{Applier: &extFake{failOn: "pg_extension"}}
 	opAc := newRunApplierCache(func(string) (Applier, error) { return opaque, nil }, io.Discard, 0)
-	defer opAc.closeAll()
+	defer func() { _ = opAc.closeAll() }()
 	if err := preflightExtensions(context.Background(), opAc, pending); err != nil {
 		t.Errorf("an opaque decorator was probed on a guess: %v", err)
 	}

@@ -180,7 +180,7 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	teardownCtx, teardownCancel := context.WithCancel(context.Background())
 	defer teardownCancel()
 	done := make(chan struct{})
-	go func() {
+	go func() { //nolint:gosec // G118: teardown runs after ctx is done, so its context cannot derive from ctx
 		defer close(done)
 		wg.Wait()
 		close(errCh)
