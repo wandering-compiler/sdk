@@ -1,7 +1,8 @@
-// fetch wrapper — threads the auth header + decodes JSON or
-// raises a typed AdminApiError.
+// fetch wrapper — threads the auth header (or, with device identity on,
+// the DPoP signer) + decodes JSON or raises a typed AdminApiError.
 
-import { authHeader } from "./auth";
+import { authHeader, deviceFetch, deviceIdentity, pageBase } from "./auth";
+import type { DeviceCallOptions } from "./auth";
 import { MIME_PROTOBUF, codecFor } from "./wire";
 import type { WireCodec } from "./wire";
 
@@ -150,8 +151,17 @@ export async function apiGet<T>(endpoint: string, wire?: WireRefs): Promise<T> {
   return apiCall<T>("GET", endpoint, undefined, wire);
 }
 
-export async function apiPost<T>(endpoint: string, body: unknown, wire?: WireRefs): Promise<T> {
-  return apiCall<T>("POST", endpoint, body, wire);
+/**
+ * `device` marks a mint call (sign-in, OAuth exchange): with device identity
+ * on it carries an unbound proof; either way it carries no stored token.
+ */
+export async function apiPost<T>(
+  endpoint: string,
+  body: unknown,
+  wire?: WireRefs,
+  device?: DeviceCallOptions,
+): Promise<T> {
+  return apiCall<T>("POST", endpoint, body, wire, device);
 }
 
 export async function apiPatch<T>(endpoint: string, body: unknown, wire?: WireRefs): Promise<T> {
@@ -167,6 +177,7 @@ async function apiCall<T>(
   endpoint: string,
   body?: unknown,
   wire?: WireRefs,
+  device?: DeviceCallOptions,
 ): Promise<T> {
   // Per-CALL negotiation, not per-console: a codec exists for a message ref or
   // it does not, and an endpoint whose request or response is a well-known
@@ -186,16 +197,25 @@ async function apiCall<T>(
   if (respCodec) {
     headers["Accept"] = MIME_PROTOBUF;
   }
-  const auth = authHeader();
-  if (auth) {
-    headers["Authorization"] = auth;
-  }
-
-  const res = await fetch(endpoint, {
+  const init: RequestInit = {
     method,
     headers,
     body: encodeBody(body, reqCodec),
-  });
+  };
+  let res: Response;
+  if (deviceIdentity()) {
+    // The signer sets `Authorization: DPoP` and the proof itself. The URL is
+    // made absolute here: a proof names it, and the signer checks its origin.
+    res = await deviceFetch(new URL(endpoint, pageBase()).href, init, device);
+  } else {
+    // A mint carries no token on the Bearer path either: the code exchange
+    // may go to another origin, and a stored session has no business there.
+    const auth = device?.mint ? undefined : authHeader();
+    if (auth) {
+      headers["Authorization"] = auth;
+    }
+    res = await fetch(endpoint, init);
+  }
 
   const parsed = await decodeBody(res, respCodec);
 

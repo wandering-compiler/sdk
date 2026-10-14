@@ -102,6 +102,8 @@ jobs:
         working-directory: ts/admin-runtime
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # src/dpop is a copy of ts/dpop/src; it must be the signer ts-dpop tests.
+      - run: sh ../../tools/admin-dpop.sh check
       - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit -p .
       - run: npx eslint .

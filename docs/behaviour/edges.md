@@ -8,7 +8,7 @@ Packages: `go/lib/restgw` (with `go/lib/restgw/dpopgw`), `go/lib/ratelimit`, `go
 `go/lib/grpcclient` (dial side; server TLS is in [server.md](server.md)), `go/lib/egress/wire`,
 `go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`, `go/lib/dpop` (with
 `go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`); the TypeScript DPoP client is
-`ts/dpop` (`@w17/dpop`).
+`ts/dpop` (`@w17/dpop`), and the admin runtime's use of it is in `ts/admin-runtime`.
 
 Much of the gateway's behaviour is decided by the generated code that calls these helpers:
 which middleware is mounted and in which order, which routes skip authentication, and whether a
@@ -87,6 +87,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E37 | DPoP at the REST edge | `go/lib/restgw/dpopgw` — `Gate`, `CachedAuthFunc`, `NewWSAuth`, `WatchStreamBinding`; `go/lib/restgw` — `CachedAuthFuncWithDecision`, `WithDPoPCORS` |
 | E38 | Shared DPoP replay stores | `go/lib/dpop/dpopstore` — `RedisJTIStore`, `SQLJTIStore` |
 | E39 | DPoP TypeScript client | `ts/dpop` — `createDpopFetch`, `createProof`, `jwkThumbprint`, `IndexedDBKeyStore`, `issueStreamTicket` |
+| E40 | DPoP in the admin runtime | `ts/admin-runtime/src` — `auth.ts` (`configureAuth`, `deviceFetch`), `api.ts`, `oauth.ts`, `Login.tsx`, `App.tsx` |
 
 ---
 
@@ -1467,7 +1468,7 @@ WebCrypto, its RFC 7638 thumbprint (the device id), RFC 9449 proofs, and a fetch
 attaches `Authorization: DPoP <token>` and a proof to a request with a token (a proof alone to
 a mint call, nothing to any other request), follows `DPoP-Nonce`, retries once on
 `use_dpop_nonce`, and turns `DEVICE_REVOKED` / `SESSION_EXPIRED` refusals into typed errors.
-The generated TypeScript transport and the admin runtime are meant to embed this source.
+The generated TypeScript transport and the admin runtime (E40) embed this source.
 
 **Configuration.**
 
@@ -1530,3 +1531,67 @@ bound request), E3 (the error envelope a refusal is read from).
 - `FileKeyStore` writes the private key unencrypted (mode 0600); a browser has no use for it.
 - Which calls are mint calls is the caller's to say; a tokenless sign-in call that is neither
   marked nor under `mintPaths` reaches the server with no proof and is refused there.
+
+---
+
+## E40. DPoP in the admin runtime
+
+**Code.** `ts/admin-runtime/src` (`@w17/admin-runtime`) — `auth.ts` (`configureAuth`, `deviceFetch`, `onDeviceRevoked`, `getToken`, `setToken`, `clearToken`, `takeFragmentParam`), `api.ts` (`apiCall`, the one fetch site), `oauth.ts` (`consumeRedirect`, `federatedStartURL`, `exchangeCode`, `challengeOf`), `Login.tsx`, `App.tsx`; `src/dpop/` is a verbatim copy of the browser half of `ts/dpop/src` (E39), kept by `tools/admin-dpop.sh sync` and checked by `tools/admin-dpop.sh check` (`make check-admin-dpop`, CI job `ts`). Tests are vitest under `ts/admin-runtime/src`, named below as `file › test`.
+
+**Purpose.** The admin SPA's side of device identity: when the admin it serves binds sessions
+to a device key, every request is signed by E39's fetch wrapper with this browser profile's
+key, the sign-in is a mint call, a revoked device sends the operator back to sign in, and a
+federated sign-in comes back with a one-time code the SPA redeems itself (PKCE) instead of a
+session in the URL.
+
+**Configuration** (the admin spec's `auth`, written by the platform's admin generator).
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `auth.dpop` | absent = off | Only `true` turns signing on. Off, every request is the Bearer request it was before this feature, and `public_computer` is neither offered nor honoured |
+| `auth.oauth_exchange_endpoint` | absent | A path on the admin's origin or an absolute http(s) URL; its origin is added to the signer's allowed origins. Set, sign-in buttons start a PKCE flow and `#code=` is redeemed there; absent, the buttons are plain links and `#token=` is read (Bearer only) |
+| `configureAuth(auth, { keyStore })` | `defaultKeyStore()` (E39) | Called by `App` once, before the fragment is read. `keyStore` is a test seam |
+
+**Shares.** E39 (the signer, key stores and refusal errors it embeds), E3 (refusals are read
+from the error envelope), E22 (the plugin's OAuth callback answers with a browser redirect
+carrying `#code=`), the `w17_admin_token` key in `localStorage` / `sessionStorage` with every
+tab of the origin, and the IndexedDB device key with every page of the origin.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E40.1 | With `auth.dpop` absent or false, a request MUST be the Bearer request it was before — same URL as given, same init, no `DPoP` header — and `public_computer` MUST be neither offered nor honoured | `device.test.ts › sends Bearer, no proof, to the endpoint as given…`, `› ignores the public-computer choice…`, `› is what configureAuth returns to…`, `devicelogin.test.tsx › offers no public-computer box, and signs in with Bearer…` |
+| E40.2 | With it on, a request with a token MUST carry `Authorization: DPoP <token>` and a proof for its method, absolute URL and token, signed by the stored device key; Bearer MUST never be sent; a request without a token that is not a mint MUST carry no DPoP headers | `device.test.ts › signs a request: Authorization DPoP and a proof…`, `› never sends Bearer`, `› sends a request without a token and not a mint with no DPoP headers` |
+| E40.3 | The password sign-in and the code exchange MUST be mint calls: an unbound proof and no `Authorization`, even with a token stored; the next ordinary request MUST carry the token again | `device.test.ts › makes a sign-in a mint call…`, `devicelogin.test.tsx › signs in with a mint proof and no token…` |
+| E40.4 | The token MUST be sent only to the admin's origin and the exchange endpoint's; a request elsewhere MUST be refused before anything is sent | `device.test.ts › refuses to send the token to another origin`, `› signs for the exchange endpoint's origin when it is another` |
+| E40.5 | `DEVICE_REVOKED` on a request sent under the current sign-in MUST discard the key it was raised for, clear the session, and tell `onDeviceRevoked` listeners once for any number of requests in flight; `App` MUST then show the sign-in screen saying why | `device.test.ts › ends the session once, discards the key, and tells the app`, `devicelogin.test.tsx › sends the user back to sign in when the device was revoked…` |
+| E40.6 | A `DEVICE_REVOKED` answer to a request sent before a later sign-in — in this tab or (by the storage event) another — MUST NOT end the newer session | `device.test.ts › does not end a session the user signed in to after the refused request was sent`, `› does not end a session another tab signed in to meanwhile` |
+| E40.7 | A password sign-in refused with `DEVICE_REVOKED` (the stored key was revoked) MUST be re-sent once, with the same body, on a fresh key, without telling the listeners; the code exchange (one-time input) MUST be sent once and the key discarded | `device.test.ts › re-sends a password sign-in once, on a fresh key…`, `› sends a one-time mint (the code exchange) once, and discards the key`, `devicelogin.test.tsx › signs in on a fresh key when the stored one was revoked` |
+| E40.8 | `SESSION_EXPIRED` MUST surface as the 401 it is, keeping the key and telling no listener | `device.test.ts › is the 401 it is…` |
+| E40.9 | A sign-in whose response says `public_computer: true` MUST keep the token in `sessionStorage` only, remove the profile's `localStorage` token, survive a reload of the same tab, and follow no other tab; a later normal sign-in MUST move it back to `localStorage`. `public_computer` MUST be sent only when the operator ticked the box | `device.test.ts › public computer: sessionStorage only…`, `› a normal sign-in replaces a public-computer one…`, `› a reload in the same tab restores…`, `› a public-computer session follows no other tab`, `devicelogin.test.tsx › signs in with a mint proof…`, `› sends no public_computer when the box is not ticked` |
+| E40.10 | Every sign-in (`setToken`) and another tab's sign-in (the storage event) MUST make this tab sign with the key the store holds (`reloadKey`); storage events for other keys or other storage areas MUST be ignored | `device.test.ts › another tab's sign-in: this tab signs with the key the store holds now`, `› a sign-in makes this tab sign with the key the store holds`, `› ignores storage events for other keys and other storage areas` |
+| E40.11 | Once the key store has fallen back to memory — or where there is no IndexedDB at all — the tab MUST use only its own token, kept in its memory, and ignore other tabs' sign-ins: it MUST NOT read or write another tab's token in the shared `localStorage` / `sessionStorage` slots, nor clear it. A token this tab wrote to a shared slot before an IndexedDB failure (bound to the key the fallback is seeded with) MUST stay this tab's session, and its sign-out MUST clear it while the slot still holds it | `device.test.ts › an IndexedDB that fails keeps the key, and every later token, in this tab's memory`, `› a tab whose IndexedDB fails neither signs with nor clears the other tabs' token`, `› an IndexedDB that fails mid-session keeps this tab's session, and its sign-out clears it`, `› a fallen-back tab's sign-out leaves a token another tab wrote since`, `› no IndexedDB at all: the key is this tab's, and so is every token` |
+| E40.12 | With an exchange endpoint, a sign-in button MUST add the S256 `code_challenge` of a fresh 43-character verifier to its `start_url`, keeping the verifier (and the public-computer choice) in this tab's `sessionStorage`; the exchange MUST send `{code, code_verifier}` (plus `public_computer` when chosen), use the verifier once, and store the session it returns | `device.test.ts › adds an S256 challenge to the start URL…`, `› sends no public_computer the user did not ask for`, `› uses the verifier once`, `devicelogin.test.tsx › starts a federated sign-in with a PKCE challenge…`, `› redeems a #code= the callback sent back…` |
+| E40.13 | A code this tab holds no verifier for MUST NOT be sent, and the sign-in screen MUST say why; an exchange answer without a token MUST store nothing | `device.test.ts › refuses a code this tab holds no verifier for…`, `› refuses an exchange without an endpoint, or whose answer has no token`, `devicelogin.test.tsx › shows why a code could not be redeemed` |
+| E40.14 | `#code=` and `#token=` MUST leave the URL before the router reads it, without a history entry, keeping the rest of the fragment; with device identity on a `#token=` MUST be dropped, not stored, and the operator asked to sign in again; `#code=` MUST be left alone on an admin without an exchange endpoint | `device.test.ts › takes #code= out of the URL for the exchange`, `› drops a #token= on a device-binding admin…`, `› still stores a #token= on a Bearer admin`, `› leaves #code= alone…`, `devicelogin.test.tsx › drops a #token= and asks the user to sign in again`, `authredirect.test.ts` |
+| E40.15 | A code exchange MUST NOT carry a stored token on the Bearer path either; the Bearer password sign-in stays the request it was | `device.test.ts › sends no stored Bearer token with a code exchange`, `devicelogin.test.tsx › offers no public-computer box, and signs in with Bearer…` |
+| E40.16 | With an exchange endpoint a sign-in option MUST be a button, not a link to the bare `start_url`; one start MUST run at a time (the buttons disabled meanwhile); without WebCrypto the screen MUST say that a sign-in needs HTTPS, and any other failed start MUST be shown | `devicelogin.test.tsx › starts a federated sign-in with a PKCE challenge…`, `› starts one federated sign-in at a time`, `› explains that a sign-in needs HTTPS where there is no WebCrypto`, `› says why a federated sign-in could not start` |
+| E40.17 | `src/dpop` MUST be byte-identical to `ts/dpop/src` for every browser file and hold no other file | `tools/admin-dpop.sh check` (CI job `ts`) |
+
+**Deliberate limits.**
+- Whether to sign is the spec's to say (`auth.dpop`); the SPA never probes the server. A
+  binding admin whose spec lacks the flag gets Bearer requests and refuses them.
+- WebCrypto (`crypto.subtle`) is required with device identity on: a page served over plain
+  HTTP from anything but `localhost` has none, and every signed request fails.
+- The admin has no token refresh, so there is nothing to keep off the mints.
+- `public_computer` is sent under that name: a login method without the field refuses an
+  unknown one, so the box is offered only on a device-binding admin and sent only when ticked.
+- The fragment parameter the code arrives in is `code` (the plugin's
+  `browser_redirect.token_param`); the session parameter stays `token`.
+- A verifier lives in the tab that started the flow; a sign-in finished in another tab or
+  window has to be started again there.
+- Signing is tested in jsdom against a scripted fetch that verifies each proof with WebCrypto,
+  with `MemoryKeyStore` or `fake-indexeddb`, not in a browser.
+- A token minted with a key another tab replaced meanwhile is kept: the replacement happens only
+  after that key was revoked, so the token is refused anyway and the operator signs in again.

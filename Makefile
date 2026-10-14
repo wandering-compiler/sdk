@@ -4,6 +4,9 @@
 #   make pb        regenerate go/pb from go/proto
 #   make check-pb  fail when the committed go/pb is not what make pb writes
 #
+#   make sync-admin-dpop   copy ts/dpop/src into ts/admin-runtime/src/dpop
+#   make check-admin-dpop  fail when that copy has drifted (CI, ts job)
+#
 # go/pb/consoleapi/rpc is the exception: the console's own API definition
 # generates it, so it has no source here — the console's maintainers refresh it
 # with a pull request when that API changes. make pb leaves it alone.
@@ -38,3 +41,10 @@ check-pb: pb
 		echo "check-pb: go/pb differs from what make pb writes — run make pb and commit"; exit 1; \
 	fi
 	@echo "check-pb ok: go/pb matches go/proto"
+
+.PHONY: sync-admin-dpop check-admin-dpop
+sync-admin-dpop:
+	@sh tools/admin-dpop.sh sync
+
+check-admin-dpop:
+	@sh tools/admin-dpop.sh check

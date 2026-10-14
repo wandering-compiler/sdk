@@ -248,6 +248,23 @@ export interface AdminAuthSpec {
    * false would blank its login page.
    */
   password_sign_in?: boolean;
+  /**
+   * Device identity (DPoP, RFC 9449): the admin binds every session to the
+   * browser's device key, so the SPA signs each request with it and sends
+   * `Authorization: DPoP` instead of `Bearer`. Set by the generator when the
+   * admin's identity lookup binds devices. Absent or false: Bearer, as
+   * before — a non-binding admin may refuse a DPoP token.
+   */
+  dpop?: boolean;
+  /**
+   * Where a federated sign-in's one-time code is redeemed (the auth plugin's
+   * OAuthExchange, `POST …/auth/oauth/exchange`), as a path on the admin's
+   * origin or an absolute http(s) URL. Set, the sign-in buttons start a PKCE
+   * flow (`code_challenge` added to `start_url`) and the SPA redeems the
+   * `#code=` the callback sends back. Absent: the buttons are plain links and
+   * a `#token=` fragment is read, as before (Bearer admins only).
+   */
+  oauth_exchange_endpoint?: string;
 }
 
 /** One federated entry point on the login page. */
