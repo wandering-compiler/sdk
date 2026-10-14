@@ -124,6 +124,24 @@ jobs:
       - run: npx eslint .
       - run: npm test
 
+  # The storage proxy (rs/storage-proxy): the gates its published image is
+  # built behind — formatting, clippy with every warning an error, the unit and
+  # integration tests, and the RustSec advisory scan of Cargo.lock.
+  rust:
+    runs-on: ubuntu-latest
+    container: rust:1-bookworm
+    defaults:
+      run:
+        working-directory: rs/storage-proxy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup component add clippy rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked
+      - run: cargo install --locked cargo-audit
+      - run: cargo audit
+
   # The adoption test: every public example generated, built and run against
   # this commit of the SDK. Needs the W17_TOKEN secret, which a pull request
   # from a fork does not get, so it runs for this repository's own branches.

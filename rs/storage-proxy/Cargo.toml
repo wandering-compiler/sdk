@@ -1,0 +1,53 @@
+[package]
+name = "storage-proxy"
+version = "0.1.0-rc1"
+edition = "2021"
+description = "Contract-blind L7 gRPC proxy that pins distributed-transaction RPCs to the replica that opened the tx. Routes by :path + w17-conn-id metadata only; never decodes protobuf message bodies."
+license = "MIT"
+
+[lib]
+name = "storage_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "storage-proxy"
+path = "src/main.rs"
+
+[dependencies]
+hyper = { version = "1", features = ["http2", "server", "client"] }
+hyper-util = { version = "0.1", features = ["http2", "client-legacy", "tokio", "server"] }
+http = "1"
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+
+# TLS for both proxy legs (re-encrypting hop: terminate client TLS, re-dial
+# backends over TLS). rustls with the `ring` crypto provider — pure-Rust, no
+# OpenSSL/aws-lc-rs (no cmake/nasm at build, no extra .so at runtime),
+# matching the slim image. The rustls configs are built by hand (src/tls.rs)
+# to mirror the Go grpcserver/grpcclient TLS posture exactly.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http2", "tls12"] }
+rustls-pemfile = "2"
+rustls-native-certs = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# OpenTelemetry: metrics (always on when an OTLP endpoint is set) +
+# opt-in/sampled per-RPC spans + W3C trace-context propagation. OTLP
+# export over gRPC (tonic). Pinned to the 0.27 line (mutually compatible).
+opentelemetry = { version = "0.27", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "trace", "metrics"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
+
+[dev-dependencies]
+# Mint a self-signed leaf in-process for the TLS round-trip integration test.
+rcgen = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

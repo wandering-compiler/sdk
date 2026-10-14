@@ -1,0 +1,58 @@
+# The storage proxy's image: built and pushed to
+# ghcr.io/wandering-compiler/storage-proxy:<version> when a
+# `storage-proxy/v<version>` tag is pushed. Generated manifests name that image
+# with an exact tag, so a published tag is never rebuilt or moved: the workflow
+# refuses a version that is already there.
+name: storage-proxy image
+
+on:
+  push:
+    tags: ["storage-proxy/v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/wandering-compiler/storage-proxy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Version
+        id: version
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#storage-proxy/v}"
+          crate="$(sed -n 's/^version = "\(.*\)"$/\1/p' rs/storage-proxy/Cargo.toml | head -n1)"
+          if [ "$v" != "$crate" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} says $v, rs/storage-proxy/Cargo.toml says $crate"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Refuse a tag that is already published
+        run: |
+          if docker manifest inspect "$IMAGE:${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::$IMAGE:${{ steps.version.outputs.version }} is already published — a released tag is never rebuilt; bump the version"
+            exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and push
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.version=${{ steps.version.outputs.version }}" \
+            --label "org.opencontainers.image.licenses=MIT" \
+            -t "$IMAGE:${{ steps.version.outputs.version }}" \
+            --push rs/storage-proxy
