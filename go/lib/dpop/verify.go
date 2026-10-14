@@ -61,7 +61,9 @@ var (
 
 // ErrUnavailable is not a verdict on the proof: the replay store could not
 // record it — it is full ([ErrJTIStoreFull], also matched) or failing. The
-// request is refused, never accepted unrecorded, and the caller answers
+// request is refused, never accepted unrecorded (the one opt-in exception is
+// an unbound proof meeting a full mint store, [Config.MintFull]), and the
+// caller answers
 // 503 Service Unavailable with Retry-After (gRPC: codes.Unavailable), which
 // [HTTPStatus], [GRPCCode] and [SetChallenge] do. Entries expire within a
 // nonce lifetime, so the condition clears by itself.
@@ -128,6 +130,23 @@ type Config struct {
 	// means a [MemoryJTIStore] of [DefaultMaxMintJTIs] when JTIs is nil too;
 	// setting JTIs without MintJTIs, or both to the same store, is an error.
 	MintJTIs JTIStore
+	// MintFull is what an unbound (mint) proof meets when MintJTIs is full
+	// ([ErrJTIStoreFull]). The default, [MintFullRefuse], refuses it with
+	// [ErrUnavailable] like any other unrecordable proof.
+	// [MintFullAcceptUnrecorded] accepts it without recording its jti and
+	// reports that in [Result.MintUnrecorded], so the caller can log it:
+	// replay protection for minting becomes best-effort, which a deployment
+	// may prefer to a mint outage, since a replayed unbound proof only yields
+	// a token bound to a key the replayer does not hold. It never applies to
+	// bound proofs, nor to a store that fails rather than being full.
+	//
+	// MintFullRefuse is the recommended setting. Under
+	// MintFullAcceptUnrecorded a replayed unbound proof reaches the mint
+	// handler again, so everything that handler does runs again: a one-time
+	// or MFA code is burned, lockout counters move, Device rows are written,
+	// events are emitted. Use it only behind per-address limits on the mint
+	// endpoints, with an alert on Result.MintUnrecorded.
+	MintFull MintFullPolicy
 	// ReuseWindow is how long a proof may be presented again byte for byte.
 	// 0 means [DefaultReuseWindow]; a negative value turns reuse off (every
 	// repeat is a replay); more than [MaxReuseWindow] is an error.
@@ -141,6 +160,33 @@ type Config struct {
 	SignatureCacheEntries int
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+}
+
+// MintFullPolicy is [Config.MintFull].
+type MintFullPolicy int
+
+const (
+	// MintFullRefuse refuses an unbound proof the full mint store cannot
+	// record ([ErrUnavailable] wrapping [ErrJTIStoreFull]). The default, and
+	// the recommended setting.
+	MintFullRefuse MintFullPolicy = iota
+	// MintFullAcceptUnrecorded accepts an unbound proof the full mint store
+	// cannot record, without recording it, and sets [Result.MintUnrecorded].
+	// A replay then re-runs the mint handler (see [Config.MintFull]); use it
+	// only behind per-address mint limits, alerting on MintUnrecorded.
+	MintFullAcceptUnrecorded
+)
+
+// Result is what [Verifier.VerifyResult] established for one request.
+type Result struct {
+	// Thumbprint is the RFC 7638 thumbprint of the key that signed the
+	// proof.
+	Thumbprint string
+	// MintUnrecorded is true when an unbound proof was accepted without its
+	// jti being recorded, because the mint store was full and
+	// [Config.MintFull] is [MintFullAcceptUnrecorded]. The proof could be
+	// presented again until the store has room; log it.
+	MintUnrecorded bool
 }
 
 // Request is what the verifier needs from one request.
@@ -171,6 +217,7 @@ type Verifier struct {
 	nonces   NonceSource
 	jtis     JTIStore
 	mintJTIs JTIStore
+	mintFull MintFullPolicy
 	reuse    time.Duration
 	iat      time.Duration
 	jtiTTL   time.Duration
@@ -192,6 +239,7 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		nonces:   cfg.Nonces,
 		jtis:     cfg.JTIs,
 		mintJTIs: cfg.MintJTIs,
+		mintFull: cfg.MintFull,
 		reuse:    cfg.ReuseWindow,
 		iat:      cfg.IATWindow,
 		now:      cfg.Now,
@@ -211,6 +259,11 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		v.iat = DefaultIATWindow
 	case v.iat < 0:
 		return nil, fmt.Errorf("dpop: IATWindow %s is negative", cfg.IATWindow)
+	}
+	switch cfg.MintFull {
+	case MintFullRefuse, MintFullAcceptUnrecorded:
+	default:
+		return nil, fmt.Errorf("dpop: unknown MintFull policy %d", cfg.MintFull)
 	}
 	switch {
 	case cfg.JTIs != nil && cfg.MintJTIs == nil:
@@ -268,45 +321,62 @@ var privateJWKMembers = []string{"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
 // Verify checks one request's proof and returns the RFC 7638 thumbprint of
 // the key that signed it. See the package documentation for the order of the
 // checks and [ErrMissingProof] and its siblings for the refusals.
+//
+// With [Config.MintFull] set to [MintFullAcceptUnrecorded], Verify may accept
+// an unbound proof it did not record; [Verifier.VerifyResult] says when.
 func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
+	r, err := v.VerifyResult(ctx, req)
+	return r.Thumbprint, err
+}
+
+// VerifyResult is [Verifier.Verify] returning the whole [Result].
+func (v *Verifier) VerifyResult(ctx context.Context, req Request) (Result, error) {
+	thumb, unrecorded, err := v.verify(ctx, req)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Thumbprint: thumb, MintUnrecorded: unrecorded}, nil
+}
+
+func (v *Verifier) verify(ctx context.Context, req Request) (string, bool, error) {
 	now := v.now()
 
 	// 1. Header.
 	switch {
 	case len(req.Proofs) == 0 || (len(req.Proofs) == 1 && req.Proofs[0] == ""):
-		return "", ErrMissingProof
+		return "", false, ErrMissingProof
 	case len(req.Proofs) > 1:
-		return "", fmt.Errorf("%w: %d DPoP headers", ErrMalformed, len(req.Proofs))
+		return "", false, fmt.Errorf("%w: %d DPoP headers", ErrMalformed, len(req.Proofs))
 	}
 	proof := req.Proofs[0]
 	if len(proof) > MaxProofBytes {
-		return "", fmt.Errorf("%w: proof longer than %d bytes", ErrMalformed, MaxProofBytes)
+		return "", false, fmt.Errorf("%w: proof longer than %d bytes", ErrMalformed, MaxProofBytes)
 	}
 	alg, err := checkHeader(proof)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	jws, err := jose.ParseSignedCompact(proof, AllowedAlgs)
 	if err != nil {
 		var unexpected *jose.ErrUnexpectedSignatureAlgorithm
 		if errors.As(err, &unexpected) {
-			return "", fmt.Errorf("%w: %w", ErrBadAlg, err)
+			return "", false, fmt.Errorf("%w: %w", ErrBadAlg, err)
 		}
-		return "", fmt.Errorf("%w: %w", ErrMalformed, err)
+		return "", false, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 	if len(jws.Signatures) != 1 {
-		return "", fmt.Errorf("%w: want one signature", ErrMalformed)
+		return "", false, fmt.Errorf("%w: want one signature", ErrMalformed)
 	}
 	jwk := jws.Signatures[0].Header.JSONWebKey
 	if jwk == nil {
-		return "", fmt.Errorf("%w: no jwk", ErrBadKey)
+		return "", false, fmt.Errorf("%w: no jwk", ErrBadKey)
 	}
 	if !keyFitsAlg(jwk.Key, alg) {
-		return "", fmt.Errorf("%w: %T does not fit %s", ErrBadKey, jwk.Key, alg)
+		return "", false, fmt.Errorf("%w: %T does not fit %s", ErrBadKey, jwk.Key, alg)
 	}
 	thumb, err := Thumbprint(jwk.Key)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrBadKey, err)
+		return "", false, fmt.Errorf("%w: %w", ErrBadKey, err)
 	}
 	sum := sha256.Sum256([]byte(proof))
 	hash := hex.EncodeToString(sum[:])
@@ -319,12 +389,12 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 	} else {
 		payload, err = jws.Verify(jwk)
 		if err != nil {
-			return "", fmt.Errorf("%w: %w", ErrBadSignature, err)
+			return "", false, fmt.Errorf("%w: %w", ErrBadSignature, err)
 		}
 	}
 	c, err := parseClaims(payload)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	// 3. Nonce, or iat when nonces are off.
@@ -332,75 +402,81 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (string, error) {
 		if c.Nonce == nil || *c.Nonce == "" || !v.nonces.Valid(*c.Nonce, thumb) {
 			fresh, err := v.nonces.Issue(thumb)
 			if err != nil {
-				return "", fmt.Errorf("dpop: issue nonce: %w", err)
+				return "", false, fmt.Errorf("dpop: issue nonce: %w", err)
 			}
-			return "", &NonceError{Nonce: fresh, Missing: c.Nonce == nil || *c.Nonce == ""}
+			return "", false, &NonceError{Nonce: fresh, Missing: c.Nonce == nil || *c.Nonce == ""}
 		}
 	} else {
 		iat := time.Unix(*c.IAT, 0)
 		if d := now.Sub(iat); d > v.iat || d < -v.iat {
-			return "", fmt.Errorf("%w: iat %s from now", ErrStaleProof, -d)
+			return "", false, fmt.Errorf("%w: iat %s from now", ErrStaleProof, -d)
 		}
 	}
 
 	// 4. htm and htu.
 	if !strings.HasPrefix(req.Path, "/") {
-		return "", fmt.Errorf("%w: request path %q does not start with /", ErrHTUMismatch, req.Path)
+		return "", false, fmt.Errorf("%w: request path %q does not start with /", ErrHTUMismatch, req.Path)
 	}
 	if *c.HTM != req.Method {
-		return "", fmt.Errorf("%w: htm %q, request %q", ErrHTMMismatch, *c.HTM, req.Method)
+		return "", false, fmt.Errorf("%w: htm %q, request %q", ErrHTMMismatch, *c.HTM, req.Method)
 	}
 	path, _, _ := strings.Cut(req.Path, "?")
 	want, err := NormalizeHTU(v.origin + path)
 	if err != nil {
-		return "", fmt.Errorf("%w: request path %q: %w", ErrHTUMismatch, req.Path, err)
+		return "", false, fmt.Errorf("%w: request path %q: %w", ErrHTUMismatch, req.Path, err)
 	}
 	if gotHTU, err := NormalizeHTU(*c.HTU); err != nil || gotHTU != want {
-		return "", fmt.Errorf("%w: htu %q, want %q", ErrHTUMismatch, *c.HTU, want)
+		return "", false, fmt.Errorf("%w: htu %q, want %q", ErrHTUMismatch, *c.HTU, want)
 	}
 
 	// 5. ath.
 	if req.AccessToken != "" {
 		if c.ATH == nil || subtle.ConstantTimeCompare([]byte(*c.ATH), []byte(AccessTokenHash(req.AccessToken))) != 1 {
-			return "", ErrATHMismatch
+			return "", false, ErrATHMismatch
 		}
 	} else if c.ATH != nil {
-		return "", fmt.Errorf("%w: ath present without an access token", ErrATHMismatch)
+		return "", false, fmt.Errorf("%w: ath present without an access token", ErrATHMismatch)
 	}
 
 	// 6. Binding.
 	switch {
 	case req.Binding != "":
 		if subtle.ConstantTimeCompare([]byte(req.Binding), []byte(thumb)) != 1 {
-			return "", ErrBindingMismatch
+			return "", false, ErrBindingMismatch
 		}
 	case req.AccessToken != "":
-		return "", fmt.Errorf("%w: access token presented with no binding to check", ErrBindingMismatch)
+		return "", false, fmt.Errorf("%w: access token presented with no binding to check", ErrBindingMismatch)
 	}
 
 	// 7. jti, last: only a proof that passed every other check is recorded,
 	// so refused proofs never take room in the store. The insert is atomic;
 	// a jti already there is a replay unless it is this very proof inside
 	// its reuse window.
-	store := v.jtis
-	if req.Binding == "" {
+	store, mint := v.jtis, req.Binding == ""
+	if mint {
 		store = v.mintJTIs // unbound: kept apart, see Config.MintJTIs
 	}
 	rec := JTIRecord{Thumbprint: thumb, ProofHash: hash, FirstSeen: now}
 	got, created, err := store.Record(ctx, thumb+"\x00"+*c.JTI, rec, v.jtiTTL)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrUnavailable, err)
+	unrecorded := false
+	switch {
+	case err != nil && mint && v.mintFull == MintFullAcceptUnrecorded && errors.Is(err, ErrJTIStoreFull):
+		// Best-effort replay protection for minting (Config.MintFull):
+		// accepted, not recorded, and reported to the caller.
+		unrecorded, created = true, true
+	case err != nil:
+		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if !created {
 		if got.ProofHash != hash || v.reuse <= 0 || now.Sub(got.FirstSeen) >= v.reuse {
-			return "", ErrReplay
+			return "", false, ErrReplay
 		}
 	}
 
 	if !verified {
 		v.remember(hash, now)
 	}
-	return thumb, nil
+	return thumb, unrecorded, nil
 }
 
 // checkHeader reads the protected header before go-jose parses the JWS, to

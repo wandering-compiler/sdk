@@ -42,9 +42,9 @@ describe("createDpopFetch: what a request carries", () => {
     expect(s.body).toBe("{}");
   });
 
-  it("sends no Authorization and no ath without a token", async () => {
+  it("sends no Authorization and no ath on a mint call without a token", async () => {
     const { f, server } = setup(undefined, null);
-    await f(`${ORIGIN}/v1/sign-in`, { method: "POST" });
+    await f(`${ORIGIN}/v1/sign-in`, { method: "POST", mint: true });
     const s = server.sent[0]!;
     expect(s.req.headers.has("Authorization")).toBe(false);
     expect(s.proof!.claims).not.toHaveProperty("ath");
@@ -80,11 +80,89 @@ describe("createDpopFetch: what a request carries", () => {
       save: (p) => inner.save(p),
       clear: () => inner.clear(),
     };
-    const f = createDpopFetch({ origins: [ORIGIN], keyStore: store, fetch: server.fetch });
+    const f = createDpopFetch({
+      origins: [ORIGIN],
+      keyStore: store,
+      getToken: () => "tok",
+      fetch: server.fetch,
+    });
     await expect(f(`${ORIGIN}/r`)).rejects.toThrow("store down");
     expect(server.sent).toHaveLength(0);
     fail = false;
     expect((await f(`${ORIGIN}/r`)).status).toBe(200);
+  });
+});
+
+describe("createDpopFetch: a proof only with a token or for a mint call", () => {
+  it("sends a request without a token and not a mint call with no DPoP headers, loading no key", async () => {
+    for (const token of [null, ""]) {
+      const { f, server, store } = setup(undefined, token);
+      const load = vi.spyOn(store, "load");
+      const resp = await f(`${ORIGIN}/v1/public`, { method: "POST", body: "b" });
+      expect(resp.status).toBe(200);
+      const s = server.sent[0]!;
+      expect(s.req.headers.has("DPoP")).toBe(false);
+      expect(s.req.headers.has("Authorization")).toBe(false);
+      expect(s.body).toBe("b");
+      expect(s.req.redirect).toBe("error");
+      expect(load).not.toHaveBeenCalled();
+      expect(await store.load()).toBeUndefined();
+    }
+  });
+
+  it("signs a mint call marked on the call, and a token request", async () => {
+    let token: string | null = null;
+    const server = scriptedFetch(() => ok());
+    const f = createDpopFetch({
+      origins: [ORIGIN],
+      keyStore: new MemoryKeyStore(),
+      getToken: () => token,
+      fetch: server.fetch,
+    });
+    await f(`${ORIGIN}/v1/sign-in`, { method: "POST", mint: true });
+    await f(`${ORIGIN}/v1/sign-in`, { method: "POST", mint: false });
+    token = "tok";
+    await f(`${ORIGIN}/v1/things`);
+    expect(server.sent.map((s) => s.proofRaw !== null)).toEqual([true, false, true]);
+    expect(server.sent[0]!.proof!.claims).not.toHaveProperty("ath");
+    expect(server.sent[2]!.req.headers.get("Authorization")).toBe("DPoP tok");
+  });
+
+  it("signs a request to a configured mint path, by its exact path", async () => {
+    const server = scriptedFetch(() => ok());
+    const f = createDpopFetch({
+      origins: [ORIGIN],
+      keyStore: new MemoryKeyStore(),
+      mintPaths: ["/v1/sign-in", "/v1/token"],
+      fetch: server.fetch,
+    });
+    await f(`${ORIGIN}/v1/sign-in?next=%2F`, { method: "POST" });
+    await f(new Request(`${ORIGIN}/v1/token`, { method: "POST" }));
+    await f(`${ORIGIN}/v1/sign-in/other`, { method: "POST" });
+    await f(`${ORIGIN}/v1/token/`);
+    await f(`${ORIGIN}/v1/public`);
+    expect(server.sent.map((s) => s.proofRaw !== null)).toEqual([true, true, false, false, false]);
+    expect(server.sent[0]!.proof!.claims.htu).toBe(`${ORIGIN}/v1/sign-in`);
+  });
+
+  it("refuses a mint path that is not a path", () => {
+    for (const p of ["v1/sign-in", "https://api.example.com/v1/sign-in", "/a?b", "/a#b"]) {
+      expect(
+        () =>
+          createDpopFetch({ origins: [ORIGIN], keyStore: new MemoryKeyStore(), mintPaths: [p] }),
+        p,
+      ).toThrow(/mint path/);
+    }
+  });
+
+  it("returns a refusal of an unsigned request as a plain response", async () => {
+    const { f } = setup(
+      () =>
+        json(401, { error: { code: "UNAUTHENTICATED", details: [{ code: "DEVICE_REVOKED" }] } }),
+      null,
+    );
+    const resp = await f(`${ORIGIN}/v1/public`);
+    expect(resp.status).toBe(401);
   });
 });
 
@@ -211,6 +289,7 @@ describe("createDpopFetch: nonces", () => {
     const f = createDpopFetch({
       origins: [ORIGIN, other],
       keyStore: new MemoryKeyStore(),
+      getToken: () => "tok",
       fetch: server.fetch,
     });
     await f(`${ORIGIN}/a`);
@@ -400,7 +479,12 @@ describe("createDpopFetch: discarding a key", () => {
       },
     };
     const server = scriptedFetch(() => ok());
-    const f = createDpopFetch({ origins: [ORIGIN], keyStore: store, fetch: server.fetch });
+    const f = createDpopFetch({
+      origins: [ORIGIN],
+      keyStore: store,
+      getToken: () => "tok",
+      fetch: server.fetch,
+    });
     const revokedKey = (await f.key()).thumbprint;
 
     const discarding = f.discardKey(revokedKey);

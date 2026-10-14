@@ -3,6 +3,7 @@ package dpopstore_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,9 +24,9 @@ import (
 // moving.
 func sqlHarness(db *sql.DB, dialect dpopstore.Dialect) harness {
 	return harness{
-		newStore: func(t *testing.T, maxPerKey int) dpop.JTIStore {
+		newStore: func(t *testing.T, maxPerKey, maxTotal int) dpop.JTIStore {
 			table := "w17_dpop_jti_test_" + randomSuffix(t)
-			s, err := dpopstore.NewSQLJTIStore(db, dialect, dpopstore.WithSQLTable(table), dpopstore.WithSQLMaxPerKey(maxPerKey), dpopstore.WithSQLPruneEvery(1))
+			s, err := dpopstore.NewSQLJTIStore(db, dialect, dpopstore.WithSQLTable(table), dpopstore.WithSQLMaxPerKey(maxPerKey), dpopstore.WithSQLMaxEntries(maxTotal), dpopstore.WithSQLPruneEvery(1))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,6 +93,41 @@ func TestSQLJTIStore_PrunesExpiredRows(t *testing.T) {
 	}
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+dpopstore.DefaultSQLTable).Scan(&n); err != nil || n != 0 {
 		t.Errorf("Prune left %d rows (%v)", n, err)
+	}
+}
+
+// The total cap holds between recounts: the store adds its own inserts to the
+// count it keeps, and counts again once SQLRecountEvery has passed, which is
+// when expired rows give their room back.
+func TestSQLJTIStore_TotalCapBetweenRecounts(t *testing.T) {
+	db := openSQLite(t)
+	s, err := dpopstore.NewSQLJTIStore(db, dpopstore.SQLite, dpopstore.WithSQLMaxEntries(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now()
+	rec := func(tp string, at time.Time) error {
+		_, _, err := s.Record(ctx, tp+"\x00j", dpop.JTIRecord{Thumbprint: tp, ProofHash: tp, FirstSeen: at}, 100*time.Millisecond)
+		return err
+	}
+	for _, tp := range []string{"a", "b", "c"} {
+		if err := rec(tp, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rec("d", base); !errors.Is(err, dpop.ErrJTIStoreFull) {
+		t.Fatalf("over the cap between recounts: %v, want ErrJTIStoreFull", err)
+	}
+	// Expired, but not counted again yet: still full.
+	if err := rec("d", base.Add(500*time.Millisecond)); !errors.Is(err, dpop.ErrJTIStoreFull) {
+		t.Fatalf("before the recount: %v, want ErrJTIStoreFull", err)
+	}
+	if err := rec("d", base.Add(dpopstore.SQLRecountEvery)); err != nil {
+		t.Fatalf("after the recount the expired rows still count: %v", err)
 	}
 }
 

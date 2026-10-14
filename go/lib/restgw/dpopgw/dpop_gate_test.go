@@ -328,6 +328,36 @@ func TestDPoPGate_OptionalAndMint(t *testing.T) {
 	}
 }
 
+// A mint request the full mint store could not record passes only with
+// MintFullAcceptUnrecorded, and the gate reports it on the context for the
+// handler to log.
+func TestDPoPGate_MintUnrecordedIsReported(t *testing.T) {
+	v, err := dpop.NewVerifier(dpop.Config{
+		Origin:   dpOrigin,
+		JTIs:     dpop.NewMemoryJTIStore(0),
+		MintJTIs: dpop.NewMemoryJTIStore(1),
+		MintFull: dpop.MintFullAcceptUnrecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := dpGate(t, v, &bindings{})
+	rec, seen := serve(g, dpReq(t, dpKey(t), http.MethodPost, "/v1/devices", "", ""))
+	if rec.Code != http.StatusOK || seen == nil || seen.MintUnrecorded {
+		t.Fatalf("recorded mint request: status %d, verified %+v", rec.Code, seen)
+	}
+	key := dpKey(t)
+	rec, seen = serve(g, dpReq(t, key, http.MethodPost, "/v1/devices", "", ""))
+	if rec.Code != http.StatusOK || seen == nil || !seen.MintUnrecorded || seen.Thumbprint != key.Thumbprint() || seen.DeviceID() != "" {
+		t.Fatalf("unrecorded mint request: status %d, verified %+v", rec.Code, seen)
+	}
+
+	refuse := dpGate(t, dpVerifier(t, nil), &bindings{})
+	if _, seen := serve(refuse, dpReq(t, dpKey(t), http.MethodPost, "/v1/devices", "", "")); seen == nil || seen.MintUnrecorded {
+		t.Fatalf("default verifier reported an unrecorded mint: %+v", seen)
+	}
+}
+
 // SetDeviceMetadata stamps x-w17-device on the outgoing side and removes it
 // for an empty thumbprint, without touching the caller's metadata.
 func TestSetDeviceMetadata(t *testing.T) {

@@ -5,45 +5,52 @@
   "jwk": {
     "kty": "EC",
     "crv": "P-256",
-    "x": "Io5Ji7jj7AVOwWz0z2XS7lKSQ1r1oj_wwcbFzUk0das",
-    "y": "c5jixmsPEa_YhfsiZz0rcD9RBVPulRv5v1mSV7E5hHI"
+    "x": "67ZYdkQLqqEBaPZR2UM5h4xrx_Qza7gih62qlYTWGD0",
+    "y": "mcmdnFDzUSdjrLlYpHfQybovPHshdSZwxCzQr0kr1Ac"
   },
-  "thumbprint": "uK6nCVBtXF55gEu80WY3oo3ptsO1T714GeXRfbgNVIc",
+  "thumbprint": "6KvRZAJCjqEdLcXTirQLtyXUst0gWIi9kJqKTsFJDXQ",
   "cases": [
     {
       "name": "bound GET with a query",
       "method": "GET",
       "path": "/v1/things?page=2",
       "token": "fixture-access-token.Kz~8mXK1",
-      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiSW81Smk3amo3QVZPd1d6MHoyWFM3bEtTUTFyMW9qX3d3Y2JGelVrMGRhcyIsInkiOiJjNWppeG1zUEVhX1loZnNpWnowcmNEOVJCVlB1bFJ2NXYxbVNWN0U1aEhJIn19.eyJqdGkiOiJ0SFRKQkpsNmxkVzVRM0drSFRzcFdnIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvdGhpbmdzIiwiaWF0IjoxNzkxOTEwNTgxLCJhdGgiOiJKMnMwTFlScmtmbXRGV1Z3eXIyUzF1S1dDT3BucXZ1b0Fya0k5SFVPY2FnIiwibm9uY2UiOiJ0cy1maXh0dXJlLW5vbmNlIn0.IWVOdC2Dpxbd961m4tx23tLpsZKXd0jxsw-5VW8cNuXD5yT-WACk_T5fCs0vuq8S6NxdTIGXW67Fz0BM8Y4lrw"
+      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiNjdaWWRrUUxxcUVCYVBaUjJVTTVoNHhyeF9RemE3Z2loNjJxbFlUV0dEMCIsInkiOiJtY21kbkZEelVTZGpyTGxZcEhmUXlib3ZQSHNoZFNad3hDelFyMGtyMUFjIn19.eyJqdGkiOiJ3X25RQ0h6Yk9EMkpOdDB2WW9veGpBIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvdGhpbmdzIiwiaWF0IjoxNzkxOTIxOTI0LCJhdGgiOiJKMnMwTFlScmtmbXRGV1Z3eXIyUzF1S1dDT3BucXZ1b0Fya0k5SFVPY2FnIiwibm9uY2UiOiJ0cy1maXh0dXJlLW5vbmNlIn0.UGLZ8LTusnvW7UAQhfbe_HKvrvpsVf1zu_aPT1L0d_rKdKBlMor4ufyFuSYG0bJGa8KZN0r35m9wFDJno_65Vg"
     },
     {
       "name": "unbound POST, no token",
       "method": "POST",
       "path": "/v1/sign-in",
       "token": "",
-      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiSW81Smk3amo3QVZPd1d6MHoyWFM3bEtTUTFyMW9qX3d3Y2JGelVrMGRhcyIsInkiOiJjNWppeG1zUEVhX1loZnNpWnowcmNEOVJCVlB1bFJ2NXYxbVNWN0U1aEhJIn19.eyJqdGkiOiJMTEQtNlp4RVdjQU1zMDEwZnViV1dBIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUuY29tL3YxL3NpZ24taW4iLCJpYXQiOjE3OTE5MTA1ODEsIm5vbmNlIjoidHMtZml4dHVyZS1ub25jZSJ9.yh23HTekQl6Pg4XrqhtXRXgUy89qRT7AxT6oL0lJG4LNb7QpNkuJ37X11hr3RGWl3DXl0_ZlyBy-_W6dEYKqaw"
+      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiNjdaWWRrUUxxcUVCYVBaUjJVTTVoNHhyeF9RemE3Z2loNjJxbFlUV0dEMCIsInkiOiJtY21kbkZEelVTZGpyTGxZcEhmUXlib3ZQSHNoZFNad3hDelFyMGtyMUFjIn19.eyJqdGkiOiJuMmlJNm40WFBCWjZNb094aW00cmF3IiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUuY29tL3YxL3NpZ24taW4iLCJpYXQiOjE3OTE5MjE5MjQsIm5vbmNlIjoidHMtZml4dHVyZS1ub25jZSJ9.gR2g92O6CtS1RYcqI9gkf_mnVE9gnPmYSi1Xa-YBmo821foxv7TBRrfBP2My4Hstw3-DUtXlX5kVrvfCjTlH_g"
     },
     {
       "name": "htu with upper case and default port",
       "method": "DELETE",
       "path": "/v1/things/42",
       "token": "fixture-access-token.Kz~8mXK1",
-      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiSW81Smk3amo3QVZPd1d6MHoyWFM3bEtTUTFyMW9qX3d3Y2JGelVrMGRhcyIsInkiOiJjNWppeG1zUEVhX1loZnNpWnowcmNEOVJCVlB1bFJ2NXYxbVNWN0U1aEhJIn19.eyJqdGkiOiJobVkzVVdfVHBjX0VfTUdIQnM5UU9nIiwiaHRtIjoiREVMRVRFIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvdGhpbmdzLzQyIiwiaWF0IjoxNzkxOTEwNTgxLCJhdGgiOiJKMnMwTFlScmtmbXRGV1Z3eXIyUzF1S1dDT3BucXZ1b0Fya0k5SFVPY2FnIiwibm9uY2UiOiJ0cy1maXh0dXJlLW5vbmNlIn0.UgEGYIHYeENRc1nc5K_KnxYnwe6f-paR6u09baqF-WewuF2S1IE78GEyAE7It9S7QwcL5fCCg3zu_I8eq5rc-A"
+      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiNjdaWWRrUUxxcUVCYVBaUjJVTTVoNHhyeF9RemE3Z2loNjJxbFlUV0dEMCIsInkiOiJtY21kbkZEelVTZGpyTGxZcEhmUXlib3ZQSHNoZFNad3hDelFyMGtyMUFjIn19.eyJqdGkiOiJ3dFF5c3d4NzVQQ0VMdFQtWUtCWFBBIiwiaHRtIjoiREVMRVRFIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvdGhpbmdzLzQyIiwiaWF0IjoxNzkxOTIxOTI0LCJhdGgiOiJKMnMwTFlScmtmbXRGV1Z3eXIyUzF1S1dDT3BucXZ1b0Fya0k5SFVPY2FnIiwibm9uY2UiOiJ0cy1maXh0dXJlLW5vbmNlIn0.2f82p-yplGSOHH8beh1E4i-5vnJSgkWlKSV_a6XzYIkkAspEn6ZHQL3mlIKcj-XwmOUNYIMw_-psVnQfj5AQ4g"
     },
     {
       "name": "percent-encoded path",
       "method": "PUT",
       "path": "/v1/files/a%20b%2Fc",
       "token": "fixture-access-token.Kz~8mXK1",
-      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiSW81Smk3amo3QVZPd1d6MHoyWFM3bEtTUTFyMW9qX3d3Y2JGelVrMGRhcyIsInkiOiJjNWppeG1zUEVhX1loZnNpWnowcmNEOVJCVlB1bFJ2NXYxbVNWN0U1aEhJIn19.eyJqdGkiOiIyRzZxMm4xdHFNaVRiSEFjN2VLdmZRIiwiaHRtIjoiUFVUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvZmlsZXMvYSUyMGIlMkZjIiwiaWF0IjoxNzkxOTEwNTgxLCJhdGgiOiJKMnMwTFlScmtmbXRGV1Z3eXIyUzF1S1dDT3BucXZ1b0Fya0k5SFVPY2FnIiwibm9uY2UiOiJ0cy1maXh0dXJlLW5vbmNlIn0.XqH6C4kFBv-zxSqQ_Wvc5d5Ywv8-rKyaBdDpRAW3FMmnsCuv0rXCgPJrpKhZaGv5N1a2M43l3zyc8LPYS-DXGQ"
+      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiNjdaWWRrUUxxcUVCYVBaUjJVTTVoNHhyeF9RemE3Z2loNjJxbFlUV0dEMCIsInkiOiJtY21kbkZEelVTZGpyTGxZcEhmUXlib3ZQSHNoZFNad3hDelFyMGtyMUFjIn19.eyJqdGkiOiJLNll1d3NjVGNoZ3dFTm5zc2dJN0FBIiwiaHRtIjoiUFVUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvZmlsZXMvYSUyMGIlMkZjIiwiaWF0IjoxNzkxOTIxOTI0LCJhdGgiOiJKMnMwTFlScmtmbXRGV1Z3eXIyUzF1S1dDT3BucXZ1b0Fya0k5SFVPY2FnIiwibm9uY2UiOiJ0cy1maXh0dXJlLW5vbmNlIn0.SRgPnY-t9uQHYjT1rw65HS06oiODHpCmQdlR754HVeDmMYyPU0pRvsApYguvoK_ePvScZUVXOWaDGMKcQXwbuA"
     },
     {
       "name": "fetch wrapper retry, ticket request",
       "method": "POST",
       "path": "/api/ws/ticket",
       "token": "fixture-access-token.Kz~8mXK1",
-      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiSW81Smk3amo3QVZPd1d6MHoyWFM3bEtTUTFyMW9qX3d3Y2JGelVrMGRhcyIsInkiOiJjNWppeG1zUEVhX1loZnNpWnowcmNEOVJCVlB1bFJ2NXYxbVNWN0U1aEhJIn19.eyJqdGkiOiIzcWIyczV4XzJoSEw0VzdfQnliamRnIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUuY29tL2FwaS93cy90aWNrZXQiLCJpYXQiOjE3OTE5MTA1ODEsImF0aCI6IkoyczBMWVJya2ZtdEZXVnd5cjJTMXVLV0NPcG5xdnVvQXJrSTlIVU9jYWciLCJub25jZSI6InRzLWZpeHR1cmUtbm9uY2UifQ.7Nw_fKO5-Y3LZcttso4gQAVwGxhvappX7ONouXjLAgAJiJ-Kn6mADUjrDRtwSvhVRO6N-bFggFoO-bShoDJS7Q"
+      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiNjdaWWRrUUxxcUVCYVBaUjJVTTVoNHhyeF9RemE3Z2loNjJxbFlUV0dEMCIsInkiOiJtY21kbkZEelVTZGpyTGxZcEhmUXlib3ZQSHNoZFNad3hDelFyMGtyMUFjIn19.eyJqdGkiOiJzSF9Pb0VYM0tZMmFTOVhWb1NLOHRBIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUuY29tL2FwaS93cy90aWNrZXQiLCJpYXQiOjE3OTE5MjE5MjQsImF0aCI6IkoyczBMWVJya2ZtdEZXVnd5cjJTMXVLV0NPcG5xdnVvQXJrSTlIVU9jYWciLCJub25jZSI6InRzLWZpeHR1cmUtbm9uY2UifQ._n1INLGzMD3btuDWZiPJ603xPhSqOEE7Ju-lgz-Dx4JCOq_h8AUgJU_NHRAPIdZMyea710PBTywBhPGHOv4dHQ"
+    },
+    {
+      "name": "fetch wrapper mint call, no token",
+      "method": "POST",
+      "path": "/v1/sign-in",
+      "token": "",
+      "proof": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiNjdaWWRrUUxxcUVCYVBaUjJVTTVoNHhyeF9RemE3Z2loNjJxbFlUV0dEMCIsInkiOiJtY21kbkZEelVTZGpyTGxZcEhmUXlib3ZQSHNoZFNad3hDelFyMGtyMUFjIn19.eyJqdGkiOiJEd3VxeFJFQ1FBZ0s1N1lRRjZCWEhnIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUuY29tL3YxL3NpZ24taW4iLCJpYXQiOjE3OTE5MjE5MjQsIm5vbmNlIjoidHMtZml4dHVyZS1ub25jZSJ9.NQsvF7qm0IvrHYJMhFekEgBoJK71Nhgl__wfZ1_bsa18NKqMWEdCOAUWsDGxGQ_5wbyOVhwQ5Qn27Z6k9Sp8ew"
     }
   ],
   "thumbprints": [
@@ -51,10 +58,10 @@
       "jwk": {
         "kty": "EC",
         "crv": "P-256",
-        "x": "Io5Ji7jj7AVOwWz0z2XS7lKSQ1r1oj_wwcbFzUk0das",
-        "y": "c5jixmsPEa_YhfsiZz0rcD9RBVPulRv5v1mSV7E5hHI"
+        "x": "67ZYdkQLqqEBaPZR2UM5h4xrx_Qza7gih62qlYTWGD0",
+        "y": "mcmdnFDzUSdjrLlYpHfQybovPHshdSZwxCzQr0kr1Ac"
       },
-      "thumbprint": "uK6nCVBtXF55gEu80WY3oo3ptsO1T714GeXRfbgNVIc"
+      "thumbprint": "6KvRZAJCjqEdLcXTirQLtyXUst0gWIi9kJqKTsFJDXQ"
     },
     {
       "jwk": {

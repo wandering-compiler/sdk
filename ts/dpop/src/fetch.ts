@@ -9,7 +9,12 @@ export const HEADER_PROOF = "DPoP";
 export const HEADER_NONCE = "DPoP-Nonce";
 export const AUTH_SCHEME = "DPoP";
 
-/** Returns the access token for the next request, or nothing for a request without one (its proof has no `ath`). */
+/**
+ * Returns the access token for the next request, or nothing for a request
+ * without one: that request carries a proof (with no `ath`) only when it is a
+ * mint call ({@link DpopRequestInit.mint}, {@link DpopFetchOptions.mintPaths}),
+ * and no DPoP headers otherwise.
+ */
 export type TokenSource = () => string | null | undefined | Promise<string | null | undefined>;
 
 /** Options of {@link createDpopFetch}. */
@@ -22,17 +27,36 @@ export interface DpopFetchOptions {
   origins: readonly string[];
   /** Where the device key lives. The key is loaded (or made) on the first request. */
   keyStore: KeyStore;
-  /** The access token source. Omitted: requests carry a proof and no token (a sign-in endpoint). */
+  /** The access token source. Omitted: no request carries a token. */
   getToken?: TokenSource;
+  /**
+   * Paths (`/v1/sign-in`, compared with the request URL's path exactly) whose
+   * requests are mint calls: without a token they still carry a proof, which
+   * the server binds the new credential to. See {@link DpopRequestInit.mint}
+   * for marking a single call.
+   */
+  mintPaths?: readonly string[];
   /** The fetch that sends. Default `globalThis.fetch`. */
   fetch?: typeof fetch;
   /** The clock proofs take iat from, for tests. Default `Date.now`. */
   now?: () => number;
 }
 
+/** The init of a {@link DpopFetch} call: fetch's, plus the mint marker. */
+export interface DpopRequestInit extends RequestInit {
+  /**
+   * Marks the call as a mint call (sign-in, token issue): without a token it
+   * still carries an unbound proof. A call with neither a token nor this
+   * marker (nor a path in {@link DpopFetchOptions.mintPaths}) carries no DPoP
+   * headers at all, so anonymous browsing costs no proof and no place in the
+   * server's mint replay store.
+   */
+  mint?: boolean;
+}
+
 /** A fetch-compatible function with the device key's lifecycle attached. */
 export interface DpopFetch {
-  (input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  (input: RequestInfo | URL, init?: DpopRequestInit): Promise<Response>;
   /** The device key, loaded or made on first use. Its thumbprint is the device id. */
   key(): Promise<DpopKey>;
   /**
@@ -225,9 +249,11 @@ async function refusalReason(resp: Response): Promise<RefusalReason | undefined>
 /**
  * Wraps fetch for a DPoP-protected API.
  *
- * For a request to one of `origins` it adds `Authorization: DPoP <token>`
- * (when `getToken` returns one) and a fresh `DPoP` proof whose htu is the
- * request URL without query and fragment. It remembers the last `DPoP-Nonce`
+ * For a request to one of `origins` with a token (from `getToken`) it adds
+ * `Authorization: DPoP <token>` and a fresh `DPoP` proof whose htu is the
+ * request URL without query and fragment; a mint call without a token (`{
+ * mint: true }` or a path in `mintPaths`) gets the proof alone; any other
+ * request is sent with no DPoP headers, and no key is loaded for it. It remembers the last `DPoP-Nonce`
  * each origin sent, on any response, and puts it in the next proof. A 401
  * with `WWW-Authenticate: DPoP error="use_dpop_nonce"` and a new nonce is
  * retried exactly once, with the same body; a second refusal is returned.
@@ -250,6 +276,13 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     const n = configuredOrigin(o);
     if (!n) throw new Error(`dpop: origin ${JSON.stringify(o)} is not scheme://host[:port]`);
     allowed.add(n);
+  }
+  const mintPaths = new Set<string>();
+  for (const p of opts.mintPaths ?? []) {
+    if (!p.startsWith("/") || /[?#]/.test(p)) {
+      throw new Error(`dpop: mint path ${JSON.stringify(p)} is not a path starting with /`);
+    }
+    mintPaths.add(new URL(p, "http://x").pathname);
   }
   const store = opts.keyStore;
   const send =
@@ -323,13 +356,14 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     return fresh;
   };
 
-  const dpopFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const dpopFetch = async (input: RequestInfo | URL, init?: DpopRequestInit): Promise<Response> => {
+    const { mint, ...fetchInit } = init ?? {};
     // A Request of our own, so the caller's object is never modified. The
     // first attempt and the retry each send a clone of it. The origin check
     // reads the URL this Request resolved, never the input: a URL-like object
     // that is not a URL, or a relative URL under a <base href>, resolves only
     // here, and the check must see exactly what will be sent.
-    const req = new Request(input, { ...init, redirect: "error" });
+    const req = new Request(input, { ...fetchInit, redirect: "error" });
     const origin = new URL(req.url).origin;
     if (!allowed.has(origin)) {
       await req.body?.cancel().catch(() => undefined);
@@ -340,6 +374,10 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
       throw new Error("dpop: a no-cors request cannot carry a DPoP proof");
     }
     const token = (await opts.getToken?.()) || undefined;
+    if (!token && mint !== true && !mintPaths.has(new URL(req.url).pathname)) {
+      // No credential and no mint call: nothing to prove.
+      return send(req);
+    }
     const k = await key();
     const used = nonces.get(origin);
 

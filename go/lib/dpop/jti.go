@@ -39,7 +39,8 @@ type JTIStore interface {
 // ErrJTIStoreFull is returned by [MemoryJTIStore.Record] when the store, or
 // the share of it one key may hold, is at its limit and no entry has
 // expired. The verifier fails closed: the request is refused, never accepted
-// unrecorded.
+// unrecorded — unless the caller opted into [MintFullAcceptUnrecorded] and
+// the proof is unbound.
 var ErrJTIStoreFull = errors.New("dpop: jti store full")
 
 // Default limits of a [MemoryJTIStore].

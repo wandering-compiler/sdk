@@ -1187,7 +1187,7 @@ code.
 
 ## E35. DPoP proofs and verifier
 
-**Code.** `go/lib/dpop` — `key.go` (`Signer`, `Key`, `GenerateKey`, `NewKey`, `ParseKeyPEM`, `LoadKeyFile`, `Key.SaveFile`, `Thumbprint`, `AccessTokenHash`), `proof.go` (`NewProof`, `SignClaims`, `NormalizeHTU`), `verify.go` (`Verifier`, `Config`, `Request`, `NonceError`, the `Err*` refusal causes), `nonce.go` (`NonceSource`, `HMACNonces`), `jti.go` (`JTIStore`, `MemoryJTIStore`), `challenge.go` (`SetChallenge`, `HTTPStatus`, `GRPCCode`, `ChallengeMetadata`, `WWWAuthenticate`, `IsUseNonceChallenge`, `AccessToken`). JWS and JWK handling is `github.com/go-jose/go-jose/v4`.
+**Code.** `go/lib/dpop` — `key.go` (`Signer`, `Key`, `GenerateKey`, `NewKey`, `ParseKeyPEM`, `LoadKeyFile`, `Key.SaveFile`, `Thumbprint`, `AccessTokenHash`), `proof.go` (`NewProof`, `SignClaims`, `NormalizeHTU`), `verify.go` (`Verifier`, `Verify`, `VerifyResult`, `Result`, `Config`, `MintFullPolicy`, `Request`, `NonceError`, the `Err*` refusal causes), `nonce.go` (`NonceSource`, `HMACNonces`), `jti.go` (`JTIStore`, `MemoryJTIStore`), `challenge.go` (`SetChallenge`, `HTTPStatus`, `GRPCCode`, `ChallengeMetadata`, `WWWAuthenticate`, `IsUseNonceChallenge`, `AccessToken`). JWS and JWK handling is `github.com/go-jose/go-jose/v4`.
 
 **Purpose.** Binds a credential to a device key per RFC 9449. The device id is the RFC 7638
 thumbprint of the device's public key; every request carries a proof signed with that key, and
@@ -1203,6 +1203,7 @@ the HTTP request or gRPC metadata and answers refusals itself.
 | `Config.Nonces` | nil (nonces off) | nil → `iat` must lie within `IATWindow`; set → `iat` is not checked and every proof needs a valid nonce |
 | `Config.JTIs` | `NewMemoryJTIStore(0)` | Records bound proofs. The memory store is per process: correct only with one replica |
 | `Config.MintJTIs` | `NewMemoryJTIStore(DefaultMaxMintJTIs)` = 50 000 | Records unbound (mint) proofs, apart from `JTIs`. `JTIs` set without `MintJTIs`, or both the same store → error at construction |
+| `Config.MintFull` | `MintFullRefuse` (recommended) | `MintFullAcceptUnrecorded`: an unbound proof the full mint store cannot record (`ErrJTIStoreFull`) is accepted unrecorded and `Result.MintUnrecorded` is set; never for bound proofs or a failing store. Any other value → error at construction |
 | `Config.ReuseWindow` | 30 s | Negative → reuse off; above 300 s → error at construction |
 | `Config.IATWindow` | 60 s | Negative → error; ignored with nonces |
 | `Config.SignatureCacheEntries` | 10 000 | A full cache stops caching; it never refuses |
@@ -1241,7 +1242,7 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 | E35.17 | htu MUST equal the configured origin plus the request path after normalisation (scheme and host case, default port, no query or fragment); a gRPC call MUST be POST to origin + full method name | `TestVerify_HTUNormalisation`, `TestNormalizeHTU`, `TestVerify_GRPCTarget`, `TestVerify_RefusalCauses` |
 | E35.18 | `ath` MUST match the presented token, MUST be present when a token is, and MUST be absent when none is; a token presented with no binding to check MUST be refused | `TestVerify_RefusalCauses` |
 | E35.19 | A full or failing jti store MUST fail closed with `ErrUnavailable` (wrapping the cause, e.g. `ErrJTIStoreFull`), never accept unrecorded; expired entries MUST free room, in expiry order, without scanning the store | `TestVerify_FullJTIStoreFailsClosed`, `TestMemoryJTIStore_ExpiresInOrder` |
-| E35.20 | Invalid configuration (no origin, origin with a path, reuse window above 300 s, negative iat window, `JTIs` without `MintJTIs`, one store for both) MUST be refused at construction | `TestNewVerifier_Config` |
+| E35.20 | Invalid configuration (no origin, origin with a path, reuse window above 300 s, negative iat window, `JTIs` without `MintJTIs`, one store for both, an unknown `MintFull` policy) MUST be refused at construction | `TestNewVerifier_Config`, `TestVerify_MintFullRefuseIsTheDefault` |
 | E35.21 | A refusal MUST map to the RFC 9449 challenge: `use_dpop_nonce` plus `DPoP-Nonce` for a nonce refusal, `invalid_token` for ath and binding, `invalid_dpop_proof` otherwise, `no-store`; gRPC carries the same values in the trailer | `TestChallenge_Headers`, `TestIsUseNonceChallenge`, `TestAccessToken` |
 | E35.22 | Keys MUST be P-256 or Ed25519 (others refused); a saved key MUST be mode 0600, replacing any existing file atomically; any `crypto.Signer` (KMS, HSM) MUST be usable as the signer | `TestKey_GenerateBothTypes`, `TestKey_UnsupportedKeysRefused`, `TestKey_SaveLoadRoundTrip`, `TestSigner_ExternalCryptoSigner` |
 | E35.23 | Proofs refused for any reason (wrong htu, ath or binding, signed with the sender's own key and fresh jtis) MUST take no room in the jti store, so they cannot lock out legitimate proofs | `TestVerify_RefusedProofsDoNotFillJTIStore` |
@@ -1252,6 +1253,8 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 | E35.28 | Unbound (mint) proofs MUST be recorded apart from bound ones: a flood of unbound proofs from throwaway keys can fill only the mint store, bound proofs MUST keep passing, and minting MUST recover as entries expire | `TestVerify_MintFloodCannotStarveBoundProofs` |
 | E35.29 | `ErrUnavailable` MUST map to 503 with `Retry-After` and no challenge (gRPC `Unavailable`); every proof refusal to 401 (`Unauthenticated`); anything else to 500 (`Internal`) | `TestHTTPStatusAndGRPCCode`, `TestVerify_FullJTIStoreFailsClosed` |
 | E35.30 | For arbitrary header and claims JSON signed with a valid key, an accepted proof MUST carry that key's thumbprint, match the request's method and token, and MUST NOT be accepted a second time with reuse off | `FuzzVerifySigned` (valid-proof seeds run in `go test`) |
+| E35.31 | With `MintFullAcceptUnrecorded`, an unbound proof the full mint store cannot record MUST be accepted without being recorded and reported in `Result.MintUnrecorded`; a recorded unbound proof MUST still be a replay | `TestVerify_MintFullAcceptUnrecorded` |
+| E35.32 | A bound proof meeting a full store, and any proof meeting a failing store, MUST fail closed whatever `MintFull` says; by default (`MintFullRefuse`) a full mint store MUST refuse and nothing MUST be reported unrecorded | `TestVerify_MintFullAcceptUnrecorded`, `TestVerify_MintFullRefuseIsTheDefault` |
 
 **Deliberate limits.**
 - `MemoryJTIStore` is per process. With more than one replica a proof accepted by one can be
@@ -1259,7 +1262,14 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 - A mint endpoint (no access token, no binding) accepts a proof from any key, and keys cost
   nothing to make: there the per-key share does not bound a flood. Such a flood can only fill
   the mint store (stalling minting, never authenticated requests), but mint endpoints still
-  need rate limiting in front of the verifier.
+  need rate limiting in front of the verifier. `MintFullAcceptUnrecorded` keeps minting up
+  through such a flood at the price of best-effort replay protection for unbound proofs: a
+  proof accepted unrecorded can be presented again while the store stays full. That replay
+  yields only a credential bound to a key the replayer does not hold, but it re-runs the mint
+  handler and everything it does: a one-time or MFA code is burned, lockout counters move,
+  Device rows are written, events are emitted. `MintFullRefuse` is the default and the
+  recommended setting; use `MintFullAcceptUnrecorded` only behind per-address limits on the
+  mint endpoints, with an alert on `Result.MintUnrecorded`.
 - The verifier does not answer the request; the caller sets the challenge with `SetChallenge` or
   `ChallengeMetadata` and writes its own status and body.
 - `Request.Path` is compared as given; percent-encoding case is not normalised.
@@ -1268,11 +1278,12 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 
 ## E36. DPoP client helpers
 
-**Code.** `go/lib/dpop/dpopclient` — `transport.go` (`Transport`, `TokenFunc`), `grpc.go` (`Credentials`, `UnaryClientInterceptor`, `StreamClientInterceptor`, `DialOptions`), `refusal.go` (`RefusedError`, `Refusal`, `ErrDeviceRevoked`, `ErrSessionExpired`).
+**Code.** `go/lib/dpop/dpopclient` — `transport.go` (`Transport`, `TokenFunc`, `WithMint`, `MintContext`, `IsMint`), `grpc.go` (`Credentials`, `UnaryClientInterceptor`, `StreamClientInterceptor`, `DialOptions`), `refusal.go` (`RefusedError`, `Refusal`, `ErrDeviceRevoked`, `ErrSessionExpired`).
 
 **Purpose.** Attaches `Authorization: DPoP <token>` and a fresh proof to every outgoing HTTP
-request or gRPC call, follows the server's nonces, and retries once when the server asks for a
-fresh nonce.
+request or gRPC call that carries a token, a proof alone to a mint call (a sign-in or token
+request the caller marks), follows the server's nonces, and retries once when the server asks
+for a fresh nonce. Anything else goes out with no DPoP headers.
 
 **Configuration.**
 
@@ -1281,7 +1292,8 @@ fresh nonce.
 | `Transport.Base` | `http.DefaultTransport` | — |
 | `Transport.Origins` | required | Origins that may receive the token and proofs. Empty or all invalid → every request fails with `ErrNoOrigins`; `NewTransport` refuses them up front. A request to any other origin fails with `ErrOriginNotAllowed` |
 | `Transport.Signer`, `Credentials.Signer` | required | nil → every request fails |
-| `Transport.Token`, `Credentials.Token` | nil (no token, no `ath`) | An error fails the request |
+| `Transport.Token`, `Credentials.Token` | nil (no token, no `ath`) | An error fails the request. `""` or nil: the request carries DPoP only when it is a mint call |
+| `dpopclient.WithMint(req)`, `dpopclient.MintContext(ctx)` | unmarked | Marks an HTTP request (a shallow copy) or every call made with `ctx` as a mint call: without a token it still carries an unbound proof |
 | `Credentials.Origin` | required | The origin the server is configured with; htu = origin + full method |
 | `Credentials.AllowInsecure` | false | false → gRPC refuses to send the credentials over a connection without transport security |
 
@@ -1295,7 +1307,7 @@ fresh nonce.
 | E36.2 | A server that keeps asking for a nonce MUST get exactly one retry; the second refusal is returned | `TestTransport_RetriesExactlyOnce`, `TestCredentials_UnaryRetriesExactlyOnce` |
 | E36.3 | A request whose body cannot be replayed MUST NOT be retried, but its nonce MUST still be learned | `TestTransport_UnreplayableBodyNotRetried` |
 | E36.4 | A nonce sent on a success MUST be used by the next proof | `TestTransport_LearnsNonceFromSuccess` |
-| E36.5 | Without a token no `Authorization` MUST be sent and the proof MUST carry no `ath` | `TestTransport_NoTokenNoATH` |
+| E36.5 | Without a token a mint call MUST send no `Authorization` and a proof with no `ath` | `TestTransport_NoTokenNoATH`, `TestCredentials_ProofOnlyWithTokenOrMint` |
 | E36.6 | The caller's request MUST NOT be modified | `TestTransport_DoesNotMutateRequest` |
 | E36.7 | A gRPC unary `Unauthenticated` refusal with `use_dpop_nonce` and `dpop-nonce` in the trailer MUST be retried once; the proof MUST be POST to origin + full method name | `TestCredentials_UnaryNonceRetryOnce` |
 | E36.8 | A gRPC stream MUST NOT be retried, but the nonce from its refusal MUST be learned for the next call | `TestCredentials_StreamLearnsNonce` |
@@ -1303,6 +1315,7 @@ fresh nonce.
 | E36.10 | `Refusal` MUST recognise those reasons in a 401 or 403 error envelope and leave the body readable from the start | `TestRefusal_HTTPEnvelope` |
 | E36.11 | The gRPC credentials MUST require transport security unless `AllowInsecure` is set | `TestCredentials_RequireTransportSecurity` |
 | E36.12 | The token and proofs MUST go only to the configured origins, with no implicit default: a request elsewhere, a cross-host redirect included, MUST fail with `ErrOriginNotAllowed` before anything is sent or the token fetched, and a Transport without valid origins MUST send nothing | `TestTransport_OtherOriginsGetNoCredentials` |
+| E36.13 | A request or call with no token that is not marked as a mint call MUST carry no DPoP header or metadata (no proof, no `Authorization`); a token or the mint marker MUST make it carry a proof; `WithMint` MUST NOT mark the caller's request | `TestTransport_ProofOnlyWithTokenOrMint`, `TestCredentials_ProofOnlyWithTokenOrMint` |
 
 **Deliberate limits.**
 - Only 401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"` triggers the HTTP retry; a 400
@@ -1311,12 +1324,14 @@ fresh nonce.
   have sent.
 - The HTTP nonce is remembered per origin; the gRPC nonce per `Credentials`.
 - Refusal reasons are read from the `w17.ErrorDetail` code only.
+- Which calls are mint calls is the caller's to say (`WithMint`, `MintContext`): a tokenless
+  sign-in call left unmarked reaches the server with no proof and is refused there.
 
 ---
 
 ## E37. DPoP at the REST edge
 
-**Code.** `go/lib/restgw/dpopgw` — `dpop_gate.go` (`Gate`, `NewGate`, `WithBinding`, `WithRequired`, `BindingFunc`, `Verified` (`DeviceID`), `FromContext`, `Error`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedAuthFunc`), `dpop_ticket.go` (`TicketPrincipal`, `NewWSAuth`, `WSAuthConfig`, `WSAuth` (`Thumbprint`, `Verified`), `TicketThumbprintLabel`, `ErrTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `BindingCheck`); `go/lib/restgw` — `authcache_decision.go` (`CachedAuthFuncWithDecision`, `AuthCacheDecision`, the hook `dpopgw.CachedAuthFunc` is built on), `cors.go` (`WithDPoPCORS`). `lib/restgw` and every other pre-existing package import nothing of `lib/dpop` or go-jose: a consumer that does not use DPoP gets no new dependency.
+**Code.** `go/lib/restgw/dpopgw` — `dpop_gate.go` (`Gate`, `NewGate`, `WithBinding`, `WithRequired`, `BindingFunc`, `Verified` (`DeviceID`, `MintUnrecorded`), `FromContext`, `Error`, `SetDeviceMetadata`), `dpop_cache.go` (`CachedAuthFunc`), `dpop_ticket.go` (`TicketPrincipal`, `NewWSAuth`, `WSAuthConfig`, `WSAuth` (`Thumbprint`, `Verified`), `TicketThumbprintLabel`, `ErrTicketUnverified`), `dpop_reauth.go` (`WatchStreamBinding`, `BindingCheck`); `go/lib/restgw` — `authcache_decision.go` (`CachedAuthFuncWithDecision`, `AuthCacheDecision`, the hook `dpopgw.CachedAuthFunc` is built on), `cors.go` (`WithDPoPCORS`). `lib/restgw` and every other pre-existing package import nothing of `lib/dpop` or go-jose: a consumer that does not use DPoP gets no new dependency.
 
 **Purpose.** Opt-in wiring of E35 into the REST gateway. The gate verifies
 `Authorization: DPoP <token>` + `DPoP: <proof>`, answers refusals with the RFC 9449 challenge,
@@ -1370,6 +1385,7 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 | E37.20 | An unbound ticket whose credential uses the DPoP scheme MUST be refused (`ErrTicketInvalid`) even when the gate is optional | `TestDPoPTicket_UnboundTicketWithDPoPTokenRefused` |
 | E37.21 | Only `lib/dpop`, its subpackages and `lib/restgw/dpopgw` MAY import `lib/dpop` or go-jose; every other package MUST NOT, so the DPoP dependency stays opt-in | `TestDPoPImportsStayInsideTheOptInPackages` |
 | E37.22 | `CachedAuthFuncWithDecision` MUST bypass without reading or filling, keep namespaces apart from each other and from un-namespaced entries, neither key on nor be defeated by `IgnoreHeader`, and behave as `CachedAuthFuncWithKeyHeaders` for the zero decision or a nil hook | `TestCachedAuthFuncWithDecision` |
+| E37.23 | A mint request the verifier accepted unrecorded (`dpop.MintFullAcceptUnrecorded`, full mint store) MUST reach `next` with `Verified.MintUnrecorded` set and no device; a recorded one, or any one under the default policy, MUST NOT be reported unrecorded | `TestDPoPGate_MintUnrecordedIsReported` |
 
 **Deliberate limits.**
 - The gate does not decide what a token is worth; `dpopgw.BindingFunc` and the auth method do.
@@ -1384,7 +1400,7 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 
 ## E38. Shared DPoP replay stores
 
-**Code.** `go/lib/dpop/dpopstore` — `redis.go` (`RedisJTIStore`, `NewRedisJTIStore`, `WithRedisPrefix`, `WithRedisMaxPerKey`), `sql.go` (`SQLJTIStore`, `NewSQLJTIStore`, `Dialect`, `Postgres`, `MySQL`, `SQLite`, `WithSQLTable`, `WithSQLMaxPerKey`, `WithSQLPruneEvery`, `Schema`, `EnsureSchema`, `Prune`).
+**Code.** `go/lib/dpop/dpopstore` — `redis.go` (`RedisJTIStore`, `NewRedisJTIStore`, `WithRedisPrefix`, `WithRedisMaxPerKey`, `WithRedisMaxEntries`), `sql.go` (`SQLJTIStore`, `NewSQLJTIStore`, `Dialect`, `Postgres`, `MySQL`, `SQLite`, `WithSQLTable`, `WithSQLMaxPerKey`, `WithSQLMaxEntries`, `WithSQLPruneEvery`, `SQLRecountEvery`, `Schema`, `EnsureSchema`, `Prune`).
 
 **Purpose.** `dpop.JTIStore` implementations shared by every replica, so a proof accepted by one
 replica is a replay on all of them (E35's memory store is per process).
@@ -1396,6 +1412,7 @@ replica is a replay on all of them (E35's memory store is per process).
 | `NewRedisJTIStore(rdb, ...)` | — | nil client → error. Any `redis.Scripter` (client, cluster client) |
 | `WithRedisPrefix` | `w17:dpop:jti:` | Use another prefix for the mint store |
 | `WithRedisMaxPerKey` / `WithSQLMaxPerKey` | `dpop.DefaultMaxJTIsPerKey` = 10 000 | `n <= 0` keeps the default |
+| `WithRedisMaxEntries` / `WithSQLMaxEntries` | `dpop.DefaultMaxJTIs` = 200 000 per store | The total cap of one store (one prefix or table); `n <= 0` keeps the default. A full store refuses with `ErrJTIStoreFull`. Size it for peak proofs per second times the jti ttl; give the mint store a smaller cap of its own |
 | `NewSQLJTIStore(db, dialect, ...)` | — | nil db or unknown dialect → error |
 | `WithSQLTable` | `w17_dpop_jti` | Must match `[a-z_][a-z0-9_]{0,62}` or construction fails |
 | `WithSQLPruneEvery` | 256 records | `n <= 0` keeps the default |
@@ -1415,12 +1432,25 @@ uses the repository's `go-redis` client; the SQL store `database/sql` with the c
 | E38.5 | Two verifiers sharing the stores MUST refuse a proof the other accepted (`ErrReplay`) | same contract tests (`replicas sharing the store refuse a replay`) |
 | E38.6 | A failing backend MUST return an error and never report a record as created; it MUST NOT read as a full store | `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
 | E38.7 | Invalid configuration (nil client or db, unknown dialect, unsafe table name) MUST be refused at construction | `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
+| E38.8 | A store MUST NOT exceed its total cap (`ErrJTIStoreFull`), MUST still return the stored record for a key it holds when full — on Redis also when the key's total-set member was lost, so a replay is never read as full (and never accepted unrecorded) — and MUST free room as entries expire (on SQL within `SQLRecountEvery`, counting its own inserts in between) | same contract tests (`total cap`), `TestSQLJTIStore_TotalCapBetweenRecounts`, `TestRedisJTIStore_FullStoreStillAnswersForARecordedJTI` |
+| E38.9 | A record refused by the per-key share, or a repeat of a recorded jti, MUST NOT take a place under the total cap | same contract tests (`a refused record takes no place under the total cap`), `TestRedisJTIStore_RepeatReleasesItsReservation` |
+| E38.10 | A flood of unbound proofs from throwaway keys MUST fill only the mint store: bound proofs MUST keep passing through the same backend, `MintFullAcceptUnrecorded` MUST keep minting; on Redis the flood MUST leave at most the mint cap's keys (refused proofs none), so a `noeviction` Redis keeps the memory the bound store needs | same contract tests (`a mint flood fills only the mint store`), `TestRedisJTIStore_FloodStaysWithinTheCap` |
 
 **Deliberate limits.**
-- The Redis store is bounded by Redis memory, not by a total count; it needs a Redis whose
-  `maxmemory-policy` is `noeviction`, since an evicted jti reopens a replay window early.
-  Redis keys expire on the server's clock; the per-key count and the SQL store judge expiry by
-  `rec.FirstSeen`, the verifier's clock.
+- The Redis store needs a Redis whose `maxmemory-policy` is `noeviction`, since an evicted jti
+  reopens a replay window early; the total caps of the stores on it bound what each can take
+  of its memory, so size `maxmemory` for both caps. The cap is reserved in a Lua script of its
+  own (the total set lives in its own cluster hash slot) before the record script runs; an
+  unused reservation (refused, failed, or a repeat of a recorded jti) is released, and one
+  left by a crash expires with the entry's ttl. Because the reservation cannot see the jti
+  key (another slot), a full answer is checked against the jti key before it is returned.
+  Redis keys expire on the server's clock; the per-key count, the total and the SQL store
+  judge expiry by `rec.FirstSeen`, the verifier's clock.
+- The SQL total cap is judged against a count each replica keeps, recounted every
+  `SQLRecountEvery` (1 s) or every prune interval of records: other replicas' inserts since
+  the last count are not seen, so the table can overshoot the cap by what they insert in that
+  interval, and a full table reopens up to 1 s after rows expire. Counting the table on every
+  record would cost a scan per proof.
 - The SQL per-key share is counted before the insert: concurrent `Record`s of one thumbprint
   can overshoot it by the number in flight.
 - Live tests run against the servers named by `W17_REDIS_ADDR`, `W17_PG_DSN` and
@@ -1430,11 +1460,12 @@ uses the repository's `go-redis` client; the SQL store `database/sql` with the c
 
 ## E39. DPoP TypeScript client
 
-**Code.** `ts/dpop/src` (`@w17/dpop`) — `jwk.ts` (`jwkThumbprint`, `canonicalJwk`, `publicJwk`), `key.ts` (`generateKeyPair`, `dpopKey`, `loadOrCreateKey`, `KeyStore`, `MemoryKeyStore`, `IndexedDBKeyStore`), `proof.ts` (`createProof`, `signClaims`, `normalizeHTU`, `accessTokenHash`), `fetch.ts` (`createDpopFetch`, `DpopOriginError`, `DpopRefusedError`, `isDeviceRevoked`, `isSessionExpired`, `isUseNonceChallenge`), `ticket.ts` (`issueStreamTicket`, `withTicket`, `DpopTicketError`), `base64url.ts`; `node.ts` (`@w17/dpop/node`: `FileKeyStore`). No runtime dependency: signing and hashing are WebCrypto (`globalThis.crypto.subtle`, browsers and Node >= 20); the package assembles the JWS and JWK JSON only. Tests are vitest under `ts/dpop/test`, named below as `file › test`; the cross-language tests are Go tests in `go/lib/dpop/ts_fixture_test.go`.
+**Code.** `ts/dpop/src` (`@w17/dpop`) — `jwk.ts` (`jwkThumbprint`, `canonicalJwk`, `publicJwk`), `key.ts` (`generateKeyPair`, `dpopKey`, `loadOrCreateKey`, `KeyStore`, `MemoryKeyStore`, `IndexedDBKeyStore`), `proof.ts` (`createProof`, `signClaims`, `normalizeHTU`, `accessTokenHash`), `fetch.ts` (`createDpopFetch`, `DpopRequestInit`, `DpopOriginError`, `DpopRefusedError`, `isDeviceRevoked`, `isSessionExpired`, `isUseNonceChallenge`), `ticket.ts` (`issueStreamTicket`, `withTicket`, `DpopTicketError`), `base64url.ts`; `node.ts` (`@w17/dpop/node`: `FileKeyStore`). No runtime dependency: signing and hashing are WebCrypto (`globalThis.crypto.subtle`, browsers and Node >= 20); the package assembles the JWS and JWK JSON only. Tests are vitest under `ts/dpop/test`, named below as `file › test`; the cross-language tests are Go tests in `go/lib/dpop/ts_fixture_test.go`.
 
 **Purpose.** The client side of E35 for browsers and Node: an ES256 device key held by
 WebCrypto, its RFC 7638 thumbprint (the device id), RFC 9449 proofs, and a fetch wrapper that
-attaches `Authorization: DPoP <token>` and a proof, follows `DPoP-Nonce`, retries once on
+attaches `Authorization: DPoP <token>` and a proof to a request with a token (a proof alone to
+a mint call, nothing to any other request), follows `DPoP-Nonce`, retries once on
 `use_dpop_nonce`, and turns `DEVICE_REVOKED` / `SESSION_EXPIRED` refusals into typed errors.
 The generated TypeScript transport and the admin runtime are meant to embed this source.
 
@@ -1444,7 +1475,9 @@ The generated TypeScript transport and the admin runtime are meant to embed this
 |---|---|---|
 | `createDpopFetch({ origins })` | required | Each must be a bare `http(s)://host[:port]` (a trailing `/` allowed); empty, a path, a query, user info or another scheme → throws at construction |
 | `keyStore` | required | `MemoryKeyStore`, `IndexedDBKeyStore`, `FileKeyStore` or the caller's own `KeyStore` |
-| `getToken` | none (no `Authorization`, no `ath`) | An empty string counts as no token; a throw fails the request |
+| `getToken` | none (no `Authorization`, no `ath`) | An empty string counts as no token; a throw fails the request. Without a token a request carries DPoP only when it is a mint call |
+| `mintPaths` | none | Paths whose requests are mint calls, compared with the request URL's path exactly (query ignored). Not starting with `/`, or holding `?` or `#` → throws at construction |
+| `{ mint: true }` on a call | false | Marks that call as a mint call: without a token it still carries an unbound proof |
 | `fetch` | `globalThis.fetch` | — |
 | `IndexedDBKeyStore({ dbName, storeName, key, indexedDB })` | `w17-dpop`, `keys`, `device`, `globalThis.indexedDB` | No IndexedDB → every call rejects |
 | `FileKeyStore(path, { exportPrivateKey: true })` | — | Anything but `exportPrivateKey: true`, or an empty path → throws: the store writes the private key to disk and the caller must say so. For servers, CLIs and tests |
@@ -1464,8 +1497,8 @@ bound request), E3 (the error envelope a refusal is read from).
 | E39.4 | The claims MUST be `jti` (fresh, 128 random bits), `htm`, `htu`, `iat` (seconds), plus `ath` only with a non-empty token (the RFC 9449 example value) and `nonce` only when one is known | `proof.test.ts › carries jti, htm, htu and iat…`, `› sets ath to the token hash…`, `› draws a fresh 128-bit jti per proof`, `› computes the RFC's ath` |
 | E39.5 | The signature MUST be the raw 64-byte r‖s that WebCrypto verifies against the embedded key, and MUST NOT verify once a claim or the key changes; the test's verifier MUST accept the RFC 9449 example proofs and refuse one with a flipped bit | `proof.test.ts › is signed with a raw 64-byte r‖s…`, `› does not verify once a claim is changed`, `› does not verify under another key`, `› verifies the RFC's example proofs`, `› refuses an RFC proof with one bit of its signature flipped` |
 | E39.6 | `normalizeHTU` MUST agree with the Go `NormalizeHTU` table: lower-case scheme and host, no default port, `/` for an empty path, no query or fragment, user info and a missing authority refused | `proof.test.ts › normalises like the Go verifier`, `› refuses what the Go verifier refuses` |
-| E39.7 | The Go verifier MUST accept proofs this package made — direct, and through the fetch wrapper's nonce retry to the ticket issuer — and return the thumbprint the TypeScript side computed; it MUST refuse each of them with another nonce, method, path, token, binding or signature | `TestTSProofsVerify`, `TestTSProofsRefusedWhenTheirBindingsChange`, `TestTSThumbprintsMatch` (fixture `go/lib/dpop/testdata/ts_proofs.json`, regenerated with `npm run fixture` in `ts/dpop`) |
-| E39.8 | A request to an allowed origin MUST carry `Authorization: DPoP <token>` and a proof for its method and URL (no query or fragment) with the token's `ath`; without a token, neither `Authorization` nor `ath` | `fetch.test.ts › attaches Authorization: DPoP and a proof…`, `› sends no Authorization and no ath without a token` |
+| E39.7 | The Go verifier MUST accept proofs this package made — direct, and through the fetch wrapper's nonce retry to the ticket issuer and on a tokenless mint call — and return the thumbprint the TypeScript side computed; it MUST refuse each of them with another nonce, method, path, token, binding or signature | `TestTSProofsVerify`, `TestTSProofsRefusedWhenTheirBindingsChange`, `TestTSThumbprintsMatch` (fixture `go/lib/dpop/testdata/ts_proofs.json`, regenerated with `npm run fixture` in `ts/dpop`) |
+| E39.8 | A request to an allowed origin with a token MUST carry `Authorization: DPoP <token>` and a proof for its method and URL (no query or fragment) with the token's `ath`; a mint call without a token, neither `Authorization` nor `ath` | `fetch.test.ts › attaches Authorization: DPoP and a proof…`, `› sends no Authorization and no ath on a mint call without a token` |
 | E39.9 | A request to any other origin (another host, a suffix host, another scheme or port) MUST throw `DpopOriginError` before anything is sent or the token is read; the origin checked MUST be the one the built `Request` resolved (a URL-like object that is not a `URL`, a relative URL under a document base), never the input; a configuration without a valid origin MUST throw | `fetch.test.ts › throws for any other origin before sending or reading the token`, `› checks a URL-like object that is not a URL by what the Request resolves`, `› checks a relative URL as the Request resolves it, not against location`, `› matches origins after normalisation`, `› refuses a configuration without a valid origin` |
 | E39.10 | A 401 with `use_dpop_nonce` and a new `DPoP-Nonce` MUST be retried exactly once, with a new proof carrying that nonce and the same body, a streamed body included; a second refusal MUST be returned and its nonce learned | `fetch.test.ts › retries a use_dpop_nonce refusal once…`, `› re-sends a streamed body on the retry`, `› retries exactly once against a server that keeps asking` |
 | E39.11 | A 401 without the challenge, without a nonce, or naming the nonce the proof already carried MUST NOT be retried; the challenge MUST be recognised only as the DPoP scheme | `fetch.test.ts › does not retry without a challenge…`, `› finds the DPoP challenge alone or among others`, `› ignores other errors, other schemes and look-alikes` |
@@ -1477,6 +1510,7 @@ bound request), E3 (the error envelope a refusal is read from).
 | E39.17 | `issueStreamTicket` MUST make a signed, token-bound POST to the issuer path (following a nonce challenge) and return the ticket; a refusal or a body without a ticket MUST throw `DpopTicketError`, a revoked device `DpopRefusedError` | `ticket.test.ts › POSTs a signed, token-bound request…`, `› takes a configured path…`, `› throws DpopTicketError…`, `› lets a revoked device surface as DpopRefusedError` |
 | E39.18 | A refusal MUST carry the thumbprint of the key that signed the refused request, and its `discardKey` MUST discard only that key: a key made since then MUST survive a stale refusal; a request made while a discard is in progress MUST wait for it and MUST NOT sign with or reload the key being discarded | `fetch.test.ts › tags a refusal with the key it was raised for`, `› does not let a stale refusal discard a newer key`, `› makes requests wait for a discard instead of reloading the revoked key` |
 | E39.19 | A refusal body MUST be read only up to `MAX_REFUSAL_BODY` (64 KiB) before parsing; a longer one MUST be returned as a plain response with its body intact | `fetch.test.ts › does not parse a refusal body over the cap, and leaves it readable`, `› still recognises a refusal just under the cap` |
+| E39.20 | A request with no token that is not a mint call (`{ mint: true }` or a path in `mintPaths`, matched exactly) MUST be sent with no `DPoP` and no `Authorization` header, still refusing redirects, without loading or making a key, and its refusal MUST come back as a plain response; a mint call or a token MUST make it carry a proof; a mint path that is not a path MUST throw | `fetch.test.ts › sends a request without a token and not a mint call with no DPoP headers…`, `› signs a mint call marked on the call, and a token request`, `› signs a request to a configured mint path, by its exact path`, `› refuses a mint path that is not a path`, `› returns a refusal of an unsigned request as a plain response` |
 
 **Deliberate limits.**
 - ES256 only. The Go verifier also accepts EdDSA, but Ed25519 in WebCrypto is not available in
@@ -1490,3 +1524,5 @@ bound request), E3 (the error envelope a refusal is read from).
   call `discardKey`.
 - `IndexedDBKeyStore` is tested against `fake-indexeddb` in Node, not in a browser.
 - `FileKeyStore` writes the private key unencrypted (mode 0600); a browser has no use for it.
+- Which calls are mint calls is the caller's to say; a tokenless sign-in call that is neither
+  marked nor under `mintPaths` reaches the server with no proof and is refused there.

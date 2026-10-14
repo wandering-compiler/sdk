@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-136 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
+137 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
 
 ## Server × Server
 
@@ -96,7 +96,8 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | DPoP gate (E37) | Browser stream tickets (E16) | A bound ticket is issued only for a verified bound request and records its thumbprint; redemption re-checks the binding and stays one-shot; an unbound ticket carries no device and is refused when the gate is required. | `TestDPoPTicket_BoundFlow`, `TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest`, `TestDPoPTicket_RedemptionChecksTheBinding`, `TestDPoPTicket_UnboundTicket` |
 | DPoP gate (E37) | Stream re-auth watchdog (E17) | A DPoP stream is watched by `dpopgw.WatchStreamBinding`, which asks a binding-only question and never replays the set-up proof or a spent ticket; refusals and outages are split as in E17. | `TestWatchStreamBinding_AsksTheBindingQuestion`, `TestWatchStreamBinding_RefusedVersusUnanswered`, `TestWatchStreamBinding_NoBindingEndsTheStream` |
 | DPoP gate (E37) | CORS (E12) | `WithDPoPCORS` lets a browser send `DPoP` and read `DPoP-Nonce` / `WWW-Authenticate`; the defaults stay unchanged. | `TestWithDPoPCORS` |
-| Shared replay stores (E38) | DPoP verifier (E35) | Replicas sharing the stores refuse each other's accepted proofs; a failing store is an error the verifier turns into 503, never an acceptance. | `TestRedisJTIStore_Contract`, `TestSQLJTIStore_Contract_SQLite`, `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig` |
+| Shared replay stores (E38) | DPoP verifier (E35) | Replicas sharing the stores refuse each other's accepted proofs; a failing store is an error the verifier turns into 503, never an acceptance. Each store has its own total cap, so a mint flood fills only the mint store and bound proofs keep passing; with `MintFullAcceptUnrecorded` a full mint store accepts unbound proofs unrecorded, never bound ones. | `TestRedisJTIStore_Contract`, `TestSQLJTIStore_Contract_SQLite`, `TestRedisJTIStore_FailingBackendFailsClosed`, `TestSQLJTIStore_FailuresAndConfig`, `TestRedisJTIStore_FloodStaysWithinTheCap` |
+| DPoP clients (E36, E39) | Mint replay store (E35, E38) | A client sends a proof only with a token or on a call marked as a mint call, so anonymous requests to public routes take no place in the server's mint store. | `TestTransport_ProofOnlyWithTokenOrMint`, `TestCredentials_ProofOnlyWithTokenOrMint`, `fetch.test.ts › sends a request without a token and not a mint call with no DPoP headers…` |
 | DPoP TypeScript client (E39) | DPoP verifier (E35), DPoP gate (E37) | Proofs the TypeScript client signs, directly and through its nonce retry to the ticket issuer, verify with the Go verifier under the thumbprint the client computed, and are refused once their nonce, method, path, token, binding or signature changes. | `TestTSProofsVerify`, `TestTSProofsRefusedWhenTheirBindingsChange`, `TestTSThumbprintsMatch` |
 
 ## Edges × Data

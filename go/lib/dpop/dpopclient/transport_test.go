@@ -181,8 +181,8 @@ func TestTransport_UnreplayableBodyNotRetried(t *testing.T) {
 	}
 }
 
-// Without a token the proof has no ath and no Authorization is sent (a mint
-// endpoint).
+// Without a token, a request marked as a mint call gets a proof with no ath
+// and no Authorization (a mint endpoint).
 func TestTransport_NoTokenNoATH(t *testing.T) {
 	k := mustKey(t)
 	s := newServer(t, "")
@@ -194,10 +194,78 @@ func TestTransport_NoTokenNoATH(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(r)
 	})
 	c := &http.Client{Transport: &dpopclient.Transport{Base: base, Signer: k, Origins: []string{s.URL}}}
-	resp := do(t, c, "POST", s.URL+"/token", "")
+	req, err := http.NewRequest("POST", s.URL+"/token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(dpopclient.WithMint(req))
+	if err != nil {
+		t.Fatal(err)
+	}
 	readAll(t, resp)
 	if resp.StatusCode != 200 || sawAuth.Load() {
 		t.Fatalf("status %d, Authorization sent: %v", resp.StatusCode, sawAuth.Load())
+	}
+}
+
+// A request with no token that is not marked as a mint call (anonymous
+// browsing of a public route) goes out with no DPoP headers at all; marking
+// it — WithMint, or MintContext on the request's context — or a token makes
+// it carry a proof.
+func TestTransport_ProofOnlyWithTokenOrMint(t *testing.T) {
+	var mu sync.Mutex
+	var seen []http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Clone())
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	tok := ""
+	tr := &dpopclient.Transport{Signer: mustKey(t), Origins: []string{srv.URL}, Token: func(context.Context) (string, error) { return tok, nil }}
+	c := &http.Client{Transport: tr}
+	send := func(req *http.Request) {
+		t.Helper()
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readAll(t, resp)
+	}
+	plain, _ := http.NewRequest("GET", srv.URL+"/public", nil)
+	send(plain)
+	send(dpopclient.WithMint(plain))
+	ctxReq, _ := http.NewRequestWithContext(dpopclient.MintContext(context.Background()), "POST", srv.URL+"/sign-in", nil)
+	send(ctxReq)
+	tok = "tok"
+	send(plain)
+	if dpopclient.IsMint(plain.Context()) {
+		t.Fatal("WithMint marked the caller's request")
+	}
+	// A nil Token is no token.
+	resp, err := (&dpopclient.Transport{Signer: mustKey(t), Origins: []string{srv.URL}}).RoundTrip(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readAll(t, resp)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 5 {
+		t.Fatalf("server saw %d requests, want 5", len(seen))
+	}
+	for i, want := range []bool{false, true, true, true, false} {
+		if got := seen[i].Get("DPoP") != ""; got != want {
+			t.Errorf("request %d: proof sent %v, want %v", i, got, want)
+		}
+	}
+	for i, h := range [][]string{seen[0]["Authorization"], seen[1]["Authorization"], seen[4]["Authorization"]} {
+		if len(h) != 0 {
+			t.Errorf("tokenless request %d carried Authorization %v", i, h)
+		}
+	}
+	if seen[3].Get("Authorization") != "DPoP tok" {
+		t.Errorf("token request Authorization = %q", seen[3].Get("Authorization"))
 	}
 }
 
@@ -217,7 +285,7 @@ func TestTransport_LearnsNonceFromSuccess(t *testing.T) {
 		w.Header().Set("DPoP-Nonce", fmt.Sprintf("n-%d", n))
 	}))
 	defer srv.Close()
-	c := &http.Client{Transport: &dpopclient.Transport{Signer: mustKey(t), Origins: []string{srv.URL}}}
+	c := &http.Client{Transport: &dpopclient.Transport{Signer: mustKey(t), Token: token("tok"), Origins: []string{srv.URL}}}
 	for i := 0; i < 3; i++ {
 		readAll(t, do(t, c, "GET", srv.URL+"/r", ""))
 	}

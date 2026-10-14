@@ -7,6 +7,12 @@
 // nonce from response metadata and retry; [Credentials.DialOptions] installs
 // all three.
 //
+// Both attach DPoP only to a request that carries a token, or that the
+// caller marks as a mint call ([WithMint], [MintContext]): the sign-in or
+// token request that has no token yet. Any other request — anonymous
+// browsing of public routes — goes out with no DPoP headers, so it neither
+// costs a proof nor spends a place in the server's mint replay store.
+//
 // Both remember the last nonce the server sent — on any response, success or
 // refusal — and put it in the next proof. A refusal carrying
 // `use_dpop_nonce` and a new nonce is retried exactly once with a new proof;
@@ -27,11 +33,36 @@ import (
 )
 
 // TokenFunc returns the access token for a request, or "" for a request that
-// carries none (a mint endpoint; its proof has no ath).
+// carries none: then the request gets a proof (with no ath) only when it is
+// marked as a mint call ([WithMint]), and no DPoP headers otherwise.
 type TokenFunc func(ctx context.Context) (string, error)
 
+type mintKey struct{}
+
+// MintContext marks every request or gRPC call made with ctx as a mint call:
+// without a token it still carries an unbound proof, which a mint endpoint
+// (sign-in, token issue) binds the new credential to. Unmarked calls without
+// a token carry no DPoP headers.
+func MintContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mintKey{}, true)
+}
+
+// WithMint returns a shallow copy of req marked as a mint call
+// ([MintContext]).
+func WithMint(req *http.Request) *http.Request {
+	return req.WithContext(MintContext(req.Context()))
+}
+
+// IsMint reports whether ctx is marked as a mint call.
+func IsMint(ctx context.Context) bool {
+	m, _ := ctx.Value(mintKey{}).(bool)
+	return m
+}
+
 // Transport is an http.RoundTripper that adds `Authorization: DPoP <token>`
-// (when Token returns one) and a fresh `DPoP` proof to every request.
+// and a fresh `DPoP` proof to a request when Token returns a token, and a
+// proof alone to a request marked as a mint call ([WithMint]). A request
+// with neither is sent unchanged, with no DPoP headers.
 //
 // The htu of each proof is the request URL without query and fragment, so the
 // client must address the server by the public origin the server is
@@ -179,6 +210,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			closeBody()
 			return nil, err
 		}
+	}
+	if token == "" && !IsMint(req.Context()) {
+		// No credential and no mint call: nothing to prove.
+		return t.base().RoundTrip(req)
 	}
 	used := t.nonce(origin)
 	out, err := t.prepare(req, req.Body, token, used)

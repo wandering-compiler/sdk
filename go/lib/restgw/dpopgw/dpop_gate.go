@@ -99,6 +99,12 @@ type Verified struct {
 	// AccessToken is the DPoP-bound token the proof was checked against, or
 	// "" for an unbound proof (a mint request: no token yet).
 	AccessToken string
+	// MintUnrecorded is true when the unbound proof was accepted without its
+	// jti being recorded, because the mint store was full and the verifier
+	// is configured with [dpop.MintFullAcceptUnrecorded]
+	// ([dpop.Result.MintUnrecorded]). The proof could be presented again
+	// while the store stays full; a mint handler should log it.
+	MintUnrecorded bool
 }
 
 // Bound reports whether the proof was checked against a token's binding.
@@ -175,7 +181,7 @@ func (g *Gate) Verify(r *http.Request) (Verified, error) {
 			return Verified{}, err
 		}
 	}
-	thumb, err := g.v.Verify(ctx, dpop.Request{
+	res, err := g.v.VerifyResult(ctx, dpop.Request{
 		Method:      r.Method,
 		Path:        r.URL.EscapedPath(),
 		Proofs:      proofs,
@@ -185,7 +191,7 @@ func (g *Gate) Verify(r *http.Request) (Verified, error) {
 	if err != nil {
 		return Verified{}, err
 	}
-	return Verified{Thumbprint: thumb, AccessToken: token}, nil
+	return Verified{Thumbprint: res.Thumbprint, AccessToken: token, MintUnrecorded: res.MintUnrecorded}, nil
 }
 
 // lookupBinding asks the binding func which key token is bound to, mapping

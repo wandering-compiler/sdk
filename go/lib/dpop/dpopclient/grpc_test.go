@@ -159,6 +159,30 @@ func TestCredentials_UnaryNonceRetryOnce(t *testing.T) {
 	}
 }
 
+// Without a token a call carries DPoP only when its context is marked with
+// MintContext; an unmarked one carries no dpop metadata.
+func TestCredentials_ProofOnlyWithTokenOrMint(t *testing.T) {
+	k := mustKey(t)
+	g, lis := startGRPC(t, "")
+	creds := &dpopclient.Credentials{Signer: k, Origin: grpcOrigin, AllowInsecure: true}
+	hc := dial(t, lis, creds.DialOptions()...)
+	_, err := hc.Check(context.Background(), &healthpb.HealthCheckRequest{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unmarked tokenless call = %v, want the server's missing-proof refusal", err)
+	}
+	md := g.lastMD.Load().(metadata.MD)
+	if len(md.Get("dpop")) != 0 || len(md.Get("authorization")) != 0 {
+		t.Fatalf("unmarked tokenless call carried DPoP metadata: %v", md)
+	}
+	if _, err := hc.Check(dpopclient.MintContext(context.Background()), &healthpb.HealthCheckRequest{}); err != nil {
+		t.Fatalf("mint call: %v", err)
+	}
+	md = g.lastMD.Load().(metadata.MD)
+	if len(md.Get("dpop")) != 1 || len(md.Get("authorization")) != 0 {
+		t.Fatalf("mint call metadata = %v, want a proof and no authorization", md)
+	}
+}
+
 func TestCredentials_UnaryRetriesExactlyOnce(t *testing.T) {
 	k := mustKey(t)
 	g, lis := startGRPC(t, k.Thumbprint())
