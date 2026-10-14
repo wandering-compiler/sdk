@@ -16,9 +16,9 @@ import (
 // ForUserWith exists for one reason: a sentence that must name a VALUE, with the
 // value beside the msgid instead of inside it.
 //
-// A consumer found out why by doing the other thing — they made the value part of
-// the key (`period 2027-03 is already locked`), which is a new key every month, so
-// no catalogue entry can match and the caller would eventually see the key itself.
+// The other way, the value is part of the key (`period 2027-03 is already
+// locked`), which is a new key every month, so no catalogue entry can match and
+// the caller would eventually see the key itself.
 // Interpolation keeps one entry a translator can hold.
 //
 // This is the only test of that function, and it was added on review: the function

@@ -15,12 +15,10 @@ import (
 // after the auto-rollback interceptor discarded the tx is told which
 // call did it, not merely that the id is unknown.
 //
-// This is the shape a consumer hit in the field — a guarded write whose
-// `WHERE` matched nothing returned NotFound, the business handler
-// deliberately tolerated it, and the Commit three lines later answered
-// `unknown tx_id`. Every layer named a symptom; nothing named the
-// cause, and the reported diagnosis started at "the transaction
-// plumbing is broken".
+// The shape: a guarded write whose `WHERE` matched nothing returns NotFound,
+// the business handler deliberately tolerates it, and the Commit three lines
+// later answers `unknown tx_id`. Every layer names a symptom and nothing names
+// the cause, so a diagnosis starts at "the transaction plumbing is broken".
 func TestMemory_RollbackCaused_ExplainsLaterCommit(t *testing.T) {
 	reg := singleConnRegistry(t)
 	id, err := reg.Begin(context.Background(), txregistry.BeginOptions{ConnectionName: "main"})

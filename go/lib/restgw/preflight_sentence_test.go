@@ -18,8 +18,7 @@ func invalidArgStatus() *status.Status {
 	return status.New(codes.InvalidArgument, "SomeService/Method: validation failed")
 }
 
-// One sentence per code on the whole surface, which is what surfaces.md promises
-// and what a consumer measured to be false on 2026-09-30.
+// One sentence per code on the whole surface, which is what surfaces.md promises.
 //
 // The two halves of INVALID_ARGUMENT reach a client by different routes: a backend
 // status gets demoted by clientFacing, while the gateway's own pre-flight

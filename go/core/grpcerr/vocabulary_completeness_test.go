@@ -7,11 +7,11 @@ import (
 )
 
 // Vocabulary() is a list of CODES, and several codes share one sentence — so
-// it was complete by COINCIDENCE, not by construction. A consumer found the
-// shared arm that mattered: `FailedPrecondition` was answered with "The
-// request could not be accepted as sent.", which is true for InvalidArgument
-// and false here — their handler refused because a payment had too little left
-// to allocate, and the caller was told to fix a request that was fine.
+// it was complete by COINCIDENCE, not by construction. A shared arm matters:
+// answering `FailedPrecondition` with "The request could not be accepted as
+// sent.", which is true for InvalidArgument and false here — a handler that
+// refuses because a payment has too little left to allocate would tell the
+// caller to fix a request that was fine.
 //
 // Splitting that arm added a sentence the harvest list did not reach. A msgid
 // outside it falls back to itself, so the new sentence would have rendered

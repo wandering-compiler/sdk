@@ -206,11 +206,10 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	// A LINK THAT DROPS HAS TO BE AUDIBLE.
 	//
 	// natsgo.Connect with no options reconnects on its own — and says nothing,
-	// at any point, whatever happens. A consumer lost half an hour to exactly
-	// that: their broker was recreated by an ordinary `docker compose up -d`,
-	// delivery stopped, and the subscriber's log held one line from before the
-	// restart and nothing after it. Sign-in returned 200, the challenge row
-	// appeared, and the code never arrived.
+	// at any point, whatever happens. When an ordinary `docker compose up -d`
+	// recreates the broker, delivery stops and the subscriber's log holds one
+	// line from before the restart and nothing after it: a sign-in returns 200,
+	// its challenge row appears, and the code never arrives.
 	//
 	// These four handlers do not repair anything. They make the difference
 	// between "the bus is quiet because nothing was emitted" and "the bus is
