@@ -169,6 +169,11 @@ func (g *dpopGateway) serve(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case "/signin":
+		if body["email"] == "wrong" {
+			status = http.StatusUnauthorized
+			refuseDPoP(w, "UNAUTHENTICATED", "BAD_PASSWORD", "wrong password")
+			return
+		}
 		if email, _ := body["email"].(string); strings.HasPrefix(email, "mfa") {
 			g.mu.Lock()
 			g.seq++
@@ -403,10 +408,19 @@ func TestDPoP_DeviceRevoked(t *testing.T) {
 	refused := dpopMe("auth.token", "")
 	refused.Expect = nil
 	refused.ExpectError = &runner.ExpectError{Code: "UNAUTHENTICATED", Details: []runner.ExpectErrorDetail{{Code: "DEVICE_REVOKED"}}}
+	// A refused re-sign-in (signed with a candidate key) changes nothing:
+	// the old token is still refused as revoked afterwards.
+	// A refused step captures no token, so it names the session's device:
+	// device names share the namespace of token slots.
+	wrong := dpopSignIn("wrong", nil)
+	wrong.Device = "auth.token"
+	wrong.ExpectError = &runner.ExpectError{Code: "UNAUTHENTICATED", Details: []runner.ExpectErrorDetail{{Code: "BAD_PASSWORD"}}}
 	steps := []runner.Step{
 		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "first"}}),
 		revoke,
 		refused,
+		refused,
+		wrong,
 		refused,
 		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "second"}}),
 		dpopMe("", "me"),
@@ -762,5 +776,51 @@ func TestDPoP_WithOriginSignsForThePublicOrigin(t *testing.T) {
 		Call(context.Background(), steps[0].Endpoint, map[string]any{"email": "a"}, "", nil, "", nil)
 	if err == nil || !strings.Contains(err.Error(), "WithOrigin") {
 		t.Errorf("a bad WithOrigin: err = %v, want it named", err)
+	}
+}
+
+// A redirect to an absolute URL on the WithOrigin public origin is home: it
+// is dialled at the target and signed.
+func TestDPoP_WithOriginRedirectOnThePublicOriginIsHome(t *testing.T) {
+	const public = "https://api.example.test"
+	g := newDPoPGatewayAt(t, public)
+	g.redirectTo = public + "/me"
+	scope := runtime.NewRun().NewScope()
+	callers := map[string]runner.Caller{"rest": runner.NewRESTCaller(g.URL, nil).WithSigner(dpope2e.New(dpope2e.WithOrigin(public)))}
+	steps := []runner.Step{
+		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "mint"}}),
+		{Label: "via redirect", Endpoint: runner.Endpoint{Ref: "me.Via", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/go", AuthRequired: true},
+			Expect: map[string]any{"jkt": map[string]any{"capture": "me"}}},
+	}
+	if err := runner.RunSteps(context.Background(), scope, steps, callers); err != nil {
+		t.Fatal(err)
+	}
+	if captured(t, scope, "me") != captured(t, scope, "mint") {
+		t.Error("the redirected call was not signed by the session's key")
+	}
+}
+
+func TestWithOrigin_RefusesAPathQueryOrFragment(t *testing.T) {
+	g := newDPoPGateway(t)
+	ep := runner.Endpoint{Ref: "auth.SignIn", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/signin", Mint: true}
+	for _, o := range []string{g.URL + "/api", g.URL + "?x=1", g.URL + "#f"} {
+		c := runner.NewRESTCaller(g.URL, nil).WithSigner(dpope2e.New(dpope2e.WithOrigin(o)))
+		if _, err := c.Call(context.Background(), ep, map[string]any{"email": "a"}, "", nil, "", nil); err == nil || !strings.Contains(err.Error(), "WithOrigin") {
+			t.Errorf("WithOrigin(%q): err = %v, want it refused", o, err)
+		}
+	}
+}
+
+// ${device_jwk:…} anywhere but a step's input says where it belongs.
+func TestDPoP_DeviceJWKOutsideTheInputIsNamed(t *testing.T) {
+	g := newDPoPGateway(t)
+	step := runner.Step{
+		Label:    "header",
+		Endpoint: runner.Endpoint{Ref: "pub.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/pub"},
+		Headers:  map[string]string{"X-Key": "${device_jwk:bot}"},
+	}
+	err := runner.RunSteps(context.Background(), runtime.NewRun().NewScope(), []runner.Step{step}, dpopCallers(g))
+	if err == nil || !strings.Contains(err.Error(), "only in a step's input") {
+		t.Errorf("err = %v, want the place it is allowed named", err)
 	}
 }

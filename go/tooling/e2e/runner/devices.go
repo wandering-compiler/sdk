@@ -22,9 +22,11 @@ import (
 //     written anywhere.
 //   - A MINT step (Endpoint.Mint: sign-in, sign-up, …) sends no stored token
 //     and signs an unbound proof. Its device is, in order: Step.Device when
-//     set (two devices of one principal); the device of an earlier mint one
-//     of its input values came from (VerifyMfa sends the challenge_id SignIn
-//     answered, and must be signed by the key SignIn was); the device of
+//     set (two devices of one principal); the device of an UNFINISHED mint
+//     one of its input values came from — a mint that captured no token,
+//     such as SignIn answering mfa_required or SignUp awaiting confirmation
+//     (VerifyMfa sends the challenge_id SignIn answered, and must be signed
+//     by the key SignIn was); the device of
 //     the slot its token lands in — the capture bound to the response's
 //     `token` field, which every auth-plugin mint names so. Signing in again
 //     into one slot reuses its device, as one browser signing in again
@@ -34,9 +36,11 @@ import (
 //   - The token a mint captured is remembered as that device's, so a later
 //     step presenting it (`auth.token`, `token_from`, an await's
 //     `token_from`, a `DPoP` credential) signs with the key it is bound to,
-//     whatever capture it was copied into since. Every string a mint
-//     captured is remembered too, but only for a later mint's input to
-//     chain on; no other value is ever taken for a token.
+//     whatever capture it was copied into since. Every string an unfinished
+//     mint captured is remembered too, for ONE later mint's input to chain
+//     on (a challenge id is single-use); a finished mint's other captures
+//     (a user id, a trust token) chain nothing, and no value but a token is
+//     ever taken for a token.
 //   - `${device_jwk:<name>}` in a step's input is the public JWK of the
 //     device <name> (the `public_key` of CreateApiToken / IssueBotToken);
 //     the token that step captures from its `token` field is that device's.
@@ -64,10 +68,11 @@ type Signer interface {
 
 	// Do is the same signing for a client that is not an http.Client (the
 	// stress engine's): send applies h to the request, sends it and returns
-	// the status and the response headers. Do signs for dev (nil: the
+	// the status, the response headers and — for a 401 or 403, so a
+	// revocation can be read — the body. Do signs for dev (nil: the
 	// signer's own device) and calls send again, once, when the server asks
 	// for a fresh nonce. It returns the last status.
-	Do(dev *Device, method, target, token string, mint bool, send func(h http.Header) (int, http.Header, error)) (int, error)
+	Do(dev *Device, method, target, token string, mint bool, send func(h http.Header) (status int, resp http.Header, body []byte, err error)) (int, error)
 
 	// PublicJWK is the JSON of dev's public key as a JWK (RFC 7517), with
 	// no private member: what `${device_jwk:<name>}` expands to.
@@ -107,7 +112,7 @@ type Devices struct {
 	mu      sync.Mutex
 	byName  map[string]*Device
 	byToken map[string]*Device // tokens a mint (or a device_jwk step) captured
-	byChain map[string]*Device // every string a mint captured
+	byChain map[string]*Device // strings an unfinished mint captured, until a mint uses one
 }
 
 // NewDevices returns an empty set.
@@ -168,11 +173,23 @@ func (d *Devices) DeviceFor(token string) *Device {
 	return d.forToken(token, DefaultTokenSlot)
 }
 
-// learn records what a successful mint step bound: its token is a
-// credential of dv and its slot now resolves to dv, and every string it
-// captured may be chained on by a later mint.
-func (d *Devices) learn(dv *Device, s Step, scope *runtime.Scope) {
-	d.bindToken(dv, s, scope)
+// learn records what a successful mint step bound. The chain entries its
+// input used are spent (a challenge id is single-use; a step that is
+// refused leaves them for a retry). A finished mint — one that captured a
+// token — binds that token to dv and its slot to dv; an unfinished one
+// leaves every string it captured for the next mint to chain on.
+func (d *Devices) learn(dv *Device, s Step, input map[string]any, scope *runtime.Scope) {
+	d.mu.Lock()
+	for _, str := range inputStrings(input, nil) {
+		if d.byChain[str] == dv {
+			delete(d.byChain, str)
+		}
+	}
+	d.mu.Unlock()
+	if tokenCapture(s.Expect) != "" {
+		d.bindToken(dv, s, scope)
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, name := range runtime.CaptureNames(s.Expect) {
@@ -182,6 +199,23 @@ func (d *Devices) learn(dv *Device, s Step, scope *runtime.Scope) {
 			}
 		}
 	}
+}
+
+// inputStrings appends every string in input, in a stable order.
+func inputStrings(input any, out []string) []string {
+	switch v := input.(type) {
+	case string:
+		out = append(out, v)
+	case map[string]any:
+		for _, k := range sortedKeys(v) {
+			out = inputStrings(v[k], out)
+		}
+	case []any:
+		for _, e := range v {
+			out = inputStrings(e, out)
+		}
+	}
+	return out
 }
 
 // bindToken records the token a step captured from its `token` field as a
@@ -201,25 +235,14 @@ func (d *Devices) bindToken(dv *Device, s Step, scope *runtime.Scope) {
 	}
 }
 
-// chained returns the device of an earlier mint that captured one of the
-// strings in input, or nil.
-func (d *Devices) chained(input any) *Device {
-	switch v := input.(type) {
-	case string:
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return d.byChain[v]
-	case map[string]any:
-		for _, k := range sortedKeys(v) {
-			if dv := d.chained(v[k]); dv != nil {
-				return dv
-			}
-		}
-	case []any:
-		for _, e := range v {
-			if dv := d.chained(e); dv != nil {
-				return dv
-			}
+// chained returns the device of an unfinished mint that captured one of
+// the strings in input, or nil.
+func (d *Devices) chained(input map[string]any) *Device {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, str := range inputStrings(input, nil) {
+		if dv, ok := d.byChain[str]; ok {
+			return dv
 		}
 	}
 	return nil

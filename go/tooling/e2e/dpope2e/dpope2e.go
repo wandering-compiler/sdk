@@ -20,7 +20,8 @@
 // carry it while requests still go to the target.
 //
 // Only a request that presents a token, or is a mint, to the caller's own
-// origin is signed. Anything else — an anonymous call, or a redirect to
+// origin (or to the WithOrigin public origin, which is dialled at the
+// target) is signed. Anything else — an anonymous call, or a redirect to
 // another origin (a presigned download URL) — goes out with no DPoP
 // headers and no Authorization, as Go's client already drops Authorization
 // on a redirect to another host.
@@ -28,14 +29,17 @@
 // Keys are P-256, in memory, made on a device's first signed request and
 // never written. A refusal carrying DEVICE_REVOKED marks the device
 // revoked: it keeps its key, so its token keeps being refused for the
-// right reason, and its next mint — signing in again — signs with a new key
-// and so is a new device, as a client is after its device was revoked.
+// right reason. Its next mint — signing in again — signs with a new key,
+// which the device adopts only when that mint succeeds: a refused sign-in
+// leaves the revoked key, and its token, as they were.
 package dpope2e
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -66,10 +70,17 @@ type Option func(*Signer)
 // caller's target: for a runner that reaches the gateway by an address
 // other than the one the gateway is configured to see. The htu of a proof
 // is origin followed by the request's path.
+//
+// A redirect to an absolute URL on origin is a redirect home: it is dialled
+// at the target too, and signed. An origin with a path, query or fragment
+// is refused: every signed request then fails, naming WithOrigin.
 func WithOrigin(origin string) Option {
 	return func(s *Signer) {
-		if s.origin = normOrigin(origin); s.origin == "" {
-			s.err = fmt.Errorf("dpope2e: WithOrigin(%q): want scheme://host[:port]", origin)
+		u, err := url.Parse(origin)
+		if s.origin = normOrigin(origin); s.origin == "" || err != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			s.origin = ""
+			s.err = fmt.Errorf("dpope2e: WithOrigin(%q): want scheme://host[:port] with no path, query or fragment", origin)
 		}
 	}
 }
@@ -103,45 +114,62 @@ func stateOf(dv *runner.Device) *deviceState {
 	return dv.Value(stateKey{}, func() any { return &deviceState{} }).(*deviceState)
 }
 
-// keyFor returns the device's key, making it when there is none, and a new
-// one for a mint once the current one was revoked. Called with mu held.
-func (st *deviceState) keyFor(mint bool) error {
+// signingKey returns the key a request signs with: the device's (made when
+// there is none), or — for a mint while that key is revoked — a candidate
+// the device adopts only if the mint succeeds. Called with mu held.
+func (st *deviceState) signingKey(mint bool) (key *dpop.Key, candidate bool, err error) {
 	if st.key != nil && !(mint && st.revoked) {
-		return nil
+		return st.key, false, nil
 	}
 	k, err := dpop.GenerateKey(dpop.KeyP256)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	st.key, st.revoked = k, false
-	st.transports, st.nonces = nil, nil
-	return nil
+	if st.key == nil {
+		st.key = k
+		return k, false, nil
+	}
+	return k, true, nil
 }
 
-// transport returns the device's transport for rt and the key it signs
-// with.
-func (st *deviceState) transport(rt *signingRT, mint bool) (*dpopclient.Transport, *dpop.Key, error) {
+// transport returns the transport rt signs with for this request, its key,
+// and whether the key is a candidate (its transport is then not kept).
+func (st *deviceState) transport(rt *signingRT, mint bool) (*dpopclient.Transport, *dpop.Key, bool, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if err := st.keyFor(mint); err != nil {
-		return nil, nil, err
-	}
-	if t, ok := st.transports[rt]; ok {
-		return t, st.key, nil
-	}
-	base := rt.base
-	if rt.public != "" {
-		base = &redial{base: rt.base, origin: rt.origin}
-	}
-	t, err := dpopclient.NewTransport(base, st.key, callToken, rt.signedOrigin())
+	key, candidate, err := st.signingKey(mint)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	if st.transports == nil {
-		st.transports = map[*signingRT]*dpopclient.Transport{}
+	if t, ok := st.transports[rt]; ok && !candidate {
+		return t, key, false, nil
 	}
-	st.transports[rt] = t
-	return t, st.key, nil
+	t, err := dpopclient.NewTransport(rt.redial, key, callToken, rt.signedOrigin())
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !candidate {
+		if st.transports == nil {
+			st.transports = map[*signingRT]*dpopclient.Transport{}
+		}
+		st.transports[rt] = t
+	}
+	return t, key, candidate, nil
+}
+
+// adopt makes a candidate key the device's after the mint signed with it
+// succeeded; t (if any) is rt's transport for it.
+func (st *deviceState) adopt(key *dpop.Key, rt *signingRT, t *dpopclient.Transport) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.revoked {
+		return // another request adopted a key first
+	}
+	st.key, st.revoked = key, false
+	st.transports, st.nonces = nil, nil
+	if rt != nil && t != nil {
+		st.transports = map[*signingRT]*dpopclient.Transport{rt: t}
+	}
 }
 
 // markRevoked records that key was refused as revoked, if the device still
@@ -153,6 +181,8 @@ func (st *deviceState) markRevoked(key *dpop.Key) {
 		st.revoked = true
 	}
 }
+
+func success(status int) bool { return status >= 200 && status < 300 }
 
 func callToken(ctx context.Context) (string, error) {
 	tok, _ := runner.CallAuth(ctx)
@@ -169,7 +199,12 @@ func (s *Signer) Client(c *http.Client, baseURL string) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	cp.Transport = &signingRT{base: base, origin: normOrigin(baseURL), public: s.origin, err: s.err, own: &s.own}
+	rt := &signingRT{base: base, origin: normOrigin(baseURL), public: s.origin, err: s.err, own: &s.own}
+	rt.redial = base
+	if rt.public != "" {
+		rt.redial = &redial{base: base, origin: rt.origin}
+	}
+	cp.Transport = rt
 	return &cp
 }
 
@@ -177,8 +212,9 @@ func (s *Signer) Client(c *http.Client, baseURL string) *http.Client {
 // signer's own), for the token its context carries.
 type signingRT struct {
 	base   http.RoundTripper
-	origin string // the target's origin, where requests go
-	public string // the origin proofs name; "" = origin
+	origin string            // the target's origin, where requests go
+	public string            // the origin proofs name; "" = origin
+	redial http.RoundTripper // sends a request on the public origin to the target
 	err    error
 	own    *runner.Device
 }
@@ -191,8 +227,13 @@ func (rt *signingRT) signedOrigin() string {
 }
 
 func (rt *signingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	o := originOf(req.URL)
+	public := rt.public != "" && o == rt.public
 	tok, mint := runner.CallAuth(req.Context())
 	if tok == "" && !mint {
+		if public {
+			return rt.redial.RoundTrip(req)
+		}
 		return rt.base.RoundTrip(req)
 	}
 	fail := func(err error) (*http.Response, error) {
@@ -206,7 +247,7 @@ func (rt *signingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		return fail(rt.err)
 	case rt.origin == "":
 		return fail(dpopclient.ErrNoOrigins)
-	case originOf(req.URL) != rt.origin:
+	case o != rt.origin && !public:
 		// A redirect off the caller's origin (a presigned URL): the token
 		// and the proofs stay home, as a Bearer does.
 		return rt.base.RoundTrip(req)
@@ -216,14 +257,14 @@ func (rt *signingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		dv = rt.own
 	}
 	st := stateOf(dv)
-	t, key, err := st.transport(rt, mint)
+	t, key, candidate, err := st.transport(rt, mint)
 	if err != nil {
 		return fail(err)
 	}
 	if mint {
 		req = dpopclient.WithMint(req)
 	}
-	if rt.public != "" {
+	if rt.public != "" && !public {
 		req = req.Clone(req.Context())
 		req.URL.Scheme, req.URL.Host = splitOrigin(rt.public)
 	}
@@ -231,7 +272,10 @@ func (rt *signingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if errors.Is(dpopclient.Refusal(resp), dpopclient.ErrDeviceRevoked) {
+	switch {
+	case candidate && success(resp.StatusCode):
+		st.adopt(key, rt, t)
+	case !candidate && errors.Is(dpopclient.Refusal(resp), dpopclient.ErrDeviceRevoked):
 		st.markRevoked(key)
 	}
 	return resp, nil
@@ -253,11 +297,12 @@ func (r *redial) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // Do implements [runner.Signer]: the stress engine's requests, signed with
 // dpopclient.Transport's rule — the last nonce the origin sent this key, and
-// one retry when a 401 asks for a new one. A request with no token that is
-// not a mint goes out unsigned.
-func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool, send func(http.Header) (int, http.Header, error)) (int, error) {
+// one retry when a 401 asks for a new one — and the same revocation rule as
+// the callers. A request with no token that is not a mint goes out
+// unsigned.
+func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool, send func(http.Header) (int, http.Header, []byte, error)) (int, error) {
 	if token == "" && !mint {
-		status, _, err := send(http.Header{})
+		status, _, _, err := send(http.Header{})
 		return status, err
 	}
 	if s.err != nil {
@@ -278,11 +323,15 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 	origin := originOf(&htu)
 
 	st.mu.Lock()
-	if err := st.keyFor(mint); err != nil {
+	key, candidate, err := st.signingKey(mint)
+	if err != nil {
 		st.mu.Unlock()
 		return -1, err
 	}
-	key, used := st.key, st.nonces[origin]
+	used := ""
+	if !candidate {
+		used = st.nonces[origin]
+	}
 	st.mu.Unlock()
 
 	for attempt := 0; ; attempt++ {
@@ -295,11 +344,25 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 			h.Set("Authorization", dpop.AuthScheme+" "+token)
 		}
 		h.Set(dpop.HeaderProof, proof)
-		status, resp, err := send(h)
+		status, resp, body, err := send(h)
 		if err != nil {
 			return status, err
 		}
 		fresh := resp.Get(dpop.HeaderNonce)
+		if attempt == 0 && status == http.StatusUnauthorized && fresh != "" && fresh != used &&
+			dpop.IsUseNonceChallenge(resp.Values(dpop.HeaderWWWAuthenticate)) {
+			used = fresh
+			continue
+		}
+		switch {
+		case candidate && success(status):
+			st.adopt(key, nil, nil)
+		case !candidate:
+			refusal := dpopclient.Refusal(&http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(body))})
+			if errors.Is(refusal, dpopclient.ErrDeviceRevoked) {
+				st.markRevoked(key)
+			}
+		}
 		if fresh != "" {
 			st.mu.Lock()
 			if st.key == key {
@@ -310,11 +373,7 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 			}
 			st.mu.Unlock()
 		}
-		if attempt > 0 || status != http.StatusUnauthorized || fresh == "" || fresh == used ||
-			!dpop.IsUseNonceChallenge(resp.Values(dpop.HeaderWWWAuthenticate)) {
-			return status, nil
-		}
-		used = fresh
+		return status, nil
 	}
 }
 
@@ -327,8 +386,7 @@ func (s *Signer) PublicJWK(dev *runner.Device) (string, error) {
 	}
 	st := stateOf(dev)
 	st.mu.Lock()
-	err := st.keyFor(false)
-	key := st.key
+	key, _, err := st.signingKey(false)
 	st.mu.Unlock()
 	if err != nil {
 		return "", err

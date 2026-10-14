@@ -52,6 +52,12 @@ func Expand(v any, s *Scope) (any, error) {
 	}
 }
 
+// DeviceJWKPrefix is the generator prefix of a device's public key,
+// `${device_jwk:<device>}`. Only the runner can resolve it (through
+// ExpandWith, for a step's input); anywhere else it is an error naming where
+// it is allowed, not an unresolved capture.
+const DeviceJWKPrefix = "device_jwk"
+
 // ExpandWith is Expand with extra generator prefixes: `${<prefix>:<arg>}`
 // resolves through ext[prefix](arg) instead of being read as a capture. The
 // runner uses it for values only it can produce, such as a device's public
@@ -185,6 +191,9 @@ func (s *Scope) resolve(expr string) (any, error) {
 		if prefix, arg, ok := strings.Cut(expr, ":"); ok {
 			if fn, ok := s.ext[prefix]; ok {
 				return fn(arg)
+			}
+			if prefix == DeviceJWKPrefix {
+				return nil, fmt.Errorf("e2e runtime: ${%s:%s} is expanded only in a step's input, on a caller that signs with device keys — not in headers, expectations or stress load ops", DeviceJWKPrefix, arg)
 			}
 		}
 		v, ok := s.lookup(expr)

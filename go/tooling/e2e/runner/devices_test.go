@@ -50,7 +50,7 @@ func TestDevices_TokenFollowsItsMint(t *testing.T) {
 	mint := mintStep(map[string]any{"token": map[string]any{"capture": "bob.token"}})
 	dv := d.stepDevice(mint, "", nil)
 	sc.Capture("bob.token", "tok-b")
-	d.learn(dv, mint, sc)
+	d.learn(dv, mint, nil, sc)
 	if got := d.stepDevice(Step{TokenFrom: "copy"}, "tok-b", nil); got != dv {
 		t.Error("a copied token did not sign with the device that minted it")
 	}
@@ -75,33 +75,62 @@ func TestDevices_TokenFollowsItsMint(t *testing.T) {
 	}
 }
 
-// Only a mint's token field is a token. Other values it captured — a user
-// id, a flag — never stand for a device, so a token that happens to equal
-// one signs as its slot; a mint's input chains only on strings.
-func TestDevices_OnlyTheTokenFieldIsAToken(t *testing.T) {
+// Only a mint's token field is a token, and a finished mint's other
+// captures chain nothing: bob's sign-in whose input happens to carry
+// alice's user id is bob's own device.
+func TestDevices_AFinishedMintChainsNothing(t *testing.T) {
 	d := NewDevices()
 	sc := newScope()
 	alice := mintStep(map[string]any{
 		"token":   map[string]any{"capture": "auth.token"},
 		"user_id": map[string]any{"capture": "alice.id"},
-		"admin":   map[string]any{"capture": "alice.admin"},
 	})
 	dv := d.stepDevice(alice, "", nil)
 	sc.Capture("auth.token", "tok-a")
 	sc.Capture("alice.id", "u-1")
-	sc.Capture("alice.admin", true)
-	d.learn(dv, alice, sc)
+	d.learn(dv, alice, nil, sc)
 
 	bob := mintStep(map[string]any{"token": map[string]any{"capture": "bob.token"}})
-	bobDev := d.stepDevice(bob, "", nil)
+	bobDev := d.stepDevice(bob, "", map[string]any{"invited_by": "u-1"})
+	if bobDev == dv {
+		t.Error("bob's mint chained on alice's user id")
+	}
 	if d.stepDevice(Step{TokenFrom: "bob.token"}, "u-1", nil) != bobDev {
 		t.Error("a captured user id was taken for a token of its mint's device")
 	}
-	if d.stepDevice(bob, "", map[string]any{"remember": true, "flag": "true"}) != bobDev {
+}
+
+// An unfinished mint (no token yet: an MFA challenge) chains the next mint
+// that carries what it captured — strings only — and only once.
+func TestDevices_AnUnfinishedMintChainsOnce(t *testing.T) {
+	d := NewDevices()
+	sc := newScope()
+	signIn := mintStep(map[string]any{
+		"challenge_id": map[string]any{"capture": "mfa.challenge_id"},
+		"remember":     map[string]any{"capture": "mfa.remember"},
+	})
+	dv := d.stepDevice(signIn, "", nil)
+	sc.Capture("mfa.challenge_id", "ch-1")
+	sc.Capture("mfa.remember", true)
+	d.learn(dv, signIn, nil, sc)
+
+	verify := mintStep(map[string]any{"token": map[string]any{"capture": "auth.token"}})
+	if d.stepDevice(verify, "", map[string]any{"flag": "true"}) == dv {
 		t.Error("a non-string capture chained a later mint")
 	}
-	if d.stepDevice(bob, "", map[string]any{"user": map[string]any{"id": "u-1"}}) != dv {
-		t.Error("a mint whose input carries a string an earlier mint captured did not chain on it")
+	in := map[string]any{"challenge": map[string]any{"id": "ch-1"}}
+	if d.stepDevice(verify, "", in) != dv {
+		t.Fatal("the mint carrying the challenge did not chain on it")
+	}
+	// A refused attempt spends nothing: the retry chains again.
+	if d.stepDevice(verify, "", in) != dv {
+		t.Fatal("a second attempt before success did not chain")
+	}
+	sc.Capture("auth.token", "tok-a")
+	d.learn(dv, verify, in, sc)
+	other := mintStep(map[string]any{"token": map[string]any{"capture": "other.token"}})
+	if d.stepDevice(other, "", in) == dv {
+		t.Error("a spent challenge chained a second successful mint")
 	}
 }
 

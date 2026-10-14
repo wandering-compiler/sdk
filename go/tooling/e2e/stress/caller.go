@@ -105,7 +105,7 @@ func (c *LoadCaller) FireAs(dev *runner.Device, ep runner.Endpoint, input map[st
 		}
 		return resp.StatusCode(), nil
 	}
-	return c.signer.Do(dev, method, target, token, ep.Mint, func(h http.Header) (int, http.Header, error) {
+	return c.signer.Do(dev, method, target, token, ep.Mint, func(h http.Header) (int, http.Header, []byte, error) {
 		for k, vs := range h {
 			req.Header.Del(k)
 			for _, v := range vs {
@@ -114,7 +114,7 @@ func (c *LoadCaller) FireAs(dev *runner.Device, ep runner.Endpoint, input map[st
 		}
 		resp.Reset()
 		if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
-			return -1, nil, err
+			return -1, nil, nil, err
 		}
 		// Only what the signer reads: the nonce and the challenge.
 		out := http.Header{}
@@ -123,6 +123,11 @@ func (c *LoadCaller) FireAs(dev *runner.Device, ep runner.Endpoint, input map[st
 				out.Add(name, string(v))
 			}
 		}
-		return resp.StatusCode(), out, nil
+		// The body only for a refusal: it may name a revoked device.
+		var body []byte
+		if st := resp.StatusCode(); st == http.StatusUnauthorized || st == http.StatusForbidden {
+			body = append(body, resp.Body()...)
+		}
+		return resp.StatusCode(), out, body, nil
 	})
 }

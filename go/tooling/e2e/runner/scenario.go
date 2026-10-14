@@ -311,7 +311,7 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		keyDevice = devs.named(name)
 		return sg.PublicJWK(keyDevice)
 	}
-	expanded, err := runtime.ExpandWith(s.Input, scope, map[string]func(string) (any, error){"device_jwk": deviceJWK})
+	expanded, err := runtime.ExpandWith(s.Input, scope, map[string]func(string) (any, error){runtime.DeviceJWKPrefix: deviceJWK})
 	if err != nil {
 		return fmt.Errorf("expand input: %w", err)
 	}
@@ -388,7 +388,7 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	case keyDevice != nil:
 		devs.bindToken(keyDevice, s, scope)
 	case s.Endpoint.Mint:
-		devs.learn(dev, s, scope)
+		devs.learn(dev, s, input, scope)
 	}
 
 	for i, ae := range s.AwaitEvents {

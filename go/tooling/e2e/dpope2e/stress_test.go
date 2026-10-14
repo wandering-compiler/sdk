@@ -13,6 +13,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/dpope2e"
+	"github.com/wandering-compiler/sdk/go/tooling/e2e/internal/runtime"
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/runner"
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/stress"
 )
@@ -160,5 +161,32 @@ func TestFireAs_WithOriginSignsForThePublicOrigin(t *testing.T) {
 	code, err := lc.FireAs(nil, ep, map[string]any{"email": "a"}, "", nil)
 	if err != nil || code != http.StatusOK || g.refused.Load() != 0 {
 		t.Errorf("mint for the public origin: status %d, err %v, refused %d", code, err, g.refused.Load())
+	}
+}
+
+// The load reads a revocation like the callers do: after DEVICE_REVOKED the
+// device's next mint signs with a new key, which the gateway accepts.
+func TestFireAs_ReadsARevocation(t *testing.T) {
+	g := newDPoPGateway(t)
+	devs := runner.NewDevices()
+	ctx := runner.WithDevices(context.Background(), devs)
+	scope := runtime.NewRun().NewScope()
+	steps := []runner.Step{
+		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}}),
+		{Label: "revoke", Endpoint: runner.Endpoint{Ref: "devices.Revoke", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/revoke", AuthRequired: true}},
+	}
+	if err := runner.RunSteps(ctx, scope, steps, dpopCallers(g)); err != nil {
+		t.Fatal(err)
+	}
+	tok := captured(t, scope, "auth.token")
+	dev := devs.DeviceFor(tok)
+	lc := stress.NewLoadCaller(g.URL, 1, 5*time.Second).WithSigner(dpope2e.New())
+	me := runner.Endpoint{Ref: "me.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/me", AuthRequired: true}
+	if code, _ := lc.FireAs(dev, me, nil, tok, nil); code != http.StatusUnauthorized {
+		t.Fatalf("revoked device's call: status %d, want 401", code)
+	}
+	signIn := runner.Endpoint{Ref: "auth.SignIn", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/signin", Mint: true}
+	if code, err := lc.FireAs(dev, signIn, map[string]any{"email": "alice"}, "", nil); code != http.StatusOK {
+		t.Errorf("sign-in after the revocation: status %d, err %v, want 200 with a new key", code, err)
 	}
 }
