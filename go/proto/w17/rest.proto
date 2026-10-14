@@ -961,6 +961,23 @@ message RestStream {
   // safety comes from being one-shot with a 30s TTL, which is
   // exactly what a customer link cannot be.
   Credential credential = 9;
+
+  // The HTTP method that opens the stream. Empty / GET is the default: the
+  // request's fields ride the URL (path and query string), which is what a
+  // browser's EventSource and a WebSocket upgrade can send.
+  //
+  // POST is for a server-stream over SSE whose request does not belong in a
+  // URL: the request is a JSON body decoded exactly as a unary POST's, and
+  // the answer is still `text/event-stream`. A chat turn is the case — the
+  // question would otherwise land in every proxy's access log, and history,
+  // repeated messages and long text do not fit a query string at all. The
+  // generated clients read it with a streaming fetch, not EventSource, so
+  // nothing on their side changes shape.
+  //
+  // Refused on a stream that resolves to WS (a WebSocket upgrade is a GET by
+  // definition) and for PUT / PATCH / DELETE — a stream is opened, not an
+  // edit.
+  HttpMethod method = 10;
 }
 
 // DownloadEndpoint binds a static download route under the

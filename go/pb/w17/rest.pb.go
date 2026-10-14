@@ -2064,7 +2064,23 @@ type RestStream struct {
 	// you must already be authenticated to mint one — and its
 	// safety comes from being one-shot with a 30s TTL, which is
 	// exactly what a customer link cannot be.
-	Credential    *Credential `protobuf:"bytes,9,opt,name=credential,proto3" json:"credential,omitempty"`
+	Credential *Credential `protobuf:"bytes,9,opt,name=credential,proto3" json:"credential,omitempty"`
+	// The HTTP method that opens the stream. Empty / GET is the default: the
+	// request's fields ride the URL (path and query string), which is what a
+	// browser's EventSource and a WebSocket upgrade can send.
+	//
+	// POST is for a server-stream over SSE whose request does not belong in a
+	// URL: the request is a JSON body decoded exactly as a unary POST's, and
+	// the answer is still `text/event-stream`. A chat turn is the case — the
+	// question would otherwise land in every proxy's access log, and history,
+	// repeated messages and long text do not fit a query string at all. The
+	// generated clients read it with a streaming fetch, not EventSource, so
+	// nothing on their side changes shape.
+	//
+	// Refused on a stream that resolves to WS (a WebSocket upgrade is a GET by
+	// definition) and for PUT / PATCH / DELETE — a stream is opened, not an
+	// edit.
+	Method        HttpMethod `protobuf:"varint,10,opt,name=method,proto3,enum=w17.HttpMethod" json:"method,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2153,6 +2169,13 @@ func (x *RestStream) GetCredential() *Credential {
 		return x.Credential
 	}
 	return nil
+}
+
+func (x *RestStream) GetMethod() HttpMethod {
+	if x != nil {
+		return x.Method
+	}
+	return HttpMethod_HTTP_METHOD_UNSPECIFIED
 }
 
 // DownloadEndpoint binds a static download route under the
@@ -2438,7 +2461,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fFieldBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1b\n" +
-	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xef\x02\n" +
+	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\x98\x03\n" +
 	"\n" +
 	"RestStream\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
@@ -2450,7 +2473,9 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x06fields\x18\b \x03(\v2\x11.w17.FieldBindingR\x06fields\x12/\n" +
 	"\n" +
 	"credential\x18\t \x01(\v2\x0f.w17.CredentialR\n" +
-	"credentialJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
+	"credential\x12'\n" +
+	"\x06method\x18\n" +
+	" \x01(\x0e2\x0f.w17.HttpMethodR\x06methodJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
 	"\x10DownloadEndpoint\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\ainclude\x18\x02 \x03(\tR\ainclude\x12\x18\n" +
@@ -2563,15 +2588,16 @@ var file_w17_rest_proto_depIdxs = []int32{
 	16, // 19: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
 	18, // 20: w17.RestStream.fields:type_name -> w17.FieldBinding
 	11, // 21: w17.RestStream.credential:type_name -> w17.Credential
-	3,  // 22: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 23: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	21, // 24: w17.rest_api:extendee -> google.protobuf.FileOptions
-	7,  // 25: w17.rest_api:type_name -> w17.RestApi
-	26, // [26:26] is the sub-list for method output_type
-	26, // [26:26] is the sub-list for method input_type
-	25, // [25:26] is the sub-list for extension type_name
-	24, // [24:25] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	5,  // 22: w17.RestStream.method:type_name -> w17.HttpMethod
+	3,  // 23: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 24: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	21, // 25: w17.rest_api:extendee -> google.protobuf.FileOptions
+	7,  // 26: w17.rest_api:type_name -> w17.RestApi
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	26, // [26:27] is the sub-list for extension type_name
+	25, // [25:26] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
