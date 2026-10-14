@@ -10,11 +10,13 @@ import (
 	"testing"
 )
 
-// DPoP is opt-in down to the module graph: only lib/dpop, its subpackages and
-// lib/restgw/dpopgw may import lib/dpop or go-jose. Every other package —
-// lib/restgw, lib/principal, core/grpcx and the rest — must not, so a
-// consumer that never uses DPoP gets no new transitive dependency (and no
-// new go.sum entry) when it bumps the SDK. Checked on the direct imports of
+// DPoP is opt-in down to the module graph: only lib/dpop, its subpackages,
+// lib/restgw/dpopgw and tooling/e2e/dpope2e (the e2e runner's signer, which
+// only a suite whose surface binds devices imports) may import lib/dpop or
+// go-jose. Every other package — lib/restgw, lib/principal, core/grpcx, the
+// e2e runner and the rest — must not, so a consumer that never uses DPoP gets
+// no new transitive dependency (and no new go.sum entry) when it bumps the
+// SDK. Checked on the direct imports of
 // every non-test file in the module; since go-jose is reachable only through
 // these packages, that bounds the transitive graph too.
 func TestDPoPImportsStayInsideTheOptInPackages(t *testing.T) {
@@ -22,7 +24,7 @@ func TestDPoPImportsStayInsideTheOptInPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{"lib/dpop", "lib/restgw/dpopgw"}
+	allowed := []string{"lib/dpop", "lib/restgw/dpopgw", "tooling/e2e/dpope2e"}
 	forbidden := []string{"github.com/wandering-compiler/sdk/go/lib/dpop", "github.com/go-jose/go-jose"}
 	checked := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

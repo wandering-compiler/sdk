@@ -112,6 +112,14 @@ type Step struct {
 	// and Anonymous.
 	TokenFrom string
 
+	// Device names the device key this step signs with on a caller built
+	// WithSigner, in place of the one its token implies (see devices.go). Two
+	// sign-ins of one principal with different Device values are two
+	// devices; a step presenting one device's token under another Device
+	// asserts the refusal of a proof by the wrong key. Empty: derived.
+	// Ignored by callers that do not sign.
+	Device string
+
 	// Repeat runs this step N times sequentially (the `${seq}`
 	// generator advances each iteration). Zero/one = once.
 	Repeat int
@@ -172,6 +180,9 @@ func RunSteps(ctx context.Context, scope *runtime.Scope, steps []Step, callers m
 	var cfg runCfg
 	for _, o := range opts {
 		o(&cfg)
+	}
+	if DevicesFrom(ctx) == nil {
+		ctx = WithDevices(ctx, NewDevices())
 	}
 	total := 0
 	for _, s := range steps {
@@ -295,6 +306,21 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		return fmt.Errorf("expand credential: %w", err)
 	}
 
+	// The device key this step signs with, on callers that sign. The
+	// credential of the DPoP scheme is a token too, and its key is the one
+	// that minted it.
+	devs := DevicesFrom(ctx)
+	if devs == nil {
+		devs = NewDevices()
+		ctx = WithDevices(ctx, devs)
+	}
+	presented := token
+	if tok, ok := signedCredential(credential); ok {
+		presented = tok
+	}
+	dev := devs.stepDevice(s, presented)
+	ctx = withDevice(ctx, dev)
+
 	// Open every event subscription BEFORE the call so an async event the
 	// call triggers can't land before we're listening (the stream has no
 	// replay). One subscription per awaited topic keeps each Await from
@@ -336,6 +362,9 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 		if err := runUnaryStep(ctx, s, caller, input, token, headers, credential, scope); err != nil {
 			return err
 		}
+	}
+	if s.Endpoint.Mint {
+		devs.learn(dev, s, scope)
 	}
 
 	for i, ae := range s.AwaitEvents {
@@ -386,7 +415,12 @@ func subscribeAwaits(ctx context.Context, s Step, cfg runCfg, scope *runtime.Sco
 			if terr != nil {
 				return subs, fmt.Errorf("await_event %q: %w", ae.Topic, terr)
 			}
-			sub, err = cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, tok, subHeaders)
+			// Another principal's stream signs with that principal's key.
+			actx := ctx
+			if devs := DevicesFrom(ctx); devs != nil {
+				actx = withDevice(ctx, devs.forToken(tok, ae.TokenFrom))
+			}
+			sub, err = cfg.events.Subscribe(actx, ae.Path, []string{ae.Topic}, tok, subHeaders)
 		case credential != "":
 			// The step's own credential, not the session's: the stream has to
 			// be that principal's for the await to say anything about what
@@ -398,15 +432,19 @@ func subscribeAwaits(ctx context.Context, s Step, cfg runCfg, scope *runtime.Sco
 			sub, err = cs.SubscribeWithCredential(ctx, ae.Path, []string{ae.Topic}, credential, subHeaders)
 		default:
 			evToken := token
+			actx := ctx
 			if evToken == "" {
 				// The /w17-events stream is gated by the same realm as REST;
 				// reuse the scenario's captured token even when this step's own
-				// endpoint needs none.
-				if v, ok := scope.Get("auth.token"); ok && v != nil {
+				// endpoint needs none — signed by the key that minted it.
+				if v, ok := scope.Get(DefaultTokenSlot); ok && v != nil {
 					evToken = runtime.Text(v)
 				}
+				if devs := DevicesFrom(ctx); devs != nil && evToken != "" {
+					actx = withDevice(ctx, devs.forToken(evToken, DefaultTokenSlot))
+				}
 			}
-			sub, err = cfg.events.Subscribe(ctx, ae.Path, []string{ae.Topic}, evToken, subHeaders)
+			sub, err = cfg.events.Subscribe(actx, ae.Path, []string{ae.Topic}, evToken, subHeaders)
 		}
 		if err != nil {
 			return subs, err
@@ -507,6 +545,13 @@ func stepToken(s Step, scope *runtime.Scope) (string, error) {
 	case s.Credential != "" && s.TokenFrom != "":
 		return "", fmt.Errorf("step names both a credential and token_from %q — a call carries one Authorization value", s.TokenFrom)
 	case s.Anonymous || s.Credential != "":
+		return "", nil
+	case s.Endpoint.Mint && s.TokenFrom != "":
+		return "", fmt.Errorf("step names token_from %q on the mint %s — a mint call presents no token (the gateway checks a presented token before the sign-in runs)", s.TokenFrom, s.Endpoint.Ref)
+	case s.Endpoint.Mint:
+		// A token mint sends no stored token, even to an endpoint that
+		// requires auth: the edge checks a presented token before the route
+		// runs, so a stale session would fail signing in again.
 		return "", nil
 	case s.TokenFrom != "":
 		return capturedToken(scope, s.TokenFrom)

@@ -79,6 +79,16 @@ type StreamCaller interface {
 type SSEStreamCaller struct {
 	BaseURL string
 	Client  *http.Client
+
+	signs bool
+}
+
+// WithSigner makes the caller sign with device keys, as
+// [RESTCaller.WithSigner] does. It returns c.
+func (c *SSEStreamCaller) WithSigner(s Signer) *SSEStreamCaller {
+	c.Client = s.Client(c.Client, c.BaseURL)
+	c.signs = true
+	return c
 }
 
 // NewSSEStreamCaller builds a stream caller against baseURL. A nil client
@@ -96,6 +106,9 @@ func (c *SSEStreamCaller) OpenStream(ctx context.Context, ep Endpoint, input map
 	if err != nil {
 		return nil, fmt.Errorf("open stream %s: %w", ep.Ref, err)
 	}
+	if c.signs {
+		ctx = withCallAuth(ctx, token, ep.Mint)
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, target, nil)
 	if err != nil {
@@ -103,7 +116,7 @@ func (c *SSEStreamCaller) OpenStream(ctx context.Context, ep Endpoint, input map
 		return nil, fmt.Errorf("open stream %s: build request: %w", ep.Ref, err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if token != "" {
+	if token != "" && !c.signs {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	// Same rule as the unary caller and the event subscriber: a step's own

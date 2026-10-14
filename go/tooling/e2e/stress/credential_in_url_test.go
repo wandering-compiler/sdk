@@ -34,7 +34,7 @@ func TestFireOp_CapabilityLinkGetsNoBearer(t *testing.T) {
 			PathTemplate: "/tasks", AuthRequired: true}},
 	}
 	for i := range ops {
-		fireOp(ws, &ops[i], "session-token", lc, &workerBuf{}, time.Time{})
+		fireOp(ws, &ops[i], "session-token", nil, lc, &workerBuf{}, time.Time{})
 	}
 	mu.Lock()
 	defer mu.Unlock()

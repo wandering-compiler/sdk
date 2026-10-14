@@ -38,6 +38,21 @@ type Caller interface {
 type RESTCaller struct {
 	BaseURL string
 	Client  *http.Client
+
+	signs bool
+}
+
+// WithSigner makes the caller sign with device keys for a surface whose
+// auth method binds devices (pass dpope2e.New()): a token goes out as
+// `Authorization: DPoP <token>` with a proof by the key that minted it, a
+// mint step carries an unbound proof and no token, and a call with neither
+// carries no DPoP headers. Proofs are made for the origin of BaseURL only,
+// which must be the origin the gateway is configured with
+// (`<P>_DPOP_ORIGIN`). See devices.go. It returns c.
+func (c *RESTCaller) WithSigner(s Signer) *RESTCaller {
+	c.Client = s.Client(c.Client, c.BaseURL)
+	c.signs = true
+	return c
 }
 
 // NewRESTCaller builds a REST caller against baseURL (e.g.
@@ -234,6 +249,14 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 		return nil, err
 	}
 	method, target, body := r.method, r.target, r.body
+	if c.signs {
+		// A DPoP credential is a token: the signing transport writes it
+		// back with its proof.
+		if tok, ok := signedCredential(credential); ok {
+			token, credential = tok, ""
+		}
+		ctx = withCallAuth(ctx, token, ep.Mint)
+	}
 
 	var reqBody io.Reader
 	contentType := ""
@@ -267,7 +290,7 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 	switch {
 	case credential != "":
 		req.Header.Set("Authorization", credential)
-	case token != "":
+	case token != "" && !c.signs:
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	// Static per-step headers (e.g. X-Device-Id). Set after the

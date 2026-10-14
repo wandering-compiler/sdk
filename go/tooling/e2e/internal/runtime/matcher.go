@@ -70,6 +70,44 @@ func BindsCapture(expect map[string]any) bool {
 	return false
 }
 
+// CaptureNames lists, sorted and without repeats, the capture names an
+// expect mapping binds anywhere in it — the same places [BindsCapture]
+// looks.
+func CaptureNames(expect map[string]any) []string {
+	seen := map[string]bool{}
+	for _, spec := range expect {
+		captureNames(spec, seen)
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func captureNames(spec any, seen map[string]bool) {
+	m, ok := asStringMap(spec)
+	if !ok {
+		return
+	}
+	if v, ok := m["capture"]; ok {
+		if name, ok := v.(string); ok && name != "" {
+			seen[name] = true
+		}
+		if inner, ok := m["match"]; ok {
+			captureNames(inner, seen)
+		}
+		return
+	}
+	if _, isNamed := m["matcher"]; isNamed {
+		return
+	}
+	for _, v := range m {
+		captureNames(v, seen)
+	}
+}
+
 // bindsCapture reports whether a matcher spec binds a capture anywhere in it
 // — at its top, or inside a nested object or a `match:` it carries.
 func bindsCapture(spec any) bool {
