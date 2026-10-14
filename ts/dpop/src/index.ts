@@ -7,7 +7,9 @@
 export { base64urlDecode, base64urlEncode } from "./base64url";
 export { canonicalJwk, jwkThumbprint, publicJwk, type PublicJwk } from "./jwk";
 export {
+  defaultKeyStore,
   dpopKey,
+  FallbackKeyStore,
   generateKeyPair,
   IndexedDBKeyStore,
   loadOrCreateKey,
