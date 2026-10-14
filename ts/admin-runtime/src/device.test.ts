@@ -426,15 +426,60 @@ describe("where the token lives", () => {
     expect(sent[1].auth).toBe("DPoP theirs");
   });
 
-  it("a sign-in keeps the key it was minted with, even when the store changed meanwhile", async () => {
+  it("a sign-in makes this tab sign with the key the store holds", async () => {
     configureAuth(DPOP, { keyStore: store });
     const { sent } = server(() => json(200, { token: "t" }));
-    await apiPost("/admin/api/authenticate", {}, undefined, { mint: true });
-    // Another tab put a new key in the store and has not signed in (yet).
-    await store.save(await generateKeyPair());
-    setToken("t");
+    await apiGet("/warm");
+    setToken("old");
     await apiGet("/a");
-    expect(sent[1].thumbprint).toBe(sent[0].thumbprint);
+    // Another tab replaced the key; this tab is handed a token for it.
+    const theirs = await store.save(await generateKeyPair()).then(() => storedThumbprint(store));
+    setToken("t");
+    await apiGet("/b");
+    expect(sent[1].thumbprint).not.toBe(theirs);
+    expect(sent[2].thumbprint).toBe(theirs);
+  });
+
+  it("re-sends a password sign-in whose key another tab replaced on the way", async () => {
+    configureAuth(DPOP, { keyStore: store });
+    let theirs = "";
+    const { sent } = server(async (_, n) => {
+      if (n === 1) {
+        await store.save(await generateKeyPair());
+        theirs = (await storedThumbprint(store)) ?? "";
+      }
+      return json(200, { token: `t-${n}` });
+    });
+    const resp = await apiPost<{ token: string }>("/admin/api/authenticate", {}, undefined, {
+      mint: true,
+      resign: true,
+    });
+    expect(sent).toHaveLength(2);
+    expect(sent[1].thumbprint).toBe(theirs);
+    expect(resp.token).toBe("t-2");
+  });
+
+  it("refuses a code exchange whose key another tab replaced on the way", async () => {
+    configureAuth(DPOP, { keyStore: store });
+    const { sent } = server(async () => {
+      await store.save(await generateKeyPair());
+      return json(200, { token: "t" });
+    });
+    await expect(apiPost(EXCHANGE, {}, undefined, { mint: true })).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("refuses a password sign-in whose key changed twice", async () => {
+    configureAuth(DPOP, { keyStore: store });
+    server(async () => {
+      await store.save(await generateKeyPair());
+      return json(200, { token: "t" });
+    });
+    await expect(
+      apiPost("/admin/api/authenticate", {}, undefined, { mint: true, resign: true }),
+    ).rejects.toThrow(/device key changed/);
   });
 
   it("a public-computer session follows no other tab", async () => {
@@ -485,7 +530,8 @@ describe("where the token lives", () => {
     expect(sent[0].proof).not.toBeNull();
     setToken("t");
     expect(getToken()).toBe("t");
-    expect(window.localStorage.getItem("w17_admin_token")).toBeNull();
+    // The profile's token belongs to the other tabs: left where it is.
+    expect(window.localStorage.getItem("w17_admin_token")).toBe("profile");
     expect(window.sessionStorage.getItem("w17_admin_token")).toBeNull();
     // Another tab's sign-in is bound to a key this tab does not hold.
     window.dispatchEvent(
@@ -498,6 +544,29 @@ describe("where the token lives", () => {
     expect(getToken()).toBe("t");
     clearToken();
     expect(getToken()).toBeNull();
+    expect(window.localStorage.getItem("w17_admin_token")).toBe("profile");
+  });
+
+  it("a tab whose IndexedDB fails neither signs with nor clears the other tabs' token", async () => {
+    vi.stubGlobal("indexedDB", {
+      open: () => {
+        throw new Error("blocked");
+      },
+    });
+    window.localStorage.setItem("w17_admin_token", "shared");
+    configureAuth(DPOP);
+    const { sent } = server(() => json(401, { error: { code: "UNAUTHENTICATED", message: "x" } }));
+    await expect(apiGet("/a")).rejects.toMatchObject({ status: 401 });
+    // The first request loaded the key, and only then could the tab know.
+    await expect(apiGet("/b")).rejects.toMatchObject({ status: 401 });
+    expect(sent[1].auth).toBeNull();
+    expect(getToken()).toBeNull();
+    clearToken();
+    expect(window.localStorage.getItem("w17_admin_token")).toBe("shared");
+    setToken("mine");
+    expect(window.localStorage.getItem("w17_admin_token")).toBe("shared");
+    await apiGet("/c").catch(() => undefined);
+    expect(sent[2].auth).toBe("DPoP mine");
   });
 });
 
@@ -581,6 +650,18 @@ describe("federated sign-in: the code flow", () => {
     expect(consumeRedirect(PKCE)).toEqual({ kind: "token-refused" });
     expect(getToken()).toBeNull();
     expect(window.location.href).not.toContain("ey.leaked");
+  });
+
+  it("sends no stored Bearer token with a code exchange", async () => {
+    const bearer = { ...BEARER, oauth_exchange_endpoint: EXCHANGE };
+    configureAuth(bearer);
+    setToken("tok");
+    await federatedStartURL("/start");
+    const { sent } = server(() => json(200, { token: "t" }));
+    await exchangeCode(bearer, "c");
+    expect(sent[0].auth).toBeNull();
+    expect(sent[0].proof).toBeNull();
+    expect(getToken()).toBe("t");
   });
 
   it("still stores a #token= on a Bearer admin", () => {

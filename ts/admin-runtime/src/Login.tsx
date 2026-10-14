@@ -74,6 +74,21 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
   const dpop = spec.auth.dpop === true;
   const pkce = !!spec.auth.oauth_exchange_endpoint;
   const [publicComputer, setPublicComputer] = useState(false);
+  const [federatedError, setFederatedError] = useState<string | null>(null);
+
+  // A PKCE start is a button, not a link: the URL to go to exists only once
+  // the challenge is made, and a link to the bare start_url (opened in a new
+  // tab, copied) would reach the plugin without one and be refused.
+  async function startFederated(startUrl: string) {
+    setFederatedError(null);
+    try {
+      window.location.assign(
+        await federatedStartURL(startUrl, { publicComputer: dpop && publicComputer }),
+      );
+    } catch (err) {
+      setFederatedError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -84,12 +99,15 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
       // Only when ticked: a login method without the field refuses an
       // unknown one, and an unticked box has nothing to say.
       if (dpop && publicComputer) body.public_computer = true;
-      // A mint: an unbound proof and no token, re-sent once on a fresh key
-      // when the stored one turns out to be revoked (a password may be).
-      const resp = await apiPost<LoginResp>(spec.auth.login_endpoint, body, undefined, {
-        mint: true,
-        resign: true,
-      });
+      // With device identity, a mint: an unbound proof and no token, re-sent
+      // once on a fresh key when the stored one turns out to be revoked (a
+      // password may be). Without it, the request it always was.
+      const resp = await apiPost<LoginResp>(
+        spec.auth.login_endpoint,
+        body,
+        undefined,
+        dpop ? { mint: true, resign: true } : undefined,
+      );
       if (!resp.token) {
         setError("login response missing 'token' field");
         return;
@@ -128,30 +146,40 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
               )}
               {options.length > 0 && (
                 <Stack gap="sm">
-                  {options.map((o) => (
-                    <Button
-                      key={o.label}
-                      component="a"
-                      href={o.start_url}
-                      onClick={
-                        pkce
-                          ? async (e: React.MouseEvent) => {
-                              e.preventDefault();
-                              window.location.assign(
-                                await federatedStartURL(o.start_url, {
-                                  publicComputer: dpop && publicComputer,
-                                }),
-                              );
-                            }
-                          : undefined
-                      }
-                      variant="default"
-                      fullWidth
-                      size="md"
+                  {options.map((o) =>
+                    pkce ? (
+                      <Button
+                        key={o.label}
+                        onClick={() => startFederated(o.start_url)}
+                        variant="default"
+                        fullWidth
+                        size="md"
+                      >
+                        {o.label}
+                      </Button>
+                    ) : (
+                      <Button
+                        key={o.label}
+                        component="a"
+                        href={o.start_url}
+                        variant="default"
+                        fullWidth
+                        size="md"
+                      >
+                        {o.label}
+                      </Button>
+                    ),
+                  )}
+                  {federatedError && (
+                    <Alert
+                      color="red"
+                      variant="light"
+                      icon={<IconAlertTriangle size={18} />}
+                      title={t("Sign-in failed")}
                     >
-                      {o.label}
-                    </Button>
-                  ))}
+                      {federatedError}
+                    </Alert>
+                  )}
                 </Stack>
               )}
               {options.length > 0 && passwordSignIn && (

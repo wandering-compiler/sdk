@@ -152,8 +152,8 @@ export async function apiGet<T>(endpoint: string, wire?: WireRefs): Promise<T> {
 }
 
 /**
- * `device` marks a mint call (sign-in, OAuth exchange) for the DPoP signer;
- * it changes nothing while device identity is off.
+ * `device` marks a mint call (sign-in, OAuth exchange): with device identity
+ * on it carries an unbound proof; either way it carries no stored token.
  */
 export async function apiPost<T>(
   endpoint: string,
@@ -208,7 +208,9 @@ async function apiCall<T>(
     // made absolute here: a proof names it, and the signer checks its origin.
     res = await deviceFetch(new URL(endpoint, pageBase()).href, init, device);
   } else {
-    const auth = authHeader();
+    // A mint carries no token on the Bearer path either: the code exchange
+    // may go to another origin, and a stored session has no business there.
+    const auth = device?.mint ? undefined : authHeader();
     if (auth) {
       headers["Authorization"] = auth;
     }

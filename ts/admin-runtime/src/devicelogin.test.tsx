@@ -215,7 +215,10 @@ describe("Login with device identity", () => {
     );
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("This is a public computer"));
-    await user.click(screen.getByRole("link", { name: "Sign in with Acme" }));
+    // A button, not a link: a link to the bare start_url opened in a new
+    // tab would reach the plugin without a challenge.
+    expect(screen.queryByRole("link", { name: "Sign in with Acme" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Sign in with Acme" }));
     await waitFor(() => expect(window.location.hash).toBe("#/oauth-started"));
     const target = new URL(started[0]);
     expect(target.pathname).toBe("/oauth/acme/authorize");
@@ -224,6 +227,24 @@ describe("Login with device identity", () => {
       public_computer?: boolean;
     };
     expect(pending.public_computer).toBe(true);
+  });
+
+  it("says why a federated sign-in could not start", async () => {
+    const spec = makeSpec({
+      oauth_exchange_endpoint: EXCHANGE,
+      password_sign_in: false,
+      sign_in_options: [{ label: "Sign in with Acme", start_url: "/oauth/acme/authorize" }],
+    });
+    configureAuth(spec.auth);
+    vi.spyOn(crypto.subtle, "digest").mockRejectedValue(new Error("no WebCrypto here"));
+    render(
+      <MantineProvider>
+        <Login spec={spec} onLogin={() => {}} />
+      </MantineProvider>,
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: "Sign in with Acme" }));
+    expect(await screen.findByText("no WebCrypto here")).toBeTruthy();
+    expect(window.location.hash).not.toBe("#/oauth-started");
   });
 });
 
