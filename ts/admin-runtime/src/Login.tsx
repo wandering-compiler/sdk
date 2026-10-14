@@ -122,7 +122,12 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
         setError("login response missing 'token' field");
         return;
       }
-      setToken(resp.token, { publicComputer: resp.public_computer === true });
+      // The operator's own choice counts even when the answer cannot echo it
+      // (a sign-in method without the field): a public computer must never
+      // leave a token in the profile's storage.
+      setToken(resp.token, {
+        publicComputer: resp.public_computer === true || (dpop && publicComputer),
+      });
       onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

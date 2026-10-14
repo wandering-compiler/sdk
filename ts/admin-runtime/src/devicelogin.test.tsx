@@ -138,6 +138,24 @@ describe("Login with device identity", () => {
     expect(window.localStorage.getItem("w17_admin_token")).toBeNull();
   });
 
+  it("keeps a public-computer session tab-only even when the answer does not echo it", async () => {
+    const spec = makeSpec({ dpop: true });
+    configureAuth(spec.auth);
+    server(() => json(200, { token: "t-1" }));
+    const onLogin = vi.fn();
+    render(
+      <MantineProvider>
+        <Login spec={spec} onLogin={onLogin} />
+      </MantineProvider>,
+    );
+    const user = await typeCredentials();
+    await user.click(screen.getByLabelText("This is a public computer"));
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(onLogin).toHaveBeenCalled());
+    expect(window.sessionStorage.getItem("w17_admin_token")).toBe("t-1");
+    expect(window.localStorage.getItem("w17_admin_token")).toBeNull();
+  });
+
   it("sends no public_computer when the box is not ticked", async () => {
     const spec = makeSpec({ dpop: true });
     configureAuth(spec.auth);
