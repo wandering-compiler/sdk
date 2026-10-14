@@ -166,5 +166,8 @@ export async function exchangeCode(auth: AdminAuthSpec, code: string): Promise<v
   if (pending.public_computer) body.public_computer = true;
   const resp = await apiPost<ExchangeResp>(endpoint, body, undefined, { mint: true });
   if (!resp?.token) throw new FederatedSignInError("sign-in response missing 'token' field");
-  setToken(resp.token, { publicComputer: resp.public_computer === true });
+  // The choice made at the start counts even when the answer cannot echo it.
+  setToken(resp.token, {
+    publicComputer: resp.public_computer === true || pending.public_computer === true,
+  });
 }

@@ -614,6 +614,15 @@ describe("federated sign-in: the code flow", () => {
     expect(window.localStorage.getItem("w17_admin_token")).toBeNull();
   });
 
+  it("keeps a public-computer session tab-only even when the answer does not echo it", async () => {
+    configureAuth(PKCE, { keyStore: store });
+    await federatedStartURL("/start", { publicComputer: true });
+    server(() => json(200, { token: "t" }));
+    await exchangeCode(PKCE, "c");
+    expect(window.sessionStorage.getItem("w17_admin_token")).toBe("t");
+    expect(window.localStorage.getItem("w17_admin_token")).toBeNull();
+  });
+
   it("sends no public_computer the user did not ask for", async () => {
     configureAuth(PKCE, { keyStore: store });
     await federatedStartURL("/start");
