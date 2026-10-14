@@ -42,6 +42,14 @@ type Endpoint struct {
 	// field.
 	CredentialInURL bool
 
+	// Mint marks a token mint of a surface that binds devices (sign-in,
+	// sign-up, …: the gateway's `IsDeviceMintMethod`). A mint call sends no
+	// stored token — the gateway checks a presented token before the route
+	// runs, so a stale one would fail the sign-in — and, on a caller built
+	// WithSigner, carries an unbound proof the new token is bound to. See
+	// devices.go for which device key signs it.
+	Mint bool
+
 	// Stream marks an endpoint whose REST route is a server-stream served
 	// over SSE. The step OPENS it and reads frames instead of issuing a
 	// unary call.

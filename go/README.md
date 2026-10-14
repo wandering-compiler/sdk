@@ -141,7 +141,10 @@ sdk/go/
 │   ├── certgen/     mints the local dev PKI (self-signed CA + CA-signed leaf) used
 │   │                when the internal-mesh TLS switch (W17_INTERNAL_TLS) is on.
 │   ├── e2e/         the harness the *generated* e2erunner test module compiles
-│   │                against (matchers, interpolation, the gRPC/REST/MCP caller).
+│   │                against (matchers, interpolation, the gRPC/REST/MCP caller);
+│   │                e2e/dpope2e signs its calls with device keys (DPoP) for a
+│   │                surface that binds devices, and is the only e2e package
+│   │                that imports lib/dpop.
 │   ├── pathguard/   path-containment checks for untrusted relative paths (keeps a
 │   │                staged file inside its project root).
 │   └── plugindigest/ the canonical content digest of a plugin tree (what a lock

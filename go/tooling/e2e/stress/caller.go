@@ -1,6 +1,7 @@
 package stress
 
 import (
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,6 +23,19 @@ type LoadCaller struct {
 	BaseURL string
 	timeout time.Duration
 	client  *fasthttp.Client
+
+	signer runner.Signer // nil: Bearer, as before
+}
+
+// WithSigner makes the load sign with device keys, as the asserting
+// callers' WithSigner does (pass dpope2e.New()): a token goes out as
+// `Authorization: DPoP <token>` with a fresh proof per request, a mint
+// endpoint gets an unbound proof, and a nonce challenge is answered once.
+// [Run] signs with the device that minted the setup's session. It returns
+// c.
+func (c *LoadCaller) WithSigner(s runner.Signer) *LoadCaller {
+	c.signer = s
+	return c
 }
 
 // NewLoadCaller builds a load caller against baseURL with a connection
@@ -51,6 +65,12 @@ func NewLoadCaller(baseURL string, concurrency int, timeout time.Duration) *Load
 // response so the connection is reused; the body is discarded — load
 // measures status + latency, not response contracts.
 func (c *LoadCaller) Fire(ep runner.Endpoint, input map[string]any, token string, headers map[string]string) (int, error) {
+	return c.FireAs(nil, ep, input, token, headers)
+}
+
+// FireAs is Fire signing as dev when the caller signs (WithSigner); a nil
+// dev means the signer's own device. Without a signer dev is ignored.
+func (c *LoadCaller) FireAs(dev *runner.Device, ep runner.Endpoint, input map[string]any, token string, headers map[string]string) (int, error) {
 	method, target, body, err := runner.ResolveREST(c.BaseURL, ep, input)
 	if err != nil {
 		return -1, err
@@ -67,7 +87,7 @@ func (c *LoadCaller) Fire(ep runner.Endpoint, input map[string]any, token string
 		req.Header.SetContentType("application/json")
 		req.SetBody(body)
 	}
-	if token != "" {
+	if token != "" && c.signer == nil {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	// Static per-op headers, after the built-ins so a preset can't
@@ -79,8 +99,35 @@ func (c *LoadCaller) Fire(ep runner.Endpoint, input map[string]any, token string
 		req.Header.Set(k, v)
 	}
 
-	if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
-		return -1, err
+	if c.signer == nil {
+		if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
+			return -1, err
+		}
+		return resp.StatusCode(), nil
 	}
-	return resp.StatusCode(), nil
+	return c.signer.Do(dev, method, target, token, ep.Mint, func(h http.Header) (int, http.Header, []byte, error) {
+		for k, vs := range h {
+			req.Header.Del(k)
+			for _, v := range vs {
+				req.Header.Add(k, v)
+			}
+		}
+		resp.Reset()
+		if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
+			return -1, nil, nil, err
+		}
+		// Only what the signer reads: the nonce and the challenge.
+		out := http.Header{}
+		for _, name := range []string{"DPoP-Nonce", "WWW-Authenticate"} {
+			for _, v := range resp.Header.PeekAll(name) {
+				out.Add(name, string(v))
+			}
+		}
+		// The body only for a refusal: it may name a revoked device.
+		var body []byte
+		if st := resp.StatusCode(); st == http.StatusUnauthorized || st == http.StatusForbidden {
+			body = append(body, resp.Body()...)
+		}
+		return resp.StatusCode(), out, body, nil
+	})
 }

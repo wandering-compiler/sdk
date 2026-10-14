@@ -146,6 +146,17 @@ type Settable interface {
 type SSESubscriber struct {
 	BaseURL string
 	Client  *http.Client
+
+	signs bool
+}
+
+// WithSigner makes the subscriber sign with device keys, as
+// [RESTCaller.WithSigner] does: the subscribe request is an authenticated
+// call like any other. It returns s.
+func (s *SSESubscriber) WithSigner(sg Signer) *SSESubscriber {
+	s.Client = sg.Client(s.Client, s.BaseURL)
+	s.signs = true
+	return s
 }
 
 // NewSSESubscriber builds an SSE subscriber against baseURL (the REST base,
@@ -170,16 +181,27 @@ func NewSSESubscriber(baseURL string, client *http.Client) *SSESubscriber {
 // the SSE content negotiation — the same rule [RESTCaller.Call] applies to
 // the call itself.
 func (s *SSESubscriber) Subscribe(ctx context.Context, path string, topics []string, token string, headers map[string]string) (Subscription, error) {
+	if s.signs {
+		return s.subscribe(withCallAuth(ctx, token, false), path, topics, "", headers)
+	}
 	authorization := ""
 	if token != "" {
 		authorization = "Bearer " + token
 	}
-	return s.SubscribeWithCredential(ctx, path, topics, authorization, headers)
+	return s.subscribe(ctx, path, topics, authorization, headers)
 }
 
 // SubscribeWithCredential is Subscribe presenting authorization as the whole
-// `Authorization` header (empty: none) — see [CredentialSubscriber].
+// `Authorization` header (empty: none) — see [CredentialSubscriber]. Signing
+// (WithSigner), a credential of the DPoP scheme is signed for like a token.
 func (s *SSESubscriber) SubscribeWithCredential(ctx context.Context, path string, topics []string, authorization string, headers map[string]string) (Subscription, error) {
+	if tok, ok := signedCredential(authorization); ok && s.signs {
+		return s.Subscribe(ctx, path, topics, tok, headers)
+	}
+	return s.subscribe(ctx, path, topics, authorization, headers)
+}
+
+func (s *SSESubscriber) subscribe(ctx context.Context, path string, topics []string, authorization string, headers map[string]string) (Subscription, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	target := s.BaseURL + path + "?topics=" + url.QueryEscape(strings.Join(topics, ","))
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, target, nil)

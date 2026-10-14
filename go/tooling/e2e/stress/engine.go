@@ -28,6 +28,13 @@ import (
 func Run(ctx context.Context, label string, plan Plan, setup []runner.Step, load []Op, teardown []runner.Step, callers map[string]runner.Caller, lc *LoadCaller) (*Report, error) {
 	run := runtime.NewRun()
 	scope := run.NewScope()
+	// One key set for setup, load and teardown: the load signs with the key
+	// that minted the setup's session.
+	devs := runner.DevicesFrom(ctx)
+	if devs == nil {
+		devs = runner.NewDevices()
+		ctx = runner.WithDevices(ctx, devs)
+	}
 
 	if len(setup) > 0 {
 		if err := runner.RunSteps(ctx, scope, setup, callers); err != nil {
@@ -44,7 +51,7 @@ func Run(ctx context.Context, label string, plan Plan, setup []runner.Step, load
 		token = fmt.Sprint(v)
 	}
 
-	results := runLoad(ctx, run, plan, load, base, token, lc)
+	results := runLoad(ctx, run, plan, load, base, token, devs.DeviceFor(token), lc)
 
 	if len(teardown) > 0 {
 		// Best-effort: a fresh scope (the load workers consumed seq
@@ -81,13 +88,14 @@ type loadState struct {
 	load        []Op
 	base        map[string]any
 	token       string
+	dev         *runner.Device
 	lc          *LoadCaller
 	rr          *atomic.Int64 // round-robin cursor (pool mode)
 	warmupUntil time.Time
 	stop        func() bool
 }
 
-func runLoad(ctx context.Context, run *runtime.Run, plan Plan, load []Op, base map[string]any, token string, lc *LoadCaller) loadResult {
+func runLoad(ctx context.Context, run *runtime.Run, plan Plan, load []Op, base map[string]any, token string, dev *runner.Device, lc *LoadCaller) loadResult {
 	bufs := make([]workerBuf, plan.Concurrency)
 
 	var iter atomic.Int64 // reserved iterations (total mode)
@@ -97,7 +105,7 @@ func runLoad(ctx context.Context, run *runtime.Run, plan Plan, load []Op, base m
 	deadline := start.Add(plan.Duration) // zero Duration → deadline == start (unused; total mode drives)
 
 	st := &loadState{
-		plan: plan, load: load, base: base, token: token, lc: lc, rr: &rr,
+		plan: plan, load: load, base: base, token: token, dev: dev, lc: lc, rr: &rr,
 		warmupUntil: start.Add(plan.Warmup),
 		// stop reports whether to keep going: either the shared iteration
 		// budget is exhausted (total mode) or the wall-clock window elapsed
@@ -163,10 +171,10 @@ func (st *loadState) worker(ctx context.Context, run *runtime.Run, id int, buf *
 	for !st.stop() {
 		if st.plan.Mode == ModeSequence {
 			for i := range st.load {
-				fireOp(ws, &st.load[i], st.token, st.lc, buf, st.warmupUntil)
+				fireOp(ws, &st.load[i], st.token, st.dev, st.lc, buf, st.warmupUntil)
 			}
 		} else { // pool
-			fireOp(ws, &st.load[st.pickIdx()], st.token, st.lc, buf, st.warmupUntil)
+			fireOp(ws, &st.load[st.pickIdx()], st.token, st.dev, st.lc, buf, st.warmupUntil)
 		}
 		if st.plan.ThinkTime > 0 {
 			select {
@@ -197,7 +205,7 @@ func (st *loadState) pickIdx() int {
 
 // fireOp expands one op's input, fires it through the load caller, and
 // records latency + status into the worker buffer when past warm-up.
-func fireOp(ws *runtime.Scope, op *Op, token string, lc *LoadCaller, buf *workerBuf, warmupUntil time.Time) {
+func fireOp(ws *runtime.Scope, op *Op, token string, dev *runner.Device, lc *LoadCaller, buf *workerBuf, warmupUntil time.Time) {
 	expanded, err := runtime.Expand(op.Input, ws)
 	if err != nil {
 		// An input that can't expand is a malformed op, not load — count
@@ -233,7 +241,7 @@ func fireOp(ws *runtime.Scope, op *Op, token string, lc *LoadCaller, buf *worker
 	}
 
 	t0 := time.Now()
-	code, _ := lc.Fire(op.Endpoint, input, tok, headers)
+	code, _ := lc.FireAs(dev, op.Endpoint, input, tok, headers)
 	lat := time.Since(t0).Nanoseconds()
 
 	// Discard warm-up samples (let the pool scale up first).

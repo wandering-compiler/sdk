@@ -52,6 +52,23 @@ func Expand(v any, s *Scope) (any, error) {
 	}
 }
 
+// DeviceJWKPrefix is the generator prefix of a device's public key,
+// `${device_jwk:<device>}`. Only the runner can resolve it (through
+// ExpandWith, for a step's input); anywhere else it is an error naming where
+// it is allowed, not an unresolved capture.
+const DeviceJWKPrefix = "device_jwk"
+
+// ExpandWith is Expand with extra generator prefixes: `${<prefix>:<arg>}`
+// resolves through ext[prefix](arg) instead of being read as a capture. The
+// runner uses it for values only it can produce, such as a device's public
+// key (`${device_jwk:<device>}`).
+func ExpandWith(v any, s *Scope, ext map[string]func(arg string) (any, error)) (any, error) {
+	prev := s.ext
+	s.ext = ext
+	defer func() { s.ext = prev }()
+	return Expand(v, s)
+}
+
 // expandString resolves the tokens in one string. When the whole
 // string is exactly one token (`${expr}` with nothing around it) the
 // resolved value is returned with its native type (so a captured int
@@ -171,6 +188,14 @@ func (s *Scope) resolve(expr string) (any, error) {
 		// and the suite passes for the wrong reason.
 		return s.once(strings.TrimPrefix(expr, "once:")), nil
 	default:
+		if prefix, arg, ok := strings.Cut(expr, ":"); ok {
+			if fn, ok := s.ext[prefix]; ok {
+				return fn(arg)
+			}
+			if prefix == DeviceJWKPrefix {
+				return nil, fmt.Errorf("e2e runtime: ${%s:%s} is expanded only in a step's input, on a caller that signs with device keys — not in headers, expectations or stress load ops", DeviceJWKPrefix, arg)
+			}
+		}
 		v, ok := s.lookup(expr)
 		if !ok {
 			return nil, fmt.Errorf("e2e runtime: unresolved reference ${%s} (no generator with that prefix, and no captured value bound)", expr)

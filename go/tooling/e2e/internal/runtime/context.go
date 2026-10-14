@@ -87,6 +87,8 @@ type Scope struct {
 	// are minted by whoever reads them first — mixing the two would let a
 	// typo'd capture name silently become a generated value.
 	onced map[string]int
+	// ext holds the extra generator prefixes of an ExpandWith in progress.
+	ext map[string]func(arg string) (any, error)
 }
 
 // Capture binds a value to a name for later `${name}` resolution.
