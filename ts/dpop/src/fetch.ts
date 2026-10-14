@@ -305,9 +305,22 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
   // pair a discard is about to delete.
   let discards: Promise<void> = Promise.resolve();
 
+  // The last key this wrapper signed with, kept across reloadKey(): a reload
+  // that fails (the store briefly unreadable) goes on with it instead of
+  // failing requests made under a live session. A discard forgets it.
+  let lastKey: DpopKey | undefined;
+
   const key = (): Promise<DpopKey> => {
     if (!keyPromise) {
-      const p = discards.then(() => loadOrCreateKey(store));
+      const p = discards
+        .then(() => loadOrCreateKey(store))
+        .then(
+          (k) => (lastKey = k),
+          (err: unknown) => {
+            if (lastKey) return lastKey;
+            throw err;
+          },
+        );
       keyPromise = p;
       // A failed load must not stick: the next request tries again.
       p.catch(() => {
@@ -325,8 +338,18 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
         // second tab, refused for the old key after the first had already
         // made a new one, delete the first tab's new key — and the two tabs
         // went on as two devices.
-        const stored = await store.load();
-        if (!stored || (await dpopKey(stored)).thumbprint !== thumbprint) return;
+        // A store that compares and deletes in one step does so (another
+        // tab cannot save between the two); any other is read, then cleared.
+        const cleared = store.clearIf ? await store.clearIf(thumbprint) : undefined;
+        if (cleared === false) return;
+        if (cleared === undefined) {
+          const stored = await store.load();
+          const held = stored ? await dpopKey(stored).catch(() => undefined) : undefined;
+          if (held?.thumbprint !== thumbprint) return;
+          await store.clear();
+        }
+        nonces.clear();
+        return;
       }
       nonces.clear();
       await store.clear();
@@ -335,6 +358,7 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     // Requests from now on wait for this discard and then load the store's
     // key (see key()) — the newer one when the discard left it alone.
     keyPromise = undefined;
+    lastKey = undefined;
     return op;
   };
 

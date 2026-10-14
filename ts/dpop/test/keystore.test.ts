@@ -179,6 +179,65 @@ describe("FallbackKeyStore and defaultKeyStore", () => {
   });
 });
 
+describe("key store edges: fallback seeding, atomic discard, bad records", () => {
+  const flaky = () => {
+    const inner = new MemoryKeyStore();
+    let broken = false;
+    const fail = () => Promise.reject(new Error("idb flaked"));
+    const store: KeyStore = {
+      load: () => (broken ? fail() : inner.load()),
+      save: (p) => (broken ? fail() : inner.save(p)),
+      clear: () => (broken ? fail() : inner.clear()),
+    };
+    return { store, breakIt: () => (broken = true) };
+  };
+
+  it("seeds the fallback with the pair the primary last held", async () => {
+    const { store, breakIt } = flaky();
+    const fb = new FallbackKeyStore(store);
+    const key = await loadOrCreateKey(fb);
+    breakIt(); // a later reload hits a failing primary
+    const again = await loadOrCreateKey(fb);
+    expect(fb.usingFallback).toBe(true);
+    expect(again.thumbprint).toBe(key.thumbprint);
+  });
+
+  it("reports the switch once, however many calls fail at the same time", async () => {
+    const seen: unknown[] = [];
+    const broken: KeyStore = {
+      load: () => Promise.reject(new Error("x")),
+      save: () => Promise.reject(new Error("x")),
+      clear: () => Promise.reject(new Error("x")),
+    };
+    const fb = new FallbackKeyStore(broken, new MemoryKeyStore(), (e) => seen.push(e));
+    await Promise.all([fb.load(), fb.load(), fb.load()]);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("clearIf deletes only the record with that thumbprint, in one transaction", async () => {
+    const indexedDB = new IDBFactory();
+    const store = new IndexedDBKeyStore({ indexedDB });
+    const key = await loadOrCreateKey(store);
+    expect(await store.clearIf("not-this-one")).toBe(false);
+    expect((await dpopKey((await store.load())!)).thumbprint).toBe(key.thumbprint);
+    expect(await store.clearIf(key.thumbprint)).toBe(true);
+    expect(await store.load()).toBeUndefined();
+    expect(await store.clearIf(key.thumbprint)).toBe(false);
+  });
+
+  it("treats a stored record that is not a P-256 pair as absent and replaces it", async () => {
+    const store = new MemoryKeyStore();
+    const p384 = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-384" }, false, [
+      "sign",
+      "verify",
+    ]);
+    await store.save(p384);
+    const key = await loadOrCreateKey(store);
+    expect(await signsWith(key.keyPair)).toBe(true);
+    expect((await dpopKey((await store.load())!)).thumbprint).toBe(key.thumbprint);
+  });
+});
+
 describe("FileKeyStore", () => {
   const dir = () => mkdtemp(join(tmpdir(), "w17-dpop-"));
 
