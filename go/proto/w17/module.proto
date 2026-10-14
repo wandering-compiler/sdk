@@ -128,10 +128,10 @@ message Module {
   // `dist/`, `target/`, `bin/` or a media directory, because those belong to the
   // project and guessing would decide what somebody else's code can see.
   //
-  // The consequence, measured on a consumer 2026-09-30: their build context was
-  // ~2.5 GB and BuildKit keeps one cache record of it PER BUNDLE built, so a
-  // single build's records came to ~8 GB — while the same project's w17-generated
-  // tree weighs 7.9 MB. The weight was their own, and they had no way to say so:
+  // The consequence: a build context of ~2.5 GB, of which BuildKit keeps one
+  // cache record PER BUNDLE built, comes to ~8 GB of records for a single build —
+  // while a project's w17-generated tree weighs a few MB. The weight is the
+  // project's own, and without this there is no way to say so:
   // BuildKit reads `<dockerfile>.dockerignore` beside the Dockerfile IN PREFERENCE
   // to a `.dockerignore` at the context root, so the tool-owned file silently won
   // and a project-root exclude list did nothing for w17's builds.

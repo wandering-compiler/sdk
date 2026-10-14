@@ -987,8 +987,8 @@ message RemoveClientStubIntent {
 }
 
 // SetClientStubIntent changes an existing clients[] entry in place, found by
-// output_root — only the fields that are SET. Asked for by a consumer: with
-// add-only, switching an entry to another rest_surface meant editing the
+// output_root — only the fields that are SET. With add-only, switching an
+// entry to another rest_surface would mean editing the
 // signed lock by hand. Tokens are the AddClientStubIntent ones; an empty
 // rest_surface (set) clears the scoping. At least one field must be set.
 message SetClientStubIntent {
@@ -1027,7 +1027,7 @@ message SetPbStubIntent {
 
 // SetDirLayoutIntent re-points the project's DIRECTORY fields after init.
 //
-// Asked for by a consumer, and the shape of the ask is migration: you want a
+// The case is migration: you want a
 // provisional `w17proto/` while an existing tree is still being converted, then
 // the real directory once the conversion lands. Today that answer is given once,
 // in the wizard, and never again — so the first week of adopting w17 on an
@@ -1058,9 +1058,9 @@ message SetDirLayoutIntent {
 //
 // `add` refuses a second entry for a domain (one bundle per domain), and
 // nothing could edit the first — so a `register` path typed wrong in the
-// first five minutes of a project cost a full reinit. A consumer paid that,
-// and named it as one of a family: decisions taken at `init` that `init`
-// gives no way to revise. `pb_stubs` was the previous one.
+// first five minutes of a project cost a full reinit. It is one of a family:
+// decisions taken at `init` that `init` gives no way to revise. `pb_stubs` was
+// the previous one.
 //
 // domain selects the entry and must already exist — this is `set`, not
 // `add`, and creating one here would hide a typo'd domain as a new bundle.

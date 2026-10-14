@@ -79,8 +79,8 @@ func TestWriteGRPCError_DeadlineCarryingBalancerErrorIsScrubbed(t *testing.T) {
 // the scrub touches it. The concern was right and the channel was wrong: prose
 // a FORM binds to travels in `details`, which this still carries, and the
 // top-level message was never a safe place for it — the same authored strings
-// it protected carry `<Service>.<Method>` prefixes, which is exactly the
-// technical text a consumer reported seeing.
+// it protected carry `<Service>.<Method>` prefixes, technical text a person
+// must not see.
 //
 // The contract is now: `status.Message()` belongs to the operator, a person
 // sees what a detail says, and a handler that attached nothing gets the

@@ -1559,9 +1559,8 @@ type RestEndpoint struct {
 	// how often one address may call the method at all, which is what a
 	// method that does something on SUCCESS needs. Registration creates an account and sends
 	// a mail; a password-reset request sends one and answers success either
-	// way, so it never fails at all. Charging only failures left both
-	// unbounded (a consumer measured 45 registrations in a row from one
-	// address, 2026-10-11).
+	// way, so it never fails at all. Charging only failures leaves both
+	// unbounded: dozens of registrations in a row from one address.
 	//
 	// FAILED_ONLY suits a method that checks a guessable secret: a sign-in, a
 	// one-time code, a link token. An attacker's guesses fail and are

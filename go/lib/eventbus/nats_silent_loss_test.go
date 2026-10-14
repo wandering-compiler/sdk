@@ -16,11 +16,10 @@ import (
 
 // A subscriber whose consumer disappears server-side must SAY so.
 //
-// A consumer reported half an hour lost to the silent version: an ordinary
-// `docker compose up -d` recreated their broker, delivery stopped, and the
-// subscriber's log held one line from before the restart and nothing after it.
-// Sign-in returned 200, the challenge row appeared, and the second-factor code
-// never arrived — every layer looked healthy.
+// The silent version: an ordinary `docker compose up -d` recreates the broker,
+// delivery stops, and the subscriber's log holds one line from before the
+// restart and nothing after it. A sign-in returns 200, its challenge row
+// appears, and the second-factor code never arrives — every layer looks healthy.
 //
 // Recreating a broker is destroying its JetStream state, so this test does the
 // same thing to the same effect: it deletes the consumer out from under a live

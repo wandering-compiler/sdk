@@ -284,8 +284,8 @@ func internalSentence(ctx context.Context) string {
 //
 // It exists because that path had no status to demote and so bypassed
 // [clientFacing] entirely: the generated handler passed the literal
-// `"validation failed"` as the envelope's `message`. A consumer measured the
-// consequence on 2026-09-30 — the same `INVALID_ARGUMENT` surface answered
+// `"validation failed"` as the envelope's `message`. The consequence: the same
+// `INVALID_ARGUMENT` surface answered
 // `validation failed` for a bad enum caught at the gateway and
 // `The request could not be accepted as sent.` for a violation the backend
 // raised, so `surfaces.md`'s "identical for every INVALID_ARGUMENT" was false

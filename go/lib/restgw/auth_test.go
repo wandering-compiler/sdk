@@ -62,11 +62,9 @@ func TestClassifyAuthScheme(t *testing.T) {
 // WriteForbidden writes 403 PERMISSION_DENIED with the canonical envelope and
 // WITHOUT the permission the caller lacked.
 //
-// This test asserted the opposite until the leak was closed: it required
-// `tasks.Task#delete` to appear in the body, so the defect a consumer reported
-// — service and method names in a browser — was pinned here as the contract.
-// The permission now goes to the operator (observx.ReportRefusal); what a
-// caller gets is the code plus the catalog's sentence for it.
+// The permission name (`tasks.Task#delete`) would put service and method names
+// in a browser. It goes to the operator (observx.ReportRefusal); what a caller
+// gets is the code plus the catalog's sentence for it.
 func TestWriteForbidden(t *testing.T) {
 	t.Run("no reason", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -693,8 +691,7 @@ func TestWriteForbiddenCtx_NamesThePermissionOnBothChannels(t *testing.T) {
 	}
 	// The NAME must not be here, and the CODE must. Both halves, because either
 	// alone is a regression: without the code the refusal is untestable, and with
-	// the name a browser learns the service and method a consumer reported as a
-	// leak.
+	// the name a browser learns the service and method.
 	if strings.Contains(rec.Body.String(), "billing.WalletMutation.OpenTopup") {
 		t.Errorf("the permission name reached the caller — that leak is closed on purpose: %s", rec.Body.String())
 	}

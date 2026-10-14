@@ -185,19 +185,12 @@ const (
 	CodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
 
 	// The ACL gate's three refusals. All three are PERMISSION_DENIED on the
-	// wire, and until 2026-09-28 that was ALL a caller could see: the gate said
-	// which permission was missing in `status.Message()`, and the two-audience
-	// split (#4) demoted that to the operator channel — correctly, and without
-	// noticing that this emitter's prose was the answer rather than a diagnostic.
-	//
-	// The consequence a consumer measured: `PERMISSION_DENIED` reads identically
-	// for "your role is too narrow", "you are in no organization" and "the
-	// gateway never authenticated you" — three different fixes behind one
-	// sentence — and an assertion on that sentence cannot fail, because it is
-	// per-code. The generator's own comment had argued the opposite case
-	// ("NAME the permission … it is already public: the permission catalogue
-	// ships to every consumer in the ACL lock") and described behaviour the code
-	// no longer delivered.
+	// wire. The gate's `status.Message()` names the missing permission, and the
+	// two-audience split sends that to the operator channel, so without these
+	// codes `PERMISSION_DENIED` would read identically for "your role is too
+	// narrow", "you are in no organization" and "the gateway never
+	// authenticated you" — three different fixes behind one sentence — and an
+	// assertion on that sentence could not fail, because it is per-code.
 	//
 	// So each cause gets its own DETAIL code. The code is what a test asserts
 	// and what a client branches on; the sentence stays translatable.
@@ -337,10 +330,9 @@ func ForUser(ctx context.Context, c codes.Code, method, dev, code, userMsgid str
 //
 // The msgid stays the whole translatable sentence with `{placeholder}` holes,
 // and the values arrive separately — `i18n.T` substitutes them. Both halves
-// matter and a consumer found out why the hard way: they first wrote the value
-// INTO the msgid (`period 2027-03 is already locked`), which makes a different
-// msgid for every month, so no catalogue entry can ever match and the caller
-// gets the key. Interpolating instead keeps one entry a translator can hold.
+// matter: a value written INTO the msgid (`period 2027-03 is already locked`)
+// makes a different msgid for every month, so no catalogue entry can ever match
+// and the caller gets the key. Interpolating instead keeps one entry a translator can hold.
 //
 // Use it when the fact IS the answer — which permission is missing, which
 // organization was needed. When the sentence is complete without a value,
@@ -550,9 +542,8 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// missing: `info` carries exactly this, and it was already attached as
 	// an ErrorDetail — but a caller reading the status message (which is
 	// what a REST gateway surfaces, and what a human reads first) got none
-	// of it. a consumer reported this on 2026-08-30 after a `customer_id` they
-	// omitted came back as `DocumentMutation.CreateDocument: not_null
-	// violation`.
+	// of it: an omitted `customer_id` came back as
+	// `DocumentMutation.CreateDocument: not_null violation`.
 	//
 	// `info.Message` is written to follow the field name — "is required",
 	// "already exists" — so field + message composes into the sentence the
