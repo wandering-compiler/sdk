@@ -1,9 +1,13 @@
 name: ci
 
 on:
+  # A change to Markdown alone builds and tests nothing, so it runs nothing.
+  # Comments in code are not Markdown and still run everything.
   push:
     branches: [main]
+    paths-ignore: ["**/*.md"]
   pull_request:
+    paths-ignore: ["**/*.md"]
   workflow_dispatch:
 
 permissions:
