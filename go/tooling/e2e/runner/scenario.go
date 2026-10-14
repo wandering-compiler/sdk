@@ -285,7 +285,33 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	if !ok {
 		return fmt.Errorf("no caller for transport %q", s.Endpoint.Transport)
 	}
-	expanded, err := runtime.Expand(s.Input, scope)
+	devs := DevicesFrom(ctx)
+	if devs == nil {
+		devs = NewDevices()
+		ctx = WithDevices(ctx, devs)
+	}
+	// `${device_jwk:<device>}`: the device's public key, which only the
+	// signer of a signing caller can give. The token the step then captures
+	// is bound to that device's key.
+	var keyDevice *Device
+	deviceJWK := func(name string) (any, error) {
+		var sg Signer
+		if sc, ok := caller.(signingCaller); ok {
+			sg = sc.deviceSigner()
+		}
+		if sg == nil {
+			return nil, fmt.Errorf("${device_jwk:%s}: the %q caller does not sign (no WithSigner), so there is no device key", name, s.Endpoint.Transport)
+		}
+		if name == "" {
+			return nil, fmt.Errorf("${device_jwk:}: name the device")
+		}
+		if keyDevice != nil && keyDevice != devs.named(name) {
+			return nil, fmt.Errorf("${device_jwk:%s}: a step binds its token to one device's key", name)
+		}
+		keyDevice = devs.named(name)
+		return sg.PublicJWK(keyDevice)
+	}
+	expanded, err := runtime.ExpandWith(s.Input, scope, map[string]func(string) (any, error){"device_jwk": deviceJWK})
 	if err != nil {
 		return fmt.Errorf("expand input: %w", err)
 	}
@@ -309,16 +335,11 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 	// The device key this step signs with, on callers that sign. The
 	// credential of the DPoP scheme is a token too, and its key is the one
 	// that minted it.
-	devs := DevicesFrom(ctx)
-	if devs == nil {
-		devs = NewDevices()
-		ctx = WithDevices(ctx, devs)
-	}
 	presented := token
 	if tok, ok := signedCredential(credential); ok {
 		presented = tok
 	}
-	dev := devs.stepDevice(s, presented)
+	dev := devs.stepDevice(s, presented, input)
 	ctx = withDevice(ctx, dev)
 
 	// Open every event subscription BEFORE the call so an async event the
@@ -363,7 +384,10 @@ func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[stri
 			return err
 		}
 	}
-	if s.Endpoint.Mint {
+	switch {
+	case keyDevice != nil:
+		devs.bindToken(keyDevice, s, scope)
+	case s.Endpoint.Mint:
 		devs.learn(dev, s, scope)
 	}
 

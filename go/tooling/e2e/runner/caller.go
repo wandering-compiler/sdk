@@ -39,8 +39,10 @@ type RESTCaller struct {
 	BaseURL string
 	Client  *http.Client
 
-	signs bool
+	signer Signer
 }
+
+func (c *RESTCaller) deviceSigner() Signer { return c.signer }
 
 // WithSigner makes the caller sign with device keys for a surface whose
 // auth method binds devices (pass dpope2e.New()): a token goes out as
@@ -51,7 +53,7 @@ type RESTCaller struct {
 // (`<P>_DPOP_ORIGIN`). See devices.go. It returns c.
 func (c *RESTCaller) WithSigner(s Signer) *RESTCaller {
 	c.Client = s.Client(c.Client, c.BaseURL)
-	c.signs = true
+	c.signer = s
 	return c
 }
 
@@ -249,7 +251,7 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 		return nil, err
 	}
 	method, target, body := r.method, r.target, r.body
-	if c.signs {
+	if c.signer != nil {
 		// A DPoP credential is a token: the signing transport writes it
 		// back with its proof.
 		if tok, ok := signedCredential(credential); ok {
@@ -290,7 +292,7 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 	switch {
 	case credential != "":
 		req.Header.Set("Authorization", credential)
-	case token != "" && !c.signs:
+	case token != "" && c.signer == nil:
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	// Static per-step headers (e.g. X-Device-Id). Set after the

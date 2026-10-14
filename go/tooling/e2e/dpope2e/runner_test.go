@@ -7,8 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/go-jose/go-jose/v4"
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/dpope2e"
@@ -21,7 +24,12 @@ import (
 // of each key meets use_dpop_nonce):
 //
 //	POST /signin  mint: an unbound proof and no token; answers a token bound
-//	              to the proof's key, and that key's thumbprint as jkt
+//	              to the proof's key, and that key's thumbprint as jkt — or,
+//	              for an email starting "mfa", an MFA challenge bound to it
+//	POST /verify  mint: completes a challenge; a proof by another key than
+//	              the challenge's is refused (OTHER_DEVICE)
+//	POST /tokens  issues a token bound to the request's public_key JWK
+//	GET  /go      redirects to redirectTo, whatever the request carries
 //	GET  /me      a bound call: answers the thumbprint the proof was signed by
 //	POST /revoke  revokes the caller's device
 //	POST /ping    fans an event out to every /w17-events subscriber
@@ -42,6 +50,9 @@ type dpopGateway struct {
 	seq      int
 	requests []seenRequest
 	subs     map[chan string]string // subscriber → its jkt
+	mfa      map[string]string      // challenge → jkt
+
+	redirectTo string
 }
 
 type seenRequest struct {
@@ -50,16 +61,23 @@ type seenRequest struct {
 	status              int
 }
 
-func newDPoPGateway(t *testing.T) *dpopGateway {
+func newDPoPGateway(t *testing.T) *dpopGateway { return newDPoPGatewayAt(t, "") }
+
+// newDPoPGatewayAt is a gateway whose verifier expects proofs for the public
+// origin, not for the address it listens on ("" = that address).
+func newDPoPGatewayAt(t *testing.T, origin string) *dpopGateway {
 	t.Helper()
-	g := &dpopGateway{t: t, tokens: map[string]string{}, revoked: map[string]bool{}, subs: map[chan string]string{}}
+	g := &dpopGateway{t: t, tokens: map[string]string{}, revoked: map[string]bool{}, subs: map[chan string]string{}, mfa: map[string]string{}}
 	g.Server = httptest.NewServer(http.HandlerFunc(g.serve))
 	t.Cleanup(g.Close)
 	nonces, err := dpop.NewHMACNonces([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.v, err = dpop.NewVerifier(dpop.Config{Origin: g.URL, Nonces: nonces}); err != nil {
+	if origin == "" {
+		origin = g.URL
+	}
+	if g.v, err = dpop.NewVerifier(dpop.Config{Origin: origin, Nonces: nonces}); err != nil {
 		t.Fatal(err)
 	}
 	return g
@@ -100,7 +118,14 @@ func (g *dpopGateway) serve(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	defer func() { g.record(r, status) }()
 
-	mint := r.URL.Path == "/signin"
+	if r.URL.Path == "/go" {
+		status = http.StatusFound
+		http.Redirect(w, r, g.redirectTo, http.StatusFound)
+		return
+	}
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	mint := r.URL.Path == "/signin" || r.URL.Path == "/verify"
 	tok, isDPoP := dpop.AccessToken(r.Header.Get("Authorization"))
 	if !mint && !isDPoP {
 		status = http.StatusUnauthorized
@@ -144,12 +169,43 @@ func (g *dpopGateway) serve(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case "/signin":
+		if email, _ := body["email"].(string); strings.HasPrefix(email, "mfa") {
+			g.mu.Lock()
+			g.seq++
+			ch := fmt.Sprintf("ch-%d", g.seq)
+			g.mfa[ch] = jkt
+			g.mu.Unlock()
+			writeJSON(w, map[string]any{"mfa": map[string]any{"challenge_id": ch}})
+			return
+		}
+		writeJSON(w, map[string]any{"token": g.issue(jkt), "jkt": jkt})
+	case "/verify":
+		ch, _ := body["challenge_id"].(string)
 		g.mu.Lock()
-		g.seq++
-		tok := fmt.Sprintf("tok-%d", g.seq)
-		g.tokens[tok] = jkt
+		want, ok := g.mfa[ch]
 		g.mu.Unlock()
-		writeJSON(w, map[string]any{"token": tok, "jkt": jkt})
+		if !ok || want != jkt {
+			status = http.StatusUnauthorized
+			refuseDPoP(w, "UNAUTHENTICATED", "OTHER_DEVICE", "the challenge belongs to another device")
+			return
+		}
+		writeJSON(w, map[string]any{"token": g.issue(jkt), "jkt": jkt})
+	case "/tokens":
+		pk, _ := body["public_key"].(string)
+		var jwk jose.JSONWebKey
+		if err := jwk.UnmarshalJSON([]byte(pk)); err != nil || !jwk.IsPublic() || strings.Contains(pk, `"d"`) {
+			status = http.StatusBadRequest
+			w.WriteHeader(status)
+			_, _ = fmt.Fprintf(w, `{"error":{"code":"INVALID_ARGUMENT","message":"public_key"}}`)
+			return
+		}
+		tp, err := dpop.Thumbprint(jwk.Key)
+		if err != nil {
+			status = http.StatusBadRequest
+			w.WriteHeader(status)
+			return
+		}
+		writeJSON(w, map[string]any{"token": g.issue(tp), "device_id": tp})
 	case "/me":
 		writeJSON(w, map[string]any{"jkt": jkt})
 	case "/revoke":
@@ -190,6 +246,15 @@ func (g *dpopGateway) serve(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusNotFound
 		http.NotFound(w, r)
 	}
+}
+
+func (g *dpopGateway) issue(jkt string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.seq++
+	tok := fmt.Sprintf("tok-%d", g.seq)
+	g.tokens[tok] = jkt
+	return tok
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -328,8 +393,9 @@ func TestDPoP_RunsDoNotShareKeys(t *testing.T) {
 	}
 }
 
-// A revoked device's refusal reaches the scenario with its detail code, and
-// the device then gets a new key, so signing in again works.
+// A revoked device's refusal reaches the scenario with its detail code — on
+// every call presenting its token, not only the first — and the device's
+// next sign-in signs with a new key, so it works.
 func TestDPoP_DeviceRevoked(t *testing.T) {
 	g := newDPoPGateway(t)
 	scope := runtime.NewRun().NewScope()
@@ -340,6 +406,7 @@ func TestDPoP_DeviceRevoked(t *testing.T) {
 	steps := []runner.Step{
 		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "first"}}),
 		revoke,
+		refused,
 		refused,
 		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "second"}}),
 		dpopMe("", "me"),
@@ -517,5 +584,183 @@ func TestDPoP_AnonymousCallCarriesNoProof(t *testing.T) {
 	h := seen()[0]
 	if h.Get("Authorization") != "" || h.Get(dpop.HeaderProof) != "" {
 		t.Errorf("anonymous call carried %v", h)
+	}
+
+	// Nothing about signing is consulted for it: not even a signer whose
+	// configuration fails every signed call.
+	bad := runner.NewRESTCaller(srv.URL, nil).WithSigner(dpope2e.New(dpope2e.WithOrigin("not an origin")))
+	if _, err := bad.Call(context.Background(), ep, nil, "", nil, "", nil); err != nil {
+		t.Errorf("an anonymous call failed on the signer's configuration: %v", err)
+	}
+}
+
+// An MFA sign-in is two mints by one device: VerifyMfa sends the
+// challenge SignIn answered, captures no token itself on SignIn, and must
+// be signed by SignIn's key or the gateway refuses it as another device.
+func TestDPoP_MFASignInSignsBothMintsWithOneKey(t *testing.T) {
+	g := newDPoPGateway(t)
+	scope := runtime.NewRun().NewScope()
+	verify := runner.Step{
+		Label:    "verify",
+		Endpoint: runner.Endpoint{Ref: "auth.VerifyMfa", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/verify", Mint: true},
+		Input:    map[string]any{"challenge_id": "${mfa.challenge_id}", "code": "123456"},
+		Expect:   map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "verify_jkt"}},
+	}
+	steps := []runner.Step{
+		dpopSignIn("mfa-alice", map[string]any{"mfa": map[string]any{"challenge_id": map[string]any{"capture": "mfa.challenge_id"}}}),
+		verify,
+		dpopMe("", "me_jkt"),
+	}
+	if err := runner.RunSteps(context.Background(), scope, steps, dpopCallers(g)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := captured(t, scope, "me_jkt"), captured(t, scope, "verify_jkt"); got != want {
+		t.Errorf("the session was signed by %s, minted for %s", got, want)
+	}
+}
+
+// `${device_jwk:<name>}` sends a device's public key; the token the step
+// captures is bound to that key, and token_from it signs with it.
+func TestDPoP_DeviceJWKBindsAnAPIToken(t *testing.T) {
+	g := newDPoPGateway(t)
+	scope := runtime.NewRun().NewScope()
+	create := runner.Step{
+		Label:    "create token",
+		Endpoint: runner.Endpoint{Ref: "auth.CreateApiToken", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/tokens", AuthRequired: true},
+		Input:    map[string]any{"public_key": "${device_jwk:ci-bot}"},
+		Expect:   map[string]any{"token": map[string]any{"capture": "api.token"}, "device_id": map[string]any{"capture": "api_device"}},
+	}
+	steps := []runner.Step{
+		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "session"}}),
+		create,
+		dpopMe("api.token", "api_me"),
+		dpopMe("", "session_me"),
+	}
+	if err := runner.RunSteps(context.Background(), scope, steps, dpopCallers(g)); err != nil {
+		t.Fatal(err)
+	}
+	api, session := captured(t, scope, "api_device"), captured(t, scope, "session")
+	if api == session {
+		t.Fatal("the API token was bound to the session's key")
+	}
+	if got := captured(t, scope, "api_me"); got != api {
+		t.Errorf("the API token was presented with a proof by %s, want %s", got, api)
+	}
+	if got := captured(t, scope, "session_me"); got != session {
+		t.Errorf("the session was presented with a proof by %s, want %s", got, session)
+	}
+}
+
+func TestPublicJWK_HasNoPrivateMember(t *testing.T) {
+	s := dpope2e.New()
+	var dv runner.Device
+	j, err := s.PublicJWK(&dv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(j), &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, priv := range []string{"d", "p", "q", "dp", "dq", "qi", "k"} {
+		if _, ok := m[priv]; ok {
+			t.Errorf("JWK carries private member %q: %s", priv, j)
+		}
+	}
+	if m["kty"] != "EC" || m["crv"] != "P-256" {
+		t.Errorf("JWK %s, want a P-256 key", j)
+	}
+	if again, _ := s.PublicJWK(&dv); again != j {
+		t.Error("one device answered two keys")
+	}
+}
+
+// ${device_jwk:…} on a caller that does not sign is an error, not a guess.
+func TestDPoP_DeviceJWKNeedsASigningCaller(t *testing.T) {
+	srv, _ := headerRecorder(t)
+	step := runner.Step{
+		Label:    "create token",
+		Endpoint: runner.Endpoint{Ref: "auth.CreateApiToken", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/tokens"},
+		Input:    map[string]any{"public_key": "${device_jwk:bot}"},
+	}
+	err := runner.RunSteps(context.Background(), runtime.NewRun().NewScope(), []runner.Step{step},
+		map[string]runner.Caller{"rest": runner.NewRESTCaller(srv.URL, nil)})
+	if err == nil || !strings.Contains(err.Error(), "does not sign") {
+		t.Errorf("err = %v, want the caller named as not signing", err)
+	}
+}
+
+// A redirect to another origin (a presigned URL) is followed: an anonymous
+// call as before, and a signed call without its token or a proof.
+func TestDPoP_CrossOriginRedirectGoesUnsigned(t *testing.T) {
+	var mu sync.Mutex
+	var got []http.Header
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Header.Clone())
+		mu.Unlock()
+		writeJSON(w, map[string]any{"file": "ok"})
+	}))
+	defer other.Close()
+	g := newDPoPGateway(t)
+	g.redirectTo = other.URL + "/dl"
+
+	scope := runtime.NewRun().NewScope()
+	steps := []runner.Step{
+		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}}),
+		{Label: "anon download", Endpoint: runner.Endpoint{Ref: "files.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/go"}, Expect: map[string]any{"file": "ok"}},
+		{Label: "signed download", Endpoint: runner.Endpoint{Ref: "files.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/go", AuthRequired: true}, Expect: map[string]any{"file": "ok"}},
+	}
+	if err := runner.RunSteps(context.Background(), scope, steps, dpopCallers(g)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("the other origin saw %d requests, want 2", len(got))
+	}
+	for i, h := range got {
+		if h.Get("Authorization") != "" || h.Get(dpop.HeaderProof) != "" {
+			t.Errorf("redirected request %d carried Authorization %q, DPoP %q", i, h.Get("Authorization"), h.Get(dpop.HeaderProof))
+		}
+	}
+	// The signed call itself was signed at home.
+	if gos := g.seen("/go"); len(gos) < 2 || gos[len(gos)-1].authorization == "" || !gos[len(gos)-1].proof {
+		t.Errorf("the signed call reached the gateway as %+v", gos)
+	}
+}
+
+// WithOrigin signs for the gateway's public origin while dialling the
+// address the runner reaches it by.
+func TestDPoP_WithOriginSignsForThePublicOrigin(t *testing.T) {
+	const public = "https://api.example.test"
+	g := newDPoPGatewayAt(t, public)
+	scope := runtime.NewRun().NewScope()
+	s := dpope2e.New(dpope2e.WithOrigin(public))
+	callers := map[string]runner.Caller{"rest": runner.NewRESTCaller(g.URL, nil).WithSigner(s)}
+	steps := []runner.Step{
+		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}, "jkt": map[string]any{"capture": "mint"}}),
+		dpopMe("", "me"),
+	}
+	if err := runner.RunSteps(context.Background(), scope, steps, callers); err != nil {
+		t.Fatal(err)
+	}
+	if captured(t, scope, "me") != captured(t, scope, "mint") {
+		t.Error("the session was not signed by its key")
+	}
+
+	// Without the option the proofs name the dialled address and fail.
+	err := runner.RunSteps(context.Background(), runtime.NewRun().NewScope(), steps[:1], dpopCallers(g))
+	if err == nil {
+		t.Error("proofs for the dialled address passed a gateway that expects its public origin")
+	}
+
+	// A bad WithOrigin fails every signed call, even against a gateway that
+	// would accept proofs for the dialled address.
+	plain := newDPoPGateway(t)
+	_, err = runner.NewRESTCaller(plain.URL, nil).WithSigner(dpope2e.New(dpope2e.WithOrigin("not an origin"))).
+		Call(context.Background(), steps[0].Endpoint, map[string]any{"email": "a"}, "", nil, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "WithOrigin") {
+		t.Errorf("a bad WithOrigin: err = %v, want it named", err)
 	}
 }

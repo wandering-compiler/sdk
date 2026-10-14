@@ -628,6 +628,7 @@ refuses `TokenFrom`. Callers built `WithSigner` send the token as `DPoP` with a 
 | `${seq}`, `${seq:<name>}` | process-global monotonic counters starting at 1 |
 | `${once:<name>}` | minted once per scope from the shared counter |
 | `${random:uuid\|int\|string}` | `int` in [0, 2^30); `string` is 8 hex characters |
+| `${device_jwk:<device>}` | step input only, on a signing caller: the device's public JWK (T30) |
 
 A whole-string token keeps its native type; embedded tokens are stringified (integral floats
 without exponent).
@@ -855,41 +856,61 @@ those locations without following symlinks, so a fetched tree holds only covered
 
 **Code.** `go/tooling/e2e/runner/devices.go` — `Signer`, `Device`, `Devices`, `WithDevices`,
 `DevicesFrom`, `DeviceFrom`, `CallAuth`; `RESTCaller.WithSigner`, `SSEStreamCaller.WithSigner`,
-`SSESubscriber.WithSigner`; `go/tooling/e2e/dpope2e/dpope2e.go` — `New`, `Signer.Client`,
-`Signer.Do`; `go/tooling/e2e/stress/caller.go` — `LoadCaller.WithSigner`, `FireAs`;
-`go/tooling/e2e/stress/engine.go` — `Run`
+`SSESubscriber.WithSigner`; `go/tooling/e2e/runner/scenario.go` — `runStep` (`${device_jwk:…}`);
+`go/tooling/e2e/internal/runtime/interpolate.go` — `ExpandWith`; `go/tooling/e2e/dpope2e/dpope2e.go`
+— `New`, `WithOrigin`, `Signer.Client`, `Signer.Do`, `Signer.PublicJWK`;
+`go/tooling/e2e/stress/caller.go` — `LoadCaller.WithSigner`, `FireAs`; `go/tooling/e2e/stress/engine.go` — `Run`
 
 **Purpose.** Run the suites against a surface whose auth method binds tokens to device keys (RFC
 9449). The generated runner opts in per caller with `WithSigner(dpope2e.New())` when the API
 binds devices, and marks the token mints (`IsDeviceMintMethod`) with `Endpoint.Mint`. The runner
 chooses the device a step signs as and holds no key material; `dpope2e` holds the keys and makes
 the proofs, so a suite that never imports it never depends on `lib/dpop` or JOSE (the module's
-DPoP isolation gate allows `tooling/e2e/dpope2e` and nothing else under `tooling`). A signing caller sends
-`Authorization: DPoP <token>` with a proof by the key the token was minted for, an unbound proof
-and no token on a mint, and no DPoP headers on a call with neither. Proofs go to the origin of the
-caller's base URL only, which must be the gateway's `<P>_DPOP_ORIGIN`; nonces follow
-`dpopclient` (remembered per key and caller, one retry on `use_dpop_nonce`); one `dpope2e.Signer`
-may serve every caller, and a device's key is the same for all of them.
+DPoP isolation gate allows `tooling/e2e/dpope2e` and nothing else under `tooling`).
 
-Device keys belong to a run: `RunSteps` takes the `Devices` its context carries, else a fresh set,
-so two scenarios never share a key. A mint signs with the device of the slot its token lands in
-(the capture its `expect` binds — `auth.token` when it binds that, else the first name mentioning
-a token, else the first name), so signing in again into one slot reuses the device, as one client
-does, and a second principal's slot is a second device. `Step.Device` names the device instead
-(two devices of one principal; a proof by the wrong key). Every value a mint captured is
-remembered as that device's, so a later step presenting it — `auth.token`, `token_from`, an
-await's `token_from`, a `credential: DPoP …` — signs with its key. A refusal carrying
-`DEVICE_REVOKED` discards the key; the device's next use makes a new one. The stress engine runs
-setup, load and teardown on one key set and signs the load with the key of the setup's
-`auth.token`. MCP is never signed: it keeps the bearer.
+A signing caller sends `Authorization: DPoP <token>` with a proof by the key the token was minted
+for, an unbound proof and no token on a mint, and nothing DPoP on a call with neither. Only a call
+to the caller's own origin is signed: a redirect to another origin (a presigned download URL) is
+followed with no proof and no `Authorization`, as Go's client already drops `Authorization` from a
+Bearer call redirected to another host. A proof names the origin of the caller's base URL, or the
+public origin `dpope2e.WithOrigin` gives when the runner reaches the gateway by another address
+(`htu` is that origin plus the request path; the request still goes to the base URL). Nonces follow
+`dpopclient` (remembered per key and origin, one retry on `use_dpop_nonce`). One `dpope2e.Signer`
+may serve every caller; a device's key is the same for all of them.
+
+Devices belong to a run: `RunSteps` takes the `Devices` its context carries, else a fresh set, so
+two scenarios never share a key. A mint signs as, in order:
+
+1. `Step.Device`, when set (two devices of one principal; a proof by the wrong key);
+2. the device of an earlier mint that captured a string the mint's input carries — `VerifyMfa`
+   sends the `challenge_id` `SignIn` answered and is signed by `SignIn`'s key;
+3. the device of the slot its token lands in: the capture bound to the response's `token` field
+   (every auth-plugin mint names it so). Signing in again into one slot reuses its device, as one
+   client does; another principal's slot is another device;
+4. otherwise a device of its own, used by that step alone (a sign-up that captures no token, a
+   refused sign-in).
+
+The token a mint captured from `token` is that device's, so a later step presenting it —
+`auth.token`, `token_from`, an await's `token_from`, a `credential: DPoP …` — signs with its key
+wherever it was copied. Every other string a mint captured counts only for rule 2; no captured id
+or flag is ever taken for a token. `${device_jwk:<name>}` in a step's input expands to the public
+JWK (JSON, no private member) of the device `<name>` — the `public_key` of `CreateApiToken` and
+`IssueBotToken` — and the token that step captures from `token` is bound to that device.
+
+A refusal carrying `DEVICE_REVOKED` marks the device revoked. It keeps signing with the revoked
+key, so every later call presenting its token is refused for the same reason; its next mint signs
+with a new key, so signing in again makes a new device. The stress engine runs setup, load and
+teardown on one set and signs the load with the device of the setup's `auth.token`.
 
 **Configuration.**
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `WithSigner(…)` on a caller | none: Bearer, no DPoP header, wire unchanged | a base URL with no scheme and host → every call fails with `dpopclient.ErrNoOrigins` |
+| `WithSigner(…)` on a caller | none: Bearer, no DPoP header, wire unchanged | a base URL with no scheme and host → every signed call fails with `dpopclient.ErrNoOrigins` |
+| `dpope2e.WithOrigin(origin)` | the base URL's origin | not `scheme://host[:port]` → every signed call fails naming `WithOrigin`; unsigned calls are unaffected |
 | `Endpoint.Mint` | false | with `TokenFrom` → the step fails before sending |
 | `Step.Device` | derived (above) | — |
+| `${device_jwk:<name>}` | — | on a caller without a signer, with no name, or naming two devices in one step → the step fails before sending |
 | `credential:` | sent as written | `DPoP <token>` on a signing caller is signed for like a token |
 
 **Guarantees.**
@@ -897,23 +918,33 @@ setup, load and teardown on one key set and signs the load with the key of the s
 | ID | Guarantee | Test |
 |---|---|---|
 | T30.1 | A call presenting a minted token MUST carry a proof by the key that minted it, through the gateway's nonce challenge. | `TestDPoP_SignInThenCallSignsWithTheMintingKey` |
-| T30.2 | A mint MUST carry an unbound proof and no stored token, even on an auth-required endpoint with a session bound. | `TestDPoP_MintSendsNoStoredToken`, `TestFireAs_MintCarriesAnUnboundProof` |
-| T30.3 | Each principal's slot MUST be its own device; signing in again into a slot MUST reuse its device; `Step.Device` MUST make another. | `TestDPoP_KeyPerPrincipal` |
+| T30.2 | A mint MUST carry an unbound proof and no stored token, even on an auth-required endpoint with a session bound. | `TestDPoP_MintSendsNoStoredToken`, `TestFireAs_MintCarriesAnUnboundProof`, `TestStepToken_MintPresentsNoToken` |
+| T30.3 | Each principal's slot MUST be its own device; signing in again into a slot MUST reuse its device; `Step.Device` MUST make another; a mint with no slot MUST be a device of its own. | `TestDPoP_KeyPerPrincipal`, `TestDevices_TokenFollowsItsMint`, `TestDevices_AnUnboundMintIsItsOwnDevice` |
 | T30.4 | Two runs MUST NOT share a device key. | `TestDPoP_RunsDoNotShareKeys` |
-| T30.5 | A `DEVICE_REVOKED` refusal MUST reach `expect_error` with its detail code, and the device MUST sign its next mint with a new key. | `TestDPoP_DeviceRevoked` |
+| T30.5 | Every call presenting a revoked device's token MUST be refused with `DEVICE_REVOKED` reaching `expect_error`, and the device's next mint MUST sign with a new key. | `TestDPoP_DeviceRevoked` |
 | T30.6 | A `DPoP` credential, a server stream and event subscriptions (the step's and an await's `token_from`) MUST be signed by the key of the token they present. | `TestDPoP_DPoPCredentialIsSigned`, `TestDPoP_StreamIsSigned`, `TestDPoP_EventSubscriptionsAreSigned` |
-| T30.7 | A signing caller MUST NOT send DPoP headers on a call with no token that is not a mint. | `TestDPoP_AnonymousCallCarriesNoProof` |
+| T30.7 | A signing caller MUST NOT send DPoP headers on a call with no token that is not a mint, nor consult the signer for it. | `TestDPoP_AnonymousCallCarriesNoProof` |
 | T30.8 | Without `WithSigner` every header of every request MUST be what it was before. | `TestDPoP_OffModeWireIsUnchanged`, `TestFire_OffModeSendsTheBearer` |
 | T30.9 | The stress load MUST sign with the setup session's key and spend a nonce challenge only on a key's first proofs. | `TestRun_DPoPLoadSignsWithTheSetupKey` |
-| T30.10 | A mint step's token slot MUST be chosen as described, and a token MUST sign as the device that minted it wherever it was copied. | `TestMintSlot`, `TestDevices_TokenFollowsItsMint`, `TestStepToken_MintPresentsNoToken` |
+| T30.10 | Only the capture of a mint's `token` field MUST be taken for a token; a mint MUST chain only on a string an earlier mint captured. | `TestTokenCapture`, `TestDevices_OnlyTheTokenFieldIsAToken` |
 | T30.11 | The runner and the stress engine MUST NOT import `lib/dpop` or JOSE; only `dpope2e` may. | `TestDPoPImportsStayInsideTheOptInPackages` |
+| T30.12 | The two mints of an MFA sign-in MUST be signed by one key. | `TestDPoP_MFASignInSignsBothMintsWithOneKey` |
+| T30.13 | `${device_jwk:<name>}` MUST expand to that device's public JWK with no private member, the token the step captures MUST sign with that device's key, and a caller without a signer MUST refuse it. | `TestDPoP_DeviceJWKBindsAnAPIToken`, `TestPublicJWK_HasNoPrivateMember`, `TestDPoP_DeviceJWKNeedsASigningCaller` |
+| T30.14 | A redirect to another origin MUST be followed without a proof or `Authorization`, signed call or not. | `TestDPoP_CrossOriginRedirectGoesUnsigned` |
+| T30.15 | With `WithOrigin`, proofs MUST name the public origin while requests go to the base URL, for the callers and the stress load. | `TestDPoP_WithOriginSignsForThePublicOrigin`, `TestFireAs_WithOriginSignsForThePublicOrigin` |
 
 **Deliberate limits.**
 - A token the run did not mint (a fixture constant, a value built by hand) signs with the key of
   the slot it is read from, which the gateway refuses if it was bound to another key.
-- A revoked key is discarded only when a refusal for it is seen; a scenario asserting that a
-  revoked key stays refused at sign-in presents it before any call observes the revocation.
+- A device becomes revoked only when a `DEVICE_REVOKED` refusal for it is seen. Until then it signs
+  with its old key, so a scenario that revokes a device and signs in again on it without a call in
+  between presents the revoked key, and the sign-in is refused.
 - A mint refused for `DEVICE_REVOKED` is not retried; the step reports what the gateway said.
-- MCP sends the session token as a bearer; a surface that refuses unbound bearers on MCP needs
-  MCP-specific credentials.
+- A mint chains on any string an earlier mint of the run captured; a mint input that carries one
+  by coincidence signs as that mint's device.
+- MCP is never signed: it sends the token as a bearer. Against a surface that binds devices an
+  MCP scenario needs a token that passes there without a proof (an `mcp_only` API token), or DPoP
+  on MCP, which the runner does not do.
+- With `WithOrigin`, the request carries the base URL's host; a gateway that routes by `Host`
+  sees the address the runner dialled.
 - Keys are P-256, in memory, made on first use, never written.

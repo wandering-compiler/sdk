@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
@@ -20,16 +21,25 @@ import (
 //     set of devices, each holding a key made on first use and never
 //     written anywhere.
 //   - A MINT step (Endpoint.Mint: sign-in, sign-up, …) sends no stored token
-//     and signs an unbound proof with the device of the slot its token lands
-//     in — the capture name its `expect` binds (`auth.token` by preference).
-//     Signing in again into the same slot reuses that device, as one browser
-//     signing in again does; a different slot (a second principal's
-//     `bob.token`) is a different device. Step.Device names the device
-//     explicitly, for a scenario about two devices of one principal.
-//   - Every value the mint step captured is remembered as minted by that
-//     device, so a later step presenting the token (`auth.token`,
-//     `token_from`, an await's `token_from`, a `DPoP` credential) signs with
-//     the key it is bound to, whatever capture it was copied into since.
+//     and signs an unbound proof. Its device is, in order: Step.Device when
+//     set (two devices of one principal); the device of an earlier mint one
+//     of its input values came from (VerifyMfa sends the challenge_id SignIn
+//     answered, and must be signed by the key SignIn was); the device of
+//     the slot its token lands in — the capture bound to the response's
+//     `token` field, which every auth-plugin mint names so. Signing in again
+//     into one slot reuses its device, as one browser signing in again
+//     does; another principal's slot (`bob.token`) is another device. A
+//     mint with none of these (a sign-up that captures no token, a refused
+//     sign-in) signs as a device of its own, used by that step alone.
+//   - The token a mint captured is remembered as that device's, so a later
+//     step presenting it (`auth.token`, `token_from`, an await's
+//     `token_from`, a `DPoP` credential) signs with the key it is bound to,
+//     whatever capture it was copied into since. Every string a mint
+//     captured is remembered too, but only for a later mint's input to
+//     chain on; no other value is ever taken for a token.
+//   - `${device_jwk:<name>}` in a step's input is the public JWK of the
+//     device <name> (the `public_key` of CreateApiToken / IssueBotToken);
+//     the token that step captures from its `token` field is that device's.
 //
 // This package chooses the device; it holds no key material. The key, the
 // proofs and the nonces belong to a [Signer] — package
@@ -58,6 +68,15 @@ type Signer interface {
 	// signer's own device) and calls send again, once, when the server asks
 	// for a fresh nonce. It returns the last status.
 	Do(dev *Device, method, target, token string, mint bool, send func(h http.Header) (int, http.Header, error)) (int, error)
+
+	// PublicJWK is the JSON of dev's public key as a JWK (RFC 7517), with
+	// no private member: what `${device_jwk:<name>}` expands to.
+	PublicJWK(dev *Device) (string, error)
+}
+
+// signingCaller is a caller that may have a Signer.
+type signingCaller interface {
+	deviceSigner() Signer
 }
 
 // Device is one device: an identity a [Signer] keeps its key and nonces
@@ -87,12 +106,13 @@ func (d *Device) Value(key any, mk func() any) any {
 type Devices struct {
 	mu      sync.Mutex
 	byName  map[string]*Device
-	byToken map[string]*Device
+	byToken map[string]*Device // tokens a mint (or a device_jwk step) captured
+	byChain map[string]*Device // every string a mint captured
 }
 
 // NewDevices returns an empty set.
 func NewDevices() *Devices {
-	return &Devices{byName: map[string]*Device{}, byToken: map[string]*Device{}}
+	return &Devices{byName: map[string]*Device{}, byToken: map[string]*Device{}, byChain: map[string]*Device{}}
 }
 
 type devicesKey struct{}
@@ -148,52 +168,99 @@ func (d *Devices) DeviceFor(token string) *Device {
 	return d.forToken(token, DefaultTokenSlot)
 }
 
-// learn records what a successful mint step bound: each captured value is a
-// credential that device minted, and each capture name now resolves to it.
+// learn records what a successful mint step bound: its token is a
+// credential of dv and its slot now resolves to dv, and every string it
+// captured may be chained on by a later mint.
 func (d *Devices) learn(dv *Device, s Step, scope *runtime.Scope) {
+	d.bindToken(dv, s, scope)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, name := range runtime.CaptureNames(s.Expect) {
-		d.byName[name] = dv
-		if v, ok := scope.Get(name); ok && v != nil {
-			if tok := runtime.Text(v); tok != "" {
-				d.byToken[tok] = dv
+		if v, ok := scope.Get(name); ok {
+			if str, ok := v.(string); ok && str != "" {
+				d.byChain[str] = dv
 			}
 		}
 	}
 }
 
+// bindToken records the token a step captured from its `token` field as a
+// credential of dv, and the capture's name as dv's slot.
+func (d *Devices) bindToken(dv *Device, s Step, scope *runtime.Scope) {
+	slot := tokenCapture(s.Expect)
+	if slot == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.byName[slot] = dv
+	if v, ok := scope.Get(slot); ok && v != nil {
+		if tok := runtime.Text(v); tok != "" {
+			d.byToken[tok] = dv
+		}
+	}
+}
+
+// chained returns the device of an earlier mint that captured one of the
+// strings in input, or nil.
+func (d *Devices) chained(input any) *Device {
+	switch v := input.(type) {
+	case string:
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.byChain[v]
+	case map[string]any:
+		for _, k := range sortedKeys(v) {
+			if dv := d.chained(v[k]); dv != nil {
+				return dv
+			}
+		}
+	case []any:
+		for _, e := range v {
+			if dv := d.chained(e); dv != nil {
+				return dv
+			}
+		}
+	}
+	return nil
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // stepDevice picks the device a step signs with; presented is the token
-// the step sends ("" for none).
-func (d *Devices) stepDevice(s Step, presented string) *Device {
+// the step sends ("" for none), input its expanded input.
+func (d *Devices) stepDevice(s Step, presented string, input map[string]any) *Device {
 	switch {
 	case s.Device != "":
 		return d.named(s.Device)
 	case s.Endpoint.Mint:
-		return d.named(mintSlot(s))
+		if dv := d.chained(input); dv != nil {
+			return dv
+		}
+		if slot := tokenCapture(s.Expect); slot != "" {
+			return d.named(slot)
+		}
+		return &Device{}
 	}
 	return d.forToken(presented, s.TokenFrom)
 }
 
-// mintSlot is the capture a mint step's token lands in: `auth.token` when
-// the step binds it, else the first bound name that mentions a token, else
-// the first bound name, else `auth.token`.
-func mintSlot(s Step) string {
-	names := runtime.CaptureNames(s.Expect)
-	for _, n := range names {
-		if n == DefaultTokenSlot {
-			return n
-		}
+// tokenCapture is the capture a step binds its response's `token` field to,
+// "" when it binds none.
+func tokenCapture(expect map[string]any) string {
+	m, ok := expect["token"].(map[string]any)
+	if !ok {
+		return ""
 	}
-	for _, n := range names {
-		if strings.Contains(strings.ToLower(n), "token") {
-			return n
-		}
-	}
-	if len(names) > 0 {
-		return names[0]
-	}
-	return DefaultTokenSlot
+	name, _ := m["capture"].(string)
+	return name
 }
 
 type deviceKey struct{}

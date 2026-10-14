@@ -14,22 +14,34 @@
 //	events := runner.NewSSESubscriber(target, nil).WithSigner(signer)
 //	load := stress.NewLoadCaller(target, n, timeout).WithSigner(signer)
 //
-// The target's origin must be the gateway's public origin (`<P>_DPOP_ORIGIN`):
-// proofs name it, and requests to any other origin fail before they are
-// sent.
+// A proof names the gateway's public origin (`<P>_DPOP_ORIGIN`). By default
+// that is the origin of the caller's target; when the runner reaches the
+// gateway by another address, [WithOrigin] names the public one: proofs
+// carry it while requests still go to the target.
+//
+// Only a request that presents a token, or is a mint, to the caller's own
+// origin is signed. Anything else — an anonymous call, or a redirect to
+// another origin (a presigned download URL) — goes out with no DPoP
+// headers and no Authorization, as Go's client already drops Authorization
+// on a redirect to another host.
 //
 // Keys are P-256, in memory, made on a device's first signed request and
-// never written. A refusal carrying DEVICE_REVOKED discards the key it was
-// for, so the device's next request — signing in again — makes a new one,
-// as a client does after its device was revoked.
+// never written. A refusal carrying DEVICE_REVOKED marks the device
+// revoked: it keeps its key, so its token keeps being refused for the
+// right reason, and its next mint — signing in again — signs with a new key
+// and so is a new device, as a client is after its device was revoked.
 package dpope2e
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+
+	"github.com/go-jose/go-jose/v4"
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/lib/dpop/dpopclient"
@@ -39,13 +51,37 @@ import (
 // Signer is a [runner.Signer] signing with DPoP. One Signer may serve every
 // caller of a suite; a device's key is shared by all of them.
 type Signer struct {
-	own runner.Device // the device of a request made outside a step
+	own    runner.Device // the device of a request made outside a step
+	origin string        // the public origin proofs name; "" = the target's
+	err    error         // a bad WithOrigin, reported by every signed request
 }
 
 var _ runner.Signer = (*Signer)(nil)
 
+// Option configures a [Signer].
+type Option func(*Signer)
+
+// WithOrigin makes proofs name origin (scheme://host[:port]), the gateway's
+// public origin (`<P>_DPOP_ORIGIN`), while requests still go to the
+// caller's target: for a runner that reaches the gateway by an address
+// other than the one the gateway is configured to see. The htu of a proof
+// is origin followed by the request's path.
+func WithOrigin(origin string) Option {
+	return func(s *Signer) {
+		if s.origin = normOrigin(origin); s.origin == "" {
+			s.err = fmt.Errorf("dpope2e: WithOrigin(%q): want scheme://host[:port]", origin)
+		}
+	}
+}
+
 // New returns a Signer.
-func New() *Signer { return &Signer{} }
+func New(opts ...Option) *Signer {
+	s := &Signer{}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
 
 // stateKey is where a device holds its [deviceState]. One key for the
 // package: every Signer and every caller signs as a device with the same
@@ -53,11 +89,12 @@ func New() *Signer { return &Signer{} }
 type stateKey struct{}
 
 // deviceState is one device's key, the signing transports built on it
-// (one per client, each with its own nonce for its origin) and the nonces
-// [Signer.Do] learnt, per origin.
+// (one per client, each with its own nonce for its origin), the nonces
+// [Signer.Do] learnt per origin, and whether the key was revoked.
 type deviceState struct {
 	mu         sync.Mutex
 	key        *dpop.Key
+	revoked    bool
 	transports map[*signingRT]*dpopclient.Transport
 	nonces     map[string]string
 }
@@ -66,32 +103,37 @@ func stateOf(dv *runner.Device) *deviceState {
 	return dv.Value(stateKey{}, func() any { return &deviceState{} }).(*deviceState)
 }
 
-// ensureKey makes the key when there is none. Called with mu held.
-func (st *deviceState) ensureKey() error {
-	if st.key != nil {
+// keyFor returns the device's key, making it when there is none, and a new
+// one for a mint once the current one was revoked. Called with mu held.
+func (st *deviceState) keyFor(mint bool) error {
+	if st.key != nil && !(mint && st.revoked) {
 		return nil
 	}
 	k, err := dpop.GenerateKey(dpop.KeyP256)
 	if err != nil {
 		return err
 	}
-	st.key = k
+	st.key, st.revoked = k, false
 	st.transports, st.nonces = nil, nil
 	return nil
 }
 
 // transport returns the device's transport for rt and the key it signs
 // with.
-func (st *deviceState) transport(rt *signingRT) (*dpopclient.Transport, *dpop.Key, error) {
+func (st *deviceState) transport(rt *signingRT, mint bool) (*dpopclient.Transport, *dpop.Key, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if err := st.ensureKey(); err != nil {
+	if err := st.keyFor(mint); err != nil {
 		return nil, nil, err
 	}
 	if t, ok := st.transports[rt]; ok {
 		return t, st.key, nil
 	}
-	t, err := dpopclient.NewTransport(rt.base, st.key, callToken, rt.origin)
+	base := rt.base
+	if rt.public != "" {
+		base = &redial{base: rt.base, origin: rt.origin}
+	}
+	t, err := dpopclient.NewTransport(base, st.key, callToken, rt.signedOrigin())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,12 +144,13 @@ func (st *deviceState) transport(rt *signingRT) (*dpopclient.Transport, *dpop.Ke
 	return t, st.key, nil
 }
 
-// discard drops key if the device still holds it.
-func (st *deviceState) discard(key *dpop.Key) {
+// markRevoked records that key was refused as revoked, if the device still
+// signs with it.
+func (st *deviceState) markRevoked(key *dpop.Key) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.key == key {
-		st.key, st.transports, st.nonces = nil, nil, nil
+		st.revoked = true
 	}
 }
 
@@ -126,7 +169,7 @@ func (s *Signer) Client(c *http.Client, baseURL string) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	cp.Transport = &signingRT{base: base, origin: originOf(baseURL), own: &s.own}
+	cp.Transport = &signingRT{base: base, origin: normOrigin(baseURL), public: s.origin, err: s.err, own: &s.own}
 	return &cp
 }
 
@@ -134,34 +177,78 @@ func (s *Signer) Client(c *http.Client, baseURL string) *http.Client {
 // signer's own), for the token its context carries.
 type signingRT struct {
 	base   http.RoundTripper
-	origin string
+	origin string // the target's origin, where requests go
+	public string // the origin proofs name; "" = origin
+	err    error
 	own    *runner.Device
 }
 
-func (rt *signingRT) RoundTrip(req *http.Request) (*http.Response, error) {
-	dv := runner.DeviceFrom(req.Context())
-	if dv == nil {
-		dv = rt.own
+func (rt *signingRT) signedOrigin() string {
+	if rt.public != "" {
+		return rt.public
 	}
-	st := stateOf(dv)
-	t, key, err := st.transport(rt)
-	if err != nil {
+	return rt.origin
+}
+
+func (rt *signingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	tok, mint := runner.CallAuth(req.Context())
+	if tok == "" && !mint {
+		return rt.base.RoundTrip(req)
+	}
+	fail := func(err error) (*http.Response, error) {
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}
 		return nil, err
 	}
-	if _, mint := runner.CallAuth(req.Context()); mint {
+	switch {
+	case rt.err != nil:
+		return fail(rt.err)
+	case rt.origin == "":
+		return fail(dpopclient.ErrNoOrigins)
+	case originOf(req.URL) != rt.origin:
+		// A redirect off the caller's origin (a presigned URL): the token
+		// and the proofs stay home, as a Bearer does.
+		return rt.base.RoundTrip(req)
+	}
+	dv := runner.DeviceFrom(req.Context())
+	if dv == nil {
+		dv = rt.own
+	}
+	st := stateOf(dv)
+	t, key, err := st.transport(rt, mint)
+	if err != nil {
+		return fail(err)
+	}
+	if mint {
 		req = dpopclient.WithMint(req)
+	}
+	if rt.public != "" {
+		req = req.Clone(req.Context())
+		req.URL.Scheme, req.URL.Host = splitOrigin(rt.public)
 	}
 	resp, err := t.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
 	if errors.Is(dpopclient.Refusal(resp), dpopclient.ErrDeviceRevoked) {
-		st.discard(key)
+		st.markRevoked(key)
 	}
 	return resp, nil
+}
+
+// redial sends a request addressed to the public origin to the target
+// origin instead.
+type redial struct {
+	base   http.RoundTripper
+	origin string
+}
+
+func (r *redial) RoundTrip(req *http.Request) (*http.Response, error) {
+	out := req.Clone(req.Context())
+	out.URL.Scheme, out.URL.Host = splitOrigin(r.origin)
+	out.Host = ""
+	return r.base.RoundTrip(out)
 }
 
 // Do implements [runner.Signer]: the stress engine's requests, signed with
@@ -173,6 +260,9 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 		status, _, err := send(http.Header{})
 		return status, err
 	}
+	if s.err != nil {
+		return -1, s.err
+	}
 	if dev == nil {
 		dev = &s.own
 	}
@@ -181,10 +271,14 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 	if err != nil {
 		return -1, err
 	}
-	origin := u.Scheme + "://" + u.Host
+	htu := *u
+	if s.origin != "" {
+		htu.Scheme, htu.Host = splitOrigin(s.origin)
+	}
+	origin := originOf(&htu)
 
 	st.mu.Lock()
-	if err := st.ensureKey(); err != nil {
+	if err := st.keyFor(mint); err != nil {
 		st.mu.Unlock()
 		return -1, err
 	}
@@ -192,7 +286,7 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 	st.mu.Unlock()
 
 	for attempt := 0; ; attempt++ {
-		proof, err := dpop.NewProof(key, method, target, token, used)
+		proof, err := dpop.NewProof(key, method, htu.String(), token, used)
 		if err != nil {
 			return -1, err
 		}
@@ -224,12 +318,52 @@ func (s *Signer) Do(dev *runner.Device, method, target, token string, mint bool,
 	}
 }
 
-// originOf is scheme://host[:port] of a base URL, "" when it has none (and
-// then every signed request fails with dpopclient.ErrNoOrigins).
-func originOf(baseURL string) string {
-	u, err := url.Parse(baseURL)
+// PublicJWK implements [runner.Signer]: the JSON of the device's public key
+// as a JWK. The key is made when the device has none; a JWK of a key made
+// here is never private.
+func (s *Signer) PublicJWK(dev *runner.Device) (string, error) {
+	if dev == nil {
+		dev = &s.own
+	}
+	st := stateOf(dev)
+	st.mu.Lock()
+	err := st.keyFor(false)
+	key := st.key
+	st.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	jwk := jose.JSONWebKey{Key: key.Public()}
+	if !jwk.IsPublic() {
+		return "", errors.New("dpope2e: device key is not a public key")
+	}
+	b, err := jwk.MarshalJSON()
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// originOf is the normalised scheme://host[:port] of u.
+func originOf(u *url.URL) string {
+	return normOrigin(u.Scheme + "://" + u.Host)
+}
+
+// normOrigin normalises an origin or base URL to scheme://host[:port] (lower
+// case, no default port); "" when it has no scheme and host.
+func normOrigin(raw string) string {
+	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
-	return u.Scheme + "://" + u.Host
+	o, err := dpop.NormalizeHTU(u.Scheme + "://" + u.Host)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(o, "/")
+}
+
+func splitOrigin(origin string) (scheme, host string) {
+	scheme, host, _ = strings.Cut(origin, "://")
+	return scheme, host
 }

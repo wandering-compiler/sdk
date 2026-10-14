@@ -145,3 +145,20 @@ func TestFire_OffModeSendsTheBearer(t *testing.T) {
 		t.Errorf("Authorization %q, DPoP %q: want the bearer and no proof", auth, proof)
 	}
 }
+
+// WithOrigin applies to the load too: htu names the public origin.
+func TestFireAs_WithOriginSignsForThePublicOrigin(t *testing.T) {
+	const public = "https://api.example.test"
+	g := newLoadGateway(t)
+	var err error
+	nonces, _ := dpop.NewHMACNonces([]byte("0123456789abcdef0123456789abcdef"))
+	if g.v, err = dpop.NewVerifier(dpop.Config{Origin: public, Nonces: nonces}); err != nil {
+		t.Fatal(err)
+	}
+	lc := stress.NewLoadCaller(g.URL, 1, 5*time.Second).WithSigner(dpope2e.New(dpope2e.WithOrigin(public)))
+	ep := runner.Endpoint{Ref: "auth.SignIn", Transport: "rest", HTTPMethod: "POST", PathTemplate: "/signin", Mint: true}
+	code, err := lc.FireAs(nil, ep, map[string]any{"email": "a"}, "", nil)
+	if err != nil || code != http.StatusOK || g.refused.Load() != 0 {
+		t.Errorf("mint for the public origin: status %d, err %v, refused %d", code, err, g.refused.Load())
+	}
+}
