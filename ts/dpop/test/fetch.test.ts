@@ -501,6 +501,100 @@ describe("createDpopFetch: discarding a key", () => {
     expect(server.sent[0]!.proof!.header.jwk).toEqual((await f.key()).jwk);
   });
 
+  // Two tabs: two wrappers over ONE store, as two pages over one IndexedDB.
+  function twoTabs(reply: Reply = () => ok()) {
+    const store = new MemoryKeyStore();
+    const server = scriptedFetch(reply);
+    const tab = () =>
+      createDpopFetch({
+        origins: [ORIGIN],
+        keyStore: store,
+        getToken: () => "tok",
+        fetch: server.fetch,
+      });
+    return { a: tab(), b: tab(), store, server };
+  }
+
+  it("does not let another tab's stale refusal delete the key this tab just made", async () => {
+    const { a, b, store } = twoTabs();
+    const old = (await a.key()).thumbprint;
+    expect((await b.key()).thumbprint).toBe(old);
+
+    await a.discardKey(old); // tab A was told DEVICE_REVOKED first
+    const fresh = (await a.key()).thumbprint;
+    expect(fresh).not.toBe(old);
+
+    await b.discardKey(old); // tab B, refused for the same old key, later
+    expect((await dpopKey((await store.load())!)).thumbprint).toBe(fresh);
+    expect((await b.key()).thumbprint).toBe(fresh); // B joins A's new key
+    expect((await a.key()).thumbprint).toBe(fresh);
+  });
+
+  it("reloadKey makes a tab adopt the key another tab put in the store", async () => {
+    const { a, b, server } = twoTabs();
+    const old = (await b.key()).thumbprint;
+    await a.discardKey();
+    const fresh = (await a.key()).thumbprint;
+    expect(fresh).not.toBe(old);
+    expect((await b.key()).thumbprint).toBe(old); // B still holds the old one in memory
+
+    b.reloadKey();
+    await b(`${ORIGIN}/r`);
+    expect(server.sent[0]!.proof!.header.jwk).toEqual((await a.key()).jwk);
+  });
+
+  it("discards through the store's own compare-and-delete when it has one", async () => {
+    const inner = new MemoryKeyStore();
+    let loads = 0;
+    const calls: string[] = [];
+    const store: KeyStore = {
+      load: () => {
+        loads++;
+        return inner.load();
+      },
+      save: (p) => inner.save(p),
+      clear: () => inner.clear(),
+      clearIf: async (t) => {
+        calls.push(t);
+        const held = await inner.load();
+        if (held && (await dpopKey(held)).thumbprint === t) {
+          await inner.clear();
+          return true;
+        }
+        return false;
+      },
+    };
+    const f = createDpopFetch({ origins: [ORIGIN], keyStore: store, getToken: () => "t" });
+    const k = (await f.key()).thumbprint;
+    const before = loads;
+    await f.discardKey(k);
+    expect(calls).toEqual([k]);
+    expect(loads).toBe(before); // no separate read: the compare happened in the store
+    expect(await inner.load()).toBeUndefined();
+  });
+
+  it("keeps signing with the key it had when a reload cannot read the store", async () => {
+    const inner = new MemoryKeyStore();
+    let broken = false;
+    const store: KeyStore = {
+      load: () => (broken ? Promise.reject(new Error("idb flaked")) : inner.load()),
+      save: (p) => inner.save(p),
+      clear: () => inner.clear(),
+    };
+    const server = scriptedFetch(() => ok());
+    const f = createDpopFetch({
+      origins: [ORIGIN],
+      keyStore: store,
+      getToken: () => "t",
+      fetch: server.fetch,
+    });
+    const k = await f.key();
+    broken = true;
+    f.reloadKey();
+    await f(`${ORIGIN}/r`);
+    expect(server.sent[0]!.proof!.header.jwk).toEqual(k.jwk);
+  });
+
   it("discards unconditionally without a thumbprint", async () => {
     const { f, store } = setup();
     const before = (await f.key()).thumbprint;

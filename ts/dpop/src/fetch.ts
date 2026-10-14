@@ -66,11 +66,22 @@ export interface DpopFetch {
    * own `discardKey` is the safer call, since it discards only the key it was
    * raised for.
    *
-   * With `thumbprint`, only a key with that thumbprint is discarded: a newer
-   * key is left alone. Requests made while a discard is in progress wait for
-   * it, so none of them signs with, or reloads, the key being discarded.
+   * With `thumbprint`, the STORED key is deleted only when it is the one
+   * with that thumbprint: a newer key — made by this page after the refusal,
+   * or by another page on the same store (another tab) — is left alone. The
+   * key in memory is dropped either way, and the next request loads whatever
+   * the store holds, so every page on one store converges on one key.
+   * Requests made while a discard is in progress wait for it, so none of
+   * them signs with, or reloads, the key being discarded.
    */
   discardKey(thumbprint?: string): Promise<void>;
+  /**
+   * Forgets the key held in memory, never the stored one: the next request
+   * loads the store's. Call it when another page on the same store may have
+   * replaced the key — another tab signed in, or answered DEVICE_REVOKED with
+   * a new key — so this page signs as the same device the store now holds.
+   */
+  reloadKey(): void;
 }
 
 /** A request to an origin outside {@link DpopFetchOptions.origins}. Nothing was sent. */
@@ -294,9 +305,22 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
   // pair a discard is about to delete.
   let discards: Promise<void> = Promise.resolve();
 
+  // The last key this wrapper signed with, kept across reloadKey(): a reload
+  // that fails (the store briefly unreadable) goes on with it instead of
+  // failing requests made under a live session. A discard forgets it.
+  let lastKey: DpopKey | undefined;
+
   const key = (): Promise<DpopKey> => {
     if (!keyPromise) {
-      const p = discards.then(() => loadOrCreateKey(store));
+      const p = discards
+        .then(() => loadOrCreateKey(store))
+        .then(
+          (k) => (lastKey = k),
+          (err: unknown) => {
+            if (lastKey) return lastKey;
+            throw err;
+          },
+        );
       keyPromise = p;
       // A failed load must not stick: the next request tries again.
       p.catch(() => {
@@ -307,28 +331,39 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
   };
 
   const discardKey = (thumbprint?: string): Promise<void> => {
-    const held = keyPromise;
     const op = discards.then(async () => {
       if (thumbprint !== undefined) {
-        // Discard only the key the caller means: the one in memory, or, when
-        // none is loaded, the one in the store.
-        let current = held ? await held.catch(() => undefined) : undefined;
-        if (!current) {
+        // Compared with the STORE, not with memory: the store is what every
+        // page on it loads from. Comparing with this page's own key let a
+        // second tab, refused for the old key after the first had already
+        // made a new one, delete the first tab's new key — and the two tabs
+        // went on as two devices.
+        // A store that compares and deletes in one step does so (another
+        // tab cannot save between the two); any other is read, then cleared.
+        const cleared = store.clearIf ? await store.clearIf(thumbprint) : undefined;
+        if (cleared === false) return;
+        if (cleared === undefined) {
           const stored = await store.load();
-          current = stored ? await dpopKey(stored) : undefined;
+          const held = stored ? await dpopKey(stored).catch(() => undefined) : undefined;
+          if (held?.thumbprint !== thumbprint) return;
+          await store.clear();
         }
-        if (current?.thumbprint !== thumbprint) {
-          if (keyPromise === undefined && held) keyPromise = held; // keep the newer key
-          return;
-        }
+        nonces.clear();
+        return;
       }
       nonces.clear();
       await store.clear();
     });
     discards = op.catch(() => undefined);
-    // Requests from now on wait for this discard (see key()).
-    if (keyPromise === held) keyPromise = undefined;
+    // Requests from now on wait for this discard and then load the store's
+    // key (see key()) — the newer one when the discard left it alone.
+    keyPromise = undefined;
+    lastKey = undefined;
     return op;
+  };
+
+  const reloadKey = (): void => {
+    keyPromise = undefined;
   };
 
   const attempt = async (
@@ -399,5 +434,5 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     return resp;
   };
 
-  return Object.assign(dpopFetch, { key, discardKey });
+  return Object.assign(dpopFetch, { key, discardKey, reloadKey });
 }

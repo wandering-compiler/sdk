@@ -6,7 +6,9 @@ import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultKeyStore,
   dpopKey,
+  FallbackKeyStore,
   generateKeyPair,
   IndexedDBKeyStore,
   loadOrCreateKey,
@@ -79,6 +81,160 @@ describe("IndexedDBKeyStore", () => {
 
   it("fails clearly where there is no IndexedDB", async () => {
     await expect(new IndexedDBKeyStore().load()).rejects.toThrow(/IndexedDB is not available/);
+  });
+});
+
+describe("one key per store, whoever writes last", () => {
+  it("uses the key the store holds after saving, not the one it generated", async () => {
+    // Another page on the same store writes its key right after ours.
+    const inner = new MemoryKeyStore();
+    const other = await generateKeyPair();
+    const store: KeyStore = {
+      load: () => inner.load(),
+      save: async (p) => {
+        await inner.save(p);
+        await inner.save(other);
+      },
+      clear: () => inner.clear(),
+    };
+    const key = await loadOrCreateKey(store);
+    expect(key.thumbprint).toBe((await dpopKey(other)).thumbprint);
+  });
+
+  it("makes ONE key for two pages creating one at the same moment on IndexedDB", async () => {
+    const indexedDB = new IDBFactory();
+    const [a, b] = await Promise.all([
+      loadOrCreateKey(new IndexedDBKeyStore({ indexedDB })),
+      loadOrCreateKey(new IndexedDBKeyStore({ indexedDB })),
+    ]);
+    expect(a.thumbprint).toBe(b.thumbprint);
+    const stored = await new IndexedDBKeyStore({ indexedDB }).load();
+    expect((await dpopKey(stored!)).thumbprint).toBe(a.thumbprint);
+  });
+
+  it("saveIfAbsent keeps a pair that is already there", async () => {
+    const indexedDB = new IDBFactory();
+    const store = new IndexedDBKeyStore({ indexedDB });
+    const first = await generateKeyPair();
+    const second = await generateKeyPair();
+    expect(await dpopKey(await store.saveIfAbsent(first))).toEqual(await dpopKey(first));
+    const kept = await store.saveIfAbsent(second);
+    expect((await dpopKey(kept)).thumbprint).toBe((await dpopKey(first)).thumbprint);
+  });
+});
+
+describe("FallbackKeyStore and defaultKeyStore", () => {
+  const broken: KeyStore = {
+    load: () => Promise.reject(new Error("idb broken")),
+    save: () => Promise.reject(new Error("idb broken")),
+    clear: () => Promise.reject(new Error("idb broken")),
+  };
+
+  it("goes on in memory once the primary store fails, and says so once", async () => {
+    const seen: unknown[] = [];
+    const store = new FallbackKeyStore(broken, new MemoryKeyStore(), (e) => seen.push(e));
+    const key = await loadOrCreateKey(store);
+    expect(store.usingFallback).toBe(true);
+    expect((await loadOrCreateKey(store)).thumbprint).toBe(key.thumbprint);
+    await store.clear();
+    expect(await store.load()).toBeUndefined();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("uses the primary store while it works", async () => {
+    const primary = new MemoryKeyStore();
+    const store = new FallbackKeyStore(primary);
+    const key = await loadOrCreateKey(store);
+    expect(store.usingFallback).toBe(false);
+    expect((await dpopKey((await primary.load())!)).thumbprint).toBe(key.thumbprint);
+  });
+
+  it("defaultKeyStore: IndexedDB that fails to open still yields a working key", async () => {
+    const g = globalThis as { indexedDB?: unknown };
+    const saved = g.indexedDB;
+    g.indexedDB = {
+      open: () => {
+        throw new Error("blocked");
+      },
+    };
+    try {
+      const store = defaultKeyStore();
+      expect(store).toBeInstanceOf(FallbackKeyStore);
+      const key = await loadOrCreateKey(store);
+      expect(await signsWith(key.keyPair)).toBe(true);
+    } finally {
+      g.indexedDB = saved;
+    }
+  });
+
+  it("defaultKeyStore: memory where there is no IndexedDB", () => {
+    const g = globalThis as { indexedDB?: unknown };
+    const saved = g.indexedDB;
+    delete g.indexedDB;
+    try {
+      expect(defaultKeyStore()).toBeInstanceOf(MemoryKeyStore);
+    } finally {
+      if (saved !== undefined) g.indexedDB = saved;
+    }
+  });
+});
+
+describe("key store edges: fallback seeding, atomic discard, bad records", () => {
+  const flaky = () => {
+    const inner = new MemoryKeyStore();
+    let broken = false;
+    const fail = () => Promise.reject(new Error("idb flaked"));
+    const store: KeyStore = {
+      load: () => (broken ? fail() : inner.load()),
+      save: (p) => (broken ? fail() : inner.save(p)),
+      clear: () => (broken ? fail() : inner.clear()),
+    };
+    return { store, breakIt: () => (broken = true) };
+  };
+
+  it("seeds the fallback with the pair the primary last held", async () => {
+    const { store, breakIt } = flaky();
+    const fb = new FallbackKeyStore(store);
+    const key = await loadOrCreateKey(fb);
+    breakIt(); // a later reload hits a failing primary
+    const again = await loadOrCreateKey(fb);
+    expect(fb.usingFallback).toBe(true);
+    expect(again.thumbprint).toBe(key.thumbprint);
+  });
+
+  it("reports the switch once, however many calls fail at the same time", async () => {
+    const seen: unknown[] = [];
+    const broken: KeyStore = {
+      load: () => Promise.reject(new Error("x")),
+      save: () => Promise.reject(new Error("x")),
+      clear: () => Promise.reject(new Error("x")),
+    };
+    const fb = new FallbackKeyStore(broken, new MemoryKeyStore(), (e) => seen.push(e));
+    await Promise.all([fb.load(), fb.load(), fb.load()]);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("clearIf deletes only the record with that thumbprint, in one transaction", async () => {
+    const indexedDB = new IDBFactory();
+    const store = new IndexedDBKeyStore({ indexedDB });
+    const key = await loadOrCreateKey(store);
+    expect(await store.clearIf("not-this-one")).toBe(false);
+    expect((await dpopKey((await store.load())!)).thumbprint).toBe(key.thumbprint);
+    expect(await store.clearIf(key.thumbprint)).toBe(true);
+    expect(await store.load()).toBeUndefined();
+    expect(await store.clearIf(key.thumbprint)).toBe(false);
+  });
+
+  it("treats a stored record that is not a P-256 pair as absent and replaces it", async () => {
+    const store = new MemoryKeyStore();
+    const p384 = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-384" }, false, [
+      "sign",
+      "verify",
+    ]);
+    await store.save(p384);
+    const key = await loadOrCreateKey(store);
+    expect(await signsWith(key.keyPair)).toBe(true);
+    expect((await dpopKey((await store.load())!)).thumbprint).toBe(key.thumbprint);
   });
 });
 
