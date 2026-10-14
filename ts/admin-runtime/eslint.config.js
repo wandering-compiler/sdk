@@ -10,7 +10,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**"] },
+  // src/dpop is a verbatim copy of ts/dpop/src (tools/admin-dpop.sh), linted
+  // there under that package's stricter compiler options — here its non-null
+  // assertions read as unnecessary, and the copy cannot be edited to suit.
+  { ignores: ["dist/**", "node_modules/**", "src/dpop/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
