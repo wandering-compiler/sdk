@@ -13,7 +13,7 @@
 // Browser back / forward + page refresh + deep links work out
 // of the box.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AppShell,
   Box,
@@ -38,7 +38,8 @@ import { Brand, NavMonogram, ThemeToggle } from "./components";
 import { IconChevronRight, IconDashboard, IconLogout } from "./icons";
 import { pageLabel } from "./format";
 import { apiGet } from "./api";
-import { getToken, clearToken, consumeRedirectToken, pageVisibleTo } from "./auth";
+import { getToken, clearToken, configureAuth, onDeviceRevoked, pageVisibleTo } from "./auth";
+import { consumeRedirect, exchangeCode } from "./oauth";
 import { overviewIsAvailable } from "./overviewTiles";
 import { globalNavItemSlotKey } from "./types";
 import { TranslateProvider, translatorFor, useT } from "./i18n";
@@ -60,11 +61,23 @@ export function App({ spec, slots }: AppProps) {
   // it — see i18n.ts::translatorFor.
   const t = translatorFor(spec);
   // FIRST, before anything reads the hash: a federated sign-in comes
-  // back with the session in the fragment, and the fragment is also this
-  // SPA's router. The lazy initialiser runs once, ahead of the `hash`
-  // state below, so the router never sees `#token=…` — and the
-  // credential is out of the address bar before the first paint.
-  useState(() => consumeRedirectToken());
+  // back with the session (or a one-time code) in the fragment, and the
+  // fragment is also this SPA's router. The lazy initialiser runs once,
+  // ahead of the `hash` state below, so the router never sees `#token=…`
+  // or `#code=…` — and the credential is out of the address bar before the
+  // first paint. Device identity is set up before it: whether a `#token=`
+  // may be stored depends on it.
+  const [redirect] = useState(() => {
+    configureAuth(spec.auth);
+    return consumeRedirect(spec.auth);
+  });
+  // A code is single-use: the exchange is started once and every run of the
+  // auth effect below (React may run it twice) waits for that one. It
+  // resolves to the failure's message, or null.
+  const exchange = useRef<Promise<string | null> | null>(null);
+  const [notice, setNotice] = useState<"revoked" | "token-refused" | { failed: string } | null>(
+    redirect.kind === "token-refused" ? "token-refused" : null,
+  );
   const [authState, setAuthState] = useState<"unknown" | "anon" | "authed">("unknown");
   const [whoami, setWhoami] = useState<WhoAmIResp | null>(null);
   // Bumped by Login. The whoami fetch below is keyed on it because a
@@ -113,27 +126,59 @@ export function App({ spec, slots }: AppProps) {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  // The server refused this device for good: the session is gone and the
+  // key discarded (auth.ts); the next sign-in makes a new device.
+  useEffect(
+    () =>
+      onDeviceRevoked(() => {
+        setWhoami(null);
+        setNotice("revoked");
+        setAuthState("anon");
+      }),
+    [],
+  );
+
   useEffect(() => {
     let cancelled = false;
-    if (!getToken()) {
-      setAuthState("anon");
-      return;
-    }
-    apiGet<WhoAmIResp>(spec.auth.whoami_endpoint)
-      .then((resp) => {
-        if (cancelled) return;
-        setWhoami(resp);
-        setAuthState("authed");
-      })
-      .catch(() => {
-        if (cancelled) return;
-        clearToken();
+    const whoamiCheck = () => {
+      if (!getToken()) {
         setAuthState("anon");
+        return;
+      }
+      apiGet<WhoAmIResp>(spec.auth.whoami_endpoint)
+        .then((resp) => {
+          if (cancelled) return;
+          setWhoami(resp);
+          setAuthState("authed");
+        })
+        .catch(() => {
+          if (cancelled) return;
+          clearToken();
+          setAuthState("anon");
+        });
+    };
+    if (redirect.kind !== "code") {
+      whoamiCheck();
+    } else {
+      exchange.current ??= exchangeCode(spec.auth, redirect.code).then(
+        () => null,
+        (err: unknown) => (err instanceof Error ? err.message : String(err)),
+      );
+      void exchange.current.then((failure) => {
+        if (cancelled) return;
+        // A failed exchange matters only until the user signs in another way.
+        if (failure !== null && !getToken()) {
+          setNotice({ failed: failure });
+          setAuthState("anon");
+          return;
+        }
+        whoamiCheck();
       });
+    }
     return () => {
       cancelled = true;
     };
-  }, [spec.auth.whoami_endpoint, authNonce]);
+  }, [spec.auth, spec.auth.whoami_endpoint, redirect, authNonce]);
 
   if (authState === "unknown") {
     return <Text>{t("Loading…")}</Text>;
@@ -144,7 +189,17 @@ export function App({ spec, slots }: AppProps) {
     return (
       <Login
         spec={spec}
+        notice={
+          notice === "revoked"
+            ? t("This device was signed out. Sign in again.")
+            : notice === "token-refused"
+              ? t("This sign-in link cannot be used here. Sign in again.")
+              : notice
+                ? `${t("Sign-in failed")}: ${notice.failed}`
+                : undefined
+        }
         onLogin={() => {
+          setNotice(null);
           setAuthState("unknown");
           setAuthNonce((n) => n + 1);
         }}

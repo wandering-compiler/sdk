@@ -106,6 +106,7 @@ export default defineConfig({
       include: [
         "src/api.ts",
         "src/auth.ts",
+        "src/oauth.ts",
         "src/types.ts",
         "src/valueFormat.ts",
         "src/slotFormat.ts",

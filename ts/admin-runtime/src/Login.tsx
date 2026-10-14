@@ -11,6 +11,15 @@
 // Both, either, in any number. The default — no options, password on —
 // is the screen this was before federated sign-in existed.
 //
+// With an `auth.oauth_exchange_endpoint` a federated button is a PKCE start
+// (oauth.ts): the link gains a `code_challenge` and the browser comes back
+// with a one-time code instead of a session.
+//
+// With device identity on (`auth.dpop`) the password sign-in is a mint call
+// (an unbound DPoP proof, no token) and the screen offers "This is a public
+// computer": the session then gets the plugin's short public lifetime, its
+// device is never trusted, and the token is kept in sessionStorage only.
+//
 // The color-scheme toggle is available here too so the OS-default theme
 // can be overridden before signing in.
 
@@ -18,6 +27,7 @@ import { useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   Center,
   Container,
   Group,
@@ -31,6 +41,7 @@ import {
 
 import { apiPost } from "./api";
 import { setToken } from "./auth";
+import { federatedStartURL } from "./oauth";
 import { Brand, ThemeToggle } from "./components";
 import { Divider } from "@mantine/core";
 import { IconAlertTriangle } from "./icons";
@@ -39,14 +50,17 @@ import { useT } from "./i18n";
 
 interface LoginResp {
   token: string;
+  public_computer?: boolean;
 }
 
 export interface LoginProps {
   spec: AdminSpec;
   onLogin: () => void;
+  /** Why the user is here again (a revoked device, a dropped sign-in link). */
+  notice?: string;
 }
 
-export function Login({ spec, onLogin }: LoginProps) {
+export function Login({ spec, onLogin, notice }: LoginProps) {
   const t = useT();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -57,21 +71,30 @@ export function Login({ spec, onLogin }: LoginProps) {
   // would blank its login page on the next regeneration.
   const passwordSignIn = spec.auth.password_sign_in !== false;
   const [error, setError] = useState<string | null>(null);
+  const dpop = spec.auth.dpop === true;
+  const pkce = !!spec.auth.oauth_exchange_endpoint;
+  const [publicComputer, setPublicComputer] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      const resp = await apiPost<LoginResp>(spec.auth.login_endpoint, {
-        username,
-        password,
+      const body: Record<string, unknown> = { username, password };
+      // Only when ticked: a login method without the field refuses an
+      // unknown one, and an unticked box has nothing to say.
+      if (dpop && publicComputer) body.public_computer = true;
+      // A mint: an unbound proof and no token, re-sent once on a fresh key
+      // when the stored one turns out to be revoked (a password may be).
+      const resp = await apiPost<LoginResp>(spec.auth.login_endpoint, body, undefined, {
+        mint: true,
+        resign: true,
       });
       if (!resp.token) {
         setError("login response missing 'token' field");
         return;
       }
-      setToken(resp.token);
+      setToken(resp.token, { publicComputer: resp.public_computer === true });
       onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -98,6 +121,11 @@ export function Login({ spec, onLogin }: LoginProps) {
                     : t("Continue with your organization account.")}
                 </Text>
               </Stack>
+              {notice && (
+                <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={18} />}>
+                  {notice}
+                </Alert>
+              )}
               {options.length > 0 && (
                 <Stack gap="sm">
                   {options.map((o) => (
@@ -105,6 +133,18 @@ export function Login({ spec, onLogin }: LoginProps) {
                       key={o.label}
                       component="a"
                       href={o.start_url}
+                      onClick={
+                        pkce
+                          ? async (e: React.MouseEvent) => {
+                              e.preventDefault();
+                              window.location.assign(
+                                await federatedStartURL(o.start_url, {
+                                  publicComputer: dpop && publicComputer,
+                                }),
+                              );
+                            }
+                          : undefined
+                      }
                       variant="default"
                       fullWidth
                       size="md"
@@ -150,6 +190,14 @@ export function Login({ spec, onLogin }: LoginProps) {
                     </Button>
                   </Stack>
                 </form>
+              )}
+              {dpop && (
+                <Checkbox
+                  label={t("This is a public computer")}
+                  description={t("Keep me signed in only until the browser closes.")}
+                  checked={publicComputer}
+                  onChange={(e) => setPublicComputer(e.currentTarget.checked)}
+                />
               )}
             </Stack>
           </Paper>
