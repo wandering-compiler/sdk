@@ -75,18 +75,28 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
   const pkce = !!spec.auth.oauth_exchange_endpoint;
   const [publicComputer, setPublicComputer] = useState(false);
   const [federatedError, setFederatedError] = useState<string | null>(null);
+  // One start at a time: a second click would make a second verifier and
+  // overwrite the first while the browser is already on its way.
+  const [starting, setStarting] = useState(false);
 
   // A PKCE start is a button, not a link: the URL to go to exists only once
   // the challenge is made, and a link to the bare start_url (opened in a new
   // tab, copied) would reach the plugin without one and be refused.
   async function startFederated(startUrl: string) {
     setFederatedError(null);
+    // No WebCrypto (a page not served over HTTPS): no challenge can be made.
+    if (!(globalThis.crypto as Crypto | undefined)?.subtle) {
+      setFederatedError(t("This browser cannot start a secure sign-in here — it needs HTTPS"));
+      return;
+    }
+    setStarting(true);
     try {
       window.location.assign(
         await federatedStartURL(startUrl, { publicComputer: dpop && publicComputer }),
       );
     } catch (err) {
       setFederatedError(err instanceof Error ? err.message : String(err));
+      setStarting(false);
     }
   }
 
@@ -151,6 +161,7 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
                       <Button
                         key={o.label}
                         onClick={() => startFederated(o.start_url)}
+                        disabled={starting}
                         variant="default"
                         fullWidth
                         size="md"

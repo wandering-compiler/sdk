@@ -28,6 +28,7 @@ import {
   federatedStartURL,
 } from "./oauth";
 import type { AdminAuthSpec } from "./types";
+import { IDBFactory } from "fake-indexeddb";
 
 // Device identity (DPoP, RFC 9449) in the admin runtime: what the SPA sends
 // when `auth.dpop` is on, what it does with the refusals, where it keeps the
@@ -440,48 +441,6 @@ describe("where the token lives", () => {
     expect(sent[2].thumbprint).toBe(theirs);
   });
 
-  it("re-sends a password sign-in whose key another tab replaced on the way", async () => {
-    configureAuth(DPOP, { keyStore: store });
-    let theirs = "";
-    const { sent } = server(async (_, n) => {
-      if (n === 1) {
-        await store.save(await generateKeyPair());
-        theirs = (await storedThumbprint(store)) ?? "";
-      }
-      return json(200, { token: `t-${n}` });
-    });
-    const resp = await apiPost<{ token: string }>("/admin/api/authenticate", {}, undefined, {
-      mint: true,
-      resign: true,
-    });
-    expect(sent).toHaveLength(2);
-    expect(sent[1].thumbprint).toBe(theirs);
-    expect(resp.token).toBe("t-2");
-  });
-
-  it("refuses a code exchange whose key another tab replaced on the way", async () => {
-    configureAuth(DPOP, { keyStore: store });
-    const { sent } = server(async () => {
-      await store.save(await generateKeyPair());
-      return json(200, { token: "t" });
-    });
-    await expect(apiPost(EXCHANGE, {}, undefined, { mint: true })).rejects.toMatchObject({
-      status: 401,
-    });
-    expect(sent).toHaveLength(1);
-  });
-
-  it("refuses a password sign-in whose key changed twice", async () => {
-    configureAuth(DPOP, { keyStore: store });
-    server(async () => {
-      await store.save(await generateKeyPair());
-      return json(200, { token: "t" });
-    });
-    await expect(
-      apiPost("/admin/api/authenticate", {}, undefined, { mint: true, resign: true }),
-    ).rejects.toThrow(/device key changed/);
-  });
-
   it("a public-computer session follows no other tab", async () => {
     configureAuth(DPOP, { keyStore: store });
     setToken("pub", { publicComputer: true });
@@ -545,6 +504,60 @@ describe("where the token lives", () => {
     clearToken();
     expect(getToken()).toBeNull();
     expect(window.localStorage.getItem("w17_admin_token")).toBe("profile");
+  });
+
+  it("an IndexedDB that fails mid-session keeps this tab's session, and its sign-out clears it", async () => {
+    const real = new IDBFactory();
+    let broken = false;
+    vi.stubGlobal("indexedDB", {
+      open: (name: string, version?: number) => {
+        if (broken) throw new Error("blocked");
+        return real.open(name, version);
+      },
+    });
+    configureAuth(DPOP);
+    const { sent } = server(() => json(200, { token: "mine" }));
+    await apiPost("/admin/api/authenticate", {}, undefined, { mint: true });
+    setToken("mine"); // reloads the key: the next request reads IndexedDB again
+    broken = true;
+    await apiGet("/a");
+    // The fallback is seeded with this tab's key, which "mine" is bound to.
+    expect(sent[1].thumbprint).toBe(sent[0].thumbprint);
+    expect(sent[1].auth).toBe("DPoP mine");
+    expect(getToken()).toBe("mine");
+    clearToken();
+    expect(getToken()).toBeNull();
+    expect(window.localStorage.getItem("w17_admin_token")).toBeNull();
+  });
+
+  it("a fallen-back tab's sign-out leaves a token another tab wrote since", async () => {
+    const real = new IDBFactory();
+    let broken = false;
+    vi.stubGlobal("indexedDB", {
+      open: (name: string, version?: number) => {
+        if (broken) throw new Error("blocked");
+        return real.open(name, version);
+      },
+    });
+    configureAuth(DPOP);
+    server(() => json(200, {}));
+    await apiPost("/admin/api/authenticate", {}, undefined, { mint: true });
+    setToken("mine");
+    broken = true;
+    await apiGet("/a");
+    window.localStorage.setItem("w17_admin_token", "theirs");
+    clearToken();
+    expect(window.localStorage.getItem("w17_admin_token")).toBe("theirs");
+  });
+
+  it("no IndexedDB at all: the key is this tab's, and so is every token", () => {
+    vi.stubGlobal("indexedDB", undefined);
+    window.localStorage.setItem("w17_admin_token", "theirs");
+    configureAuth(DPOP);
+    expect(getToken()).toBeNull();
+    setToken("mine");
+    expect(getToken()).toBe("mine");
+    expect(window.localStorage.getItem("w17_admin_token")).toBe("theirs");
   });
 
   it("a tab whose IndexedDB fails neither signs with nor clears the other tabs' token", async () => {

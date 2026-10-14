@@ -9,7 +9,6 @@
 import {
   createDpopFetch,
   defaultKeyStore,
-  dpopKey,
   DpopRefusedError,
   isDeviceRevoked,
   type DpopFetch,
@@ -29,7 +28,6 @@ const TOKEN_KEY = "w17_admin_token";
 let dpopOn = false;
 // The signer every request goes through while device identity is on.
 let signer: DpopFetch | null = null;
-let keyStore: KeyStore | null = null;
 // True while a mint call (sign-in, OAuth exchange) is being handed to the
 // signer: it must carry no token even when one is stored, or the edge would
 // check that stale token before the sign-in route runs.
@@ -48,6 +46,11 @@ let publicSession = false;
 // signed in again.
 let signInGen = 0;
 let storageListener: ((e: StorageEvent) => void) | null = null;
+// The shared slot this tab last wrote its token to, and the token. Should
+// the key store fall back to memory later, that token is bound to the key
+// the fallback was seeded with — this tab's — so the tab goes on with it,
+// and its sign-out still clears it.
+let written: { slot: () => Storage | null; token: string } | null = null;
 const revokedListeners = new Set<() => void>();
 
 function localStore(): Storage | null {
@@ -119,15 +122,16 @@ export function setToken(token: string, opts?: SetTokenOptions): void {
     } else if (publicSession) {
       write(sessionStore(), token);
       write(localStore(), null);
+      written = { slot: sessionStore, token };
     } else {
       write(localStore(), token);
       write(sessionStore(), null);
+      written = { slot: localStore, token };
     }
-    // Sign with the key the store holds, as the generated client does. A
-    // minted token reaches here only when the store still held the key it
-    // was minted with (deviceFetch checks), so this reloads that same key —
-    // and a page that was handed its token from elsewhere picks up the
-    // store's.
+    // Sign with the key the store holds, as the generated client does. It
+    // differs from the key this sign-in was minted with only when another
+    // tab replaced that key after a revocation — and a token bound to a
+    // revoked key is dead either way.
     signer?.reloadKey();
     return;
   }
@@ -143,9 +147,15 @@ export function clearToken(): void {
   if (dpopOn) {
     memoryToken = null;
     publicSession = false;
-    // A tab whose key is in memory never wrote the shared slots; clearing
-    // them would sign every other tab out.
-    if (keyInMemory) return;
+    // A tab whose key is in memory clears only the token it wrote itself,
+    // and only while the slot still holds it: anything else there is
+    // another tab's, and clearing it would sign that tab out.
+    if (keyInMemory) {
+      if (written && read(written.slot()) === written.token) write(written.slot(), null);
+      written = null;
+      return;
+    }
+    written = null;
     write(localStore(), null);
     write(sessionStore(), null);
     return;
@@ -190,7 +200,7 @@ export function configureAuth(auth: AdminAuthSpec, opts: DeviceOptions = {}): vo
     storageListener = null;
   }
   signer = null;
-  keyStore = null;
+  written = null;
   memoryToken = null;
   keyInMemory = false;
   publicSession = false;
@@ -205,12 +215,18 @@ export function configureAuth(auth: AdminAuthSpec, opts: DeviceOptions = {}): vo
     const o = new URL(auth.oauth_exchange_endpoint, page).origin;
     if (!origins.includes(o)) origins.push(o);
   }
-  keyStore =
+  // No IndexedDB at all: the key is a new one in every tab's memory, so
+  // every token is this tab's alone from the start.
+  if (!opts.keyStore && !(globalThis as { indexedDB?: IDBFactory }).indexedDB) keyInMemory = true;
+  const keyStore =
     opts.keyStore ??
     defaultKeyStore(() => {
       // IndexedDB failed: the key is in this tab's memory from now on, and
       // so is the token of any later sign-in.
       keyInMemory = true;
+      // The token this tab wrote, if the slot still holds it, is bound to
+      // the key the fallback was seeded with: keep it rather than sign out.
+      if (written && read(written.slot()) === written.token) memoryToken = written.token;
     });
   signer = createDpopFetch({
     origins,
@@ -287,11 +303,7 @@ export async function deviceFetch(
   try {
     if (!opts.mint) return await s(url, init);
     try {
-      const resp = await checkedMint(s, url, init);
-      if (resp || !opts.resign) return resp ?? keyChanged();
-      // The minted token is bound to a key the store no longer holds:
-      // a password sign-in is sent again, on the store's key.
-      return (await checkedMint(s, url, init)) ?? keyChanged();
+      return await mintCall(s, url, init);
     } catch (e) {
       if (!isDeviceRevoked(e) || !opts.resign) throw e;
       // The stored key was revoked: this sign-in makes a new device.
@@ -300,7 +312,7 @@ export async function deviceFetch(
       } catch {
         // the retry still loads or makes a key
       }
-      return (await checkedMint(s, url, init)) ?? keyChanged();
+      return await mintCall(s, url, init);
     }
   } catch (e) {
     if (isDeviceRevoked(e)) {
@@ -310,44 +322,6 @@ export async function deviceFetch(
     if (e instanceof DpopRefusedError) return e.response;
     throw e;
   }
-}
-
-/**
- * A mint whose token is bound to the key this tab signed it with. Returns
- * undefined — the answer discarded, the key reloaded — when the store no
- * longer holds that key (another tab replaced it, after a revocation, while
- * this sign-in was on its way): the token would be bound to a key no page
- * signs with any more.
- */
-async function checkedMint(
-  s: DpopFetch,
-  url: string,
-  init: RequestInit,
-): Promise<Response | undefined> {
-  const minted = (await s.key()).thumbprint;
-  const resp = await mintCall(s, url, init);
-  if (!resp.ok) return resp;
-  const stored = await keyStore
-    ?.load()
-    .then((pair) => (pair ? dpopKey(pair) : undefined))
-    .catch(() => null);
-  // null: the store cannot be read, so it cannot have been replaced either.
-  if (stored === null || stored?.thumbprint === minted) return resp;
-  await resp.body?.cancel().catch(() => undefined);
-  s.reloadKey();
-  return undefined;
-}
-
-function keyChanged(): Response {
-  return new Response(
-    JSON.stringify({
-      error: {
-        code: "UNAUTHENTICATED",
-        message: "this browser's device key changed during sign-in; sign in again",
-      },
-    }),
-    { status: 401, headers: { "Content-Type": "application/json" } },
-  );
 }
 
 async function deviceRevoked(err: DpopRefusedError, sentGen: number | null): Promise<void> {

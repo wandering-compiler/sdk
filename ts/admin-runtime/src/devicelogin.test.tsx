@@ -8,6 +8,7 @@ import { Login } from "./Login";
 import { configureAuth, getToken } from "./auth";
 import { federatedStartURL } from "./oauth";
 import type { AdminSpec } from "./types";
+import { IDBFactory } from "fake-indexeddb";
 
 // jsdom cannot navigate to another document; a fragment-only change is the
 // one navigation it performs. So the real start URL is recorded and the
@@ -92,6 +93,8 @@ async function typeCredentials() {
 }
 
 beforeEach(() => {
+  // A browser's key store; without IndexedDB every token is tab-only.
+  vi.stubGlobal("indexedDB", new IDBFactory());
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/admin/");
@@ -227,6 +230,42 @@ describe("Login with device identity", () => {
       public_computer?: boolean;
     };
     expect(pending.public_computer).toBe(true);
+  });
+
+  it("starts one federated sign-in at a time", async () => {
+    const spec = makeSpec({
+      oauth_exchange_endpoint: EXCHANGE,
+      sign_in_options: [{ label: "Sign in with Acme", start_url: "/oauth/acme/authorize" }],
+    });
+    configureAuth(spec.auth);
+    vi.spyOn(crypto.subtle, "digest").mockReturnValue(new Promise<ArrayBuffer>(() => {}));
+    render(
+      <MantineProvider>
+        <Login spec={spec} onLogin={() => {}} />
+      </MantineProvider>,
+    );
+    const button = screen.getByRole("button", { name: "Sign in with Acme" });
+    await userEvent.setup().click(button);
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+  });
+
+  it("explains that a sign-in needs HTTPS where there is no WebCrypto", async () => {
+    const spec = makeSpec({
+      oauth_exchange_endpoint: EXCHANGE,
+      sign_in_options: [{ label: "Sign in with Acme", start_url: "/oauth/acme/authorize" }],
+    });
+    configureAuth(spec.auth);
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    render(
+      <MantineProvider>
+        <Login spec={spec} onLogin={() => {}} />
+      </MantineProvider>,
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: "Sign in with Acme" }));
+    expect(
+      await screen.findByText("This browser cannot start a secure sign-in here — it needs HTTPS"),
+    ).toBeTruthy();
+    expect(window.sessionStorage.getItem("w17_admin_oauth")).toBeNull();
   });
 
   it("says why a federated sign-in could not start", async () => {
