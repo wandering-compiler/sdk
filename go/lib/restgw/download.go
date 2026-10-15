@@ -56,20 +56,6 @@ type DownloadConfig struct {
 	// handler clears r.Header["Range"] before delegating to
 	// http.ServeContent so partial responses never go out.
 	DisableRange bool
-
-	// Variants are the declared image variants, by name: `?variant=<name>`
-	// serves one, rendered on first request and stored beside the original.
-	// Empty = the endpoint serves originals only. Set with WithVariants.
-	Variants map[string]imagevariant.Spec
-}
-
-// WithVariants returns cfg serving the given image variants.
-func (cfg DownloadConfig) WithVariants(specs ...imagevariant.Spec) DownloadConfig {
-	cfg.Variants = make(map[string]imagevariant.Spec, len(specs))
-	for _, s := range specs {
-		cfg.Variants[s.Name] = s
-	}
-	return cfg
 }
 
 // DownloadField is one resolved UPLOADED_* field served by a
@@ -83,6 +69,12 @@ type DownloadField struct {
 	// Driver is the kvfs.Driver backing this bucket. Resolved
 	// at gateway boot from the field's `(w17.field).upload.connection`.
 	Driver kvfs.Driver
+
+	// Variants are the field's declared image variants
+	// (`(w17.field).upload.variants`): `?variant=<name>` serves one,
+	// rendered on first request (or by the variant workers right after the
+	// upload) and stored beside the original. Empty = originals only.
+	Variants []imagevariant.Spec
 }
 
 // NewDownloadConfig sorts the field list by descending bucket-
@@ -341,12 +333,18 @@ func matchBucket(fields []DownloadField, remainder string) (DownloadField, strin
 // served as the image type they are rather than as an opaque download.
 func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, field DownloadField, key, name string) {
 	ctx := r.Context()
-	spec, ok := cfg.Variants[name]
+	var spec imagevariant.Spec
+	ok := false
+	for _, v := range field.Variants {
+		if v.Name == name {
+			spec, ok = v, true
+		}
+	}
 	if !ok {
 		writeRefusalStatus(ctx, w, http.StatusBadRequest, codes.InvalidArgument, "")
 		return
 	}
-	vkey := key + "~" + name
+	vkey := VariantKey(key, name)
 	info, err := field.Driver.Stat(ctx, vkey)
 	if errors.Is(err, kvfs.ErrNotFound) {
 		if status, rerr := renderVariant(ctx, field.Driver, key, vkey, spec); rerr != nil {
@@ -404,6 +402,10 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 	header.Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, "", info.ModTime, body)
 }
+
+// VariantKey is where a variant of the object at key is stored: beside it,
+// under a name no upload produces (object keys are hex digests).
+func VariantKey(key, name string) string { return key + "~" + name }
 
 // renderVariant renders and stores one variant. The status is the answer a
 // failure deserves: 404 for a missing original, 415 for one that is not an

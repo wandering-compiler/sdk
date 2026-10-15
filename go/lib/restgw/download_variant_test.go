@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/wandering-compiler/sdk/go/lib/imagevariant"
+	"github.com/wandering-compiler/sdk/go/lib/kvfs"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs/memory"
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
@@ -23,10 +25,10 @@ func variantDownload(t *testing.T) (*memory.Driver, restgw.DownloadConfig) {
 	}
 	d.PutBytes("avatars/0123456789abcdef", b.Bytes())
 	d.PutBytes("docs/deadbeef", []byte("<html><script>alert(1)</script>"))
+	thumb := []imagevariant.Spec{{Name: "thumb", MaxWidth: 200, MaxHeight: 200}}
 	cfg := restgw.NewDownloadConfig("/api/files", []restgw.DownloadField{
-		{BucketPath: "/avatars", Driver: d}, {BucketPath: "/docs", Driver: d},
-	}, "public, max-age=31536000, immutable", false, false, false).
-		WithVariants(imagevariant.Spec{Name: "thumb", MaxWidth: 200, MaxHeight: 200})
+		{BucketPath: "/avatars", Driver: d, Variants: thumb}, {BucketPath: "/docs", Driver: d, Variants: thumb},
+	}, "public, max-age=31536000, immutable", false, false, false)
 	return d, cfg
 }
 
@@ -77,8 +79,88 @@ func TestServeDownload_VariantRefusals(t *testing.T) {
 	if rec := get(cfg, "/api/files/avatars/nope?variant=thumb"); rec.Code != http.StatusNotFound {
 		t.Errorf("a variant of a missing object: %d, want 404", rec.Code)
 	}
-	plain := restgw.NewDownloadConfig("/api/files", cfg.Fields, "", false, false, false)
+	plain := restgw.NewDownloadConfig("/api/files", []restgw.DownloadField{{BucketPath: "/avatars", Driver: cfg.Fields[0].Driver}}, "", false, false, false)
 	if rec := get(plain, "/api/files/avatars/0123456789abcdef?variant=thumb"); rec.Code != http.StatusBadRequest {
 		t.Errorf("an endpoint without variants: %d, want 400", rec.Code)
+	}
+}
+
+// A succeeded request's uploads go to the workers, which render every
+// declared variant into the store: the first viewer then finds it there.
+func TestVariantWorkers_RenderWhatASucceededRequestQueued(t *testing.T) {
+	d, _ := variantDownload(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	q := restgw.StartVariantWorkers(ctx, 2, func(err error) { t.Errorf("render: %v", err) })
+	specs := []imagevariant.Spec{{Name: "thumb", MaxWidth: 200}, {Name: "card", MaxWidth: 400}}
+	restgw.QueueVariants(q, map[string]kvfs.Driver{"up": d}, []restgw.UploadedObject{
+		{Connection: "up", Handle: "avatars/0123456789abcdef", Variants: specs, Pregenerate: true},
+		{Connection: "up", Handle: "avatars/0123456789abcdef", Variants: specs[:1], Pregenerate: false}, // queues nothing
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for _, name := range []string{"thumb", "card"} {
+		for {
+			if _, err := d.Stat(ctx, restgw.VariantKey("avatars/0123456789abcdef", name)); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("variant %s was never rendered", name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	cancel()
+	q.Wait()
+}
+
+// A full queue drops the job instead of blocking the upload: the download
+// renders a missing variant on the spot.
+func TestVariantWorkers_AFullQueueDropsRatherThanBlocks(t *testing.T) {
+	d, _ := variantDownload(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // workers stop at once; nothing drains the queue
+	q := restgw.StartVariantWorkers(ctx, 1, nil)
+	q.Wait()
+	job := restgw.VariantJob{Driver: d, Key: "avatars/0123456789abcdef", Variants: []imagevariant.Spec{{Name: "t", MaxWidth: 10}}}
+	accepted := 0
+	for i := 0; i < 2000; i++ {
+		if q.Enqueue(job) {
+			accepted++
+		}
+	}
+	if accepted == 2000 || q.Dropped() == 0 {
+		t.Errorf("accepted %d of 2000, dropped %d — a bounded queue never refused", accepted, q.Dropped())
+	}
+	var none *restgw.VariantWorkers
+	if none.Enqueue(job) {
+		t.Error("a nil queue (background rendering off) accepted a job")
+	}
+}
+
+func TestRollbackUploads_DeletesTheVariantsToo(t *testing.T) {
+	d, cfg := variantDownload(t)
+	if rec := get(cfg, "/api/files/avatars/0123456789abcdef?variant=thumb"); rec.Code != http.StatusOK {
+		t.Fatalf("render: %d", rec.Code)
+	}
+	restgw.RollbackUploads(context.Background(), map[string]kvfs.Driver{"up": d}, []restgw.UploadedObject{
+		{Connection: "up", Handle: "avatars/0123456789abcdef", Variants: []imagevariant.Spec{{Name: "thumb"}}},
+	})
+	if _, err := d.Stat(context.Background(), restgw.VariantKey("avatars/0123456789abcdef", "thumb")); err == nil {
+		t.Error("the rolled-back object's variant is still stored")
+	}
+}
+
+func TestVariantWorkersFromEnv(t *testing.T) {
+	env := map[string]string{}
+	get := func(k string) string { return env[k] }
+	if n, err := restgw.VariantWorkersFromEnv("GW", get); err != nil || n != restgw.DefaultVariantWorkers {
+		t.Errorf("unset: %d %v", n, err)
+	}
+	env["GW_VARIANT_WORKERS"] = "0"
+	if n, err := restgw.VariantWorkersFromEnv("GW", get); err != nil || n != 0 {
+		t.Errorf("0: %d %v", n, err)
+	}
+	env["GW_VARIANT_WORKERS"] = "many"
+	if _, err := restgw.VariantWorkersFromEnv("GW", get); err == nil {
+		t.Error("a non-number was accepted")
 	}
 }

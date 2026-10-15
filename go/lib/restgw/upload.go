@@ -53,6 +53,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
+	"github.com/wandering-compiler/sdk/go/lib/imagevariant"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
 )
 
@@ -382,6 +383,12 @@ func WriteUploadErrorCtx(ctx context.Context, w http.ResponseWriter, err error) 
 type UploadedObject struct {
 	Connection string
 	Handle     string
+	// Variants are the field's declared image variants: rendered in the
+	// background once the request succeeds (QueueVariants), deleted with the
+	// object when it does not (RollbackUploads).
+	Variants []imagevariant.Spec
+	// Pregenerate is the field's `(w17.field).upload.pregenerate`.
+	Pregenerate bool
 }
 
 // RollbackUploads deletes objects a failed request had already written.
@@ -412,5 +419,30 @@ func RollbackUploads(ctx context.Context, drivers map[string]kvfs.Driver, objs [
 		if err := d.Delete(ctx, o.Handle); err != nil {
 			log.Printf("restgw: upload rollback %s/%s: %v", o.Connection, o.Handle, err)
 		}
+		// A variant cannot exist yet (they are queued only after success),
+		// but deleting one that does not is free and keeps the rule simple:
+		// an object's variants go with it.
+		for _, v := range o.Variants {
+			if err := d.Delete(ctx, VariantKey(o.Handle, v.Name)); err != nil {
+				log.Printf("restgw: upload rollback %s/%s variant %s: %v", o.Connection, o.Handle, v.Name, err)
+			}
+		}
+	}
+}
+
+// QueueVariants hands the variants of a SUCCEEDED request's uploads to the
+// background workers. Called on the success path only: a request that fails
+// rolls its uploads back, and rendering variants of an object about to be
+// deleted would leave them behind. A nil queue, or a field that does not
+// pregenerate, queues nothing — its variants are rendered on first request.
+func QueueVariants(q VariantQueue, drivers map[string]kvfs.Driver, objs []UploadedObject) {
+	if q == nil {
+		return
+	}
+	for _, o := range objs {
+		if !o.Pregenerate || len(o.Variants) == 0 || o.Handle == "" || drivers[o.Connection] == nil {
+			continue
+		}
+		q.Enqueue(VariantJob{Driver: drivers[o.Connection], Key: o.Handle, Variants: o.Variants})
 	}
 }
