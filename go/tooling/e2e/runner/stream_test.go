@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -469,5 +470,43 @@ func TestExpectStream_ATransportErrorExpectationIsRefused(t *testing.T) {
 	err := runStream(t, srv, s)
 	if err == nil || !strings.Contains(err.Error(), "expect_transport_error on the stream") {
 		t.Fatalf("expect_transport_error on a stream step: %v", err)
+	}
+}
+
+// A stream declared POST (RestStream.method) opens with its request as a JSON
+// body and nothing in the URL. The caller used to open every stream as a
+// bodiless GET, so a POST stream's case reached the route with nothing and
+// could only fail; the frames were never the question.
+func TestExpectStream_APostStreamSendsItsRequestAsTheBody(t *testing.T) {
+	mux := http.NewServeMux()
+	var gotMethod, gotQuery, gotType string
+	var gotBody map[string]any
+	mux.HandleFunc("/api/v1/chat/ask", func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotQuery, gotType = r.Method, r.URL.RawQuery, r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "data: %s\n\n", `{"text":"echo: `+fmt.Sprint(gotBody["question"])+`"}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	step := Step{
+		Endpoint: Endpoint{
+			Ref: "chat.ChatService.Ask", Transport: "rest", Stream: true,
+			HTTPMethod: "POST", PathTemplate: "/api/v1/chat/ask",
+		},
+		Label:        "tests/rest/ask.yaml",
+		Input:        map[string]any{"question": "what is w17?", "history": []any{map[string]any{"text": "hi"}}},
+		ExpectStream: &ExpectStream{Frames: []map[string]any{{"text": "echo: what is w17?"}}},
+	}
+	if err := runStream(t, srv, step); err != nil {
+		t.Fatalf("RunScenario: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotQuery != "" || gotType != "application/json" {
+		t.Errorf("opened with %s ?%s (%s) — want a POST with a JSON body and no query", gotMethod, gotQuery, gotType)
+	}
+	if h, _ := gotBody["history"].([]any); len(h) != 1 {
+		t.Errorf("the body lost the repeated field: %v", gotBody)
 	}
 }
