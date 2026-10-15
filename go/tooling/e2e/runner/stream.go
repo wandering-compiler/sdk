@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -104,7 +105,11 @@ func NewSSEStreamCaller(baseURL string, client *http.Client) *SSEStreamCaller {
 }
 
 func (c *SSEStreamCaller) OpenStream(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string) (StreamConn, error) {
-	_, target, _, err := ResolveREST(c.BaseURL, ep, input)
+	// The stream opens with the endpoint's own method. A GET stream's request
+	// rides the URL; a POST stream (RestStream.method) sends it as a JSON body,
+	// which resolveREST has already built — opening every stream as a bodiless
+	// GET reached a POST route with nothing, so the case could only fail.
+	method, target, body, err := ResolveREST(c.BaseURL, ep, input)
 	if err != nil {
 		return nil, fmt.Errorf("open stream %s: %w", ep.Ref, err)
 	}
@@ -112,10 +117,17 @@ func (c *SSEStreamCaller) OpenStream(ctx context.Context, ep Endpoint, input map
 		ctx = withCallAuth(ctx, token, ep.Mint)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, target, nil)
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(streamCtx, method, target, reqBody)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("open stream %s: build request: %w", ep.Ref, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	if token != "" && c.signer == nil {
