@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -95,14 +96,29 @@ type Driver struct {
 
 var _ kvfs.Driver = (*Driver)(nil)
 
-// New parses dsn and builds the client. Nothing is dialled here; the first
-// call reaches the store.
+// New parses dsn and builds the client, with credentials from the AWS
+// default chain. Nothing is dialled here; the first call reaches the store.
 func New(ctx context.Context, dsn string) (*Driver, error) {
+	return NewWithKeys(ctx, dsn, "", "")
+}
+
+// NewWithKeys is New with a static key pair for this one store. The default
+// chain's AWS_ACCESS_KEY_ID is one variable per process, and a binary with two
+// upload connections on two stores (a local MinIO, an R2 bucket) needs two
+// pairs. Empty keys fall back to the default chain — an instance or task role
+// in the cloud, where no key should be configured at all.
+func NewWithKeys(ctx context.Context, dsn, accessKeyID, secretAccessKey string) (*Driver, error) {
 	cfg, err := ParseDSN(dsn)
 	if err != nil {
 		return nil, err
 	}
+	if (accessKeyID == "") != (secretAccessKey == "") {
+		return nil, errors.New("kvfs s3: set both the access key id and the secret access key, or neither")
+	}
 	var load []func(*awsconfig.LoadOptions) error
+	if accessKeyID != "" {
+		load = append(load, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")))
+	}
 	if cfg.Region != "" {
 		load = append(load, awsconfig.WithRegion(cfg.Region))
 	}
