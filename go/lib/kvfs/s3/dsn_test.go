@@ -16,6 +16,9 @@ func TestParseDSN(t *testing.T) {
 		{"s3://media?endpoint=http://minio:9000&region=eu-1", Config{Bucket: "media", Endpoint: "http://minio:9000", Region: "eu-1", PathStyle: true}},
 		{"s3://media?endpoint=https://r2.example&path_style=false", Config{Bucket: "media", Endpoint: "https://r2.example"}},
 		{"s3://media?path_style=true&profile=ops", Config{Bucket: "media", Profile: "ops", PathStyle: true}},
+		// The store's own key pair, as a Postgres DSN carries its password;
+		// a secret with reserved characters is percent-encoded.
+		{"s3://AKIA123:s%2Fe%3Dcret@media/up?endpoint=http://minio:9000", Config{AccessKeyID: "AKIA123", SecretAccessKey: "s/e=cret", Bucket: "media", Prefix: "up", Endpoint: "http://minio:9000", PathStyle: true}},
 	} {
 		got, err := ParseDSN(tc.dsn)
 		if err != nil {
@@ -32,7 +35,8 @@ func TestParseDSN_Refuses(t *testing.T) {
 	for _, tc := range []struct{ dsn, want string }{
 		{"https://media", "expected an s3:// DSN"},
 		{"s3://", "names no bucket"},
-		{"s3://key:secret@media", "credentials do not belong in the DSN"},
+		{"s3://key@media", "half a key pair"},
+		{"s3://:secret@media", "half a key pair"},
 		{"s3://media?path_style=maybe", "path_style"},
 	} {
 		_, err := ParseDSN(tc.dsn)

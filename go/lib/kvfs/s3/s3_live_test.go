@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,5 +190,59 @@ func TestLive_FailedPutKeepsTheStagingFile(t *testing.T) {
 	}
 	if b, err := os.ReadFile(tmp); err != nil || !bytes.Equal(b, []byte("kept")) {
 		t.Errorf("the staging file did not survive a failed put: %v", err)
+	}
+}
+
+// EnsureBucket creates a missing bucket and leaves an existing one alone, so
+// the gateway can call it on every boot.
+func TestLive_EnsureBucketCreatesOnlyWhatIsMissing(t *testing.T) {
+	_, raw, _ := liveDriver(t, "")
+	ctx := context.Background()
+	bucket := "kvfs-ensure-" + strings.ToLower(strings.ReplaceAll(time.Now().Format("150405.000000"), ".", ""))
+	d, err := kvs3.New(ctx, "s3://"+bucket+"?endpoint="+os.Getenv("W17_S3_ENDPOINT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: aws.String(bucket)}); err == nil {
+		t.Fatalf("bucket %s exists before the test", bucket)
+	}
+	if err := d.EnsureBucket(ctx); err != nil {
+		t.Fatalf("first EnsureBucket: %v", err)
+	}
+	h, err := d.PutFromTempFile(ctx, "k", stage(t, "v"))
+	if err != nil {
+		t.Fatalf("put into the ensured bucket: %v", err)
+	}
+	if err := d.EnsureBucket(ctx); err != nil {
+		t.Fatalf("second EnsureBucket on an existing bucket: %v", err)
+	}
+	if _, err := d.Stat(ctx, h); err != nil {
+		t.Errorf("the object did not survive a second EnsureBucket: %v", err)
+	}
+}
+
+// The DSN's key pair is this store's alone: with the process-wide AWS_*
+// variables cleared, it still reaches the store, and a wrong pair is refused
+// by the store rather than silently replaced by the default chain.
+func TestLive_TheDSNCarriesItsOwnKeyPair(t *testing.T) {
+	_, _, bucket := liveDriver(t, "")
+	ctx := context.Background()
+	ep := os.Getenv("W17_S3_ENDPOINT")
+	id, secret := os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	d, err := kvs3.New(ctx, "s3://"+url.UserPassword(id, secret).String()+"@"+bucket+"?endpoint="+ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PutFromTempFile(ctx, "keyed", stage(t, "v")); err != nil {
+		t.Fatalf("put with the DSN's own keys: %v", err)
+	}
+	bad, err := kvs3.New(ctx, "s3://"+url.UserPassword(id, "not-the-secret").String()+"@"+bucket+"?endpoint="+ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bad.Stat(ctx, "keyed"); err == nil || errors.Is(err, kvfs.ErrNotFound) {
+		t.Errorf("a wrong secret was not refused by the store: %v", err)
 	}
 }

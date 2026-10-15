@@ -6,11 +6,14 @@
 // It speaks the same DSN as the migrator's S3 applier, so one connection has
 // one spelling everywhere:
 //
-//	s3://<bucket>[/<prefix>][?endpoint=URL][&region=R][&profile=P][&path_style=true|false]
+//	s3://[<access-key>:<secret>@]<bucket>[/<prefix>][?endpoint=URL][&region=R][&profile=P][&path_style=true|false]
 //
-// Credentials are never in the DSN: they come from the AWS default chain
-// (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, a shared profile, an instance or
-// task role). `endpoint` points at a non-AWS store; path-style addressing is
+// One DSN is one store, credentials included, the way a Postgres DSN carries
+// its password: a binary with two stores (a MinIO and an R2 bucket) needs two
+// key pairs, which process-wide variables cannot hold. Without them the AWS
+// default chain applies — a shared profile, an instance or task role, which is
+// where a cloud deployment should leave them. The DSN is therefore a secret,
+// and nothing here ever prints it. `endpoint` points at a non-AWS store; path-style addressing is
 // the default whenever it is set (MinIO and most compatible stores expect it)
 // and virtual-hosted otherwise, and `path_style` overrides either.
 //
@@ -33,6 +36,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -42,12 +46,15 @@ import (
 
 // Config is a parsed DSN.
 type Config struct {
-	Bucket    string
-	Prefix    string // key prefix inside the bucket, without leading or trailing "/"
-	Endpoint  string
-	Region    string
-	Profile   string
-	PathStyle bool
+	// AccessKeyID / SecretAccessKey are the DSN's userinfo; empty = the
+	// default chain.
+	AccessKeyID, SecretAccessKey string
+	Bucket                       string
+	Prefix                       string // key prefix inside the bucket, without leading or trailing "/"
+	Endpoint                     string
+	Region                       string
+	Profile                      string
+	PathStyle                    bool
 }
 
 // ParseDSN reads `s3://<bucket>[/<prefix>]?…`. It refuses anything else rather
@@ -64,11 +71,17 @@ func ParseDSN(dsn string) (Config, error) {
 	if u.Host == "" {
 		return Config{}, errors.New("kvfs s3: the DSN names no bucket (expected s3://<bucket>)")
 	}
-	if u.User != nil {
-		return Config{}, errors.New("kvfs s3: credentials do not belong in the DSN — set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (or a profile / role) instead")
-	}
 	q := u.Query()
-	cfg := Config{
+	cfg := Config{}
+	if u.User != nil {
+		cfg.AccessKeyID = u.User.Username()
+		cfg.SecretAccessKey, _ = u.User.Password()
+		if cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
+			return Config{}, errors.New("kvfs s3: the DSN carries half a key pair — give both the access key id and its key in the userinfo, or neither for the default chain")
+		}
+	}
+	cfg = Config{
+		AccessKeyID: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey,
 		Bucket:   u.Host,
 		Prefix:   strings.Trim(u.Path, "/"),
 		Endpoint: q.Get("endpoint"),
@@ -95,7 +108,8 @@ type Driver struct {
 
 var _ kvfs.Driver = (*Driver)(nil)
 
-// New parses dsn and builds the client. Nothing is dialled here; the first
+// New parses dsn and builds the client: the DSN's key pair when it carries
+// one, the AWS default chain otherwise. Nothing is dialled here; the first
 // call reaches the store.
 func New(ctx context.Context, dsn string) (*Driver, error) {
 	cfg, err := ParseDSN(dsn)
@@ -103,6 +117,9 @@ func New(ctx context.Context, dsn string) (*Driver, error) {
 		return nil, err
 	}
 	var load []func(*awsconfig.LoadOptions) error
+	if cfg.AccessKeyID != "" {
+		load = append(load, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, "")))
+	}
 	if cfg.Region != "" {
 		load = append(load, awsconfig.WithRegion(cfg.Region))
 	}
@@ -125,6 +142,41 @@ func New(ctx context.Context, dsn string) (*Driver, error) {
 		}
 	})
 	return &Driver{cli: cli, bucket: cfg.Bucket, prefix: cfg.Prefix}, nil
+}
+
+// EnsureBucket makes the driver's bucket exist: a HEAD, and a CreateBucket
+// only when the store answers that there is none. It is the object-store
+// counterpart of local_fs.EnsureRoot, called by the gateway — a connection's
+// only writer — at boot, so a fresh dev stack (an empty MinIO) works without
+// a provisioning step. Where infrastructure owns the bucket (terraform in the
+// cloud targets) the HEAD finds it and nothing is created; a store that
+// refuses the HEAD for any other reason (no permission, wrong endpoint) is an
+// error, not a reason to try creating it.
+func (d *Driver) EnsureBucket(ctx context.Context) error {
+	_, err := d.cli.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: aws.String(d.bucket)})
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) && !isNoSuchBucket(err) {
+		return fmt.Errorf("kvfs s3: bucket %s: %w", d.bucket, err)
+	}
+	if _, err := d.cli.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(d.bucket)}); err != nil {
+		var owned *types.BucketAlreadyOwnedByYou
+		if errors.As(err, &owned) {
+			return nil // another replica created it between the HEAD and here
+		}
+		return fmt.Errorf("kvfs s3: create bucket %s: %w", d.bucket, err)
+	}
+	return nil
+}
+
+func isNoSuchBucket(err error) bool {
+	var nsb *types.NoSuchBucket
+	if errors.As(err, &nsb) {
+		return true
+	}
+	var api smithy.APIError
+	return errors.As(err, &api) && api.ErrorCode() == "NoSuchBucket"
 }
 
 func (d *Driver) objectKey(key string) string {
