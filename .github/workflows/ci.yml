@@ -65,6 +65,11 @@ jobs:
   # `server` argument, which a job service container cannot be given, so this
   # job runs on the host runner and starts it with docker; REQUIRE turns a
   # missing endpoint into a failure.
+  #
+  # MinIO no longer publishes community images (minio/minio on Docker Hub and
+  # quay.io/minio/minio are gone); Chainguard's build is public. Pinned by
+  # digest: its only tag is `latest`. Runs as uid 65532, so data goes under
+  # /tmp.
   kvfs-s3:
     runs-on: ubuntu-latest
     steps:
@@ -74,7 +79,7 @@ jobs:
           docker network create s3test
           docker run -d --name minio --network s3test \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data
+            cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8 server /tmp/data
       - name: go test ./lib/kvfs/s3
         run: |
           docker run --rm --network s3test \
