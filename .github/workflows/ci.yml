@@ -61,6 +61,35 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
 
+  # The S3 kvfs driver against a real S3-compatible store. MinIO needs its
+  # `server` argument, which a job service container cannot be given, so this
+  # job runs on the host runner and starts it with docker; REQUIRE turns a
+  # missing endpoint into a failure.
+  #
+  # MinIO no longer publishes community images (minio/minio on Docker Hub and
+  # quay.io/minio/minio are gone); Chainguard's build is public. Pinned by
+  # digest: its only tag is `latest`. Runs as uid 65532, so data goes under
+  # /tmp.
+  kvfs-s3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: MinIO
+        run: |
+          docker network create s3test
+          docker run -d --name minio --network s3test \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8 server /tmp/data
+      - name: go test ./lib/kvfs/s3
+        run: |
+          docker run --rm --network s3test \
+            -e GOFLAGS=-buildvcs=false -e GODEBUG=http2client=0 \
+            -e W17_S3_ENDPOINT=http://minio:9000 -e W17_REQUIRE_LIVE_S3=1 \
+            -e AWS_ACCESS_KEY_ID=minioadmin -e AWS_SECRET_ACCESS_KEY=minioadmin \
+            -v "$PWD/go:/w" -w /w golang:1.26 sh -c '
+              for i in $(seq 1 60); do wget -q -O /dev/null http://minio:9000/minio/health/live && break; sleep 1; done
+              go test -race -count=1 ./lib/kvfs/s3/...'
+
   lint:
     runs-on: ubuntu-latest
     container: golang:1.26
