@@ -816,6 +816,56 @@ func (AutoDefault) EnumDescriptor() ([]byte, []int) {
 	return file_w17_field_proto_rawDescGZIP(), []int{4}
 }
 
+// ImageFormat is an image variant's output encoding.
+type ImageFormat int32
+
+const (
+	ImageFormat_IMAGE_FORMAT_UNSPECIFIED ImageFormat = 0 // the source's family
+	ImageFormat_IMAGE_FORMAT_JPEG        ImageFormat = 1
+	ImageFormat_IMAGE_FORMAT_PNG         ImageFormat = 2
+)
+
+// Enum value maps for ImageFormat.
+var (
+	ImageFormat_name = map[int32]string{
+		0: "IMAGE_FORMAT_UNSPECIFIED",
+		1: "IMAGE_FORMAT_JPEG",
+		2: "IMAGE_FORMAT_PNG",
+	}
+	ImageFormat_value = map[string]int32{
+		"IMAGE_FORMAT_UNSPECIFIED": 0,
+		"IMAGE_FORMAT_JPEG":        1,
+		"IMAGE_FORMAT_PNG":         2,
+	}
+)
+
+func (x ImageFormat) Enum() *ImageFormat {
+	p := new(ImageFormat)
+	*p = x
+	return p
+}
+
+func (x ImageFormat) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ImageFormat) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_field_proto_enumTypes[5].Descriptor()
+}
+
+func (ImageFormat) Type() protoreflect.EnumType {
+	return &file_w17_field_proto_enumTypes[5]
+}
+
+func (x ImageFormat) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ImageFormat.Descriptor instead.
+func (ImageFormat) EnumDescriptor() ([]byte, []int) {
+	return file_w17_field_proto_rawDescGZIP(), []int{5}
+}
+
 // Validate is the carrier for cross-field rules on a message.
 // Empty rules list = no-op (the annotation can sit on a
 // message that doesn't need rules without harm).
@@ -1921,7 +1971,22 @@ type Upload struct {
 	// Per-file size cap, in bytes. The gateway wraps the multipart
 	// part reader with `http.MaxBytesReader`; uploads exceeding the
 	// cap fail with HTTP 413 before any disk write.
-	MaxSizeBytes  uint64 `protobuf:"varint,5,opt,name=max_size_bytes,json=maxSizeBytes,proto3" json:"max_size_bytes,omitempty"`
+	MaxSizeBytes uint64 `protobuf:"varint,5,opt,name=max_size_bytes,json=maxSizeBytes,proto3" json:"max_size_bytes,omitempty"`
+	// UPLOADED_IMAGE only: the sizes this image is also served at. Every
+	// download endpoint that serves the field serves them, as
+	// `<url>?variant=<name>` — the stored image fitted inside the variant's
+	// box, its aspect ratio kept, never enlarged. Only declared names exist
+	// (any other is a 400): a server that resized to whatever a URL asked for
+	// would render and store a new image per request. A source must be a JPEG,
+	// PNG, GIF or WebP of at most 50 megapixels. Refused on UPLOADED_FILE.
+	Variants []*ImageVariant `protobuf:"bytes,6,rep,name=variants,proto3" json:"variants,omitempty"`
+	// Render the variants right after the upload, in the background, so the
+	// first viewer never waits. Default true. Either way a variant that is not
+	// there yet when it is asked for is rendered on the spot and stored, so
+	// nothing depends on the background work having finished — a burst of
+	// uploads (a mass import) is spread over the gateway's variant workers
+	// (`<PREFIX>_VARIANT_WORKERS`) rather than refused.
+	Pregenerate   *bool `protobuf:"varint,7,opt,name=pregenerate,proto3,oneof" json:"pregenerate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1989,6 +2054,20 @@ func (x *Upload) GetMaxSizeBytes() uint64 {
 		return x.MaxSizeBytes
 	}
 	return 0
+}
+
+func (x *Upload) GetVariants() []*ImageVariant {
+	if x != nil {
+		return x.Variants
+	}
+	return nil
+}
+
+func (x *Upload) GetPregenerate() bool {
+	if x != nil && x.Pregenerate != nil {
+		return *x.Pregenerate
+	}
+	return false
 }
 
 // EnumValueDisplay is the body of `(w17.value_display)`. Pure
@@ -2059,6 +2138,91 @@ func (x *EnumValueDisplay) GetDeprecated() bool {
 		return x.Deprecated
 	}
 	return false
+}
+
+// ImageVariant is one declared size of an uploaded image.
+type ImageVariant struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How a URL asks for it (`?variant=<name>`): lower-case letters, digits and
+	// `-`, unique within the field.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The box the image is fitted inside, its aspect ratio kept; 0 leaves that
+	// side unbounded, and at least one is set. An image already inside the box
+	// is not enlarged.
+	MaxWidth  uint32 `protobuf:"varint,2,opt,name=max_width,json=maxWidth,proto3" json:"max_width,omitempty"`
+	MaxHeight uint32 `protobuf:"varint,3,opt,name=max_height,json=maxHeight,proto3" json:"max_height,omitempty"`
+	// The output encoding; UNSPECIFIED keeps the source's family (JPEG for a
+	// JPEG source, PNG for every other).
+	Format ImageFormat `protobuf:"varint,4,opt,name=format,proto3,enum=w17.ImageFormat" json:"format,omitempty"`
+	// The JPEG quality, 1–100; 0 = 85.
+	Quality       uint32 `protobuf:"varint,5,opt,name=quality,proto3" json:"quality,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImageVariant) Reset() {
+	*x = ImageVariant{}
+	mi := &file_w17_field_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImageVariant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImageVariant) ProtoMessage() {}
+
+func (x *ImageVariant) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_field_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImageVariant.ProtoReflect.Descriptor instead.
+func (*ImageVariant) Descriptor() ([]byte, []int) {
+	return file_w17_field_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ImageVariant) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ImageVariant) GetMaxWidth() uint32 {
+	if x != nil {
+		return x.MaxWidth
+	}
+	return 0
+}
+
+func (x *ImageVariant) GetMaxHeight() uint32 {
+	if x != nil {
+		return x.MaxHeight
+	}
+	return 0
+}
+
+func (x *ImageVariant) GetFormat() ImageFormat {
+	if x != nil {
+		return x.Format
+	}
+	return ImageFormat_IMAGE_FORMAT_UNSPECIFIED
+}
+
+func (x *ImageVariant) GetQuality() uint32 {
+	if x != nil {
+		return x.Quality
+	}
+	return 0
 }
 
 var file_w17_field_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -2257,7 +2421,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"orphanable\"V\n" +
 	"\x11ValidationMessage\x12'\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x13.w17.ValidationTypeR\x04type\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xc0\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xa6\x02\n" +
 	"\x06Upload\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
@@ -2266,13 +2430,23 @@ const file_w17_field_proto_rawDesc = "" +
 	"bucketPath\x12)\n" +
 	"\x10expected_objects\x18\x03 \x01(\x04R\x0fexpectedObjects\x12$\n" +
 	"\x0emax_per_bucket\x18\x04 \x01(\rR\fmaxPerBucket\x12$\n" +
-	"\x0emax_size_bytes\x18\x05 \x01(\x04R\fmaxSizeBytes\"j\n" +
+	"\x0emax_size_bytes\x18\x05 \x01(\x04R\fmaxSizeBytes\x12-\n" +
+	"\bvariants\x18\x06 \x03(\v2\x11.w17.ImageVariantR\bvariants\x12%\n" +
+	"\vpregenerate\x18\a \x01(\bH\x00R\vpregenerate\x88\x01\x01B\x0e\n" +
+	"\f_pregenerate\"j\n" +
 	"\x10EnumValueDisplay\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"deprecated\x18\x03 \x01(\bR\n" +
-	"deprecated*\xb0\x01\n" +
+	"deprecated\"\xa2\x01\n" +
+	"\fImageVariant\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
+	"\tmax_width\x18\x02 \x01(\rR\bmaxWidth\x12\x1d\n" +
+	"\n" +
+	"max_height\x18\x03 \x01(\rR\tmaxHeight\x12(\n" +
+	"\x06format\x18\x04 \x01(\x0e2\x10.w17.ImageFormatR\x06format\x12\x18\n" +
+	"\aquality\x18\x05 \x01(\rR\aquality*\xb0\x01\n" +
 	"\x12ValidationRuleKind\x12$\n" +
 	" VALIDATION_RULE_KIND_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vREQUIRED_IF\x10\x01\x12\x13\n" +
@@ -2365,7 +2539,11 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x04TRUE\x10\x1e\x12\t\n" +
 	"\x05FALSE\x10\x1f\x12\f\n" +
 	"\bIDENTITY\x10(\x12\x11\n" +
-	"\rCRYPTO_RANDOM\x102:A\n" +
+	"\rCRYPTO_RANDOM\x102*X\n" +
+	"\vImageFormat\x12\x1c\n" +
+	"\x18IMAGE_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11IMAGE_FORMAT_JPEG\x10\x01\x12\x14\n" +
+	"\x10IMAGE_FORMAT_PNG\x10\x02:A\n" +
 	"\x05field\x12\x1d.google.protobuf.FieldOptions\x18\xb9\x8e\x03 \x01(\v2\n" +
 	".w17.FieldR\x05field:L\n" +
 	"\bvalidate\x12\x1f.google.protobuf.MessageOptions\x18\xba\x8e\x03 \x01(\v2\r.w17.ValidateR\bvalidate:_\n" +
@@ -2383,44 +2561,48 @@ func file_w17_field_proto_rawDescGZIP() []byte {
 	return file_w17_field_proto_rawDescData
 }
 
-var file_w17_field_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_w17_field_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_w17_field_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_w17_field_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_w17_field_proto_goTypes = []any{
 	(ValidationRuleKind)(0),               // 0: w17.ValidationRuleKind
 	(AutoChoices)(0),                      // 1: w17.AutoChoices
 	(ValidationType)(0),                   // 2: w17.ValidationType
 	(Type)(0),                             // 3: w17.Type
 	(AutoDefault)(0),                      // 4: w17.AutoDefault
-	(*Validate)(nil),                      // 5: w17.Validate
-	(*ValidationRule)(nil),                // 6: w17.ValidationRule
-	(*Field)(nil),                         // 7: w17.Field
-	(*ValidationMessage)(nil),             // 8: w17.ValidationMessage
-	(*Upload)(nil),                        // 9: w17.Upload
-	(*EnumValueDisplay)(nil),              // 10: w17.EnumValueDisplay
-	(*descriptorpb.FieldOptions)(nil),     // 11: google.protobuf.FieldOptions
-	(*descriptorpb.MessageOptions)(nil),   // 12: google.protobuf.MessageOptions
-	(*descriptorpb.EnumValueOptions)(nil), // 13: google.protobuf.EnumValueOptions
+	(ImageFormat)(0),                      // 5: w17.ImageFormat
+	(*Validate)(nil),                      // 6: w17.Validate
+	(*ValidationRule)(nil),                // 7: w17.ValidationRule
+	(*Field)(nil),                         // 8: w17.Field
+	(*ValidationMessage)(nil),             // 9: w17.ValidationMessage
+	(*Upload)(nil),                        // 10: w17.Upload
+	(*EnumValueDisplay)(nil),              // 11: w17.EnumValueDisplay
+	(*ImageVariant)(nil),                  // 12: w17.ImageVariant
+	(*descriptorpb.FieldOptions)(nil),     // 13: google.protobuf.FieldOptions
+	(*descriptorpb.MessageOptions)(nil),   // 14: google.protobuf.MessageOptions
+	(*descriptorpb.EnumValueOptions)(nil), // 15: google.protobuf.EnumValueOptions
 }
 var file_w17_field_proto_depIdxs = []int32{
-	6,  // 0: w17.Validate.rules:type_name -> w17.ValidationRule
+	7,  // 0: w17.Validate.rules:type_name -> w17.ValidationRule
 	0,  // 1: w17.ValidationRule.kind:type_name -> w17.ValidationRuleKind
 	3,  // 2: w17.Field.type:type_name -> w17.Type
 	4,  // 3: w17.Field.default_auto:type_name -> w17.AutoDefault
-	9,  // 4: w17.Field.upload:type_name -> w17.Upload
-	8,  // 5: w17.Field.validation_messages:type_name -> w17.ValidationMessage
+	10, // 4: w17.Field.upload:type_name -> w17.Upload
+	9,  // 5: w17.Field.validation_messages:type_name -> w17.ValidationMessage
 	1,  // 6: w17.Field.auto_choices:type_name -> w17.AutoChoices
 	2,  // 7: w17.ValidationMessage.type:type_name -> w17.ValidationType
-	11, // 8: w17.field:extendee -> google.protobuf.FieldOptions
-	12, // 9: w17.validate:extendee -> google.protobuf.MessageOptions
-	13, // 10: w17.value_display:extendee -> google.protobuf.EnumValueOptions
-	7,  // 11: w17.field:type_name -> w17.Field
-	5,  // 12: w17.validate:type_name -> w17.Validate
-	10, // 13: w17.value_display:type_name -> w17.EnumValueDisplay
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	11, // [11:14] is the sub-list for extension type_name
-	8,  // [8:11] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	12, // 8: w17.Upload.variants:type_name -> w17.ImageVariant
+	5,  // 9: w17.ImageVariant.format:type_name -> w17.ImageFormat
+	13, // 10: w17.field:extendee -> google.protobuf.FieldOptions
+	14, // 11: w17.validate:extendee -> google.protobuf.MessageOptions
+	15, // 12: w17.value_display:extendee -> google.protobuf.EnumValueOptions
+	8,  // 13: w17.field:type_name -> w17.Field
+	6,  // 14: w17.validate:type_name -> w17.Validate
+	11, // 15: w17.value_display:type_name -> w17.EnumValueDisplay
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	13, // [13:16] is the sub-list for extension type_name
+	10, // [10:13] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_w17_field_proto_init() }
@@ -2434,13 +2616,14 @@ func file_w17_field_proto_init() {
 		(*Field_DefaultDouble)(nil),
 		(*Field_DefaultAuto)(nil),
 	}
+	file_w17_field_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_field_proto_rawDesc), len(file_w17_field_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   6,
+			NumEnums:      6,
+			NumMessages:   7,
 			NumExtensions: 3,
 			NumServices:   0,
 		},

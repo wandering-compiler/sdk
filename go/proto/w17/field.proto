@@ -810,6 +810,23 @@ message Upload {
   // part reader with `http.MaxBytesReader`; uploads exceeding the
   // cap fail with HTTP 413 before any disk write.
   uint64 max_size_bytes = 5;
+
+  // UPLOADED_IMAGE only: the sizes this image is also served at. Every
+  // download endpoint that serves the field serves them, as
+  // `<url>?variant=<name>` — the stored image fitted inside the variant's
+  // box, its aspect ratio kept, never enlarged. Only declared names exist
+  // (any other is a 400): a server that resized to whatever a URL asked for
+  // would render and store a new image per request. A source must be a JPEG,
+  // PNG, GIF or WebP of at most 50 megapixels. Refused on UPLOADED_FILE.
+  repeated ImageVariant variants = 6;
+
+  // Render the variants right after the upload, in the background, so the
+  // first viewer never waits. Default true. Either way a variant that is not
+  // there yet when it is asked for is rendered on the spot and stored, so
+  // nothing depends on the background work having finished — a burst of
+  // uploads (a mass import) is spread over the gateway's variant workers
+  // (`<PREFIX>_VARIANT_WORKERS`) rather than refused.
+  optional bool pregenerate = 7;
 }
 
 // Type — semantic subtype refining the proto carrier into a SQL column type
@@ -1231,4 +1248,28 @@ message EnumValueDisplay {
   // soft-warns on new writes; reads keep working so existing
   // rows survive until migrated off.
   bool deprecated = 3;
+}
+
+// ImageVariant is one declared size of an uploaded image.
+message ImageVariant {
+  // How a URL asks for it (`?variant=<name>`): lower-case letters, digits and
+  // `-`, unique within the field.
+  string name = 1;
+  // The box the image is fitted inside, its aspect ratio kept; 0 leaves that
+  // side unbounded, and at least one is set. An image already inside the box
+  // is not enlarged.
+  uint32 max_width = 2;
+  uint32 max_height = 3;
+  // The output encoding; UNSPECIFIED keeps the source's family (JPEG for a
+  // JPEG source, PNG for every other).
+  ImageFormat format = 4;
+  // The JPEG quality, 1–100; 0 = 85.
+  uint32 quality = 5;
+}
+
+// ImageFormat is an image variant's output encoding.
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0; // the source's family
+  IMAGE_FORMAT_JPEG        = 1;
+  IMAGE_FORMAT_PNG         = 2;
 }

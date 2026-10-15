@@ -204,10 +204,6 @@ func (FieldSource) EnumDescriptor() ([]byte, []int) {
 	return file_w17_rest_proto_rawDescGZIP(), []int{1}
 }
 
-// URLForm picks how the gateway renders URLs for UPLOADED_*
-// response fields covered by this DownloadEndpoint. Required
-// on every DownloadEndpoint — the parser refuses UNSPECIFIED
-// so authors don't accidentally ship the wrong shape.
 type URLForm int32
 
 const (

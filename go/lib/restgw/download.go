@@ -1,13 +1,17 @@
 package restgw
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 
 	"google.golang.org/grpc/codes"
 
+	"github.com/wandering-compiler/sdk/go/lib/imagevariant"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
 )
 
@@ -65,6 +69,12 @@ type DownloadField struct {
 	// Driver is the kvfs.Driver backing this bucket. Resolved
 	// at gateway boot from the field's `(w17.field).upload.connection`.
 	Driver kvfs.Driver
+
+	// Variants are the field's declared image variants
+	// (`(w17.field).upload.variants`): `?variant=<name>` serves one,
+	// rendered on first request (or by the variant workers right after the
+	// upload) and stored beside the original. Empty = originals only.
+	Variants []imagevariant.Spec
 }
 
 // NewDownloadConfig sorts the field list by descending bucket-
@@ -138,6 +148,10 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 	}
 
 	ctx := r.Context()
+	if name, asked := r.URL.Query()["variant"]; asked {
+		serveVariant(w, r, cfg, field, key, strings.Join(name, ","))
+		return
+	}
 	info, err := field.Driver.Stat(ctx, key)
 	if err != nil {
 		if errors.Is(err, kvfs.ErrNotFound) {
@@ -304,4 +318,134 @@ func matchBucket(fields []DownloadField, remainder string) (DownloadField, strin
 		return f, key, true
 	}
 	return DownloadField{}, "", false
+}
+
+// serveVariant serves one declared image variant of the object at key.
+//
+// The variant is rendered the first time it is asked for and stored in the
+// same store under `<key>~<name>`, so every later request — from this replica
+// or another — reads it back instead of resizing again. Concurrent first
+// requests may each render it; the store's atomic put keeps one whole copy.
+//
+// Only declared names exist (400 for any other): a server that resized to
+// whatever a URL asked for would render and store a new image per request.
+// The bytes are this server's own re-encoding, never the upload's, so they are
+// served as the image type they are rather than as an opaque download.
+func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, field DownloadField, key, name string) {
+	ctx := r.Context()
+	var spec imagevariant.Spec
+	ok := false
+	for _, v := range field.Variants {
+		if v.Name == name {
+			spec, ok = v, true
+		}
+	}
+	if !ok {
+		writeRefusalStatus(ctx, w, http.StatusBadRequest, codes.InvalidArgument, "")
+		return
+	}
+	vkey := VariantKey(key, name)
+	info, err := field.Driver.Stat(ctx, vkey)
+	if errors.Is(err, kvfs.ErrNotFound) {
+		if status, rerr := renderVariant(ctx, field.Driver, key, vkey, spec); rerr != nil {
+			if status == http.StatusInternalServerError {
+				WriteInternal(ctx, w, "download variant: "+rerr.Error())
+			} else {
+				writeRefusalStatus(ctx, w, status, codes.InvalidArgument, "")
+			}
+			return
+		}
+		info, err = field.Driver.Stat(ctx, vkey)
+	}
+	if err != nil {
+		if errors.Is(err, kvfs.ErrNotFound) {
+			writeRefusalStatus(ctx, w, http.StatusNotFound, codes.NotFound, "")
+			return
+		}
+		WriteInternal(ctx, w, "download variant: stat: "+err.Error())
+		return
+	}
+	body, err := field.Driver.OpenSeekable(ctx, vkey)
+	if err != nil {
+		WriteInternal(ctx, w, "download variant: open: "+err.Error())
+		return
+	}
+	defer func() { _ = body.Close() }()
+	var sniff [512]byte
+	n, _ := io.ReadFull(body, sniff[:])
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		WriteInternal(ctx, w, "download variant: seek: "+err.Error())
+		return
+	}
+	contentType := http.DetectContentType(sniff[:n])
+	if contentType != "image/jpeg" && contentType != "image/png" {
+		contentType = "application/octet-stream"
+	}
+	objectKey := vkey[strings.LastIndex(vkey, "/")+1:]
+	header := w.Header()
+	if !cfg.DisableETag {
+		header.Set("ETag", `"`+objectKey+`"`)
+	}
+	if cfg.CacheControl != "" {
+		header.Set("Cache-Control", cfg.CacheControl)
+	}
+	if cfg.AsAttachment {
+		header.Set("Content-Disposition", `attachment; filename="`+objectKey+spec.Ext(strings.TrimPrefix(contentType, "image/"))+`"`)
+	} else {
+		header.Set("Content-Disposition", "inline")
+	}
+	if cfg.DisableRange {
+		r.Header.Del("Range")
+		r.Header.Del("If-Range")
+	}
+	header.Set("Content-Type", contentType)
+	header.Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, "", info.ModTime, body)
+}
+
+// VariantKey is where a variant of the object at key is stored: beside it,
+// under a name no upload produces (object keys are hex digests).
+func VariantKey(key, name string) string { return key + "~" + name }
+
+// renderVariant renders and stores one variant. The status is the answer a
+// failure deserves: 404 for a missing original, 415 for one that is not an
+// image this server resizes, 500 for the store.
+func renderVariant(ctx context.Context, d kvfs.Driver, key, vkey string, spec imagevariant.Spec) (int, error) {
+	src, err := d.Open(ctx, key)
+	if err != nil {
+		if errors.Is(err, kvfs.ErrNotFound) {
+			return http.StatusNotFound, err
+		}
+		return http.StatusInternalServerError, err
+	}
+	data, _, err := imagevariant.Render(src, spec)
+	_ = src.Close()
+	if errors.Is(err, imagevariant.ErrNotAnImage) || errors.Is(err, imagevariant.ErrTooLarge) {
+		return http.StatusUnsupportedMediaType, err
+	}
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	dir := ""
+	if sp, ok := d.(kvfs.StagingDirProvider); ok {
+		if dir, err = sp.StagingDir(); err != nil {
+			return http.StatusInternalServerError, err
+		}
+	}
+	tmp, err := os.CreateTemp(dir, "w17-variant-*")
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	tmpPath := tmp.Name()
+	_, werr := tmp.Write(data)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(tmpPath)
+		return http.StatusInternalServerError, errors.Join(werr, cerr)
+	}
+	if _, err := d.PutFromTempFile(ctx, vkey, tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return http.StatusInternalServerError, err
+	}
+	return 0, nil
 }

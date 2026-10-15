@@ -1073,6 +1073,7 @@ message DownloadEndpoint {
 // response fields covered by this DownloadEndpoint. Required
 // on every DownloadEndpoint — the parser refuses UNSPECIFIED
 // so authors don't accidentally ship the wrong shape.
+
 enum URLForm {
   URL_FORM_UNSPECIFIED = 0;  // parse error
   URL_FORM_RELATIVE    = 1;
