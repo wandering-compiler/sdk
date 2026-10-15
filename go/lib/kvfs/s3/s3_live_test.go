@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,31 +221,28 @@ func TestLive_EnsureBucketCreatesOnlyWhatIsMissing(t *testing.T) {
 	}
 }
 
-// Static keys are this store's alone: with the process-wide AWS_* variables
-// cleared, NewWithKeys still reaches the store, and a wrong pair is refused by
-// it rather than silently replaced by the default chain.
-func TestLive_NewWithKeysUsesItsOwnPair(t *testing.T) {
+// The DSN's key pair is this store's alone: with the process-wide AWS_*
+// variables cleared, it still reaches the store, and a wrong pair is refused
+// by the store rather than silently replaced by the default chain.
+func TestLive_TheDSNCarriesItsOwnKeyPair(t *testing.T) {
 	_, _, bucket := liveDriver(t, "")
 	ctx := context.Background()
 	ep := os.Getenv("W17_S3_ENDPOINT")
 	id, secret := os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	d, err := kvs3.NewWithKeys(ctx, "s3://"+bucket+"?endpoint="+ep, id, secret)
+	d, err := kvs3.New(ctx, "s3://"+url.UserPassword(id, secret).String()+"@"+bucket+"?endpoint="+ep)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.PutFromTempFile(ctx, "keyed", stage(t, "v")); err != nil {
-		t.Fatalf("put with the connection's own keys: %v", err)
+		t.Fatalf("put with the DSN's own keys: %v", err)
 	}
-	bad, err := kvs3.NewWithKeys(ctx, "s3://"+bucket+"?endpoint="+ep, id, "not-the-secret")
+	bad, err := kvs3.New(ctx, "s3://"+url.UserPassword(id, "not-the-secret").String()+"@"+bucket+"?endpoint="+ep)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := bad.Stat(ctx, "keyed"); err == nil || errors.Is(err, kvfs.ErrNotFound) {
 		t.Errorf("a wrong secret was not refused by the store: %v", err)
-	}
-	if _, err := kvs3.NewWithKeys(ctx, "s3://"+bucket, id, ""); err == nil {
-		t.Error("an access key without its secret was accepted")
 	}
 }

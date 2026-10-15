@@ -6,11 +6,14 @@
 // It speaks the same DSN as the migrator's S3 applier, so one connection has
 // one spelling everywhere:
 //
-//	s3://<bucket>[/<prefix>][?endpoint=URL][&region=R][&profile=P][&path_style=true|false]
+//	s3://[<access-key>:<secret>@]<bucket>[/<prefix>][?endpoint=URL][&region=R][&profile=P][&path_style=true|false]
 //
-// Credentials are never in the DSN: they come from the AWS default chain
-// (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, a shared profile, an instance or
-// task role). `endpoint` points at a non-AWS store; path-style addressing is
+// One DSN is one store, credentials included, the way a Postgres DSN carries
+// its password: a binary with two stores (a MinIO and an R2 bucket) needs two
+// key pairs, which process-wide variables cannot hold. Without them the AWS
+// default chain applies — a shared profile, an instance or task role, which is
+// where a cloud deployment should leave them. The DSN is therefore a secret,
+// and nothing here ever prints it. `endpoint` points at a non-AWS store; path-style addressing is
 // the default whenever it is set (MinIO and most compatible stores expect it)
 // and virtual-hosted otherwise, and `path_style` overrides either.
 //
@@ -43,12 +46,15 @@ import (
 
 // Config is a parsed DSN.
 type Config struct {
-	Bucket    string
-	Prefix    string // key prefix inside the bucket, without leading or trailing "/"
-	Endpoint  string
-	Region    string
-	Profile   string
-	PathStyle bool
+	// AccessKeyID / SecretAccessKey are the DSN's userinfo; empty = the
+	// default chain.
+	AccessKeyID, SecretAccessKey string
+	Bucket                       string
+	Prefix                       string // key prefix inside the bucket, without leading or trailing "/"
+	Endpoint                     string
+	Region                       string
+	Profile                      string
+	PathStyle                    bool
 }
 
 // ParseDSN reads `s3://<bucket>[/<prefix>]?…`. It refuses anything else rather
@@ -65,11 +71,17 @@ func ParseDSN(dsn string) (Config, error) {
 	if u.Host == "" {
 		return Config{}, errors.New("kvfs s3: the DSN names no bucket (expected s3://<bucket>)")
 	}
-	if u.User != nil {
-		return Config{}, errors.New("kvfs s3: credentials do not belong in the DSN — set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (or a profile / role) instead")
-	}
 	q := u.Query()
-	cfg := Config{
+	cfg := Config{}
+	if u.User != nil {
+		cfg.AccessKeyID = u.User.Username()
+		cfg.SecretAccessKey, _ = u.User.Password()
+		if cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
+			return Config{}, errors.New("kvfs s3: the DSN carries half a key pair — give both the access key id and its key in the userinfo, or neither for the default chain")
+		}
+	}
+	cfg = Config{
+		AccessKeyID: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey,
 		Bucket:   u.Host,
 		Prefix:   strings.Trim(u.Path, "/"),
 		Endpoint: q.Get("endpoint"),
@@ -96,28 +108,17 @@ type Driver struct {
 
 var _ kvfs.Driver = (*Driver)(nil)
 
-// New parses dsn and builds the client, with credentials from the AWS
-// default chain. Nothing is dialled here; the first call reaches the store.
+// New parses dsn and builds the client: the DSN's key pair when it carries
+// one, the AWS default chain otherwise. Nothing is dialled here; the first
+// call reaches the store.
 func New(ctx context.Context, dsn string) (*Driver, error) {
-	return NewWithKeys(ctx, dsn, "", "")
-}
-
-// NewWithKeys is New with a static key pair for this one store. The default
-// chain's AWS_ACCESS_KEY_ID is one variable per process, and a binary with two
-// upload connections on two stores (a local MinIO, an R2 bucket) needs two
-// pairs. Empty keys fall back to the default chain — an instance or task role
-// in the cloud, where no key should be configured at all.
-func NewWithKeys(ctx context.Context, dsn, accessKeyID, secretAccessKey string) (*Driver, error) {
 	cfg, err := ParseDSN(dsn)
 	if err != nil {
 		return nil, err
 	}
-	if (accessKeyID == "") != (secretAccessKey == "") {
-		return nil, errors.New("kvfs s3: set both the access key id and the secret access key, or neither")
-	}
 	var load []func(*awsconfig.LoadOptions) error
-	if accessKeyID != "" {
-		load = append(load, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")))
+	if cfg.AccessKeyID != "" {
+		load = append(load, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, "")))
 	}
 	if cfg.Region != "" {
 		load = append(load, awsconfig.WithRegion(cfg.Region))
