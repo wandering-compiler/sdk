@@ -127,6 +127,41 @@ func New(ctx context.Context, dsn string) (*Driver, error) {
 	return &Driver{cli: cli, bucket: cfg.Bucket, prefix: cfg.Prefix}, nil
 }
 
+// EnsureBucket makes the driver's bucket exist: a HEAD, and a CreateBucket
+// only when the store answers that there is none. It is the object-store
+// counterpart of local_fs.EnsureRoot, called by the gateway — a connection's
+// only writer — at boot, so a fresh dev stack (an empty MinIO) works without
+// a provisioning step. Where infrastructure owns the bucket (terraform in the
+// cloud targets) the HEAD finds it and nothing is created; a store that
+// refuses the HEAD for any other reason (no permission, wrong endpoint) is an
+// error, not a reason to try creating it.
+func (d *Driver) EnsureBucket(ctx context.Context) error {
+	_, err := d.cli.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: aws.String(d.bucket)})
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) && !isNoSuchBucket(err) {
+		return fmt.Errorf("kvfs s3: bucket %s: %w", d.bucket, err)
+	}
+	if _, err := d.cli.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(d.bucket)}); err != nil {
+		var owned *types.BucketAlreadyOwnedByYou
+		if errors.As(err, &owned) {
+			return nil // another replica created it between the HEAD and here
+		}
+		return fmt.Errorf("kvfs s3: create bucket %s: %w", d.bucket, err)
+	}
+	return nil
+}
+
+func isNoSuchBucket(err error) bool {
+	var nsb *types.NoSuchBucket
+	if errors.As(err, &nsb) {
+		return true
+	}
+	var api smithy.APIError
+	return errors.As(err, &api) && api.ErrorCode() == "NoSuchBucket"
+}
+
 func (d *Driver) objectKey(key string) string {
 	key = strings.TrimLeft(key, "/")
 	if d.prefix == "" {

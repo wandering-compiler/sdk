@@ -191,3 +191,31 @@ func TestLive_FailedPutKeepsTheStagingFile(t *testing.T) {
 		t.Errorf("the staging file did not survive a failed put: %v", err)
 	}
 }
+
+// EnsureBucket creates a missing bucket and leaves an existing one alone, so
+// the gateway can call it on every boot.
+func TestLive_EnsureBucketCreatesOnlyWhatIsMissing(t *testing.T) {
+	_, raw, _ := liveDriver(t, "")
+	ctx := context.Background()
+	bucket := "kvfs-ensure-" + strings.ToLower(strings.ReplaceAll(time.Now().Format("150405.000000"), ".", ""))
+	d, err := kvs3.New(ctx, "s3://"+bucket+"?endpoint="+os.Getenv("W17_S3_ENDPOINT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: aws.String(bucket)}); err == nil {
+		t.Fatalf("bucket %s exists before the test", bucket)
+	}
+	if err := d.EnsureBucket(ctx); err != nil {
+		t.Fatalf("first EnsureBucket: %v", err)
+	}
+	h, err := d.PutFromTempFile(ctx, "k", stage(t, "v"))
+	if err != nil {
+		t.Fatalf("put into the ensured bucket: %v", err)
+	}
+	if err := d.EnsureBucket(ctx); err != nil {
+		t.Fatalf("second EnsureBucket on an existing bucket: %v", err)
+	}
+	if _, err := d.Stat(ctx, h); err != nil {
+		t.Errorf("the object did not survive a second EnsureBucket: %v", err)
+	}
+}
