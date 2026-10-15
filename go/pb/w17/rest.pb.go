@@ -204,10 +204,56 @@ func (FieldSource) EnumDescriptor() ([]byte, []int) {
 	return file_w17_rest_proto_rawDescGZIP(), []int{1}
 }
 
-// URLForm picks how the gateway renders URLs for UPLOADED_*
-// response fields covered by this DownloadEndpoint. Required
-// on every DownloadEndpoint — the parser refuses UNSPECIFIED
-// so authors don't accidentally ship the wrong shape.
+// ImageFormat is an image variant's output encoding.
+type ImageFormat int32
+
+const (
+	ImageFormat_IMAGE_FORMAT_UNSPECIFIED ImageFormat = 0 // the source's family
+	ImageFormat_IMAGE_FORMAT_JPEG        ImageFormat = 1
+	ImageFormat_IMAGE_FORMAT_PNG         ImageFormat = 2
+)
+
+// Enum value maps for ImageFormat.
+var (
+	ImageFormat_name = map[int32]string{
+		0: "IMAGE_FORMAT_UNSPECIFIED",
+		1: "IMAGE_FORMAT_JPEG",
+		2: "IMAGE_FORMAT_PNG",
+	}
+	ImageFormat_value = map[string]int32{
+		"IMAGE_FORMAT_UNSPECIFIED": 0,
+		"IMAGE_FORMAT_JPEG":        1,
+		"IMAGE_FORMAT_PNG":         2,
+	}
+)
+
+func (x ImageFormat) Enum() *ImageFormat {
+	p := new(ImageFormat)
+	*p = x
+	return p
+}
+
+func (x ImageFormat) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ImageFormat) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_rest_proto_enumTypes[2].Descriptor()
+}
+
+func (ImageFormat) Type() protoreflect.EnumType {
+	return &file_w17_rest_proto_enumTypes[2]
+}
+
+func (x ImageFormat) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ImageFormat.Descriptor instead.
+func (ImageFormat) EnumDescriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{2}
+}
+
 type URLForm int32
 
 const (
@@ -241,11 +287,11 @@ func (x URLForm) String() string {
 }
 
 func (URLForm) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[2].Descriptor()
+	return file_w17_rest_proto_enumTypes[3].Descriptor()
 }
 
 func (URLForm) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[2]
+	return &file_w17_rest_proto_enumTypes[3]
 }
 
 func (x URLForm) Number() protoreflect.EnumNumber {
@@ -254,7 +300,7 @@ func (x URLForm) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use URLForm.Descriptor instead.
 func (URLForm) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{2}
+	return file_w17_rest_proto_rawDescGZIP(), []int{3}
 }
 
 // ContentDisposition picks the value of the
@@ -292,11 +338,11 @@ func (x ContentDisposition) String() string {
 }
 
 func (ContentDisposition) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[3].Descriptor()
+	return file_w17_rest_proto_enumTypes[4].Descriptor()
 }
 
 func (ContentDisposition) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[3]
+	return &file_w17_rest_proto_enumTypes[4]
 }
 
 func (x ContentDisposition) Number() protoreflect.EnumNumber {
@@ -305,7 +351,7 @@ func (x ContentDisposition) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ContentDisposition.Descriptor instead.
 func (ContentDisposition) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{3}
+	return file_w17_rest_proto_rawDescGZIP(), []int{4}
 }
 
 // PublicLimit — how a method that takes no credential charges the gateway's
@@ -350,11 +396,11 @@ func (x PublicLimit) String() string {
 }
 
 func (PublicLimit) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[4].Descriptor()
+	return file_w17_rest_proto_enumTypes[5].Descriptor()
 }
 
 func (PublicLimit) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[4]
+	return &file_w17_rest_proto_enumTypes[5]
 }
 
 func (x PublicLimit) Number() protoreflect.EnumNumber {
@@ -363,7 +409,7 @@ func (x PublicLimit) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PublicLimit.Descriptor instead.
 func (PublicLimit) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{4}
+	return file_w17_rest_proto_rawDescGZIP(), []int{5}
 }
 
 // HttpMethod enumerates the HTTP verbs the gateway emits.
@@ -413,11 +459,11 @@ func (x HttpMethod) String() string {
 }
 
 func (HttpMethod) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[5].Descriptor()
+	return file_w17_rest_proto_enumTypes[6].Descriptor()
 }
 
 func (HttpMethod) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[5]
+	return &file_w17_rest_proto_enumTypes[6]
 }
 
 func (x HttpMethod) Number() protoreflect.EnumNumber {
@@ -426,7 +472,7 @@ func (x HttpMethod) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HttpMethod.Descriptor instead.
 func (HttpMethod) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{5}
+	return file_w17_rest_proto_rawDescGZIP(), []int{6}
 }
 
 // StreamTransport selects the HTTP-side streaming shape for a
@@ -466,11 +512,11 @@ func (x StreamTransport) String() string {
 }
 
 func (StreamTransport) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[6].Descriptor()
+	return file_w17_rest_proto_enumTypes[7].Descriptor()
 }
 
 func (StreamTransport) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[6]
+	return &file_w17_rest_proto_enumTypes[7]
 }
 
 func (x StreamTransport) Number() protoreflect.EnumNumber {
@@ -479,7 +525,7 @@ func (x StreamTransport) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamTransport.Descriptor instead.
 func (StreamTransport) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{6}
+	return file_w17_rest_proto_rawDescGZIP(), []int{7}
 }
 
 // RestApi declares one REST surface — one logical API exposed
@@ -2254,7 +2300,15 @@ type DownloadEndpoint struct {
 	//	           `<ENV_PREFIX>_PUBLIC_HOST` at boot. Picks
 	//	           this when FE runs on a different domain
 	//	           (CORS deploys, mobile clients, CDN-fronted).
-	UrlForm       URLForm `protobuf:"varint,10,opt,name=url_form,json=urlForm,proto3,enum=w17.URLForm" json:"url_form,omitempty"`
+	UrlForm URLForm `protobuf:"varint,10,opt,name=url_form,json=urlForm,proto3,enum=w17.URLForm" json:"url_form,omitempty"`
+	// Image variants this endpoint serves, by name: `?variant=<name>` returns
+	// the stored image fitted inside the variant's box. Only declared names
+	// exist — any other is a 400 — because a server that resized to whatever a
+	// URL asked for would render and store a new image per request. Each
+	// variant is rendered on its first request and stored beside the original,
+	// so later requests read it back. The source must be an image this server
+	// decodes (JPEG, PNG, GIF, WebP; 415 otherwise) of at most 50 megapixels.
+	Variants      []*ImageVariant `protobuf:"bytes,11,rep,name=variants,proto3" json:"variants,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2350,6 +2404,102 @@ func (x *DownloadEndpoint) GetUrlForm() URLForm {
 		return x.UrlForm
 	}
 	return URLForm_URL_FORM_UNSPECIFIED
+}
+
+func (x *DownloadEndpoint) GetVariants() []*ImageVariant {
+	if x != nil {
+		return x.Variants
+	}
+	return nil
+}
+
+// URLForm picks how the gateway renders URLs for UPLOADED_*
+// response fields covered by this DownloadEndpoint. Required
+// on every DownloadEndpoint — the parser refuses UNSPECIFIED
+// so authors don't accidentally ship the wrong shape.
+// ImageVariant is one declared size of an uploaded image.
+type ImageVariant struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How a URL asks for it (`?variant=<name>`): lower-case letters, digits and
+	// `-`, unique within the endpoint.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The box the image is fitted inside, its aspect ratio kept; 0 leaves that
+	// side unbounded, and at least one is set. An image already inside the box
+	// is not enlarged.
+	MaxWidth  uint32 `protobuf:"varint,2,opt,name=max_width,json=maxWidth,proto3" json:"max_width,omitempty"`
+	MaxHeight uint32 `protobuf:"varint,3,opt,name=max_height,json=maxHeight,proto3" json:"max_height,omitempty"`
+	// The output encoding; UNSPECIFIED keeps the source's family (JPEG for a
+	// JPEG source, PNG for every other).
+	Format ImageFormat `protobuf:"varint,4,opt,name=format,proto3,enum=w17.ImageFormat" json:"format,omitempty"`
+	// The JPEG quality, 1–100; 0 = 85.
+	Quality       uint32 `protobuf:"varint,5,opt,name=quality,proto3" json:"quality,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImageVariant) Reset() {
+	*x = ImageVariant{}
+	mi := &file_w17_rest_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImageVariant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImageVariant) ProtoMessage() {}
+
+func (x *ImageVariant) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rest_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImageVariant.ProtoReflect.Descriptor instead.
+func (*ImageVariant) Descriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ImageVariant) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ImageVariant) GetMaxWidth() uint32 {
+	if x != nil {
+		return x.MaxWidth
+	}
+	return 0
+}
+
+func (x *ImageVariant) GetMaxHeight() uint32 {
+	if x != nil {
+		return x.MaxHeight
+	}
+	return 0
+}
+
+func (x *ImageVariant) GetFormat() ImageFormat {
+	if x != nil {
+		return x.Format
+	}
+	return ImageFormat_IMAGE_FORMAT_UNSPECIFIED
+}
+
+func (x *ImageVariant) GetQuality() uint32 {
+	if x != nil {
+		return x.Quality
+	}
+	return 0
 }
 
 var file_w17_rest_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -2475,7 +2625,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"credential\x18\t \x01(\v2\x0f.w17.CredentialR\n" +
 	"credential\x12'\n" +
 	"\x06method\x18\n" +
-	" \x01(\x0e2\x0f.w17.HttpMethodR\x06methodJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
+	" \x01(\x0e2\x0f.w17.HttpMethodR\x06methodJ\x04\b\x05\x10\x06R\vauth_scopes\"\x9f\x03\n" +
 	"\x10DownloadEndpoint\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\ainclude\x18\x02 \x03(\tR\ainclude\x12\x18\n" +
@@ -2486,7 +2636,15 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fdisable_etag\x18\b \x01(\bR\vdisableEtag\x12#\n" +
 	"\rdisable_range\x18\t \x01(\bR\fdisableRange\x12'\n" +
 	"\burl_form\x18\n" +
-	" \x01(\x0e2\f.w17.URLFormR\aurlFormJ\x04\b\x05\x10\x06R\vauth_scopes*\x82\x01\n" +
+	" \x01(\x0e2\f.w17.URLFormR\aurlForm\x12-\n" +
+	"\bvariants\x18\v \x03(\v2\x11.w17.ImageVariantR\bvariantsJ\x04\b\x05\x10\x06R\vauth_scopes\"\xa2\x01\n" +
+	"\fImageVariant\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
+	"\tmax_width\x18\x02 \x01(\rR\bmaxWidth\x12\x1d\n" +
+	"\n" +
+	"max_height\x18\x03 \x01(\rR\tmaxHeight\x12(\n" +
+	"\x06format\x18\x04 \x01(\x0e2\x10.w17.ImageFormatR\x06format\x12\x18\n" +
+	"\aquality\x18\x05 \x01(\rR\aquality*\x82\x01\n" +
 	"\tTokenType\x12\x1a\n" +
 	"\x16TOKEN_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11TOKEN_TYPE_BEARER\x10\x01\x12\x14\n" +
@@ -2499,7 +2657,11 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\vQUERY_PARAM\x10\x02\x12\n" +
 	"\n" +
 	"\x06HEADER\x10\x03\x12\r\n" +
-	"\tFILE_PART\x10\x04*Q\n" +
+	"\tFILE_PART\x10\x04*X\n" +
+	"\vImageFormat\x12\x1c\n" +
+	"\x18IMAGE_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11IMAGE_FORMAT_JPEG\x10\x01\x12\x14\n" +
+	"\x10IMAGE_FORMAT_PNG\x10\x02*Q\n" +
 	"\aURLForm\x12\x18\n" +
 	"\x14URL_FORM_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11URL_FORM_RELATIVE\x10\x01\x12\x15\n" +
@@ -2539,65 +2701,69 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 	return file_w17_rest_proto_rawDescData
 }
 
-var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
 	(FieldSource)(0),                 // 1: w17.FieldSource
-	(URLForm)(0),                     // 2: w17.URLForm
-	(ContentDisposition)(0),          // 3: w17.ContentDisposition
-	(PublicLimit)(0),                 // 4: w17.PublicLimit
-	(HttpMethod)(0),                  // 5: w17.HttpMethod
-	(StreamTransport)(0),             // 6: w17.StreamTransport
-	(*RestApi)(nil),                  // 7: w17.RestApi
-	(*PluginInclude)(nil),            // 8: w17.PluginInclude
-	(*BrowserRedirect)(nil),          // 9: w17.BrowserRedirect
-	(*AuthMethod)(nil),               // 10: w17.AuthMethod
-	(*Credential)(nil),               // 11: w17.Credential
-	(*MetadataPropagation)(nil),      // 12: w17.MetadataPropagation
-	(*HeaderRename)(nil),             // 13: w17.HeaderRename
-	(*RestGroup)(nil),                // 14: w17.RestGroup
-	(*RestEndpoint)(nil),             // 15: w17.RestEndpoint
-	(*MetadataBinding)(nil),          // 16: w17.MetadataBinding
-	(*PagedConfig)(nil),              // 17: w17.PagedConfig
-	(*FieldBinding)(nil),             // 18: w17.FieldBinding
-	(*RestStream)(nil),               // 19: w17.RestStream
-	(*DownloadEndpoint)(nil),         // 20: w17.DownloadEndpoint
-	(*descriptorpb.FileOptions)(nil), // 21: google.protobuf.FileOptions
+	(ImageFormat)(0),                 // 2: w17.ImageFormat
+	(URLForm)(0),                     // 3: w17.URLForm
+	(ContentDisposition)(0),          // 4: w17.ContentDisposition
+	(PublicLimit)(0),                 // 5: w17.PublicLimit
+	(HttpMethod)(0),                  // 6: w17.HttpMethod
+	(StreamTransport)(0),             // 7: w17.StreamTransport
+	(*RestApi)(nil),                  // 8: w17.RestApi
+	(*PluginInclude)(nil),            // 9: w17.PluginInclude
+	(*BrowserRedirect)(nil),          // 10: w17.BrowserRedirect
+	(*AuthMethod)(nil),               // 11: w17.AuthMethod
+	(*Credential)(nil),               // 12: w17.Credential
+	(*MetadataPropagation)(nil),      // 13: w17.MetadataPropagation
+	(*HeaderRename)(nil),             // 14: w17.HeaderRename
+	(*RestGroup)(nil),                // 15: w17.RestGroup
+	(*RestEndpoint)(nil),             // 16: w17.RestEndpoint
+	(*MetadataBinding)(nil),          // 17: w17.MetadataBinding
+	(*PagedConfig)(nil),              // 18: w17.PagedConfig
+	(*FieldBinding)(nil),             // 19: w17.FieldBinding
+	(*RestStream)(nil),               // 20: w17.RestStream
+	(*DownloadEndpoint)(nil),         // 21: w17.DownloadEndpoint
+	(*ImageVariant)(nil),             // 22: w17.ImageVariant
+	(*descriptorpb.FileOptions)(nil), // 23: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
-	10, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
-	14, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
-	12, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
-	8,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
+	11, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
+	15, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
+	13, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
+	9,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
 	0,  // 4: w17.AuthMethod.token_types:type_name -> w17.TokenType
-	13, // 5: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
-	15, // 6: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	19, // 7: w17.RestGroup.streams:type_name -> w17.RestStream
-	20, // 8: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
-	5,  // 9: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	18, // 10: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	17, // 11: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	16, // 12: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
-	11, // 13: w17.RestEndpoint.credential:type_name -> w17.Credential
-	9,  // 14: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
-	4,  // 15: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
+	14, // 5: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
+	16, // 6: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
+	20, // 7: w17.RestGroup.streams:type_name -> w17.RestStream
+	21, // 8: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	6,  // 9: w17.RestEndpoint.method:type_name -> w17.HttpMethod
+	19, // 10: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	18, // 11: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	17, // 12: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	12, // 13: w17.RestEndpoint.credential:type_name -> w17.Credential
+	10, // 14: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
+	5,  // 15: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
 	1,  // 16: w17.MetadataBinding.from:type_name -> w17.FieldSource
 	1,  // 17: w17.FieldBinding.from:type_name -> w17.FieldSource
-	6,  // 18: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	16, // 19: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	18, // 20: w17.RestStream.fields:type_name -> w17.FieldBinding
-	11, // 21: w17.RestStream.credential:type_name -> w17.Credential
-	5,  // 22: w17.RestStream.method:type_name -> w17.HttpMethod
-	3,  // 23: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 24: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	21, // 25: w17.rest_api:extendee -> google.protobuf.FileOptions
-	7,  // 26: w17.rest_api:type_name -> w17.RestApi
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	26, // [26:27] is the sub-list for extension type_name
-	25, // [25:26] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	7,  // 18: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	17, // 19: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	19, // 20: w17.RestStream.fields:type_name -> w17.FieldBinding
+	12, // 21: w17.RestStream.credential:type_name -> w17.Credential
+	6,  // 22: w17.RestStream.method:type_name -> w17.HttpMethod
+	4,  // 23: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	3,  // 24: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	22, // 25: w17.DownloadEndpoint.variants:type_name -> w17.ImageVariant
+	2,  // 26: w17.ImageVariant.format:type_name -> w17.ImageFormat
+	23, // 27: w17.rest_api:extendee -> google.protobuf.FileOptions
+	8,  // 28: w17.rest_api:type_name -> w17.RestApi
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	28, // [28:29] is the sub-list for extension type_name
+	27, // [27:28] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2610,8 +2776,8 @@ func file_w17_rest_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
-			NumEnums:      7,
-			NumMessages:   14,
+			NumEnums:      8,
+			NumMessages:   15,
 			NumExtensions: 1,
 			NumServices:   0,
 		},

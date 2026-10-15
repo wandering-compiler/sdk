@@ -1067,12 +1067,45 @@ message DownloadEndpoint {
   //              this when FE runs on a different domain
   //              (CORS deploys, mobile clients, CDN-fronted).
   URLForm url_form = 10;
+
+  // Image variants this endpoint serves, by name: `?variant=<name>` returns
+  // the stored image fitted inside the variant's box. Only declared names
+  // exist — any other is a 400 — because a server that resized to whatever a
+  // URL asked for would render and store a new image per request. Each
+  // variant is rendered on its first request and stored beside the original,
+  // so later requests read it back. The source must be an image this server
+  // decodes (JPEG, PNG, GIF, WebP; 415 otherwise) of at most 50 megapixels.
+  repeated ImageVariant variants = 11;
 }
 
 // URLForm picks how the gateway renders URLs for UPLOADED_*
 // response fields covered by this DownloadEndpoint. Required
 // on every DownloadEndpoint — the parser refuses UNSPECIFIED
 // so authors don't accidentally ship the wrong shape.
+// ImageVariant is one declared size of an uploaded image.
+message ImageVariant {
+  // How a URL asks for it (`?variant=<name>`): lower-case letters, digits and
+  // `-`, unique within the endpoint.
+  string name = 1;
+  // The box the image is fitted inside, its aspect ratio kept; 0 leaves that
+  // side unbounded, and at least one is set. An image already inside the box
+  // is not enlarged.
+  uint32 max_width = 2;
+  uint32 max_height = 3;
+  // The output encoding; UNSPECIFIED keeps the source's family (JPEG for a
+  // JPEG source, PNG for every other).
+  ImageFormat format = 4;
+  // The JPEG quality, 1–100; 0 = 85.
+  uint32 quality = 5;
+}
+
+// ImageFormat is an image variant's output encoding.
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0; // the source's family
+  IMAGE_FORMAT_JPEG        = 1;
+  IMAGE_FORMAT_PNG         = 2;
+}
+
 enum URLForm {
   URL_FORM_UNSPECIFIED = 0;  // parse error
   URL_FORM_RELATIVE    = 1;
