@@ -115,7 +115,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
-  # go/pb is generated from go/proto with the protoc pinned in tools/protoc;
+  # go/pb is generated from proto/ with the protoc pinned in tools/protoc;
   # the committed tree must be exactly what that writes.
   pb:
     runs-on: ubuntu-latest

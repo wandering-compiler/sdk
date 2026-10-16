@@ -1,9 +1,7 @@
 # The w17 proto vocabulary
 
-> Published to `go/proto/w17/` of the SDK repository by
-> `scripts/publish-sdk.sh`. Its source is `scripts/sdk-proto-README.md` in the
-> source repository — beside the publisher that owns it, because neither `sdk/`
-> nor `proto/w17/` can hold it without a second copy appearing somewhere.
+> `proto/w17/` of the SDK repository, which is the source of the vocabulary:
+> edit it here.
 
 These are the annotation definitions a w17 project writes against — the same ones
 your protos already import:
