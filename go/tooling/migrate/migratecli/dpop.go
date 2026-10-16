@@ -133,19 +133,36 @@ func dpopOrigin(addr string, getenv func(string) string) string {
 	return "https://" + net.JoinHostPort(host, port)
 }
 
+// fetchAuth is how the calls to the console authenticate.
+type fetchAuth int
+
+const (
+	// authBearer: W17_DPOP_KEY unset — the token (if any) as a plain bearer.
+	authBearer fetchAuth = iota
+	// authSigned: W17_DPOP_KEY and W17_TOKEN set — DPoP with a proof.
+	authSigned
+	// authKeyNoToken: W17_DPOP_KEY set, W17_TOKEN empty — nothing is sent,
+	// as with no token at all.
+	authKeyNoToken
+)
+
 // fetchCredentials returns the dial options that authenticate the fetch: the
 // plain bearer when W17_DPOP_KEY is unset, the DPoP credential and its nonce
 // interceptor when it is set. A key that cannot be used is an error here,
 // before anything is dialed — a fetch that went out unsigned would only be
 // refused, with a reason that names the token rather than the key.
-func fetchCredentials(addr string, getenv func(string) string) (opts []grpc.DialOption, signed bool, err error) {
+func fetchCredentials(addr string, getenv func(string) string) (opts []grpc.DialOption, auth fetchAuth, err error) {
 	path := getenv(envDPoPKey)
 	if path == "" {
-		return []grpc.DialOption{grpc.WithPerRPCCredentials(bearerCreds{getenv: getenv})}, false, nil
+		return []grpc.DialOption{grpc.WithPerRPCCredentials(bearerCreds{getenv: getenv})}, authBearer, nil
 	}
 	k, err := loadDeviceKey(path)
 	if err != nil {
-		return nil, false, err
+		return nil, authBearer, err
+	}
+	auth = authSigned
+	if getenv(envToken) == "" {
+		auth = authKeyNoToken
 	}
 	dc := &dpopclient.Credentials{
 		Signer: k,
@@ -160,7 +177,7 @@ func fetchCredentials(addr string, getenv func(string) string) (opts []grpc.Dial
 	return []grpc.DialOption{
 		grpc.WithPerRPCCredentials(dpopCreds{dc: dc, getenv: getenv}),
 		grpc.WithChainUnaryInterceptor(dc.UnaryClientInterceptor()),
-	}, true, nil
+	}, auth, nil
 }
 
 // dpopCreds is the DPoP credential plus the active-org header bearerCreds

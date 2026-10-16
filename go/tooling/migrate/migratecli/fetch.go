@@ -104,7 +104,7 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 		)
 	}
 
-	conn, signed, err := dialFetch(addr, getenv)
+	conn, auth, err := dialFetch(addr, getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 		Targets:   want,
 	})
 	if err != nil {
-		return nil, fetchRefusal(addr, signed, err)
+		return nil, fetchRefusal("migrate", "fetch", addr, auth, err)
 	}
 	return requestedOnly(resp.GetMigrations(), want)
 }
@@ -155,54 +155,61 @@ func requestedOnly(migs []*applyfetchpb.Migration, want []*applyfetchpb.Target) 
 // real schema history — the same reason w17ctl lifts it.
 const fetchMaxRecvMsgSize = 256 << 20
 
-// dialFetch reports whether the calls are signed (W17_DPOP_KEY set), which is
-// what the refusal explanation turns on.
-func dialFetch(addr string, getenv func(string) string) (*grpc.ClientConn, bool, error) {
+// dialFetch reports how the calls authenticate (fetchAuth), which is what the
+// refusal explanation turns on.
+func dialFetch(addr string, getenv func(string) string) (*grpc.ClientConn, fetchAuth, error) {
 	target, creds := transportFor(addr, getenv)
-	auth, signed, err := fetchCredentials(addr, getenv)
+	opts, auth, err := fetchCredentials(addr, getenv)
 	if err != nil {
-		return nil, false, err
+		return nil, auth, err
 	}
-	opts := append([]grpc.DialOption{creds}, auth...)
+	opts = append([]grpc.DialOption{creds}, opts...)
 	opts = append(opts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(fetchMaxRecvMsgSize)))
 	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
-		return nil, false, fmt.Errorf("migrate: connect %s: %w", addr, err)
+		return nil, auth, fmt.Errorf("migrate: connect %s: %w", addr, err)
 	}
-	return conn, signed, nil
+	return conn, auth, nil
 }
 
-// fetchRefusal explains a failed fetch. An Unauthenticated reply names the
-// variables to set, and what it says depends on whether the call was signed:
-// a console that binds devices refuses a plain bearer, and one that does not
-// refuses the DPoP scheme, so each half points at the other.
-func fetchRefusal(addr string, signed bool, err error) error {
+// fetchRefusal explains a failed call to the console. tool prefixes the
+// message ("migrate", "fixtures"), what names the call ("fetch", "list",
+// "render app/users"). An Unauthenticated reply names the variables to set,
+// and what it says depends on how the call authenticated: a console that
+// binds devices refuses a plain bearer, and one that does not refuses the
+// DPoP scheme, so each half points at the other. Any other failure keeps its
+// cause, wrapped.
+func fetchRefusal(tool, what, addr string, auth fetchAuth, err error) error {
 	switch {
 	case errors.Is(err, dpopclient.ErrDeviceRevoked):
 		return fmt.Errorf(
-			"migrate: %s refused the fetch: the device key in %s was revoked\n"+
+			"%s: %s refused the %s: the device key in %s was revoked\n"+
 				"  fix: make a new key (W17_DPOP_KEY=<new file> w17ctl key public), issue a new\n"+
 				"       machine-account token for it, and deploy both — a revoked key is refused for good\n"+
 				"  raw: %v",
-			addr, envDPoPKey, err)
+			tool, addr, what, envDPoPKey, err)
 	case errors.Is(err, dpopclient.ErrSessionExpired):
 		return fmt.Errorf(
-			"migrate: %s refused the fetch: the token in %s has expired\n"+
+			"%s: %s refused the %s: the token in %s has expired\n"+
 				"  fix: issue a new machine-account token for the same device key and deploy it\n"+
 				"  raw: %v",
-			addr, envToken, err)
+			tool, addr, what, envToken, err)
 	case status.Code(err) != codes.Unauthenticated:
-		return fmt.Errorf("migrate: fetch from %s: %w", addr, err)
+		return fmt.Errorf("%s: %s from %s: %w", tool, what, addr, err)
 	}
 	keyHint := "       If this console binds tokens to a device key, set " + envDPoPKey + " to the\n" +
 		"       key file the token was issued for (W17_DPOP_KEY=<file> w17ctl key public prints it).\n"
-	if signed {
+	switch auth {
+	case authKeyNoToken:
+		// Nothing was sent: the fix is the token, and the key is already set.
+		keyHint = ""
+	case authSigned:
 		keyHint = "       The call was signed with " + envDPoPKey + ": the token must be the one issued\n" +
 			"       for that key, and a console that binds no devices refuses a signed call —\n" +
 			"       unset " + envDPoPKey + " for it.\n"
 	}
 	return fmt.Errorf(
-		"migrate: %s refused the fetch: not authenticated\n"+
+		"%s: %s refused the %s: not authenticated\n"+
 			"  fix: set %s to an API token minted for a MACHINE account —\n"+
 			"       in the console: Organizations → your org → Machine accounts.\n"+
 			"       There is no w17ctl command for this; it is a console act.\n"+
@@ -210,7 +217,7 @@ func fetchRefusal(addr string, signed bool, err error) error {
 			"  why: a deploy needs a credential of its own rather than a person's login\n"+
 			"       session, so it can be revoked without logging anybody out\n"+
 			"  raw: %v",
-		addr, envToken, keyHint, err,
+		tool, addr, what, envToken, keyHint, err,
 	)
 }
 

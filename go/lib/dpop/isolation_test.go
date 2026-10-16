@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,7 +14,8 @@ import (
 // DPoP is opt-in down to the module graph: only lib/dpop, its subpackages,
 // lib/restgw/dpopgw, tooling/e2e/dpope2e (the e2e runner's signer, which
 // only a suite whose surface binds devices imports) and
-// tooling/migrate/migratecli may import lib/dpop or go-jose. Every other
+// tooling/migrate/migratecli may import lib/dpop or go-jose — migratecli only
+// lib/dpop and lib/dpop/dpopclient, never go-jose directly. Every other
 // package — lib/restgw, lib/principal, core/grpcx, the e2e runner and the
 // rest — must not, so a consumer that never uses DPoP gets no new transitive
 // dependency (and no new go.sum entry) when it bumps the SDK. Checked on the
@@ -33,8 +35,17 @@ func TestDPoPImportsStayInsideTheOptInPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{"lib/dpop", "lib/restgw/dpopgw", "tooling/e2e/dpope2e", "tooling/migrate/migratecli"}
+	allowed := []string{"lib/dpop", "lib/restgw/dpopgw", "tooling/e2e/dpope2e"}
 	forbidden := []string{"github.com/wandering-compiler/sdk/go/lib/dpop", "github.com/go-jose/go-jose"}
+	// A package (its own files, not its subpackages) that may import exactly
+	// these and nothing else of DPoP — never go-jose itself: migratecli signs
+	// through the SDK's client, it does not build JOSE objects.
+	limited := map[string][]string{
+		"tooling/migrate/migratecli": {
+			"github.com/wandering-compiler/sdk/go/lib/dpop",
+			"github.com/wandering-compiler/sdk/go/lib/dpop/dpopclient",
+		},
+	}
 	checked := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -57,6 +68,9 @@ func TestDPoPImportsStayInsideTheOptInPackages(t *testing.T) {
 		checked++
 		for _, imp := range f.Imports {
 			p, _ := strconv.Unquote(imp.Path.Value)
+			if slices.Contains(limited[filepath.ToSlash(filepath.Dir(rel))], p) {
+				continue
+			}
 			for _, bad := range forbidden {
 				if p == bad || strings.HasPrefix(p, bad+"/") {
 					t.Errorf("%s imports %s: DPoP must stay in its opt-in packages", rel, p)

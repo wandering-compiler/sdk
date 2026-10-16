@@ -2,6 +2,7 @@ package migratecli
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -18,6 +20,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
 // dpopConsole is a console's fetch surface behind the SDK's own DPoP
@@ -71,6 +74,16 @@ func (c *dpopConsole) FetchMigrations(context.Context, *applyfetchpb.FetchMigrat
 	return &applyfetchpb.FetchMigrationsResponse{}, nil
 }
 
+// fixtureConsole is the fixture surface behind the same check: it lists
+// nothing, so a call that passes the check renders no seed.
+type fixtureConsole struct {
+	applyfetchpb.UnimplementedFixtureFetchServer
+}
+
+func (fixtureConsole) FetchFixtureFiles(context.Context, *applyfetchpb.FetchFixtureFilesRequest) (*applyfetchpb.FetchFixtureFilesResponse, error) {
+	return &applyfetchpb.FetchFixtureFilesResponse{}, nil
+}
+
 func (c *dpopConsole) seen() ([]metadata.MD, []error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -106,6 +119,7 @@ func serveDPoP(t *testing.T, k *dpop.Key, origin string) (*dpopConsole, string) 
 		return h(ctx, req)
 	}))
 	applyfetchpb.RegisterMigrationFetchServer(srv, c)
+	applyfetchpb.RegisterFixtureFetchServer(srv, fixtureConsole{})
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(srv.Stop)
 	return c, addr
@@ -289,5 +303,55 @@ func TestDPoPOrigin(t *testing.T) {
 	}
 	if got := dpopOrigin("console:50051", fetchEnv(map[string]string{envDPoPOrigin: " https://api.w17.app:50051/ "})); got != "https://api.w17.app:50051" {
 		t.Errorf("override: %q", got)
+	}
+}
+
+func fetchSeedsWithin(t *testing.T, env map[string]string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := fetchSeeds(ctx, applyFlags{}, &migrate.LockView{ProjectID: "p-1"}, Options{Getenv: fetchEnv(env)}, io.Discard)
+	return err
+}
+
+// `fixtures apply --fetch` dials the console the same way: signed with
+// W17_DPOP_KEY, the nonce challenge answered, and a refusal explained with
+// the same sentences — under its own name.
+func TestFixturesFetch_SignsAndExplainsTheRefusal(t *testing.T) {
+	k, path := writeKey(t, dpop.KeyP256, 0o600)
+	c, addr := serveDPoP(t, k, "")
+	env := map[string]string{envConsoleAddr: "grpc://" + addr, envToken: "tok", envDPoPKey: path}
+	if err := fetchSeedsWithin(t, env); err != nil {
+		t.Fatalf("signed fixture list: %v", err)
+	}
+	if calls, errs := c.seen(); len(calls) != 2 || errs[1] != nil {
+		t.Fatalf("calls = %d (errs %v), want the challenge then an accepted retry", len(calls), errs)
+	}
+
+	c.refuse = "SOMETHING_ELSE"
+	err := fetchSeedsWithin(t, env)
+	if err == nil || !strings.HasPrefix(err.Error(), "fixtures: ") || !strings.Contains(err.Error(), "refused the list") ||
+		!strings.Contains(err.Error(), "unset W17_DPOP_KEY") {
+		t.Errorf("signed fixture refusal:\n%v", err)
+	}
+	c.refuse = "DEVICE_REVOKED"
+	if err := fetchSeedsWithin(t, env); err == nil || !strings.Contains(err.Error(), "was revoked") {
+		t.Errorf("revoked fixture refusal:\n%v", err)
+	}
+}
+
+// A key with no token sends nothing: the explanation asks for the token and
+// neither claims the call was signed nor asks for the key it already has.
+func TestFetch_KeyWithoutTokenIsNotCalledSigned(t *testing.T) {
+	k, path := writeKey(t, dpop.KeyP256, 0o600)
+	_, addr := serveDPoP(t, k, "")
+	err := fetchWithin(t, map[string]string{envConsoleAddr: "grpc://" + addr, envDPoPKey: path})
+	if err == nil || !strings.Contains(err.Error(), "set W17_TOKEN") {
+		t.Fatalf("refusal:\n%v", err)
+	}
+	for _, wrong := range []string{"was signed", "set W17_DPOP_KEY", "unset W17_DPOP_KEY"} {
+		if strings.Contains(err.Error(), wrong) {
+			t.Errorf("refusal says %q:\n%v", wrong, err)
+		}
 	}
 }
