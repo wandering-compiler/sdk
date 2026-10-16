@@ -236,9 +236,10 @@ func WriteSSEGRPCErrorCtxWithTimeout(ctx context.Context, w http.ResponseWriter,
 //     coder/websocket echoes the first advertised protocol the
 //     client also offered; read it back via [WSFormat]. A client
 //     that offers neither gets the empty subprotocol → JSON.
-//   - InsecureSkipVerify: false (default) — same-origin
-//     enforced; consumers behind a reverse proxy set
-//     `OriginPatterns` via the option helper if needed.
+//   - origin: same-origin, plus every origin the CORS allowlist
+//     (`<PREFIX>_CORS_ORIGINS`) names explicitly — [CORSMiddleware] hands
+//     it over on the request. Its `*` wildcard does not open sockets to
+//     every site: see webSocketOriginPatterns.
 //   - CompressionMode: disabled — tiny per-message payloads
 //     don't benefit, deflate adds CPU.
 //   - read limit: one inbound message may be as large as a REST
@@ -248,9 +249,11 @@ func WriteSSEGRPCErrorCtxWithTimeout(ctx context.Context, w http.ResponseWriter,
 // the helper has already responded; caller bails without
 // further writes.
 func AcceptWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	origins, _ := r.Context().Value(wsOriginsKey{}).([]string)
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionDisabled,
 		Subprotocols:    []string{wsSubprotocolPB, wsSubprotocolJSON},
+		OriginPatterns:  origins,
 	})
 	if err != nil {
 		return nil, err

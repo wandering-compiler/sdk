@@ -1,6 +1,7 @@
 package restgw
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -180,7 +181,16 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 	if cfg.MaxAgeSeconds > 0 {
 		maxAgeHdr = strconv.Itoa(cfg.MaxAgeSeconds)
 	}
+	wsOrigins := webSocketOriginPatterns(cfg.AllowedOrigins)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A WebSocket upgrade is not a CORS request: the browser sends it
+		// cross-origin without asking, and the WebSocket library refuses
+		// any Origin but the gateway's own. The allowlist rides the request
+		// to AcceptWebSocket, so a frontend this gateway already allows
+		// can open its sockets too.
+		if len(wsOrigins) > 0 {
+			r = r.WithContext(context.WithValue(r.Context(), wsOriginsKey{}, wsOrigins))
+		}
 		origin := r.Header.Get("Origin")
 		// Every response this middleware sees depends on Origin, including
 		// the ones that carry no CORS headers: without Vary on those, a
@@ -210,6 +220,28 @@ func CORSMiddleware(cfg CORSConfig, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+type wsOriginsKey struct{}
+
+// webSocketOriginPatterns turns the CORS allowlist into the WebSocket
+// library's origin patterns: each listed origin, matched exactly (its glob
+// characters escaped). The `*` wildcard is NOT carried over. A browser sends
+// its cookies on a WebSocket whatever CORS says, so an open origin list would
+// let any website open a socket authenticated as its visitor (cross-site
+// WebSocket hijacking) — the one thing the same-origin default prevents. List
+// the origins that open sockets explicitly.
+func webSocketOriginPatterns(allowed []string) []string {
+	var out []string
+	for _, a := range allowed {
+		if a == "*" || a == "" {
+			continue
+		}
+		out = append(out, globEscaper.Replace(a))
+	}
+	return out
+}
+
+var globEscaper = strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`)
 
 // containsWildcardOrigin reports whether the allowlist contains the
 // bare `*` wildcard entry. Used to refuse the forbidden `*` +
