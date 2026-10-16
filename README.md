@@ -47,7 +47,7 @@ further language gets its own top-level directory and README when it lands.
 
 ## Building and checking
 
-- `make pb` regenerates `go/pb` from the protos in `go/proto` (protoc pinned in
+- `make pb` regenerates `go/pb` from the protos in `proto/` (protoc pinned in
   `tools/protoc`, run in Docker); `make check-pb` fails when the committed code
   differs.
 - `make sync-admin-dpop` copies `ts/dpop/src` into `ts/admin-runtime/src/dpop`;
