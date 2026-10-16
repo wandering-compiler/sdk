@@ -179,7 +179,7 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 				"  fix: set %s to the console's gRPC endpoint, or drop --fetch to read %s from disk",
 			envConsoleAddr, f.fixtures)
 	}
-	conn, err := dialFetch(addr, getenv)
+	conn, auth, err := dialFetch(addr, getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,7 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 		Domain:    f.domain, // "" = every domain
 	})
 	if err != nil {
-		return nil, fmt.Errorf("fixtures: list from the console: %w", err)
+		return nil, fetchRefusal("fixtures", "list", addr, auth, err)
 	}
 	var seeds []migrate.FixtureSeed
 	for _, file := range listed.GetFiles() {
@@ -216,7 +216,7 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 			Name:      seeds[i].Name,
 		})
 		if rerr != nil {
-			return nil, fmt.Errorf("fixtures: render %s/%s: %w", seeds[i].Domain, seeds[i].Name, rerr)
+			return nil, fetchRefusal("fixtures", "render of "+seeds[i].Domain+"/"+seeds[i].Name, addr, auth, rerr)
 		}
 		seeds[i].Statements = resp.GetStatements()
 	}

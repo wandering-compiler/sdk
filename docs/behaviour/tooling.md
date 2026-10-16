@@ -157,7 +157,7 @@ and the column is added only on the apply path.
 
 ## T4. Artefact fetch (`migrate fetch`, `--fetch`)
 
-**Code.** `go/tooling/migrate/migratecli/fetch.go` — `fetchMigrations`, `transportFor`, `consoleTLSConfig`, `caPool`, `bearerCreds`; `go/tooling/migrate/lockview.go` — `MigrationSetFS`; `go/tooling/migrate/orchestrator.go` — `WriteMigration`
+**Code.** `go/tooling/migrate/migratecli/fetch.go` — `fetchMigrations`, `fetchRefusal`, `transportFor`, `consoleTLSConfig`, `caPool`, `bearerCreds`; `go/tooling/migrate/migratecli/dpop.go` — `fetchCredentials`, `fetchAuth`, `loadDeviceKey`, `dpopOrigin`, `dpopCreds`; `go/tooling/migrate/migratecli/fixtures.go` — `fetchSeeds`; `go/tooling/migrate/lockview.go` — `MigrationSetFS`; `go/tooling/migrate/orchestrator.go` — `WriteMigration`
 
 **Purpose.** Download migration artefacts from the console. `migrate fetch` writes them under
 `--migrations`; `apply --fetch` keeps them in memory.
@@ -168,13 +168,19 @@ and the column is added only on the apply path.
 |---|---|---|
 | `W17_CONSOLE_ADDR` | required | `grpcs://` or bare `host:port` → TLS 1.2+; `grpc://` → plaintext |
 | `W17_TOKEN` | none (no bearer sent) | — |
+| `W17_DPOP_KEY` | unset: the token is sent as `Bearer` | the path of a PKCS #8 PEM (P-256 or Ed25519): the token is sent as `DPoP` with a proof per call (RFC 9449), the console's nonce learned and a `use_dpop_nonce` refusal retried once; a missing or unparsable file, or one writable by group or others, is refused before dialing |
+| `W17_CONSOLE_DPOP_ORIGIN` | derived from the address: `https://host[:port]`, port 443 omitted, for every scheme | the origin proofs are signed for (htu = origin + gRPC method), for a console dialed by a name its configuration does not use |
 | `W17_CONSOLE_ORG` | none | sent as `w17-org` metadata |
 | `W17_CONSOLE_CA` | system roots | additional PEM roots; an unreadable file leaves verification against system roots, which then fails |
 | `W17_CONSOLE_TLS_SKIP_VERIFY` | off | `true` (case-insensitive) |
 | Response size | 256 MiB maximum | — |
 
 Unpinned connections are not requested; when every connection is unpinned the console is not
-contacted.
+contacted. `fixtures apply --fetch` dials the same way.
+
+A console whose auth binds devices issues a deployment's machine-account token for the public
+half of a key the deployment holds: `W17_DPOP_KEY=<file> w17ctl key public` makes the key and
+prints that half. `W17_DPOP_KEY` and `W17_CONSOLE_DPOP_ORIGIN` mean what they mean to w17ctl.
 
 **Guarantees.**
 
@@ -182,7 +188,9 @@ contacted.
 |---|---|---|
 | T4.1 | The default transport MUST be TLS with system roots. | `TestFetch_DefaultTransportIsTLSWithSystemRoots` |
 | T4.2 | The bearer MUST NOT be sent in clear by default. | `TestFetch_BearerIsNotSentInClearByDefault` |
-| T4.3 | An `Unauthenticated` reply MUST produce a message naming `W17_TOKEN`. | `TestFetch_UnauthenticatedNamesW17Token` |
+| T4.3 | An `Unauthenticated` reply MUST produce a message naming `W17_TOKEN`, and `W17_DPOP_KEY`: to set it on an unsigned call, to unset it (or match the token to it) on a signed one, to replace the key on `DEVICE_REVOKED`; with a key and no token nothing is signed, and the message MUST NOT say it was. `fixtures apply --fetch` MUST explain its refusals the same way, under its own name. | `TestFetch_UnauthenticatedNamesW17Token`, `TestFetch_RefusalNamesTheDeviceKey`, `TestFetch_KeyWithoutTokenIsNotCalledSigned`, `TestFixturesFetch_SignsAndExplainsTheRefusal` |
+| T4.7 | Without `W17_DPOP_KEY` (unset or empty) the token MUST go as a plain `Bearer` with no proof. With it, every call MUST carry `DPoP <token>` and a proof the SDK's verifier accepts for that token, key and origin, a nonce challenge MUST be answered by one retry, and the org header MUST still ride. | `TestFetch_NoDPoPKeySendsPlainBearer`, `TestFetch_DPoPKeySignsTheCallAndAnswersTheNonceChallenge`, `TestFetch_DPoPOriginOverride`, `TestDPoPOrigin` |
+| T4.8 | A key file that is missing, does not parse, or is writable by group or others MUST be refused with a message naming it, before the console is dialed; one only readable by others (a mounted secret) MUST be used. | `TestFetch_UnusableDPoPKeyIsAClearError` |
 | T4.4 | Fetched artefacts MUST be written only under `--migrations`: a connection name or migration id that is not one plain path segment (no separator, `:`, `.`/`..` or control character) MUST be refused before anything is written, and every write MUST pass the path guard (T28). | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
 | T4.6 | An in-memory fetch (`--fetch`) MUST apply the same segment rule to connection names and ids as a fetch to disk. | `TestWriteMigration_RefusesPathShapedNames` |
 | T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | `TestFetch_KeepsOnlyRequestedConnections`, `TestFetch_RefusesADuplicateMigration`, `TestMigrationSetFS_RefusesADuplicate` |
