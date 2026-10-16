@@ -229,7 +229,9 @@ flags (apply):
   --console ADDR      console endpoint; overrides W17_CONSOLE_ADDR
   --fetch             pull the set from the console and apply it WITHOUT writing
                       to disk; ignores --migrations. Needs W17_CONSOLE_ADDR +
-                      W17_TOKEN
+                      W17_TOKEN, and W17_DPOP_KEY (the path of the device key
+                      the token was issued for) when the console binds tokens
+                      to a device key; unset, the token goes as a plain bearer
   --dry-run           print what would apply, apply nothing
   --log-format text|json
   --parallel N        worker count for KV data migrations; 0 = the migration's own

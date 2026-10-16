@@ -179,7 +179,7 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 				"  fix: set %s to the console's gRPC endpoint, or drop --fetch to read %s from disk",
 			envConsoleAddr, f.fixtures)
 	}
-	conn, err := dialFetch(addr, getenv)
+	conn, _, err := dialFetch(addr, getenv)
 	if err != nil {
 		return nil, err
 	}

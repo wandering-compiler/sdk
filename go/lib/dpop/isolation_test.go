@@ -11,20 +11,29 @@ import (
 )
 
 // DPoP is opt-in down to the module graph: only lib/dpop, its subpackages,
-// lib/restgw/dpopgw and tooling/e2e/dpope2e (the e2e runner's signer, which
-// only a suite whose surface binds devices imports) may import lib/dpop or
-// go-jose. Every other package — lib/restgw, lib/principal, core/grpcx, the
-// e2e runner and the rest — must not, so a consumer that never uses DPoP gets
-// no new transitive dependency (and no new go.sum entry) when it bumps the
-// SDK. Checked on the direct imports of
-// every non-test file in the module; since go-jose is reachable only through
-// these packages, that bounds the transitive graph too.
+// lib/restgw/dpopgw, tooling/e2e/dpope2e (the e2e runner's signer, which
+// only a suite whose surface binds devices imports) and
+// tooling/migrate/migratecli may import lib/dpop or go-jose. Every other
+// package — lib/restgw, lib/principal, core/grpcx, the e2e runner and the
+// rest — must not, so a consumer that never uses DPoP gets no new transitive
+// dependency (and no new go.sum entry) when it bumps the SDK. Checked on the
+// direct imports of every non-test file in the module; since go-jose is
+// reachable only through these packages, that bounds the transitive graph
+// too.
+//
+// migratecli is the one exception every binary carries, because for it DPoP
+// is not the consumer's choice: `apply --fetch` and `fixtures apply --fetch`
+// call the console with the deployment's W17_TOKEN, and a console whose auth
+// binds devices accepts that token only with a proof signed by the key it was
+// issued for (W17_DPOP_KEY). Whether to sign is decided where the binary is
+// deployed, not where it is built, so the signer comes with the migrate
+// command.
 func TestDPoPImportsStayInsideTheOptInPackages(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{"lib/dpop", "lib/restgw/dpopgw", "tooling/e2e/dpope2e"}
+	allowed := []string{"lib/dpop", "lib/restgw/dpopgw", "tooling/e2e/dpope2e", "tooling/migrate/migratecli"}
 	forbidden := []string{"github.com/wandering-compiler/sdk/go/lib/dpop", "github.com/go-jose/go-jose"}
 	checked := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
