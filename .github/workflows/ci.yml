@@ -181,3 +181,5 @@ jobs:
       sdk_ref: ${{ github.event.pull_request.head.sha || github.sha }}
     secrets:
       W17_TOKEN: ${{ secrets.W17_TOKEN }}
+      # The key W17_TOKEN is bound to, once the console binds devices.
+      W17_DEVICE_KEY: ${{ secrets.W17_DEVICE_KEY }}
