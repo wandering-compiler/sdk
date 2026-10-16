@@ -75,6 +75,12 @@ type DownloadField struct {
 	// rendered on first request (or by the variant workers right after the
 	// upload) and stored beside the original. Empty = originals only.
 	Variants []imagevariant.Spec
+
+	// Image marks an UPLOADED_IMAGE field: its originals are served with the
+	// raster type their bytes are (see imageType) instead of
+	// application/octet-stream, so a browser renders them inline. Anything
+	// that is not one of those types still goes out as octet-stream.
+	Image bool
 }
 
 // NewDownloadConfig sorts the field list by descending bucket-
@@ -176,6 +182,19 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 
 	objectKey := key[strings.LastIndex(key, "/")+1:]
 
+	// An image field's original carries the type its bytes are, when they
+	// are a raster image a browser renders and never executes; every other
+	// upload — and an image field's upload that is not one — is
+	// application/octet-stream (below).
+	contentType, ext := "application/octet-stream", ""
+	if field.Image {
+		var err error
+		if contentType, ext, err = sniffImageType(body); err != nil {
+			WriteInternal(ctx, w, "download: sniff: "+err.Error())
+			return
+		}
+	}
+
 	header := w.Header()
 	if !cfg.DisableETag {
 		header.Set("ETag", `"`+objectKey+`"`)
@@ -184,7 +203,7 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 		header.Set("Cache-Control", cfg.CacheControl)
 	}
 	if cfg.AsAttachment {
-		header.Set("Content-Disposition", `attachment; filename="`+objectKey+`"`)
+		header.Set("Content-Disposition", `attachment; filename="`+objectKey+ext+`"`)
 	} else {
 		header.Set("Content-Disposition", "inline")
 	}
@@ -206,12 +225,12 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 	// http.ServeContent sniffs the body (the empty `name` disables the
 	// extension path), so an uploaded HTML / SVG / JS payload would be
 	// served as `text/html` and, inline on the same origin, EXECUTED —
-	// stored XSS. Pin a non-renderable type + `nosniff` so the browser
-	// never sniffs or executes uploaded content. (Per-field declared
-	// content types for safe inline rendering of images / PDFs are a
-	// future enhancement; until then security wins over inline preview.)
+	// stored XSS. So the type is always set here, never left to sniffing:
+	// application/octet-stream, or — on an image field — one of the raster
+	// types sniffImageType admits, which a browser renders and never runs.
+	// `nosniff` keeps the browser to the type it is given.
 	// Setting Content-Type before ServeContent also stops it sniffing.
-	header.Set("Content-Type", "application/octet-stream")
+	header.Set("Content-Type", contentType)
 	header.Set("X-Content-Type-Options", "nosniff")
 
 	// http.ServeContent handles If-None-Match (against ETag) +
@@ -371,15 +390,10 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 		return
 	}
 	defer func() { _ = body.Close() }()
-	var sniff [512]byte
-	n, _ := io.ReadFull(body, sniff[:])
-	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		WriteInternal(ctx, w, "download variant: seek: "+err.Error())
+	contentType, ext, err := sniffImageType(body)
+	if err != nil {
+		WriteInternal(ctx, w, "download variant: sniff: "+err.Error())
 		return
-	}
-	contentType := http.DetectContentType(sniff[:n])
-	if contentType != "image/jpeg" && contentType != "image/png" {
-		contentType = "application/octet-stream"
 	}
 	objectKey := vkey[strings.LastIndex(vkey, "/")+1:]
 	header := w.Header()
@@ -390,7 +404,7 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 		header.Set("Cache-Control", cfg.CacheControl)
 	}
 	if cfg.AsAttachment {
-		header.Set("Content-Disposition", `attachment; filename="`+objectKey+spec.Ext(strings.TrimPrefix(contentType, "image/"))+`"`)
+		header.Set("Content-Disposition", `attachment; filename="`+objectKey+ext+`"`)
 	} else {
 		header.Set("Content-Disposition", "inline")
 	}
@@ -448,4 +462,35 @@ func renderVariant(ctx context.Context, d kvfs.Driver, key, vkey string, spec im
 		return http.StatusInternalServerError, err
 	}
 	return 0, nil
+}
+
+// imageTypes are the content types an image field's bytes may be served as:
+// raster formats a browser decodes and never executes, with the extension an
+// attachment's filename gets. SVG is deliberately absent — it is a document
+// that runs script — and http.DetectContentType reports it as XML anyway.
+var imageTypes = map[string]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/gif":  ".gif",
+	"image/webp": ".webp",
+}
+
+// sniffImageType reads the head of body and rewinds it: the raster type the
+// bytes are, with its extension, or application/octet-stream and no extension
+// when they are anything else. The decision is the content's, never the
+// uploaded filename's — the upload checked only that.
+func sniffImageType(body io.ReadSeeker) (contentType, ext string, err error) {
+	var head [512]byte
+	n, err := io.ReadFull(body, head[:])
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return "", "", err
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return "", "", err
+	}
+	ct := http.DetectContentType(head[:n])
+	if ext, ok := imageTypes[ct]; ok {
+		return ct, ext, nil
+	}
+	return "application/octet-stream", "", nil
 }
