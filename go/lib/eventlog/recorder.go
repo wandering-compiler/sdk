@@ -264,6 +264,8 @@ type Record struct {
 	grpcCode   int32
 
 	userID, orgID, traceID, requestID string
+	span                              trace.SpanContext
+	otel                              bool // sampled for the telemetry sink
 	consent, consentKnown             bool
 	purposes                          uint8 // bit 0 audit, bit 1 marketing
 
@@ -384,7 +386,10 @@ func (rec *Record) Finish(ctx context.Context, httpStatus int) {
 	rec.httpStatus = int32(httpStatus)
 	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
 		rec.traceID = sc.TraceID().String()
+		rec.span = sc
 	}
+	// The telemetry sink: W17_OBSERVX_REQUEST_DATA=all, sampled.
+	rec.otel = observx.SampleRequestTelemetry()
 	if s.purposes.Audit {
 		rec.purposes |= purposeAudit
 	}
@@ -527,14 +532,15 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	}
 	var cut []string
 	var err error
+	var reqAt, respAt [2]int // the redacted messages' bytes in dst
 	if rec.req != nil && rec.method.RequestTag != 0 {
-		dst, cut, err = appendRedacted(dst, rec.method.RequestTag, rec.req, reqBudget, "request.", cut)
+		dst, cut, reqAt, err = appendRedacted(dst, rec.method.RequestTag, rec.req, reqBudget, "request.", cut)
 		if err != nil {
 			return dst, err
 		}
 	}
 	if rec.resp != nil && rec.method.ResponseTag != 0 {
-		dst, cut, err = appendRedacted(dst, rec.method.ResponseTag, rec.resp, reqBudget, "response.", cut)
+		dst, cut, respAt, err = appendRedacted(dst, rec.method.ResponseTag, rec.resp, reqBudget, "response.", cut)
 		if err != nil {
 			return dst, err
 		}
@@ -575,22 +581,27 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	m.RequestId = rec.requestID
 	dst = protowire.AppendTag(dst, EnvelopeMetaField, protowire.BytesType)
 	dst = protowire.AppendVarint(dst, uint64(proto.Size(m)))
-	return proto.MarshalOptions{}.MarshalAppend(dst, m)
+	dst, err = proto.MarshalOptions{}.MarshalAppend(dst, m)
+	if err == nil && rec.otel {
+		emitTelemetry(rec, m, dst[reqAt[0]:reqAt[1]], dst[respAt[0]:respAt[1]])
+	}
+	return dst, err
 }
 
-// appendRedacted writes msg as field num, redacted and cut to ceiling.
-func appendRedacted(dst []byte, num protowire.Number, msg proto.Message, ceiling int, prefix string, cut []string) ([]byte, []string, error) {
+// appendRedacted writes msg as field num, redacted and cut to ceiling, and
+// reports where the message's own bytes are in the result.
+func appendRedacted(dst []byte, num protowire.Number, msg proto.Message, ceiling int, prefix string, cut []string) ([]byte, []string, [2]int, error) {
 	dst = protowire.AppendTag(dst, num, protowire.BytesType)
 	start := len(dst)
 	dst = append(dst, 0, 0, 0) // room for a 3-byte length (up to 2 MiB)
 	out, paths, err := redact.Default.Append(dst, msg, ceiling)
 	if err != nil {
-		return dst[:start-protowire.SizeTag(num)], cut, fmt.Errorf("eventlog: %s%w", prefix, err)
+		return dst[:start-protowire.SizeTag(num)], cut, [2]int{}, fmt.Errorf("eventlog: %s%w", prefix, err)
 	}
 	n := len(out) - start - 3
 	w := protowire.SizeVarint(uint64(n))
 	if w > 3 {
-		return dst[:start-protowire.SizeTag(num)], cut, fmt.Errorf("eventlog: %s record over 2 MiB", prefix)
+		return dst[:start-protowire.SizeTag(num)], cut, [2]int{}, fmt.Errorf("eventlog: %s record over 2 MiB", prefix)
 	}
 	copy(out[start+w:], out[start+3:])
 	out = out[:len(out)-(3-w)]
@@ -598,7 +609,7 @@ func appendRedacted(dst []byte, num protowire.Number, msg proto.Message, ceiling
 	for _, p := range paths {
 		cut = append(cut, prefix+p)
 	}
-	return out, cut, nil
+	return out, cut, [2]int{start + w, start + w + n}, nil
 }
 
 // failureLineChunk keeps one log line under the json-file driver's 16 KiB.

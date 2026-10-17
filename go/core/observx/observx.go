@@ -65,6 +65,7 @@ package observx
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -78,10 +79,15 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
+	otellog "go.opentelemetry.io/otel/log"
+	logglobal "go.opentelemetry.io/otel/log/global"
+	lognoop "go.opentelemetry.io/otel/log/noop"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -260,6 +266,7 @@ var (
 	tracerProvider *sdktrace.TracerProvider
 	otlpExporter   *otlptrace.Exporter
 	meterProvider  *sdkmetric.MeterProvider
+	loggerProvider *sdklog.LoggerProvider
 	sentryEnabled  bool
 	sentryClient   *sentry.Client // the client MustInit bound; nil when off
 	debugEvents    bool
@@ -460,6 +467,34 @@ func initLocked(c Config) error {
 		))
 	}
 
+	// OTel log records — the request event stream's telemetry sink: with
+	// W17_OBSERVX_REQUEST_DATA=all (and a sample above 0), each sampled
+	// request's record goes to the backend as a log record carrying its
+	// trace and span ids, so the backend joins it to the span. Same endpoint
+	// and transport as the traces.
+	if c.OTelEndpoint != "" && requestMode == RequestDataAll && requestSample > 0 {
+		tlsCfg, err := otlpTLS(c.OTelTLS, os.Getenv)
+		if err != nil {
+			return err
+		}
+		security := otlploggrpc.WithInsecure()
+		if tlsCfg != nil {
+			security = otlploggrpc.WithTLSCredentials(credentials.NewTLS(tlsCfg))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		lexp, err := otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(c.OTelEndpoint), security)
+		if err != nil {
+			return fmt.Errorf("observx: otlp log exporter: %w", err)
+		}
+		loggerProvider = sdklog.NewLoggerProvider(
+			sdklog.WithProcessor(sdklog.NewBatchProcessor(lexp)),
+			sdklog.WithResource(res),
+		)
+		logglobal.SetLoggerProvider(loggerProvider)
+		requestLogger = loggerProvider
+	}
+
 	// Prometheus MeterProvider — opt-in (gateway turns it
 	// on; storage today doesn't run an HTTP /metrics
 	// endpoint). promhttp.Handler() consumed by
@@ -484,6 +519,19 @@ func initLocked(c Config) error {
 // OTelTLS setting and the internal-mesh switch read through lookup (see
 // [Config.OTelTLS]).
 func otlpTransport(setting string, lookup func(string) string) (otlptracegrpc.Option, error) {
+	tlsCfg, err := otlpTLS(setting, lookup)
+	if err != nil {
+		return nil, err
+	}
+	if tlsCfg == nil {
+		return otlptracegrpc.WithInsecure(), nil
+	}
+	return otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsCfg)), nil
+}
+
+// otlpTLS is otlpTransport's decision for any OTLP exporter (traces, logs):
+// the TLS configuration, nil for plaintext.
+func otlpTLS(setting string, lookup func(string) string) (*tls.Config, error) {
 	var tlsLookup grpcclient.LookupFunc
 	switch strings.ToLower(strings.TrimSpace(setting)) {
 	case "":
@@ -502,7 +550,7 @@ func otlpTransport(setting string, lookup func(string) string) (otlptracegrpc.Op
 			log.Printf("observx: telemetry is exported in plaintext although %s=%s, because %s is off",
 				grpcclient.EnvInternalTLS, mesh, EnvOTelTLS)
 		}
-		return otlptracegrpc.WithInsecure(), nil
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("observx: %s=%q is not a recognised value; accepted: on|true|1|yes (TLS), off|false|0|no (plaintext), or unset (follow %s)",
 			EnvOTelTLS, setting, grpcclient.EnvInternalTLS)
@@ -511,10 +559,7 @@ func otlpTransport(setting string, lookup func(string) string) (otlptracegrpc.Op
 	if err != nil {
 		return nil, fmt.Errorf("observx: otlp exporter TLS: %w", err)
 	}
-	if tlsCfg == nil {
-		return otlptracegrpc.WithInsecure(), nil
-	}
-	return otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsCfg)), nil
+	return tlsCfg, nil
 }
 
 // Shutdown flushes any buffered telemetry and closes the
@@ -549,6 +594,17 @@ func shutdownLocked(ctx context.Context) error {
 	if meterProvider != nil {
 		if err := meterProvider.Shutdown(ctx); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("observx: meter shutdown: %w", err)
+		}
+	}
+	if loggerProvider != nil {
+		if err := loggerProvider.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("observx: logger shutdown: %w", err)
+		}
+		if logglobal.GetLoggerProvider() == otellog.LoggerProvider(loggerProvider) {
+			logglobal.SetLoggerProvider(lognoop.NewLoggerProvider())
+		}
+		if requestLogger == otellog.LoggerProvider(loggerProvider) {
+			requestLogger = nil
 		}
 	}
 	if otlpExporter != nil {
@@ -586,6 +642,7 @@ func shutdownLocked(ctx context.Context) error {
 	}
 	tracerProvider = nil
 	meterProvider = nil
+	loggerProvider = nil
 	otlpExporter = nil
 	sentryEnabled = false
 	return firstErr

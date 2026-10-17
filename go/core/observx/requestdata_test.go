@@ -6,8 +6,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	lognoop "go.opentelemetry.io/otel/log/noop"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc/metadata"
@@ -226,5 +228,60 @@ func TestWithRequest_OffStoresNothing(t *testing.T) {
 	ctx := context.Background()
 	if WithRequest(ctx, "/m", sampleRequest()) != ctx {
 		t.Fatal("mode off stored the request")
+	}
+}
+
+func TestSampleRequestTelemetry_NeedsASink(t *testing.T) {
+	resetForTest(t)
+	if err := MustInit(Config{ServiceName: "svc"}); err != nil {
+		t.Fatal(err)
+	}
+	if SampleRequestTelemetry() {
+		t.Fatal("telemetry sampled with no sink installed")
+	}
+	UseRequestLogger(lognoop.NewLoggerProvider())
+	t.Cleanup(func() { UseRequestLogger(nil) })
+	if !SampleRequestTelemetry() {
+		t.Fatal("mode all, sample 1, a sink: not sampled")
+	}
+	resetForTest(t)
+	t.Setenv(EnvRequestData, "errors")
+	if err := MustInit(Config{ServiceName: "svc"}); err != nil {
+		t.Fatal(err)
+	}
+	UseRequestLogger(lognoop.NewLoggerProvider())
+	if SampleRequestTelemetry() {
+		t.Fatal("mode errors sends every request to telemetry")
+	}
+}
+
+// With an OTel endpoint and mode all, MustInit installs the logs pipeline
+// as the sink; mode errors does not; Shutdown removes it.
+func TestMustInit_InstallsTheRequestLogsPipeline(t *testing.T) {
+	for _, c := range []struct {
+		mode string
+		want bool
+	}{{"all", true}, {"errors", false}} {
+		resetForTest(t)
+		t.Setenv(EnvRequestData, c.mode)
+		t.Setenv(EnvOTelTLS, "off")
+		if err := MustInit(Config{ServiceName: "svc", OTelEndpoint: "127.0.0.1:1"}); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		got := requestLogger != nil
+		mu.Unlock()
+		if got != c.want {
+			t.Errorf("mode %s: sink installed = %v", c.mode, got)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = Shutdown(ctx)
+		cancel()
+		mu.Lock()
+		left := requestLogger != nil
+		mu.Unlock()
+		if left {
+			t.Errorf("mode %s: Shutdown left the sink", c.mode)
+		}
 	}
 }

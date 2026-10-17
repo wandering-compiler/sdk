@@ -11,6 +11,8 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"go.opentelemetry.io/otel/attribute"
+	otellog "go.opentelemetry.io/otel/log"
+	lognoop "go.opentelemetry.io/otel/log/noop"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -117,6 +119,41 @@ func SampleRequestData() bool {
 		return false
 	}
 	return sample >= 1 || rand.Float64() < sample
+}
+
+// requestLogger is the request telemetry sink's provider: the one MustInit
+// installed, or one a binary brought ([UseRequestLogger]); nil = no sink.
+var requestLogger otellog.LoggerProvider
+
+// UseRequestLogger makes p the request event stream's telemetry sink — for a
+// binary that runs its own OTel logs pipeline (MustInit installs one itself
+// when it exports to OTel). nil removes it.
+func UseRequestLogger(p otellog.LoggerProvider) {
+	mu.Lock()
+	defer mu.Unlock()
+	requestLogger = p
+}
+
+// RequestLogger is the logger the request event stream's telemetry sink
+// emits through; a no-op logger without a sink.
+func RequestLogger() otellog.Logger {
+	mu.Lock()
+	p := requestLogger
+	mu.Unlock()
+	if p == nil {
+		return lognoop.NewLoggerProvider().Logger("w17.requests")
+	}
+	return p.Logger("w17.requests")
+}
+
+// SampleRequestTelemetry decides, for one request, whether its record also
+// goes to the telemetry backend: a sink is installed and SampleRequestData
+// says yes. Without a sink it is false, so nothing is rendered for nobody.
+func SampleRequestTelemetry() bool {
+	mu.Lock()
+	on := requestLogger != nil
+	mu.Unlock()
+	return on && SampleRequestData()
 }
 
 type requestKey struct{}

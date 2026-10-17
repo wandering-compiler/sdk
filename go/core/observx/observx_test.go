@@ -23,6 +23,8 @@ func resetForTest(t *testing.T) {
 	mu.Lock()
 	tracerProvider = nil
 	meterProvider = nil
+	loggerProvider = nil
+	requestLogger = nil
 	otlpExporter = nil
 	sentryEnabled = false
 	sentryClient = nil
