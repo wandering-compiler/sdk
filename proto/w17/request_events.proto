@@ -36,6 +36,10 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // request, anonymous and refused ones included.
 
 extend google.protobuf.MethodOptions {
+  // The method's request event stream settings, on every surface that
+  // exposes it with the stream on: leave it out (`exclude`), record its
+  // response too (`response`), or let a marketing record drop instead of
+  // waiting for room (`backpressure`).
   RequestEventsMethod request_events = 50190;
 }
 

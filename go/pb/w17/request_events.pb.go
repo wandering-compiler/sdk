@@ -604,6 +604,11 @@ var file_w17_request_events_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.MethodOptions.
 var (
+	// The method's request event stream settings, on every surface that
+	// exposes it with the stream on: leave it out (`exclude`), record its
+	// response too (`response`), or let a marketing record drop instead of
+	// waiting for room (`backpressure`).
+	//
 	// optional w17.RequestEventsMethod request_events = 50190;
 	E_RequestEvents = &file_w17_request_events_proto_extTypes[0]
 )
