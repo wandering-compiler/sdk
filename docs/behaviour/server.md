@@ -620,6 +620,7 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 | S19.13 | Sampling MUST be parent-based: an incoming sampling decision is kept whatever the local rate. | `TestSampler_HonoursTheParentDecision` |
 | S19.14 | A `SampleRate` outside 0..1, or NaN, MUST fail init instead of being clamped or ignored. | `TestMustInit_RejectsSampleRateOutsideZeroToOne` |
 | S19.15 | An unrecognised `W17_OBSERVX_REQUEST_DATA`, or a `_SAMPLE` outside 0..1, NaN or not a number, MUST fail init with an error naming the variable. | `TestRequestDataEnv` |
+| S19.16 | With an OTel endpoint and request data `all` (sample above 0), init MUST install the OTLP logs pipeline as the request telemetry sink; mode `errors` MUST NOT; `Shutdown` MUST remove it. | `TestMustInit_InstallsTheRequestLogsPipeline` |
 
 **Deliberate limits.**
 - An exporter that is down at start is not an error: OTLP over gRPC connects lazily, and the batcher drops spans later.
@@ -663,6 +664,7 @@ at `Shutdown`.
 | S20.13 | A request type without a plan MUST be omitted (the context says why), never written whole; a request over the size bound MUST be cut and its cut paths named. | `TestReportError_TypeWithoutPlanIsOmitted`, `TestReportError_LargeRequestIsCut` |
 | S20.14 | Both gRPC recovery interceptors MUST record the unary request, so a fault reported while serving it carries it. | `TestRecoverUnary_ErrorCarriesTheRequest` (`service/runtime`, `core/grpcerr`) |
 | S20.15 | `SampleRequestData` MUST be false outside mode `all` and with sample 0, true with sample 1, and hold the configured share otherwise. | `TestSampleRequestData` |
+| S20.16 | `SampleRequestTelemetry` MUST be false without a sink and outside mode `all`, so no record is rendered for nobody. | `TestSampleRequestTelemetry_NeedsASink` |
 
 **Deliberate limits.**
 - A request whose entry point did not call `WithRequestScope` records no breadcrumbs. The SDK's entry points call it (the gRPC recovery interceptors, the REST recovery middleware, MCP tool calls); a hand-written entry point must call it too.

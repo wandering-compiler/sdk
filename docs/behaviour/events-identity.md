@@ -30,6 +30,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I17 | Shared value validators | `go/lib/typere/typere.go` — `UUID`, `Slug`, `URL`, `MAC`, `ValidEmail`, `FitsDecimal` |
 | I18 | Random tokens | `go/lib/randstr/randstr.go` — `Token` |
 | I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
+| I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `otel.go` |
 
 ---
 
@@ -63,6 +64,7 @@ the emit after the database commit.
 | I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | `TestMemoryBus_DispatchAfterDrainIsRefused`, `TestDispatchAfterClose_IsAnErrorOnEveryTransport`, `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I1.5 | An empty topic MUST be refused on every transport with `ErrInvalidTopic` and reported through `OnEmitFailure`. | `TestDispatch_EmptyTopicRefusedOnEveryTransport` |
 | I1.6 | A channel or topic that breaks the name rule MUST be refused identically on every transport, before any broker call, at both `Subscriber` and `Dispatch`; the names generated surfaces use MUST stay valid. | `TestChannelNameRefusedOnEveryTransport` |
+| I1.7 | The channel names `w17` and `w17_*` (any case) MUST be refused: the request event stream owns the `w17.requests.>` subjects and the `W17_REQUESTS` stream. | `TestValidateChannel_ReservedW17` |
 
 **Deliberate limits.**
 - No transactional outbox. The event is published after the commit by the
@@ -700,9 +702,55 @@ field 2 each record as `Encode` wrote it, so a consumer decodes it with its own 
 | I19.10 | `Submit` racing `Close` MUST NOT panic. | `TestPipeline_SubmitRacingClose` |
 | I19.11 | `Submit` with room MUST NOT allocate. | `TestPipeline_SubmitDoesNotAllocate` |
 | I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes`. | `TestNew_RequiresItsParts` |
+| I19.13 | A batch MUST carry the distinct tags of its records (`Config.Tag`), at most `MaxBatchTags`, and say when there were more. | `TestPipeline_BatchCarriesItsDistinctTags` |
+| I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once. | `TestRecorder_DropDoesNotWait` |
 
 **Deliberate limits.**
 - A sink MUST return once its context ends: `Close` past its deadline cancels it and waits for it.
 - Order across producers is the order they reached the queue; a gateway with several replicas has no order across them.
 - A recovered panic is reported at most once a second (the count rides on the report).
 - Retries, the `sync` audit wait and the sinks themselves belong to the gateway's event layer, not to the pipeline.
+
+## I20. Request event recorder
+
+**Code.** `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Recorder.Surface`, `Surface.Start`, `Record`; `go/lib/eventlog/http.go` — `Surface.HTTPMiddleware`, `Begin`; `go/lib/eventlog/conn.go` — `Surface.Conn`; `go/lib/eventlog/natssink.go` — `NATSSink`, `EnsureStream`, `NATSBatchBytes`; `go/lib/eventlog/otel.go`
+
+**Purpose.** Records the requests of a gateway's surfaces into the request event stream:
+one record per request on `w17.requests.<domain>.<api>` (the `W17_REQUESTS` stream), for
+the project's marketing and audit consumers, and — sampled — into the telemetry backend.
+A surface hook starts a `Record` (the request path's one allocation), fills it and finishes
+it; the batcher builds the envelope: the request and response by their redaction plans
+(S22) under the per-domain lock's oneof numbers, then the `w17.RequestEventMeta`.
+
+**Configuration.**
+
+| Setting | Default / effect |
+|---|---|
+| `Domain`, `Surfaces` (purposes per surface) | required; a surface with no purpose has no recorder (`Surface` returns nil, whose methods are no-ops) |
+| `Auth` | the auth response's `scopes` and `marketing_consent` numbers; `user_id` is field 2 by contract |
+| `RecordCeiling` | 64 KiB per record; the request and response share it |
+| `Stream` | the stream's limits: 7 days, 10 GiB, 1 replica, 2-minute duplicate window |
+| `Fail` | default: each undelivered record as numbered log lines (base64, under 16 KiB a line), and a report at most once a second |
+| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection |
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I20.1 | A record MUST carry its meta (id, purposes, api, domain, method, route, status, code, start, duration, caller, consent, client, request id), the request without its planned-out fields, and the response only when the method opts in and the call succeeded. | `TestRecorder_WritesTheEnvelope`, `TestRecorder_ResponseOnlyWhenOptedInAndOK` |
+| I20.2 | Marketing MUST record signed-in requests only; audit MUST record every request, anonymous and refused ones included. | `TestRecorder_PurposesPerRequest` |
+| I20.3 | A record MUST fit its ceiling, and the cut fields' paths MUST be named, prefixed `request.` / `response.`. | `TestRecorder_CutPathsArePrefixed` |
+| I20.4 | A marketing record set to drop MUST NOT wait for room. | `TestRecorder_DropDoesNotWait` |
+| I20.5 | The default failure path MUST write each undelivered record in numbered parts under the log driver's line limit, readable back into the record, and count those it has no encoding for. | `TestRecorder_FailureLogLines` |
+| I20.6 | Over JetStream, each surface's records MUST be stored on its subject, a batch's organizations on `W17-Orgs` and its id on `Nats-Msg-Id`. | `TestRecorder_OverJetStream`, `TestSubject` |
+| I20.7 | The NATS sink MUST count a batch delivered only once stored, store a re-sent batch once, honour its context, and create the stream when a publish finds none. | `TestNATSSink_StoresEachBatchOnce`, `TestNATSSink_UnstoredBatchFails`, `TestNATSSink_HonoursItsContext`, `TestNATSSink_CreatesTheStreamOnDemand` |
+| I20.8 | The HTTP middleware MUST finish the record the handler began, with the status, the client through the trusted proxies, the UTM parameters and the request id; a request without `Begin` MUST record nothing; the writer MUST keep `Flush` and `Hijack`. | `TestHTTPMiddleware_FinishesTheRecordTheHandlerBegan`, `TestHTTPMiddleware_OffSurfaceAndNoSlot`, `TestHTTPMiddleware_KeepsHijack` |
+| I20.9 | `Surface.Conn` MUST record a request's first call of a recorded method into the request's record and pass every other call through. | `TestConn_RecordsTheRequestsBackendCall` |
+| I20.10 | The caller MUST be read from the stamped metadata, outgoing or incoming, and an interceptor's untyped request and response MUST be recorded. | `TestRecord_SetCallerFromContext`, `TestRecord_InterceptorShape` |
+| I20.11 | `Open` MUST start with NATS not up yet, and `Close` MUST close the connection it owns. | `TestOpen_StartsBeforeNATSAndOwnsTheConnection` |
+| I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink` |
+
+**Deliberate limits.**
+- A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
+- One record per request: a second recorded backend call in the same admin request is not recorded.
+- A marketing surface whose auth response carries no `marketing_consent` is reported (at most once a minute) and its records say no consent; the compiler refuses that configuration before it runs.
