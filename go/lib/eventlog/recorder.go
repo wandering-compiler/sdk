@@ -579,6 +579,12 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	m.TruncatedPaths = cut
 	m.TraceId = rec.traceID
 	m.RequestId = rec.requestID
+	if reqAt[1] > 0 {
+		m.RequestField = int32(rec.method.RequestTag)
+	}
+	if respAt[1] > 0 {
+		m.ResponseField = int32(rec.method.ResponseTag)
+	}
 	dst = protowire.AppendTag(dst, EnvelopeMetaField, protowire.BytesType)
 	dst = protowire.AppendVarint(dst, uint64(proto.Size(m)))
 	dst, err = proto.MarshalOptions{}.MarshalAppend(dst, m)

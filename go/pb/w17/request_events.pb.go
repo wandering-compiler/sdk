@@ -338,8 +338,13 @@ type RequestEventMeta struct {
 	Truncated      bool     `protobuf:"varint,15,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	TruncatedPaths []string `protobuf:"bytes,16,rep,name=truncated_paths,json=truncatedPaths,proto3" json:"truncated_paths,omitempty"`
 	// Joins the record to its trace and its log lines.
-	TraceId       string `protobuf:"bytes,17,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	RequestId     string `protobuf:"bytes,18,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	TraceId   string `protobuf:"bytes,17,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	RequestId string `protobuf:"bytes,18,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// The envelope's field numbers holding the request and the response
+	// (0 = absent): with `method`, what a consumer needs to decode them
+	// without the domain's lock (the method names their types).
+	RequestField  int32 `protobuf:"varint,19,opt,name=request_field,json=requestField,proto3" json:"request_field,omitempty"`
+	ResponseField int32 `protobuf:"varint,20,opt,name=response_field,json=responseField,proto3" json:"response_field,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -500,6 +505,20 @@ func (x *RequestEventMeta) GetRequestId() string {
 	return ""
 }
 
+func (x *RequestEventMeta) GetRequestField() int32 {
+	if x != nil {
+		return x.RequestField
+	}
+	return 0
+}
+
+func (x *RequestEventMeta) GetResponseField() int32 {
+	if x != nil {
+		return x.ResponseField
+	}
+	return 0
+}
+
 // RequestClient is what the request says about the client. All of it is
 // personal data.
 type RequestClient struct {
@@ -600,7 +619,7 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\x13RequestEventsMethod\x12\x18\n" +
 	"\aexclude\x18\x01 \x01(\bR\aexclude\x12\x1a\n" +
 	"\bresponse\x18\x02 \x01(\bR\bresponse\x125\n" +
-	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\"\xe8\x04\n" +
+	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\"\xb4\x05\n" +
 	"\x10RequestEventMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12/\n" +
 	"\bpurposes\x18\x02 \x03(\x0e2\x13.w17.RequestPurposeR\bpurposes\x12!\n" +
@@ -622,7 +641,9 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\x0ftruncated_paths\x18\x10 \x03(\tR\x0etruncatedPaths\x12\x19\n" +
 	"\btrace_id\x18\x11 \x01(\tR\atraceId\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x12 \x01(\tR\trequestId\"\xe5\x01\n" +
+	"request_id\x18\x12 \x01(\tR\trequestId\x12#\n" +
+	"\rrequest_field\x18\x13 \x01(\x05R\frequestField\x12%\n" +
+	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseField\"\xe5\x01\n" +
 	"\rRequestClient\x12\x17\n" +
 	"\x02ip\x18\x01 \x01(\tB\a\xca\xf3\x18\x03\x98\x02\x01R\x02ip\x12&\n" +
 	"\n" +

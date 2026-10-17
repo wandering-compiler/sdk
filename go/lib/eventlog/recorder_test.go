@@ -195,6 +195,9 @@ func TestRecorder_WritesTheEnvelope(t *testing.T) {
 	if len(m.GetPurposes()) != 2 {
 		t.Fatalf("purposes %v", m.GetPurposes())
 	}
+	if m.GetRequestField() != int32(reqTag) || m.GetResponseField() != int32(respTag) {
+		t.Fatalf("fields %d/%d", m.GetRequestField(), m.GetResponseField())
+	}
 	var req descriptorpb.FieldDescriptorProto
 	if err := proto.Unmarshal(e.req, &req); err != nil || req.GetName() != "Write the report" || req.DefaultValue != nil {
 		t.Fatalf("request %v %v", &req, err)

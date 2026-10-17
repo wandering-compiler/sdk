@@ -123,6 +123,12 @@ message RequestEventMeta {
   // Joins the record to its trace and its log lines.
   string trace_id = 17;
   string request_id = 18;
+
+  // The envelope's field numbers holding the request and the response
+  // (0 = absent): with `method`, what a consumer needs to decode them
+  // without the domain's lock (the method names their types).
+  int32 request_field = 19;
+  int32 response_field = 20;
 }
 
 // RequestClient is what the request says about the client. All of it is
