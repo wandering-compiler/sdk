@@ -431,3 +431,47 @@ func decodeAs(t protoreflect.MessageType, raw []byte) proto.Message {
 	}
 	return m
 }
+
+// Serve dials NATS at dsn and runs the consumers until ctx ends — what the
+// generated subscriber calls. NATS not up yet is not an error: the
+// connection keeps trying.
+func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) error {
+	if dsn == "" {
+		return errors.New("eventlog: request consumers need a NATS DSN (the request stream lives in JetStream)")
+	}
+	nc, err := nats.Connect(dsn,
+		nats.Name("w17-request-consumers"),
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.NoCallbacksAfterClientClose(),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			log.Printf("eventlog consumers nats: connection LOST (%v) — consuming stops until it returns", err)
+		}),
+		nats.ReconnectHandler(func(c *nats.Conn) {
+			log.Printf("eventlog consumers nats: reconnected to %s", c.ConnectedUrl())
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("eventlog: nats connect: %w", err)
+	}
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return fmt.Errorf("eventlog: jetstream: %w", err)
+	}
+	cfg.JS = js
+	// The stream may not exist yet (no gateway has recorded): wait for it
+	// rather than fail the subscriber's boot.
+	for {
+		err = cs.Run(ctx, cfg)
+		if err == nil || ctx.Err() != nil {
+			return nil
+		}
+		log.Printf("eventlog: request consumers: %v — retrying in 5s", err)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(5 * time.Second):
+		}
+	}
+}

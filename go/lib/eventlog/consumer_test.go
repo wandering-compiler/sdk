@@ -243,3 +243,16 @@ func appendField(dst []byte, num protowire.Number, v []byte) []byte {
 	dst = protowire.AppendTag(dst, num, protowire.BytesType)
 	return protowire.AppendBytes(dst, v)
 }
+
+func TestConsumers_ServeNeedsADSNAndStopsWithItsContext(t *testing.T) {
+	cs := &Consumers{}
+	if err := cs.Serve(context.Background(), "", ConsumerConfig{DurablePrefix: "p"}); err == nil {
+		t.Fatal("no DSN accepted")
+	}
+	_ = cs.Audit("a", funcConsumer{audit: func(context.Context, *ConsumedBatch) error { return nil }})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := cs.Serve(ctx, "nats://127.0.0.1:1", ConsumerConfig{DurablePrefix: "p"}); err != nil {
+		t.Fatalf("Serve with NATS down returned %v instead of waiting for it", err)
+	}
+}
