@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -76,17 +77,37 @@ func (s *NATSSink) Sink(ctx context.Context, b *Batch) error {
 // StreamLimits are the request stream's bounds: a stream without them fills
 // the disk.
 type StreamLimits struct {
-	MaxAge   time.Duration // default 7 days
-	MaxBytes int64         // default 10 GiB
-	Replicas int           // default 1; 3 for a highly available cluster
+	MaxAge time.Duration // default 7 days
+	// MaxBytes caps the stream (default 10 GiB). JetStream reserves it out of
+	// the server's storage when the stream is created; a server without room
+	// for it gets the largest halving of it that fits, down to
+	// [MinStreamBytes], said in the log.
+	MaxBytes int64
+	Replicas int // default 1; 3 for a highly available cluster
 	// Duplicates is the window in which a re-sent batch id is dropped.
 	// Default 2 minutes.
 	Duplicates time.Duration
 }
 
-// EnsureStream creates or updates the JetStream stream that stores the
-// request records, over subjects (e.g. "<prefix>.>"), with its limits.
+// MinStreamBytes is the smallest cap [EnsureStream] halves a stream's
+// MaxBytes down to when the server has no room for it.
+const MinStreamBytes = 64 << 20
+
+// jsInsufficientResources is JetStream's error code for a stream whose
+// MaxBytes the server cannot reserve.
+const jsInsufficientResources = 10047
+
+// EnsureStream creates the JetStream stream that stores the request records,
+// over subjects (e.g. "<prefix>.>"), with its limits — when it does not exist
+// yet. An existing stream is left as it is: whoever created it, or an
+// operator who changed its limits since, decided them, and a binary booting
+// with its defaults must not undo that.
 func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subjects []string, l StreamLimits) error {
+	if _, err := js.Stream(ctx, name); err == nil {
+		return nil
+	} else if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		return fmt.Errorf("eventlog: ensure stream %s: %w", name, err)
+	}
 	if l.MaxAge <= 0 {
 		l.MaxAge = 7 * 24 * time.Hour
 	}
@@ -99,19 +120,32 @@ func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subj
 	if l.Duplicates <= 0 {
 		l.Duplicates = 2 * time.Minute
 	}
-	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:       name,
-		Subjects:   subjects,
-		Retention:  jetstream.LimitsPolicy,
-		Discard:    jetstream.DiscardOld,
-		MaxAge:     l.MaxAge,
-		MaxBytes:   l.MaxBytes,
-		MaxMsgs:    -1,
-		Replicas:   l.Replicas,
-		Duplicates: l.Duplicates,
-	})
-	if err != nil {
-		return fmt.Errorf("eventlog: ensure stream %s: %w", name, err)
+	want := l.MaxBytes
+	for {
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:       name,
+			Subjects:   subjects,
+			Retention:  jetstream.LimitsPolicy,
+			Discard:    jetstream.DiscardOld,
+			MaxAge:     l.MaxAge,
+			MaxBytes:   l.MaxBytes,
+			MaxMsgs:    -1,
+			Replicas:   l.Replicas,
+			Duplicates: l.Duplicates,
+		})
+		var apiErr *jetstream.APIError
+		switch {
+		case err == nil:
+			if l.MaxBytes < want {
+				log.Printf("eventlog: stream %s capped at %d MiB: the JetStream server has no room for the %d MiB asked — raise its storage (max_file_store) and the stream's max_bytes", name, l.MaxBytes>>20, want>>20)
+			}
+			return nil
+		case errors.Is(err, jetstream.ErrStreamNameAlreadyInUse):
+			return nil // created meanwhile, by another binary
+		case errors.As(err, &apiErr) && apiErr.ErrorCode == jsInsufficientResources && l.MaxBytes/2 >= MinStreamBytes:
+			l.MaxBytes /= 2
+		default:
+			return fmt.Errorf("eventlog: ensure stream %s (max_bytes %d MiB): %w", name, l.MaxBytes>>20, err)
+		}
 	}
-	return nil
 }

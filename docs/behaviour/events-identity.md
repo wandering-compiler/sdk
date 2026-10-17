@@ -733,7 +733,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 | `Domain`, `Surfaces` (purposes per surface) | required; a surface with no purpose has no recorder (`Surface` returns nil, whose methods are no-ops) |
 | `Auth` | the auth response's `scopes` and `marketing_consent` numbers; `user_id` is field 2 by contract |
 | `RecordCeiling` | 64 KiB per record; the request and response share it |
-| `Stream` | the stream's limits: 7 days, 10 GiB, 1 replica, 2-minute duplicate window |
+| `Stream` | the stream's limits when it creates it: 7 days, 10 GiB (halved, down to 64 MiB, while the server has no room for it, and logged), 1 replica, 2-minute duplicate window; an existing stream keeps its own |
 | `Fail` | default: each undelivered record as numbered log lines (base64, under 16 KiB a line), and a report at most once a second |
 | `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection |
 
@@ -757,6 +757,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.14 | The sync wait MUST NOT outlast `SyncWait`; the record MUST still be delivered after the request went on. | `TestRecorder_SyncAuditWaitIsBounded` |
 | I20.15 | Marketing MUST never wait, whatever the method's mode. | `TestRecorder_SyncIsAuditOnly` |
 | I20.16 | Through `Surface.Conn`, a sync audit method's backend call MUST return to the handler only once its record is stored, and the record MUST be stored once. | `TestConn_SyncAuditHoldsTheCall` |
+| I20.17 | `EnsureStream` MUST create a missing stream within the server's storage, halving its cap while it does not fit, and MUST leave an existing stream's limits as they are. | `TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
@@ -783,6 +784,7 @@ method's own types when the binary links them.
 | `MaxDeliver` | 5 offers, then `_dlq.w17.requests.<purpose>.<name>` (`W17_REQUESTS_DLQ`) |
 | `AckWait` | 30s per Consume |
 | `Backoff` | 1s doubling to 1m between offers |
+| `Stream` | the dead letter stream's limits, as the recorder's but 1 GiB |
 
 **Guarantees.**
 

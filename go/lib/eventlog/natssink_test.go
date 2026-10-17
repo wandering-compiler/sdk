@@ -139,3 +139,50 @@ func TestNATSSink_CreatesTheStreamOnDemand(t *testing.T) {
 		t.Fatalf("Ensure ran %d times, want once", ensured)
 	}
 }
+
+// A server without room for the stream's cap gets the largest halving of it
+// that fits; a stream that exists keeps the limits it has.
+func TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone(t *testing.T) {
+	opts := natsserver.DefaultTestOptions
+	opts.Port = -1
+	opts.JetStream = true
+	opts.StoreDir = t.TempDir()
+	opts.JetStreamMaxStore = 1 << 30
+	srv := natsserver.RunServer(&opts)
+	t.Cleanup(srv.Shutdown)
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	js, _ := jetstream.New(nc)
+	ctx := context.Background()
+
+	if err := EnsureStream(ctx, js, StreamName, []string{SubjectPrefix + ".>"}, StreamLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureStream(ctx, js, DeadLetterStream, []string{DeadLetterPrefix + ".>"}, StreamLimits{MaxBytes: DeadLetterMaxBytes}); err != nil {
+		t.Fatalf("the second stream did not fit beside the first: %v", err)
+	}
+	var total int64
+	for _, name := range []string{StreamName, DeadLetterStream} {
+		s, err := js.Stream(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += s.CachedInfo().Config.MaxBytes
+	}
+	if total > 1<<30 {
+		t.Fatalf("the streams reserve %d bytes of a 1 GiB server", total)
+	}
+
+	s, _ := js.Stream(ctx, StreamName)
+	before := s.CachedInfo().Config
+	if err := EnsureStream(ctx, js, StreamName, []string{SubjectPrefix + ".>"}, StreamLimits{MaxAge: time.Hour, MaxBytes: MinStreamBytes}); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = js.Stream(ctx, StreamName)
+	if after := s.CachedInfo().Config; after.MaxAge != before.MaxAge || after.MaxBytes != before.MaxBytes {
+		t.Fatalf("an existing stream's limits changed: %v/%d → %v/%d", before.MaxAge, before.MaxBytes, after.MaxAge, after.MaxBytes)
+	}
+}

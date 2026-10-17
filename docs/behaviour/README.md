@@ -21,9 +21,9 @@ changing it.
 | [server.md](server.md) | 22 | 179 | 0 | 7 |
 | [edges.md](edges.md) | 40 | 334 | 2 | 4 |
 | [data.md](data.md) | 17 | 134 | 2 | 2 |
-| [events-identity.md](events-identity.md) | 21 | 157 | 0 | 1 |
+| [events-identity.md](events-identity.md) | 21 | 158 | 0 | 1 |
 | [tooling.md](tooling.md) | 30 | 187 | 0 | 0 |
-| **All areas** | **130** | **991** | **4** | **14** |
+| **All areas** | **130** | **992** | **4** | **14** |
 | [matrix.md](matrix.md) | — | 138 interactions | 9 | 7 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of

@@ -137,7 +137,9 @@ type ConsumerConfig struct {
 	// Backoff is the wait before a failed batch is offered again. Default 1s,
 	// doubling to 1m.
 	Backoff func(attempt int) time.Duration
-	// Stream bounds the dead letter stream. Defaults as [StreamLimits].
+	// Stream bounds the dead letter stream. Defaults as [StreamLimits], but
+	// MaxBytes [DeadLetterMaxBytes]: it holds what consumers failed on, not
+	// the traffic.
 	Stream StreamLimits
 }
 
@@ -148,6 +150,9 @@ const DeadLetterPrefix = "_dlq." + SubjectPrefix
 
 // DeadLetterStream holds them.
 const DeadLetterStream = StreamName + "_DLQ"
+
+// DeadLetterMaxBytes is the dead letter stream's default cap.
+const DeadLetterMaxBytes = 1 << 30
 
 // Run consumes for every registered consumer until ctx ends. Each has its
 // own durable consumer on the request stream: a batch is acknowledged once
@@ -181,7 +186,11 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, StreamLimits{}); err != nil {
 		return err
 	}
-	if err := EnsureStream(ctx, cfg.JS, DeadLetterStream, []string{DeadLetterPrefix + ".>"}, cfg.Stream); err != nil {
+	dl := cfg.Stream
+	if dl.MaxBytes <= 0 {
+		dl.MaxBytes = DeadLetterMaxBytes
+	}
+	if err := EnsureStream(ctx, cfg.JS, DeadLetterStream, []string{DeadLetterPrefix + ".>"}, dl); err != nil {
 		return err
 	}
 	stream, err := cfg.JS.Stream(ctx, StreamName)
