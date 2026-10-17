@@ -5,7 +5,7 @@ between tiers, how permissions are checked, and how messages are translated and
 formatted. Includes the eventbus-backed server-sent-events hub, because it is the
 eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 (event hub only), `go/lib/principal`, `go/lib/acllock`, `go/lib/i18n`,
-`go/lib/typere`, `go/lib/randstr`.
+`go/lib/typere`, `go/lib/randstr`, `go/lib/eventlog`.
 
 ## Features
 
@@ -29,6 +29,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I16 | Catalog tooling | `go/lib/i18n/extract.go`, `harvest.go` — `MarshalPO`, `MergePO`, `HarvestEnumLabels` |
 | I17 | Shared value validators | `go/lib/typere/typere.go` — `UUID`, `Slug`, `URL`, `MAC`, `ValidEmail`, `FitsDecimal` |
 | I18 | Random tokens | `go/lib/randstr/randstr.go` — `Token` |
+| I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
 
 ---
 
@@ -656,3 +657,52 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 **Deliberate limits.**
 - The caller chooses `n`; a short `n` gives low entropy.
+
+## I19. Request event pipeline
+
+**Code.** `go/lib/eventlog/pipeline.go` — `New`, `Config`, `Pipeline.Submit`, `Pipeline.Close`, `Pipeline.Stats`, `Batch`, `Failure`
+
+**Purpose.** Carries the record of every request a gateway serves to a sink (the event
+bus, OTel) without a goroutine per request: the request hands a pointer to a queue, one
+batcher encodes the records into batches, one sender delivers each batch.
+
+**Configuration.**
+
+| Setting | Default / effect |
+|---|---|
+| `Size`, `Encode`, `Sink`, `Fail` | required; `Size` runs on the request path, the rest in the background |
+| `BatchBytes` | required (> 64): a batch's largest encoded size, the sink's limit |
+| `BatchItems` | 1000: a batch closes at this many records |
+| `BatchPeriod` | 10ms: a batch closes this long after its first record |
+| `QueueBytes` | 64 MiB: memory held by queued and in-flight records, by `Size`; one item larger than it takes the whole budget |
+| `QueueItems` | 65536: capacity of the request-side queue |
+| `SendQueue` | 4: closed batches waiting for the sender |
+| `BlockTimeout` | 1s: the longest `Submit` waits for room |
+
+**Behaviour.** The batch is a protobuf message: field 1 the batch id (16 bytes, UUIDv7),
+field 2 each record as `Encode` wrote it, so a consumer decodes it with its own Batch type.
+`Submit` returns nil when queued, otherwise the reason, the record having already gone to
+`Fail`; the caller goes on either way.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I19.1 | Every submitted record MUST be delivered, in submission order from one producer, each batch with its own id, its wire form decoding to its records. | `TestPipeline_DeliversEveryRecordInOrder` |
+| I19.2 | A batch MUST close at `BatchItems`, at `BatchPeriod` after its first record, and before its encoding would exceed `BatchBytes`. | `TestPipeline_BatchClosesByCount`, `TestPipeline_BatchClosesByPeriod`, `TestPipeline_BatchClosesBySize` |
+| I19.3 | A slow sink MUST slow the producers down, never drop a record. | `TestPipeline_BackpressureLosesNothing` |
+| I19.4 | Queued and in-flight records MUST NOT hold more than `QueueBytes`; a record that finds no room within the wait MUST go to `Fail` with its encoding. | `TestPipeline_QueueBoundInBytes` |
+| I19.5 | `Submit` MUST NOT wait past `BlockTimeout` or its context. | `TestPipeline_QueueBoundInBytes`, `TestPipeline_WaitEndsWithTheRequest` |
+| I19.6 | A record that does not encode, whose encoder panics, or that cannot fit a batch MUST go to `Fail`, and the pipeline MUST go on. | `TestPipeline_FailurePaths`, `TestPipeline_TooLargeRecord` |
+| I19.7 | A batch the sink refuses or panics on MUST go to `Fail` whole, with its id and records. | `TestPipeline_SinkErrorAndPanicFailTheBatch` |
+| I19.8 | `Close` MUST deliver everything queued; a record submitted after it MUST go to `Fail` with `ErrClosed`. | `TestPipeline_CloseDrainsThenRefuses` |
+| I19.9 | A `Close` whose context ends MUST return, failing what it still holds: every record is delivered or failed, none lost unreported. | `TestPipeline_CloseBoundedByItsContext`, `TestPipeline_SubmitRacingClose` |
+| I19.10 | `Submit` racing `Close` MUST NOT panic. | `TestPipeline_SubmitRacingClose` |
+| I19.11 | `Submit` with room MUST NOT allocate. | `TestPipeline_SubmitDoesNotAllocate` |
+| I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes`. | `TestNew_RequiresItsParts` |
+
+**Deliberate limits.**
+- A sink MUST return once its context ends: `Close` past its deadline cancels it and waits for it.
+- Order across producers is the order they reached the queue; a gateway with several replicas has no order across them.
+- A recovered panic is reported at most once a second (the count rides on the report).
+- Retries, the `sync` audit wait and the sinks themselves belong to the gateway's event layer, not to the pipeline.

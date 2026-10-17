@@ -10,7 +10,7 @@ changing it.
 | [server.md](server.md) | Process startup and lifecycle: supervisor, gRPC server, bounded stops, health, internal-mesh TLS, observability, in-process bridge, redacted records |
 | [edges.md](edges.md) | Edges and traffic: REST gateway, authentication, streams, uploads, rate limiting, MCP, client dial, error mapping, DPoP (proofs, client, REST wiring, shared replay stores, TypeScript client, admin runtime) |
 | [data.md](data.md) | Data layer: database sessions, transactions, SQL helpers, paging, blob and key-value stores, field encryption, secrets |
-| [events-identity.md](events-identity.md) | Events, identity and language: event bus, principal, permission checks, i18n, small helpers |
+| [events-identity.md](events-identity.md) | Events, identity and language: event bus, principal, permission checks, i18n, small helpers, the request event pipeline |
 | [tooling.md](tooling.md) | Tooling: migrations, data migrations, the e2e runner, dev PKI, digests |
 | [matrix.md](matrix.md) | Feature-interaction matrix across all areas |
 
@@ -21,9 +21,9 @@ changing it.
 | [server.md](server.md) | 22 | 177 | 0 | 7 |
 | [edges.md](edges.md) | 40 | 330 | 2 | 4 |
 | [data.md](data.md) | 17 | 134 | 2 | 2 |
-| [events-identity.md](events-identity.md) | 18 | 117 | 0 | 1 |
+| [events-identity.md](events-identity.md) | 19 | 129 | 0 | 1 |
 | [tooling.md](tooling.md) | 30 | 185 | 0 | 0 |
-| **All areas** | **127** | **943** | **4** | **14** |
+| **All areas** | **128** | **955** | **4** | **14** |
 | [matrix.md](matrix.md) | — | 138 interactions | 9 | 7 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of

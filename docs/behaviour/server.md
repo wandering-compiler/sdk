@@ -6,7 +6,7 @@ health, internal-mesh TLS, observability bootstrap and the in-process gRPC bridg
 Packages: `go/service/bootstrap`, `go/service/runtime`, `go/service/internal/server`,
 `go/service/inprocgrpc`, `go/service/healthcheck`, `go/lib/grpcserver`,
 `go/lib/grpcclient` (internal-mesh TLS and dial defaults only), `go/core/lifecycle`,
-`go/core/healthz`, `go/core/observx`.
+`go/core/healthz`, `go/core/observx`, `go/lib/redact`.
 
 ## Process shape
 
@@ -59,8 +59,9 @@ gRPC server options built by `runtime.GRPCComponent`, in order:
 | S17 | Internal-mesh TLS, server side | `go/lib/grpcserver/grpcserver.go` — `TLSServerOption` |
 | S18 | Internal-mesh TLS, client side, and dial defaults | `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption`, `InternalTLSEnabled` |
 | S19 | Observability bootstrap | `go/core/observx/observx.go` — `MustInit`, `Shutdown`, `Tracer` |
-| S20 | Error, event and refusal reporting | `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal` |
+| S20 | Error, event and refusal reporting | `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal`; `go/core/observx/requestdata.go` — `WithRequest` |
 | S21 | In-process gRPC bridge | `go/service/inprocgrpc/inprocgrpc.go` — `New`, `Conn`, `Invoke`, `NewStream` |
+| S22 | Redacted records | `go/lib/redact/redact.go` — `Register`, `Set.Append` |
 
 ## S1. Component supervisor
 
