@@ -705,6 +705,9 @@ field 2 each record as `Encode` wrote it, so a consumer decodes it with its own 
 | I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes`. | `TestNew_RequiresItsParts` |
 | I19.13 | A batch MUST carry the distinct tags of its records (`Config.Tag`), at most `MaxBatchTags`, and say when there were more. | `TestPipeline_BatchCarriesItsDistinctTags` |
 | I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once. | `TestRecorder_DropDoesNotWait` |
+| I19.15 | `SubmitWait` MUST return once its record's batch is stored, closing the batch at once rather than at the period. | `TestPipeline_SubmitWaitReturnsOnDelivery` |
+| I19.16 | `SubmitWait` MUST return the batch's failure when the sink keeps refusing it past `RetryFor`; a wait that ends with its context MUST leave the record in the pipeline, delivered later. | `TestPipeline_SubmitWaitLearnsTheFailure`, `TestPipeline_SubmitWaitEndsWithItsContext` |
+| I19.17 | A batch the sink refuses MUST be retried with backoff for `RetryFor` before it fails. | `TestPipeline_RetryDelivers`, `TestPipeline_SubmitWaitLearnsTheFailure` |
 
 **Deliberate limits.**
 - A sink MUST return once its context ends: `Close` past its deadline cancels it and waits for it.
@@ -750,6 +753,10 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.10 | The caller MUST be read from the stamped metadata, outgoing or incoming, and an interceptor's untyped request and response MUST be recorded. | `TestRecord_SetCallerFromContext`, `TestRecord_InterceptorShape` |
 | I20.11 | `Open` MUST start with NATS not up yet, and `Close` MUST close the connection it owns. | `TestOpen_StartsBeforeNATSAndOwnsTheConnection` |
 | I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink` |
+| I20.13 | A sync audit record MUST hold its caller until its batch is stored; a later `Finish` MUST do nothing. | `TestRecorder_SyncAuditWaitsForTheAck` |
+| I20.14 | The sync wait MUST NOT outlast `SyncWait`; the record MUST still be delivered after the request went on. | `TestRecorder_SyncAuditWaitIsBounded` |
+| I20.15 | Marketing MUST never wait, whatever the method's mode. | `TestRecorder_SyncIsAuditOnly` |
+| I20.16 | Through `Surface.Conn`, a sync audit method's backend call MUST return to the handler only once its record is stored, and the record MUST be stored once. | `TestConn_SyncAuditHoldsTheCall` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
