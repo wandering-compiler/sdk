@@ -404,7 +404,11 @@ type AdminApi struct {
 	// Overview page — landing screen. v1 renders a grid of
 	// custom JS slot widgets; generic pre-built widgets
 	// (counter / chart / mini-table) parked v2.
-	Overview      *AdminOverview `protobuf:"bytes,12,opt,name=overview,proto3" json:"overview,omitempty"`
+	Overview *AdminOverview `protobuf:"bytes,12,opt,name=overview,proto3" json:"overview,omitempty"`
+	// The request event stream for the admin (request_events.proto): `audit`
+	// only — an admin action is not a marketing signal, so `marketing` is
+	// refused. Absent = no records.
+	RequestEvents *RequestEvents `protobuf:"bytes,6,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -491,6 +495,13 @@ func (x *AdminApi) GetNav() []*AdminNavGroup {
 func (x *AdminApi) GetOverview() *AdminOverview {
 	if x != nil {
 		return x.Overview
+	}
+	return nil
+}
+
+func (x *AdminApi) GetRequestEvents() *RequestEvents {
+	if x != nil {
+		return x.RequestEvents
 	}
 	return nil
 }
@@ -2184,7 +2195,7 @@ var File_w17_admin_proto protoreflect.FileDescriptor
 
 const file_w17_admin_proto_rawDesc = "" +
 	"\n" +
-	"\x0fw17/admin.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\x9e\x02\n" +
+	"\x0fw17/admin.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xd9\x02\n" +
 	"\bAdminApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\"\n" +
@@ -2194,7 +2205,8 @@ const file_w17_admin_proto_rawDesc = "" +
 	"\x05pages\x18\n" +
 	" \x03(\v2\x0e.w17.AdminPageR\x05pages\x12$\n" +
 	"\x03nav\x18\v \x03(\v2\x12.w17.AdminNavGroupR\x03nav\x12.\n" +
-	"\boverview\x18\f \x01(\v2\x12.w17.AdminOverviewR\boverview\"\xe8\x01\n" +
+	"\boverview\x18\f \x01(\v2\x12.w17.AdminOverviewR\boverview\x129\n" +
+	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"\xe8\x01\n" +
 	"\tAdminAuth\x12!\n" +
 	"\flogin_method\x18\x01 \x01(\tR\vloginMethod\x12\x1f\n" +
 	"\vuser_lookup\x18\x02 \x01(\tR\n" +
@@ -2351,45 +2363,47 @@ var file_w17_admin_proto_goTypes = []any{
 	(*AdminOverview)(nil),               // 18: w17.AdminOverview
 	(*AdminWidget)(nil),                 // 19: w17.AdminWidget
 	(*AdminWidgetValue)(nil),            // 20: w17.AdminWidgetValue
-	(*descriptorpb.FileOptions)(nil),    // 21: google.protobuf.FileOptions
-	(*descriptorpb.MessageOptions)(nil), // 22: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 23: google.protobuf.FieldOptions
-	(*descriptorpb.MethodOptions)(nil),  // 24: google.protobuf.MethodOptions
+	(*RequestEvents)(nil),               // 21: w17.RequestEvents
+	(*descriptorpb.FileOptions)(nil),    // 22: google.protobuf.FileOptions
+	(*descriptorpb.MessageOptions)(nil), // 23: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 24: google.protobuf.FieldOptions
+	(*descriptorpb.MethodOptions)(nil),  // 25: google.protobuf.MethodOptions
 }
 var file_w17_admin_proto_depIdxs = []int32{
 	6,  // 0: w17.AdminApi.auth:type_name -> w17.AdminAuth
 	8,  // 1: w17.AdminApi.pages:type_name -> w17.AdminPage
 	17, // 2: w17.AdminApi.nav:type_name -> w17.AdminNavGroup
 	18, // 3: w17.AdminApi.overview:type_name -> w17.AdminOverview
-	7,  // 4: w17.AdminAuth.sign_in_options:type_name -> w17.AdminSignInOption
-	9,  // 5: w17.AdminPage.list:type_name -> w17.AdminList
-	12, // 6: w17.AdminPage.detail:type_name -> w17.AdminDetail
-	14, // 7: w17.AdminPage.actions:type_name -> w17.AdminAction
-	16, // 8: w17.AdminPage.inlines:type_name -> w17.AdminInline
-	10, // 9: w17.AdminList.columns:type_name -> w17.AdminColumn
-	11, // 10: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
-	13, // 11: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
-	0,  // 12: w17.AdminAction.target:type_name -> w17.AdminActionTarget
-	15, // 13: w17.AdminAction.result:type_name -> w17.AdminActionResult
-	1,  // 14: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
-	19, // 15: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
-	4,  // 16: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
-	2,  // 17: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
-	20, // 18: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
-	3,  // 19: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
-	20, // 20: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
-	21, // 21: w17.admin_api:extendee -> google.protobuf.FileOptions
-	22, // 22: w17.admin_title:extendee -> google.protobuf.MessageOptions
-	23, // 23: w17.admin_filter:extendee -> google.protobuf.FieldOptions
-	23, // 24: w17.admin_search:extendee -> google.protobuf.FieldOptions
-	23, // 25: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
-	24, // 26: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
-	5,  // 27: w17.admin_api:type_name -> w17.AdminApi
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	27, // [27:28] is the sub-list for extension type_name
-	21, // [21:27] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	21, // 4: w17.AdminApi.request_events:type_name -> w17.RequestEvents
+	7,  // 5: w17.AdminAuth.sign_in_options:type_name -> w17.AdminSignInOption
+	9,  // 6: w17.AdminPage.list:type_name -> w17.AdminList
+	12, // 7: w17.AdminPage.detail:type_name -> w17.AdminDetail
+	14, // 8: w17.AdminPage.actions:type_name -> w17.AdminAction
+	16, // 9: w17.AdminPage.inlines:type_name -> w17.AdminInline
+	10, // 10: w17.AdminList.columns:type_name -> w17.AdminColumn
+	11, // 11: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
+	13, // 12: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
+	0,  // 13: w17.AdminAction.target:type_name -> w17.AdminActionTarget
+	15, // 14: w17.AdminAction.result:type_name -> w17.AdminActionResult
+	1,  // 15: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
+	19, // 16: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
+	4,  // 17: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
+	2,  // 18: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
+	20, // 19: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
+	3,  // 20: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
+	20, // 21: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
+	22, // 22: w17.admin_api:extendee -> google.protobuf.FileOptions
+	23, // 23: w17.admin_title:extendee -> google.protobuf.MessageOptions
+	24, // 24: w17.admin_filter:extendee -> google.protobuf.FieldOptions
+	24, // 25: w17.admin_search:extendee -> google.protobuf.FieldOptions
+	24, // 26: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
+	25, // 27: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
+	5,  // 28: w17.admin_api:type_name -> w17.AdminApi
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	28, // [28:29] is the sub-list for extension type_name
+	22, // [22:28] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_w17_admin_proto_init() }
@@ -2397,6 +2411,7 @@ func file_w17_admin_proto_init() {
 	if File_w17_admin_proto != nil {
 		return
 	}
+	file_w17_request_events_proto_init()
 	file_w17_admin_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

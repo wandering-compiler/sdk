@@ -58,7 +58,10 @@ type RpcApi struct {
 	// desugar into a synthesized group named after the method's
 	// (override-or-original) backend service — both paths converge
 	// on the same internal model.
-	Groups        []*RpcGroup `protobuf:"bytes,6,rep,name=groups,proto3" json:"groups,omitempty"`
+	Groups []*RpcGroup `protobuf:"bytes,6,rep,name=groups,proto3" json:"groups,omitempty"`
+	// The request event stream for this surface (request_events.proto):
+	// which purposes its records serve. Absent = no records.
+	RequestEvents *RequestEvents `protobuf:"bytes,7,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -124,6 +127,13 @@ func (x *RpcApi) GetReflection() bool {
 func (x *RpcApi) GetGroups() []*RpcGroup {
 	if x != nil {
 		return x.Groups
+	}
+	return nil
+}
+
+func (x *RpcApi) GetRequestEvents() *RequestEvents {
+	if x != nil {
+		return x.RequestEvents
 	}
 	return nil
 }
@@ -330,7 +340,7 @@ var File_w17_rpc_proto protoreflect.FileDescriptor
 
 const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xb3\x01\n" +
+	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xee\x01\n" +
 	"\x06RpcApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -338,7 +348,8 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
 	"reflection\x18\x04 \x01(\bR\n" +
 	"reflection\x12%\n" +
-	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groupsJ\x04\b\x05\x10\x06R\fauth_methods\"s\n" +
+	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groups\x129\n" +
+	"\x0erequest_events\x18\a \x01(\v2\x12.w17.RequestEventsR\rrequestEventsJ\x04\b\x05\x10\x06R\fauth_methods\"s\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
@@ -366,20 +377,22 @@ var file_w17_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_w17_rpc_proto_goTypes = []any{
 	(*RpcApi)(nil),                     // 0: w17.RpcApi
 	(*RpcGroup)(nil),                   // 1: w17.RpcGroup
-	(*descriptorpb.MethodOptions)(nil), // 2: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 3: google.protobuf.FileOptions
+	(*RequestEvents)(nil),              // 2: w17.RequestEvents
+	(*descriptorpb.MethodOptions)(nil), // 3: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 4: google.protobuf.FileOptions
 }
 var file_w17_rpc_proto_depIdxs = []int32{
 	1, // 0: w17.RpcApi.groups:type_name -> w17.RpcGroup
-	2, // 1: w17.rpc:extendee -> google.protobuf.MethodOptions
-	2, // 2: w17.rpc_service:extendee -> google.protobuf.MethodOptions
-	3, // 3: w17.rpc_api:extendee -> google.protobuf.FileOptions
-	0, // 4: w17.rpc_api:type_name -> w17.RpcApi
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	4, // [4:5] is the sub-list for extension type_name
-	1, // [1:4] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: w17.RpcApi.request_events:type_name -> w17.RequestEvents
+	3, // 2: w17.rpc:extendee -> google.protobuf.MethodOptions
+	3, // 3: w17.rpc_service:extendee -> google.protobuf.MethodOptions
+	4, // 4: w17.rpc_api:extendee -> google.protobuf.FileOptions
+	0, // 5: w17.rpc_api:type_name -> w17.RpcApi
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	5, // [5:6] is the sub-list for extension type_name
+	2, // [2:5] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_w17_rpc_proto_init() }
@@ -387,6 +400,7 @@ func file_w17_rpc_proto_init() {
 	if File_w17_rpc_proto != nil {
 		return
 	}
+	file_w17_request_events_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

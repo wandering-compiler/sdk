@@ -89,7 +89,10 @@ type McpApi struct {
 	// STANDALONE `<domain>-mcp-server` bundle instead, list them
 	// explicitly in `tools` by ref; an include-only surface generates
 	// no standalone bundle.
-	Include       []string `protobuf:"bytes,5,rep,name=include,proto3" json:"include,omitempty"`
+	Include []string `protobuf:"bytes,5,rep,name=include,proto3" json:"include,omitempty"`
+	// The request event stream for this surface (request_events.proto):
+	// which purposes its records serve. Absent = no records.
+	RequestEvents *RequestEvents `protobuf:"bytes,6,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -155,6 +158,13 @@ func (x *McpApi) GetTools() []*McpTool {
 func (x *McpApi) GetInclude() []string {
 	if x != nil {
 		return x.Include
+	}
+	return nil
+}
+
+func (x *McpApi) GetRequestEvents() *RequestEvents {
+	if x != nil {
+		return x.RequestEvents
 	}
 	return nil
 }
@@ -369,13 +379,14 @@ var File_w17_mcp_proto protoreflect.FileDescriptor
 
 const file_w17_mcp_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\x96\x01\n" +
+	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xd1\x01\n" +
 	"\x06McpApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\"\n" +
 	"\x05tools\x18\x04 \x03(\v2\f.w17.McpToolR\x05tools\x12\x18\n" +
-	"\ainclude\x18\x05 \x03(\tR\ainclude\"\x89\x01\n" +
+	"\ainclude\x18\x05 \x03(\tR\ainclude\x129\n" +
+	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"\x89\x01\n" +
 	"\aMcpTool\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12#\n" +
 	"\rname_override\x18\x02 \x01(\tR\fnameOverride\x121\n" +
@@ -403,22 +414,24 @@ var file_w17_mcp_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_w17_mcp_proto_goTypes = []any{
 	(*McpApi)(nil),                     // 0: w17.McpApi
 	(*McpTool)(nil),                    // 1: w17.McpTool
-	(*descriptorpb.MethodOptions)(nil), // 2: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 3: google.protobuf.FileOptions
+	(*RequestEvents)(nil),              // 2: w17.RequestEvents
+	(*descriptorpb.MethodOptions)(nil), // 3: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 4: google.protobuf.FileOptions
 }
 var file_w17_mcp_proto_depIdxs = []int32{
 	1, // 0: w17.McpApi.tools:type_name -> w17.McpTool
-	2, // 1: w17.mcp:extendee -> google.protobuf.MethodOptions
-	2, // 2: w17.mcp_description:extendee -> google.protobuf.MethodOptions
-	2, // 3: w17.mcp_name:extendee -> google.protobuf.MethodOptions
-	2, // 4: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
-	3, // 5: w17.mcp_api:extendee -> google.protobuf.FileOptions
-	0, // 6: w17.mcp_api:type_name -> w17.McpApi
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	6, // [6:7] is the sub-list for extension type_name
-	1, // [1:6] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: w17.McpApi.request_events:type_name -> w17.RequestEvents
+	3, // 2: w17.mcp:extendee -> google.protobuf.MethodOptions
+	3, // 3: w17.mcp_description:extendee -> google.protobuf.MethodOptions
+	3, // 4: w17.mcp_name:extendee -> google.protobuf.MethodOptions
+	3, // 5: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
+	4, // 6: w17.mcp_api:extendee -> google.protobuf.FileOptions
+	0, // 7: w17.mcp_api:type_name -> w17.McpApi
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	7, // [7:8] is the sub-list for extension type_name
+	2, // [2:7] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_w17_mcp_proto_init() }
@@ -426,6 +439,7 @@ func file_w17_mcp_proto_init() {
 	if File_w17_mcp_proto != nil {
 		return
 	}
+	file_w17_request_events_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
