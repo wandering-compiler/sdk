@@ -35,6 +35,10 @@ type NATSSink struct {
 	Subject string
 	// Timeout bounds one publish and its ack. Default 5s.
 	Timeout time.Duration
+	// Ensure, when set, creates the stream; the sink calls it when a
+	// publish finds no stream (it could not be created at start, or was
+	// deleted) and publishes once more.
+	Ensure func(context.Context) error
 }
 
 // Sink is a [Config.Sink].
@@ -54,6 +58,12 @@ func (s *NATSSink) Sink(ctx context.Context, b *Batch) error {
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ack, err := s.JS.PublishMsg(pctx, msg)
+	if err != nil && s.Ensure != nil && errors.Is(err, jetstream.ErrNoStreamResponse) {
+		if eerr := s.Ensure(pctx); eerr != nil {
+			return fmt.Errorf("eventlog: publish to %s: no stream, and creating it failed: %w", s.Subject, eerr)
+		}
+		ack, err = s.JS.PublishMsg(pctx, msg)
+	}
 	if err != nil {
 		return fmt.Errorf("eventlog: publish to %s: %w", s.Subject, err)
 	}

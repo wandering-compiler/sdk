@@ -131,15 +131,24 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 	if r.fail == nil {
 		r.fail = r.reportFailure
 	}
-	batchBytes := 1 << 20
+	batchBytes := 1<<20 - natsHeaderRoom // NATS's default max_payload until the server says
+	var ensure func(context.Context) error
 	if cfg.Sink == nil {
 		if cfg.JS == nil || cfg.NC == nil {
 			return nil, errors.New("eventlog: Recorder needs a JetStream connection")
 		}
-		if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, cfg.Stream); err != nil {
-			return nil, err
+		ensure = func(ctx context.Context) error {
+			return EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, cfg.Stream)
 		}
-		batchBytes = NATSBatchBytes(cfg.NC)
+		// Not fatal: NATS may not be up yet. The sink creates the stream on
+		// the first publish that finds none; until then batches take the
+		// failure path, reported.
+		if err := ensure(ctx); err != nil {
+			observx.ReportError(ctx, fmt.Errorf("eventlog: domain %s: the request stream is not ready yet, creating it on first publish: %w", cfg.Domain, err))
+		}
+		if mp := NATSBatchBytes(cfg.NC); mp > 64 {
+			batchBytes = mp
+		}
 	}
 	for api, purposes := range cfg.Surfaces {
 		if !purposes.Marketing && !purposes.Audit {
@@ -150,7 +159,7 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 		if sink != nil {
 			sf = sink(api)
 		} else {
-			sf = (&NATSSink{JS: cfg.JS, Subject: Subject(cfg.Domain, api)}).Sink
+			sf = (&NATSSink{JS: cfg.JS, Subject: Subject(cfg.Domain, api), Ensure: ensure}).Sink
 		}
 		s := &Surface{r: r, api: api, purposes: purposes}
 		p, err := New(Config[*Record]{

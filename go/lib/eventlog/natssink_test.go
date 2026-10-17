@@ -118,3 +118,24 @@ func TestNATSSink_HonoursItsContext(t *testing.T) {
 		t.Fatalf("err %v after %v", err, time.Since(t0))
 	}
 }
+
+// A publish that finds no stream creates it through Ensure and is stored:
+// a stream that could not be made at start (NATS not up yet) or was deleted
+// does not leave the recorder failing every batch.
+func TestNATSSink_CreatesTheStreamOnDemand(t *testing.T) {
+	_, js := embeddedJetStream(t)
+	ensured := 0
+	sink := &NATSSink{JS: js, Subject: "w17.requests.tasks.rest", Ensure: func(ctx context.Context) error {
+		ensured++
+		return EnsureStream(ctx, js, StreamName, []string{SubjectPrefix + ".>"}, StreamLimits{})
+	}}
+	if err := sink.Sink(context.Background(), &Batch{Wire: []byte{0x0a, 0x00}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Sink(context.Background(), &Batch{Wire: []byte{0x0a, 0x00}}); err != nil {
+		t.Fatal(err)
+	}
+	if ensured != 1 {
+		t.Fatalf("Ensure ran %d times, want once", ensured)
+	}
+}
