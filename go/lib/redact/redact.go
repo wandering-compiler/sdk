@@ -4,8 +4,9 @@
 // ceiling — written straight from the message, never from a copy of it.
 //
 // The compiler decides what is left out and emits it as a [Plan] per message
-// type (the `(w17.field)` gdpr / sensitive labels and their automatic rules);
-// this package walks the message by reflection and writes protowire. The
+// type (the `(w17.field)` gdpr / sensitive labels and their automatic rules)
+// into a `_redact.pb.go` beside each `.pb.go`, registered into [Default] at
+// init; this package walks the message by reflection and writes protowire. The
 // output is a valid encoding of the same message type, so a consumer decodes
 // it with the type it already has: a left-out field reads as unset.
 //
@@ -32,6 +33,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -45,19 +47,51 @@ type Plan struct {
 	Skip []protowire.Number
 }
 
-// Set is every plan of a bundle, by message full name.
+// Set is a collection of plans, by message full name. [Default] is the
+// process's: every generated `_redact.pb.go` registers its file's plans there
+// at init, so a binary has the plan of every message type it links.
 type Set struct {
-	plans map[protoreflect.FullName]Plan
+	mu    sync.Mutex // serialises Register; reads take no lock
+	plans atomic.Pointer[map[protoreflect.FullName]Plan]
 }
 
-// NewSet takes the generated plans, keyed by the message's full proto name
-// without a leading dot ("acme.tasks.v1.CreateTaskReq").
+// Default is the process-wide set the generated code registers into.
+var Default = &Set{}
+
+// Register adds plans to [Default]; generated code calls it from init.
+func Register(plans map[string]Plan) { Default.Register(plans) }
+
+// NewSet returns a set holding plans.
 func NewSet(plans map[string]Plan) *Set {
-	s := &Set{plans: make(map[protoreflect.FullName]Plan, len(plans))}
-	for name, p := range plans {
-		s.plans[protoreflect.FullName(strings.TrimPrefix(name, "."))] = p
-	}
+	s := &Set{}
+	s.Register(plans)
 	return s
+}
+
+// Register adds plans, keyed by the message's full proto name with or
+// without a leading dot ("acme.tasks.v1.CreateTaskReq"); a name already
+// present is replaced. Safe alongside concurrent [Set.Append] calls (the map
+// is copied, not written in place), meant for init time.
+func (s *Set) Register(plans map[string]Plan) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := map[protoreflect.FullName]Plan{}
+	if cur := s.plans.Load(); cur != nil {
+		for k, v := range *cur {
+			next[k] = v
+		}
+	}
+	for name, p := range plans {
+		next[protoreflect.FullName(strings.TrimPrefix(name, "."))] = p
+	}
+	s.plans.Store(&next)
+}
+
+func (s *Set) load() map[protoreflect.FullName]Plan {
+	if p := s.plans.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // ErrNoPlan is returned for a top-level message the set has no plan for.
@@ -73,12 +107,13 @@ var ErrTooLarge = errors.New("redact: record does not fit the ceiling")
 // dst is returned unchanged.
 func (s *Set) Append(dst []byte, m proto.Message, ceiling int) (out []byte, cut []string, err error) {
 	mr := m.ProtoReflect()
-	if _, ok := s.plans[mr.Descriptor().FullName()]; !ok {
+	plans := s.load()
+	if _, ok := plans[mr.Descriptor().FullName()]; !ok {
 		return dst, nil, fmt.Errorf("%w %s", ErrNoPlan, mr.Descriptor().FullName())
 	}
 	e := encoders.Get().(*encoder)
 	defer e.release()
-	e.set = s
+	e.plans = plans
 
 	base := len(dst)
 	e.measure = ceiling > 0
@@ -134,7 +169,7 @@ func waterLevel(units []int, excess int) (int, bool) {
 var encoders = sync.Pool{New: func() any { return &encoder{} }}
 
 type encoder struct {
-	set *Set
+	plans map[protoreflect.FullName]Plan
 
 	// measure: record each unit's encoded size (first pass).
 	measure bool
@@ -148,7 +183,7 @@ type encoder struct {
 }
 
 func (e *encoder) release() {
-	e.set, e.measure, e.cutting, e.limit = nil, false, false, 0
+	e.plans, e.measure, e.cutting, e.limit = nil, false, false, 0
 	e.units, e.path, e.cut = e.units[:0], e.path[:0], nil
 	encoders.Put(e)
 }
@@ -157,7 +192,7 @@ func (e *encoder) release() {
 // unit, so nothing below it is measured or cut on its own.
 func (e *encoder) message(dst []byte, m protoreflect.Message, inList int) []byte {
 	md := m.Descriptor()
-	plan := e.set.plans[md.FullName()]
+	plan := e.plans[md.FullName()]
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
@@ -343,7 +378,7 @@ func (e *encoder) value(dst []byte, fd protoreflect.FieldDescriptor, num protowi
 // writable: a nested message is written when the set has its plan or it is
 // a plain well-known type; any other type is left out whole.
 func (e *encoder) writable(n protoreflect.FullName) bool {
-	if _, ok := e.set.plans[n]; ok {
+	if _, ok := e.plans[n]; ok {
 		return true
 	}
 	return plainWKT(n)

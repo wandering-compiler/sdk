@@ -355,6 +355,9 @@ func TestWaterLevel(t *testing.T) {
 }
 
 func TestAppend_NoAllocations(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation counts are meaningless under -race")
+	}
 	d := descs(t)
 	req := sample(t, d)
 	req.Clear(d.req.Fields().ByName("tags")) // a map's Range takes a closure
@@ -389,5 +392,29 @@ func BenchmarkAppend(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		buf, _, _ = s.Append(buf[:0], req, 64<<10)
+	}
+}
+
+func TestRegister_AddsAndReplaces(t *testing.T) {
+	d := descs(t)
+	s := &Set{}
+	if _, _, err := s.Append(nil, dynamicpb.NewMessage(d.item), 0); !errors.Is(err, ErrNoPlan) {
+		t.Fatalf("empty set: err = %v", err)
+	}
+	s.Register(map[string]Plan{"redacttest.Item": {}})
+	s.Register(map[string]Plan{"redacttest.Profile": {}})
+	it := dynamicpb.NewMessage(d.item)
+	set(it, "secret", protoreflect.ValueOfString("DECOY"))
+	out, _, err := s.Append(nil, it, 0)
+	if err != nil || !bytes.Contains(out, []byte("DECOY")) {
+		t.Fatalf("first registration lost or plan not applied: %q %v", out, err)
+	}
+	s.Register(map[string]Plan{"redacttest.Item": {Skip: []protowire.Number{2}}})
+	out, _, _ = s.Append(nil, it, 0)
+	if bytes.Contains(out, []byte("DECOY")) {
+		t.Fatal("a re-registered plan did not replace the old one")
+	}
+	if _, _, err := s.Append(nil, dynamicpb.NewMessage(d.profile), 0); err != nil {
+		t.Fatalf("the other registration was dropped: %v", err)
 	}
 }
