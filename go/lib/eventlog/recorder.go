@@ -308,6 +308,24 @@ func (rec *Record) SetRequest(req proto.Message) {
 	}
 }
 
+// SetRequestAny is SetRequest for a gRPC interceptor's untyped request.
+func (rec *Record) SetRequestAny(req any) {
+	if m, ok := req.(proto.Message); ok {
+		rec.SetRequest(m)
+	}
+}
+
+// FinishUnary is SetResult and Finish for a gRPC interceptor: its untyped
+// response and error, no HTTP status.
+func (rec *Record) FinishUnary(ctx context.Context, resp any, err error) {
+	if rec == nil {
+		return
+	}
+	m, _ := resp.(proto.Message)
+	rec.SetResult(m, err)
+	rec.Finish(ctx, 0)
+}
+
 // SetResult records the call's outcome: its error (the gRPC code) and,
 // when the method opts in and the call succeeded, its response.
 func (rec *Record) SetResult(resp proto.Message, err error) {
@@ -325,6 +343,28 @@ func (rec *Record) SetResult(resp proto.Message, err error) {
 // sends the backend, or the incoming metadata on the rpc surface.
 func (rec *Record) SetCaller(md metadata.MD) {
 	if rec != nil {
+		rec.readCaller(md)
+	}
+}
+
+// SetCallerOutgoing records the caller from the metadata ctx carries out —
+// what an HTTP gateway stamped for the backend call.
+func (rec *Record) SetCallerOutgoing(ctx context.Context) {
+	if rec == nil {
+		return
+	}
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		rec.readCaller(md)
+	}
+}
+
+// SetCallerIncoming records the caller from the metadata ctx carries in —
+// the rpc gateway's, after it stamped the verified principal.
+func (rec *Record) SetCallerIncoming(ctx context.Context) {
+	if rec == nil {
+		return
+	}
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		rec.readCaller(md)
 	}
 }

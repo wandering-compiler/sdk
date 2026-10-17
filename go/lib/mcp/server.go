@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wandering-compiler/sdk/go/lib/eventlog"
 	"log"
 	"net/http"
 	"os"
@@ -38,6 +39,11 @@ type PermResolver func(ctx context.Context, conn ConnectionInfo) (perms []int32,
 type Server struct {
 	inner *mcpserver.MCPServer
 	auth  MCPAuthFunc
+
+	// requestEvents + requestEventMethods record tool calls into the
+	// request event stream (SetRequestEvents); nil = off.
+	requestEvents       *eventlog.Surface
+	requestEventMethods map[string]*eventlog.Method
 
 	// permResolver + toolPerms drive permission gating. Both empty/nil
 	// => no gate (every tool open). When set, a connection sees + can
@@ -432,6 +438,13 @@ func HTTPHeadersFromContext(ctx context.Context) http.Header {
 
 type httpHeadersCtxKey struct{}
 
+// SetRequestEvents records every tool call into the request event stream:
+// surface is the MCP surface's recorder (nil: record nothing), methods the
+// recorded tools' settings by tool name. Call it before serving.
+func (s *Server) SetRequestEvents(surface *eventlog.Surface, methods map[string]*eventlog.Method) {
+	s.requestEvents, s.requestEventMethods = surface, methods
+}
+
 // CallUnary is the generic dispatcher used by every generated
 // tool handler. It decodes the MCP arguments JSON into reqMsg,
 // runs the auth translator, attaches metadata to the outgoing
@@ -454,8 +467,21 @@ func (s *Server) CallUnary(
 	req mcp.CallToolRequest,
 	reqMsg proto.Message,
 	invoke func(ctx context.Context, reqMsg proto.Message) (proto.Message, error),
-) (*mcp.CallToolResult, error) {
+) (result *mcp.CallToolResult, callErr error) {
 	conn := s.connInfo(ctx)
+
+	// The call's record in the request event stream: begun before the
+	// permission gate, so a refused call is recorded too; finished with the
+	// call's outcome (see SetRequestEvents).
+	var rec *eventlog.Record
+	var respRecorded proto.Message
+	if s.requestEvents != nil {
+		rec = s.requestEvents.Start(s.requestEventMethods[req.Params.Name])
+		defer func() {
+			rec.SetResult(respRecorded, callErr)
+			rec.Finish(ctx, 0)
+		}()
+	}
 
 	// Authorization runs BEFORE decoding the arguments: an
 	// unauthorized caller is refused without the server spending CPU
@@ -494,6 +520,7 @@ func (s *Server) CallUnary(
 		}
 		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
+	rec.SetCallerOutgoing(ctx)
 
 	// Decode only after authz passes.
 	if raw := req.GetRawArguments(); raw != nil {
@@ -506,10 +533,12 @@ func (s *Server) CallUnary(
 		}
 	}
 
+	rec.SetRequest(reqMsg)
 	respMsg, err := invoke(ctx, reqMsg)
 	if err != nil {
 		return nil, publicError(ctx, err)
 	}
+	respRecorded = respMsg
 
 	// UseEnumNumbers mirrors restgw: enum values are INTEGERS on every w17
 	// JSON surface, MCP included. This site emitted NAMES while the comment below claimed

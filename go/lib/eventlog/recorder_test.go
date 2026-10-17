@@ -397,3 +397,36 @@ func TestOpen_StartsBeforeNATSAndOwnsTheConnection(t *testing.T) {
 		t.Fatal("Close left the owned connection open")
 	}
 }
+
+func TestRecord_SetCallerFromContext(t *testing.T) {
+	r, c := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}})
+	s := r.Surface(w17pb.RequestApi_REQUEST_API_REST)
+	out := s.Start(testMethod)
+	out.SetCallerOutgoing(metadata.NewOutgoingContext(context.Background(), authMD("u-out", false, "o")))
+	out.Finish(context.Background(), 200)
+	in := s.Start(testMethod)
+	in.SetCallerIncoming(metadata.NewIncomingContext(context.Background(), authMD("u-in", false, "o")))
+	in.Finish(context.Background(), 0)
+	var nilRec *Record
+	nilRec.SetCallerOutgoing(context.Background())
+	closeRecorder(t, r)
+	recs := c.records(w17pb.RequestApi_REQUEST_API_REST)
+	if len(recs) != 2 || decodeEnvelope(t, recs[0]).meta.GetUserId() != "u-out" || decodeEnvelope(t, recs[1]).meta.GetUserId() != "u-in" {
+		t.Fatalf("%d records", len(recs))
+	}
+}
+
+func TestRecord_InterceptorShape(t *testing.T) {
+	r, c := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_RPC: {Audit: true}})
+	rec := r.Surface(w17pb.RequestApi_REQUEST_API_RPC).Start(testMethod)
+	rec.SetRequestAny(sampleReq())
+	rec.SetRequestAny("not a message") // ignored, keeps the request
+	rec.FinishUnary(context.Background(), sampleResp(), nil)
+	var none *Record
+	none.FinishUnary(context.Background(), nil, nil)
+	closeRecorder(t, r)
+	e := decodeEnvelope(t, c.records(w17pb.RequestApi_REQUEST_API_RPC)[0])
+	if e.req == nil || e.resp == nil || e.meta.GetHttpStatus() != 0 {
+		t.Fatalf("envelope %+v", e)
+	}
+}
