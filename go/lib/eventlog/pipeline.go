@@ -78,6 +78,10 @@ type Config[T any] struct {
 	Sink func(ctx context.Context, b *Batch) error
 	// Fail receives every record that was not delivered, with the reason.
 	Fail func(Failure)
+	// Tag, when set, names what a record belongs to (its organization); a
+	// batch carries the distinct tags of its records ([Batch.Tags]), so a
+	// sink can label it and a consumer skip it without decoding.
+	Tag func(T) string
 
 	// BatchBytes bounds a batch's encoded size (the sink's limit — NATS's
 	// max_payload, less the room its headers take).
@@ -104,8 +108,33 @@ type Batch struct {
 	// Wire is the encoded batch message (see the package doc).
 	Wire []byte
 
+	// Tags are the distinct non-empty tags of its records (Config.Tag), at
+	// most MaxBatchTags; TagsOverflow says there were more, so Tags is not
+	// the whole set.
+	Tags         []string
+	TagsOverflow bool
+
 	offsets []int // each record's [start,end) in Wire, flattened
 	held    int64 // queue bytes its records hold
+}
+
+// MaxBatchTags bounds [Batch.Tags].
+const MaxBatchTags = 32
+
+func (b *Batch) addTag(tag string) {
+	if tag == "" || b.TagsOverflow {
+		return
+	}
+	for _, t := range b.Tags {
+		if t == tag {
+			return
+		}
+	}
+	if len(b.Tags) == MaxBatchTags {
+		b.TagsOverflow, b.Tags = true, nil
+		return
+	}
+	b.Tags = append(b.Tags, tag)
 }
 
 // Len is the number of records in the batch.
@@ -286,6 +315,16 @@ func (p *Pipeline[T]) encode(dst []byte, item T) (out []byte, err error) {
 	return p.cfg.Encode(dst, item)
 }
 
+func (p *Pipeline[T]) tag(item T) (tag string) {
+	defer func() {
+		if r := recover(); r != nil {
+			tag = ""
+			_ = p.recovered("Tag", r)
+		}
+	}()
+	return p.cfg.Tag(item)
+}
+
 func (p *Pipeline[T]) fail(f Failure) {
 	p.failed.Add(uint64(f.Count))
 	defer func() {
@@ -356,6 +395,9 @@ func (p *Pipeline[T]) batcher() {
 			b.Wire = append(b.Wire, rec...)
 			b.offsets = append(b.offsets, len(b.Wire))
 			b.held += q.size
+			if p.cfg.Tag != nil {
+				b.addTag(p.tag(q.item))
+			}
 			if b.Len() >= p.cfg.BatchItems {
 				flush()
 			}

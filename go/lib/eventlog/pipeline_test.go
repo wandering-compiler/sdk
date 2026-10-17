@@ -512,3 +512,30 @@ func BenchmarkSubmit(b *testing.B) {
 		}
 	})
 }
+
+func TestPipeline_BatchCarriesItsDistinctTags(t *testing.T) {
+	var mu sync.Mutex
+	var tags [][]string
+	var overflow []bool
+	cfg := newHarness(t).config()
+	cfg.BatchItems, cfg.BatchPeriod = 100, time.Hour
+	cfg.Tag = func(r *rec) string { return r.payload }
+	cfg.Sink = func(_ context.Context, b *Batch) error {
+		mu.Lock()
+		defer mu.Unlock()
+		tags = append(tags, append([]string(nil), b.Tags...))
+		overflow = append(overflow, b.TagsOverflow)
+		return nil
+	}
+	p := start(t, cfg)
+	for i := 0; i < 100; i++ { // one batch: org-a, org-b, an untagged one
+		_ = p.Submit(context.Background(), &rec{n: i, payload: []string{"org-a", "org-b", ""}[i%3]})
+	}
+	for i := 0; i < 100; i++ { // one batch: 100 distinct tags
+		_ = p.Submit(context.Background(), &rec{n: i, payload: fmt.Sprintf("org-%d", i)})
+	}
+	closeNow(t, p)
+	if fmt.Sprint(tags) != "[[org-a org-b] []]" || fmt.Sprint(overflow) != "[false true]" {
+		t.Fatalf("tags %v overflow %v", tags, overflow)
+	}
+}
