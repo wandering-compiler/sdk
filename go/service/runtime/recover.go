@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 )
@@ -29,7 +30,8 @@ import (
 //
 // Being outermost, it is also where the request gets its own error-tracker
 // scope ([observx.WithRequestScope]), so breadcrumbs recorded while serving
-// it stay with it.
+// it stay with it, and where the request is recorded for an error report to
+// carry ([observx.WithRequest]).
 func recoveryUnaryInterceptor(
 	ctx context.Context,
 	req any,
@@ -45,6 +47,11 @@ func recoveryUnaryInterceptor(
 	}()
 	if resp, ok, err := serveHealthUnary(ctx, req, info); ok {
 		return resp, err
+	}
+	// The request, for an error reported while serving it to carry
+	// (redacted, and only then encoded).
+	if m, ok := req.(proto.Message); ok {
+		ctx = observx.WithRequest(ctx, info.FullMethod, m)
 	}
 	return handler(ctx, req)
 }

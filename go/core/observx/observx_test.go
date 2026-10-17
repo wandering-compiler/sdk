@@ -27,6 +27,7 @@ func resetForTest(t *testing.T) {
 	sentryEnabled = false
 	sentryClient = nil
 	debugEvents = false
+	requestMode, requestSample = RequestDataAll, 1
 	cfg = Config{}
 	mu.Unlock()
 	for _, l := range limiters {
