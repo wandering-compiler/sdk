@@ -315,14 +315,18 @@ func (rec *Record) SetRequestAny(req any) {
 	}
 }
 
+func (rec *Record) setResultAny(resp any, err error) {
+	m, _ := resp.(proto.Message)
+	rec.SetResult(m, err)
+}
+
 // FinishUnary is SetResult and Finish for a gRPC interceptor: its untyped
 // response and error, no HTTP status.
 func (rec *Record) FinishUnary(ctx context.Context, resp any, err error) {
 	if rec == nil {
 		return
 	}
-	m, _ := resp.(proto.Message)
-	rec.SetResult(m, err)
+	rec.setResultAny(resp, err)
 	rec.Finish(ctx, 0)
 }
 
