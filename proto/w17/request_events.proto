@@ -68,6 +68,24 @@ message RequestEventsMethod {
 
   // What the request does when the stream is full.
   Backpressure backpressure = 3;
+
+  // How an audit record of this method holds its request.
+  AuditMode audit_mode = 4;
+}
+
+// AuditMode is how an audit record holds its request. Marketing records are
+// always asynchronous.
+enum AuditMode {
+  // The record is queued and the response returns at once. The loss window
+  // is a crash between the response and the publish.
+  AUDIT_MODE_ASYNC = 0;
+
+  // The request waits until the stream acknowledges its record's batch —
+  // a bounded wait (<PREFIX>_REQUEST_EVENTS_SYNC_WAIT, 2s by default). A wait
+  // that runs out is reported and the request completes with its own
+  // response, never failed by the audit. In normal operation the client is
+  // answered only after the ack.
+  AUDIT_MODE_SYNC = 1;
 }
 
 // Backpressure is what a request does when the stream has no room.

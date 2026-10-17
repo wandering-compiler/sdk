@@ -100,6 +100,10 @@ type Config[T any] struct {
 	SendQueue int
 	// BlockTimeout bounds how long Submit waits for room. Default 1s.
 	BlockTimeout time.Duration
+	// RetryFor bounds how long the sender retries a batch the sink refused
+	// (with backoff; a sink deduplicating by batch id makes it safe) before
+	// the batch takes the failure path. Default 5s; negative = no retry.
+	RetryFor time.Duration
 }
 
 // Batch is one closed batch, as the sink receives it.
@@ -114,8 +118,9 @@ type Batch struct {
 	Tags         []string
 	TagsOverflow bool
 
-	offsets []int // each record's [start,end) in Wire, flattened
-	held    int64 // queue bytes its records hold
+	offsets []int        // each record's [start,end) in Wire, flattened
+	dones   []chan error // SubmitWait callers waiting on this batch
+	held    int64        // queue bytes its records hold
 }
 
 // MaxBatchTags bounds [Batch.Tags].
@@ -163,6 +168,7 @@ type Stats struct {
 type queued[T any] struct {
 	item T
 	size int64
+	done chan error // SubmitWait's: told the batch's outcome; nil otherwise
 }
 
 // Pipeline is the two-stage pipeline (see the package doc).
@@ -223,6 +229,9 @@ func New[T any](cfg Config[T]) (*Pipeline[T], error) {
 	if cfg.BlockTimeout <= 0 {
 		cfg.BlockTimeout = time.Second
 	}
+	if cfg.RetryFor == 0 {
+		cfg.RetryFor = 5 * time.Second
+	}
 	p := &Pipeline[T]{
 		cfg:  cfg,
 		sem:  semaphore.NewWeighted(cfg.QueueBytes),
@@ -259,7 +268,7 @@ func (p *Pipeline[T]) Submit(ctx context.Context, item T) error {
 	// Fast path: room now, no timer.
 	if p.sem.TryAcquire(size) {
 		select {
-		case p.in <- queued[T]{item, size}:
+		case p.in <- queued[T]{item: item, size: size}:
 			p.closeMu.RUnlock()
 			return nil
 		default:
@@ -270,6 +279,47 @@ func (p *Pipeline[T]) Submit(ctx context.Context, item T) error {
 	err := p.submitSlow(ctx, item, size)
 	p.closeMu.RUnlock()
 	return err
+}
+
+// SubmitWait queues item like Submit and then waits for its batch's outcome:
+// nil once the sink took the batch, or the reason it did not. The record
+// closes its batch at once, so it does not wait out the batch period. Both
+// waits — for room and for the outcome — end with ctx (bound it); a wait
+// that ends with ctx returns ctx's error and leaves the record in the
+// pipeline, to be delivered or to take the failure path as any other.
+func (p *Pipeline[T]) SubmitWait(ctx context.Context, item T) error {
+	p.submitted.Add(1)
+	size := int64(p.cfg.Size(item))
+	if size < 1 {
+		size = 1
+	}
+	if size > p.cfg.QueueBytes {
+		size = p.cfg.QueueBytes
+	}
+	done := make(chan error, 1)
+	p.closeMu.RLock()
+	if p.closed {
+		p.closeMu.RUnlock()
+		return p.failItem(item, ErrClosed)
+	}
+	if err := p.sem.Acquire(ctx, size); err != nil {
+		p.closeMu.RUnlock()
+		return p.failItem(item, ErrQueueFull)
+	}
+	select {
+	case p.in <- queued[T]{item: item, size: size, done: done}:
+	case <-ctx.Done():
+		p.sem.Release(size)
+		p.closeMu.RUnlock()
+		return p.failItem(item, ErrQueueFull)
+	}
+	p.closeMu.RUnlock()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // TrySubmit queues item only if there is room now; otherwise it goes to
@@ -292,7 +342,7 @@ func (p *Pipeline[T]) TrySubmit(item T) error {
 		return p.failItem(item, ErrQueueFull)
 	}
 	select {
-	case p.in <- queued[T]{item, size}:
+	case p.in <- queued[T]{item: item, size: size}:
 		return nil
 	default:
 		p.sem.Release(size)
@@ -312,7 +362,7 @@ func (p *Pipeline[T]) submitSlow(ctx context.Context, item T, size int64) error 
 		}
 	}
 	select {
-	case p.in <- queued[T]{item, size}:
+	case p.in <- queued[T]{item: item, size: size}:
 		return nil
 	case <-wctx.Done():
 		p.sem.Release(size)
@@ -401,6 +451,7 @@ func (p *Pipeline[T]) batcher() {
 			if err != nil {
 				p.sem.Release(q.size)
 				p.fail(Failure{Err: err, Count: 1})
+				tell(q.done, err)
 				continue
 			}
 			need := protowire.SizeTag(BatchFieldRecords) + protowire.SizeBytes(len(rec))
@@ -412,6 +463,7 @@ func (p *Pipeline[T]) batcher() {
 				if len(b.Wire)+need > p.cfg.BatchBytes {
 					p.sem.Release(q.size)
 					p.fail(Failure{Err: ErrTooLarge, Records: [][]byte{rec}, Count: 1})
+					tell(q.done, ErrTooLarge)
 					continue
 				}
 				timer.Reset(p.cfg.BatchPeriod)
@@ -425,6 +477,13 @@ func (p *Pipeline[T]) batcher() {
 			b.held += q.size
 			if p.cfg.Tag != nil {
 				b.addTag(p.tag(q.item))
+			}
+			if q.done != nil {
+				// A waiting request: close the batch now rather than at the
+				// period, which would only add to its wait.
+				b.dones = append(b.dones, q.done)
+				flush()
+				continue
 			}
 			if b.Len() >= p.cfg.BatchItems {
 				flush()
@@ -456,7 +515,8 @@ func (p *Pipeline[T]) release(b *Batch) {
 	p.bufs.Put(&buf)
 }
 
-// sender is stage 2.
+// sender is stage 2. A batch the sink refuses is tried again with backoff
+// for RetryFor (the sink must be idempotent per batch id), then failed.
 func (p *Pipeline[T]) sender() {
 	defer close(p.done)
 	for b := range p.out {
@@ -464,7 +524,7 @@ func (p *Pipeline[T]) sender() {
 		if p.aborted.Load() {
 			err = ErrClosed
 		} else {
-			err = p.sink(b)
+			err = p.sinkRetrying(b)
 		}
 		if err == nil {
 			p.delivered.Add(uint64(b.Len()))
@@ -476,7 +536,41 @@ func (p *Pipeline[T]) sender() {
 			}
 			p.fail(Failure{Err: err, BatchID: b.ID, Records: recs, Count: b.Len()})
 		}
+		for _, d := range b.dones {
+			tell(d, err)
+		}
+		b.dones = nil
 		p.release(b)
+	}
+}
+
+func (p *Pipeline[T]) sinkRetrying(b *Batch) error {
+	err := p.sink(b)
+	if err == nil || p.cfg.RetryFor < 0 {
+		return err
+	}
+	deadline := time.Now().Add(p.cfg.RetryFor)
+	wait := 25 * time.Millisecond
+	for err != nil && time.Now().Add(wait).Before(deadline) && !p.aborted.Load() {
+		select {
+		case <-p.sinkCtx.Done():
+			return err
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, 500*time.Millisecond)
+		err = p.sink(b)
+	}
+	return err
+}
+
+// tell hands a waiting SubmitWait its batch's outcome (never blocks: the
+// channel holds one, and a caller that gave up no longer reads it).
+func tell(done chan error, err error) {
+	if done != nil {
+		select {
+		case done <- err:
+		default:
+		}
 	}
 }
 

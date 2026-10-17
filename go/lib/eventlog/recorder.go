@@ -71,6 +71,9 @@ type Method struct {
 	RequestTag, ResponseTag protowire.Number
 	// Drop: a marketing record does not wait for room.
 	Drop bool
+	// Sync: an audit record of this method holds its request until the
+	// stream acknowledged it (within RecorderConfig.SyncWait).
+	Sync bool
 }
 
 // RecorderConfig configures a [Recorder].
@@ -92,6 +95,10 @@ type RecorderConfig struct {
 	// Pipeline settings, defaults as in [Config].
 	BlockTimeout time.Duration
 	QueueBytes   int64
+	// SyncWait bounds how long a sync audit record holds its request for
+	// the stream's acknowledgement, the wait for queue room included.
+	// Default 2s.
+	SyncWait time.Duration
 	// Sink overrides the NATS sink (tests).
 	Sink func(api w17pb.RequestApi) func(context.Context, *Batch) error
 }
@@ -105,6 +112,9 @@ type Recorder struct {
 	fail     func(Failure)
 
 	conn *nats.Conn // owned when [Open] dialed it
+
+	syncWait time.Duration
+	syncLate atomic.Int64 // last sync-wait report, unix nanos
 
 	reported atomic.Int64 // last failure report, unix nanos
 	failures atomic.Uint64
@@ -128,6 +138,10 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 	r := &Recorder{domain: cfg.Domain, ceiling: cfg.RecordCeiling, auth: cfg.Auth, surfaces: map[w17pb.RequestApi]*Surface{}}
 	if r.ceiling <= 0 {
 		r.ceiling = DefaultRecordCeiling
+	}
+	r.syncWait = cfg.SyncWait
+	if r.syncWait <= 0 {
+		r.syncWait = 2 * time.Second
 	}
 	r.fail = cfg.Fail
 	if r.fail == nil {
@@ -271,6 +285,8 @@ type Record struct {
 
 	ip, userAgent, referrer string
 	utm                     map[string]string
+
+	finished bool // Finish ran: a later call (the middleware's) does nothing
 }
 
 const (
@@ -377,10 +393,18 @@ func (rec *Record) SetCallerIncoming(ctx context.Context) {
 
 // Finish closes the record and hands it to the stream; httpStatus is 0 on a
 // non-HTTP surface. Nothing may touch the request or response after it.
+//
+// A sync audit record (Method.Sync) holds the caller until the stream
+// acknowledged its batch, at most SyncWait and never past ctx: a surface
+// finishes it BEFORE it answers the client, so a crash after the answer
+// cannot lose the record. A wait that runs out is reported and the request
+// goes on — the record stays in the pipeline, delivered or failed as any
+// other. Finish runs once; later calls do nothing.
 func (rec *Record) Finish(ctx context.Context, httpStatus int) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
+	rec.finished = true
 	s := rec.s
 	rec.dur = time.Since(rec.start)
 	rec.httpStatus = int32(httpStatus)
@@ -407,6 +431,14 @@ func (rec *Record) Finish(ctx context.Context, httpStatus int) {
 	}
 	if rec.method.Drop && rec.purposes&purposeAudit == 0 {
 		_ = s.pipe.TrySubmit(rec)
+		return
+	}
+	if rec.method.Sync && rec.purposes&purposeAudit != 0 {
+		wctx, cancel := context.WithTimeout(ctx, s.r.syncWait)
+		defer cancel()
+		if err := s.pipe.SubmitWait(wctx, rec); err != nil && wctx.Err() != nil {
+			s.r.reportSyncLate(rec.method.FullName, err)
+		}
 		return
 	}
 	_ = s.pipe.Submit(ctx, rec)
@@ -642,6 +674,17 @@ func (r *Recorder) reportFailure(f Failure) {
 	now := time.Now().UnixNano()
 	if last := r.reported.Load(); now-last >= int64(time.Second) && r.reported.CompareAndSwap(last, now) {
 		observx.ReportError(context.Background(), fmt.Errorf("eventlog: %d request record(s) not delivered (%d so far): %w", f.Count, total, f.Err))
+	}
+}
+
+// reportSyncLate: a sync audit record was not acknowledged in time — the
+// request went on. At most once a minute.
+func (r *Recorder) reportSyncLate(method string, err error) {
+	now := time.Now().UnixNano()
+	if last := r.syncLate.Load(); now-last >= int64(time.Minute) && r.syncLate.CompareAndSwap(last, now) {
+		observx.ReportError(context.Background(), fmt.Errorf(
+			"eventlog: domain %s: a sync audit record of %s was not acknowledged within %s — the request went on, the record stays queued: %w",
+			r.domain, method, r.syncWait, err))
 	}
 }
 

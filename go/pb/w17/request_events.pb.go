@@ -23,6 +23,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// AuditMode is how an audit record holds its request. Marketing records are
+// always asynchronous.
+type AuditMode int32
+
+const (
+	// The record is queued and the response returns at once. The loss window
+	// is a crash between the response and the publish.
+	AuditMode_AUDIT_MODE_ASYNC AuditMode = 0
+	// The request waits until the stream acknowledges its record's batch —
+	// a bounded wait (<PREFIX>_REQUEST_EVENTS_SYNC_WAIT, 2s by default). A wait
+	// that runs out is reported and the request completes with its own
+	// response, never failed by the audit. In normal operation the client is
+	// answered only after the ack.
+	AuditMode_AUDIT_MODE_SYNC AuditMode = 1
+)
+
+// Enum value maps for AuditMode.
+var (
+	AuditMode_name = map[int32]string{
+		0: "AUDIT_MODE_ASYNC",
+		1: "AUDIT_MODE_SYNC",
+	}
+	AuditMode_value = map[string]int32{
+		"AUDIT_MODE_ASYNC": 0,
+		"AUDIT_MODE_SYNC":  1,
+	}
+)
+
+func (x AuditMode) Enum() *AuditMode {
+	p := new(AuditMode)
+	*p = x
+	return p
+}
+
+func (x AuditMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AuditMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_request_events_proto_enumTypes[0].Descriptor()
+}
+
+func (AuditMode) Type() protoreflect.EnumType {
+	return &file_w17_request_events_proto_enumTypes[0]
+}
+
+func (x AuditMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AuditMode.Descriptor instead.
+func (AuditMode) EnumDescriptor() ([]byte, []int) {
+	return file_w17_request_events_proto_rawDescGZIP(), []int{0}
+}
+
 // Backpressure is what a request does when the stream has no room.
 type Backpressure int32
 
@@ -58,11 +113,11 @@ func (x Backpressure) String() string {
 }
 
 func (Backpressure) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_request_events_proto_enumTypes[0].Descriptor()
+	return file_w17_request_events_proto_enumTypes[1].Descriptor()
 }
 
 func (Backpressure) Type() protoreflect.EnumType {
-	return &file_w17_request_events_proto_enumTypes[0]
+	return &file_w17_request_events_proto_enumTypes[1]
 }
 
 func (x Backpressure) Number() protoreflect.EnumNumber {
@@ -71,7 +126,7 @@ func (x Backpressure) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Backpressure.Descriptor instead.
 func (Backpressure) EnumDescriptor() ([]byte, []int) {
-	return file_w17_request_events_proto_rawDescGZIP(), []int{0}
+	return file_w17_request_events_proto_rawDescGZIP(), []int{1}
 }
 
 type RequestPurpose int32
@@ -107,11 +162,11 @@ func (x RequestPurpose) String() string {
 }
 
 func (RequestPurpose) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_request_events_proto_enumTypes[1].Descriptor()
+	return file_w17_request_events_proto_enumTypes[2].Descriptor()
 }
 
 func (RequestPurpose) Type() protoreflect.EnumType {
-	return &file_w17_request_events_proto_enumTypes[1]
+	return &file_w17_request_events_proto_enumTypes[2]
 }
 
 func (x RequestPurpose) Number() protoreflect.EnumNumber {
@@ -120,7 +175,7 @@ func (x RequestPurpose) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RequestPurpose.Descriptor instead.
 func (RequestPurpose) EnumDescriptor() ([]byte, []int) {
-	return file_w17_request_events_proto_rawDescGZIP(), []int{1}
+	return file_w17_request_events_proto_rawDescGZIP(), []int{2}
 }
 
 type RequestApi int32
@@ -162,11 +217,11 @@ func (x RequestApi) String() string {
 }
 
 func (RequestApi) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_request_events_proto_enumTypes[2].Descriptor()
+	return file_w17_request_events_proto_enumTypes[3].Descriptor()
 }
 
 func (RequestApi) Type() protoreflect.EnumType {
-	return &file_w17_request_events_proto_enumTypes[2]
+	return &file_w17_request_events_proto_enumTypes[3]
 }
 
 func (x RequestApi) Number() protoreflect.EnumNumber {
@@ -175,7 +230,7 @@ func (x RequestApi) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RequestApi.Descriptor instead.
 func (RequestApi) EnumDescriptor() ([]byte, []int) {
-	return file_w17_request_events_proto_rawDescGZIP(), []int{2}
+	return file_w17_request_events_proto_rawDescGZIP(), []int{3}
 }
 
 // RequestEvents turns the stream on for one surface. Both false (or the
@@ -247,7 +302,9 @@ type RequestEventsMethod struct {
 	// consumers need the request and the status.
 	Response bool `protobuf:"varint,2,opt,name=response,proto3" json:"response,omitempty"`
 	// What the request does when the stream is full.
-	Backpressure  Backpressure `protobuf:"varint,3,opt,name=backpressure,proto3,enum=w17.Backpressure" json:"backpressure,omitempty"`
+	Backpressure Backpressure `protobuf:"varint,3,opt,name=backpressure,proto3,enum=w17.Backpressure" json:"backpressure,omitempty"`
+	// How an audit record of this method holds its request.
+	AuditMode     AuditMode `protobuf:"varint,4,opt,name=audit_mode,json=auditMode,proto3,enum=w17.AuditMode" json:"audit_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -301,6 +358,13 @@ func (x *RequestEventsMethod) GetBackpressure() Backpressure {
 		return x.Backpressure
 	}
 	return Backpressure_BACKPRESSURE_BLOCK
+}
+
+func (x *RequestEventsMethod) GetAuditMode() AuditMode {
+	if x != nil {
+		return x.AuditMode
+	}
+	return AuditMode_AUDIT_MODE_ASYNC
 }
 
 // RequestEventMeta is the fixed part of every record: what a consumer
@@ -620,11 +684,13 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\x18w17/request_events.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x0fw17/field.proto\"C\n" +
 	"\rRequestEvents\x12\x1c\n" +
 	"\tmarketing\x18\x01 \x01(\bR\tmarketing\x12\x14\n" +
-	"\x05audit\x18\x02 \x01(\bR\x05audit\"\x82\x01\n" +
+	"\x05audit\x18\x02 \x01(\bR\x05audit\"\xb1\x01\n" +
 	"\x13RequestEventsMethod\x12\x18\n" +
 	"\aexclude\x18\x01 \x01(\bR\aexclude\x12\x1a\n" +
 	"\bresponse\x18\x02 \x01(\bR\bresponse\x125\n" +
-	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\"\xb4\x05\n" +
+	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\x12-\n" +
+	"\n" +
+	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xb4\x05\n" +
 	"\x10RequestEventMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12/\n" +
 	"\bpurposes\x18\x02 \x03(\x0e2\x13.w17.RequestPurposeR\bpurposes\x12!\n" +
@@ -657,7 +723,10 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\x03utm\x18\x04 \x03(\v2\x1b.w17.RequestClient.UtmEntryB\a\xca\xf3\x18\x03\x98\x02\x01R\x03utm\x1a6\n" +
 	"\bUtmEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*=\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*6\n" +
+	"\tAuditMode\x12\x14\n" +
+	"\x10AUDIT_MODE_ASYNC\x10\x00\x12\x13\n" +
+	"\x0fAUDIT_MODE_SYNC\x10\x01*=\n" +
 	"\fBackpressure\x12\x16\n" +
 	"\x12BACKPRESSURE_BLOCK\x10\x00\x12\x15\n" +
 	"\x11BACKPRESSURE_DROP\x10\x01*k\n" +
@@ -686,34 +755,36 @@ func file_w17_request_events_proto_rawDescGZIP() []byte {
 	return file_w17_request_events_proto_rawDescData
 }
 
-var file_w17_request_events_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_w17_request_events_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_w17_request_events_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_w17_request_events_proto_goTypes = []any{
-	(Backpressure)(0),                  // 0: w17.Backpressure
-	(RequestPurpose)(0),                // 1: w17.RequestPurpose
-	(RequestApi)(0),                    // 2: w17.RequestApi
-	(*RequestEvents)(nil),              // 3: w17.RequestEvents
-	(*RequestEventsMethod)(nil),        // 4: w17.RequestEventsMethod
-	(*RequestEventMeta)(nil),           // 5: w17.RequestEventMeta
-	(*RequestClient)(nil),              // 6: w17.RequestClient
-	nil,                                // 7: w17.RequestClient.UtmEntry
-	(*timestamppb.Timestamp)(nil),      // 8: google.protobuf.Timestamp
-	(*descriptorpb.MethodOptions)(nil), // 9: google.protobuf.MethodOptions
+	(AuditMode)(0),                     // 0: w17.AuditMode
+	(Backpressure)(0),                  // 1: w17.Backpressure
+	(RequestPurpose)(0),                // 2: w17.RequestPurpose
+	(RequestApi)(0),                    // 3: w17.RequestApi
+	(*RequestEvents)(nil),              // 4: w17.RequestEvents
+	(*RequestEventsMethod)(nil),        // 5: w17.RequestEventsMethod
+	(*RequestEventMeta)(nil),           // 6: w17.RequestEventMeta
+	(*RequestClient)(nil),              // 7: w17.RequestClient
+	nil,                                // 8: w17.RequestClient.UtmEntry
+	(*timestamppb.Timestamp)(nil),      // 9: google.protobuf.Timestamp
+	(*descriptorpb.MethodOptions)(nil), // 10: google.protobuf.MethodOptions
 }
 var file_w17_request_events_proto_depIdxs = []int32{
-	0, // 0: w17.RequestEventsMethod.backpressure:type_name -> w17.Backpressure
-	1, // 1: w17.RequestEventMeta.purposes:type_name -> w17.RequestPurpose
-	2, // 2: w17.RequestEventMeta.api:type_name -> w17.RequestApi
-	8, // 3: w17.RequestEventMeta.start:type_name -> google.protobuf.Timestamp
-	6, // 4: w17.RequestEventMeta.client:type_name -> w17.RequestClient
-	7, // 5: w17.RequestClient.utm:type_name -> w17.RequestClient.UtmEntry
-	9, // 6: w17.request_events:extendee -> google.protobuf.MethodOptions
-	4, // 7: w17.request_events:type_name -> w17.RequestEventsMethod
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	7, // [7:8] is the sub-list for extension type_name
-	6, // [6:7] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	1,  // 0: w17.RequestEventsMethod.backpressure:type_name -> w17.Backpressure
+	0,  // 1: w17.RequestEventsMethod.audit_mode:type_name -> w17.AuditMode
+	2,  // 2: w17.RequestEventMeta.purposes:type_name -> w17.RequestPurpose
+	3,  // 3: w17.RequestEventMeta.api:type_name -> w17.RequestApi
+	9,  // 4: w17.RequestEventMeta.start:type_name -> google.protobuf.Timestamp
+	7,  // 5: w17.RequestEventMeta.client:type_name -> w17.RequestClient
+	8,  // 6: w17.RequestClient.utm:type_name -> w17.RequestClient.UtmEntry
+	10, // 7: w17.request_events:extendee -> google.protobuf.MethodOptions
+	5,  // 8: w17.request_events:type_name -> w17.RequestEventsMethod
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	8,  // [8:9] is the sub-list for extension type_name
+	7,  // [7:8] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_w17_request_events_proto_init() }
@@ -727,7 +798,7 @@ func file_w17_request_events_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_request_events_proto_rawDesc), len(file_w17_request_events_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   5,
 			NumExtensions: 1,
 			NumServices:   0,

@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -432,4 +433,101 @@ func TestRecord_InterceptorShape(t *testing.T) {
 	if e.req == nil || e.resp == nil || e.meta.GetHttpStatus() != 0 {
 		t.Fatalf("envelope %+v", e)
 	}
+}
+
+// A sync audit record holds its request until the stream stored it; the
+// middleware's later Finish does nothing.
+func TestRecorder_SyncAuditWaitsForTheAck(t *testing.T) {
+	var mu sync.Mutex
+	stored := 0
+	gate := make(chan struct{})
+	r, _ := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}},
+		func(cfg *RecorderConfig) {
+			cfg.Sink = func(w17pb.RequestApi) func(context.Context, *Batch) error {
+				return func(context.Context, *Batch) error {
+					<-gate
+					mu.Lock()
+					stored++
+					mu.Unlock()
+					return nil
+				}
+			}
+		})
+	sync := *testMethod
+	sync.Sync = true
+	rec := r.Surface(w17pb.RequestApi_REQUEST_API_REST).Start(&sync)
+	done := make(chan struct{})
+	go func() { rec.Finish(context.Background(), 200); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("Finish returned before the stream acknowledged the record")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Finish never returned after the ack")
+	}
+	mu.Lock()
+	if stored != 1 {
+		t.Fatalf("stored %d", stored)
+	}
+	mu.Unlock()
+	rec.Finish(context.Background(), 500) // the middleware's: nothing
+	closeRecorder(t, r)
+	mu.Lock()
+	defer mu.Unlock()
+	if stored != 1 {
+		t.Fatalf("the record was submitted twice (%d)", stored)
+	}
+}
+
+// A sync wait that runs out lets the request go on; the record is still
+// delivered afterwards.
+func TestRecorder_SyncAuditWaitIsBounded(t *testing.T) {
+	gate := make(chan struct{})
+	var delivered atomic.Int32
+	r, _ := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}},
+		func(cfg *RecorderConfig) {
+			cfg.SyncWait = 50 * time.Millisecond
+			cfg.Sink = func(w17pb.RequestApi) func(context.Context, *Batch) error {
+				return func(context.Context, *Batch) error { <-gate; delivered.Add(1); return nil }
+			}
+		})
+	sync := *testMethod
+	sync.Sync = true
+	t0 := time.Now()
+	r.Surface(w17pb.RequestApi_REQUEST_API_REST).Start(&sync).Finish(context.Background(), 200)
+	if d := time.Since(t0); d > time.Second {
+		t.Fatalf("held the request %v past its SyncWait", d)
+	}
+	close(gate)
+	closeRecorder(t, r)
+	if delivered.Load() != 1 {
+		t.Fatal("the record was lost when its request stopped waiting")
+	}
+}
+
+// Marketing is always asynchronous: a sync method on a marketing-only
+// surface does not wait.
+func TestRecorder_SyncIsAuditOnly(t *testing.T) {
+	gate := make(chan struct{})
+	r, _ := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Marketing: true}},
+		func(cfg *RecorderConfig) {
+			cfg.Sink = func(w17pb.RequestApi) func(context.Context, *Batch) error {
+				return func(context.Context, *Batch) error { <-gate; return nil }
+			}
+		})
+	sync := *testMethod
+	sync.Sync = true
+	t0 := time.Now()
+	rec := r.Surface(w17pb.RequestApi_REQUEST_API_REST).Start(&sync)
+	rec.SetCaller(authMD("u", true, "o"))
+	rec.Finish(context.Background(), 200)
+	if time.Since(t0) > time.Second {
+		t.Fatal("a marketing record waited for the ack")
+	}
+	close(gate)
+	closeRecorder(t, r)
 }

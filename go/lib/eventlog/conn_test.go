@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -68,5 +70,37 @@ func TestConn_RecordsTheRequestsBackendCall(t *testing.T) {
 	var nilS *Surface
 	if nilS.Conn(backend, nil) != grpc.ClientConnInterface(backend) {
 		t.Fatal("a nil surface wrapped the conn")
+	}
+}
+
+// A sync audit method: the backend call returns to the handler only once its
+// record is stored — before the handler answers.
+func TestConn_SyncAuditHoldsTheCall(t *testing.T) {
+	gate := make(chan struct{})
+	var stored atomic.Int32
+	r, _ := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_ADMIN: {Audit: true}},
+		func(cfg *RecorderConfig) {
+			cfg.Sink = func(w17pb.RequestApi) func(context.Context, *Batch) error {
+				return func(context.Context, *Batch) error { <-gate; stored.Add(1); return nil }
+			}
+		})
+	s := r.Surface(w17pb.RequestApi_REQUEST_API_ADMIN)
+	sync := *testMethod
+	sync.Sync = true
+	cc := s.Conn(&fakeConn{}, map[string]*Method{"/acme.tasks.TaskService/Create": &sync})
+	answered := make(chan int32, 1)
+	go s.HTTPMiddleware(nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_ = cc.Invoke(req.Context(), "/acme.tasks.TaskService/Create", sampleReq(), &descriptorpb.EnumValueDescriptorProto{})
+		answered <- stored.Load()
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/admin/api/action/x", nil))
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	if n := <-answered; n != 1 {
+		t.Fatalf("the handler answered with %d records stored", n)
+	}
+	closeRecorder(t, r)
+	if stored.Load() != 1 {
+		t.Fatalf("stored %d records (the middleware finished it again?)", stored.Load())
 	}
 }

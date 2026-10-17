@@ -130,6 +130,7 @@ func (h *harness) config() Config[*rec] {
 			h.fails = append(h.fails, cp)
 		},
 		BatchBytes: 1 << 20,
+		RetryFor:   -1, // the retry tests turn it on
 	}
 }
 
@@ -537,5 +538,89 @@ func TestPipeline_BatchCarriesItsDistinctTags(t *testing.T) {
 	closeNow(t, p)
 	if fmt.Sprint(tags) != "[[org-a org-b] []]" || fmt.Sprint(overflow) != "[false true]" {
 		t.Fatalf("tags %v overflow %v", tags, overflow)
+	}
+}
+
+// SubmitWait returns once its batch is stored, without waiting out the
+// batch period.
+func TestPipeline_SubmitWaitReturnsOnDelivery(t *testing.T) {
+	h := newHarness(t)
+	cfg := h.config()
+	cfg.BatchPeriod = time.Hour
+	p := start(t, cfg)
+	_ = p.Submit(context.Background(), &rec{n: 1}) // an async record in the same batch
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	t0 := time.Now()
+	if err := p.SubmitWait(ctx, &rec{n: 2}); err != nil {
+		t.Fatalf("SubmitWait: %v", err)
+	}
+	if time.Since(t0) > time.Second {
+		t.Fatalf("waited %v: the batch period was waited out", time.Since(t0))
+	}
+	if got := h.delivered(); fmt.Sprint(got) != "[1 2]" {
+		t.Fatalf("delivered %v before SubmitWait returned", got)
+	}
+}
+
+// A sink that keeps refusing: the sender retries for RetryFor, then the
+// waiting request learns the batch failed (and the batch takes the failure
+// path).
+func TestPipeline_SubmitWaitLearnsTheFailure(t *testing.T) {
+	h := newHarness(t)
+	cfg := h.config()
+	cfg.RetryFor = 200 * time.Millisecond
+	var calls atomic.Int32
+	cfg.Sink = func(context.Context, *Batch) error { calls.Add(1); return errors.New("nats down") }
+	p := start(t, cfg)
+	err := p.SubmitWait(context.Background(), &rec{n: 1})
+	if err == nil || err.Error() != "nats down" {
+		t.Fatalf("SubmitWait = %v", err)
+	}
+	if calls.Load() < 3 {
+		t.Fatalf("sink tried %d times within RetryFor", calls.Load())
+	}
+	if f := h.failed(); len(f) != 1 || f[0].Count != 1 {
+		t.Fatalf("failures %+v", f)
+	}
+}
+
+// A sink that refuses once and then takes the batch: retried, delivered.
+func TestPipeline_RetryDelivers(t *testing.T) {
+	h := newHarness(t)
+	cfg := h.config()
+	cfg.RetryFor = time.Second
+	inner := cfg.Sink
+	var calls atomic.Int32
+	cfg.Sink = func(ctx context.Context, b *Batch) error {
+		if calls.Add(1) == 1 {
+			return errors.New("ack timeout")
+		}
+		return inner(ctx, b)
+	}
+	p := start(t, cfg)
+	if err := p.SubmitWait(context.Background(), &rec{n: 7}); err != nil {
+		t.Fatalf("SubmitWait: %v", err)
+	}
+	if fmt.Sprint(h.delivered()) != "[7]" || len(h.failed()) != 0 {
+		t.Fatalf("delivered %v, failed %v", h.delivered(), h.failed())
+	}
+}
+
+// The wait ends with its context; the record stays in the pipeline and is
+// delivered later.
+func TestPipeline_SubmitWaitEndsWithItsContext(t *testing.T) {
+	h := newHarness(t)
+	h.gate = make(chan struct{})
+	p := start(t, h.config())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := p.SubmitWait(ctx, &rec{n: 3}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubmitWait = %v", err)
+	}
+	close(h.gate)
+	closeNow(t, p)
+	if fmt.Sprint(h.delivered()) != "[3]" {
+		t.Fatalf("the record was lost when its request stopped waiting: %v", h.delivered())
 	}
 }
