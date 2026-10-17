@@ -104,6 +104,8 @@ type Recorder struct {
 	surfaces map[w17pb.RequestApi]*Surface
 	fail     func(Failure)
 
+	conn *nats.Conn // owned when [Open] dialed it
+
 	reported atomic.Int64 // last failure report, unix nanos
 	failures atomic.Uint64
 	consent  atomic.Int64 // last missing-consent report
@@ -143,7 +145,10 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 		// Not fatal: NATS may not be up yet. The sink creates the stream on
 		// the first publish that finds none; until then batches take the
 		// failure path, reported.
-		if err := ensure(ctx); err != nil {
+		ectx, cancel := context.WithTimeout(ctx, 2*time.Second) // a gateway's boot does not wait on NATS
+		err := ensure(ectx)
+		cancel()
+		if err != nil {
 			observx.ReportError(ctx, fmt.Errorf("eventlog: domain %s: the request stream is not ready yet, creating it on first publish: %w", cfg.Domain, err))
 		}
 		if mp := NATSBatchBytes(cfg.NC); mp > 64 {
@@ -190,7 +195,8 @@ func (r *Recorder) Surface(api w17pb.RequestApi) *Surface {
 	return r.surfaces[api]
 }
 
-// Close drains every surface's pipeline, bounded by ctx.
+// Close drains every surface's pipeline, bounded by ctx, then closes the
+// connection when the recorder owns it.
 func (r *Recorder) Close(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -201,7 +207,47 @@ func (r *Recorder) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	if r.conn != nil {
+		if err := r.conn.Drain(); err != nil {
+			r.conn.Close()
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// Open dials NATS at dsn and starts a recorder over it, owning the
+// connection. NATS not up yet is not an error: the connection keeps trying
+// (and the stream is created on the first publish), and every drop and
+// return is logged — a stream that stops must be visible in the log.
+func Open(ctx context.Context, dsn string, cfg RecorderConfig) (*Recorder, error) {
+	nc, err := nats.Connect(dsn,
+		nats.Name("w17-requests-"+cfg.Domain),
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.NoCallbacksAfterClientClose(),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			log.Printf("eventlog nats: connection LOST (%v) — request records wait, then take the failure path", err)
+		}),
+		nats.ReconnectHandler(func(c *nats.Conn) {
+			log.Printf("eventlog nats: reconnected to %s", c.ConnectedUrl())
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("eventlog: nats connect: %w", err)
+	}
+	js, err := jetstream.New(nc)
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("eventlog: jetstream: %w", err)
+	}
+	cfg.NC, cfg.JS = nc, js
+	r, err := NewRecorder(ctx, cfg)
+	if err != nil {
+		nc.Close()
+		return nil, err
+	}
+	r.conn = nc
+	return r, nil
 }
 
 // Record is one request on its way to the stream. The surface hook fills

@@ -375,3 +375,25 @@ func TestSubject(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// Open dials NATS itself; with the server not up yet it still starts, and
+// records once the server is there.
+func TestOpen_StartsBeforeNATSAndOwnsTheConnection(t *testing.T) {
+	r, err := Open(context.Background(), "nats://127.0.0.1:1", RecorderConfig{
+		Domain:   "tasks",
+		Surfaces: map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}},
+		Fail:     func(Failure) {},
+	})
+	if err != nil {
+		t.Fatalf("Open with NATS down: %v", err)
+	}
+	if r.Surface(w17pb.RequestApi_REQUEST_API_REST) == nil {
+		t.Fatal("no surface")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = r.Close(ctx)
+	if !r.conn.IsClosed() {
+		t.Fatal("Close left the owned connection open")
+	}
+}
