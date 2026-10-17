@@ -272,6 +272,34 @@ func (p *Pipeline[T]) Submit(ctx context.Context, item T) error {
 	return err
 }
 
+// TrySubmit queues item only if there is room now; otherwise it goes to
+// Fail with ErrQueueFull at once (a marketing record set to drop).
+func (p *Pipeline[T]) TrySubmit(item T) error {
+	p.submitted.Add(1)
+	size := int64(p.cfg.Size(item))
+	if size < 1 {
+		size = 1
+	}
+	if size > p.cfg.QueueBytes {
+		size = p.cfg.QueueBytes
+	}
+	p.closeMu.RLock()
+	defer p.closeMu.RUnlock()
+	if p.closed {
+		return p.failItem(item, ErrClosed)
+	}
+	if !p.sem.TryAcquire(size) {
+		return p.failItem(item, ErrQueueFull)
+	}
+	select {
+	case p.in <- queued[T]{item, size}:
+		return nil
+	default:
+		p.sem.Release(size)
+		return p.failItem(item, ErrQueueFull)
+	}
+}
+
 // submitSlow waits for room; size < 0 means its bytes are not yet acquired.
 func (p *Pipeline[T]) submitSlow(ctx context.Context, item T, size int64) error {
 	p.waited.Add(1)
