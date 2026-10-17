@@ -31,6 +31,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I18 | Random tokens | `go/lib/randstr/randstr.go` — `Token` |
 | I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
 | I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `otel.go` |
+| I21 | Request event consumers | `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers`, `DecodeBatch` |
 
 ---
 
@@ -754,3 +755,39 @@ it; the batcher builds the envelope: the request and response by their redaction
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
 - One record per request: a second recorded backend call in the same admin request is not recorded.
 - A marketing surface whose auth response carries no `marketing_consent` is reported (at most once a minute) and its records say no consent; the compiler refuses that configuration before it runs.
+
+## I21. Request event consumers
+
+**Code.** `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers.Marketing`, `Consumers.Audit`, `Consumers.Run`, `Consumers.Serve`, `DecodeBatch`
+
+**Purpose.** The contract a project's marketing and audit integrations read the request
+event stream through. A purpose is a method, so a consumer cannot be registered for the
+wrong one by mistake. Each registered consumer reads from its own durable consumer on the
+`W17_REQUESTS` stream and receives only the records of its purpose, decoded with the
+method's own types when the binary links them.
+
+**Configuration.**
+
+| Setting | Default / effect |
+|---|---|
+| name (`Marketing` / `Audit`) | required, 1–64 of `A–Z a–z 0–9 _ -`: the identity its progress is kept under |
+| subjects | `w17.requests.>`; narrower ones must stay under `w17.requests.` |
+| `DurablePrefix` | required; durable `<prefix>-<purpose>-<name>` |
+| `MaxDeliver` | 5 offers, then `_dlq.w17.requests.<purpose>.<name>` (`W17_REQUESTS_DLQ`) |
+| `AckWait` | 30s per Consume |
+| `Backoff` | 1s doubling to 1m between offers |
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I21.1 | Each consumer MUST receive only the records of its purpose, the request and response decoded with the method's types. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
+| I21.2 | A consumer that fails MUST be offered the batch again after its backoff, without another consumer receiving it twice. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
+| I21.3 | A batch its consumer fails (or panics on) MaxDeliver times MUST go to the dead letter subject with the reason and the original subject, and be reported. | `TestConsumers_DeadLetterAfterMaxDeliver` |
+| I21.4 | Registration MUST refuse a bad name, a subject outside the stream and a duplicate of one purpose. | `TestConsumers_Registration` |
+| I21.5 | A record whose method the binary does not link MUST keep its bytes; a record without meta MUST NOT decode. | `TestDecodeBatch_UnlinkedTypesKeepTheirBytes` |
+| I21.6 | `Serve` MUST refuse an empty DSN and, with NATS down, wait for it until its context ends. | `TestConsumers_ServeNeedsADSNAndStopsWithItsContext` |
+
+**Deliberate limits.**
+- Delivery is at least once: a consumer deduplicates on the record id.
+- A batch is acknowledged as a whole: a consumer that handled part of it and failed is offered all of it again.
