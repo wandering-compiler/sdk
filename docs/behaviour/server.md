@@ -591,6 +591,8 @@ Prometheus meter provider, and W3C propagation.
 | `EnableMetrics` | Prometheus reader on the global meter provider |
 | `ConfigAttrs` | non-secret, non-empty values → resource attribute `w17.config.<lower(key)>`; secret entries dropped |
 | `W17_OBSERVX_DEBUG` | `1` / `true` / `yes` / `on` turns on `ReportEvent`; read at init only |
+| `W17_OBSERVX_REQUEST_DATA` | `all` (default, also empty) / `errors` / `off`, any case: how far request data travels (S20). Any other value → init error naming the variable; read at init only |
+| `W17_OBSERVX_REQUEST_DATA_SAMPLE` | `0`–`1`, default `1`: the share of requests whose data the request stream's telemetry sink records in mode `all` (`SampleRequestData`); errors are not sampled. Outside 0..1, NaN or not a number → init error |
 
 **Shares.** Package globals (tracer, exporter, meter provider, tracker flag, debug flag,
 config, log budgets) plus the OpenTelemetry globals (tracer provider, propagator, meter
@@ -616,18 +618,25 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 | S19.12 | `OTelTLS=on` MUST force TLS with the switch off; an explicit opt-out while the mesh is on MUST be logged; an unrecognised value MUST fail init with an error naming `W17_OTEL_TLS`. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut`, `TestMustInit_RejectsUnknownOTelTLS` |
 | S19.13 | Sampling MUST be parent-based: an incoming sampling decision is kept whatever the local rate. | `TestSampler_HonoursTheParentDecision` |
 | S19.14 | A `SampleRate` outside 0..1, or NaN, MUST fail init instead of being clamped or ignored. | `TestMustInit_RejectsSampleRateOutsideZeroToOne` |
+| S19.15 | An unrecognised `W17_OBSERVX_REQUEST_DATA`, or a `_SAMPLE` outside 0..1, NaN or not a number, MUST fail init with an error naming the variable. | `TestRequestDataEnv` |
 
 **Deliberate limits.**
 - An exporter that is down at start is not an error: OTLP over gRPC connects lazily, and the batcher drops spans later.
 
 ## S20. Error, event and refusal reporting
 
-**Code.** `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal`, `WithRequestScope`
+**Code.** `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal`, `WithRequestScope`; `go/core/observx/requestdata.go` — `WithRequest`, `RequestData`, `SampleRequestData`
 
 **Purpose.** Three channels: faults (span error plus error-tracker issue), debug events
 (gated by `W17_OBSERVX_DEBUG`), and refusals (always recorded, never an issue).
 `WithRequestScope` gives a request its own error-tracker hub, so breadcrumbs stay with the
-request that recorded them.
+request that recorded them. `WithRequest` records the request being served (a pointer,
+nothing encoded); a fault reported for it carries the request, redacted by its plan (S22)
+and cut to 16 KB: in the error tracker as a `request` context (method, type, the fields as
+JSON, the cut paths) with the tags `method`, `org_id`, `user_id` (from the scopes the
+gateway threads), on the failing span as an `observx.request` event, and on the stderr
+fallback line. The gRPC recovery interceptors (`service/runtime`, `core/grpcerr`) call it
+for every unary request.
 
 **Configuration.** Log budgets, fixed: the refusal line and the error and debug stderr
 fallbacks each have a budget of a burst of 50 lines, then 10 lines per second. Lines over
@@ -647,10 +656,18 @@ at `Shutdown`.
 | S20.7 | One request's breadcrumbs MUST NOT be attached to another request's event: breadcrumbs are recorded only on the hub the request's context carries (none without one), and `ReportError` without a request hub MUST drop the shared hub's breadcrumbs. | `TestReportError_DoesNotCarryAnotherRequestsBreadcrumbs`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 | S20.8 | Log volume from client-driven refusals, and from the error and debug fallbacks, MUST be bounded per channel; suppressed lines MUST be counted and the count logged with the next written line and at `Shutdown`. | `TestReportRefusal_LogVolumeIsBounded`, `TestShutdown_ReportsPendingSuppressedLines` |
 | S20.9 | `WithRequestScope` on a context that already carries a hub MUST return it unchanged, so a nested entry point (an in-process call) stays in its caller's request. | `TestRequestScope_KeepsBreadcrumbsPerRequest` |
+| S20.10 | A fault reported for a recorded request MUST carry its plain fields and MUST NOT carry a field its plan leaves out — in the error tracker, on the span and on the stderr line. | `TestReportError_CarriesTheRedactedRequest`, `TestReportError_SpanEventOnlyOnTheFailingSpan`, `TestReportError_WithoutSentryLogsTheRequest` |
+| S20.11 | The request data MUST go only on a failing span, never on one that did not report a fault. | `TestReportError_SpanEventOnlyOnTheFailingSpan` |
+| S20.12 | Modes `all` and `errors` MUST attach the request to a fault; mode `off` MUST attach nothing and `WithRequest` MUST store nothing. | `TestReportError_ModeErrorsStillCarriesIt_ModeOffDoesNot`, `TestWithRequest_OffStoresNothing` |
+| S20.13 | A request type without a plan MUST be omitted (the context says why), never written whole; a request over the size bound MUST be cut and its cut paths named. | `TestReportError_TypeWithoutPlanIsOmitted`, `TestReportError_LargeRequestIsCut` |
+| S20.14 | Both gRPC recovery interceptors MUST record the unary request, so a fault reported while serving it carries it. | `TestRecoverUnary_ErrorCarriesTheRequest` (`service/runtime`, `core/grpcerr`) |
+| S20.15 | `SampleRequestData` MUST be false outside mode `all` and with sample 0, true with sample 1, and hold the configured share otherwise. | `TestSampleRequestData` |
 
 **Deliberate limits.**
 - A request whose entry point did not call `WithRequestScope` records no breadcrumbs. The SDK's entry points call it (the gRPC recovery interceptors, the REST recovery middleware, MCP tool calls); a hand-written entry point must call it too.
 - Without the error tracker, `WithRequestScope` returns the context unchanged.
+- A streaming RPC records no request (there is no single one). The REST and MCP surfaces of a gateway record theirs where the gateway's request layer is generated; until then a backend fault is reported, with its request, by the backend tier that served it.
+- `WithRequest` stores a pointer: the request must not be changed after it is recorded.
 
 ## S21. In-process gRPC bridge
 
@@ -703,3 +720,40 @@ directly, with behaviour equivalent to a wire hop.
 **Deliberate limits.**
 - A stream goroutine stays alive until the caller cancels its context or reads to the end — the same contract as grpc-go.
 - No message-size limit and no deadline injection: there is no wire.
+
+## S22. Redacted records
+
+**Code.** `go/lib/redact/redact.go` — `Plan`, `Set`, `Default`, `Register`, `NewSet`, `Set.Append`
+
+**Purpose.** The wire form of a request or response for the telemetry sinks and the request
+event stream: the message without the fields whose value may never leave the request,
+written straight from it (no copy), cut to fit a per-record ceiling. The compiler emits a
+`_redact.pb.go` beside each `.pb.go` that registers its messages' plans into `Default` at
+init, so a binary has the plan of every message type it links.
+
+**Configuration.**
+
+| Input | Effect |
+|---|---|
+| `Plan.Skip` | field numbers never written (`sensitive`, by label or by type) |
+| ceiling (`Append`) | `> 0` bounds the appended length; `<= 0` none |
+
+**Behaviour.** Over the ceiling the record is written again with every string, bytes,
+repeated and map field capped at one common size, the smallest that fits (largest first); a
+string is cut on a UTF-8 boundary, a list or map keeps its first entries; a field inside a
+list is not cut on its own.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| S22.1 | A planned-out field, an unknown field, `Any` / `Struct` / `Value` / `ListValue`, and a nested type without a plan MUST NOT be written; everything else MUST decode back equal (presence included). | `TestAppend_LeavesOutWhatMayNotLeave` |
+| S22.2 | A top-level type without a plan MUST be an error (`ErrNoPlan`), not an unredacted record. | `TestAppend_NoPlan` |
+| S22.3 | With a ceiling, the record MUST fit it, decode, keep strings valid UTF-8 and lists as prefixes, cut the largest fields to one common level, leave smaller fields whole, and name the cut paths. | `TestAppend_CutsTheLargestFirst`, `TestAppend_CutsInsideNestedMessagesButNotInsideLists`, `TestAppend_PackedAndMapCut`, `TestAppend_ManyCeilings`, `TestWaterLevel` |
+| S22.4 | A record that cannot fit even with every variable-size field emptied MUST be an error (`ErrTooLarge`). | `TestAppend_TooLarge` |
+| S22.5 | A record without a map MUST be written without allocating. | `TestAppend_NoAllocations` |
+| S22.6 | `Register` MUST add to the plans already held and replace a re-registered name, safely beside concurrent `Append`. | `TestRegister_AddsAndReplaces` |
+
+**Deliberate limits.**
+- Field order on the wire is declaration order, not number order; decoders accept either.
+- A record over the ceiling is encoded twice.

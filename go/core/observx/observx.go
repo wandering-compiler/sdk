@@ -366,6 +366,15 @@ func initLocked(c Config) error {
 		debugEvents = false
 	}
 
+	// W17_OBSERVX_REQUEST_DATA / _SAMPLE — how far request data travels
+	// (requestdata.go). A value that does not parse refuses the boot, like
+	// any other bad telemetry setting.
+	mode, sample, err := readRequestDataEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	requestMode, requestSample = mode, sample
+
 	// Sentry init.
 	if c.SentryDSN != "" {
 		opts := sentry.ClientOptions{
@@ -611,10 +620,16 @@ func ReportError(ctx context.Context, err error) {
 		return
 	}
 
+	// The request being served, redacted — built only now, on the error.
+	req := requestReportOf(ctx)
+
 	span := trace.SpanFromContext(ctx)
 	if span.IsRecording() {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		if req != nil {
+			req.spanEvent(span)
+		}
 	}
 
 	mu.Lock()
@@ -626,7 +641,11 @@ func ReportError(ctx context.Context, err error) {
 		// No Sentry → log.Printf fallback. Matches
 		// gox/errorx's behavior so the migration is
 		// observability-equivalent without Sentry.
-		errorLog.printf("error: %s", scrubLog(err.Error()))
+		suffix := ""
+		if req != nil {
+			suffix = req.logSuffix()
+		}
+		errorLog.printf("error: %s%s", scrubLog(err.Error()), scrubLog(suffix))
 		return
 	}
 
@@ -650,6 +669,11 @@ func ReportError(ctx context.Context, err error) {
 			scope.SetTag("trace_id", span.SpanContext().TraceID().String())
 			scope.SetTag("span_id", span.SpanContext().SpanID().String())
 		}
+		if req != nil {
+			scope.SetTag("method", req.method)
+			scope.SetContext("request", req.sentryContext())
+		}
+		callerTags(ctx, scope)
 		hub.CaptureException(err)
 	})
 }

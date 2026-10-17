@@ -302,6 +302,34 @@ message Field {
   // change the wire: it says the column's admitted set includes 0.
   bool zero_is_value = 34;
 
+  // --- Data classification: where a field's value may travel ---
+  //
+  // Two labels, read by everything that carries request data OUT of the
+  // request: error reports (Sentry), traces (OTel), and the request event
+  // stream (marketing, audit). A field carries neither, one, or both.
+  //
+  //   sink                    unlabelled   gdpr          sensitive
+  //   logs, Sentry, traces    yes          yes           never
+  //   marketing stream        yes          yes (with     never
+  //                                        the consent
+  //                                        flag)
+  //   audit stream            yes          yes           never
+  //
+  // gdpr — personal data: a name, an e-mail address, a phone number, a postal
+  // address. It may travel, and is labelled so that what handles a data
+  // subject's rights (export, erasure, retention) can find it. Automatic on
+  // `type: EMAIL`; the request stream also treats the client's IP address and
+  // user agent as gdpr.
+  bool gdpr = 35;
+
+  // sensitive — must not leave the request in any form, for a reason this
+  // label does not say: an internal amount, commercial terms, a national
+  // identifier. Left out of every sink above. Automatic on `type: PASSWORD`,
+  // `type: SECRET` and `type: CRYPTED_SECRET`, and on credentials
+  // (`(w17.rest_api)` `credential`) — writing it there is allowed and changes
+  // nothing. On a message-typed field it covers the whole sub-message.
+  bool sensitive = 36;
+
   // --- Enumerated choices (string carriers) ---
   // FQN of a proto enum reachable from this file. The IR builder resolves
   // the path, reads the enum's value names, and emits
