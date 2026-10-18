@@ -431,9 +431,11 @@ func (x *SecretKey) GetUpdatedBy() string {
 }
 
 type FetchEnvironmentSecretsReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	Environment   string                 `protobuf:"bytes,2,opt,name=environment,proto3" json:"environment,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId   string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Environment string                 `protobuf:"bytes,2,opt,name=environment,proto3" json:"environment,omitempty"`
+	// The commit being deployed, as the deploy says it; recorded with the fetch.
+	DeployRef     string `protobuf:"bytes,3,opt,name=deploy_ref,json=deployRef,proto3" json:"deploy_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -478,6 +480,13 @@ func (x *FetchEnvironmentSecretsReq) GetProjectId() string {
 func (x *FetchEnvironmentSecretsReq) GetEnvironment() string {
 	if x != nil {
 		return x.Environment
+	}
+	return ""
+}
+
+func (x *FetchEnvironmentSecretsReq) GetDeployRef() string {
+	if x != nil {
+		return x.DeployRef
 	}
 	return ""
 }
@@ -665,11 +674,13 @@ const file_domains_console_secrets_secrets_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
 	"\n" +
-	"updated_by\x18\x04 \x01(\tR\tupdatedBy\"]\n" +
+	"updated_by\x18\x04 \x01(\tR\tupdatedBy\"|\n" +
 	"\x1aFetchEnvironmentSecretsReq\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12 \n" +
-	"\venvironment\x18\x02 \x01(\tR\venvironment\"Z\n" +
+	"\venvironment\x18\x02 \x01(\tR\venvironment\x12\x1d\n" +
+	"\n" +
+	"deploy_ref\x18\x03 \x01(\tR\tdeployRef\"Z\n" +
 	"\x1bFetchEnvironmentSecretsResp\x12;\n" +
 	"\bservices\x18\x01 \x03(\v2\x1f.console.secrets.ServiceSecretsR\bservices\"`\n" +
 	"\x0eServiceSecrets\x12\x18\n" +
