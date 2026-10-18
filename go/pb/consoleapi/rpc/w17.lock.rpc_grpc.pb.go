@@ -20,6 +20,7 @@ import (
 	checkpoints "github.com/wandering-compiler/sdk/go/pb/consoleapi/checkpoints"
 	initiatives "github.com/wandering-compiler/sdk/go/pb/consoleapi/initiatives"
 	review "github.com/wandering-compiler/sdk/go/pb/consoleapi/review"
+	secrets "github.com/wandering-compiler/sdk/go/pb/consoleapi/secrets"
 	w17compiler "github.com/wandering-compiler/sdk/go/pb/w17compiler"
 	w17registry "github.com/wandering-compiler/sdk/go/pb/w17registry"
 	grpc "google.golang.org/grpc"
@@ -3487,6 +3488,234 @@ var EnvironmentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _EnvironmentQuery_List_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "domains/console/w17.lock.rpc.proto",
+}
+
+const (
+	EnvironmentSecrets_ListSecretKeys_FullMethodName          = "/w17lock.console.rpc.EnvironmentSecrets/ListSecretKeys"
+	EnvironmentSecrets_SetSecret_FullMethodName               = "/w17lock.console.rpc.EnvironmentSecrets/SetSecret"
+	EnvironmentSecrets_UnsetSecret_FullMethodName             = "/w17lock.console.rpc.EnvironmentSecrets/UnsetSecret"
+	EnvironmentSecrets_FetchEnvironmentSecrets_FullMethodName = "/w17lock.console.rpc.EnvironmentSecrets/FetchEnvironmentSecrets"
+)
+
+// EnvironmentSecretsClient is the client API for EnvironmentSecrets service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type EnvironmentSecretsClient interface {
+	// ListSecretKeys — what is set in an environment: keys, not values.
+	ListSecretKeys(ctx context.Context, in *secrets.ListSecretKeysReq, opts ...grpc.CallOption) (*secrets.ListSecretKeysResp, error)
+	// SetSecret — write one value, replacing the current one. Never echoed.
+	SetSecret(ctx context.Context, in *secrets.SetSecretReq, opts ...grpc.CallOption) (*secrets.SetSecretResp, error)
+	// UnsetSecret — remove one value; it is no longer listed or fetched.
+	// Unsetting a key that is not set is no error.
+	UnsetSecret(ctx context.Context, in *secrets.UnsetSecretReq, opts ...grpc.CallOption) (*secrets.UnsetSecretResp, error)
+	// FetchEnvironmentSecrets — every value set in an environment, by service,
+	// for a deploy to write to its target. Machine accounts only.
+	FetchEnvironmentSecrets(ctx context.Context, in *secrets.FetchEnvironmentSecretsReq, opts ...grpc.CallOption) (*secrets.FetchEnvironmentSecretsResp, error)
+}
+
+type environmentSecretsClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewEnvironmentSecretsClient(cc grpc.ClientConnInterface) EnvironmentSecretsClient {
+	return &environmentSecretsClient{cc}
+}
+
+func (c *environmentSecretsClient) ListSecretKeys(ctx context.Context, in *secrets.ListSecretKeysReq, opts ...grpc.CallOption) (*secrets.ListSecretKeysResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(secrets.ListSecretKeysResp)
+	err := c.cc.Invoke(ctx, EnvironmentSecrets_ListSecretKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *environmentSecretsClient) SetSecret(ctx context.Context, in *secrets.SetSecretReq, opts ...grpc.CallOption) (*secrets.SetSecretResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(secrets.SetSecretResp)
+	err := c.cc.Invoke(ctx, EnvironmentSecrets_SetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *environmentSecretsClient) UnsetSecret(ctx context.Context, in *secrets.UnsetSecretReq, opts ...grpc.CallOption) (*secrets.UnsetSecretResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(secrets.UnsetSecretResp)
+	err := c.cc.Invoke(ctx, EnvironmentSecrets_UnsetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *environmentSecretsClient) FetchEnvironmentSecrets(ctx context.Context, in *secrets.FetchEnvironmentSecretsReq, opts ...grpc.CallOption) (*secrets.FetchEnvironmentSecretsResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(secrets.FetchEnvironmentSecretsResp)
+	err := c.cc.Invoke(ctx, EnvironmentSecrets_FetchEnvironmentSecrets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EnvironmentSecretsServer is the server API for EnvironmentSecrets service.
+// All implementations must embed UnimplementedEnvironmentSecretsServer
+// for forward compatibility.
+type EnvironmentSecretsServer interface {
+	// ListSecretKeys — what is set in an environment: keys, not values.
+	ListSecretKeys(context.Context, *secrets.ListSecretKeysReq) (*secrets.ListSecretKeysResp, error)
+	// SetSecret — write one value, replacing the current one. Never echoed.
+	SetSecret(context.Context, *secrets.SetSecretReq) (*secrets.SetSecretResp, error)
+	// UnsetSecret — remove one value; it is no longer listed or fetched.
+	// Unsetting a key that is not set is no error.
+	UnsetSecret(context.Context, *secrets.UnsetSecretReq) (*secrets.UnsetSecretResp, error)
+	// FetchEnvironmentSecrets — every value set in an environment, by service,
+	// for a deploy to write to its target. Machine accounts only.
+	FetchEnvironmentSecrets(context.Context, *secrets.FetchEnvironmentSecretsReq) (*secrets.FetchEnvironmentSecretsResp, error)
+	mustEmbedUnimplementedEnvironmentSecretsServer()
+}
+
+// UnimplementedEnvironmentSecretsServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedEnvironmentSecretsServer struct{}
+
+func (UnimplementedEnvironmentSecretsServer) ListSecretKeys(context.Context, *secrets.ListSecretKeysReq) (*secrets.ListSecretKeysResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSecretKeys not implemented")
+}
+func (UnimplementedEnvironmentSecretsServer) SetSecret(context.Context, *secrets.SetSecretReq) (*secrets.SetSecretResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSecret not implemented")
+}
+func (UnimplementedEnvironmentSecretsServer) UnsetSecret(context.Context, *secrets.UnsetSecretReq) (*secrets.UnsetSecretResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnsetSecret not implemented")
+}
+func (UnimplementedEnvironmentSecretsServer) FetchEnvironmentSecrets(context.Context, *secrets.FetchEnvironmentSecretsReq) (*secrets.FetchEnvironmentSecretsResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchEnvironmentSecrets not implemented")
+}
+func (UnimplementedEnvironmentSecretsServer) mustEmbedUnimplementedEnvironmentSecretsServer() {}
+func (UnimplementedEnvironmentSecretsServer) testEmbeddedByValue()                            {}
+
+// UnsafeEnvironmentSecretsServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EnvironmentSecretsServer will
+// result in compilation errors.
+type UnsafeEnvironmentSecretsServer interface {
+	mustEmbedUnimplementedEnvironmentSecretsServer()
+}
+
+func RegisterEnvironmentSecretsServer(s grpc.ServiceRegistrar, srv EnvironmentSecretsServer) {
+	// If the following call panics, it indicates UnimplementedEnvironmentSecretsServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&EnvironmentSecrets_ServiceDesc, srv)
+}
+
+func _EnvironmentSecrets_ListSecretKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(secrets.ListSecretKeysReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnvironmentSecretsServer).ListSecretKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnvironmentSecrets_ListSecretKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnvironmentSecretsServer).ListSecretKeys(ctx, req.(*secrets.ListSecretKeysReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EnvironmentSecrets_SetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(secrets.SetSecretReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnvironmentSecretsServer).SetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnvironmentSecrets_SetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnvironmentSecretsServer).SetSecret(ctx, req.(*secrets.SetSecretReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EnvironmentSecrets_UnsetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(secrets.UnsetSecretReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnvironmentSecretsServer).UnsetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnvironmentSecrets_UnsetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnvironmentSecretsServer).UnsetSecret(ctx, req.(*secrets.UnsetSecretReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EnvironmentSecrets_FetchEnvironmentSecrets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(secrets.FetchEnvironmentSecretsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnvironmentSecretsServer).FetchEnvironmentSecrets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnvironmentSecrets_FetchEnvironmentSecrets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnvironmentSecretsServer).FetchEnvironmentSecrets(ctx, req.(*secrets.FetchEnvironmentSecretsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// EnvironmentSecrets_ServiceDesc is the grpc.ServiceDesc for EnvironmentSecrets service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var EnvironmentSecrets_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "w17lock.console.rpc.EnvironmentSecrets",
+	HandlerType: (*EnvironmentSecretsServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListSecretKeys",
+			Handler:    _EnvironmentSecrets_ListSecretKeys_Handler,
+		},
+		{
+			MethodName: "SetSecret",
+			Handler:    _EnvironmentSecrets_SetSecret_Handler,
+		},
+		{
+			MethodName: "UnsetSecret",
+			Handler:    _EnvironmentSecrets_UnsetSecret_Handler,
+		},
+		{
+			MethodName: "FetchEnvironmentSecrets",
+			Handler:    _EnvironmentSecrets_FetchEnvironmentSecrets_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
