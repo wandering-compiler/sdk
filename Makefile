@@ -29,8 +29,8 @@ pb: protoc-image
 	$(PROTOC_GRPC) w17apply/fetch.proto
 	$(PROTOC_GRPC) w17compiler/codegen.proto
 	$(PROTOC_GRPC) w17registry/registry.proto
-	$(PROTOC_GRPC) w17secrets/secrets.proto
 	$(PROTOC_GRPC) common/distx/distributed_tx.proto
+	$(PROTOC) domains/console/secrets/secrets.proto
 	$(PROTOC_GRPC) \
 		domains/console/initiatives/initiatives.proto \
 		domains/console/review/review.proto \
