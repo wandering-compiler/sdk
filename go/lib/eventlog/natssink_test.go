@@ -12,12 +12,19 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// embeddedJetStream is a JetStream server whose storage is a fixed 8 GiB,
+// whatever the host's free disk: a server left to size itself takes a share
+// of the free disk, and on a near-full host the request stream's capped
+// share left no room for the dead letter stream (EnsureStream's minimum),
+// so a test that dead-letters timed out. 8 GiB holds both streams' fitted
+// caps (the 10 GiB stream halved to 5 GiB, the 1 GiB dead letter stream).
 func embeddedJetStream(t *testing.T) (*nats.Conn, jetstream.JetStream) {
 	t.Helper()
 	opts := natsserver.DefaultTestOptions
 	opts.Port = -1
 	opts.JetStream = true
 	opts.StoreDir = t.TempDir()
+	opts.JetStreamMaxStore = 8 << 30
 	srv := natsserver.RunServer(&opts)
 	t.Cleanup(srv.Shutdown)
 	nc, err := nats.Connect(srv.ClientURL())
