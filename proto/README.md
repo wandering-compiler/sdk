@@ -10,6 +10,7 @@ fails when the committed code differs from what `make pb` writes.
 | `w17compiler/` | the compiler service the CLI calls |
 | `w17apply/` | the deploy plan and fetch services |
 | `w17registry/` | the project registry service |
+| `w17secrets/` | an environment's env values and secrets, held by the console |
 | `common/distx/` | the distributed-transaction envelope |
 | `domains/console/` | the console API messages the CLI uses |
 
