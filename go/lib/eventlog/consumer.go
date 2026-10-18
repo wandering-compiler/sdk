@@ -31,7 +31,8 @@ import (
 // never redelivers a batch to another.
 
 // MarketingConsumer receives the records that serve marketing (signed-in
-// requests, with the caller's consent).
+// requests, each with the caller's marketing consent when the project's auth
+// keeps it — the consumer's to honour before it sends a message).
 type MarketingConsumer interface {
 	ConsumeMarketing(ctx context.Context, b *ConsumedBatch) error
 }

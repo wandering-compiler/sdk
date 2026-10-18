@@ -394,8 +394,12 @@ type RequestEventMeta struct {
 	// The verified caller; empty on an anonymous request.
 	UserId string `protobuf:"bytes,11,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	OrgId  string `protobuf:"bytes,12,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	// The caller's marketing consent, from the principal.
-	MarketingConsent bool           `protobuf:"varint,13,opt,name=marketing_consent,json=marketingConsent,proto3" json:"marketing_consent,omitempty"`
+	// Whether the caller agreed to receive marketing messages, from the
+	// principal (the auth response's `bool marketing_consent`). Unset when the
+	// project's auth does not keep it, or on an anonymous request. It says
+	// nothing about recording: a record is written either way, and a consumer
+	// that sends messages reads it before it sends one.
+	MarketingConsent *bool          `protobuf:"varint,13,opt,name=marketing_consent,json=marketingConsent,proto3,oneof" json:"marketing_consent,omitempty"`
 	Client           *RequestClient `protobuf:"bytes,14,opt,name=client,proto3" json:"client,omitempty"`
 	// The request (or response) was cut to fit the record's size; the paths
 	// name what was cut.
@@ -528,8 +532,8 @@ func (x *RequestEventMeta) GetOrgId() string {
 }
 
 func (x *RequestEventMeta) GetMarketingConsent() bool {
-	if x != nil {
-		return x.MarketingConsent
+	if x != nil && x.MarketingConsent != nil {
+		return *x.MarketingConsent
 	}
 	return false
 }
@@ -690,7 +694,7 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\bresponse\x18\x02 \x01(\bR\bresponse\x125\n" +
 	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\x12-\n" +
 	"\n" +
-	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xb4\x05\n" +
+	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xcf\x05\n" +
 	"\x10RequestEventMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12/\n" +
 	"\bpurposes\x18\x02 \x03(\x0e2\x13.w17.RequestPurposeR\bpurposes\x12!\n" +
@@ -705,8 +709,8 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\x0fduration_micros\x18\n" +
 	" \x01(\x03R\x0edurationMicros\x12 \n" +
 	"\auser_id\x18\v \x01(\tB\a\xca\xf3\x18\x03\x98\x02\x01R\x06userId\x12\x15\n" +
-	"\x06org_id\x18\f \x01(\tR\x05orgId\x12+\n" +
-	"\x11marketing_consent\x18\r \x01(\bR\x10marketingConsent\x12*\n" +
+	"\x06org_id\x18\f \x01(\tR\x05orgId\x120\n" +
+	"\x11marketing_consent\x18\r \x01(\bH\x00R\x10marketingConsent\x88\x01\x01\x12*\n" +
 	"\x06client\x18\x0e \x01(\v2\x12.w17.RequestClientR\x06client\x12\x1c\n" +
 	"\ttruncated\x18\x0f \x01(\bR\ttruncated\x12'\n" +
 	"\x0ftruncated_paths\x18\x10 \x03(\tR\x0etruncatedPaths\x12\x19\n" +
@@ -714,7 +718,8 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x12 \x01(\tR\trequestId\x12#\n" +
 	"\rrequest_field\x18\x13 \x01(\x05R\frequestField\x12%\n" +
-	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseField\"\xe5\x01\n" +
+	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseFieldB\x14\n" +
+	"\x12_marketing_consent\"\xe5\x01\n" +
 	"\rRequestClient\x12\x17\n" +
 	"\x02ip\x18\x01 \x01(\tB\a\xca\xf3\x18\x03\x98\x02\x01R\x02ip\x12&\n" +
 	"\n" +
@@ -793,6 +798,7 @@ func file_w17_request_events_proto_init() {
 		return
 	}
 	file_w17_field_proto_init()
+	file_w17_request_events_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

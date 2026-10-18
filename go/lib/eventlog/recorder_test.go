@@ -237,8 +237,43 @@ func TestRecorder_PurposesPerRequest(t *testing.T) {
 		anon.GetGrpcCode() != int32(codes.Unauthenticated) {
 		t.Fatalf("anonymous audit record %v", anon)
 	}
-	if len(signed.GetPurposes()) != 2 || signed.GetMarketingConsent() {
+	if len(signed.GetPurposes()) != 2 || signed.MarketingConsent == nil || signed.GetMarketingConsent() {
 		t.Fatalf("signed-in record %v", signed)
+	}
+}
+
+// The caller's marketing consent is carried, never applied: a caller who
+// said no, and one whose project's auth keeps no consent, are recorded as the
+// one who said yes is — only the record tells them apart.
+func TestRecorder_ConsentIsCarriedNotApplied(t *testing.T) {
+	surfaces := map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Marketing: true}}
+	r, c := newTestRecorder(t, surfaces)
+	s := r.Surface(w17pb.RequestApi_REQUEST_API_REST)
+	s.Start(testMethod).Done(context.Background(), nil, 200, nil, authMD("u-yes", true, "org-1"))
+	s.Start(testMethod).Done(context.Background(), nil, 200, nil, authMD("u-no", false, "org-1"))
+	closeRecorder(t, r)
+
+	none, cn := newTestRecorder(t, surfaces, func(cfg *RecorderConfig) { cfg.Auth = AuthFields{Scopes: scopesField} })
+	none.Surface(w17pb.RequestApi_REQUEST_API_REST).Start(testMethod).Done(context.Background(), nil, 200, nil, authMD("u-unkept", true, "org-1"))
+	closeRecorder(t, none)
+
+	recs := append(c.records(w17pb.RequestApi_REQUEST_API_REST), cn.records(w17pb.RequestApi_REQUEST_API_REST)...)
+	if len(recs) != 3 {
+		t.Fatalf("%d marketing records, want 3: consent must not decide what is recorded", len(recs))
+	}
+	want := map[string]*bool{"u-yes": proto.Bool(true), "u-no": proto.Bool(false), "u-unkept": nil}
+	for _, raw := range recs {
+		m := decodeEnvelope(t, raw).meta
+		w, ok := want[m.GetUserId()]
+		if !ok {
+			t.Fatalf("unexpected record %v", m)
+		}
+		if (w == nil) != (m.MarketingConsent == nil) || (w != nil && *w != m.GetMarketingConsent()) {
+			t.Fatalf("%s: consent %v, want %v", m.GetUserId(), m.MarketingConsent, w)
+		}
+	}
+	if len(c.fails)+len(cn.fails) != 0 {
+		t.Fatalf("failures %v %v", c.fails, cn.fails)
 	}
 }
 

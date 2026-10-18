@@ -31,9 +31,12 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // its `sensitive` fields ((w17.field) sensitive, PASSWORD, SECRET, …) and
 // cut to a per-record size.
 //
-// Marketing records only signed-in requests, and carries the caller's
-// consent from the principal (`marketing_consent`); audit records every
-// request, anonymous and refused ones included.
+// Marketing records only signed-in requests; audit records every request,
+// anonymous and refused ones included. Neither asks for consent: a marketing
+// record is the project's usage data (what is used, where people stop), and
+// whether the caller may be sent marketing messages is a separate question —
+// the record carries the answer when the project's auth keeps one
+// (`marketing_consent`), for the consumer that sends them.
 
 extend google.protobuf.MethodOptions {
   // The method's request event stream settings, on every surface that
@@ -132,8 +135,12 @@ message RequestEventMeta {
   string user_id = 11 [(w17.field) = { gdpr: true }];
   string org_id = 12;
 
-  // The caller's marketing consent, from the principal.
-  bool marketing_consent = 13;
+  // Whether the caller agreed to receive marketing messages, from the
+  // principal (the auth response's `bool marketing_consent`). Unset when the
+  // project's auth does not keep it, or on an anonymous request. It says
+  // nothing about recording: a record is written either way, and a consumer
+  // that sends messages reads it before it sends one.
+  optional bool marketing_consent = 13;
 
   RequestClient client = 14;
 

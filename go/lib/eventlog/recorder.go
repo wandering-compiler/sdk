@@ -118,7 +118,6 @@ type Recorder struct {
 
 	reported atomic.Int64 // last failure report, unix nanos
 	failures atomic.Uint64
-	consent  atomic.Int64 // last missing-consent report
 }
 
 // Surface records one surface's requests. A nil Surface records nothing,
@@ -417,14 +416,11 @@ func (rec *Record) Finish(ctx context.Context, httpStatus int) {
 	if s.purposes.Audit {
 		rec.purposes |= purposeAudit
 	}
-	// Marketing records signed-in requests only, and needs the consent the
-	// principal carries: a project that turned marketing on without giving
-	// its auth response the field is misconfigured.
+	// Marketing records signed-in requests only, whatever the caller's
+	// marketing consent: the record carries it for the consumer that sends
+	// messages, and is written either way.
 	if s.purposes.Marketing && rec.userID != "" {
 		rec.purposes |= purposeMarketing
-		if !rec.consentKnown {
-			s.r.reportMissingConsent()
-		}
 	}
 	if rec.purposes == 0 {
 		return
@@ -603,7 +599,9 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	m.DurationMicros = rec.dur.Microseconds()
 	m.UserId = rec.userID
 	m.OrgId = rec.orgID
-	m.MarketingConsent = rec.consent
+	if rec.consentKnown {
+		m.MarketingConsent = proto.Bool(rec.consent)
+	}
 	if rec.ip != "" || rec.userAgent != "" || rec.referrer != "" || len(rec.utm) > 0 {
 		m.Client = &w17pb.RequestClient{Ip: rec.ip, UserAgent: rec.userAgent, Referrer: rec.referrer, Utm: rec.utm}
 	}
@@ -685,13 +683,5 @@ func (r *Recorder) reportSyncLate(method string, err error) {
 		observx.ReportError(context.Background(), fmt.Errorf(
 			"eventlog: domain %s: a sync audit record of %s was not acknowledged within %s — the request went on, the record stays queued: %w",
 			r.domain, method, r.syncWait, err))
-	}
-}
-
-func (r *Recorder) reportMissingConsent() {
-	now := time.Now().UnixNano()
-	if last := r.consent.Load(); now-last >= int64(time.Minute) && r.consent.CompareAndSwap(last, now) {
-		observx.ReportError(context.Background(), fmt.Errorf(
-			"eventlog: domain %s records marketing, but the auth response carries no marketing_consent — every marketing record says no consent", r.domain))
 	}
 }
