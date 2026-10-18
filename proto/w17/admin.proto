@@ -3,6 +3,7 @@ syntax = "proto3";
 package w17;
 
 import "google/protobuf/descriptor.proto";
+import "w17/request_events.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
@@ -176,6 +177,11 @@ message AdminApi {
   // custom JS slot widgets; generic pre-built widgets
   // (counter / chart / mini-table) parked v2.
   AdminOverview overview = 12;
+
+  // The request event stream for the admin (request_events.proto): `audit`
+  // only — an admin action is not a marketing signal, so `marketing` is
+  // refused. Absent = no records.
+  RequestEvents request_events = 6;
 }
 
 // AdminAuth declares the thin shim over hand-written storage

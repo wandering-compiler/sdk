@@ -25,13 +25,14 @@ outside the compiler can resolve them** — which is what a plugin author needs.
 | `rest.proto` | the REST / SSE / WS surface |
 | `admin.proto` | admin pages, columns, references, widgets |
 | `event.proto`, `event_subscribers.proto` | the event surface |
+| `request_events.proto` | the request event stream: per-surface purposes, per-method settings, the record's fixed part |
 | `module.proto`, `domain.proto` | connection, dialect, domain |
 | `acl.proto` | permissions, roles, scope |
 | `contrib.proto` | **plugin features** — the one a plugin author reaches for first |
 | `paging.proto`, `rpc.proto`, `mcp.proto`, `cli.proto`, `client.proto`, `error.proto`, `lock.proto` | the remaining surfaces |
 | `pg/`, `mysql/`, `sqlite/` | the per-dialect escape hatches — a native column type, a dialect-only module or project setting |
 
-**22 files.** The five under `pg/`, `mysql/` and `sqlite/` are easy to miss and
+**23 files.** The five under `pg/`, `mysql/` and `sqlite/` are easy to miss and
 are part of the contract: `(w17.pg.column)` and its siblings are what a project
 writes when it needs a type the portable vocabulary does not name.
 

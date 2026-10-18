@@ -1208,6 +1208,32 @@ type Field struct {
 	// Only meaningful on an enum-typed field. It does not rename the value or
 	// change the wire: it says the column's admitted set includes 0.
 	ZeroIsValue bool `protobuf:"varint,34,opt,name=zero_is_value,json=zeroIsValue,proto3" json:"zero_is_value,omitempty"`
+	// --- Data classification: where a field's value may travel ---
+	//
+	// Two labels, read by everything that carries request data OUT of the
+	// request: error reports (Sentry), traces (OTel), and the request event
+	// stream (marketing, audit). A field carries neither, one, or both.
+	//
+	//	sink                    unlabelled   gdpr          sensitive
+	//	logs, Sentry, traces    yes          yes           never
+	//	marketing stream        yes          yes (with     never
+	//	                                     the consent
+	//	                                     flag)
+	//	audit stream            yes          yes           never
+	//
+	// gdpr — personal data: a name, an e-mail address, a phone number, a postal
+	// address. It may travel, and is labelled so that what handles a data
+	// subject's rights (export, erasure, retention) can find it. Automatic on
+	// `type: EMAIL`; the request stream also treats the client's IP address and
+	// user agent as gdpr.
+	Gdpr bool `protobuf:"varint,35,opt,name=gdpr,proto3" json:"gdpr,omitempty"`
+	// sensitive — must not leave the request in any form, for a reason this
+	// label does not say: an internal amount, commercial terms, a national
+	// identifier. Left out of every sink above. Automatic on `type: PASSWORD`,
+	// `type: SECRET` and `type: CRYPTED_SECRET`, and on credentials
+	// (`(w17.rest_api)` `credential`) — writing it there is allowed and changes
+	// nothing. On a message-typed field it covers the whole sub-message.
+	Sensitive bool `protobuf:"varint,36,opt,name=sensitive,proto3" json:"sensitive,omitempty"`
 	// --- Enumerated choices (string carriers) ---
 	// FQN of a proto enum reachable from this file. The IR builder resolves
 	// the path, reads the enum's value names, and emits
@@ -1654,6 +1680,20 @@ func (x *Field) GetPattern() string {
 func (x *Field) GetZeroIsValue() bool {
 	if x != nil {
 		return x.ZeroIsValue
+	}
+	return false
+}
+
+func (x *Field) GetGdpr() bool {
+	if x != nil {
+		return x.Gdpr
+	}
+	return false
+}
+
+func (x *Field) GetSensitive() bool {
+	if x != nil {
+		return x.Sensitive
 	}
 	return false
 }
@@ -2368,7 +2408,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\xb0\t\n" +
+	" \x01(\tR\amessage\"\xe2\t\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
 	"\x02pk\x18\x02 \x01(\bR\x02pk\x12\x1c\n" +
@@ -2385,7 +2425,9 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x02lt\x18\f \x01(\x01H\x05R\x02lt\x88\x01\x01\x12\x15\n" +
 	"\x03lte\x18\r \x01(\x01H\x06R\x03lte\x88\x01\x01\x12\x18\n" +
 	"\apattern\x18\x0e \x01(\tR\apattern\x12\"\n" +
-	"\rzero_is_value\x18\" \x01(\bR\vzeroIsValue\x12\x18\n" +
+	"\rzero_is_value\x18\" \x01(\bR\vzeroIsValue\x12\x12\n" +
+	"\x04gdpr\x18# \x01(\bR\x04gdpr\x12\x1c\n" +
+	"\tsensitive\x18$ \x01(\bR\tsensitive\x12\x18\n" +
 	"\achoices\x18\x10 \x01(\tR\achoices\x12\x1c\n" +
 	"\tprecision\x18\x11 \x01(\x05R\tprecision\x12\x19\n" +
 	"\x05scale\x18\x12 \x01(\x05H\aR\x05scale\x88\x01\x01\x12'\n" +

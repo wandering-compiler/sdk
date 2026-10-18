@@ -5,7 +5,7 @@ between tiers, how permissions are checked, and how messages are translated and
 formatted. Includes the eventbus-backed server-sent-events hub, because it is the
 eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 (event hub only), `go/lib/principal`, `go/lib/acllock`, `go/lib/i18n`,
-`go/lib/typere`, `go/lib/randstr`.
+`go/lib/typere`, `go/lib/randstr`, `go/lib/eventlog`.
 
 ## Features
 
@@ -29,6 +29,9 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I16 | Catalog tooling | `go/lib/i18n/extract.go`, `harvest.go` — `MarshalPO`, `MergePO`, `HarvestEnumLabels` |
 | I17 | Shared value validators | `go/lib/typere/typere.go` — `UUID`, `Slug`, `URL`, `MAC`, `ValidEmail`, `FitsDecimal` |
 | I18 | Random tokens | `go/lib/randstr/randstr.go` — `Token` |
+| I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
+| I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `otel.go` |
+| I21 | Request event consumers | `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers`, `DecodeBatch` |
 
 ---
 
@@ -62,6 +65,7 @@ the emit after the database commit.
 | I1.4 | An event MUST NOT be lost without a trace on any transport, in any bus state. | `TestMemoryBus_DispatchAfterDrainIsRefused`, `TestDispatchAfterClose_IsAnErrorOnEveryTransport`, `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I1.5 | An empty topic MUST be refused on every transport with `ErrInvalidTopic` and reported through `OnEmitFailure`. | `TestDispatch_EmptyTopicRefusedOnEveryTransport` |
 | I1.6 | A channel or topic that breaks the name rule MUST be refused identically on every transport, before any broker call, at both `Subscriber` and `Dispatch`; the names generated surfaces use MUST stay valid. | `TestChannelNameRefusedOnEveryTransport` |
+| I1.7 | The channel names `w17` and `w17_*` (any case) MUST be refused: the request event stream owns the `w17.requests.>` subjects and the `W17_REQUESTS` stream. | `TestValidateChannel_ReservedW17` |
 
 **Deliberate limits.**
 - No transactional outbox. The event is published after the commit by the
@@ -656,3 +660,144 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 **Deliberate limits.**
 - The caller chooses `n`; a short `n` gives low entropy.
+
+## I19. Request event pipeline
+
+**Code.** `go/lib/eventlog/pipeline.go` — `New`, `Config`, `Pipeline.Submit`, `Pipeline.Close`, `Pipeline.Stats`, `Batch`, `Failure`
+
+**Purpose.** Carries the record of every request a gateway serves to a sink (the event
+bus, OTel) without a goroutine per request: the request hands a pointer to a queue, one
+batcher encodes the records into batches, one sender delivers each batch.
+
+**Configuration.**
+
+| Setting | Default / effect |
+|---|---|
+| `Size`, `Encode`, `Sink`, `Fail` | required; `Size` runs on the request path, the rest in the background |
+| `BatchBytes` | required (> 64): a batch's largest encoded size, the sink's limit |
+| `BatchItems` | 1000: a batch closes at this many records |
+| `BatchPeriod` | 10ms: a batch closes this long after its first record |
+| `QueueBytes` | 64 MiB: memory held by queued and in-flight records, by `Size`; one item larger than it takes the whole budget |
+| `QueueItems` | 65536: capacity of the request-side queue |
+| `SendQueue` | 4: closed batches waiting for the sender |
+| `BlockTimeout` | 1s: the longest `Submit` waits for room |
+
+**Behaviour.** The batch is a protobuf message: field 1 the batch id (16 bytes, UUIDv7),
+field 2 each record as `Encode` wrote it, so a consumer decodes it with its own Batch type.
+`Submit` returns nil when queued, otherwise the reason, the record having already gone to
+`Fail`; the caller goes on either way.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I19.1 | Every submitted record MUST be delivered, in submission order from one producer, each batch with its own id, its wire form decoding to its records. | `TestPipeline_DeliversEveryRecordInOrder` |
+| I19.2 | A batch MUST close at `BatchItems`, at `BatchPeriod` after its first record, and before its encoding would exceed `BatchBytes`. | `TestPipeline_BatchClosesByCount`, `TestPipeline_BatchClosesByPeriod`, `TestPipeline_BatchClosesBySize` |
+| I19.3 | A slow sink MUST slow the producers down, never drop a record. | `TestPipeline_BackpressureLosesNothing` |
+| I19.4 | Queued and in-flight records MUST NOT hold more than `QueueBytes`; a record that finds no room within the wait MUST go to `Fail` with its encoding. | `TestPipeline_QueueBoundInBytes` |
+| I19.5 | `Submit` MUST NOT wait past `BlockTimeout` or its context. | `TestPipeline_QueueBoundInBytes`, `TestPipeline_WaitEndsWithTheRequest` |
+| I19.6 | A record that does not encode, whose encoder panics, or that cannot fit a batch MUST go to `Fail`, and the pipeline MUST go on. | `TestPipeline_FailurePaths`, `TestPipeline_TooLargeRecord` |
+| I19.7 | A batch the sink refuses or panics on MUST go to `Fail` whole, with its id and records. | `TestPipeline_SinkErrorAndPanicFailTheBatch` |
+| I19.8 | `Close` MUST deliver everything queued; a record submitted after it MUST go to `Fail` with `ErrClosed`. | `TestPipeline_CloseDrainsThenRefuses` |
+| I19.9 | A `Close` whose context ends MUST return, failing what it still holds: every record is delivered or failed, none lost unreported. | `TestPipeline_CloseBoundedByItsContext`, `TestPipeline_SubmitRacingClose` |
+| I19.10 | `Submit` racing `Close` MUST NOT panic. | `TestPipeline_SubmitRacingClose` |
+| I19.11 | `Submit` with room MUST NOT allocate. | `TestPipeline_SubmitDoesNotAllocate` |
+| I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes`. | `TestNew_RequiresItsParts` |
+| I19.13 | A batch MUST carry the distinct tags of its records (`Config.Tag`), at most `MaxBatchTags`, and say when there were more. | `TestPipeline_BatchCarriesItsDistinctTags` |
+| I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once. | `TestRecorder_DropDoesNotWait` |
+| I19.15 | `SubmitWait` MUST return once its record's batch is stored, closing the batch at once rather than at the period. | `TestPipeline_SubmitWaitReturnsOnDelivery` |
+| I19.16 | `SubmitWait` MUST return the batch's failure when the sink keeps refusing it past `RetryFor`; a wait that ends with its context MUST leave the record in the pipeline, delivered later. | `TestPipeline_SubmitWaitLearnsTheFailure`, `TestPipeline_SubmitWaitEndsWithItsContext` |
+| I19.17 | A batch the sink refuses MUST be retried with backoff for `RetryFor` before it fails. | `TestPipeline_RetryDelivers`, `TestPipeline_SubmitWaitLearnsTheFailure` |
+
+**Deliberate limits.**
+- A sink MUST return once its context ends: `Close` past its deadline cancels it and waits for it.
+- Order across producers is the order they reached the queue; a gateway with several replicas has no order across them.
+- A recovered panic is reported at most once a second (the count rides on the report).
+- Retries, the `sync` audit wait and the sinks themselves belong to the gateway's event layer, not to the pipeline.
+
+## I20. Request event recorder
+
+**Code.** `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Recorder.Surface`, `Surface.Start`, `Record`; `go/lib/eventlog/http.go` — `Surface.HTTPMiddleware`, `Begin`; `go/lib/eventlog/conn.go` — `Surface.Conn`; `go/lib/eventlog/natssink.go` — `NATSSink`, `EnsureStream`, `NATSBatchBytes`; `go/lib/eventlog/otel.go`
+
+**Purpose.** Records the requests of a gateway's surfaces into the request event stream:
+one record per request on `w17.requests.<domain>.<api>` (the `W17_REQUESTS` stream), for
+the project's marketing and audit consumers, and — sampled — into the telemetry backend.
+A surface hook starts a `Record` (the request path's one allocation), fills it and finishes
+it; the batcher builds the envelope: the request and response by their redaction plans
+(S22) under the per-domain lock's oneof numbers, then the `w17.RequestEventMeta`.
+
+**Configuration.**
+
+| Setting | Default / effect |
+|---|---|
+| `Domain`, `Surfaces` (purposes per surface) | required; a surface with no purpose has no recorder (`Surface` returns nil, whose methods are no-ops) |
+| `Auth` | the auth response's `scopes` and `marketing_consent` numbers; `user_id` is field 2 by contract |
+| `RecordCeiling` | 64 KiB per record; the request and response share it |
+| `Stream` | the stream's limits when it creates it: 7 days, 10 GiB (halved, down to 64 MiB, while the server has no room for it, and logged), 1 replica, 2-minute duplicate window; an existing stream keeps its own |
+| `Fail` | default: each undelivered record as numbered log lines (base64, under 16 KiB a line), and a report at most once a second |
+| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection |
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I20.1 | A record MUST carry its meta (id, purposes, api, domain, method, route, status, code, start, duration, caller, consent, client, request id), the request without its planned-out fields, and the response only when the method opts in and the call succeeded. | `TestRecorder_WritesTheEnvelope`, `TestRecorder_ResponseOnlyWhenOptedInAndOK` |
+| I20.2 | Marketing MUST record signed-in requests only; audit MUST record every request, anonymous and refused ones included. | `TestRecorder_PurposesPerRequest` |
+| I20.3 | A record MUST fit its ceiling, and the cut fields' paths MUST be named, prefixed `request.` / `response.`. | `TestRecorder_CutPathsArePrefixed` |
+| I20.4 | A marketing record set to drop MUST NOT wait for room. | `TestRecorder_DropDoesNotWait` |
+| I20.5 | The default failure path MUST write each undelivered record in numbered parts under the log driver's line limit, readable back into the record, and count those it has no encoding for. | `TestRecorder_FailureLogLines` |
+| I20.6 | Over JetStream, each surface's records MUST be stored on its subject, a batch's organizations on `W17-Orgs` and its id on `Nats-Msg-Id`. | `TestRecorder_OverJetStream`, `TestSubject` |
+| I20.7 | The NATS sink MUST count a batch delivered only once stored, store a re-sent batch once, honour its context, and create the stream when a publish finds none. | `TestNATSSink_StoresEachBatchOnce`, `TestNATSSink_UnstoredBatchFails`, `TestNATSSink_HonoursItsContext`, `TestNATSSink_CreatesTheStreamOnDemand` |
+| I20.8 | The HTTP middleware MUST finish the record the handler began, with the status, the client through the trusted proxies, the UTM parameters and the request id; a request without `Begin` MUST record nothing; the writer MUST keep `Flush` and `Hijack`. | `TestHTTPMiddleware_FinishesTheRecordTheHandlerBegan`, `TestHTTPMiddleware_OffSurfaceAndNoSlot`, `TestHTTPMiddleware_KeepsHijack` |
+| I20.9 | `Surface.Conn` MUST record a request's first call of a recorded method into the request's record and pass every other call through. | `TestConn_RecordsTheRequestsBackendCall` |
+| I20.10 | The caller MUST be read from the stamped metadata, outgoing or incoming, and an interceptor's untyped request and response MUST be recorded. | `TestRecord_SetCallerFromContext`, `TestRecord_InterceptorShape` |
+| I20.11 | `Open` MUST start with NATS not up yet, and `Close` MUST close the connection it owns. | `TestOpen_StartsBeforeNATSAndOwnsTheConnection` |
+| I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink` |
+| I20.13 | A sync audit record MUST hold its caller until its batch is stored; a later `Finish` MUST do nothing. | `TestRecorder_SyncAuditWaitsForTheAck` |
+| I20.14 | The sync wait MUST NOT outlast `SyncWait`; the record MUST still be delivered after the request went on. | `TestRecorder_SyncAuditWaitIsBounded` |
+| I20.15 | Marketing MUST never wait, whatever the method's mode. | `TestRecorder_SyncIsAuditOnly` |
+| I20.16 | Through `Surface.Conn`, a sync audit method's backend call MUST return to the handler only once its record is stored, and the record MUST be stored once. | `TestConn_SyncAuditHoldsTheCall` |
+| I20.17 | `EnsureStream` MUST create a missing stream within the server's storage, halving its cap while it does not fit, and MUST leave an existing stream's limits as they are. | `TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone` |
+| I20.18 | The caller's marketing consent MUST be carried, never applied: a signed-in request on a marketing surface MUST be recorded whether its consent is yes, no or not kept, and the record's `marketing_consent` MUST be the principal's value, unset when the auth response does not declare the field. | `TestRecorder_ConsentIsCarriedNotApplied` |
+
+**Deliberate limits.**
+- A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
+- One record per request: a second recorded backend call in the same admin request is not recorded.
+- Consent is not the recorder's to enforce: a marketing record is the project's usage data, and whether its caller may be sent marketing messages is for the consumer that sends them, which reads `marketing_consent`.
+
+## I21. Request event consumers
+
+**Code.** `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers.Marketing`, `Consumers.Audit`, `Consumers.Run`, `Consumers.Serve`, `DecodeBatch`
+
+**Purpose.** The contract a project's marketing and audit integrations read the request
+event stream through. A purpose is a method, so a consumer cannot be registered for the
+wrong one by mistake. Each registered consumer reads from its own durable consumer on the
+`W17_REQUESTS` stream and receives only the records of its purpose, decoded with the
+method's own types when the binary links them.
+
+**Configuration.**
+
+| Setting | Default / effect |
+|---|---|
+| name (`Marketing` / `Audit`) | required, 1–64 of `A–Z a–z 0–9 _ -`: the identity its progress is kept under |
+| subjects | `w17.requests.>`; narrower ones must stay under `w17.requests.` |
+| `DurablePrefix` | required; durable `<prefix>-<purpose>-<name>` |
+| `MaxDeliver` | 5 offers, then `_dlq.w17.requests.<purpose>.<name>` (`W17_REQUESTS_DLQ`) |
+| `AckWait` | 30s per Consume |
+| `Backoff` | 1s doubling to 1m between offers |
+| `Stream` | the dead letter stream's limits, as the recorder's but 1 GiB |
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I21.1 | Each consumer MUST receive only the records of its purpose, the request and response decoded with the method's types. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
+| I21.2 | A consumer that fails MUST be offered the batch again after its backoff, without another consumer receiving it twice. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
+| I21.3 | A batch its consumer fails (or panics on) MaxDeliver times MUST go to the dead letter subject with the reason and the original subject, and be reported. | `TestConsumers_DeadLetterAfterMaxDeliver` |
+| I21.4 | Registration MUST refuse a bad name, a subject outside the stream and a duplicate of one purpose. | `TestConsumers_Registration` |
+| I21.5 | A record whose method the binary does not link MUST keep its bytes; a record without meta MUST NOT decode. | `TestDecodeBatch_UnlinkedTypesKeepTheirBytes` |
+| I21.6 | `Serve` MUST refuse an empty DSN and, with NATS down, wait for it until its context ends. | `TestConsumers_ServeNeedsADSNAndStopsWithItsContext` |
+
+**Deliberate limits.**
+- Delivery is at least once: a consumer deduplicates on the record id.
+- A batch is acknowledged as a whole: a consumer that handled part of it and failed is offered all of it again.

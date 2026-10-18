@@ -3,6 +3,7 @@ syntax = "proto3";
 package w17;
 
 import "google/protobuf/descriptor.proto";
+import "w17/request_events.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
@@ -137,6 +138,10 @@ message RpcApi {
   // (override-or-original) backend service — both paths converge
   // on the same internal model.
   repeated RpcGroup groups = 6;
+
+  // The request event stream for this surface (request_events.proto):
+  // which purposes its records serve. Absent = no records.
+  RequestEvents request_events = 7;
 }
 
 // RpcGroup buckets backend methods under one public gRPC service

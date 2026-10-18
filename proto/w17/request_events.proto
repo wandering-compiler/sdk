@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/timestamp.proto";
+import "w17/field.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// Request event stream vocabulary.
+//
+// A gateway can record every external request it serves — as a record on
+// the event bus, for the project's marketing and audit consumers, and into
+// the telemetry backend. Two places declare it:
+//
+//   `request_events` on a surface (RestApi, RpcApi, McpApi, AdminApi)
+//                      — turns the stream on for that surface and names
+//                        the purposes its records serve: `marketing`,
+//                        `audit` or both. The admin allows `audit` only.
+//   (w17.request_events) on a method
+//                      — the method's own settings on every surface that
+//                        exposes it: left out, its response recorded too,
+//                        what happens when the stream is full.
+//
+// A record is published once per request, whatever its purposes, on the
+// subject `w17.requests.<domain>.<api>`. Its envelope is generated per
+// domain into `w17.lock.requests.proto`: a `RequestEventMeta` (below) and a
+// `oneof` over the methods' OWN request (and, opted in, response) messages,
+// whose field numbers the lock keeps stable. The request is written without
+// its `sensitive` fields ((w17.field) sensitive, PASSWORD, SECRET, …) and
+// cut to a per-record size.
+//
+// Marketing records only signed-in requests; audit records every request,
+// anonymous and refused ones included. Neither asks for consent: a marketing
+// record is the project's usage data (what is used, where people stop), and
+// whether the caller may be sent marketing messages is a separate question —
+// the record carries the answer when the project's auth keeps one
+// (`marketing_consent`), for the consumer that sends them.
+
+extend google.protobuf.MethodOptions {
+  // The method's request event stream settings, on every surface that
+  // exposes it with the stream on: leave it out (`exclude`), record its
+  // response too (`response`), or let a marketing record drop instead of
+  // waiting for room (`backpressure`).
+  RequestEventsMethod request_events = 50190;
+}
+
+// RequestEvents turns the stream on for one surface. Both false (or the
+// field absent) = no records from the surface.
+message RequestEvents {
+  // Records serve the project's marketing consumers. Signed-in requests
+  // only; refused on the admin surface.
+  bool marketing = 1;
+
+  // Records serve the project's audit consumers. Every request, anonymous
+  // and refused ones included.
+  bool audit = 2;
+}
+
+// RequestEventsMethod is one method's settings, on every surface exposing
+// it that has the stream on.
+message RequestEventsMethod {
+  // Leave the method out of the stream (a landing page with most of the
+  // traffic, covered by other tools).
+  bool exclude = 1;
+
+  // Record the response too. Off by default: lists can be large, and most
+  // consumers need the request and the status.
+  bool response = 2;
+
+  // What the request does when the stream is full.
+  Backpressure backpressure = 3;
+
+  // How an audit record of this method holds its request.
+  AuditMode audit_mode = 4;
+}
+
+// AuditMode is how an audit record holds its request. Marketing records are
+// always asynchronous.
+enum AuditMode {
+  // The record is queued and the response returns at once. The loss window
+  // is a crash between the response and the publish.
+  AUDIT_MODE_ASYNC = 0;
+
+  // The request waits until the stream acknowledges its record's batch —
+  // a bounded wait (<PREFIX>_REQUEST_EVENTS_SYNC_WAIT, 2s by default). A wait
+  // that runs out is reported and the request completes with its own
+  // response, never failed by the audit. In normal operation the client is
+  // answered only after the ack.
+  AUDIT_MODE_SYNC = 1;
+}
+
+// Backpressure is what a request does when the stream has no room.
+enum Backpressure {
+  // Wait for room, for a bounded time; after it the record takes the
+  // failure path (reported, never silent) and the request goes on.
+  BACKPRESSURE_BLOCK = 0;
+
+  // Do not wait: the record takes the failure path at once. Marketing
+  // only — refused on a surface that records audit.
+  BACKPRESSURE_DROP = 1;
+}
+
+// RequestEventMeta is the fixed part of every record: what a consumer
+// routes and filters on, the same on every domain's envelope.
+message RequestEventMeta {
+  // The record's id (16 bytes, a UUIDv7). Delivery is at least once: a
+  // consumer that meets an id twice skips it.
+  bytes id = 1;
+
+  // The purposes this record serves.
+  repeated RequestPurpose purposes = 2;
+
+  // The surface the request came through, and its domain.
+  RequestApi api = 3;
+  string domain = 4;
+
+  // The backend method (`/<package>.<Service>/<Method>`) and, on HTTP
+  // surfaces, the route TEMPLATE (`/notes/{id}`) — never the URL, which may
+  // carry a token.
+  string method = 5;
+  string route = 6;
+
+  // The outcome: the HTTP status on HTTP surfaces, the gRPC code on every
+  // surface (0 = OK).
+  int32 http_status = 7;
+  int32 grpc_code = 8;
+
+  // When the request started, and how long it took.
+  google.protobuf.Timestamp start = 9;
+  int64 duration_micros = 10;
+
+  // The verified caller; empty on an anonymous request.
+  string user_id = 11 [(w17.field) = { gdpr: true }];
+  string org_id = 12;
+
+  // Whether the caller agreed to receive marketing messages, from the
+  // principal (the auth response's `bool marketing_consent`). Unset when the
+  // project's auth does not keep it, or on an anonymous request. It says
+  // nothing about recording: a record is written either way, and a consumer
+  // that sends messages reads it before it sends one.
+  optional bool marketing_consent = 13;
+
+  RequestClient client = 14;
+
+  // The request (or response) was cut to fit the record's size; the paths
+  // name what was cut.
+  bool truncated = 15;
+  repeated string truncated_paths = 16;
+
+  // Joins the record to its trace and its log lines.
+  string trace_id = 17;
+  string request_id = 18;
+
+  // The envelope's field numbers holding the request and the response
+  // (0 = absent): with `method`, what a consumer needs to decode them
+  // without the domain's lock (the method names their types).
+  int32 request_field = 19;
+  int32 response_field = 20;
+}
+
+// RequestClient is what the request says about the client. All of it is
+// personal data.
+message RequestClient {
+  // The client's address, through the surface's trusted proxies.
+  string ip = 1 [(w17.field) = { gdpr: true }];
+  string user_agent = 2 [(w17.field) = { gdpr: true }];
+  string referrer = 3 [(w17.field) = { gdpr: true }];
+  // The `utm_*` query parameters, without the prefix (`source`, `campaign`).
+  map<string, string> utm = 4 [(w17.field) = { gdpr: true }];
+}
+
+enum RequestPurpose {
+  REQUEST_PURPOSE_UNSPECIFIED = 0;
+  REQUEST_PURPOSE_AUDIT = 1;
+  REQUEST_PURPOSE_MARKETING = 2;
+}
+
+enum RequestApi {
+  REQUEST_API_UNSPECIFIED = 0;
+  REQUEST_API_REST = 1;
+  REQUEST_API_RPC = 2;
+  REQUEST_API_MCP = 3;
+  REQUEST_API_ADMIN = 4;
+}

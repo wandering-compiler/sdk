@@ -105,6 +105,25 @@ message EventSubscribers {
   //
   // Default false (standalone) — the shape that works.
   bool colocated = 2;
+
+  // The request event stream's consumers this domain's subscriber runs
+  // (request_events.proto): the project's marketing and audit integrations,
+  // written against sdk/go/lib/eventlog's MarketingConsumer / AuditConsumer.
+  // Absent = the subscriber runs none.
+  RequestConsumers request_consumers = 3;
+}
+
+// RequestConsumers points the generated subscriber at the project's request
+// event consumers. Each one it registers reads the stream from its own
+// durable consumer: a batch is acknowledged once its Consume returns nil,
+// offered again after a backoff otherwise, and dead-lettered after the last
+// offer.
+message RequestConsumers {
+  // Go-module-relative import path of the package exposing
+  // `func RegisterRequestConsumers(c *eventlog.Consumers) error`
+  // (e.g. "domains/tasks/consumers") — the hand-written code, registered the
+  // way the business tier's RegisterBusiness is.
+  string register = 1;
 }
 
 // Subscription — one (event, channel, topic_filter, handler)

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // RecoverUnaryInterceptor is a server-wide panic net for generated
@@ -26,6 +27,10 @@ func RecoverUnaryInterceptor(
 	info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler,
 ) (resp any, err error) {
+	// The request, for an error reported while serving it to carry.
+	if m, ok := req.(proto.Message); ok {
+		ctx = observx.WithRequest(ctx, info.FullMethod, m)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			observx.ReportError(ctx, fmt.Errorf("PANIC %s: %v\n%s", info.FullMethod, r, debug.Stack()))

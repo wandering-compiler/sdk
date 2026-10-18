@@ -3,6 +3,7 @@ syntax = "proto3";
 package w17;
 
 import "google/protobuf/descriptor.proto";
+import "w17/request_events.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
@@ -151,6 +152,10 @@ message McpApi {
   // explicitly in `tools` by ref; an include-only surface generates
   // no standalone bundle.
   repeated string include = 5;
+
+  // The request event stream for this surface (request_events.proto):
+  // which purposes its records serve. Absent = no records.
+  RequestEvents request_events = 6;
 }
 
 // McpTool exposes one gRPC method as an MCP tool. Defaults

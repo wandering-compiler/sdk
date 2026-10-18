@@ -913,6 +913,7 @@ is bounded without a global cap.
 | E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestUntrustedForwarderWarningIsHourly` |
 | E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
 | E26.15 | Without `MAX_STREAMS` no stream is capped. With it, a client already holding that many open public streams (SSE and WebSocket together) MUST be refused with 429 without spending a token, other clients MUST be unaffected, and a stream MUST stop counting once its handler returned; a release frees exactly one slot | `TestFromEnv_MaxStreamsIsOffUnlessSet`, `TestOpenStream_NoCapAdmitsEveryStream`, `TestOpenStream_CapsOpenStreamsPerClient`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault` |
+| E26.16 | `ClientIP` MUST read the client as the limiter keys it, as the address itself: the peer, unless it is a trusted proxy — then the right-most untrusted `X-Forwarded-For` hop; an unusable hop leaves the peer. | `TestClientIP` |
 
 **Deliberate limits.**
 - The limiter is in-process: N replicas give N times the budget.
@@ -959,6 +960,7 @@ unary gRPC call using the w17 JSON dialect.
 | E27.9 | Tool arguments MUST keep 64-bit integers exact over HTTP and stdio: the raw arguments are captured before the MCP library decodes them and handed to `CallUnary`; a refused call leaves no captured arguments behind | `TestServeStreamableHTTP_ToolArgumentsKeepSixtyFourBitNumbers`, `TestHandleMessage_ScopedContextKeepsSixtyFourBitNumbers`, `TestHandleMessage_RefusedCallLeavesNoCapture` |
 | E27.10 | A backend error MUST be reported by code as E3.7: refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
 | E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | `TestAddTool_EachCallRunsInItsOwnReportingScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
+| E27.12 | With `SetRequestEvents`, every call of a recorded tool MUST be recorded — a refused one too — with its request once decoded, the caller after auth and its gRPC code; an unknown tool records nothing. | `TestCallUnary_RecordsTheCall` |
 
 **Deliberate limits.**
 - Unary tools only.

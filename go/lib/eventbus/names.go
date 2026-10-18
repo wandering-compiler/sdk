@@ -44,6 +44,13 @@ func ValidateChannel(name string) error {
 			return fmt.Errorf("%w: %q contains %q (allowed: letters, digits, '_' and '-')", ErrInvalidChannel, name, r)
 		}
 	}
+	// The `w17` subject namespace and the `W17_*` stream names are the
+	// platform's: the request event stream publishes on
+	// `w17.requests.<domain>.<api>` into `W17_REQUESTS`, which a channel's
+	// stream (named after it, over `<channel>.>`) would overlap.
+	if lower := strings.ToLower(name); lower == "w17" || strings.HasPrefix(lower, "w17_") {
+		return fmt.Errorf("%w: %q is reserved for the platform", ErrInvalidChannel, name)
+	}
 	return nil
 }
 

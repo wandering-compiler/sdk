@@ -736,14 +736,38 @@ func (l *Limiter) clientKey(ctx context.Context) (string, keyState) {
 // keyFor is the transport-free half of clientKey: the immediate peer and the
 // X-Forwarded-For values it sent, from gRPC metadata or an HTTP header alike.
 func (l *Limiter) keyFor(peerAddr netip.Addr, forwarded []string) (string, keyState) {
-	if !l.trusted(peerAddr) {
+	addr, fromHeader, st := clientAddr(peerAddr, forwarded, l.cfg.TrustedProxies)
+	if fromHeader {
+		return bucketForAddr(addr), st
+	}
+	return addrKey(addr), st
+}
+
+// ClientIP is the request's client address: the immediate peer, unless the
+// peer is a trusted proxy — then the right-most X-Forwarded-For hop that is
+// not itself trusted. The same reading the limiter keys on, for whatever
+// else needs the client's address (the request event stream).
+func ClientIP(peer netip.Addr, forwarded []string, trusted []netip.Prefix) netip.Addr {
+	addr, _, _ := clientAddr(peer, forwarded, trusted)
+	return addr
+}
+
+// ParseTrustedProxies reads a TRUSTED_PROXIES value as the limiter does.
+func ParseTrustedProxies(raw string) []netip.Prefix {
+	return parseTrustedProxies(raw, "TRUSTED_PROXIES")
+}
+
+// clientAddr resolves the client address; fromHeader says it came from
+// X-Forwarded-For rather than being the peer itself.
+func clientAddr(peerAddr netip.Addr, forwarded []string, trusted []netip.Prefix) (addr netip.Addr, fromHeader bool, st keyState) {
+	if !isTrusted(trusted, peerAddr) {
 		// The peer IS the client (no terminator in front, or one that is not
 		// configured, whose header must not be believed).
 		st := keyResolved
 		if hasForwarded(forwarded) && isPrivate(peerAddr) {
 			st = keyUntrustedForwarder
 		}
-		return addrKey(peerAddr), st
+		return peerAddr, false, st
 	}
 
 	var hops []string
@@ -762,12 +786,12 @@ func (l *Limiter) keyFor(peerAddr netip.Addr, forwarded []string) (string, keySt
 			// unverified, so stop rather than skip past it.
 			break
 		}
-		if !l.trusted(ip) {
-			return bucketForAddr(ip), keyResolved
+		if !isTrusted(trusted, ip) {
+			return ip, true, keyResolved
 		}
 	}
 	// A trusted peer that forwarded nothing usable — the collapse.
-	return addrKey(peerAddr), keyCollapsed
+	return peerAddr, false, keyCollapsed
 }
 
 func hasForwarded(forwarded []string) bool {
@@ -784,14 +808,14 @@ func isPrivate(ip netip.Addr) bool {
 	return ip.IsValid() && (ip.IsLoopback() || ip.IsPrivate())
 }
 
-func (l *Limiter) trusted(ip netip.Addr) bool {
+func isTrusted(trusted []netip.Prefix, ip netip.Addr) bool {
 	if !ip.IsValid() {
 		return false
 	}
 	// A dual-stack listener reports an IPv4 peer as ::ffff:a.b.c.d, which an
 	// IPv4 prefix does not contain.
 	ip = ip.Unmap()
-	for _, p := range l.cfg.TrustedProxies {
+	for _, p := range trusted {
 		if p.Contains(ip) {
 			return true
 		}

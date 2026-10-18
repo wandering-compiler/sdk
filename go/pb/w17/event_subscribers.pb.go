@@ -75,9 +75,14 @@ type EventSubscribers struct {
 	// consumed yet.
 	//
 	// Default false (standalone) — the shape that works.
-	Colocated     bool `protobuf:"varint,2,opt,name=colocated,proto3" json:"colocated,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Colocated bool `protobuf:"varint,2,opt,name=colocated,proto3" json:"colocated,omitempty"`
+	// The request event stream's consumers this domain's subscriber runs
+	// (request_events.proto): the project's marketing and audit integrations,
+	// written against sdk/go/lib/eventlog's MarketingConsumer / AuditConsumer.
+	// Absent = the subscriber runs none.
+	RequestConsumers *RequestConsumers `protobuf:"bytes,3,opt,name=request_consumers,json=requestConsumers,proto3" json:"request_consumers,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *EventSubscribers) Reset() {
@@ -122,6 +127,66 @@ func (x *EventSubscribers) GetColocated() bool {
 		return x.Colocated
 	}
 	return false
+}
+
+func (x *EventSubscribers) GetRequestConsumers() *RequestConsumers {
+	if x != nil {
+		return x.RequestConsumers
+	}
+	return nil
+}
+
+// RequestConsumers points the generated subscriber at the project's request
+// event consumers. Each one it registers reads the stream from its own
+// durable consumer: a batch is acknowledged once its Consume returns nil,
+// offered again after a backoff otherwise, and dead-lettered after the last
+// offer.
+type RequestConsumers struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Go-module-relative import path of the package exposing
+	// `func RegisterRequestConsumers(c *eventlog.Consumers) error`
+	// (e.g. "domains/tasks/consumers") — the hand-written code, registered the
+	// way the business tier's RegisterBusiness is.
+	Register      string `protobuf:"bytes,1,opt,name=register,proto3" json:"register,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestConsumers) Reset() {
+	*x = RequestConsumers{}
+	mi := &file_w17_event_subscribers_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestConsumers) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestConsumers) ProtoMessage() {}
+
+func (x *RequestConsumers) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_event_subscribers_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestConsumers.ProtoReflect.Descriptor instead.
+func (*RequestConsumers) Descriptor() ([]byte, []int) {
+	return file_w17_event_subscribers_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RequestConsumers) GetRegister() string {
+	if x != nil {
+		return x.Register
+	}
+	return ""
 }
 
 // Subscription — one (event, channel, topic_filter, handler)
@@ -182,7 +247,7 @@ type Subscription struct {
 
 func (x *Subscription) Reset() {
 	*x = Subscription{}
-	mi := &file_w17_event_subscribers_proto_msgTypes[1]
+	mi := &file_w17_event_subscribers_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -194,7 +259,7 @@ func (x *Subscription) String() string {
 func (*Subscription) ProtoMessage() {}
 
 func (x *Subscription) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_event_subscribers_proto_msgTypes[1]
+	mi := &file_w17_event_subscribers_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -207,7 +272,7 @@ func (x *Subscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscription.ProtoReflect.Descriptor instead.
 func (*Subscription) Descriptor() ([]byte, []int) {
-	return file_w17_event_subscribers_proto_rawDescGZIP(), []int{1}
+	return file_w17_event_subscribers_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Subscription) GetEvent() string {
@@ -274,10 +339,13 @@ var File_w17_event_subscribers_proto protoreflect.FileDescriptor
 
 const file_w17_event_subscribers_proto_rawDesc = "" +
 	"\n" +
-	"\x1bw17/event_subscribers.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x0fw17/event.proto\"i\n" +
+	"\x1bw17/event_subscribers.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x0fw17/event.proto\"\xad\x01\n" +
 	"\x10EventSubscribers\x127\n" +
 	"\rsubscriptions\x18\x01 \x03(\v2\x11.w17.SubscriptionR\rsubscriptions\x12\x1c\n" +
-	"\tcolocated\x18\x02 \x01(\bR\tcolocated\"\xa3\x01\n" +
+	"\tcolocated\x18\x02 \x01(\bR\tcolocated\x12B\n" +
+	"\x11request_consumers\x18\x03 \x01(\v2\x15.w17.RequestConsumersR\x10requestConsumers\".\n" +
+	"\x10RequestConsumers\x12\x1a\n" +
+	"\bregister\x18\x01 \x01(\tR\bregister\"\xa3\x01\n" +
 	"\fSubscription\x12\x14\n" +
 	"\x05event\x18\x01 \x01(\tR\x05event\x12\x18\n" +
 	"\achannel\x18\x02 \x01(\tR\achannel\x12!\n" +
@@ -298,23 +366,25 @@ func file_w17_event_subscribers_proto_rawDescGZIP() []byte {
 	return file_w17_event_subscribers_proto_rawDescData
 }
 
-var file_w17_event_subscribers_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_w17_event_subscribers_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_w17_event_subscribers_proto_goTypes = []any{
 	(*EventSubscribers)(nil),         // 0: w17.EventSubscribers
-	(*Subscription)(nil),             // 1: w17.Subscription
-	(*RetryPolicy)(nil),              // 2: w17.RetryPolicy
-	(*descriptorpb.FileOptions)(nil), // 3: google.protobuf.FileOptions
+	(*RequestConsumers)(nil),         // 1: w17.RequestConsumers
+	(*Subscription)(nil),             // 2: w17.Subscription
+	(*RetryPolicy)(nil),              // 3: w17.RetryPolicy
+	(*descriptorpb.FileOptions)(nil), // 4: google.protobuf.FileOptions
 }
 var file_w17_event_subscribers_proto_depIdxs = []int32{
-	1, // 0: w17.EventSubscribers.subscriptions:type_name -> w17.Subscription
-	2, // 1: w17.Subscription.retry:type_name -> w17.RetryPolicy
-	3, // 2: w17.event_subscribers:extendee -> google.protobuf.FileOptions
-	0, // 3: w17.event_subscribers:type_name -> w17.EventSubscribers
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	3, // [3:4] is the sub-list for extension type_name
-	2, // [2:3] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 0: w17.EventSubscribers.subscriptions:type_name -> w17.Subscription
+	1, // 1: w17.EventSubscribers.request_consumers:type_name -> w17.RequestConsumers
+	3, // 2: w17.Subscription.retry:type_name -> w17.RetryPolicy
+	4, // 3: w17.event_subscribers:extendee -> google.protobuf.FileOptions
+	0, // 4: w17.event_subscribers:type_name -> w17.EventSubscribers
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	4, // [4:5] is the sub-list for extension type_name
+	3, // [3:4] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_w17_event_subscribers_proto_init() }
@@ -329,7 +399,7 @@ func file_w17_event_subscribers_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_event_subscribers_proto_rawDesc), len(file_w17_event_subscribers_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 1,
 			NumServices:   0,
 		},

@@ -23,10 +23,13 @@ func resetForTest(t *testing.T) {
 	mu.Lock()
 	tracerProvider = nil
 	meterProvider = nil
+	loggerProvider = nil
+	requestLogger = nil
 	otlpExporter = nil
 	sentryEnabled = false
 	sentryClient = nil
 	debugEvents = false
+	requestMode, requestSample = RequestDataAll, 1
 	cfg = Config{}
 	mu.Unlock()
 	for _, l := range limiters {

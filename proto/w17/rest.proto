@@ -3,6 +3,7 @@ syntax = "proto3";
 package w17;
 
 import "google/protobuf/descriptor.proto";
+import "w17/request_events.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
@@ -170,6 +171,10 @@ message RestApi {
   // wired by hand as ordinary `groups[].endpoints[]` (by ref) with no
   // include at all.
   repeated PluginInclude include = 9;
+
+  // The request event stream for this surface (request_events.proto):
+  // which purposes its records serve. Absent = no records.
+  RequestEvents request_events = 10;
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
