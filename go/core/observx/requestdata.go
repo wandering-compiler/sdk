@@ -118,7 +118,7 @@ func SampleRequestData() bool {
 	if mode != RequestDataAll || sample <= 0 {
 		return false
 	}
-	return sample >= 1 || rand.Float64() < sample
+	return sample >= 1 || rand.Float64() < sample //nolint:gosec // G404: a telemetry sample, nothing to guess
 }
 
 // requestLogger is the request telemetry sink's provider: the one MustInit

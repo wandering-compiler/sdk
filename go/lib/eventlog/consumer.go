@@ -306,7 +306,7 @@ func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq,
 	if _, err := cfg.JS.PublishMsg(pctx, out); err != nil {
 		// Not stored: leave it to be offered again rather than lose it.
 		_ = msg.Nak()
-		observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: dead-lettering a batch failed (%v) after: %w", name, err, cause))
+		observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: dead-lettering a batch failed (%w) after: %w", name, err, cause))
 		return
 	}
 	_ = msg.Term()

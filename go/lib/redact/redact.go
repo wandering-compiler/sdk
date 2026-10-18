@@ -245,7 +245,7 @@ func (e *encoder) text(dst []byte, fd protoreflect.FieldDescriptor, v protorefle
 	var b []byte
 	var s string
 	isString := fd.Kind() == protoreflect.StringKind
-	n := 0
+	var n int
 	if isString {
 		s = v.String()
 		n = len(s)

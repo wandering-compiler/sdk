@@ -240,7 +240,7 @@ func New[T any](cfg Config[T]) (*Pipeline[T], error) {
 		done: make(chan struct{}),
 	}
 	p.bufs.New = func() any { b := make([]byte, 0, cfg.BatchBytes); return &b }
-	p.sinkCtx, p.cancelSink = context.WithCancel(context.Background())
+	p.sinkCtx, p.cancelSink = context.WithCancel(context.Background()) //nolint:gosec // G118: cancelSink is stored and called by Close; not leaked.
 	go p.batcher()
 	go p.sender()
 	return p, nil

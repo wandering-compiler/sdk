@@ -808,8 +808,6 @@ func isPrivate(ip netip.Addr) bool {
 	return ip.IsValid() && (ip.IsLoopback() || ip.IsPrivate())
 }
 
-func (l *Limiter) trusted(ip netip.Addr) bool { return isTrusted(l.cfg.TrustedProxies, ip) }
-
 func isTrusted(trusted []netip.Prefix, ip netip.Addr) bool {
 	if !ip.IsValid() {
 		return false
