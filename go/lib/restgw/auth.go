@@ -416,6 +416,7 @@ func CachedAuthFuncWithKeyHeaders(inner AuthFunc, ttl time.Duration, extraCredHe
 			// the cache so distinct principals never share a slot.
 			return inner(ctx, r)
 		}
+		key = addrKeyed(r, key)
 		if data, ok := c.get(key); ok {
 			return data, nil
 		}

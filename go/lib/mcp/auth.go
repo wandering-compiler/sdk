@@ -37,10 +37,17 @@ import (
 //     handshake's params object. Not yet populated; left in
 //     the struct so the MCPAuthFunc signature stays stable
 //     when the wiring lands.
+//   - ClientAddr: the HTTP caller's address (the peer, or the
+//     right-most X-Forwarded-For hop that is not a trusted proxy —
+//     see [Server.SetTrustedProxies]). Empty on stdio.
+//   - Method: what the request calls — the tool's backing RPC
+//     ([Server.SetToolMethod]), or "tools/list".
 type ConnectionInfo struct {
 	Env              map[string]string
 	HTTPHeaders      http.Header
 	InitializeParams map[string]any
+	ClientAddr       string
+	Method           string
 }
 
 // MCPAuthFunc translates a per-connection identity (env vars,
@@ -167,6 +174,15 @@ func CollectAuthHeaders(conn ConnectionInfo) map[string]string {
 		if len(vs) > 0 && !principal.IsEdgeReservedKey(k) {
 			out[strings.ToLower(k)] = vs[0]
 		}
+	}
+	// The request context the gateway owns, written after every client
+	// source so none of them can supply it.
+	out[principal.SurfaceKey] = principal.SurfaceMCP
+	if conn.ClientAddr != "" {
+		out[principal.ClientAddrKey] = conn.ClientAddr
+	}
+	if conn.Method != "" {
+		out[principal.MethodKey] = conn.Method
 	}
 	return out
 }

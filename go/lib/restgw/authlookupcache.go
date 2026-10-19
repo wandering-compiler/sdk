@@ -66,6 +66,7 @@ func (c *AuthLookupCache) Get(r *http.Request, into proto.Message) bool {
 	if !cacheable {
 		return false
 	}
+	key = addrKeyed(r, key)
 	raw, ok := c.c.get(key)
 	if !ok {
 		return false
@@ -93,6 +94,7 @@ func (c *AuthLookupCache) Put(r *http.Request, msg proto.Message) {
 	if !cacheable {
 		return
 	}
+	key = addrKeyed(r, key)
 	raw, err := proto.Marshal(msg)
 	if err != nil {
 		return

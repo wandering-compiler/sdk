@@ -43,7 +43,7 @@ func TestSetAuthEnvPrefix_EmptyIsNoop(t *testing.T) {
 	if s.authEnv != nil {
 		t.Fatalf("empty prefix must not snapshot env, got %v", s.authEnv)
 	}
-	if got := CollectAuthHeaders(s.connInfo(context.Background())); len(got) != 0 {
+	if got := CollectAuthHeaders(s.connInfo(context.Background())); got["authorization"] != "" {
 		t.Fatalf("no env forwarding without a prefix, got %v", got)
 	}
 }
