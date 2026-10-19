@@ -1578,7 +1578,22 @@ type RestEndpoint struct {
 	// So is an endpoint that republishes a plugin method its preset marks
 	// FAILED_ONLY (the same ref, declared here instead of through `include`);
 	// PUBLIC_LIMIT_EVERY_REQUEST declines that.
-	PublicLimit   PublicLimit `protobuf:"varint,20,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
+	PublicLimit PublicLimit `protobuf:"varint,20,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
+	// dpop_mint marks the project's own method as a token mint, on a surface
+	// whose auth method binds tokens to device keys: a facade that calls the
+	// auth plugin's SignIn (or another mint) and reshapes its answer. Its
+	// handler then treats a DPoP proof that comes with no token as the
+	// plugin's mint routes do: it verifies the proof (and the server nonce),
+	// charges the per-address mint budget and the replay store, and hands the
+	// verified key to the backend as `x-w17-dpop-jkt`, which the facade
+	// forwards to the plugin. Without it the gateway ignores an unbound proof
+	// on every method but the plugin's own, and the plugin refuses the mint.
+	//
+	// The plugin's own mints (SignIn, SignUp, ConfirmSignUp, VerifyMfa,
+	// OAuthExchange, CliToken on its AuthService) are mints without saying
+	// so. Requires `exclude_auth` (a mint takes no token); on a surface that
+	// does not bind devices it would do nothing, and is refused.
+	DpopMint      bool `protobuf:"varint,21,opt,name=dpop_mint,json=dpopMint,proto3" json:"dpop_mint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1730,6 +1745,13 @@ func (x *RestEndpoint) GetPublicLimit() PublicLimit {
 		return x.PublicLimit
 	}
 	return PublicLimit_PUBLIC_LIMIT_UNSPECIFIED
+}
+
+func (x *RestEndpoint) GetDpopMint() bool {
+	if x != nil {
+		return x.DpopMint
+	}
+	return false
 }
 
 // MetadataBinding — one HTTP-slot → gRPC-metadata
@@ -2433,7 +2455,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\xc4\x05\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\xe1\x05\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2454,7 +2476,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"credential\x12?\n" +
 	"\x10browser_redirect\x18\x12 \x01(\v2\x14.w17.BrowserRedirectR\x0fbrowserRedirect\x12\"\n" +
 	"\rorg_from_path\x18\x13 \x01(\tR\vorgFromPath\x123\n" +
-	"\fpublic_limit\x18\x14 \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimitJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
+	"\fpublic_limit\x18\x14 \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimit\x12\x1b\n" +
+	"\tdpop_mint\x18\x15 \x01(\bR\bdpopMintJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
 	"\x0fMetadataBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1a\n" +
