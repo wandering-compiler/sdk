@@ -3498,8 +3498,10 @@ const (
 	EnvironmentSecrets_ListSecretKeys_FullMethodName          = "/w17lock.console.rpc.EnvironmentSecrets/ListSecretKeys"
 	EnvironmentSecrets_SetSealedSecrets_FullMethodName        = "/w17lock.console.rpc.EnvironmentSecrets/SetSealedSecrets"
 	EnvironmentSecrets_UnsetSecret_FullMethodName             = "/w17lock.console.rpc.EnvironmentSecrets/UnsetSecret"
+	EnvironmentSecrets_ListSecretFetchGrants_FullMethodName   = "/w17lock.console.rpc.EnvironmentSecrets/ListSecretFetchGrants"
 	EnvironmentSecrets_FetchEnvironmentSecrets_FullMethodName = "/w17lock.console.rpc.EnvironmentSecrets/FetchEnvironmentSecrets"
 	EnvironmentSecrets_OpenSecretWriteGrant_FullMethodName    = "/w17lock.console.rpc.EnvironmentSecrets/OpenSecretWriteGrant"
+	EnvironmentSecrets_ReadSealedSecrets_FullMethodName       = "/w17lock.console.rpc.EnvironmentSecrets/ReadSealedSecrets"
 )
 
 // EnvironmentSecretsClient is the client API for EnvironmentSecrets service.
@@ -3512,6 +3514,9 @@ type EnvironmentSecretsClient interface {
 	// UnsetSecret — remove one value; it is no longer listed or fetched.
 	// Unsetting a key that is not set is no error.
 	UnsetSecret(ctx context.Context, in *secrets.UnsetSecretReq, opts ...grpc.CallOption) (*secrets.UnsetSecretResp, error)
+	// ListSecretFetchGrants — which machine accounts may fetch which
+	// environment of the project (BrowserSecretsService gives and takes them).
+	ListSecretFetchGrants(ctx context.Context, in *secrets.ListSecretFetchGrantsReq, opts ...grpc.CallOption) (*secrets.ListSecretFetchGrantsResp, error)
 	// FetchEnvironmentSecrets — every value set in an environment, by service,
 	// for a deploy to write to its target. Machine accounts only.
 	FetchEnvironmentSecrets(ctx context.Context, in *secrets.FetchEnvironmentSecretsReq, opts ...grpc.CallOption) (*secrets.FetchEnvironmentSecretsResp, error)
@@ -3519,6 +3524,12 @@ type EnvironmentSecretsClient interface {
 	// browser, BrowserSecretsService): trade the code for the grant's public
 	// key, then send every value sealed to it. The grant ends with the write.
 	OpenSecretWriteGrant(ctx context.Context, in *secrets.OpenSecretWriteGrantReq, opts ...grpc.CallOption) (*secrets.OpenSecretWriteGrantResp, error)
+	// ReadSealedSecrets — a person reads an environment's values back, under a
+	// read grant minted on the project's page after the password step-up. The
+	// CLI sends the public half of a key pair it made for this one read; every
+	// value comes back sealed to it, so not even the response carries one
+	// readable. The read ends the grant and is recorded with the keys it read.
+	ReadSealedSecrets(ctx context.Context, in *secrets.ReadSealedSecretsReq, opts ...grpc.CallOption) (*secrets.ReadSealedSecretsResp, error)
 }
 
 type environmentSecretsClient struct {
@@ -3559,6 +3570,16 @@ func (c *environmentSecretsClient) UnsetSecret(ctx context.Context, in *secrets.
 	return out, nil
 }
 
+func (c *environmentSecretsClient) ListSecretFetchGrants(ctx context.Context, in *secrets.ListSecretFetchGrantsReq, opts ...grpc.CallOption) (*secrets.ListSecretFetchGrantsResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(secrets.ListSecretFetchGrantsResp)
+	err := c.cc.Invoke(ctx, EnvironmentSecrets_ListSecretFetchGrants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *environmentSecretsClient) FetchEnvironmentSecrets(ctx context.Context, in *secrets.FetchEnvironmentSecretsReq, opts ...grpc.CallOption) (*secrets.FetchEnvironmentSecretsResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(secrets.FetchEnvironmentSecretsResp)
@@ -3579,6 +3600,16 @@ func (c *environmentSecretsClient) OpenSecretWriteGrant(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *environmentSecretsClient) ReadSealedSecrets(ctx context.Context, in *secrets.ReadSealedSecretsReq, opts ...grpc.CallOption) (*secrets.ReadSealedSecretsResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(secrets.ReadSealedSecretsResp)
+	err := c.cc.Invoke(ctx, EnvironmentSecrets_ReadSealedSecrets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EnvironmentSecretsServer is the server API for EnvironmentSecrets service.
 // All implementations must embed UnimplementedEnvironmentSecretsServer
 // for forward compatibility.
@@ -3589,6 +3620,9 @@ type EnvironmentSecretsServer interface {
 	// UnsetSecret — remove one value; it is no longer listed or fetched.
 	// Unsetting a key that is not set is no error.
 	UnsetSecret(context.Context, *secrets.UnsetSecretReq) (*secrets.UnsetSecretResp, error)
+	// ListSecretFetchGrants — which machine accounts may fetch which
+	// environment of the project (BrowserSecretsService gives and takes them).
+	ListSecretFetchGrants(context.Context, *secrets.ListSecretFetchGrantsReq) (*secrets.ListSecretFetchGrantsResp, error)
 	// FetchEnvironmentSecrets — every value set in an environment, by service,
 	// for a deploy to write to its target. Machine accounts only.
 	FetchEnvironmentSecrets(context.Context, *secrets.FetchEnvironmentSecretsReq) (*secrets.FetchEnvironmentSecretsResp, error)
@@ -3596,6 +3630,12 @@ type EnvironmentSecretsServer interface {
 	// browser, BrowserSecretsService): trade the code for the grant's public
 	// key, then send every value sealed to it. The grant ends with the write.
 	OpenSecretWriteGrant(context.Context, *secrets.OpenSecretWriteGrantReq) (*secrets.OpenSecretWriteGrantResp, error)
+	// ReadSealedSecrets — a person reads an environment's values back, under a
+	// read grant minted on the project's page after the password step-up. The
+	// CLI sends the public half of a key pair it made for this one read; every
+	// value comes back sealed to it, so not even the response carries one
+	// readable. The read ends the grant and is recorded with the keys it read.
+	ReadSealedSecrets(context.Context, *secrets.ReadSealedSecretsReq) (*secrets.ReadSealedSecretsResp, error)
 	mustEmbedUnimplementedEnvironmentSecretsServer()
 }
 
@@ -3615,11 +3655,17 @@ func (UnimplementedEnvironmentSecretsServer) SetSealedSecrets(context.Context, *
 func (UnimplementedEnvironmentSecretsServer) UnsetSecret(context.Context, *secrets.UnsetSecretReq) (*secrets.UnsetSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnsetSecret not implemented")
 }
+func (UnimplementedEnvironmentSecretsServer) ListSecretFetchGrants(context.Context, *secrets.ListSecretFetchGrantsReq) (*secrets.ListSecretFetchGrantsResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSecretFetchGrants not implemented")
+}
 func (UnimplementedEnvironmentSecretsServer) FetchEnvironmentSecrets(context.Context, *secrets.FetchEnvironmentSecretsReq) (*secrets.FetchEnvironmentSecretsResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchEnvironmentSecrets not implemented")
 }
 func (UnimplementedEnvironmentSecretsServer) OpenSecretWriteGrant(context.Context, *secrets.OpenSecretWriteGrantReq) (*secrets.OpenSecretWriteGrantResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method OpenSecretWriteGrant not implemented")
+}
+func (UnimplementedEnvironmentSecretsServer) ReadSealedSecrets(context.Context, *secrets.ReadSealedSecretsReq) (*secrets.ReadSealedSecretsResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadSealedSecrets not implemented")
 }
 func (UnimplementedEnvironmentSecretsServer) mustEmbedUnimplementedEnvironmentSecretsServer() {}
 func (UnimplementedEnvironmentSecretsServer) testEmbeddedByValue()                            {}
@@ -3696,6 +3742,24 @@ func _EnvironmentSecrets_UnsetSecret_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EnvironmentSecrets_ListSecretFetchGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(secrets.ListSecretFetchGrantsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnvironmentSecretsServer).ListSecretFetchGrants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnvironmentSecrets_ListSecretFetchGrants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnvironmentSecretsServer).ListSecretFetchGrants(ctx, req.(*secrets.ListSecretFetchGrantsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EnvironmentSecrets_FetchEnvironmentSecrets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(secrets.FetchEnvironmentSecretsReq)
 	if err := dec(in); err != nil {
@@ -3732,6 +3796,24 @@ func _EnvironmentSecrets_OpenSecretWriteGrant_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EnvironmentSecrets_ReadSealedSecrets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(secrets.ReadSealedSecretsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnvironmentSecretsServer).ReadSealedSecrets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnvironmentSecrets_ReadSealedSecrets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnvironmentSecretsServer).ReadSealedSecrets(ctx, req.(*secrets.ReadSealedSecretsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EnvironmentSecrets_ServiceDesc is the grpc.ServiceDesc for EnvironmentSecrets service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3752,12 +3834,20 @@ var EnvironmentSecrets_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EnvironmentSecrets_UnsetSecret_Handler,
 		},
 		{
+			MethodName: "ListSecretFetchGrants",
+			Handler:    _EnvironmentSecrets_ListSecretFetchGrants_Handler,
+		},
+		{
 			MethodName: "FetchEnvironmentSecrets",
 			Handler:    _EnvironmentSecrets_FetchEnvironmentSecrets_Handler,
 		},
 		{
 			MethodName: "OpenSecretWriteGrant",
 			Handler:    _EnvironmentSecrets_OpenSecretWriteGrant_Handler,
+		},
+		{
+			MethodName: "ReadSealedSecrets",
+			Handler:    _EnvironmentSecrets_ReadSealedSecrets_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
