@@ -39,137 +39,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type SetSecretReq struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	ProjectId   string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	Environment string                 `protobuf:"bytes,2,opt,name=environment,proto3" json:"environment,omitempty"`
-	Service     string                 `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
-	Key         string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
-	// The value. At most 64 KiB: an env value, not a file.
-	Value string `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"`
-	// An environment variable (shown back when listed) rather than a secret
-	// (write-only). Both are encrypted at rest and reach the deploy alike.
-	Plain         bool `protobuf:"varint,6,opt,name=plain,proto3" json:"plain,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetSecretReq) Reset() {
-	*x = SetSecretReq{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetSecretReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetSecretReq) ProtoMessage() {}
-
-func (x *SetSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetSecretReq.ProtoReflect.Descriptor instead.
-func (*SetSecretReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *SetSecretReq) GetProjectId() string {
-	if x != nil {
-		return x.ProjectId
-	}
-	return ""
-}
-
-func (x *SetSecretReq) GetEnvironment() string {
-	if x != nil {
-		return x.Environment
-	}
-	return ""
-}
-
-func (x *SetSecretReq) GetService() string {
-	if x != nil {
-		return x.Service
-	}
-	return ""
-}
-
-func (x *SetSecretReq) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-func (x *SetSecretReq) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
-func (x *SetSecretReq) GetPlain() bool {
-	if x != nil {
-		return x.Plain
-	}
-	return false
-}
-
-type SetSecretResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetSecretResp) Reset() {
-	*x = SetSecretResp{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetSecretResp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetSecretResp) ProtoMessage() {}
-
-func (x *SetSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetSecretResp.ProtoReflect.Descriptor instead.
-func (*SetSecretResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *SetSecretResp) GetUpdatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.UpdatedAt
-	}
-	return nil
-}
-
 type UnsetSecretReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
@@ -182,7 +51,7 @@ type UnsetSecretReq struct {
 
 func (x *UnsetSecretReq) Reset() {
 	*x = UnsetSecretReq{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[2]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -194,7 +63,7 @@ func (x *UnsetSecretReq) String() string {
 func (*UnsetSecretReq) ProtoMessage() {}
 
 func (x *UnsetSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[2]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -207,7 +76,7 @@ func (x *UnsetSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsetSecretReq.ProtoReflect.Descriptor instead.
 func (*UnsetSecretReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{2}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *UnsetSecretReq) GetProjectId() string {
@@ -246,7 +115,7 @@ type UnsetSecretResp struct {
 
 func (x *UnsetSecretResp) Reset() {
 	*x = UnsetSecretResp{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[3]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -258,7 +127,7 @@ func (x *UnsetSecretResp) String() string {
 func (*UnsetSecretResp) ProtoMessage() {}
 
 func (x *UnsetSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[3]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -271,7 +140,7 @@ func (x *UnsetSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsetSecretResp.ProtoReflect.Descriptor instead.
 func (*UnsetSecretResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{3}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{1}
 }
 
 type ListSecretKeysReq struct {
@@ -284,7 +153,7 @@ type ListSecretKeysReq struct {
 
 func (x *ListSecretKeysReq) Reset() {
 	*x = ListSecretKeysReq{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[4]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -296,7 +165,7 @@ func (x *ListSecretKeysReq) String() string {
 func (*ListSecretKeysReq) ProtoMessage() {}
 
 func (x *ListSecretKeysReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[4]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -309,7 +178,7 @@ func (x *ListSecretKeysReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSecretKeysReq.ProtoReflect.Descriptor instead.
 func (*ListSecretKeysReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{4}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ListSecretKeysReq) GetProjectId() string {
@@ -335,7 +204,7 @@ type ListSecretKeysResp struct {
 
 func (x *ListSecretKeysResp) Reset() {
 	*x = ListSecretKeysResp{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[5]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -347,7 +216,7 @@ func (x *ListSecretKeysResp) String() string {
 func (*ListSecretKeysResp) ProtoMessage() {}
 
 func (x *ListSecretKeysResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[5]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -360,7 +229,7 @@ func (x *ListSecretKeysResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSecretKeysResp.ProtoReflect.Descriptor instead.
 func (*ListSecretKeysResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{5}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ListSecretKeysResp) GetKeys() []*SecretKey {
@@ -388,7 +257,7 @@ type SecretKey struct {
 
 func (x *SecretKey) Reset() {
 	*x = SecretKey{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[6]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -400,7 +269,7 @@ func (x *SecretKey) String() string {
 func (*SecretKey) ProtoMessage() {}
 
 func (x *SecretKey) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[6]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -413,7 +282,7 @@ func (x *SecretKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretKey.ProtoReflect.Descriptor instead.
 func (*SecretKey) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{6}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SecretKey) GetService() string {
@@ -470,7 +339,7 @@ type FetchEnvironmentSecretsReq struct {
 
 func (x *FetchEnvironmentSecretsReq) Reset() {
 	*x = FetchEnvironmentSecretsReq{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[7]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -482,7 +351,7 @@ func (x *FetchEnvironmentSecretsReq) String() string {
 func (*FetchEnvironmentSecretsReq) ProtoMessage() {}
 
 func (x *FetchEnvironmentSecretsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[7]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -495,7 +364,7 @@ func (x *FetchEnvironmentSecretsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchEnvironmentSecretsReq.ProtoReflect.Descriptor instead.
 func (*FetchEnvironmentSecretsReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{7}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FetchEnvironmentSecretsReq) GetProjectId() string {
@@ -528,7 +397,7 @@ type FetchEnvironmentSecretsResp struct {
 
 func (x *FetchEnvironmentSecretsResp) Reset() {
 	*x = FetchEnvironmentSecretsResp{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[8]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -540,7 +409,7 @@ func (x *FetchEnvironmentSecretsResp) String() string {
 func (*FetchEnvironmentSecretsResp) ProtoMessage() {}
 
 func (x *FetchEnvironmentSecretsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[8]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -553,7 +422,7 @@ func (x *FetchEnvironmentSecretsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchEnvironmentSecretsResp.ProtoReflect.Descriptor instead.
 func (*FetchEnvironmentSecretsResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{8}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FetchEnvironmentSecretsResp) GetServices() []*ServiceSecrets {
@@ -574,7 +443,7 @@ type ServiceSecrets struct {
 
 func (x *ServiceSecrets) Reset() {
 	*x = ServiceSecrets{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[9]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -586,7 +455,7 @@ func (x *ServiceSecrets) String() string {
 func (*ServiceSecrets) ProtoMessage() {}
 
 func (x *ServiceSecrets) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[9]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -599,7 +468,7 @@ func (x *ServiceSecrets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceSecrets.ProtoReflect.Descriptor instead.
 func (*ServiceSecrets) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{9}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ServiceSecrets) GetService() string {
@@ -626,7 +495,7 @@ type SecretValue struct {
 
 func (x *SecretValue) Reset() {
 	*x = SecretValue{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[10]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -638,7 +507,7 @@ func (x *SecretValue) String() string {
 func (*SecretValue) ProtoMessage() {}
 
 func (x *SecretValue) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[10]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -651,7 +520,7 @@ func (x *SecretValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretValue.ProtoReflect.Descriptor instead.
 func (*SecretValue) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{10}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SecretValue) GetKey() string {
@@ -683,7 +552,7 @@ type OpenSecretWriteGrantReq struct {
 
 func (x *OpenSecretWriteGrantReq) Reset() {
 	*x = OpenSecretWriteGrantReq{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[11]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +564,7 @@ func (x *OpenSecretWriteGrantReq) String() string {
 func (*OpenSecretWriteGrantReq) ProtoMessage() {}
 
 func (x *OpenSecretWriteGrantReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[11]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +577,7 @@ func (x *OpenSecretWriteGrantReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenSecretWriteGrantReq.ProtoReflect.Descriptor instead.
 func (*OpenSecretWriteGrantReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{11}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *OpenSecretWriteGrantReq) GetProjectId() string {
@@ -744,7 +613,7 @@ type OpenSecretWriteGrantResp struct {
 
 func (x *OpenSecretWriteGrantResp) Reset() {
 	*x = OpenSecretWriteGrantResp{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[12]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +625,7 @@ func (x *OpenSecretWriteGrantResp) String() string {
 func (*OpenSecretWriteGrantResp) ProtoMessage() {}
 
 func (x *OpenSecretWriteGrantResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[12]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +638,7 @@ func (x *OpenSecretWriteGrantResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenSecretWriteGrantResp.ProtoReflect.Descriptor instead.
 func (*OpenSecretWriteGrantResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{12}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *OpenSecretWriteGrantResp) GetGrantId() string {
@@ -806,7 +675,7 @@ type SetSealedSecretsReq struct {
 
 func (x *SetSealedSecretsReq) Reset() {
 	*x = SetSealedSecretsReq{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[13]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -818,7 +687,7 @@ func (x *SetSealedSecretsReq) String() string {
 func (*SetSealedSecretsReq) ProtoMessage() {}
 
 func (x *SetSealedSecretsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[13]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -831,7 +700,7 @@ func (x *SetSealedSecretsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSealedSecretsReq.ProtoReflect.Descriptor instead.
 func (*SetSealedSecretsReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{13}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SetSealedSecretsReq) GetProjectId() string {
@@ -883,7 +752,7 @@ type SealedSecret struct {
 
 func (x *SealedSecret) Reset() {
 	*x = SealedSecret{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[14]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -895,7 +764,7 @@ func (x *SealedSecret) String() string {
 func (*SealedSecret) ProtoMessage() {}
 
 func (x *SealedSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[14]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -908,7 +777,7 @@ func (x *SealedSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SealedSecret.ProtoReflect.Descriptor instead.
 func (*SealedSecret) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{14}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SealedSecret) GetService() string {
@@ -948,7 +817,7 @@ type SetSealedSecretsResp struct {
 
 func (x *SetSealedSecretsResp) Reset() {
 	*x = SetSealedSecretsResp{}
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[15]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -960,7 +829,7 @@ func (x *SetSealedSecretsResp) String() string {
 func (*SetSealedSecretsResp) ProtoMessage() {}
 
 func (x *SetSealedSecretsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_secrets_secrets_proto_msgTypes[15]
+	mi := &file_domains_console_secrets_secrets_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -973,7 +842,7 @@ func (x *SetSealedSecretsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSealedSecretsResp.ProtoReflect.Descriptor instead.
 func (*SetSealedSecretsResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{15}
+	return file_domains_console_secrets_secrets_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SetSealedSecretsResp) GetCount() int32 {
@@ -987,18 +856,7 @@ var File_domains_console_secrets_secrets_proto protoreflect.FileDescriptor
 
 const file_domains_console_secrets_secrets_proto_rawDesc = "" +
 	"\n" +
-	"%domains/console/secrets/secrets.proto\x12\x0fconsole.secrets\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa7\x01\n" +
-	"\fSetSecretReq\x12\x1d\n" +
-	"\n" +
-	"project_id\x18\x01 \x01(\tR\tprojectId\x12 \n" +
-	"\venvironment\x18\x02 \x01(\tR\venvironment\x12\x18\n" +
-	"\aservice\x18\x03 \x01(\tR\aservice\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x05 \x01(\tR\x05value\x12\x14\n" +
-	"\x05plain\x18\x06 \x01(\bR\x05plain\"J\n" +
-	"\rSetSecretResp\x129\n" +
-	"\n" +
-	"updated_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"}\n" +
+	"%domains/console/secrets/secrets.proto\x12\x0fconsole.secrets\x1a\x1fgoogle/protobuf/timestamp.proto\"}\n" +
 	"\x0eUnsetSecretReq\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12 \n" +
@@ -1073,39 +931,36 @@ func file_domains_console_secrets_secrets_proto_rawDescGZIP() []byte {
 	return file_domains_console_secrets_secrets_proto_rawDescData
 }
 
-var file_domains_console_secrets_secrets_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_domains_console_secrets_secrets_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_domains_console_secrets_secrets_proto_goTypes = []any{
-	(*SetSecretReq)(nil),                // 0: console.secrets.SetSecretReq
-	(*SetSecretResp)(nil),               // 1: console.secrets.SetSecretResp
-	(*UnsetSecretReq)(nil),              // 2: console.secrets.UnsetSecretReq
-	(*UnsetSecretResp)(nil),             // 3: console.secrets.UnsetSecretResp
-	(*ListSecretKeysReq)(nil),           // 4: console.secrets.ListSecretKeysReq
-	(*ListSecretKeysResp)(nil),          // 5: console.secrets.ListSecretKeysResp
-	(*SecretKey)(nil),                   // 6: console.secrets.SecretKey
-	(*FetchEnvironmentSecretsReq)(nil),  // 7: console.secrets.FetchEnvironmentSecretsReq
-	(*FetchEnvironmentSecretsResp)(nil), // 8: console.secrets.FetchEnvironmentSecretsResp
-	(*ServiceSecrets)(nil),              // 9: console.secrets.ServiceSecrets
-	(*SecretValue)(nil),                 // 10: console.secrets.SecretValue
-	(*OpenSecretWriteGrantReq)(nil),     // 11: console.secrets.OpenSecretWriteGrantReq
-	(*OpenSecretWriteGrantResp)(nil),    // 12: console.secrets.OpenSecretWriteGrantResp
-	(*SetSealedSecretsReq)(nil),         // 13: console.secrets.SetSealedSecretsReq
-	(*SealedSecret)(nil),                // 14: console.secrets.SealedSecret
-	(*SetSealedSecretsResp)(nil),        // 15: console.secrets.SetSealedSecretsResp
-	(*timestamppb.Timestamp)(nil),       // 16: google.protobuf.Timestamp
+	(*UnsetSecretReq)(nil),              // 0: console.secrets.UnsetSecretReq
+	(*UnsetSecretResp)(nil),             // 1: console.secrets.UnsetSecretResp
+	(*ListSecretKeysReq)(nil),           // 2: console.secrets.ListSecretKeysReq
+	(*ListSecretKeysResp)(nil),          // 3: console.secrets.ListSecretKeysResp
+	(*SecretKey)(nil),                   // 4: console.secrets.SecretKey
+	(*FetchEnvironmentSecretsReq)(nil),  // 5: console.secrets.FetchEnvironmentSecretsReq
+	(*FetchEnvironmentSecretsResp)(nil), // 6: console.secrets.FetchEnvironmentSecretsResp
+	(*ServiceSecrets)(nil),              // 7: console.secrets.ServiceSecrets
+	(*SecretValue)(nil),                 // 8: console.secrets.SecretValue
+	(*OpenSecretWriteGrantReq)(nil),     // 9: console.secrets.OpenSecretWriteGrantReq
+	(*OpenSecretWriteGrantResp)(nil),    // 10: console.secrets.OpenSecretWriteGrantResp
+	(*SetSealedSecretsReq)(nil),         // 11: console.secrets.SetSealedSecretsReq
+	(*SealedSecret)(nil),                // 12: console.secrets.SealedSecret
+	(*SetSealedSecretsResp)(nil),        // 13: console.secrets.SetSealedSecretsResp
+	(*timestamppb.Timestamp)(nil),       // 14: google.protobuf.Timestamp
 }
 var file_domains_console_secrets_secrets_proto_depIdxs = []int32{
-	16, // 0: console.secrets.SetSecretResp.updated_at:type_name -> google.protobuf.Timestamp
-	6,  // 1: console.secrets.ListSecretKeysResp.keys:type_name -> console.secrets.SecretKey
-	16, // 2: console.secrets.SecretKey.updated_at:type_name -> google.protobuf.Timestamp
-	9,  // 3: console.secrets.FetchEnvironmentSecretsResp.services:type_name -> console.secrets.ServiceSecrets
-	10, // 4: console.secrets.ServiceSecrets.values:type_name -> console.secrets.SecretValue
-	16, // 5: console.secrets.OpenSecretWriteGrantResp.expires_at:type_name -> google.protobuf.Timestamp
-	14, // 6: console.secrets.SetSealedSecretsReq.values:type_name -> console.secrets.SealedSecret
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	4,  // 0: console.secrets.ListSecretKeysResp.keys:type_name -> console.secrets.SecretKey
+	14, // 1: console.secrets.SecretKey.updated_at:type_name -> google.protobuf.Timestamp
+	7,  // 2: console.secrets.FetchEnvironmentSecretsResp.services:type_name -> console.secrets.ServiceSecrets
+	8,  // 3: console.secrets.ServiceSecrets.values:type_name -> console.secrets.SecretValue
+	14, // 4: console.secrets.OpenSecretWriteGrantResp.expires_at:type_name -> google.protobuf.Timestamp
+	12, // 5: console.secrets.SetSealedSecretsReq.values:type_name -> console.secrets.SealedSecret
+	6,  // [6:6] is the sub-list for method output_type
+	6,  // [6:6] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_domains_console_secrets_secrets_proto_init() }
@@ -1119,7 +974,7 @@ func file_domains_console_secrets_secrets_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_domains_console_secrets_secrets_proto_rawDesc), len(file_domains_console_secrets_secrets_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
