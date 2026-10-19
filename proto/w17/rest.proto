@@ -761,6 +761,22 @@ message RestEndpoint {
   // FAILED_ONLY (the same ref, declared here instead of through `include`);
   // PUBLIC_LIMIT_EVERY_REQUEST declines that.
   PublicLimit public_limit = 20;
+
+  // dpop_mint marks the project's own method as a token mint, on a surface
+  // whose auth method binds tokens to device keys: a facade that calls the
+  // auth plugin's SignIn (or another mint) and reshapes its answer. Its
+  // handler then treats a DPoP proof that comes with no token as the
+  // plugin's mint routes do: it verifies the proof (and the server nonce),
+  // charges the per-address mint budget and the replay store, and hands the
+  // verified key to the backend as `x-w17-dpop-jkt`, which the facade
+  // forwards to the plugin. Without it the gateway ignores an unbound proof
+  // on every method but the plugin's own, and the plugin refuses the mint.
+  //
+  // The plugin's own mints (SignIn, SignUp, ConfirmSignUp, VerifyMfa,
+  // OAuthExchange, CliToken on its AuthService) are mints without saying
+  // so. Requires `exclude_auth` (a mint takes no token); on a surface that
+  // does not bind devices it would do nothing, and is refused.
+  bool dpop_mint = 21;
 }
 
 // MetadataBinding — one HTTP-slot → gRPC-metadata
