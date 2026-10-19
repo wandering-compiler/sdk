@@ -242,9 +242,9 @@ func ScopeKey(name string) string {
 //
 // It moves EXACTLY what the gateway stamps from its verified auth response —
 // the `x-w17-user` envelope, every `x-w17-scope-<name>` key, every
-// `w17-label-<name>` broadcast label, and the verified device id
-// ([DeviceMetadataKey]) when the gateway checked a DPoP proof — and nothing
-// else. Paging
+// `w17-label-<name>` broadcast label, the verified device id
+// ([DeviceMetadataKey]) when the gateway checked a DPoP proof, and a token
+// mint's verified key ([MintKeyMetadataKey]) — and nothing else. Paging
 // (`x-w17-paging-*`), tracing, i18n, and tx-routing metadata have their own
 // propagation and are deliberately left alone; blanket-forwarding paging in
 // particular would bleed one query's LIMIT / keyset onto sibling storage
@@ -326,6 +326,7 @@ func ForwardToOutgoing(ctx context.Context) context.Context {
 func isRelayedKey(key string) bool {
 	return key == userMetadataKey ||
 		key == DeviceMetadataKey ||
+		key == MintKeyMetadataKey ||
 		strings.HasPrefix(key, scopeKeyPrefix) ||
 		strings.HasPrefix(key, LabelKeyPrefix)
 }

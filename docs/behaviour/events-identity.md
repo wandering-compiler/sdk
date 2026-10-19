@@ -505,6 +505,7 @@ directly, or an unauthenticated call) is returned unchanged.
 | I12.3 | With an incoming principal, the relayed set MUST replace the outgoing copy (overwritten values, outgoing-only relayed keys dropped) while other outgoing keys are kept; values MUST NOT be duplicated and the call MUST be idempotent. | `TestForwardToOutgoing_VerifiedPrincipalWins` |
 | I12.4 | A context without an incoming principal MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched` |
 | I12.5 | The device id MUST be relayed on every path the principal takes — `ForwardToOutgoing`, the `grpcx.DialOpts` unary and stream interceptors over a real connection, and the in-process bridge at any depth — and a stale outgoing device MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysDevice`, `TestDialOpts_RelaysTheDeviceID`, `TestConn_NestedCall_RelaysTheDeviceID`, `TestConn_IncomingDeviceIsRelayed` |
+| I12.6 | A token mint's verified key (`x-w17-dpop-jkt`) MUST be relayed like the device id, with no principal on the request, so a facade over the auth plugin's mint hands it on; a stale outgoing copy MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysTheMintKey` |
 
 **Deliberate limits.**
 - Calling a downstream tier as a different principal is an explicit act: drop the incoming
