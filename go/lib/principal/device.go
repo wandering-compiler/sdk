@@ -19,6 +19,17 @@ import (
 // verify DPoP never stamps it, and [DeviceID] then reports false.
 const DeviceMetadataKey = "x-w17-device"
 
+// MintKeyMetadataKey carries the thumbprint of the key a token mint binds the
+// new token to: the gateway verifies the request's unbound DPoP proof on a
+// mint (the auth plugin's SignIn and the rest, or an endpoint declared
+// `dpop_mint`) and stamps its key here. The plugin's mint reads it.
+//
+// Gateway-owned like [DeviceMetadataKey] (`x-w17-`: a client's copy never
+// survives the edge), and relayed by [ForwardToOutgoing], so a facade that
+// calls the plugin's mint over a real gRPC hop hands the key on without
+// code of its own.
+const MintKeyMetadataKey = "x-w17-dpop-jkt"
+
 // DeviceID returns the verified device id of the caller: the thumbprint of
 // the device key the gateway checked a DPoP proof against, for a proof bound
 // to the request's access token. The gateway never stamps one for an unbound

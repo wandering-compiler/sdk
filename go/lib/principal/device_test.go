@@ -104,3 +104,27 @@ func TestForwardToOutgoing_RelaysDevice(t *testing.T) {
 		t.Errorf("device duplicated by a second forward: %v", got)
 	}
 }
+
+// A mint's verified key crosses a facade's hop to the plugin's mint: the
+// request has no principal yet (nobody is signed in), only the key.
+func TestForwardToOutgoing_RelaysTheMintKey(t *testing.T) {
+	if !principal.IsGatewayOwnedKey(principal.MintKeyMetadataKey) {
+		t.Fatal("the mint key must be gateway-owned, or a client could name the key its token binds to")
+	}
+	ctx := principal.ForwardToOutgoing(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		principal.MintKeyMetadataKey, "jkt-1",
+	)))
+	out, _ := metadata.FromOutgoingContext(ctx)
+	if got := out.Get(principal.MintKeyMetadataKey); len(got) != 1 || got[0] != "jkt-1" {
+		t.Fatalf("outgoing mint key = %v, want [jkt-1]", got)
+	}
+
+	// A context reused across requests does not hand one caller's key to
+	// the next caller's mint.
+	stale := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(principal.MintKeyMetadataKey, "previous-callers-key"))
+	stale = metadata.NewIncomingContext(stale, metadata.Pairs("x-w17-user", "bearer-caller"))
+	out, _ = metadata.FromOutgoingContext(principal.ForwardToOutgoing(stale))
+	if got := out.Get(principal.MintKeyMetadataKey); len(got) != 0 {
+		t.Errorf("a stale mint key was relayed: %v", got)
+	}
+}
