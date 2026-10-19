@@ -61,6 +61,7 @@ func CachedAuthFuncWithDecision(inner AuthFunc, ttl time.Duration, extraCredHead
 			// namespace.
 			key = strconv.Itoa(len(d.Namespace)) + ":" + d.Namespace + ":" + key
 		}
+		key = addrKeyed(r, key)
 		if data, ok := c.get(key); ok {
 			return data, nil
 		}

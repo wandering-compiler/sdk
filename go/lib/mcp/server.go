@@ -7,6 +7,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/eventlog"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
+	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
 
 // PermResolver resolves the calling connection's effective permission
@@ -64,6 +66,28 @@ type Server struct {
 	// maxBody caps a POST body on the HTTP transport; 0 = the default
 	// (see SetMaxRequestBodyBytes).
 	maxBody int64
+
+	// trustedProxies are the peers whose X-Forwarded-For is believed when
+	// the HTTP caller's address is resolved (SetTrustedProxies); none =
+	// the peer is the caller.
+	trustedProxies []netip.Prefix
+	// toolMethods maps a tool to its backing RPC's full method
+	// (SetToolMethod), told to the auth method as the call's method.
+	toolMethods map[string]string
+}
+
+// SetTrustedProxies names the proxies whose X-Forwarded-For is believed when
+// the HTTP caller's address is resolved for the auth method
+// (principal.ClientAddrKey). Read right to left, as the rate limiters do.
+func (s *Server) SetTrustedProxies(trusted []netip.Prefix) { s.trustedProxies = trusted }
+
+// SetToolMethod records the full gRPC method (`/<package>.<Service>/<Method>`)
+// a tool calls, which the auth method is told (principal.MethodKey).
+func (s *Server) SetToolMethod(tool, fullMethod string) {
+	if s.toolMethods == nil {
+		s.toolMethods = map[string]string{}
+	}
+	s.toolMethods[tool] = fullMethod
 }
 
 // NewServer constructs a Server with the given name/version
@@ -136,7 +160,8 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 		if h == nil {
 			h = http.Header{}
 		}
-		return ConnectionInfo{HTTPHeaders: h}
+		addr, _ := ctx.Value(clientAddrCtxKey{}).(string)
+		return ConnectionInfo{HTTPHeaders: h, ClientAddr: addr}
 	}
 	return ConnectionInfo{Env: s.authEnv}
 }
@@ -259,7 +284,9 @@ func (s *Server) resolvePermsSafe(ctx context.Context) (perms []int32) {
 			perms = nil // fail closed
 		}
 	}()
-	p, err := s.permResolver(ctx, s.connInfo(ctx))
+	conn := s.connInfo(ctx)
+	conn.Method = "tools/list"
+	p, err := s.permResolver(ctx, conn)
 	if err != nil {
 		return nil // fail closed: only ungated tools survive
 	}
@@ -346,6 +373,7 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 			if h == nil {
 				h = http.Header{}
 			}
+			ctx = context.WithValue(ctx, clientAddrCtxKey{}, ratelimit.HTTPClientAddr(r, s.trustedProxies))
 			// One message per POST, so one argument scope per request.
 			return withArgScope(context.WithValue(ctx, httpHeadersCtxKey{}, h))
 		}),
@@ -438,6 +466,9 @@ func HTTPHeadersFromContext(ctx context.Context) http.Header {
 
 type httpHeadersCtxKey struct{}
 
+// clientAddrCtxKey carries the HTTP caller's resolved address.
+type clientAddrCtxKey struct{}
+
 // SetRequestEvents records every tool call into the request event stream:
 // surface is the MCP surface's recorder (nil: record nothing), methods the
 // recorded tools' settings by tool name. Call it before serving.
@@ -469,6 +500,7 @@ func (s *Server) CallUnary(
 	invoke func(ctx context.Context, reqMsg proto.Message) (proto.Message, error),
 ) (result *mcp.CallToolResult, callErr error) {
 	conn := s.connInfo(ctx)
+	conn.Method = s.toolMethods[req.Params.Name]
 
 	// The call's record in the request event stream: begun before the
 	// permission gate, so a refused call is recorded too; finished with the

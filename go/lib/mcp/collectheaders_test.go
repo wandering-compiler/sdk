@@ -66,10 +66,10 @@ func TestCollectAuthHeaders_Precedence(t *testing.T) {
 	}
 }
 
-// Empty ConnectionInfo yields an empty (non-nil) map — no panic, never
-// reads os.Environ on its own.
+// Empty ConnectionInfo yields only the surface the gateway stamps — no
+// panic, never reads os.Environ on its own.
 func TestCollectAuthHeaders_EmptyConn(t *testing.T) {
-	if got := mcp.CollectAuthHeaders(mcp.ConnectionInfo{}); len(got) != 0 {
-		t.Fatalf("empty conn must yield no headers, got %v", got)
+	if got := mcp.CollectAuthHeaders(mcp.ConnectionInfo{}); len(got) != 1 || got["x-w17-surface"] != "mcp" {
+		t.Fatalf("empty conn must yield the surface alone, got %v", got)
 	}
 }
