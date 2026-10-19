@@ -25,6 +25,11 @@ func TestClientAddr_HTTPAndGRPC(t *testing.T) {
 	if got := HTTPClientAddr(r, trusted); got != "198.51.100.9" {
 		t.Errorf("not behind it = %q", got)
 	}
+	// A zone names an interface of this machine; it is dropped.
+	r.RemoteAddr = "[fe80::1%eth0]:1234"
+	if got := HTTPClientAddr(r, trusted); got != "fe80::1" {
+		t.Errorf("zoned peer = %q", got)
+	}
 
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 1}})
 	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-forwarded-for", "203.0.113.7"))

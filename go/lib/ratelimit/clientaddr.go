@@ -10,7 +10,9 @@ import (
 )
 
 // HTTPClientAddr is [ClientIP] of an HTTP request — its RemoteAddr and its
-// X-Forwarded-For — as text, "" when the peer is no address.
+// X-Forwarded-For — as text, unmapped and without a zone (a zone names an
+// interface of this machine, not where a request came from), "" when the
+// peer is no address.
 func HTTPClientAddr(r *http.Request, trusted []netip.Prefix) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -20,7 +22,7 @@ func HTTPClientAddr(r *http.Request, trusted []netip.Prefix) string {
 	if err != nil {
 		return ""
 	}
-	return ClientIP(peer, r.Header.Values("X-Forwarded-For"), trusted).Unmap().String()
+	return ClientIP(peer, r.Header.Values("X-Forwarded-For"), trusted).Unmap().WithZone("").String()
 }
 
 // GRPCClientAddr is [ClientIP] of a gRPC call — the peer in ctx and the
@@ -34,5 +36,5 @@ func GRPCClientAddr(ctx context.Context, trusted []netip.Prefix) string {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		forwarded = md.Get("x-forwarded-for")
 	}
-	return ClientIP(p, forwarded, trusted).Unmap().String()
+	return ClientIP(p, forwarded, trusted).Unmap().WithZone("").String()
 }
