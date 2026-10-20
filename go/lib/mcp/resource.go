@@ -151,7 +151,7 @@ func (s *Server) mountResourceServer(mux *http.ServeMux) {
 		_, _ = w.Write(doc)
 	})
 	paths := map[string]bool{
-		ProtectedResourceMetadataPath:                 true,
+		ProtectedResourceMetadataPath:                true,
 		ProtectedResourceMetadataPath + EndpointPath: true,
 	}
 	if p := strings.TrimSuffix(s.resourceURL.Path, "/"); p != "" {

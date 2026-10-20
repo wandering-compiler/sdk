@@ -102,11 +102,11 @@ func TestMetadata(t *testing.T) {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 	for k, want := range map[string]any{
-		"issuer":                 "https://auth.example.com",
-		"authorization_endpoint": "https://auth.example.com/oauth/authorize",
-		"token_endpoint":         "https://auth.example.com/oauth/token",
-		"registration_endpoint":  "https://auth.example.com/oauth/register",
-		"revocation_endpoint":    "https://auth.example.com/oauth/revoke",
+		"issuer":                                "https://auth.example.com",
+		"authorization_endpoint":                "https://auth.example.com/oauth/authorize",
+		"token_endpoint":                        "https://auth.example.com/oauth/token",
+		"registration_endpoint":                 "https://auth.example.com/oauth/register",
+		"revocation_endpoint":                   "https://auth.example.com/oauth/revoke",
 		"client_id_metadata_document_supported": true,
 	} {
 		if doc[k] != want {

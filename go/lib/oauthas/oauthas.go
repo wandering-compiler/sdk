@@ -299,18 +299,18 @@ func (s *server) metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	doc := map[string]any{
-		"issuer":                                s.cfg.Issuer,
-		"authorization_endpoint":                s.endpoint(AuthorizePath),
-		"token_endpoint":                        s.endpoint(TokenPath),
-		"revocation_endpoint":                   s.endpoint(RevokePath),
-		"response_types_supported":              []string{"code"},
-		"response_modes_supported":              []string{"query"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
-		"revocation_endpoint_auth_methods_supported": []string{"none"},
-		"scopes_supported":                              []string{"mcp"},
-		"client_id_metadata_document_supported":         true,
+		"issuer":                                         s.cfg.Issuer,
+		"authorization_endpoint":                         s.endpoint(AuthorizePath),
+		"token_endpoint":                                 s.endpoint(TokenPath),
+		"revocation_endpoint":                            s.endpoint(RevokePath),
+		"response_types_supported":                       []string{"code"},
+		"response_modes_supported":                       []string{"query"},
+		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":               []string{"S256"},
+		"token_endpoint_auth_methods_supported":          []string{"none"},
+		"revocation_endpoint_auth_methods_supported":     []string{"none"},
+		"scopes_supported":                               []string{"mcp"},
+		"client_id_metadata_document_supported":          true,
 		"authorization_response_iss_parameter_supported": true,
 	}
 	if st.DynamicRegistration {
