@@ -13,7 +13,6 @@ import (
 // session "sess".
 type restFake struct {
 	approvedFor []string
-	codes       map[string]string // code → session
 }
 
 func (r *restFake) Call(_ context.Context, ep Endpoint, input map[string]any, token string, _ map[string]string, _ string, _ []FilePart) (map[string]any, error) {

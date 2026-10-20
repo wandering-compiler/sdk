@@ -418,7 +418,7 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	)
 
 	mux := http.NewServeMux()
-	var endpoint http.Handler = drainAwareStream(srv)
+	endpoint := drainAwareStream(srv)
 	if s.resource != nil {
 		endpoint = s.requireToken(endpoint)
 		s.mountResourceServer(mux)

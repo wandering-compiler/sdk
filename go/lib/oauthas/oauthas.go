@@ -29,7 +29,7 @@ import (
 const (
 	MetadataPath  = "/.well-known/oauth-authorization-server"
 	AuthorizePath = "/oauth/authorize"
-	TokenPath     = "/oauth/token"
+	TokenPath     = "/oauth/token" //nolint:gosec // G101: an endpoint path, not a credential.
 	RegisterPath  = "/oauth/register"
 	RevokePath    = "/oauth/revoke"
 )

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -174,7 +175,8 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 	}
 	sid, err := c.ensureSession(ctx, token)
 	if err != nil {
-		if ce, ok := err.(*CallError); ok {
+		var ce *CallError
+		if errors.As(err, &ce) {
 			ce.Op = "mcp " + ep.Ref
 			return nil, ce
 		}
