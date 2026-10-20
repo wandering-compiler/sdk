@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"strings"
+
+	"github.com/mark3labs/mcp-go/mcp"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -74,4 +77,41 @@ func report(ctx context.Context, c codes.Code, err error) {
 	default:
 		observx.ReportRefusal(ctx, err)
 	}
+}
+
+// toolErrorResult is how a failed tool call reaches the client: a tool
+// result with isError, whose text is the code, the client sentence and the
+// field details — what the model reads and can act on. A JSON-RPC error
+// (-32603 with `rpc error: code = …`) is the protocol's way of saying the
+// call itself was malformed, and a client shows it as a broken server. err
+// is already the public status (CallUnary's errors are built by publicError
+// and refusal); anything else is reduced to its code's sentence.
+func toolErrorResult(err error) *mcp.CallToolResult {
+	st, ok := status.FromError(err)
+	if !ok {
+		st = status.New(codes.Internal, "internal error")
+	}
+	var b strings.Builder
+	b.WriteString(st.Code().String())
+	if msg := st.Message(); msg != "" {
+		b.WriteString(": ")
+		b.WriteString(msg)
+	}
+	for _, d := range st.Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok {
+			b.WriteString("\n- ")
+			if ed.GetField() != "" {
+				b.WriteString(ed.GetField())
+				b.WriteString(": ")
+			}
+			if ed.GetCode() != "" {
+				b.WriteString(ed.GetCode())
+				if ed.GetMessage() != "" {
+					b.WriteString(" — ")
+				}
+			}
+			b.WriteString(ed.GetMessage())
+		}
+	}
+	return mcp.NewToolResultError(b.String())
 }

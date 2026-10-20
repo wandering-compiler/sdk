@@ -93,6 +93,13 @@ type McpApi struct {
 	// The request event stream for this surface (request_events.proto):
 	// which purposes its records serve. Absent = no records.
 	RequestEvents *RequestEvents `protobuf:"bytes,6,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
+	// OAuth makes the surface's HTTP transport an OAuth 2.1 protected
+	// resource (the MCP authorization specification): it serves RFC 9728
+	// metadata naming the authorization server, answers a request without a
+	// valid token with a 401 challenge, and tells the auth method its
+	// resource so a token issued for another is refused. Absent = today's
+	// behaviour (public, or a bearer the auth method checks).
+	Oauth         *McpOAuth `protobuf:"bytes,7,opt,name=oauth,proto3" json:"oauth,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -169,6 +176,63 @@ func (x *McpApi) GetRequestEvents() *RequestEvents {
 	return nil
 }
 
+func (x *McpApi) GetOauth() *McpOAuth {
+	if x != nil {
+		return x.Oauth
+	}
+	return nil
+}
+
+// McpOAuth names where the surface's tokens come from. The public URLs are
+// the deployment's (`<P>_MCP_PUBLIC_URL`, `<P>_MCP_AUTHORIZATION_SERVER`);
+// this names the domain whose auth plugin issues them, which codegen checks
+// activates the plugin's `oauth_server` feature.
+type McpOAuth struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The domain whose auth plugin is the authorization server. Empty = this
+	// domain.
+	AuthDomain    string `protobuf:"bytes,1,opt,name=auth_domain,json=authDomain,proto3" json:"auth_domain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *McpOAuth) Reset() {
+	*x = McpOAuth{}
+	mi := &file_w17_mcp_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *McpOAuth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*McpOAuth) ProtoMessage() {}
+
+func (x *McpOAuth) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_mcp_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use McpOAuth.ProtoReflect.Descriptor instead.
+func (*McpOAuth) Descriptor() ([]byte, []int) {
+	return file_w17_mcp_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *McpOAuth) GetAuthDomain() string {
+	if x != nil {
+		return x.AuthDomain
+	}
+	return ""
+}
+
 // McpTool exposes one gRPC method as an MCP tool. Defaults
 // derive from the referenced RPC's leading comment + name; the
 // `*_override` fields are the escape hatch when the proto
@@ -203,7 +267,7 @@ type McpTool struct {
 
 func (x *McpTool) Reset() {
 	*x = McpTool{}
-	mi := &file_w17_mcp_proto_msgTypes[1]
+	mi := &file_w17_mcp_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -215,7 +279,7 @@ func (x *McpTool) String() string {
 func (*McpTool) ProtoMessage() {}
 
 func (x *McpTool) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_mcp_proto_msgTypes[1]
+	mi := &file_w17_mcp_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -228,7 +292,7 @@ func (x *McpTool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use McpTool.ProtoReflect.Descriptor instead.
 func (*McpTool) Descriptor() ([]byte, []int) {
-	return file_w17_mcp_proto_rawDescGZIP(), []int{1}
+	return file_w17_mcp_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *McpTool) GetRef() string {
@@ -379,14 +443,18 @@ var File_w17_mcp_proto protoreflect.FileDescriptor
 
 const file_w17_mcp_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xd1\x01\n" +
+	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xf6\x01\n" +
 	"\x06McpApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\"\n" +
 	"\x05tools\x18\x04 \x03(\v2\f.w17.McpToolR\x05tools\x12\x18\n" +
 	"\ainclude\x18\x05 \x03(\tR\ainclude\x129\n" +
-	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"\x89\x01\n" +
+	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12#\n" +
+	"\x05oauth\x18\a \x01(\v2\r.w17.McpOAuthR\x05oauth\"+\n" +
+	"\bMcpOAuth\x12\x1f\n" +
+	"\vauth_domain\x18\x01 \x01(\tR\n" +
+	"authDomain\"\x89\x01\n" +
 	"\aMcpTool\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12#\n" +
 	"\rname_override\x18\x02 \x01(\tR\fnameOverride\x121\n" +
@@ -410,28 +478,30 @@ func file_w17_mcp_proto_rawDescGZIP() []byte {
 	return file_w17_mcp_proto_rawDescData
 }
 
-var file_w17_mcp_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_w17_mcp_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_w17_mcp_proto_goTypes = []any{
 	(*McpApi)(nil),                     // 0: w17.McpApi
-	(*McpTool)(nil),                    // 1: w17.McpTool
-	(*RequestEvents)(nil),              // 2: w17.RequestEvents
-	(*descriptorpb.MethodOptions)(nil), // 3: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 4: google.protobuf.FileOptions
+	(*McpOAuth)(nil),                   // 1: w17.McpOAuth
+	(*McpTool)(nil),                    // 2: w17.McpTool
+	(*RequestEvents)(nil),              // 3: w17.RequestEvents
+	(*descriptorpb.MethodOptions)(nil), // 4: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 5: google.protobuf.FileOptions
 }
 var file_w17_mcp_proto_depIdxs = []int32{
-	1, // 0: w17.McpApi.tools:type_name -> w17.McpTool
-	2, // 1: w17.McpApi.request_events:type_name -> w17.RequestEvents
-	3, // 2: w17.mcp:extendee -> google.protobuf.MethodOptions
-	3, // 3: w17.mcp_description:extendee -> google.protobuf.MethodOptions
-	3, // 4: w17.mcp_name:extendee -> google.protobuf.MethodOptions
-	3, // 5: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
-	4, // 6: w17.mcp_api:extendee -> google.protobuf.FileOptions
-	0, // 7: w17.mcp_api:type_name -> w17.McpApi
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	7, // [7:8] is the sub-list for extension type_name
-	2, // [2:7] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 0: w17.McpApi.tools:type_name -> w17.McpTool
+	3, // 1: w17.McpApi.request_events:type_name -> w17.RequestEvents
+	1, // 2: w17.McpApi.oauth:type_name -> w17.McpOAuth
+	4, // 3: w17.mcp:extendee -> google.protobuf.MethodOptions
+	4, // 4: w17.mcp_description:extendee -> google.protobuf.MethodOptions
+	4, // 5: w17.mcp_name:extendee -> google.protobuf.MethodOptions
+	4, // 6: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
+	5, // 7: w17.mcp_api:extendee -> google.protobuf.FileOptions
+	0, // 8: w17.mcp_api:type_name -> w17.McpApi
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	8, // [8:9] is the sub-list for extension type_name
+	3, // [3:8] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_w17_mcp_proto_init() }
@@ -446,7 +516,7 @@ func file_w17_mcp_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_mcp_proto_rawDesc), len(file_w17_mcp_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 5,
 			NumServices:   0,
 		},

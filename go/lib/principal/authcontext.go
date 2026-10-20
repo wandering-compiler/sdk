@@ -18,6 +18,10 @@ const (
 	// event stream `GET <route>`, on the admin surface `<HTTP method>
 	// <path>`; empty on the CLI.
 	MethodKey = "x-w17-method"
+	// MCPResourceKey is the OAuth resource (RFC 8707) an MCP surface that is
+	// a protected resource serves: its public URL. The auth method refuses a
+	// token issued for another resource. Absent on every other surface.
+	MCPResourceKey = "x-w17-mcp-resource"
 )
 
 // The SurfaceKey values.
