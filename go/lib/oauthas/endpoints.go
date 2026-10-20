@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/wandering-compiler/sdk/go/lib/dpop"
 )
 
 // singleValued are the parameters that may appear once (RFC 6749 §3.1,
@@ -181,22 +179,20 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &Error{Code: "invalid_client", Description: "client_id is required"})
 		return
 	}
-	if len(r.Header.Values(dpop.HeaderProof)) > 0 {
+	if len(r.Header.Values(headerDPoP)) > 0 {
 		if s.cfg.DPoP == nil {
 			writeError(w, &Error{Code: "invalid_dpop_proof", Description: "this server does not take DPoP proofs"})
 			return
 		}
 		thumb, nonce, err := s.cfg.DPoP(r)
 		if nonce != "" {
-			w.Header().Set(dpop.HeaderNonce, nonce)
+			w.Header().Set(headerDPoPNonce, nonce)
 		}
 		if err != nil {
-			var ne *dpop.NonceError
 			switch {
-			case errors.As(err, &ne):
-				w.Header().Set(dpop.HeaderNonce, ne.Nonce)
+			case errors.Is(err, ErrDPoPUseNonce):
 				writeError(w, &Error{Code: "use_dpop_nonce", Description: "a fresh DPoP nonce is required"})
-			case errors.Is(err, dpop.ErrUnavailable):
+			case errors.Is(err, ErrDPoPUnavailable):
 				w.Header().Set("Retry-After", "1")
 				writeError(w, err)
 			default:

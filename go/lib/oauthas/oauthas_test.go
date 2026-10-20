@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/wandering-compiler/sdk/go/lib/dpop"
 )
 
 type fakeBackend struct {
@@ -234,7 +232,7 @@ func TestToken_DPoP(t *testing.T) {
 	v := url.Values{"grant_type": {"authorization_code"}, "client_id": {"c"}}
 	withProof := func() *http.Request {
 		r := form(TokenPath, v)
-		r.Header.Set(dpop.HeaderProof, "proof")
+		r.Header.Set("DPoP", "proof")
 		return r
 	}
 	h := mount(t, Config{}, &fakeBackend{})
@@ -245,15 +243,15 @@ func TestToken_DPoP(t *testing.T) {
 	b := &fakeBackend{}
 	h = mount(t, Config{DPoP: func(*http.Request) (string, string, error) { return "thumb", "n2", nil }}, b)
 	w := do(h, withProof())
-	if w.Code != 200 || b.tokenReq.DPoPThumbprint != "thumb" || w.Header().Get(dpop.HeaderNonce) != "n2" {
+	if w.Code != 200 || b.tokenReq.DPoPThumbprint != "thumb" || w.Header().Get("DPoP-Nonce") != "n2" {
 		t.Errorf("%d %s %+v", w.Code, w.Body, b.tokenReq)
 	}
 
 	h = mount(t, Config{DPoP: func(*http.Request) (string, string, error) {
-		return "", "", &dpop.NonceError{Nonce: "n1"}
+		return "", "n1", ErrDPoPUseNonce
 	}}, &fakeBackend{})
 	w = do(h, withProof())
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "use_dpop_nonce") || w.Header().Get(dpop.HeaderNonce) != "n1" {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "use_dpop_nonce") || w.Header().Get("DPoP-Nonce") != "n1" {
 		t.Errorf("nonce: %d %s %v", w.Code, w.Body, w.Header())
 	}
 }

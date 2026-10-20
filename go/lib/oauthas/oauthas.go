@@ -137,10 +137,29 @@ type Backend interface {
 }
 
 // DPoPFunc verifies the DPoP proof of a token request. It returns the
-// proof key's thumbprint, "" when the request carries no proof, and a
-// lib/dpop error for a proof it refuses. nonce, when non-empty, is sent
-// back as DPoP-Nonce for the client's next proof.
+// proof key's thumbprint and, when non-empty, a nonce sent back as
+// DPoP-Nonce for the client's next proof. A refusal is an error:
+// ErrDPoPUseNonce (with the fresh nonce) when the proof needs one,
+// ErrDPoPUnavailable when the replay store cannot answer, anything else for
+// a proof it refuses. This package imports no DPoP implementation: the
+// gateway that mounts it adapts its own verifier.
 type DPoPFunc func(r *http.Request) (thumbprint, nonce string, err error)
+
+// The DPoPFunc refusals answered other than invalid_dpop_proof.
+var (
+	// ErrDPoPUseNonce: the proof needs the server nonce returned beside it
+	// (RFC 9449 §8, use_dpop_nonce).
+	ErrDPoPUseNonce = errors.New("oauthas: the DPoP proof needs a fresh nonce")
+	// ErrDPoPUnavailable: the proof could not be checked now (the replay
+	// store); temporarily_unavailable, retry.
+	ErrDPoPUnavailable = errors.New("oauthas: the DPoP proof could not be checked now")
+)
+
+// The DPoP headers (RFC 9449).
+const (
+	headerDPoP      = "DPoP"
+	headerDPoPNonce = "DPoP-Nonce"
+)
 
 // Config configures Mount.
 type Config struct {
