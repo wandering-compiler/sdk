@@ -45,6 +45,25 @@ type ResourceServer struct {
 	Scopes []string
 }
 
+// ResourceServerFromEnv reads a protected resource's deployment settings:
+// `<PREFIX>_MCP_PUBLIC_URL` (the resource identifier — the URL clients call)
+// and `<PREFIX>_MCP_AUTHORIZATION_SERVER` (the issuer; several separated by
+// commas). Both are required: a surface declared a protected resource does
+// not serve without them.
+func ResourceServerFromEnv(prefix string, getenv func(string) string) (ResourceServer, error) {
+	res := strings.TrimSpace(getenv(prefix + "_MCP_PUBLIC_URL"))
+	var issuers []string
+	for _, v := range strings.Split(getenv(prefix+"_MCP_AUTHORIZATION_SERVER"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			issuers = append(issuers, v)
+		}
+	}
+	if res == "" || len(issuers) == 0 {
+		return ResourceServer{}, fmt.Errorf("mcp: this MCP surface is an OAuth protected resource ((w17.mcp_api).oauth): set %s_MCP_PUBLIC_URL (the URL clients call, e.g. https://mcp.example.com/mcp) and %s_MCP_AUTHORIZATION_SERVER (the issuer, e.g. https://auth.example.com)", prefix, prefix)
+	}
+	return ResourceServer{Resource: res, AuthorizationServers: issuers}, nil
+}
+
 // DefaultScope is the one OAuth scope an MCP token carries: what the holder
 // may do is the user's mcp-realm roles, not the scope.
 const DefaultScope = "mcp"

@@ -195,3 +195,14 @@ func TestToolErrorResult(t *testing.T) {
 		t.Errorf("a non-status error leaked: %s", b)
 	}
 }
+
+func TestResourceServerFromEnv(t *testing.T) {
+	env := map[string]string{"FIN_MCP_PUBLIC_URL": "https://mcp.example.com/mcp", "FIN_MCP_AUTHORIZATION_SERVER": " https://a.example , https://b.example"}
+	rs, err := ResourceServerFromEnv("FIN", func(k string) string { return env[k] })
+	if err != nil || rs.Resource != "https://mcp.example.com/mcp" || len(rs.AuthorizationServers) != 2 || rs.AuthorizationServers[1] != "https://b.example" {
+		t.Fatalf("%+v %v", rs, err)
+	}
+	if _, err := ResourceServerFromEnv("FIN", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "FIN_MCP_PUBLIC_URL") {
+		t.Errorf("missing settings: %v", err)
+	}
+}
