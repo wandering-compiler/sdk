@@ -37,6 +37,10 @@ type MCPCaller struct {
 
 	mu        sync.Mutex
 	sessionID string // negotiated once via initialize, reused for every tools/call
+
+	// oauth, when set, exchanges a step's session for an MCP access token
+	// (WithOAuth, mcp_oauth.go).
+	oauth *mcpOAuthState
 }
 
 // NewMCPCaller builds an MCP caller against the MCP HTTP endpoint.
@@ -76,7 +80,7 @@ type toolResult struct {
 // `tools/call` that lacks the `Mcp-Session-Id` header, so this must
 // precede the first tool call. Idempotent + mutex-guarded — the runner
 // shares one MCPCaller across every MCP step.
-func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
+func (c *MCPCaller) ensureSession(ctx context.Context, bearer string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sessionID != "" {
@@ -99,12 +103,20 @@ func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	// A protected resource answers every request without a token with a
+	// 401, initialize included.
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	resp, err := c.Client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("mcp initialize: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
+	if ce := mcpChallenge(resp, raw); ce != nil {
+		return "", ce
+	}
 	if resp.StatusCode >= 400 {
 		// The URL is IN the message on purpose. A 404 here means the
 		// endpoint is wrong, and the two ways it can be wrong — REST port
@@ -128,6 +140,9 @@ func (c *MCPCaller) ensureSession(ctx context.Context) (string, error) {
 		nreq.Header.Set("Content-Type", "application/json")
 		nreq.Header.Set("Accept", "application/json, text/event-stream")
 		nreq.Header.Set(mcpSessionHeader, sid)
+		if bearer != "" {
+			nreq.Header.Set("Authorization", "Bearer "+bearer)
+		}
 		if nresp, derr := c.Client.Do(nreq); derr == nil {
 			_ = nresp.Body.Close()
 		}
@@ -150,8 +165,19 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 	if len(files) > 0 {
 		return nil, fmt.Errorf("mcp %s: this step declares `files:`, but the MCP transport has no multipart — move the step to the REST surface", ep.Ref)
 	}
-	sid, err := c.ensureSession(ctx)
+	if c.oauth != nil && token != "" {
+		mcpToken, err := c.oauth.accessToken(ctx, c.Endpoint, token)
+		if err != nil {
+			return nil, fmt.Errorf("mcp %s: %w", ep.Ref, err)
+		}
+		token = mcpToken
+	}
+	sid, err := c.ensureSession(ctx, token)
 	if err != nil {
+		if ce, ok := err.(*CallError); ok {
+			ce.Op = "mcp " + ep.Ref
+			return nil, ce
+		}
 		return nil, fmt.Errorf("mcp %s: %w", ep.Ref, err)
 	}
 	rpc := jsonrpcReq{
@@ -180,6 +206,10 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
+	if ce := mcpChallenge(resp, raw); ce != nil {
+		ce.Op = "mcp " + ep.Ref
+		return nil, ce
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("mcp %s: status %d: %s", ep.Ref, resp.StatusCode, truncate(raw, 512))
 	}
@@ -213,6 +243,18 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 		return nil, fmt.Errorf("mcp %s: empty result", ep.Ref)
 	}
 	if out.Result.IsError {
+		// A backend refusal is a tool result the model reads —
+		// "<Code>: <message>" — so it is the surface answering, and
+		// `expect_error` matches on its code.
+		for _, c := range out.Result.Content {
+			if c.Type != "text" {
+				continue
+			}
+			code, msg, ok := strings.Cut(strings.SplitN(c.Text, "\n", 2)[0], ": ")
+			if ok && code != "" && !strings.ContainsAny(code, " \t") {
+				return nil, &CallError{Op: "mcp " + ep.Ref, Code: screamingSnake(code), Message: msg, Raw: c.Text}
+			}
+		}
 		return nil, fmt.Errorf("mcp %s: tool reported isError", ep.Ref)
 	}
 	return unwrapToolResult(ep.Ref, out.Result)
@@ -302,4 +344,18 @@ func screamingSnake(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// mcpChallenge is the CallError for the HTTP answers a protected resource
+// gives before any JSON-RPC: 401 (no token, or one it refuses) is
+// UNAUTHENTICATED, 403 (insufficient_scope) PERMISSION_DENIED. nil for any
+// other status.
+func mcpChallenge(resp *http.Response, raw []byte) *CallError {
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return &CallError{Status: resp.StatusCode, Code: "UNAUTHENTICATED", Message: resp.Header.Get("WWW-Authenticate"), Raw: truncate(raw, 256)}
+	case http.StatusForbidden:
+		return &CallError{Status: resp.StatusCode, Code: "PERMISSION_DENIED", Message: resp.Header.Get("WWW-Authenticate"), Raw: truncate(raw, 256)}
+	}
+	return nil
 }
