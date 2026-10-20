@@ -153,6 +153,10 @@ var (
 	// ErrDPoPUnavailable: the proof could not be checked now (the replay
 	// store); temporarily_unavailable, retry.
 	ErrDPoPUnavailable = errors.New("oauthas: the DPoP proof could not be checked now")
+	// ErrDPoPSlowDown: the address is over the verifier's budget for proofs
+	// that bind a new key — answered as the token endpoint's own rate limit
+	// (429 slow_down), not as a proof the client should give up on.
+	ErrDPoPSlowDown = errors.New("oauthas: too many DPoP proofs from this address")
 )
 
 // The DPoP headers (RFC 9449).

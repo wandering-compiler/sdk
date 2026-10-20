@@ -255,6 +255,16 @@ func TestToken_DPoP(t *testing.T) {
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "use_dpop_nonce") || w.Header().Get("DPoP-Nonce") != "n1" {
 		t.Errorf("nonce: %d %s %v", w.Code, w.Body, w.Header())
 	}
+
+	// Over the verifier's budget is the endpoint's rate limit, not a refused
+	// proof: a client must not take its key for a bad one.
+	h = mount(t, Config{DPoP: func(*http.Request) (string, string, error) {
+		return "", "", ErrDPoPSlowDown
+	}}, &fakeBackend{})
+	w = do(h, withProof())
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "slow_down") || w.Header().Get("Retry-After") == "" {
+		t.Errorf("slow down: %d %s %v", w.Code, w.Body, w.Header())
+	}
 }
 
 func TestRegister(t *testing.T) {

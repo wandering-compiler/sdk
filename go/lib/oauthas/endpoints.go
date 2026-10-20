@@ -200,6 +200,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			case errors.Is(err, ErrDPoPUnavailable):
 				w.Header().Set("Retry-After", "1")
 				writeError(w, err)
+			case errors.Is(err, ErrDPoPSlowDown):
+				w.Header().Set("Retry-After", "60")
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "slow_down"})
 			default:
 				writeError(w, &Error{Code: "invalid_dpop_proof", Description: "the DPoP proof was refused"})
 			}
