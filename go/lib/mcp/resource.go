@@ -227,7 +227,6 @@ func bearerToken(h string) (string, bool) {
 
 type tokenCheck struct {
 	perms []int32
-	err   error
 	until time.Time
 }
 
@@ -236,28 +235,30 @@ type tokenChecks struct {
 	entries map[[32]byte]tokenCheck
 }
 
-// checkToken runs the permission resolver for the token, reusing an answer
-// younger than tokenCheckTTL. Only refusals and answers are kept; a failure
-// of the auth service is retried on the next request.
+// checkToken runs the permission resolver for the token, reusing an
+// admitting answer younger than tokenCheckTTL. A refusal is not kept.
 func (s *Server) checkToken(ctx context.Context, token string, conn ConnectionInfo) ([]int32, error) {
 	key := sha256.Sum256([]byte(conn.ClientAddr + "\x00" + token))
 	now := time.Now()
 	s.checks.mu.Lock()
 	if c, ok := s.checks.entries[key]; ok && now.Before(c.until) {
 		s.checks.mu.Unlock()
-		return c.perms, c.err
+		return c.perms, nil
 	}
 	s.checks.mu.Unlock()
 
 	perms, err := s.resolveForGate(ctx, conn)
-	if err != nil && !isUnauthenticated(err) {
+	if err != nil {
+		// Only an answer that admits is reused: a refusal is asked again,
+		// so a token that was just refreshed is not refused from the cache,
+		// and a failure of the auth service is retried.
 		return nil, err
 	}
 	s.checks.mu.Lock()
 	if len(s.checks.entries) >= tokenCheckMax {
 		s.checks.entries = map[[32]byte]tokenCheck{}
 	}
-	s.checks.entries[key] = tokenCheck{perms: perms, err: err, until: now.Add(tokenCheckTTL)}
+	s.checks.entries[key] = tokenCheck{perms: perms, until: now.Add(tokenCheckTTL)}
 	s.checks.mu.Unlock()
 	return perms, err
 }

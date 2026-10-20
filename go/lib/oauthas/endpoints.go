@@ -74,6 +74,11 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		errorPage(w, &Error{Code: "invalid_request", Description: "parameter " + k + " is repeated"})
 		return
 	}
+	if !s.authLimit.AllowRequest(r) {
+		w.Header().Set("Retry-After", "60")
+		errorPage(w, &Error{Code: "temporarily_unavailable", Description: "too many sign-in requests from this address; wait a minute"})
+		return
+	}
 	req := AuthorizeRequest{
 		ResponseType:        q.Get("response_type"),
 		ClientID:            q.Get("client_id"),

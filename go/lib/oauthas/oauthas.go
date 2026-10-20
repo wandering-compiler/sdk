@@ -181,6 +181,10 @@ type Config struct {
 	// TokenPerMinute caps token requests per client address (default 60;
 	// negative = no cap).
 	TokenPerMinute int
+	// AuthorizePerMinute caps authorization requests per client address
+	// (default 30; negative = no cap): each one is a stored pending request
+	// and may fetch a client's metadata document.
+	AuthorizePerMinute int
 }
 
 // Router is what Mount registers on (chi.Router and http.ServeMux both are).
@@ -204,11 +208,12 @@ func Mount(r Router, cfg Config, b Backend) error {
 }
 
 type server struct {
-	cfg      Config
-	b        Backend
-	consent  *url.URL
-	regLimit *ratelimit.Limiter
-	tokLimit *ratelimit.Limiter
+	cfg       Config
+	b         Backend
+	consent   *url.URL
+	regLimit  *ratelimit.Limiter
+	tokLimit  *ratelimit.Limiter
+	authLimit *ratelimit.Limiter
 }
 
 func newServer(cfg Config, b Backend) (*server, error) {
@@ -222,6 +227,11 @@ func newServer(cfg Config, b Backend) (*server, error) {
 	if iss.Scheme != "https" && !loopbackHost(iss.Hostname()) {
 		return nil, fmt.Errorf("oauthas: issuer %q must be https (http only on a loopback host)", cfg.Issuer)
 	}
+	if iss.Path != "" {
+		// The endpoints and the metadata are served at the root; an issuer
+		// with a path would be looked up elsewhere (RFC 8414 §3.1).
+		return nil, fmt.Errorf("oauthas: issuer %q has a path; it is the root of the host that serves the OAuth endpoints", cfg.Issuer)
+	}
 	consent, err := url.Parse(cfg.ConsentURL)
 	if err != nil || !consent.IsAbs() || consent.Host == "" || (consent.Scheme != "https" && !loopbackHost(consent.Hostname())) {
 		return nil, fmt.Errorf("oauthas: consent URL %q is not an https URL", cfg.ConsentURL)
@@ -229,6 +239,9 @@ func newServer(cfg Config, b Backend) (*server, error) {
 	s := &server{cfg: cfg, b: b, consent: consent}
 	if n := orDefault(cfg.RegisterPerHour, 20); n > 0 {
 		s.regLimit = ratelimit.New(ratelimit.Config{PerMinute: float64(n) / 60, Burst: min(n, 5), TrustedProxies: cfg.TrustedProxies})
+	}
+	if n := orDefault(cfg.AuthorizePerMinute, 30); n > 0 {
+		s.authLimit = ratelimit.New(ratelimit.Config{PerMinute: float64(n), Burst: min(n, 10), TrustedProxies: cfg.TrustedProxies})
 	}
 	if n := orDefault(cfg.TokenPerMinute, 60); n > 0 {
 		s.tokLimit = ratelimit.New(ratelimit.Config{PerMinute: float64(n), Burst: min(n, 20), TrustedProxies: cfg.TrustedProxies})

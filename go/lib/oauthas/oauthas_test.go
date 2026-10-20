@@ -82,6 +82,7 @@ func TestMount_RefusesABrokenConfiguration(t *testing.T) {
 		{Issuer: "https://a.example?x", ConsentURL: "https://a.example/c"},
 		{Issuer: "https://a.example", ConsentURL: "/consent"},
 		{Issuer: "https://a.example", ConsentURL: "http://a.example/c"},
+		{Issuer: "https://a.example/auth", ConsentURL: "https://a.example/c"},
 	} {
 		if err := Mount(http.NewServeMux(), cfg, &fakeBackend{}); err == nil {
 			t.Errorf("accepted %+v", cfg)
