@@ -252,7 +252,23 @@ type PluginActivation struct {
 	// surface's own registry (`(w17.rest_api).include` /
 	// `(w17.mcp_api).include`), so the registry stays the single source
 	// of truth for what is exposed.
-	Presets       *PresetControls `protobuf:"bytes,7,opt,name=presets,proto3" json:"presets,omitempty"`
+	Presets *PresetControls `protobuf:"bytes,7,opt,name=presets,proto3" json:"presets,omitempty"`
+	// The project methods this activation's HOOKS call. A plugin declares a
+	// hook in `plugin.yaml` `hooks:` — a named slot with a request and a
+	// response message of its own (the agent plugin's `text_filter`:
+	// TextFilterReq → TextFilterResp) — and calls whatever the activation
+	// binds to it: a filter, a check, a lookup only the project can answer.
+	//
+	// Each method is `<module>.<Service>.<Method>`, a unary RPC of a
+	// BUSINESS service of the plugin's own domain (hand-written code, which is
+	// where a project answers a plugin), whose request and response are
+	// exactly the hook's messages as this activation stages them
+	// (`<domain>.<registered_as>.<Message>`) — so a domain with two
+	// activations of one plugin binds a method per activation. A hook the
+	// plugin declares `repeated` takes several methods, called in order; any
+	// other takes one. A slot the plugin does not declare is refused, and so
+	// is a hook it requires that the activation leaves unbound.
+	Hooks         []*PluginHook `protobuf:"bytes,8,rep,name=hooks,proto3" json:"hooks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -336,6 +352,69 @@ func (x *PluginActivation) GetPresets() *PresetControls {
 	return nil
 }
 
+func (x *PluginActivation) GetHooks() []*PluginHook {
+	if x != nil {
+		return x.Hooks
+	}
+	return nil
+}
+
+// PluginHook binds one of a plugin's hooks (PluginActivation.hooks) to the
+// project methods it calls.
+type PluginHook struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The hook's name in the plugin's `plugin.yaml` `hooks:`.
+	Slot string `protobuf:"bytes,1,opt,name=slot,proto3" json:"slot,omitempty"`
+	// The project methods, `<module>.<Service>.<Method>`, in call order.
+	Methods       []string `protobuf:"bytes,2,rep,name=methods,proto3" json:"methods,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginHook) Reset() {
+	*x = PluginHook{}
+	mi := &file_w17_domain_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginHook) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginHook) ProtoMessage() {}
+
+func (x *PluginHook) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_domain_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginHook.ProtoReflect.Descriptor instead.
+func (*PluginHook) Descriptor() ([]byte, []int) {
+	return file_w17_domain_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PluginHook) GetSlot() string {
+	if x != nil {
+		return x.Slot
+	}
+	return ""
+}
+
+func (x *PluginHook) GetMethods() []string {
+	if x != nil {
+		return x.Methods
+	}
+	return nil
+}
+
 // PresetControls is the per-surface control for a plugin activation's
 // presets. Only the admin surface is controlled here (default-on,
 // opt-out); REST/MCP publication is opt-in from the consuming
@@ -349,7 +428,7 @@ type PresetControls struct {
 
 func (x *PresetControls) Reset() {
 	*x = PresetControls{}
-	mi := &file_w17_domain_proto_msgTypes[3]
+	mi := &file_w17_domain_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -361,7 +440,7 @@ func (x *PresetControls) String() string {
 func (*PresetControls) ProtoMessage() {}
 
 func (x *PresetControls) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[3]
+	mi := &file_w17_domain_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -374,7 +453,7 @@ func (x *PresetControls) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresetControls.ProtoReflect.Descriptor instead.
 func (*PresetControls) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{3}
+	return file_w17_domain_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PresetControls) GetAdmin() *PresetSurface {
@@ -400,7 +479,7 @@ type PresetSurface struct {
 
 func (x *PresetSurface) Reset() {
 	*x = PresetSurface{}
-	mi := &file_w17_domain_proto_msgTypes[4]
+	mi := &file_w17_domain_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -412,7 +491,7 @@ func (x *PresetSurface) String() string {
 func (*PresetSurface) ProtoMessage() {}
 
 func (x *PresetSurface) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[4]
+	mi := &file_w17_domain_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -425,7 +504,7 @@ func (x *PresetSurface) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresetSurface.ProtoReflect.Descriptor instead.
 func (*PresetSurface) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{4}
+	return file_w17_domain_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PresetSurface) GetEnabled() bool {
@@ -450,7 +529,7 @@ type PluginFeatureSet struct {
 
 func (x *PluginFeatureSet) Reset() {
 	*x = PluginFeatureSet{}
-	mi := &file_w17_domain_proto_msgTypes[5]
+	mi := &file_w17_domain_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -462,7 +541,7 @@ func (x *PluginFeatureSet) String() string {
 func (*PluginFeatureSet) ProtoMessage() {}
 
 func (x *PluginFeatureSet) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[5]
+	mi := &file_w17_domain_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -475,7 +554,7 @@ func (x *PluginFeatureSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginFeatureSet.ProtoReflect.Descriptor instead.
 func (*PluginFeatureSet) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{5}
+	return file_w17_domain_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PluginFeatureSet) GetNames() []string {
@@ -514,7 +593,7 @@ type AuthInput struct {
 
 func (x *AuthInput) Reset() {
 	*x = AuthInput{}
-	mi := &file_w17_domain_proto_msgTypes[6]
+	mi := &file_w17_domain_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +605,7 @@ func (x *AuthInput) String() string {
 func (*AuthInput) ProtoMessage() {}
 
 func (x *AuthInput) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_domain_proto_msgTypes[6]
+	mi := &file_w17_domain_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +618,7 @@ func (x *AuthInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthInput.ProtoReflect.Descriptor instead.
 func (*AuthInput) Descriptor() ([]byte, []int) {
-	return file_w17_domain_proto_rawDescGZIP(), []int{6}
+	return file_w17_domain_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AuthInput) GetHeaderName() string {
@@ -587,7 +666,7 @@ const file_w17_domain_proto_rawDesc = "" +
 	"\bregister\x18\x02 \x03(\v2\x17.w17.SharedRegistrationR\bregister\"<\n" +
 	"\x12SharedRegistration\x12\x16\n" +
 	"\x06module\x18\x01 \x01(\tR\x06module\x12\x0e\n" +
-	"\x02as\x18\x02 \x01(\tR\x02as\"\xf1\x03\n" +
+	"\x02as\x18\x02 \x01(\tR\x02as\"\x98\x04\n" +
 	"\x10PluginActivation\x12\x1f\n" +
 	"\vsource_name\x18\x01 \x01(\tR\n" +
 	"sourceName\x12#\n" +
@@ -597,13 +676,18 @@ const file_w17_domain_proto_rawDesc = "" +
 	"\n" +
 	"auth_input\x18\x05 \x01(\v2\x0e.w17.AuthInputR\tauthInput\x121\n" +
 	"\bfeatures\x18\x06 \x01(\v2\x15.w17.PluginFeatureSetR\bfeatures\x12-\n" +
-	"\apresets\x18\a \x01(\v2\x13.w17.PresetControlsR\apresets\x1a>\n" +
+	"\apresets\x18\a \x01(\v2\x13.w17.PresetControlsR\apresets\x12%\n" +
+	"\x05hooks\x18\b \x03(\v2\x0f.w17.PluginHookR\x05hooks\x1a>\n" +
 	"\x10ConnectionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a;\n" +
 	"\rChannelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\":\n" +
+	"\n" +
+	"PluginHook\x12\x12\n" +
+	"\x04slot\x18\x01 \x01(\tR\x04slot\x12\x18\n" +
+	"\amethods\x18\x02 \x03(\tR\amethods\"Q\n" +
 	"\x0ePresetControls\x12(\n" +
 	"\x05admin\x18\x03 \x01(\v2\x12.w17.PresetSurfaceR\x05adminJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x04restR\x03mcp\"G\n" +
 	"\rPresetSurface\x12\x1d\n" +
@@ -630,35 +714,37 @@ func file_w17_domain_proto_rawDescGZIP() []byte {
 	return file_w17_domain_proto_rawDescData
 }
 
-var file_w17_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_w17_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_w17_domain_proto_goTypes = []any{
 	(*Domain)(nil),                   // 0: w17.Domain
 	(*SharedRegistration)(nil),       // 1: w17.SharedRegistration
 	(*PluginActivation)(nil),         // 2: w17.PluginActivation
-	(*PresetControls)(nil),           // 3: w17.PresetControls
-	(*PresetSurface)(nil),            // 4: w17.PresetSurface
-	(*PluginFeatureSet)(nil),         // 5: w17.PluginFeatureSet
-	(*AuthInput)(nil),                // 6: w17.AuthInput
-	nil,                              // 7: w17.PluginActivation.ConnectionsEntry
-	nil,                              // 8: w17.PluginActivation.ChannelsEntry
-	(*descriptorpb.FileOptions)(nil), // 9: google.protobuf.FileOptions
+	(*PluginHook)(nil),               // 3: w17.PluginHook
+	(*PresetControls)(nil),           // 4: w17.PresetControls
+	(*PresetSurface)(nil),            // 5: w17.PresetSurface
+	(*PluginFeatureSet)(nil),         // 6: w17.PluginFeatureSet
+	(*AuthInput)(nil),                // 7: w17.AuthInput
+	nil,                              // 8: w17.PluginActivation.ConnectionsEntry
+	nil,                              // 9: w17.PluginActivation.ChannelsEntry
+	(*descriptorpb.FileOptions)(nil), // 10: google.protobuf.FileOptions
 }
 var file_w17_domain_proto_depIdxs = []int32{
 	2,  // 0: w17.Domain.plugins:type_name -> w17.PluginActivation
 	1,  // 1: w17.Domain.register:type_name -> w17.SharedRegistration
-	7,  // 2: w17.PluginActivation.connections:type_name -> w17.PluginActivation.ConnectionsEntry
-	8,  // 3: w17.PluginActivation.channels:type_name -> w17.PluginActivation.ChannelsEntry
-	6,  // 4: w17.PluginActivation.auth_input:type_name -> w17.AuthInput
-	5,  // 5: w17.PluginActivation.features:type_name -> w17.PluginFeatureSet
-	3,  // 6: w17.PluginActivation.presets:type_name -> w17.PresetControls
-	4,  // 7: w17.PresetControls.admin:type_name -> w17.PresetSurface
-	9,  // 8: w17.domain:extendee -> google.protobuf.FileOptions
-	0,  // 9: w17.domain:type_name -> w17.Domain
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	9,  // [9:10] is the sub-list for extension type_name
-	8,  // [8:9] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	8,  // 2: w17.PluginActivation.connections:type_name -> w17.PluginActivation.ConnectionsEntry
+	9,  // 3: w17.PluginActivation.channels:type_name -> w17.PluginActivation.ChannelsEntry
+	7,  // 4: w17.PluginActivation.auth_input:type_name -> w17.AuthInput
+	6,  // 5: w17.PluginActivation.features:type_name -> w17.PluginFeatureSet
+	4,  // 6: w17.PluginActivation.presets:type_name -> w17.PresetControls
+	3,  // 7: w17.PluginActivation.hooks:type_name -> w17.PluginHook
+	5,  // 8: w17.PresetControls.admin:type_name -> w17.PresetSurface
+	10, // 9: w17.domain:extendee -> google.protobuf.FileOptions
+	0,  // 10: w17.domain:type_name -> w17.Domain
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	10, // [10:11] is the sub-list for extension type_name
+	9,  // [9:10] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_w17_domain_proto_init() }
@@ -666,14 +752,14 @@ func file_w17_domain_proto_init() {
 	if File_w17_domain_proto != nil {
 		return
 	}
-	file_w17_domain_proto_msgTypes[4].OneofWrappers = []any{}
+	file_w17_domain_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_domain_proto_rawDesc), len(file_w17_domain_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 1,
 			NumServices:   0,
 		},

@@ -155,6 +155,32 @@ message PluginActivation {
   // `(w17.mcp_api).include`), so the registry stays the single source
   // of truth for what is exposed.
   PresetControls presets = 7;
+
+  // The project methods this activation's HOOKS call. A plugin declares a
+  // hook in `plugin.yaml` `hooks:` — a named slot with a request and a
+  // response message of its own (the agent plugin's `text_filter`:
+  // TextFilterReq → TextFilterResp) — and calls whatever the activation
+  // binds to it: a filter, a check, a lookup only the project can answer.
+  //
+  // Each method is `<module>.<Service>.<Method>`, a unary RPC of a
+  // BUSINESS service of the plugin's own domain (hand-written code, which is
+  // where a project answers a plugin), whose request and response are
+  // exactly the hook's messages as this activation stages them
+  // (`<domain>.<registered_as>.<Message>`) — so a domain with two
+  // activations of one plugin binds a method per activation. A hook the
+  // plugin declares `repeated` takes several methods, called in order; any
+  // other takes one. A slot the plugin does not declare is refused, and so
+  // is a hook it requires that the activation leaves unbound.
+  repeated PluginHook hooks = 8;
+}
+
+// PluginHook binds one of a plugin's hooks (PluginActivation.hooks) to the
+// project methods it calls.
+message PluginHook {
+  // The hook's name in the plugin's `plugin.yaml` `hooks:`.
+  string slot = 1;
+  // The project methods, `<module>.<Service>.<Method>`, in call order.
+  repeated string methods = 2;
 }
 
 // PresetControls is the per-surface control for a plugin activation's
