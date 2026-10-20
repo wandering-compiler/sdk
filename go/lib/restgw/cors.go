@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wandering-compiler/sdk/go/lib/captcha"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
@@ -88,7 +89,11 @@ func defaultCORSAllowedHeaders() []string {
 	// and no server-side log line (w17.app, 2026-09-11 — the members and
 	// invites screens were unreachable while /auth/orgs, which needs no
 	// org header, worked).
-	return []string{"Content-Type", "Authorization", principal.OrgScopeHeader}
+	//
+	// captcha.Header is there for the same reason: an endpoint that requires
+	// a captcha (RestEndpoint.captcha) is called from a browser by design,
+	// and a preflight that leaves the header out fails the same silent way.
+	return []string{"Content-Type", "Authorization", principal.OrgScopeHeader, captcha.Header}
 }
 
 // WithDPoPCORS returns cfg opened for DPoP (RFC 9449) browser clients: the

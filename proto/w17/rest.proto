@@ -777,6 +777,23 @@ message RestEndpoint {
   // so. Requires `exclude_auth` (a mint takes no token); on a surface that
   // does not bind devices it would do nothing, and is refused.
   bool dpop_mint = 21;
+
+  // captcha decides whether a call must carry a solved captcha: the token
+  // the provider's widget gave the browser, in the `W17-Captcha-Token`
+  // header, which the gateway verifies with the provider (Cloudflare
+  // Turnstile) before the backend is called.
+  //
+  // Undeclared, the auth plugin's SignUp, SignIn and RequestPasswordReset
+  // (on the surface's auth service) require one and every other endpoint
+  // does not. CAPTCHA_REQUIRED asks for it on any endpoint — a project's
+  // own sign-in facade, a contact form; CAPTCHA_NONE declines it on a
+  // default one.
+  //
+  // It is enforced only where the gateway has a captcha secret
+  // (`<PREFIX>_CAPTCHA_SECRET`): without one nothing is checked and the
+  // gateway says so once at start, so a project turns captchas on by
+  // configuring a key and off by removing it.
+  Captcha captcha = 22;
 }
 
 // MetadataBinding — one HTTP-slot → gRPC-metadata
@@ -1122,6 +1139,17 @@ enum PublicLimit {
   // Every request takes a token, success or not, whatever a plugin preset
   // says about the same method. The way to decline the inherited mode.
   PUBLIC_LIMIT_EVERY_REQUEST = 2;
+}
+
+// Captcha is RestEndpoint.captcha.
+enum Captcha {
+  // Not declared: required on the auth plugin's SignUp, SignIn and
+  // RequestPasswordReset, nowhere else. The default.
+  CAPTCHA_UNSPECIFIED = 0;
+  // Required on this endpoint.
+  CAPTCHA_REQUIRED = 1;
+  // Not required on this endpoint, even where the default would ask.
+  CAPTCHA_NONE = 2;
 }
 
 // HttpMethod enumerates the HTTP verbs the gateway emits.
