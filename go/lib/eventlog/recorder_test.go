@@ -51,6 +51,12 @@ func sampleResp() *descriptorpb.EnumValueDescriptorProto {
 
 // authMD is the metadata the gateway stamps for a verified caller.
 func authMD(user string, consent bool, org string) metadata.MD {
+	return authMDScopes(user, consent, [2]string{"org_id", org})
+}
+
+// authMDScopes is authMD with the auth response's scopes map, entry by entry
+// in this order.
+func authMDScopes(user string, consent bool, scopes ...[2]string) metadata.MD {
 	var raw []byte
 	raw = protowire.AppendTag(raw, 1, protowire.VarintType) // an unrelated field
 	raw = protowire.AppendVarint(raw, 9)
@@ -60,13 +66,15 @@ func authMD(user string, consent bool, org string) metadata.MD {
 		raw = protowire.AppendTag(raw, consentField, protowire.VarintType)
 		raw = protowire.AppendVarint(raw, 1)
 	}
-	var entry []byte
-	entry = protowire.AppendTag(entry, 1, protowire.BytesType)
-	entry = protowire.AppendString(entry, "org_id")
-	entry = protowire.AppendTag(entry, 2, protowire.BytesType)
-	entry = protowire.AppendString(entry, org)
-	raw = protowire.AppendTag(raw, scopesField, protowire.BytesType)
-	raw = protowire.AppendBytes(raw, entry)
+	for _, kv := range scopes {
+		var entry []byte
+		entry = protowire.AppendTag(entry, 1, protowire.BytesType)
+		entry = protowire.AppendString(entry, kv[0])
+		entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+		entry = protowire.AppendString(entry, kv[1])
+		raw = protowire.AppendTag(raw, scopesField, protowire.BytesType)
+		raw = protowire.AppendBytes(raw, entry)
+	}
 	return metadata.Pairs("x-w17-user", base64.StdEncoding.EncodeToString(raw))
 }
 
@@ -452,6 +460,42 @@ func TestRecord_SetCallerFromContext(t *testing.T) {
 	recs := c.records(w17pb.RequestApi_REQUEST_API_REST)
 	if len(recs) != 2 || decodeEnvelope(t, recs[0]).meta.GetUserId() != "u-out" || decodeEnvelope(t, recs[1]).meta.GetUserId() != "u-in" {
 		t.Fatalf("%d records", len(recs))
+	}
+}
+
+// A tenant_scope project's caller has a tenant_id scope and no org_id: the
+// tenant is its organization. A project picks one model, and when both scopes
+// are there anyway org_id wins, in either order. Any other scope names no
+// organization.
+func TestRecorder_TenantIsTheOrganization(t *testing.T) {
+	stamped := func(pairs ...string) metadata.MD {
+		return metadata.Join(authMDScopes("u-1", false), metadata.Pairs(pairs...))
+	}
+	for _, c := range []struct {
+		name string
+		md   metadata.MD
+		want string
+	}{
+		{"tenant in the auth response", authMDScopes("u-1", false, [2]string{"tenant_id", "t-1"}), "t-1"},
+		{"tenant stamped", stamped("x-w17-scope-tenant_id", "t-1"), "t-1"},
+		{"org before tenant in the auth response", authMDScopes("u-1", false, [2]string{"org_id", "o-1"}, [2]string{"tenant_id", "t-1"}), "o-1"},
+		{"tenant before org in the auth response", authMDScopes("u-1", false, [2]string{"tenant_id", "t-1"}, [2]string{"org_id", "o-1"}), "o-1"},
+		{"both stamped", stamped("x-w17-scope-tenant_id", "t-1", "x-w17-scope-org_id", "o-1"), "o-1"},
+		{"another scope", authMDScopes("u-1", false, [2]string{"user_id", "u-1"}), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, cap := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}})
+			rec := r.Surface(w17pb.RequestApi_REQUEST_API_REST).Start(testMethod)
+			rec.Done(context.Background(), nil, 200, nil, c.md)
+			closeRecorder(t, r)
+			recs := cap.records(w17pb.RequestApi_REQUEST_API_REST)
+			if len(recs) != 1 {
+				t.Fatalf("%d records", len(recs))
+			}
+			if got := decodeEnvelope(t, recs[0]).meta.GetOrgId(); got != c.want {
+				t.Fatalf("org_id %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

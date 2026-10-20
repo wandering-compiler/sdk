@@ -393,7 +393,10 @@ type RequestEventMeta struct {
 	DurationMicros int64                  `protobuf:"varint,10,opt,name=duration_micros,json=durationMicros,proto3" json:"duration_micros,omitempty"`
 	// The verified caller; empty on an anonymous request.
 	UserId string `protobuf:"bytes,11,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	OrgId  string `protobuf:"bytes,12,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
+	// The caller's organization: its org_id scope, or its tenant_id scope on a
+	// project of the single-organization model (the auth plugin's
+	// tenant_scope). Empty when the caller has neither.
+	OrgId string `protobuf:"bytes,12,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
 	// Whether the caller agreed to receive marketing messages, from the
 	// principal (the auth response's `bool marketing_consent`). Unset when the
 	// project's auth does not keep it, or on an anonymous request. It says

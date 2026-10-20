@@ -760,6 +760,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.16 | Through `Surface.Conn`, a sync audit method's backend call MUST return to the handler only once its record is stored, and the record MUST be stored once. | `TestConn_SyncAuditHoldsTheCall` |
 | I20.17 | `EnsureStream` MUST create a missing stream within the server's storage, halving its cap while it does not fit, and MUST leave an existing stream's limits as they are. | `TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone` |
 | I20.18 | The caller's marketing consent MUST be carried, never applied: a signed-in request on a marketing surface MUST be recorded whether its consent is yes, no or not kept, and the record's `marketing_consent` MUST be the principal's value, unset when the auth response does not declare the field. | `TestRecorder_ConsentIsCarriedNotApplied` |
+| I20.19 | A record's organization MUST be the caller's `org_id` scope, else its `tenant_id` scope (a `tenant_scope` project's tenant is its organization), from the stamped metadata or the auth response; `org_id` MUST win when both are there, and no other scope MAY name one. | `TestRecorder_TenantIsTheOrganization` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
