@@ -175,6 +175,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		Resources:    form["resource"],
 		Scope:        form.Get("scope"),
 		ClientAddr:   s.clientAddr(r),
+		UserAgent:    r.UserAgent(),
 	}
 	if req.ClientID == "" {
 		writeError(w, &Error{Code: "invalid_client", Description: "client_id is required"})

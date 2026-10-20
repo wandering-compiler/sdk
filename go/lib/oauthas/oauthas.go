@@ -111,6 +111,8 @@ type TokenRequest struct {
 	// (RFC 9449 §5); empty when it carried none.
 	DPoPThumbprint string
 	ClientAddr     string
+	// UserAgent is the request's, for the sign-in history.
+	UserAgent string
 }
 
 // TokenResponse is a successful token response (RFC 6749 §5.1).
