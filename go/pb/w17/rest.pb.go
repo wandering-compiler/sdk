@@ -362,6 +362,60 @@ func (PublicLimit) EnumDescriptor() ([]byte, []int) {
 	return file_w17_rest_proto_rawDescGZIP(), []int{4}
 }
 
+// Captcha is RestEndpoint.captcha.
+type Captcha int32
+
+const (
+	// Not declared: required on the auth plugin's SignUp, SignIn and
+	// RequestPasswordReset, nowhere else. The default.
+	Captcha_CAPTCHA_UNSPECIFIED Captcha = 0
+	// Required on this endpoint.
+	Captcha_CAPTCHA_REQUIRED Captcha = 1
+	// Not required on this endpoint, even where the default would ask.
+	Captcha_CAPTCHA_NONE Captcha = 2
+)
+
+// Enum value maps for Captcha.
+var (
+	Captcha_name = map[int32]string{
+		0: "CAPTCHA_UNSPECIFIED",
+		1: "CAPTCHA_REQUIRED",
+		2: "CAPTCHA_NONE",
+	}
+	Captcha_value = map[string]int32{
+		"CAPTCHA_UNSPECIFIED": 0,
+		"CAPTCHA_REQUIRED":    1,
+		"CAPTCHA_NONE":        2,
+	}
+)
+
+func (x Captcha) Enum() *Captcha {
+	p := new(Captcha)
+	*p = x
+	return p
+}
+
+func (x Captcha) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Captcha) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_rest_proto_enumTypes[5].Descriptor()
+}
+
+func (Captcha) Type() protoreflect.EnumType {
+	return &file_w17_rest_proto_enumTypes[5]
+}
+
+func (x Captcha) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Captcha.Descriptor instead.
+func (Captcha) EnumDescriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{5}
+}
+
 // HttpMethod enumerates the HTTP verbs the gateway emits.
 // Adding a verb here must extend the gateway generator's
 // route emit; today the five most common are wired. PATCH-as-
@@ -409,11 +463,11 @@ func (x HttpMethod) String() string {
 }
 
 func (HttpMethod) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[5].Descriptor()
+	return file_w17_rest_proto_enumTypes[6].Descriptor()
 }
 
 func (HttpMethod) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[5]
+	return &file_w17_rest_proto_enumTypes[6]
 }
 
 func (x HttpMethod) Number() protoreflect.EnumNumber {
@@ -422,7 +476,7 @@ func (x HttpMethod) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HttpMethod.Descriptor instead.
 func (HttpMethod) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{5}
+	return file_w17_rest_proto_rawDescGZIP(), []int{6}
 }
 
 // StreamTransport selects the HTTP-side streaming shape for a
@@ -462,11 +516,11 @@ func (x StreamTransport) String() string {
 }
 
 func (StreamTransport) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_rest_proto_enumTypes[6].Descriptor()
+	return file_w17_rest_proto_enumTypes[7].Descriptor()
 }
 
 func (StreamTransport) Type() protoreflect.EnumType {
-	return &file_w17_rest_proto_enumTypes[6]
+	return &file_w17_rest_proto_enumTypes[7]
 }
 
 func (x StreamTransport) Number() protoreflect.EnumNumber {
@@ -475,7 +529,7 @@ func (x StreamTransport) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamTransport.Descriptor instead.
 func (StreamTransport) EnumDescriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{6}
+	return file_w17_rest_proto_rawDescGZIP(), []int{7}
 }
 
 // RestApi declares one REST surface — one logical API exposed
@@ -1593,7 +1647,23 @@ type RestEndpoint struct {
 	// OAuthExchange, CliToken on its AuthService) are mints without saying
 	// so. Requires `exclude_auth` (a mint takes no token); on a surface that
 	// does not bind devices it would do nothing, and is refused.
-	DpopMint      bool `protobuf:"varint,21,opt,name=dpop_mint,json=dpopMint,proto3" json:"dpop_mint,omitempty"`
+	DpopMint bool `protobuf:"varint,21,opt,name=dpop_mint,json=dpopMint,proto3" json:"dpop_mint,omitempty"`
+	// captcha decides whether a call must carry a solved captcha: the token
+	// the provider's widget gave the browser, in the `W17-Captcha-Token`
+	// header, which the gateway verifies with the provider (Cloudflare
+	// Turnstile) before the backend is called.
+	//
+	// Undeclared, the auth plugin's SignUp, SignIn and RequestPasswordReset
+	// (on the surface's auth service) require one and every other endpoint
+	// does not. CAPTCHA_REQUIRED asks for it on any endpoint — a project's
+	// own sign-in facade, a contact form; CAPTCHA_NONE declines it on a
+	// default one.
+	//
+	// It is enforced only where the gateway has a captcha secret
+	// (`<PREFIX>_CAPTCHA_SECRET`): without one nothing is checked and the
+	// gateway says so once at start, so a project turns captchas on by
+	// configuring a key and off by removing it.
+	Captcha       Captcha `protobuf:"varint,22,opt,name=captcha,proto3,enum=w17.Captcha" json:"captcha,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1752,6 +1822,13 @@ func (x *RestEndpoint) GetDpopMint() bool {
 		return x.DpopMint
 	}
 	return false
+}
+
+func (x *RestEndpoint) GetCaptcha() Captcha {
+	if x != nil {
+		return x.Captcha
+	}
+	return Captcha_CAPTCHA_UNSPECIFIED
 }
 
 // MetadataBinding — one HTTP-slot → gRPC-metadata
@@ -2455,7 +2532,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\xe1\x05\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\x89\x06\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2477,7 +2554,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x10browser_redirect\x18\x12 \x01(\v2\x14.w17.BrowserRedirectR\x0fbrowserRedirect\x12\"\n" +
 	"\rorg_from_path\x18\x13 \x01(\tR\vorgFromPath\x123\n" +
 	"\fpublic_limit\x18\x14 \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimit\x12\x1b\n" +
-	"\tdpop_mint\x18\x15 \x01(\bR\bdpopMintJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
+	"\tdpop_mint\x18\x15 \x01(\bR\bdpopMint\x12&\n" +
+	"\acaptcha\x18\x16 \x01(\x0e2\f.w17.CaptchaR\acaptchaJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
 	"\x0fMetadataBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1a\n" +
@@ -2542,7 +2620,11 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\vPublicLimit\x12\x1c\n" +
 	"\x18PUBLIC_LIMIT_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18PUBLIC_LIMIT_FAILED_ONLY\x10\x01\x12\x1e\n" +
-	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x02*\\\n" +
+	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x02*J\n" +
+	"\aCaptcha\x12\x17\n" +
+	"\x13CAPTCHA_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10CAPTCHA_REQUIRED\x10\x01\x12\x10\n" +
+	"\fCAPTCHA_NONE\x10\x02*\\\n" +
 	"\n" +
 	"HttpMethod\x12\x1b\n" +
 	"\x17HTTP_METHOD_UNSPECIFIED\x10\x00\x12\a\n" +
@@ -2570,7 +2652,7 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 	return file_w17_rest_proto_rawDescData
 }
 
-var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
 var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
@@ -2578,59 +2660,61 @@ var file_w17_rest_proto_goTypes = []any{
 	(URLForm)(0),                     // 2: w17.URLForm
 	(ContentDisposition)(0),          // 3: w17.ContentDisposition
 	(PublicLimit)(0),                 // 4: w17.PublicLimit
-	(HttpMethod)(0),                  // 5: w17.HttpMethod
-	(StreamTransport)(0),             // 6: w17.StreamTransport
-	(*RestApi)(nil),                  // 7: w17.RestApi
-	(*PluginInclude)(nil),            // 8: w17.PluginInclude
-	(*BrowserRedirect)(nil),          // 9: w17.BrowserRedirect
-	(*AuthMethod)(nil),               // 10: w17.AuthMethod
-	(*Credential)(nil),               // 11: w17.Credential
-	(*MetadataPropagation)(nil),      // 12: w17.MetadataPropagation
-	(*HeaderRename)(nil),             // 13: w17.HeaderRename
-	(*RestGroup)(nil),                // 14: w17.RestGroup
-	(*RestEndpoint)(nil),             // 15: w17.RestEndpoint
-	(*MetadataBinding)(nil),          // 16: w17.MetadataBinding
-	(*PagedConfig)(nil),              // 17: w17.PagedConfig
-	(*FieldBinding)(nil),             // 18: w17.FieldBinding
-	(*RestStream)(nil),               // 19: w17.RestStream
-	(*DownloadEndpoint)(nil),         // 20: w17.DownloadEndpoint
-	(*RequestEvents)(nil),            // 21: w17.RequestEvents
-	(*descriptorpb.FileOptions)(nil), // 22: google.protobuf.FileOptions
+	(Captcha)(0),                     // 5: w17.Captcha
+	(HttpMethod)(0),                  // 6: w17.HttpMethod
+	(StreamTransport)(0),             // 7: w17.StreamTransport
+	(*RestApi)(nil),                  // 8: w17.RestApi
+	(*PluginInclude)(nil),            // 9: w17.PluginInclude
+	(*BrowserRedirect)(nil),          // 10: w17.BrowserRedirect
+	(*AuthMethod)(nil),               // 11: w17.AuthMethod
+	(*Credential)(nil),               // 12: w17.Credential
+	(*MetadataPropagation)(nil),      // 13: w17.MetadataPropagation
+	(*HeaderRename)(nil),             // 14: w17.HeaderRename
+	(*RestGroup)(nil),                // 15: w17.RestGroup
+	(*RestEndpoint)(nil),             // 16: w17.RestEndpoint
+	(*MetadataBinding)(nil),          // 17: w17.MetadataBinding
+	(*PagedConfig)(nil),              // 18: w17.PagedConfig
+	(*FieldBinding)(nil),             // 19: w17.FieldBinding
+	(*RestStream)(nil),               // 20: w17.RestStream
+	(*DownloadEndpoint)(nil),         // 21: w17.DownloadEndpoint
+	(*RequestEvents)(nil),            // 22: w17.RequestEvents
+	(*descriptorpb.FileOptions)(nil), // 23: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
-	10, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
-	14, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
-	12, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
-	8,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
-	21, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
+	11, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
+	15, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
+	13, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
+	9,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
+	22, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
 	0,  // 5: w17.AuthMethod.token_types:type_name -> w17.TokenType
-	13, // 6: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
-	15, // 7: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	19, // 8: w17.RestGroup.streams:type_name -> w17.RestStream
-	20, // 9: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
-	5,  // 10: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	18, // 11: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	17, // 12: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	16, // 13: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
-	11, // 14: w17.RestEndpoint.credential:type_name -> w17.Credential
-	9,  // 15: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
+	14, // 6: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
+	16, // 7: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
+	20, // 8: w17.RestGroup.streams:type_name -> w17.RestStream
+	21, // 9: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	6,  // 10: w17.RestEndpoint.method:type_name -> w17.HttpMethod
+	19, // 11: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	18, // 12: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	17, // 13: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	12, // 14: w17.RestEndpoint.credential:type_name -> w17.Credential
+	10, // 15: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
 	4,  // 16: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
-	1,  // 17: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 18: w17.FieldBinding.from:type_name -> w17.FieldSource
-	6,  // 19: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	16, // 20: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	18, // 21: w17.RestStream.fields:type_name -> w17.FieldBinding
-	11, // 22: w17.RestStream.credential:type_name -> w17.Credential
-	5,  // 23: w17.RestStream.method:type_name -> w17.HttpMethod
-	3,  // 24: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 25: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	22, // 26: w17.rest_api:extendee -> google.protobuf.FileOptions
-	7,  // 27: w17.rest_api:type_name -> w17.RestApi
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	27, // [27:28] is the sub-list for extension type_name
-	26, // [26:27] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	5,  // 17: w17.RestEndpoint.captcha:type_name -> w17.Captcha
+	1,  // 18: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 19: w17.FieldBinding.from:type_name -> w17.FieldSource
+	7,  // 20: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	17, // 21: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	19, // 22: w17.RestStream.fields:type_name -> w17.FieldBinding
+	12, // 23: w17.RestStream.credential:type_name -> w17.Credential
+	6,  // 24: w17.RestStream.method:type_name -> w17.HttpMethod
+	3,  // 25: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 26: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	23, // 27: w17.rest_api:extendee -> google.protobuf.FileOptions
+	8,  // 28: w17.rest_api:type_name -> w17.RestApi
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	28, // [28:29] is the sub-list for extension type_name
+	27, // [27:28] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2644,7 +2728,7 @@ func file_w17_rest_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
-			NumEnums:      7,
+			NumEnums:      8,
 			NumMessages:   14,
 			NumExtensions: 1,
 			NumServices:   0,

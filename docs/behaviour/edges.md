@@ -88,6 +88,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E38 | Shared DPoP replay stores | `go/lib/dpop/dpopstore` — `RedisJTIStore`, `SQLJTIStore` |
 | E39 | DPoP TypeScript client | `ts/dpop` — `createDpopFetch`, `createProof`, `jwkThumbprint`, `IndexedDBKeyStore`, `issueStreamTicket` |
 | E40 | DPoP in the admin runtime | `ts/admin-runtime/src` — `auth.ts` (`configureAuth`, `deviceFetch`), `api.ts`, `oauth.ts`, `Login.tsx`, `App.tsx` |
+| E41 | Captcha verification | `go/lib/captcha` — `Verifier`, `New`, `NewFromEnv`; `go/lib/restgw` — `RequireCaptcha` |
 
 ---
 
@@ -1599,3 +1600,40 @@ tab of the origin, and the IndexedDB device key with every page of the origin.
   with `MemoryKeyStore` or `fake-indexeddb`, not in a browser.
 - A token minted with a key another tab replaced meanwhile is kept: the replacement happens only
   after that key was revoked, so the token is refused anyway and the operator signs in again.
+
+---
+
+## E41. Captcha verification
+
+**Code.** `go/lib/captcha` (`Config`, `FromEnv`, `New`, `NewFromEnv`, `Verifier.Verify`,
+`Header`); `go/lib/restgw/captcha.go` (`RequireCaptcha`, `CodeCaptcha*`).
+
+**Purpose.** A REST endpoint that requires a solved captcha (`RestEndpoint.captcha`) has the
+browser's token verified with the provider — Cloudflare Turnstile's siteverify — before the
+backend is called. Off unless the gateway has the provider's secret.
+
+**Configuration** (`<PREFIX>_CAPTCHA_*`, read by `FromEnv`).
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `_SECRET` | empty = off | Off, `New` returns nil and every call passes; `NewFromEnv` logs that once |
+| `_PROVIDER` | `turnstile` | Case-insensitive; any other name is refused by `New` |
+| `_VERIFY_URL` | Turnstile's siteverify | A stub's, in tests |
+| `_TIMEOUT` | `5s` | Not a positive Go duration → `FromEnv` errors |
+| `_HOSTNAMES` | any | Comma-separated, case-insensitive; the answer's hostname must be one |
+
+**Behaviour.**
+
+| ID | Rule | Tests |
+|---|---|---|
+| E41.1 | Without a secret the verifier MUST be nil and MUST pass every call | `captcha_test.go › TestVerify_NoSecretIsOff` |
+| E41.2 | A call MUST send the provider the secret, the token (trimmed), the client address and a 128-bit idempotency key | `› TestVerify_ASolvedTokenPassesAndTheProviderSeesTheCall` |
+| E41.3 | No token MUST be ErrMissing and a token over 2048 bytes ErrRejected, both without asking the provider; a rejection (used, expired, forged, another hostname) MUST be ErrRejected; a refused secret, an HTTP 5xx or a second internal-error MUST be ErrUnavailable | `› TestVerify_Refusals` |
+| E41.4 | A provider error MUST be retried once, with the same idempotency key | `› TestVerify_ARetryKeepsItsIdempotencyKey` |
+| E41.5 | An unknown provider MUST be refused, and FromEnv MUST read every setting | `› TestNew_RefusesAnUnknownProvider`, `› TestFromEnv` |
+| E41.6 | `RequireCaptcha` MUST pass with a nil verifier or a solved token, and otherwise answer 403 `CAPTCHA_REQUIRED`, 403 `CAPTCHA_INVALID` or 503 `CAPTCHA_UNAVAILABLE` and report false | `restgw/captcha_test.go › TestRequireCaptcha` |
+| E41.7 | The default CORS allowlist MUST include `W17-Captcha-Token` | `› TestCORSDefaultsAllowTheCaptchaHeader` |
+
+**Deliberate limits.**
+- Fails closed: an unreachable provider refuses the call.
+- One provider; the siteverify shape is the one hCaptcha and reCAPTCHA share.
