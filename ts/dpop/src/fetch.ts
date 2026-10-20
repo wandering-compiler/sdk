@@ -401,7 +401,12 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
     const req = new Request(input, { ...fetchInit, redirect: "error" });
     const origin = new URL(req.url).origin;
     if (!allowed.has(origin)) {
-      await req.body?.cancel().catch(() => undefined);
+      // Never awaited, here or below: a body may be one branch of a tee
+      // (Next.js's server fetch tees every GET response it caches or
+      // dedupes, and a proxied request body can be one too), and cancelling
+      // a branch settles only once its sibling is cancelled as well — which
+      // nobody here can do, so the await would never return.
+      void req.body?.cancel().catch(() => undefined);
       throw new DpopOriginError(origin);
     }
     if (req.mode === "no-cors") {
@@ -424,7 +429,7 @@ export function createDpopFetch(opts: DpopFetchOptions): DpopFetch {
       fresh !== used &&
       isUseNonceChallenge(resp.headers.get("WWW-Authenticate"))
     ) {
-      await resp.body?.cancel().catch(() => undefined);
+      void resp.body?.cancel().catch(() => undefined);
       resp = await attempt(req, k, token, fresh);
       learn(origin, resp);
     }

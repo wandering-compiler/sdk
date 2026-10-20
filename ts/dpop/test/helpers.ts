@@ -83,6 +83,17 @@ export function json(
   });
 }
 
+/**
+ * The response with its body replaced by one branch of a tee whose other
+ * branch nobody reads — what Next.js's server fetch answers a GET with (it
+ * keeps the sibling for its cache and dedupe). Cancelling such a body settles
+ * only once the sibling is cancelled too, so an awaited cancel never returns.
+ */
+export function teed(resp: Response): Response {
+  const [mine] = resp.body!.tee();
+  return new Response(mine, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+}
+
 export function useNonce(nonce: string): Response {
   return json(
     401,
