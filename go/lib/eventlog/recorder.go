@@ -360,8 +360,8 @@ func (rec *Record) SetResult(resp proto.Message, err error) {
 }
 
 // SetCaller records the verified caller from the metadata the gateway
-// stamped (`x-w17-user`, `x-w17-scope-org_id`): the outgoing metadata it
-// sends the backend, or the incoming metadata on the rpc surface.
+// stamped (`x-w17-user`, the organization's `x-w17-scope-*`): the outgoing
+// metadata it sends the backend, or the incoming metadata on the rpc surface.
 func (rec *Record) SetCaller(md metadata.MD) {
 	if rec != nil {
 		rec.readCaller(md)
@@ -448,12 +448,37 @@ func (rec *Record) Done(ctx context.Context, resp proto.Message, httpStatus int,
 	rec.Finish(ctx, httpStatus)
 }
 
+// orgScopes are the data scopes that name the caller's organization, in
+// precedence. The auth plugin stamps org_id with `organizations` and
+// tenant_id with `tenant_scope`, the single-organization model it
+// generalizes; a project picks one, so a record of a tenant_scope project
+// carries its tenant as the organization rather than none.
+var orgScopes = [...]string{"org_id", "tenant_id"}
+
 // readCaller decodes the caller from the stamped metadata: the auth
-// response's user_id (field 2) and marketing_consent, and the org_id scope.
+// response's user_id (field 2) and marketing_consent, and the organization
+// from the scopes ([orgScopes]): the stamped `x-w17-scope-*` first, the auth
+// response's scopes map when the metadata carries none.
 func (rec *Record) readCaller(md metadata.MD) {
-	if v := md.Get("x-w17-scope-org_id"); len(v) > 0 {
-		rec.orgID = v[0]
+	org, rank := "", len(orgScopes)
+	take := func(key, val string) {
+		for i, k := range orgScopes {
+			if k == key && i < rank && val != "" {
+				org, rank = val, i
+			}
+		}
 	}
+	for _, k := range orgScopes {
+		if v := md.Get("x-w17-scope-" + k); len(v) > 0 {
+			take(k, v[0])
+		}
+	}
+	stamped := org != ""
+	defer func() {
+		if org != "" {
+			rec.orgID = org
+		}
+	}()
 	v := md.Get("x-w17-user")
 	if len(v) == 0 || v[0] == "" {
 		return
@@ -486,14 +511,12 @@ func (rec *Record) readCaller(md metadata.MD) {
 			rec.consent, rec.consentKnown = x != 0, true
 			raw = raw[n:]
 			continue
-		case auth.Scopes != 0 && num == auth.Scopes && typ == protowire.BytesType && rec.orgID == "":
+		case auth.Scopes != 0 && num == auth.Scopes && typ == protowire.BytesType && !stamped:
 			b, n := protowire.ConsumeBytes(raw)
 			if n < 0 {
 				return
 			}
-			if k, val := mapEntry(b); k == "org_id" {
-				rec.orgID = val
-			}
+			take(mapEntry(b))
 			raw = raw[n:]
 			continue
 		}

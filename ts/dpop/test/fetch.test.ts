@@ -11,7 +11,7 @@ import {
 } from "../src/fetch";
 import { dpopKey, MemoryKeyStore, type KeyStore } from "../src/key";
 import { accessTokenHash } from "../src/proof";
-import { json, scriptedFetch, useNonce, verifyProof, type Reply } from "./helpers";
+import { json, scriptedFetch, teed, useNonce, verifyProof, type Reply } from "./helpers";
 
 const ORIGIN = "https://api.example.com";
 const ok = () => new Response("ok", { status: 200 });
@@ -181,6 +181,11 @@ describe("createDpopFetch: origins", () => {
     await expect(
       f(new Request("https://evil.example/r", { method: "POST", body: "x" })),
     ).rejects.toBeInstanceOf(DpopOriginError);
+    // A proxied body can be a tee branch (a BFF forwarding its own request's
+    // stream): the refusal must not wait for its sibling.
+    await expect(
+      f(`https://evil.example/r`, { method: "POST", body: teed(new Response("x")).body, duplex: "half" } as RequestInit),
+    ).rejects.toBeInstanceOf(DpopOriginError);
     expect(server.sent).toHaveLength(0);
     expect(getToken).not.toHaveBeenCalled();
   });
@@ -230,6 +235,14 @@ describe("createDpopFetch: nonces", () => {
     expect(retry.proof!.claims.jti).not.toBe(first.proof!.claims.jti);
     expect(retry.body).toBe("payload");
     expect(retry.req.headers.get("Authorization")).toBe("DPoP tok-1");
+  });
+
+  it("retries a challenge whose body is a tee branch nobody else reads (Next.js GET)", async () => {
+    const { f, server } = setup((_req, n) => (n === 1 ? teed(useNonce("n-1")) : ok()));
+    const resp = await f(`${ORIGIN}/session/me`);
+    expect(resp.status).toBe(200);
+    expect(server.sent).toHaveLength(2);
+    expect(server.sent[1]!.proof!.claims.nonce).toBe("n-1");
   });
 
   it("re-sends a streamed body on the retry", async () => {

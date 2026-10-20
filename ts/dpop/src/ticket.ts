@@ -46,7 +46,9 @@ export async function issueStreamTicket(
   const url = baseUrl.replace(/\/+$/, "") + (path.startsWith("/") ? path : `/${path}`);
   const resp = await dpopFetch(url, { method: "POST" });
   if (!resp.ok) {
-    await resp.body?.cancel().catch(() => undefined);
+    // Not awaited: a tee'd body's cancel settles only with its sibling's
+    // (createDpopFetch).
+    void resp.body?.cancel().catch(() => undefined);
     throw new DpopTicketError(`dpop: ticket issuer answered HTTP ${resp.status}`, resp.status);
   }
   let body: { ticket?: unknown; expires_in?: unknown };

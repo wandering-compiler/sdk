@@ -4,7 +4,7 @@ import { createDpopFetch, DpopRefusedError } from "../src/fetch";
 import { MemoryKeyStore } from "../src/key";
 import { accessTokenHash } from "../src/proof";
 import { DEFAULT_TICKET_PATH, DpopTicketError, issueStreamTicket, withTicket } from "../src/ticket";
-import { json, scriptedFetch, useNonce, verifyProof } from "./helpers";
+import { json, scriptedFetch, teed, useNonce, verifyProof } from "./helpers";
 
 const ORIGIN = "https://api.example.com";
 
@@ -56,6 +56,9 @@ describe("issueStreamTicket", () => {
       () => json(200, { nope: true }),
       () => json(200, { ticket: "" }),
       () => new Response("not json", { status: 200 }),
+      // A tee branch nobody else reads (Next.js's server fetch): the refusal
+      // must not wait for its sibling.
+      () => teed(json(503, { error: { code: "UNAVAILABLE" } })),
     ]) {
       const { f } = client(reply);
       await expect(issueStreamTicket(f, ORIGIN)).rejects.toBeInstanceOf(DpopTicketError);
