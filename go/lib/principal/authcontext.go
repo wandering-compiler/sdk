@@ -22,6 +22,15 @@ const (
 	// a protected resource serves: its public URL. The auth method refuses a
 	// token issued for another resource. Absent on every other surface.
 	MCPResourceKey = "x-w17-mcp-resource"
+	// AudienceKey is the audience the gateway serves, when its domain
+	// publishes several (w17/audience.proto); absent on a gateway without
+	// one.
+	AudienceKey = "x-w17-audience"
+	// MembershipKindsKey is the comma-separated membership kinds that
+	// audience accepts. The auth method admits a caller only through a
+	// membership of one of them, and resolves the tenant among those.
+	// Absent when the audience accepts any.
+	MembershipKindsKey = "x-w17-membership-kinds"
 )
 
 // The SurfaceKey values.

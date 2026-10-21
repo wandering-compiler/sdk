@@ -178,6 +178,7 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 			ClientAddr:  ratelimit.HTTPClientAddr(r, s.trustedProxies),
 			Method:      r.Method + " " + EndpointPath,
 			Resource:    s.resource.Resource,
+			Gateway:     s.gatewayHeaders,
 		}
 		perms, err := s.checkToken(r.Context(), token, conn)
 		switch {

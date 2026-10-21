@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// Audience surfaces: one domain publishing several REST / MCP / gRPC
+// surfaces, one per audience (backoffice, tenant, client, …), each served
+// by its own gateway.
+//
+// A surface names its audience in its registry option —
+// `(w17.rest_api).audience`, `(w17.mcp_api).audience`,
+// `(w17.rpc_api).audience` — and lives in a file named after it:
+// `rest_<audience>.proto`, `mcp_<audience>.proto`, `rpc_<audience>.proto`.
+// A domain with one audience keeps `rest.proto` / `mcp.proto` /
+// `rpc.proto` and declares none: nothing about it changes.
+//
+// Each audience is its own gateway — `<domain>-gateway-<audience>`, env
+// prefix `<DOMAIN>_GATEWAY_<AUDIENCE>` — serving that audience's REST, MCP
+// and gRPC surfaces and nothing else. A route the audience does not
+// declare does not exist on its gateway. In a composed binary the domain's
+// binary absorbs every audience gateway, each keeping its own listeners and
+// env prefix.
+//
+// The rule for when to add one: a new audience when the default data range
+// differs, a new role when only the allowed actions differ.
+
+// Audience — who a surface is for, and what that implies before any
+// handler runs. Every surface of one audience (its REST, MCP and gRPC
+// registries) carries the same value; codegen refuses a disagreement.
+message Audience {
+  // snake_case identifier, `[a-z][a-z0-9_]*`. Matches the registry file's
+  // suffix (`rest_tenant.proto` → "tenant"). Reserved: "admin" (the admin
+  // surface is its own, at most one per project), "rpc" and "mcp" (they
+  // name transports in env and file names), and the leading words of the
+  // gateway's process env (`public`, `storage`, `business`, `bus`, `dpop`,
+  // `oauth`, `upload`, `captcha`, `cors`, `metrics`, `i18n`).
+  string name = 1;
+
+  // The rows a caller of this audience sees by default. Codegen enforces it
+  // in the generated queries through the models' data scopes
+  // (`(w17.db.scope)`): a handler on an OWNER surface never filters by its
+  // caller itself. A method that needs more says so with `(w17.widen_scope)`.
+  // UNSPECIFIED is OWNER: the narrowest range is the default.
+  DataScope default_scope = 2;
+
+  // Who may call this audience's surfaces at all, checked by the auth
+  // plugin before any handler: a caller without a membership of one of
+  // these kinds gets 403.
+  MembershipPolicy membership = 3;
+}
+
+// DataScope — a range of rows, from the narrowest.
+enum DataScope {
+  // Treated as OWNER.
+  DATA_SCOPE_UNSPECIFIED = 0;
+
+  // The caller's own rows: every data scope of a model applies, the
+  // owner axis included.
+  DATA_SCOPE_OWNER = 1;
+
+  // The caller's tenant: the tenant-axis scopes apply, the owner axis
+  // does not.
+  DATA_SCOPE_TENANT = 2;
+
+  // Every tenant. Only the admin surface may have it, as its default or by
+  // widening: anywhere else it is a build error.
+  DATA_SCOPE_ALL = 3;
+}
+
+// MembershipPolicy — which memberships admit a caller to an audience, and
+// where the tenant of a request comes from.
+message MembershipPolicy {
+  // Membership kinds this audience accepts (`staff`, `client`, …). The
+  // project names the kinds; the auth plugin carries them. Empty = any
+  // membership, or none at all: the audience does not filter by kind.
+  repeated string kinds = 1;
+
+  // Where the tenant comes from, tried in order. NOT IMPLEMENTED YET:
+  // codegen refuses it. Until it is, the tenant is an OAuth grant's
+  // organization, then the W17-Org selector, then the caller's only
+  // organization of an admitted kind.
+  repeated TenantSource tenant_from = 2;
+
+  // Membership kinds a caller this audience admits may invite. Empty = the
+  // audience's own kinds. The auth plugin refuses an invitation of any other
+  // kind from such a caller, so a client cannot hand out a staff membership;
+  // a caller with no membership of the organization (a backoffice admin) or
+  // its owner may invite any kind.
+  repeated string invites = 3;
+}
+
+// TenantSource — one place the tenant of a request can come from.
+enum TenantSource {
+  TENANT_SOURCE_UNSPECIFIED = 0;
+
+  // The invitation the caller is accepting (sign-up, membership acceptance).
+  TENANT_SOURCE_INVITATION = 1;
+
+  // The host the request arrived on (a white-label or co-brand host bound
+  // to one tenant). On MCP, a host bound to a tenant decides it and the
+  // consent page offers no choice.
+  TENANT_SOURCE_HOST = 2;
+
+  // The caller's own choice among their memberships of an accepted kind:
+  // `W17-Org` on REST, the consent page on MCP; with exactly one such
+  // membership, that one.
+  TENANT_SOURCE_DEFAULT = 3;
+}
+
+extend google.protobuf.MethodOptions {
+  // (w17.widen_scope) — this method sees a wider range than its
+  // audience's default: TENANT on an OWNER surface. Written on the method
+  // so the widening is visible in review. ALL is the admin surface's
+  // range: widening to it on any other surface is a build error.
+  DataScope widen_scope = 50195;
+}

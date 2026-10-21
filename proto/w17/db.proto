@@ -260,6 +260,24 @@ message ScopeEntry {
   // Field kept as a free-form string (not a column-name enum) so
   // the dotted grammar lands without a wire change when it ships.
   string path = 2;
+
+  // Which range this scope narrows to, for audience surfaces
+  // (`w17/audience.proto`): an OWNER audience applies every entry, a
+  // TENANT audience only the TENANT-axis ones, ALL (the admin surface)
+  // none. UNSPECIFIED is TENANT, so a model scoped by tenant alone needs
+  // nothing; mark the entry that names the caller (`owner_user_id`) OWNER.
+  // Outside audience surfaces every entry applies, as before.
+  ScopeAxis axis = 3;
+}
+
+// ScopeAxis — the range one scope entry narrows to.
+enum ScopeAxis {
+  // Treated as TENANT.
+  SCOPE_AXIS_UNSPECIFIED = 0;
+  // The caller's tenant (`tenant_id`, `org_id`).
+  SCOPE_AXIS_TENANT = 1;
+  // The caller themselves (`owner_user_id`).
+  SCOPE_AXIS_OWNER = 2;
 }
 
 extend google.protobuf.MethodOptions {

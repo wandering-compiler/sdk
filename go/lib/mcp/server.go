@@ -24,6 +24,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/core/healthz"
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
@@ -63,6 +64,10 @@ type Server struct {
 	// SCREAMING_SNAKE-keyed with the prefix stripped, matching envKey so
 	// CollectAuthHeaders + lookup read it consistently.
 	authEnv map[string]string
+
+	// gatewayHeaders are the gateway-owned keys every connection carries
+	// to the auth method ([Server.SetGatewayHeaders]).
+	gatewayHeaders map[string]string
 
 	// maxBody caps a POST body on the HTTP transport; 0 = the default
 	// (see SetMaxRequestBodyBytes).
@@ -188,13 +193,48 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 			h = http.Header{}
 		}
 		addr, _ := ctx.Value(clientAddrCtxKey{}).(string)
-		conn := ConnectionInfo{HTTPHeaders: h, ClientAddr: addr}
+		conn := ConnectionInfo{HTTPHeaders: h, ClientAddr: addr, Gateway: s.gatewayHeaders}
 		if s.resource != nil {
 			conn.Resource = s.resource.Resource
 		}
 		return conn
 	}
-	return ConnectionInfo{Env: s.authEnv}
+	return ConnectionInfo{Env: s.authEnv, Gateway: s.gatewayHeaders}
+}
+
+// SetGatewayHeaders sets request context the gateway owns that every
+// connection hands the auth method — an audience gateway's audience and the
+// membership kinds it accepts ([principal.AudienceKey],
+// [principal.MembershipKindsKey]). The keys must be gateway-owned (`x-w17-*`):
+// [CollectAuthHeaders] writes them after every client source, so no caller
+// can supply them.
+//
+// Only those two keys are accepted, compared case-insensitively, and the map
+// is copied. Anything else — a credential slot, the principal envelope, a key
+// the server stamps itself — or one key given twice in different cases
+// panics: the caller is generated code passing constants, so either is a
+// defect to surface at boot, not a header to drop or let win at random.
+func (s *Server) SetGatewayHeaders(h map[string]string) {
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		lk := strings.ToLower(k)
+		if !gatewayHeaderKeys[lk] {
+			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q is not a gateway auth-context key (want %s or %s)",
+				k, principal.AudienceKey, principal.MembershipKindsKey))
+		}
+		if _, dup := out[lk]; dup {
+			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q given twice", lk))
+		}
+		out[lk] = v
+	}
+	s.gatewayHeaders = out
+}
+
+// gatewayHeaderKeys are the auth-context keys a gateway hands every
+// connection through SetGatewayHeaders.
+var gatewayHeaderKeys = map[string]bool{
+	principal.AudienceKey:        true,
+	principal.MembershipKindsKey: true,
 }
 
 // SetPermResolver turns permission gating ON: the resolver is consulted

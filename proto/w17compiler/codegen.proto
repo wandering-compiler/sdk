@@ -2992,6 +2992,55 @@ message GatewayTarget {
   // single backend and need no override. Set by the codegen orchestrator
   // from the lock's business_bundles[] AND(!) absorb_business == false.
   bool has_standalone_business = 19;
+
+  // Audience is the audience this gateway serves when its domain publishes
+  // several (`rest_<audience>.proto` …, see `w17/audience.proto`): the
+  // target is then `<domain>-gateway-<audience>` with env prefix
+  // `<DOMAIN>_GATEWAY_<AUDIENCE>`, and it serves that audience's surfaces
+  // only. Empty for a domain with a single audience.
+  string audience = 20;
+
+  // AbsorbedGateways are the domain's other audience gateways folded into
+  // this one in a composed binary, the way absorb_admin folds the admin:
+  // each keeps its own listeners and env prefix, and ships no deployment
+  // of its own. Only set on the audience gateway that hosts the
+  // composition.
+  repeated AbsorbedGateway absorbed_gateways = 21;
+
+  // LibraryOnly: this audience gateway is folded into another audience's
+  // composed binary (absorbed_gateways there). Its code is generated as
+  // usual — the composed binary imports its transport packages — but it
+  // ships no deployment of its own (no Dockerfile, compose, .env), like an
+  // absorbed admin.
+  bool library_only = 22;
+
+  // PortOffset shifts the gateway's default container ports (REST 8080,
+  // MCP 8081, gRPC 8082): every audience gateway of a composed binary
+  // listens in one process, so each absorbed one gets its own (10, 20, …).
+  // 0 everywhere else.
+  int32 port_offset = 23;
+}
+
+// AbsorbedGateway — one audience gateway folded into a composed binary.
+message AbsorbedGateway {
+  // The audience it serves.
+  string audience = 1;
+
+  // Its Go module, imported by the composed binary.
+  string module = 2;
+
+  // The composed go.mod-relative `replace` target for that module. Empty
+  // omits the replace line.
+  string replace_path = 3;
+
+  // Its env prefix (`<DOMAIN>_GATEWAY_<AUDIENCE>`) and its port offset
+  // (GatewayTarget.port_offset).
+  string env_prefix = 4;
+  int32 port_offset = 5;
+
+  // The transports it serves beside REST.
+  bool has_mcp = 6;
+  bool has_rpc = 7;
 }
 
 // AdminTarget drives the per-binary admin bundle emit

@@ -45,9 +45,9 @@ const (
 // the LLM reaches into during a session. One McpApi → one
 // generated proxy bundle at `<out>/<domain>-mcp-server/`.
 //
-// Multiple `mcp_*.proto` sentinels in the same domain produce
-// multiple proxies. Common pattern: a worker-tools surface and
-// a chat-only surface that don't share the same tool set.
+// Several `mcp_<audience>.proto` sentinels in the same domain
+// publish one MCP surface per audience, each on its own gateway
+// (and so its own host): see `audience` below.
 type McpApi struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Logical name of the surface — "default" / "worker" /
@@ -99,7 +99,12 @@ type McpApi struct {
 	// valid token with a 401 challenge, and tells the auth method its
 	// resource so a token issued for another is refused. Absent = today's
 	// behaviour (public, or a bearer the auth method checks).
-	Oauth         *McpOAuth `protobuf:"bytes,7,opt,name=oauth,proto3" json:"oauth,omitempty"`
+	Oauth *McpOAuth `protobuf:"bytes,7,opt,name=oauth,proto3" json:"oauth,omitempty"`
+	// The audience this surface is for, when its domain publishes more than
+	// one (`mcp_<audience>.proto`): see `w17/audience.proto`. Unset on a
+	// domain with a single audience, which keeps `mcp.proto` and the
+	// gateway, env names and permission ids it has always had.
+	Audience      *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -179,6 +184,13 @@ func (x *McpApi) GetRequestEvents() *RequestEvents {
 func (x *McpApi) GetOauth() *McpOAuth {
 	if x != nil {
 		return x.Oauth
+	}
+	return nil
+}
+
+func (x *McpApi) GetAudience() *Audience {
+	if x != nil {
+		return x.Audience
 	}
 	return nil
 }
@@ -430,10 +442,11 @@ var (
 	// silently absent — codegen exited 0 with no bundle and no
 	// complaint about the refs it never read.
 	//
-	// Still one surface per DOMAIN: two sentinels under the same
-	// domain would render to the same bundle directory, and that
-	// is refused at codegen rather than letting the second
-	// overwrite the first.
+	// One surface per DOMAIN AND AUDIENCE: two sentinels for the same
+	// audience would render to the same gateway, and that is refused at
+	// codegen rather than letting the second overwrite the first. A domain
+	// with several audiences declares one `mcp_<audience>.proto` each, with
+	// `audience` set; see `w17/audience.proto`.
 	//
 	// optional w17.McpApi mcp_api = 50109;
 	E_McpApi = &file_w17_mcp_proto_extTypes[4]
@@ -443,7 +456,7 @@ var File_w17_mcp_proto protoreflect.FileDescriptor
 
 const file_w17_mcp_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xf6\x01\n" +
+	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\xa1\x02\n" +
 	"\x06McpApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -451,7 +464,8 @@ const file_w17_mcp_proto_rawDesc = "" +
 	"\x05tools\x18\x04 \x03(\v2\f.w17.McpToolR\x05tools\x12\x18\n" +
 	"\ainclude\x18\x05 \x03(\tR\ainclude\x129\n" +
 	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12#\n" +
-	"\x05oauth\x18\a \x01(\v2\r.w17.McpOAuthR\x05oauth\"+\n" +
+	"\x05oauth\x18\a \x01(\v2\r.w17.McpOAuthR\x05oauth\x12)\n" +
+	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\"+\n" +
 	"\bMcpOAuth\x12\x1f\n" +
 	"\vauth_domain\x18\x01 \x01(\tR\n" +
 	"authDomain\"\x89\x01\n" +
@@ -484,24 +498,26 @@ var file_w17_mcp_proto_goTypes = []any{
 	(*McpOAuth)(nil),                   // 1: w17.McpOAuth
 	(*McpTool)(nil),                    // 2: w17.McpTool
 	(*RequestEvents)(nil),              // 3: w17.RequestEvents
-	(*descriptorpb.MethodOptions)(nil), // 4: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 5: google.protobuf.FileOptions
+	(*Audience)(nil),                   // 4: w17.Audience
+	(*descriptorpb.MethodOptions)(nil), // 5: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 6: google.protobuf.FileOptions
 }
 var file_w17_mcp_proto_depIdxs = []int32{
-	2, // 0: w17.McpApi.tools:type_name -> w17.McpTool
-	3, // 1: w17.McpApi.request_events:type_name -> w17.RequestEvents
-	1, // 2: w17.McpApi.oauth:type_name -> w17.McpOAuth
-	4, // 3: w17.mcp:extendee -> google.protobuf.MethodOptions
-	4, // 4: w17.mcp_description:extendee -> google.protobuf.MethodOptions
-	4, // 5: w17.mcp_name:extendee -> google.protobuf.MethodOptions
-	4, // 6: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
-	5, // 7: w17.mcp_api:extendee -> google.protobuf.FileOptions
-	0, // 8: w17.mcp_api:type_name -> w17.McpApi
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	8, // [8:9] is the sub-list for extension type_name
-	3, // [3:8] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	2,  // 0: w17.McpApi.tools:type_name -> w17.McpTool
+	3,  // 1: w17.McpApi.request_events:type_name -> w17.RequestEvents
+	1,  // 2: w17.McpApi.oauth:type_name -> w17.McpOAuth
+	4,  // 3: w17.McpApi.audience:type_name -> w17.Audience
+	5,  // 4: w17.mcp:extendee -> google.protobuf.MethodOptions
+	5,  // 5: w17.mcp_description:extendee -> google.protobuf.MethodOptions
+	5,  // 6: w17.mcp_name:extendee -> google.protobuf.MethodOptions
+	5,  // 7: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
+	6,  // 8: w17.mcp_api:extendee -> google.protobuf.FileOptions
+	0,  // 9: w17.mcp_api:type_name -> w17.McpApi
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	9,  // [9:10] is the sub-list for extension type_name
+	4,  // [4:9] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_w17_mcp_proto_init() }
@@ -509,6 +525,7 @@ func file_w17_mcp_proto_init() {
 	if File_w17_mcp_proto != nil {
 		return
 	}
+	file_w17_audience_proto_init()
 	file_w17_request_events_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{

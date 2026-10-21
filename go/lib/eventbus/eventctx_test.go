@@ -161,3 +161,18 @@ func TestMetadataFromContext_DropsTheTransactionHeader(t *testing.T) {
 		t.Errorf("scope metadata = %q, want it carried across", md["x-w17-scope-org_id"])
 	}
 }
+
+// A subscriber runs as the caller: with the caller's scopes it gets the
+// caller's audience range too. Without it storage would read "no audience" and
+// apply every scope, narrowing a tenant-wide request's reaction to the
+// caller's own rows.
+func TestMetadataFromContext_KeepsTheDataScope(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"x-w17-data-scope", "tenant",
+		"x-w17-scope-org_id", "org-7",
+	))
+	md := eventbus.MetadataFromContext(ctx)
+	if md["x-w17-data-scope"] != "tenant" || md["x-w17-scope-org_id"] != "org-7" {
+		t.Errorf("the envelope lost the caller's range or scope: %v", md)
+	}
+}
