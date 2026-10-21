@@ -40,6 +40,9 @@ import (
 //   - ClientAddr: the HTTP caller's address (the peer, or the
 //     right-most X-Forwarded-For hop that is not a trusted proxy —
 //     see [Server.SetTrustedProxies]). Empty on stdio.
+//   - Resource: the OAuth resource (the token's audience) on a protected
+//     resource; told to the auth method so a token issued for another
+//     resource is refused.
 //   - Method: what the request calls — the tool's backing RPC
 //     ([Server.SetToolMethod]), or "tools/list".
 type ConnectionInfo struct {
@@ -48,6 +51,9 @@ type ConnectionInfo struct {
 	InitializeParams map[string]any
 	ClientAddr       string
 	Method           string
+	// Resource is the protected resource's identifier when the HTTP
+	// transport is one ([Server.SetResourceServer]); empty otherwise.
+	Resource string
 }
 
 // MCPAuthFunc translates a per-connection identity (env vars,
@@ -183,6 +189,9 @@ func CollectAuthHeaders(conn ConnectionInfo) map[string]string {
 	}
 	if conn.Method != "" {
 		out[principal.MethodKey] = conn.Method
+	}
+	if conn.Resource != "" && conn.HTTPHeaders != nil {
+		out[principal.MCPResourceKey] = conn.Resource
 	}
 	return out
 }

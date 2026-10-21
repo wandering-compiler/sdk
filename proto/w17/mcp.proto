@@ -156,6 +156,24 @@ message McpApi {
   // The request event stream for this surface (request_events.proto):
   // which purposes its records serve. Absent = no records.
   RequestEvents request_events = 6;
+
+  // OAuth makes the surface's HTTP transport an OAuth 2.1 protected
+  // resource (the MCP authorization specification): it serves RFC 9728
+  // metadata naming the authorization server, answers a request without a
+  // valid token with a 401 challenge, and tells the auth method its
+  // resource so a token issued for another is refused. Absent = today's
+  // behaviour (public, or a bearer the auth method checks).
+  McpOAuth oauth = 7;
+}
+
+// McpOAuth names where the surface's tokens come from. The public URLs are
+// the deployment's (`<P>_MCP_PUBLIC_URL`, `<P>_MCP_AUTHORIZATION_SERVER`);
+// this names the domain whose auth plugin issues them, which codegen checks
+// activates the plugin's `oauth_server` feature.
+message McpOAuth {
+  // The domain whose auth plugin is the authorization server. Empty = this
+  // domain.
+  string auth_domain = 1;
 }
 
 // McpTool exposes one gRPC method as an MCP tool. Defaults

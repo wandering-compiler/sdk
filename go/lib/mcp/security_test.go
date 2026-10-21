@@ -158,10 +158,14 @@ func TestCallUnary_BackendErrorIsSanitised(t *testing.T) {
 		}
 	}
 
-	// The client reads what a REST client reads for the same failure.
+	// The client reads what a REST client reads for the same failure, as a
+	// tool result the model can act on — not a JSON-RPC error.
 	c, msg, details := restgw.ClientError(context.Background(), backendErr)
-	if !strings.Contains(wire, "code = "+c.String()) || !strings.Contains(wire, msg) {
-		t.Errorf("MCP response must carry code %s and sentence %q: %s", c, msg, wire)
+	if !strings.Contains(wire, `"isError":true`) || strings.Contains(wire, `"error":`) {
+		t.Errorf("a backend error must be an isError tool result: %s", wire)
+	}
+	if !strings.Contains(wire, c.String()+": "+msg) || !strings.Contains(wire, "email: UNIQUE_VIOLATION") {
+		t.Errorf("MCP response must carry code %s, sentence %q and the field detail: %s", c, msg, wire)
 	}
 
 	// The returned status keeps the field details.

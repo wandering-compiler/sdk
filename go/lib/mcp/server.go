@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -74,6 +75,12 @@ type Server struct {
 	// toolMethods maps a tool to its backing RPC's full method
 	// (SetToolMethod), told to the auth method as the call's method.
 	toolMethods map[string]string
+
+	// resource, resourceURL and checks make the HTTP transport an OAuth
+	// protected resource (SetResourceServer, resource.go); nil = not one.
+	resource    *ResourceServer
+	resourceURL *url.URL
+	checks      *tokenChecks
 }
 
 // SetTrustedProxies names the proxies whose X-Forwarded-For is believed when
@@ -90,11 +97,27 @@ func (s *Server) SetToolMethod(tool, fullMethod string) {
 	s.toolMethods[tool] = fullMethod
 }
 
+// Option tunes NewServer.
+type Option func(*serverOptions)
+
+type serverOptions struct{ instructions string }
+
+// WithInstructions sets the `instructions` the server announces in its
+// initialize result — the surface's description, which a client hands its
+// model as the server's purpose.
+func WithInstructions(text string) Option {
+	return func(o *serverOptions) { o.instructions = text }
+}
+
 // NewServer constructs a Server with the given name/version
 // and auth translator. Passing nil auth is equivalent to a
 // no-op translator (no metadata attached) — useful for
 // servers that don't need per-call identity.
-func NewServer(name, version string, auth MCPAuthFunc) *Server {
+func NewServer(name, version string, auth MCPAuthFunc, opts ...Option) *Server {
+	var o serverOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if auth == nil {
 		auth = func(_ context.Context, _ ConnectionInfo) (metadata.MD, error) {
 			return metadata.MD{}, nil
@@ -106,12 +129,16 @@ func NewServer(name, version string, auth MCPAuthFunc) *Server {
 	}
 	// WithToolFilter must be set at construction (mcp-go option). The
 	// filter is a no-op until a PermResolver is injected.
-	s.inner = mcpserver.NewMCPServer(name, version,
+	serverOpts := []mcpserver.ServerOption{
 		mcpserver.WithToolFilter(s.filterTools),
 		// Tool arguments reach CallUnary with their numbers as written
 		// (see args.go).
 		mcpserver.WithHooks(exactArgumentHooks()),
-	)
+	}
+	if o.instructions != "" {
+		serverOpts = append(serverOpts, mcpserver.WithInstructions(o.instructions))
+	}
+	s.inner = mcpserver.NewMCPServer(name, version, serverOpts...)
 	return s
 }
 
@@ -161,7 +188,11 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 			h = http.Header{}
 		}
 		addr, _ := ctx.Value(clientAddrCtxKey{}).(string)
-		return ConnectionInfo{HTTPHeaders: h, ClientAddr: addr}
+		conn := ConnectionInfo{HTTPHeaders: h, ClientAddr: addr}
+		if s.resource != nil {
+			conn.Resource = s.resource.Resource
+		}
+		return conn
 	}
 	return ConnectionInfo{Env: s.authEnv}
 }
@@ -232,7 +263,11 @@ func recoverTool(name string, h mcpserver.ToolHandlerFunc) mcpserver.ToolHandler
 				err = nil
 			}
 		}()
-		return h(ctx, req)
+		res, err = h(ctx, req)
+		if err != nil {
+			return toolErrorResult(err), nil
+		}
+		return res, nil
 	}
 }
 
@@ -358,6 +393,9 @@ const EndpointPath = "/mcp"
 // overruns. Owning the server means owning the routing — hence the mux
 // below, which mounts exactly what mcp-go's own Start would.
 func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
+	if err := s.checkResourceServer(); err != nil {
+		return err
+	}
 	// ReadHeaderTimeout bounds the header phase only, so it is safe for
 	// the long-lived GET notification stream (Slowloris guard).
 	httpSrv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
@@ -380,7 +418,12 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(EndpointPath, limitBody(drainAwareStream(srv), s.maxBodyBytes()))
+	endpoint := drainAwareStream(srv)
+	if s.resource != nil {
+		endpoint = s.requireToken(endpoint)
+		s.mountResourceServer(mux)
+	}
+	mux.Handle(EndpointPath, limitBody(endpoint, s.maxBodyBytes()))
 	// Liveness for `<binary> health` and any orchestrator probe. Outside the
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
