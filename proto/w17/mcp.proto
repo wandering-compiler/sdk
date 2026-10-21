@@ -3,6 +3,7 @@ syntax = "proto3";
 package w17;
 
 import "google/protobuf/descriptor.proto";
+import "w17/audience.proto";
 import "w17/request_events.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
@@ -74,10 +75,11 @@ extend google.protobuf.FileOptions {
   // silently absent — codegen exited 0 with no bundle and no
   // complaint about the refs it never read.
   //
-  // Still one surface per DOMAIN: two sentinels under the same
-  // domain would render to the same bundle directory, and that
-  // is refused at codegen rather than letting the second
-  // overwrite the first.
+  // One surface per DOMAIN AND AUDIENCE: two sentinels for the same
+  // audience would render to the same gateway, and that is refused at
+  // codegen rather than letting the second overwrite the first. A domain
+  // with several audiences declares one `mcp_<audience>.proto` each, with
+  // `audience` set; see `w17/audience.proto`.
   McpApi mcp_api = 50109;
 }
 
@@ -104,9 +106,9 @@ extend google.protobuf.FileOptions {
 // the LLM reaches into during a session. One McpApi → one
 // generated proxy bundle at `<out>/<domain>-mcp-server/`.
 //
-// Multiple `mcp_*.proto` sentinels in the same domain produce
-// multiple proxies. Common pattern: a worker-tools surface and
-// a chat-only surface that don't share the same tool set.
+// Several `mcp_<audience>.proto` sentinels in the same domain
+// publish one MCP surface per audience, each on its own gateway
+// (and so its own host): see `audience` below.
 message McpApi {
   // Logical name of the surface — "default" / "worker" /
   // "chat". Surfaces in tooling (catalog) and in error
@@ -164,6 +166,12 @@ message McpApi {
   // resource so a token issued for another is refused. Absent = today's
   // behaviour (public, or a bearer the auth method checks).
   McpOAuth oauth = 7;
+
+  // The audience this surface is for, when its domain publishes more than
+  // one (`mcp_<audience>.proto`): see `w17/audience.proto`. Unset on a
+  // domain with a single audience, which keeps `mcp.proto` and the
+  // gateway, env names and permission ids it has always had.
+  Audience audience = 8;
 }
 
 // McpOAuth names where the surface's tokens come from. The public URLs are

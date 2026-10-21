@@ -536,10 +536,12 @@ func (StreamTransport) EnumDescriptor() ([]byte, []int) {
 // at one prefix, with its own identity (name + version), its
 // own auth method, and a tree of grouped endpoints / streams.
 //
-// One surface per DOMAIN: every domain may publish its own,
-// served by that domain's own gateway (`<domain>-gateway`), and
-// a project may have as many as it has domains. A second
-// `(w17.rest_api)` in the SAME domain is a hard error.
+// One surface per DOMAIN AND AUDIENCE: every domain may publish its
+// own, served by that domain's own gateway (`<domain>-gateway`). A
+// domain with several audiences publishes one per audience
+// (`rest_<audience>.proto`, `audience` set), each served by its own
+// gateway (`<domain>-gateway-<audience>`); a second `(w17.rest_api)`
+// for the SAME audience is a hard error. See `w17/audience.proto`.
 type RestApi struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Logical name of the surface — "public" / "admin" /
@@ -662,6 +664,11 @@ type RestApi struct {
 	// The request event stream for this surface (request_events.proto):
 	// which purposes its records serve. Absent = no records.
 	RequestEvents *RequestEvents `protobuf:"bytes,10,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
+	// The audience this surface is for, when its domain publishes more than
+	// one (`rest_<audience>.proto`): see `w17/audience.proto`. Unset on a
+	// domain with a single audience, which keeps `rest.proto` and the
+	// gateway, env names and permission ids it has always had.
+	Audience      *Audience `protobuf:"bytes,11,opt,name=audience,proto3" json:"audience,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -762,6 +769,13 @@ func (x *RestApi) GetInclude() []*PluginInclude {
 func (x *RestApi) GetRequestEvents() *RequestEvents {
 	if x != nil {
 		return x.RequestEvents
+	}
+	return nil
+}
+
+func (x *RestApi) GetAudience() *Audience {
+	if x != nil {
+		return x.Audience
 	}
 	return nil
 }
@@ -2484,7 +2498,7 @@ var File_w17_rest_proto protoreflect.FileDescriptor
 
 const file_w17_rest_proto_rawDesc = "" +
 	"\n" +
-	"\x0ew17/rest.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xae\x03\n" +
+	"\x0ew17/rest.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\xd9\x03\n" +
 	"\aRestApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
@@ -2496,7 +2510,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x10default_language\x18\b \x01(\tR\x0fdefaultLanguage\x12,\n" +
 	"\ainclude\x18\t \x03(\v2\x12.w17.PluginIncludeR\ainclude\x129\n" +
 	"\x0erequest_events\x18\n" +
-	" \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"=\n" +
+	" \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12)\n" +
+	"\baudience\x18\v \x01(\v2\r.w17.AudienceR\baudience\"=\n" +
 	"\rPluginInclude\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x14\n" +
 	"\x05mount\x18\x02 \x01(\tR\x05mount\"\xb9\x01\n" +
@@ -2678,7 +2693,8 @@ var file_w17_rest_proto_goTypes = []any{
 	(*RestStream)(nil),               // 20: w17.RestStream
 	(*DownloadEndpoint)(nil),         // 21: w17.DownloadEndpoint
 	(*RequestEvents)(nil),            // 22: w17.RequestEvents
-	(*descriptorpb.FileOptions)(nil), // 23: google.protobuf.FileOptions
+	(*Audience)(nil),                 // 23: w17.Audience
+	(*descriptorpb.FileOptions)(nil), // 24: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
 	11, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
@@ -2686,35 +2702,36 @@ var file_w17_rest_proto_depIdxs = []int32{
 	13, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
 	9,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
 	22, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
-	0,  // 5: w17.AuthMethod.token_types:type_name -> w17.TokenType
-	14, // 6: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
-	16, // 7: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	20, // 8: w17.RestGroup.streams:type_name -> w17.RestStream
-	21, // 9: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
-	6,  // 10: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	19, // 11: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	18, // 12: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	17, // 13: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
-	12, // 14: w17.RestEndpoint.credential:type_name -> w17.Credential
-	10, // 15: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
-	4,  // 16: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
-	5,  // 17: w17.RestEndpoint.captcha:type_name -> w17.Captcha
-	1,  // 18: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 19: w17.FieldBinding.from:type_name -> w17.FieldSource
-	7,  // 20: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	17, // 21: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	19, // 22: w17.RestStream.fields:type_name -> w17.FieldBinding
-	12, // 23: w17.RestStream.credential:type_name -> w17.Credential
-	6,  // 24: w17.RestStream.method:type_name -> w17.HttpMethod
-	3,  // 25: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 26: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	23, // 27: w17.rest_api:extendee -> google.protobuf.FileOptions
-	8,  // 28: w17.rest_api:type_name -> w17.RestApi
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	28, // [28:29] is the sub-list for extension type_name
-	27, // [27:28] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	23, // 5: w17.RestApi.audience:type_name -> w17.Audience
+	0,  // 6: w17.AuthMethod.token_types:type_name -> w17.TokenType
+	14, // 7: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
+	16, // 8: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
+	20, // 9: w17.RestGroup.streams:type_name -> w17.RestStream
+	21, // 10: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	6,  // 11: w17.RestEndpoint.method:type_name -> w17.HttpMethod
+	19, // 12: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	18, // 13: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	17, // 14: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	12, // 15: w17.RestEndpoint.credential:type_name -> w17.Credential
+	10, // 16: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
+	4,  // 17: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
+	5,  // 18: w17.RestEndpoint.captcha:type_name -> w17.Captcha
+	1,  // 19: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 20: w17.FieldBinding.from:type_name -> w17.FieldSource
+	7,  // 21: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	17, // 22: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	19, // 23: w17.RestStream.fields:type_name -> w17.FieldBinding
+	12, // 24: w17.RestStream.credential:type_name -> w17.Credential
+	6,  // 25: w17.RestStream.method:type_name -> w17.HttpMethod
+	3,  // 26: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 27: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	24, // 28: w17.rest_api:extendee -> google.protobuf.FileOptions
+	8,  // 29: w17.rest_api:type_name -> w17.RestApi
+	30, // [30:30] is the sub-list for method output_type
+	30, // [30:30] is the sub-list for method input_type
+	29, // [29:30] is the sub-list for extension type_name
+	28, // [28:29] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2722,6 +2739,7 @@ func file_w17_rest_proto_init() {
 	if File_w17_rest_proto != nil {
 		return
 	}
+	file_w17_audience_proto_init()
 	file_w17_request_events_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{

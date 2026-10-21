@@ -62,6 +62,11 @@ type RpcApi struct {
 	// The request event stream for this surface (request_events.proto):
 	// which purposes its records serve. Absent = no records.
 	RequestEvents *RequestEvents `protobuf:"bytes,7,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
+	// The audience this surface is for, when its domain publishes more than
+	// one (`rpc_<audience>.proto`): see `w17/audience.proto`. Unset on a
+	// domain with a single audience, which keeps `rpc.proto` and the
+	// gateway, env names and permission ids it has always had.
+	Audience      *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -134,6 +139,13 @@ func (x *RpcApi) GetGroups() []*RpcGroup {
 func (x *RpcApi) GetRequestEvents() *RequestEvents {
 	if x != nil {
 		return x.RequestEvents
+	}
+	return nil
+}
+
+func (x *RpcApi) GetAudience() *Audience {
+	if x != nil {
+		return x.Audience
 	}
 	return nil
 }
@@ -328,9 +340,11 @@ var (
 	// do the picking. The file declares ZERO messages, like
 	// `(w17.rest_api)` and `(w17.mcp_api)`.
 	//
-	// One rpc surface per domain (one generated
-	// `w17.lock.rpc.proto` per domain); two files in one domain
-	// carrying `(w17.rpc_api)` is a hard error.
+	// One rpc surface per domain and audience; two files for the same
+	// audience carrying `(w17.rpc_api)` is a hard error. A domain with
+	// several audiences declares one `rpc_<audience>.proto` each, with
+	// `audience` set, and each audience's gateway listens on its own port;
+	// see `w17/audience.proto`.
 	//
 	// optional w17.RpcApi rpc_api = 50113;
 	E_RpcApi = &file_w17_rpc_proto_extTypes[2]
@@ -340,7 +354,7 @@ var File_w17_rpc_proto protoreflect.FileDescriptor
 
 const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xee\x01\n" +
+	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\x99\x02\n" +
 	"\x06RpcApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -349,7 +363,8 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"reflection\x18\x04 \x01(\bR\n" +
 	"reflection\x12%\n" +
 	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groups\x129\n" +
-	"\x0erequest_events\x18\a \x01(\v2\x12.w17.RequestEventsR\rrequestEventsJ\x04\b\x05\x10\x06R\fauth_methods\"s\n" +
+	"\x0erequest_events\x18\a \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12)\n" +
+	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudienceJ\x04\b\x05\x10\x06R\fauth_methods\"s\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
@@ -378,21 +393,23 @@ var file_w17_rpc_proto_goTypes = []any{
 	(*RpcApi)(nil),                     // 0: w17.RpcApi
 	(*RpcGroup)(nil),                   // 1: w17.RpcGroup
 	(*RequestEvents)(nil),              // 2: w17.RequestEvents
-	(*descriptorpb.MethodOptions)(nil), // 3: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 4: google.protobuf.FileOptions
+	(*Audience)(nil),                   // 3: w17.Audience
+	(*descriptorpb.MethodOptions)(nil), // 4: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 5: google.protobuf.FileOptions
 }
 var file_w17_rpc_proto_depIdxs = []int32{
 	1, // 0: w17.RpcApi.groups:type_name -> w17.RpcGroup
 	2, // 1: w17.RpcApi.request_events:type_name -> w17.RequestEvents
-	3, // 2: w17.rpc:extendee -> google.protobuf.MethodOptions
-	3, // 3: w17.rpc_service:extendee -> google.protobuf.MethodOptions
-	4, // 4: w17.rpc_api:extendee -> google.protobuf.FileOptions
-	0, // 5: w17.rpc_api:type_name -> w17.RpcApi
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	5, // [5:6] is the sub-list for extension type_name
-	2, // [2:5] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 2: w17.RpcApi.audience:type_name -> w17.Audience
+	4, // 3: w17.rpc:extendee -> google.protobuf.MethodOptions
+	4, // 4: w17.rpc_service:extendee -> google.protobuf.MethodOptions
+	5, // 5: w17.rpc_api:extendee -> google.protobuf.FileOptions
+	0, // 6: w17.rpc_api:type_name -> w17.RpcApi
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	6, // [6:7] is the sub-list for extension type_name
+	3, // [3:6] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_w17_rpc_proto_init() }
@@ -400,6 +417,7 @@ func file_w17_rpc_proto_init() {
 	if File_w17_rpc_proto != nil {
 		return
 	}
+	file_w17_audience_proto_init()
 	file_w17_request_events_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{

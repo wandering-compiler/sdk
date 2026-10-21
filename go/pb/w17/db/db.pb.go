@@ -22,6 +22,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ScopeAxis — the range one scope entry narrows to.
+type ScopeAxis int32
+
+const (
+	// Treated as TENANT.
+	ScopeAxis_SCOPE_AXIS_UNSPECIFIED ScopeAxis = 0
+	// The caller's tenant (`tenant_id`, `org_id`).
+	ScopeAxis_SCOPE_AXIS_TENANT ScopeAxis = 1
+	// The caller themselves (`owner_user_id`).
+	ScopeAxis_SCOPE_AXIS_OWNER ScopeAxis = 2
+)
+
+// Enum value maps for ScopeAxis.
+var (
+	ScopeAxis_name = map[int32]string{
+		0: "SCOPE_AXIS_UNSPECIFIED",
+		1: "SCOPE_AXIS_TENANT",
+		2: "SCOPE_AXIS_OWNER",
+	}
+	ScopeAxis_value = map[string]int32{
+		"SCOPE_AXIS_UNSPECIFIED": 0,
+		"SCOPE_AXIS_TENANT":      1,
+		"SCOPE_AXIS_OWNER":       2,
+	}
+)
+
+func (x ScopeAxis) Enum() *ScopeAxis {
+	p := new(ScopeAxis)
+	*p = x
+	return p
+}
+
+func (x ScopeAxis) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ScopeAxis) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_db_proto_enumTypes[0].Descriptor()
+}
+
+func (ScopeAxis) Type() protoreflect.EnumType {
+	return &file_w17_db_proto_enumTypes[0]
+}
+
+func (x ScopeAxis) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ScopeAxis.Descriptor instead.
+func (ScopeAxis) EnumDescriptor() ([]byte, []int) {
+	return file_w17_db_proto_rawDescGZIP(), []int{0}
+}
+
 // LockKind — SQL row-lock variant. The four variants map to
 // standard PG / MySQL clauses; the dialect emitter renders them
 // per dialect.
@@ -110,11 +163,11 @@ func (x LockKind) String() string {
 }
 
 func (LockKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[0].Descriptor()
+	return file_w17_db_proto_enumTypes[1].Descriptor()
 }
 
 func (LockKind) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[0]
+	return &file_w17_db_proto_enumTypes[1]
 }
 
 func (x LockKind) Number() protoreflect.EnumNumber {
@@ -123,7 +176,7 @@ func (x LockKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use LockKind.Descriptor instead.
 func (LockKind) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{0}
+	return file_w17_db_proto_rawDescGZIP(), []int{1}
 }
 
 // TxIsolation enumerates the SQL standard transaction
@@ -173,11 +226,11 @@ func (x TxIsolation) String() string {
 }
 
 func (TxIsolation) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[1].Descriptor()
+	return file_w17_db_proto_enumTypes[2].Descriptor()
 }
 
 func (TxIsolation) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[1]
+	return &file_w17_db_proto_enumTypes[2]
 }
 
 func (x TxIsolation) Number() protoreflect.EnumNumber {
@@ -186,7 +239,7 @@ func (x TxIsolation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TxIsolation.Descriptor instead.
 func (TxIsolation) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{1}
+	return file_w17_db_proto_rawDescGZIP(), []int{2}
 }
 
 // OnPresentCode is the gRPC code of an [OnPresent] refusal:
@@ -232,11 +285,11 @@ func (x OnPresentCode) String() string {
 }
 
 func (OnPresentCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[2].Descriptor()
+	return file_w17_db_proto_enumTypes[3].Descriptor()
 }
 
 func (OnPresentCode) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[2]
+	return &file_w17_db_proto_enumTypes[3]
 }
 
 func (x OnPresentCode) Number() protoreflect.EnumNumber {
@@ -245,7 +298,7 @@ func (x OnPresentCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use OnPresentCode.Descriptor instead.
 func (OnPresentCode) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{2}
+	return file_w17_db_proto_rawDescGZIP(), []int{3}
 }
 
 // OnEmptyCode is the gRPC code of an [OnEmpty] refusal. Three codes, because
@@ -292,11 +345,11 @@ func (x OnEmptyCode) String() string {
 }
 
 func (OnEmptyCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[3].Descriptor()
+	return file_w17_db_proto_enumTypes[4].Descriptor()
 }
 
 func (OnEmptyCode) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[3]
+	return &file_w17_db_proto_enumTypes[4]
 }
 
 func (x OnEmptyCode) Number() protoreflect.EnumNumber {
@@ -305,7 +358,7 @@ func (x OnEmptyCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use OnEmptyCode.Descriptor instead.
 func (OnEmptyCode) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{3}
+	return file_w17_db_proto_rawDescGZIP(), []int{4}
 }
 
 // RedisLayout — how a Redis-backed table's entity values are
@@ -370,11 +423,11 @@ func (x RedisLayout) String() string {
 }
 
 func (RedisLayout) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[4].Descriptor()
+	return file_w17_db_proto_enumTypes[5].Descriptor()
 }
 
 func (RedisLayout) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[4]
+	return &file_w17_db_proto_enumTypes[5]
 }
 
 func (x RedisLayout) Number() protoreflect.EnumNumber {
@@ -383,7 +436,7 @@ func (x RedisLayout) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RedisLayout.Descriptor instead.
 func (RedisLayout) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{4}
+	return file_w17_db_proto_rawDescGZIP(), []int{5}
 }
 
 // IndexMethod — access method for the index. UNSPECIFIED maps to
@@ -448,11 +501,11 @@ func (x IndexMethod) String() string {
 }
 
 func (IndexMethod) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[5].Descriptor()
+	return file_w17_db_proto_enumTypes[6].Descriptor()
 }
 
 func (IndexMethod) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[5]
+	return &file_w17_db_proto_enumTypes[6]
 }
 
 func (x IndexMethod) Number() protoreflect.EnumNumber {
@@ -461,7 +514,7 @@ func (x IndexMethod) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use IndexMethod.Descriptor instead.
 func (IndexMethod) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{5}
+	return file_w17_db_proto_rawDescGZIP(), []int{6}
 }
 
 // NullsOrder — NULL-position directive for ordered index fields.
@@ -498,11 +551,11 @@ func (x NullsOrder) String() string {
 }
 
 func (NullsOrder) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[6].Descriptor()
+	return file_w17_db_proto_enumTypes[7].Descriptor()
 }
 
 func (NullsOrder) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[6]
+	return &file_w17_db_proto_enumTypes[7]
 }
 
 func (x NullsOrder) Number() protoreflect.EnumNumber {
@@ -511,7 +564,7 @@ func (x NullsOrder) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NullsOrder.Descriptor instead.
 func (NullsOrder) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{6}
+	return file_w17_db_proto_rawDescGZIP(), []int{7}
 }
 
 // DbType — enumerated SQL column types, covering the common cross-dialect
@@ -664,11 +717,11 @@ func (x DbType) String() string {
 }
 
 func (DbType) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[7].Descriptor()
+	return file_w17_db_proto_enumTypes[8].Descriptor()
 }
 
 func (DbType) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[7]
+	return &file_w17_db_proto_enumTypes[8]
 }
 
 func (x DbType) Number() protoreflect.EnumNumber {
@@ -677,7 +730,7 @@ func (x DbType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DbType.Descriptor instead.
 func (DbType) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{7}
+	return file_w17_db_proto_rawDescGZIP(), []int{8}
 }
 
 // DeletionRule expresses the post-parent-deletion behaviour as a rule of
@@ -736,11 +789,11 @@ func (x DeletionRule) String() string {
 }
 
 func (DeletionRule) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[8].Descriptor()
+	return file_w17_db_proto_enumTypes[9].Descriptor()
 }
 
 func (DeletionRule) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[8]
+	return &file_w17_db_proto_enumTypes[9]
 }
 
 func (x DeletionRule) Number() protoreflect.EnumNumber {
@@ -749,7 +802,7 @@ func (x DeletionRule) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DeletionRule.Descriptor instead.
 func (DeletionRule) EnumDescriptor() ([]byte, []int) {
-	return file_w17_db_proto_rawDescGZIP(), []int{8}
+	return file_w17_db_proto_rawDescGZIP(), []int{9}
 }
 
 // Strategy enumerates the materialization shapes the `force`
@@ -804,11 +857,11 @@ func (x Materialize_Strategy) String() string {
 }
 
 func (Materialize_Strategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_db_proto_enumTypes[9].Descriptor()
+	return file_w17_db_proto_enumTypes[10].Descriptor()
 }
 
 func (Materialize_Strategy) Type() protoreflect.EnumType {
-	return &file_w17_db_proto_enumTypes[9]
+	return &file_w17_db_proto_enumTypes[10]
 }
 
 func (x Materialize_Strategy) Number() protoreflect.EnumNumber {
@@ -886,7 +939,14 @@ type ScopeEntry struct {
 	//
 	// Field kept as a free-form string (not a column-name enum) so
 	// the dotted grammar lands without a wire change when it ships.
-	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// Which range this scope narrows to, for audience surfaces
+	// (`w17/audience.proto`): an OWNER audience applies every entry, a
+	// TENANT audience only the TENANT-axis ones, ALL (the admin surface)
+	// none. UNSPECIFIED is TENANT, so a model scoped by tenant alone needs
+	// nothing; mark the entry that names the caller (`owner_user_id`) OWNER.
+	// Outside audience surfaces every entry applies, as before.
+	Axis          ScopeAxis `protobuf:"varint,3,opt,name=axis,proto3,enum=w17.db.ScopeAxis" json:"axis,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -933,6 +993,13 @@ func (x *ScopeEntry) GetPath() string {
 		return x.Path
 	}
 	return ""
+}
+
+func (x *ScopeEntry) GetAxis() ScopeAxis {
+	if x != nil {
+		return x.Axis
+	}
+	return ScopeAxis_SCOPE_AXIS_UNSPECIFIED
 }
 
 // Lock — body of `(w17.db.lock)`. A list of (resource, kind)
@@ -3343,11 +3410,12 @@ const file_w17_db_proto_rawDesc = "" +
 	"\n" +
 	"\fw17/db.proto\x12\x06w17.db\x1a google/protobuf/descriptor.proto\"5\n" +
 	"\x05Scope\x12,\n" +
-	"\aentries\x18\x01 \x03(\v2\x12.w17.db.ScopeEntryR\aentries\"4\n" +
+	"\aentries\x18\x01 \x03(\v2\x12.w17.db.ScopeEntryR\aentries\"[\n" +
 	"\n" +
 	"ScopeEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"/\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12%\n" +
+	"\x04axis\x18\x03 \x01(\x0e2\x11.w17.db.ScopeAxisR\x04axis\"/\n" +
 	"\x04Lock\x12'\n" +
 	"\x05locks\x18\x01 \x03(\v2\x11.w17.db.LockEntryR\x05locks\"M\n" +
 	"\tLockEntry\x12\x1a\n" +
@@ -3461,7 +3529,11 @@ const file_w17_db_proto_rawDesc = "" +
 	"\aexclude\x18\b \x01(\bR\aexclude\x12$\n" +
 	"\x0efk_cross_scope\x18\t \x01(\bR\ffkCrossScope\",\n" +
 	"\x0fEnumValueColumn\x12\x19\n" +
-	"\bsort_sql\x18\x01 \x01(\tR\asortSql*\x93\x01\n" +
+	"\bsort_sql\x18\x01 \x01(\tR\asortSql*T\n" +
+	"\tScopeAxis\x12\x1a\n" +
+	"\x16SCOPE_AXIS_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11SCOPE_AXIS_TENANT\x10\x01\x12\x14\n" +
+	"\x10SCOPE_AXIS_OWNER\x10\x02*\x93\x01\n" +
 	"\bLockKind\x12\x19\n" +
 	"\x15LOCK_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11SELECT_FOR_UPDATE\x10\x01\x12\x14\n" +
@@ -3568,87 +3640,89 @@ func file_w17_db_proto_rawDescGZIP() []byte {
 	return file_w17_db_proto_rawDescData
 }
 
-var file_w17_db_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
+var file_w17_db_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
 var file_w17_db_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_w17_db_proto_goTypes = []any{
-	(LockKind)(0),                         // 0: w17.db.LockKind
-	(TxIsolation)(0),                      // 1: w17.db.TxIsolation
-	(OnPresentCode)(0),                    // 2: w17.db.OnPresentCode
-	(OnEmptyCode)(0),                      // 3: w17.db.OnEmptyCode
-	(RedisLayout)(0),                      // 4: w17.db.RedisLayout
-	(IndexMethod)(0),                      // 5: w17.db.IndexMethod
-	(NullsOrder)(0),                       // 6: w17.db.NullsOrder
-	(DbType)(0),                           // 7: w17.db.DbType
-	(DeletionRule)(0),                     // 8: w17.db.DeletionRule
-	(Materialize_Strategy)(0),             // 9: w17.db.Materialize.Strategy
-	(*Scope)(nil),                         // 10: w17.db.Scope
-	(*ScopeEntry)(nil),                    // 11: w17.db.ScopeEntry
-	(*Lock)(nil),                          // 12: w17.db.Lock
-	(*LockEntry)(nil),                     // 13: w17.db.LockEntry
-	(*Method)(nil),                        // 14: w17.db.Method
-	(*Materialize)(nil),                   // 15: w17.db.Materialize
-	(*Operation)(nil),                     // 16: w17.db.Operation
-	(*OnPresent)(nil),                     // 17: w17.db.OnPresent
-	(*OnEmpty)(nil),                       // 18: w17.db.OnEmpty
-	(*Table)(nil),                         // 19: w17.db.Table
-	(*TableValidationMessage)(nil),        // 20: w17.db.TableValidationMessage
-	(*Index)(nil),                         // 21: w17.db.Index
-	(*IndexField)(nil),                    // 22: w17.db.IndexField
-	(*RawCheck)(nil),                      // 23: w17.db.RawCheck
-	(*TableCheck)(nil),                    // 24: w17.db.TableCheck
-	(*RawIndex)(nil),                      // 25: w17.db.RawIndex
-	(*Column)(nil),                        // 26: w17.db.Column
-	(*EnumValueColumn)(nil),               // 27: w17.db.EnumValueColumn
-	nil,                                   // 28: w17.db.Index.StorageEntry
-	(*descriptorpb.MessageOptions)(nil),   // 29: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),     // 30: google.protobuf.FieldOptions
-	(*descriptorpb.MethodOptions)(nil),    // 31: google.protobuf.MethodOptions
-	(*descriptorpb.EnumValueOptions)(nil), // 32: google.protobuf.EnumValueOptions
-	(*descriptorpb.ServiceOptions)(nil),   // 33: google.protobuf.ServiceOptions
+	(ScopeAxis)(0),                        // 0: w17.db.ScopeAxis
+	(LockKind)(0),                         // 1: w17.db.LockKind
+	(TxIsolation)(0),                      // 2: w17.db.TxIsolation
+	(OnPresentCode)(0),                    // 3: w17.db.OnPresentCode
+	(OnEmptyCode)(0),                      // 4: w17.db.OnEmptyCode
+	(RedisLayout)(0),                      // 5: w17.db.RedisLayout
+	(IndexMethod)(0),                      // 6: w17.db.IndexMethod
+	(NullsOrder)(0),                       // 7: w17.db.NullsOrder
+	(DbType)(0),                           // 8: w17.db.DbType
+	(DeletionRule)(0),                     // 9: w17.db.DeletionRule
+	(Materialize_Strategy)(0),             // 10: w17.db.Materialize.Strategy
+	(*Scope)(nil),                         // 11: w17.db.Scope
+	(*ScopeEntry)(nil),                    // 12: w17.db.ScopeEntry
+	(*Lock)(nil),                          // 13: w17.db.Lock
+	(*LockEntry)(nil),                     // 14: w17.db.LockEntry
+	(*Method)(nil),                        // 15: w17.db.Method
+	(*Materialize)(nil),                   // 16: w17.db.Materialize
+	(*Operation)(nil),                     // 17: w17.db.Operation
+	(*OnPresent)(nil),                     // 18: w17.db.OnPresent
+	(*OnEmpty)(nil),                       // 19: w17.db.OnEmpty
+	(*Table)(nil),                         // 20: w17.db.Table
+	(*TableValidationMessage)(nil),        // 21: w17.db.TableValidationMessage
+	(*Index)(nil),                         // 22: w17.db.Index
+	(*IndexField)(nil),                    // 23: w17.db.IndexField
+	(*RawCheck)(nil),                      // 24: w17.db.RawCheck
+	(*TableCheck)(nil),                    // 25: w17.db.TableCheck
+	(*RawIndex)(nil),                      // 26: w17.db.RawIndex
+	(*Column)(nil),                        // 27: w17.db.Column
+	(*EnumValueColumn)(nil),               // 28: w17.db.EnumValueColumn
+	nil,                                   // 29: w17.db.Index.StorageEntry
+	(*descriptorpb.MessageOptions)(nil),   // 30: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),     // 31: google.protobuf.FieldOptions
+	(*descriptorpb.MethodOptions)(nil),    // 32: google.protobuf.MethodOptions
+	(*descriptorpb.EnumValueOptions)(nil), // 33: google.protobuf.EnumValueOptions
+	(*descriptorpb.ServiceOptions)(nil),   // 34: google.protobuf.ServiceOptions
 }
 var file_w17_db_proto_depIdxs = []int32{
-	11, // 0: w17.db.Scope.entries:type_name -> w17.db.ScopeEntry
-	13, // 1: w17.db.Lock.locks:type_name -> w17.db.LockEntry
-	0,  // 2: w17.db.LockEntry.kind:type_name -> w17.db.LockKind
-	16, // 3: w17.db.Method.ops:type_name -> w17.db.Operation
-	1,  // 4: w17.db.Method.tx_isolation:type_name -> w17.db.TxIsolation
-	15, // 5: w17.db.Method.materialize:type_name -> w17.db.Materialize
-	9,  // 6: w17.db.Materialize.force:type_name -> w17.db.Materialize.Strategy
-	18, // 7: w17.db.Operation.on_empty:type_name -> w17.db.OnEmpty
-	17, // 8: w17.db.Operation.on_present:type_name -> w17.db.OnPresent
-	2,  // 9: w17.db.OnPresent.code:type_name -> w17.db.OnPresentCode
-	3,  // 10: w17.db.OnEmpty.code:type_name -> w17.db.OnEmptyCode
-	21, // 11: w17.db.Table.indexes:type_name -> w17.db.Index
-	23, // 12: w17.db.Table.raw_checks:type_name -> w17.db.RawCheck
-	25, // 13: w17.db.Table.raw_indexes:type_name -> w17.db.RawIndex
-	4,  // 14: w17.db.Table.redis_layout:type_name -> w17.db.RedisLayout
-	20, // 15: w17.db.Table.validation_messages:type_name -> w17.db.TableValidationMessage
-	24, // 16: w17.db.Table.checks:type_name -> w17.db.TableCheck
-	22, // 17: w17.db.Index.fields:type_name -> w17.db.IndexField
-	5,  // 18: w17.db.Index.method:type_name -> w17.db.IndexMethod
-	28, // 19: w17.db.Index.storage:type_name -> w17.db.Index.StorageEntry
-	6,  // 20: w17.db.IndexField.nulls:type_name -> w17.db.NullsOrder
-	8,  // 21: w17.db.Column.deletion_rule:type_name -> w17.db.DeletionRule
-	7,  // 22: w17.db.Column.db_type:type_name -> w17.db.DbType
-	29, // 23: w17.db.table:extendee -> google.protobuf.MessageOptions
-	30, // 24: w17.db.column:extendee -> google.protobuf.FieldOptions
-	31, // 25: w17.db.method:extendee -> google.protobuf.MethodOptions
-	31, // 26: w17.db.lock:extendee -> google.protobuf.MethodOptions
-	32, // 27: w17.db.enum_value:extendee -> google.protobuf.EnumValueOptions
-	29, // 28: w17.db.scope:extendee -> google.protobuf.MessageOptions
-	31, // 29: w17.db.bypass_scope:extendee -> google.protobuf.MethodOptions
-	33, // 30: w17.db.bypass_scope_service:extendee -> google.protobuf.ServiceOptions
-	19, // 31: w17.db.table:type_name -> w17.db.Table
-	26, // 32: w17.db.column:type_name -> w17.db.Column
-	14, // 33: w17.db.method:type_name -> w17.db.Method
-	12, // 34: w17.db.lock:type_name -> w17.db.Lock
-	27, // 35: w17.db.enum_value:type_name -> w17.db.EnumValueColumn
-	10, // 36: w17.db.scope:type_name -> w17.db.Scope
-	37, // [37:37] is the sub-list for method output_type
-	37, // [37:37] is the sub-list for method input_type
-	31, // [31:37] is the sub-list for extension type_name
-	23, // [23:31] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	12, // 0: w17.db.Scope.entries:type_name -> w17.db.ScopeEntry
+	0,  // 1: w17.db.ScopeEntry.axis:type_name -> w17.db.ScopeAxis
+	14, // 2: w17.db.Lock.locks:type_name -> w17.db.LockEntry
+	1,  // 3: w17.db.LockEntry.kind:type_name -> w17.db.LockKind
+	17, // 4: w17.db.Method.ops:type_name -> w17.db.Operation
+	2,  // 5: w17.db.Method.tx_isolation:type_name -> w17.db.TxIsolation
+	16, // 6: w17.db.Method.materialize:type_name -> w17.db.Materialize
+	10, // 7: w17.db.Materialize.force:type_name -> w17.db.Materialize.Strategy
+	19, // 8: w17.db.Operation.on_empty:type_name -> w17.db.OnEmpty
+	18, // 9: w17.db.Operation.on_present:type_name -> w17.db.OnPresent
+	3,  // 10: w17.db.OnPresent.code:type_name -> w17.db.OnPresentCode
+	4,  // 11: w17.db.OnEmpty.code:type_name -> w17.db.OnEmptyCode
+	22, // 12: w17.db.Table.indexes:type_name -> w17.db.Index
+	24, // 13: w17.db.Table.raw_checks:type_name -> w17.db.RawCheck
+	26, // 14: w17.db.Table.raw_indexes:type_name -> w17.db.RawIndex
+	5,  // 15: w17.db.Table.redis_layout:type_name -> w17.db.RedisLayout
+	21, // 16: w17.db.Table.validation_messages:type_name -> w17.db.TableValidationMessage
+	25, // 17: w17.db.Table.checks:type_name -> w17.db.TableCheck
+	23, // 18: w17.db.Index.fields:type_name -> w17.db.IndexField
+	6,  // 19: w17.db.Index.method:type_name -> w17.db.IndexMethod
+	29, // 20: w17.db.Index.storage:type_name -> w17.db.Index.StorageEntry
+	7,  // 21: w17.db.IndexField.nulls:type_name -> w17.db.NullsOrder
+	9,  // 22: w17.db.Column.deletion_rule:type_name -> w17.db.DeletionRule
+	8,  // 23: w17.db.Column.db_type:type_name -> w17.db.DbType
+	30, // 24: w17.db.table:extendee -> google.protobuf.MessageOptions
+	31, // 25: w17.db.column:extendee -> google.protobuf.FieldOptions
+	32, // 26: w17.db.method:extendee -> google.protobuf.MethodOptions
+	32, // 27: w17.db.lock:extendee -> google.protobuf.MethodOptions
+	33, // 28: w17.db.enum_value:extendee -> google.protobuf.EnumValueOptions
+	30, // 29: w17.db.scope:extendee -> google.protobuf.MessageOptions
+	32, // 30: w17.db.bypass_scope:extendee -> google.protobuf.MethodOptions
+	34, // 31: w17.db.bypass_scope_service:extendee -> google.protobuf.ServiceOptions
+	20, // 32: w17.db.table:type_name -> w17.db.Table
+	27, // 33: w17.db.column:type_name -> w17.db.Column
+	15, // 34: w17.db.method:type_name -> w17.db.Method
+	13, // 35: w17.db.lock:type_name -> w17.db.Lock
+	28, // 36: w17.db.enum_value:type_name -> w17.db.EnumValueColumn
+	11, // 37: w17.db.scope:type_name -> w17.db.Scope
+	38, // [38:38] is the sub-list for method output_type
+	38, // [38:38] is the sub-list for method input_type
+	32, // [32:38] is the sub-list for extension type_name
+	24, // [24:32] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_w17_db_proto_init() }
@@ -3663,7 +3737,7 @@ func file_w17_db_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_db_proto_rawDesc), len(file_w17_db_proto_rawDesc)),
-			NumEnums:      10,
+			NumEnums:      11,
 			NumMessages:   19,
 			NumExtensions: 8,
 			NumServices:   0,

@@ -2992,6 +2992,33 @@ message GatewayTarget {
   // single backend and need no override. Set by the codegen orchestrator
   // from the lock's business_bundles[] AND(!) absorb_business == false.
   bool has_standalone_business = 19;
+
+  // Audience is the audience this gateway serves when its domain publishes
+  // several (`rest_<audience>.proto` …, see `w17/audience.proto`): the
+  // target is then `<domain>-gateway-<audience>` with env prefix
+  // `<DOMAIN>_GATEWAY_<AUDIENCE>`, and it serves that audience's surfaces
+  // only. Empty for a domain with a single audience.
+  string audience = 20;
+
+  // AbsorbedGateways are the domain's other audience gateways folded into
+  // this one in a composed binary, the way absorb_admin folds the admin:
+  // each keeps its own listeners and env prefix, and ships no deployment
+  // of its own. Only set on the audience gateway that hosts the
+  // composition.
+  repeated AbsorbedGateway absorbed_gateways = 21;
+}
+
+// AbsorbedGateway — one audience gateway folded into a composed binary.
+message AbsorbedGateway {
+  // The audience it serves.
+  string audience = 1;
+
+  // Its Go module, imported by the composed binary.
+  string module = 2;
+
+  // The composed go.mod-relative `replace` target for that module. Empty
+  // omits the replace line.
+  string replace_path = 3;
 }
 
 // AdminTarget drives the per-binary admin bundle emit

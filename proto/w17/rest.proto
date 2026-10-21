@@ -3,6 +3,7 @@ syntax = "proto3";
 package w17;
 
 import "google/protobuf/descriptor.proto";
+import "w17/audience.proto";
 import "w17/request_events.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
@@ -43,10 +44,12 @@ extend google.protobuf.FileOptions {
 // at one prefix, with its own identity (name + version), its
 // own auth method, and a tree of grouped endpoints / streams.
 //
-// One surface per DOMAIN: every domain may publish its own,
-// served by that domain's own gateway (`<domain>-gateway`), and
-// a project may have as many as it has domains. A second
-// `(w17.rest_api)` in the SAME domain is a hard error.
+// One surface per DOMAIN AND AUDIENCE: every domain may publish its
+// own, served by that domain's own gateway (`<domain>-gateway`). A
+// domain with several audiences publishes one per audience
+// (`rest_<audience>.proto`, `audience` set), each served by its own
+// gateway (`<domain>-gateway-<audience>`); a second `(w17.rest_api)`
+// for the SAME audience is a hard error. See `w17/audience.proto`.
 message RestApi {
   // Logical name of the surface — "public" / "admin" /
   // "partner" / "internal". Surfaces in tooling
@@ -175,6 +178,12 @@ message RestApi {
   // The request event stream for this surface (request_events.proto):
   // which purposes its records serve. Absent = no records.
   RequestEvents request_events = 10;
+
+  // The audience this surface is for, when its domain publishes more than
+  // one (`rest_<audience>.proto`): see `w17/audience.proto`. Unset on a
+  // domain with a single audience, which keeps `rest.proto` and the
+  // gateway, env names and permission ids it has always had.
+  Audience audience = 11;
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
