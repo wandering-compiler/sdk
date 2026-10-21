@@ -64,6 +64,10 @@ type Server struct {
 	// CollectAuthHeaders + lookup read it consistently.
 	authEnv map[string]string
 
+	// gatewayHeaders are the gateway-owned keys every connection carries
+	// to the auth method ([Server.SetGatewayHeaders]).
+	gatewayHeaders map[string]string
+
 	// maxBody caps a POST body on the HTTP transport; 0 = the default
 	// (see SetMaxRequestBodyBytes).
 	maxBody int64
@@ -188,13 +192,23 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 			h = http.Header{}
 		}
 		addr, _ := ctx.Value(clientAddrCtxKey{}).(string)
-		conn := ConnectionInfo{HTTPHeaders: h, ClientAddr: addr}
+		conn := ConnectionInfo{HTTPHeaders: h, ClientAddr: addr, Gateway: s.gatewayHeaders}
 		if s.resource != nil {
 			conn.Resource = s.resource.Resource
 		}
 		return conn
 	}
-	return ConnectionInfo{Env: s.authEnv}
+	return ConnectionInfo{Env: s.authEnv, Gateway: s.gatewayHeaders}
+}
+
+// SetGatewayHeaders sets request context the gateway owns that every
+// connection hands the auth method — an audience gateway's audience and the
+// membership kinds it accepts ([principal.AudienceKey],
+// [principal.MembershipKindsKey]). The keys must be gateway-owned (`x-w17-*`):
+// [CollectAuthHeaders] writes them after every client source, so no caller
+// can supply them.
+func (s *Server) SetGatewayHeaders(h map[string]string) {
+	s.gatewayHeaders = h
 }
 
 // SetPermResolver turns permission gating ON: the resolver is consulted

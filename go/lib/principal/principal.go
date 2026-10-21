@@ -325,6 +325,7 @@ func ForwardToOutgoing(ctx context.Context) context.Context {
 // gateway stamps [ForwardToOutgoing] relays.
 func isRelayedKey(key string) bool {
 	return key == userMetadataKey ||
+		key == DataScopeMetadataKey ||
 		key == DeviceMetadataKey ||
 		key == MintKeyMetadataKey ||
 		strings.HasPrefix(key, scopeKeyPrefix) ||

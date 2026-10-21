@@ -54,6 +54,10 @@ type ConnectionInfo struct {
 	// Resource is the protected resource's identifier when the HTTP
 	// transport is one ([Server.SetResourceServer]); empty otherwise.
 	Resource string
+	// Gateway is the request context the gateway owns beyond the fixed keys
+	// — the audience and the membership kinds it accepts
+	// ([Server.SetGatewayHeaders]). Written after every client source.
+	Gateway map[string]string
 }
 
 // MCPAuthFunc translates a per-connection identity (env vars,
@@ -192,6 +196,9 @@ func CollectAuthHeaders(conn ConnectionInfo) map[string]string {
 	}
 	if conn.Resource != "" && conn.HTTPHeaders != nil {
 		out[principal.MCPResourceKey] = conn.Resource
+	}
+	for k, v := range conn.Gateway {
+		out[k] = v
 	}
 	return out
 }
