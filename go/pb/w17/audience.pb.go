@@ -227,8 +227,10 @@ type MembershipPolicy struct {
 	// project names the kinds; the auth plugin carries them. Empty = any
 	// membership, or none at all: the audience does not filter by kind.
 	Kinds []string `protobuf:"bytes,1,rep,name=kinds,proto3" json:"kinds,omitempty"`
-	// Where the tenant comes from, tried in order. Empty = the order
-	// INVITATION, HOST, DEFAULT.
+	// Where the tenant comes from, tried in order. NOT IMPLEMENTED YET:
+	// codegen refuses it. Until it is, the tenant is an OAuth grant's
+	// organization, then the W17-Org selector, then the caller's only
+	// organization of an admitted kind.
 	TenantFrom    []TenantSource `protobuf:"varint,2,rep,packed,name=tenant_from,json=tenantFrom,proto3,enum=w17.TenantSource" json:"tenant_from,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -7,8 +7,8 @@ import "google/protobuf/descriptor.proto";
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
 // Audience surfaces: one domain publishing several REST / MCP / gRPC
-// surfaces, one per audience (backoffice, tenant, client, …). Design:
-// docs/specs/gateway/audience-surfaces.md in the platform repository.
+// surfaces, one per audience (backoffice, tenant, client, …), each served
+// by its own gateway.
 //
 // A surface names its audience in its registry option —
 // `(w17.rest_api).audience`, `(w17.mcp_api).audience`,
@@ -78,8 +78,10 @@ message MembershipPolicy {
   // membership, or none at all: the audience does not filter by kind.
   repeated string kinds = 1;
 
-  // Where the tenant comes from, tried in order. Empty = the order
-  // INVITATION, HOST, DEFAULT.
+  // Where the tenant comes from, tried in order. NOT IMPLEMENTED YET:
+  // codegen refuses it. Until it is, the tenant is an OAuth grant's
+  // organization, then the W17-Org selector, then the caller's only
+  // organization of an admitted kind.
   repeated TenantSource tenant_from = 2;
 }
 

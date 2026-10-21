@@ -23,8 +23,8 @@ const (
 	// token issued for another resource. Absent on every other surface.
 	MCPResourceKey = "x-w17-mcp-resource"
 	// AudienceKey is the audience the gateway serves, when its domain
-	// publishes several (docs/specs/gateway/audience-surfaces.md in the
-	// platform repository); absent on a gateway without one.
+	// publishes several (w17/audience.proto); absent on a gateway without
+	// one.
 	AudienceKey = "x-w17-audience"
 	// MembershipKindsKey is the comma-separated membership kinds that
 	// audience accepts. The auth method admits a caller only through a

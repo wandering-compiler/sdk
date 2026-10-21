@@ -7,8 +7,8 @@ import (
 )
 
 // DataScopeMetadataKey carries the range of rows a request may see when it
-// came in through an audience gateway (docs/specs/gateway/audience-surfaces.md
-// in the platform repository): one of the DataScope* values — the audience's
+// came in through an audience gateway (w17/audience.proto): one of the
+// DataScope* values — the audience's
 // default, or what the called method widens it to with `(w17.widen_scope)`.
 //
 // Gateway-owned like the rest of the `x-w17-` namespace: [SanitizeGatewayMD]
