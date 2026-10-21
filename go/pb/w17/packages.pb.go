@@ -204,6 +204,12 @@ var file_w17_packages_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.FileOptions.
 var (
+	// packages — what a tenant of this domain can be given: named sets of its
+	// methods and audiences, which the backoffice switches on whole per
+	// organization and the auth plugin's org_packages enforces on every
+	// request (a method no package grants is held by nobody in an
+	// organization). At most one per domain.
+	//
 	// optional w17.Packages packages = 50196;
 	E_Packages = &file_w17_packages_proto_extTypes[0]
 )
