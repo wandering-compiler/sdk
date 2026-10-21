@@ -32,17 +32,25 @@ const (
 //     permission only when one of the organization's packages lists the
 //     method — whatever their roles say, the owner included. A method no
 //     package lists is held by nobody in any organization (default deny);
-//   - an audience gateway admits a caller only for an organization one of
-//     whose packages opens that audience, when any package names audiences;
+//   - an audience a package names is opened only to the organizations one
+//     of whose packages names it; an audience no package names stays open;
+//   - a `default` package is every organization's without being given — the
+//     floor a domain adopting packages starts its existing organizations on,
+//     and every new organization's first package;
 //   - roles are handed out under the same ceiling: nobody grants what they
 //     do not hold, and nobody in an organization holds more than its
 //     packages.
 //
 // Plugin methods (sign-in, the account's own settings, …) are outside the
-// ceiling unless a package lists them, and realm-wide grants (the
-// backoffice's own) are never narrowed.
+// ceiling unless a package lists them — and a plugin method one package lists
+// is then bounded for every organization, like a project method. Realm-wide
+// grants (the backoffice's own) are never narrowed.
 //
-// At most one `(w17.packages)` per domain.
+// At most one `(w17.packages)` per domain, in any of its files; codegen
+// refuses a second, a name that is not snake_case or is declared twice, an
+// include that names no package of the domain or closes a cycle, a method
+// that is not `<module>.<Service>.<Method>` of the domain, and an audience the
+// domain does not publish.
 //
 //	option (w17.packages) = {
 //	  packages: [
@@ -112,9 +120,13 @@ type Package struct {
 	// permissions the package grants a tenant.
 	Methods []string `protobuf:"bytes,5,rep,name=methods,proto3" json:"methods,omitempty"`
 	// audiences are the audience surfaces the package opens to the tenant's
-	// members (w17/audience.proto). When no package of the domain names an
-	// audience, the audience axis is off.
-	Audiences     []string `protobuf:"bytes,6,rep,name=audiences,proto3" json:"audiences,omitempty"`
+	// members (w17/audience.proto). An audience no package of the domain names
+	// is open to every organization.
+	Audiences []string `protobuf:"bytes,6,rep,name=audiences,proto3" json:"audiences,omitempty"`
+	// default — every organization holds this package without being given it
+	// (and cannot lose it). The floor: what a domain adopting packages leaves
+	// its existing organizations, and what a new one starts with.
+	Default       bool `protobuf:"varint,7,opt,name=default,proto3" json:"default,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -191,6 +203,13 @@ func (x *Package) GetAudiences() []string {
 	return nil
 }
 
+func (x *Package) GetDefault() bool {
+	if x != nil {
+		return x.Default
+	}
+	return false
+}
+
 var file_w17_packages_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.FileOptions)(nil),
@@ -220,14 +239,15 @@ const file_w17_packages_proto_rawDesc = "" +
 	"\n" +
 	"\x12w17/packages.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"4\n" +
 	"\bPackages\x12(\n" +
-	"\bpackages\x18\x01 \x03(\v2\f.w17.PackageR\bpackages\"\xa9\x01\n" +
+	"\bpackages\x18\x01 \x03(\v2\f.w17.PackageR\bpackages\"\xc3\x01\n" +
 	"\aPackage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
 	"\bincludes\x18\x04 \x03(\tR\bincludes\x12\x18\n" +
 	"\amethods\x18\x05 \x03(\tR\amethods\x12\x1c\n" +
-	"\taudiences\x18\x06 \x03(\tR\taudiences:I\n" +
+	"\taudiences\x18\x06 \x03(\tR\taudiences\x12\x18\n" +
+	"\adefault\x18\a \x01(\bR\adefault:I\n" +
 	"\bpackages\x12\x1c.google.protobuf.FileOptions\x18\x94\x88\x03 \x01(\v2\r.w17.PackagesR\bpackagesB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
 
 var (

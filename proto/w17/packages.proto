@@ -16,17 +16,25 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 //     permission only when one of the organization's packages lists the
 //     method — whatever their roles say, the owner included. A method no
 //     package lists is held by nobody in any organization (default deny);
-//   - an audience gateway admits a caller only for an organization one of
-//     whose packages opens that audience, when any package names audiences;
+//   - an audience a package names is opened only to the organizations one
+//     of whose packages names it; an audience no package names stays open;
+//   - a `default` package is every organization's without being given — the
+//     floor a domain adopting packages starts its existing organizations on,
+//     and every new organization's first package;
 //   - roles are handed out under the same ceiling: nobody grants what they
 //     do not hold, and nobody in an organization holds more than its
 //     packages.
 //
 // Plugin methods (sign-in, the account's own settings, …) are outside the
-// ceiling unless a package lists them, and realm-wide grants (the
-// backoffice's own) are never narrowed.
+// ceiling unless a package lists them — and a plugin method one package lists
+// is then bounded for every organization, like a project method. Realm-wide
+// grants (the backoffice's own) are never narrowed.
 //
-// At most one `(w17.packages)` per domain.
+// At most one `(w17.packages)` per domain, in any of its files; codegen
+// refuses a second, a name that is not snake_case or is declared twice, an
+// include that names no package of the domain or closes a cycle, a method
+// that is not `<module>.<Service>.<Method>` of the domain, and an audience the
+// domain does not publish.
 //
 //   option (w17.packages) = {
 //     packages: [
@@ -55,9 +63,13 @@ message Package {
   // permissions the package grants a tenant.
   repeated string methods = 5;
   // audiences are the audience surfaces the package opens to the tenant's
-  // members (w17/audience.proto). When no package of the domain names an
-  // audience, the audience axis is off.
+  // members (w17/audience.proto). An audience no package of the domain names
+  // is open to every organization.
   repeated string audiences = 6;
+  // default — every organization holds this package without being given it
+  // (and cannot lose it). The floor: what a domain adopting packages leaves
+  // its existing organizations, and what a new one starts with.
+  bool default = 7;
 }
 
 extend google.protobuf.FileOptions {

@@ -23,7 +23,8 @@ protoc-image:
 	@docker image inspect $(PROTOC_IMAGE) >/dev/null 2>&1 || docker build -q -t $(PROTOC_IMAGE) tools/protoc >/dev/null
 
 pb: protoc-image
-	$(PROTOC) $$(ls proto/w17/*.proto | sed 's|^proto/||')
+	$(PROTOC) $$(ls proto/w17/*.proto | grep -v grant_client.proto | sed 's|^proto/||')
+	$(PROTOC_GRPC) w17/grant_client.proto
 	$(PROTOC) $$(ls proto/w17/*/*.proto | sed 's|^proto/||')
 	$(PROTOC) w17apply/dev_plan.proto
 	$(PROTOC_GRPC) w17apply/fetch.proto
