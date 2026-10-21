@@ -11,10 +11,12 @@ syntax = "proto3";
 // comes from the generated `w17.lock.rpc.proto` stub (M-mapped to this
 // package). This mirror only carries the message types w17ctl needs.
 //
-// Only the fields the console-app build actually compiles are mirrored: the
-// `two_factor` (mfa_required/challenge_id) + `devices` (device_trust_token)
-// SignInResp fields are gated OFF in the console build, so they are omitted
-// here — adding them later stays wire-compatible (field numbers preserved).
+// Only the fields the console-app build actually compiles are mirrored. The
+// console makes the second factor mandatory (`two_factor`), so a right
+// password answers with mfa_required + challenge_id instead of a token, and
+// VerifyMfa completes the sign-in; the `devices` SignInResp field
+// (device_trust_token) is gated off there and omitted here — adding it later
+// stays wire-compatible (field numbers preserved).
 package console.auth;
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/consoleapi/auth;authpb";
@@ -25,6 +27,22 @@ message SignInReq {
   string password = 2;
 }
 message SignInResp {
+  string user_id = 1;
+  string token   = 2;
+  // The second factor is due: no token yet. VerifyMfa with this challenge
+  // and the code (an authenticator's, a recovery code, or the e-mailed one)
+  // mints it, signed by the same device key as this sign-in.
+  bool   mfa_required = 3;
+  string challenge_id = 4;
+}
+
+// VerifyMfaReq / VerifyMfaResp — the second step of a challenged sign-in
+// (unauthenticated — the challenge stands in for the token).
+message VerifyMfaReq {
+  string challenge_id = 1;
+  string code         = 2;
+}
+message VerifyMfaResp {
   string user_id = 1;
   string token   = 2;
 }

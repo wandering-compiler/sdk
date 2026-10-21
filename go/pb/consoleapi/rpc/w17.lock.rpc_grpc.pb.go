@@ -3856,6 +3856,7 @@ var EnvironmentSecrets_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	AuthService_SignIn_FullMethodName     = "/w17lock.console.rpc.AuthService/SignIn"
+	AuthService_VerifyMfa_FullMethodName  = "/w17lock.console.rpc.AuthService/VerifyMfa"
 	AuthService_CliToken_FullMethodName   = "/w17lock.console.rpc.AuthService/CliToken"
 	AuthService_ListMyOrgs_FullMethodName = "/w17lock.console.rpc.AuthService/ListMyOrgs"
 )
@@ -3865,6 +3866,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AuthServiceClient interface {
 	SignIn(ctx context.Context, in *auth.SignInReq, opts ...grpc.CallOption) (*auth.SignInResp, error)
+	VerifyMfa(ctx context.Context, in *auth.VerifyMfaReq, opts ...grpc.CallOption) (*auth.VerifyMfaResp, error)
 	CliToken(ctx context.Context, in *auth.CliTokenReq, opts ...grpc.CallOption) (*auth.CliTokenResp, error)
 	// ── org_membership — list the caller's organizations ───────
 	// ListMyOrgs returns the orgs the bearer-authenticated caller belongs to
@@ -3886,6 +3888,16 @@ func (c *authServiceClient) SignIn(ctx context.Context, in *auth.SignInReq, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(auth.SignInResp)
 	err := c.cc.Invoke(ctx, AuthService_SignIn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) VerifyMfa(ctx context.Context, in *auth.VerifyMfaReq, opts ...grpc.CallOption) (*auth.VerifyMfaResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(auth.VerifyMfaResp)
+	err := c.cc.Invoke(ctx, AuthService_VerifyMfa_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -3917,6 +3929,7 @@ func (c *authServiceClient) ListMyOrgs(ctx context.Context, in *auth.ListMyOrgsR
 // for forward compatibility.
 type AuthServiceServer interface {
 	SignIn(context.Context, *auth.SignInReq) (*auth.SignInResp, error)
+	VerifyMfa(context.Context, *auth.VerifyMfaReq) (*auth.VerifyMfaResp, error)
 	CliToken(context.Context, *auth.CliTokenReq) (*auth.CliTokenResp, error)
 	// ── org_membership — list the caller's organizations ───────
 	// ListMyOrgs returns the orgs the bearer-authenticated caller belongs to
@@ -3936,6 +3949,9 @@ type UnimplementedAuthServiceServer struct{}
 
 func (UnimplementedAuthServiceServer) SignIn(context.Context, *auth.SignInReq) (*auth.SignInResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignIn not implemented")
+}
+func (UnimplementedAuthServiceServer) VerifyMfa(context.Context, *auth.VerifyMfaReq) (*auth.VerifyMfaResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyMfa not implemented")
 }
 func (UnimplementedAuthServiceServer) CliToken(context.Context, *auth.CliTokenReq) (*auth.CliTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CliToken not implemented")
@@ -3978,6 +3994,24 @@ func _AuthService_SignIn_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthServiceServer).SignIn(ctx, req.(*auth.SignInReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_VerifyMfa_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(auth.VerifyMfaReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).VerifyMfa(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_VerifyMfa_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).VerifyMfa(ctx, req.(*auth.VerifyMfaReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4028,6 +4062,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SignIn",
 			Handler:    _AuthService_SignIn_Handler,
+		},
+		{
+			MethodName: "VerifyMfa",
+			Handler:    _AuthService_VerifyMfa_Handler,
 		},
 		{
 			MethodName: "CliToken",
