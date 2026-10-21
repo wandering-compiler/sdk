@@ -10984,8 +10984,19 @@ type GatewayTarget struct {
 	// of its own. Only set on the audience gateway that hosts the
 	// composition.
 	AbsorbedGateways []*AbsorbedGateway `protobuf:"bytes,21,rep,name=absorbed_gateways,json=absorbedGateways,proto3" json:"absorbed_gateways,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// LibraryOnly: this audience gateway is folded into another audience's
+	// composed binary (absorbed_gateways there). Its code is generated as
+	// usual — the composed binary imports its transport packages — but it
+	// ships no deployment of its own (no Dockerfile, compose, .env), like an
+	// absorbed admin.
+	LibraryOnly bool `protobuf:"varint,22,opt,name=library_only,json=libraryOnly,proto3" json:"library_only,omitempty"`
+	// PortOffset shifts the gateway's default container ports (REST 8080,
+	// MCP 8081, gRPC 8082): every audience gateway of a composed binary
+	// listens in one process, so each absorbed one gets its own (10, 20, …).
+	// 0 everywhere else.
+	PortOffset    int32 `protobuf:"varint,23,opt,name=port_offset,json=portOffset,proto3" json:"port_offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GatewayTarget) Reset() {
@@ -11158,6 +11169,20 @@ func (x *GatewayTarget) GetAbsorbedGateways() []*AbsorbedGateway {
 	return nil
 }
 
+func (x *GatewayTarget) GetLibraryOnly() bool {
+	if x != nil {
+		return x.LibraryOnly
+	}
+	return false
+}
+
+func (x *GatewayTarget) GetPortOffset() int32 {
+	if x != nil {
+		return x.PortOffset
+	}
+	return 0
+}
+
 // AbsorbedGateway — one audience gateway folded into a composed binary.
 type AbsorbedGateway struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -11167,7 +11192,14 @@ type AbsorbedGateway struct {
 	Module string `protobuf:"bytes,2,opt,name=module,proto3" json:"module,omitempty"`
 	// The composed go.mod-relative `replace` target for that module. Empty
 	// omits the replace line.
-	ReplacePath   string `protobuf:"bytes,3,opt,name=replace_path,json=replacePath,proto3" json:"replace_path,omitempty"`
+	ReplacePath string `protobuf:"bytes,3,opt,name=replace_path,json=replacePath,proto3" json:"replace_path,omitempty"`
+	// Its env prefix (`<DOMAIN>_GATEWAY_<AUDIENCE>`) and its port offset
+	// (GatewayTarget.port_offset).
+	EnvPrefix  string `protobuf:"bytes,4,opt,name=env_prefix,json=envPrefix,proto3" json:"env_prefix,omitempty"`
+	PortOffset int32  `protobuf:"varint,5,opt,name=port_offset,json=portOffset,proto3" json:"port_offset,omitempty"`
+	// The transports it serves beside REST.
+	HasMcp        bool `protobuf:"varint,6,opt,name=has_mcp,json=hasMcp,proto3" json:"has_mcp,omitempty"`
+	HasRpc        bool `protobuf:"varint,7,opt,name=has_rpc,json=hasRpc,proto3" json:"has_rpc,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11221,6 +11253,34 @@ func (x *AbsorbedGateway) GetReplacePath() string {
 		return x.ReplacePath
 	}
 	return ""
+}
+
+func (x *AbsorbedGateway) GetEnvPrefix() string {
+	if x != nil {
+		return x.EnvPrefix
+	}
+	return ""
+}
+
+func (x *AbsorbedGateway) GetPortOffset() int32 {
+	if x != nil {
+		return x.PortOffset
+	}
+	return 0
+}
+
+func (x *AbsorbedGateway) GetHasMcp() bool {
+	if x != nil {
+		return x.HasMcp
+	}
+	return false
+}
+
+func (x *AbsorbedGateway) GetHasRpc() bool {
+	if x != nil {
+		return x.HasRpc
+	}
+	return false
 }
 
 // AdminTarget drives the per-binary admin bundle emit
@@ -12841,7 +12901,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	" \x01(\tR\x05goChi\x12\x17\n" +
 	"\anats_go\x18\v \x01(\tR\x06natsGo\x12\x15\n" +
 	"\x06mcp_go\x18\f \x01(\tR\x05mcpGo\x12\x15\n" +
-	"\x06sdk_go\x18\r \x01(\tR\x05sdkGoJ\x04\b\a\x10\bR\x03gox\"\xdc\a\n" +
+	"\x06sdk_go\x18\r \x01(\tR\x05sdkGoJ\x04\b\a\x10\bR\x03gox\"\xa0\b\n" +
 	"\rGatewayTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
@@ -12865,11 +12925,20 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x1eabsorbed_eventbus_replace_path\x18\x11 \x01(\tR\x1babsorbedEventbusReplacePath\x126\n" +
 	"\x17has_standalone_business\x18\x13 \x01(\bR\x15hasStandaloneBusiness\x12\x1a\n" +
 	"\baudience\x18\x14 \x01(\tR\baudience\x12Q\n" +
-	"\x11absorbed_gateways\x18\x15 \x03(\v2$.w17.storage.codegen.AbsorbedGatewayR\x10absorbedGatewaysJ\x04\b\x12\x10\x13R\bemit_ctl\"h\n" +
+	"\x11absorbed_gateways\x18\x15 \x03(\v2$.w17.storage.codegen.AbsorbedGatewayR\x10absorbedGateways\x12!\n" +
+	"\flibrary_only\x18\x16 \x01(\bR\vlibraryOnly\x12\x1f\n" +
+	"\vport_offset\x18\x17 \x01(\x05R\n" +
+	"portOffsetJ\x04\b\x12\x10\x13R\bemit_ctl\"\xda\x01\n" +
 	"\x0fAbsorbedGateway\x12\x1a\n" +
 	"\baudience\x18\x01 \x01(\tR\baudience\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12!\n" +
-	"\freplace_path\x18\x03 \x01(\tR\vreplacePath\"\xa1\x03\n" +
+	"\freplace_path\x18\x03 \x01(\tR\vreplacePath\x12\x1d\n" +
+	"\n" +
+	"env_prefix\x18\x04 \x01(\tR\tenvPrefix\x12\x1f\n" +
+	"\vport_offset\x18\x05 \x01(\x05R\n" +
+	"portOffset\x12\x17\n" +
+	"\ahas_mcp\x18\x06 \x01(\bR\x06hasMcp\x12\x17\n" +
+	"\ahas_rpc\x18\a \x01(\bR\x06hasRpc\"\xa1\x03\n" +
 	"\vAdminTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
