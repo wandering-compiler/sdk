@@ -24,6 +24,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/core/healthz"
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
@@ -208,21 +209,32 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 // [CollectAuthHeaders] writes them after every client source, so no caller
 // can supply them.
 //
-// The map is copied and its keys lower-cased; a key outside `x-w17-`, or one
-// of the keys CollectAuthHeaders stamps itself (surface, method, client
-// address, MCP resource), is dropped — this is a channel for the gateway's
-// own context, not a way to replace a credential or what the server says
-// about the request.
+// Only those two keys are accepted, compared case-insensitively, and the map
+// is copied. Anything else — a credential slot, the principal envelope, a key
+// the server stamps itself — or one key given twice in different cases
+// panics: the caller is generated code passing constants, so either is a
+// defect to surface at boot, not a header to drop or let win at random.
 func (s *Server) SetGatewayHeaders(h map[string]string) {
 	out := make(map[string]string, len(h))
 	for k, v := range h {
-		k = strings.ToLower(k)
-		if !strings.HasPrefix(k, "x-w17-") || stampedAuthKeys[k] {
-			continue
+		lk := strings.ToLower(k)
+		if !gatewayHeaderKeys[lk] {
+			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q is not a gateway auth-context key (want %s or %s)",
+				k, principal.AudienceKey, principal.MembershipKindsKey))
 		}
-		out[k] = v
+		if _, dup := out[lk]; dup {
+			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q given twice", lk))
+		}
+		out[lk] = v
 	}
 	s.gatewayHeaders = out
+}
+
+// gatewayHeaderKeys are the auth-context keys a gateway hands every
+// connection through SetGatewayHeaders.
+var gatewayHeaderKeys = map[string]bool{
+	principal.AudienceKey:        true,
+	principal.MembershipKindsKey: true,
 }
 
 // SetPermResolver turns permission gating ON: the resolver is consulted

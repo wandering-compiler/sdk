@@ -136,15 +136,9 @@ func MetadataFromContext(ctx context.Context) map[string]string {
 // a subscriber it would pin the subscriber's own storage calls to a
 // connection that belongs to a settled transaction. `distx.ConnIDHeader` is
 // pinned the same way (`TestConnIDHeader_IsTheStrippedEnvelopeKey`).
-//
-// `x-w17-data-scope` is an audience gateway's range for the request it served
-// (principal.DataScopeMetadataKey). A subscriber is not serving that request:
-// replayed, it would narrow an internal job's storage calls to one caller's
-// own rows. Kept as a literal for the same reason as the two above.
 var reservedMetadataKeys = map[string]bool{
-	"w17-tx-id":        true,
-	"w17-conn-id":      true,
-	"x-w17-data-scope": true,
+	"w17-tx-id":   true,
+	"w17-conn-id": true,
 }
 
 // credentialHeaders are request headers that carry a credential by

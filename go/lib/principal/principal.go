@@ -246,8 +246,9 @@ func ScopeKey(name string) string {
 // ([DeviceMetadataKey]) when the gateway checked a DPoP proof, and a token
 // mint's verified key ([MintKeyMetadataKey]), and an audience gateway's data
 // range ([DataScopeMetadataKey]) — and nothing else. The range is relayed so
-// a facade's storage calls see what the request may see; a facade cannot
-// widen it for its own calls (a wider range is declared on the method,
+// a facade's storage calls see what the request may see; a facade serving an
+// audience request cannot widen it for its own calls, since the relayed
+// value replaces its own (a wider range is declared on the method,
 // `(w17.widen_scope)`, where review sees it). Paging
 // (`x-w17-paging-*`), tracing, i18n, and tx-routing metadata have their own
 // propagation and are deliberately left alone; blanket-forwarding paging in

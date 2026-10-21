@@ -162,19 +162,17 @@ func TestMetadataFromContext_DropsTheTransactionHeader(t *testing.T) {
 	}
 }
 
-// An audience gateway's data range belongs to the request it served, not to
-// the subscribers that react to it: replayed, it would narrow an internal
-// job's storage reads to that caller's own rows.
-func TestMetadataFromContext_DropsTheDataScope(t *testing.T) {
+// A subscriber runs as the caller: with the caller's scopes it gets the
+// caller's audience range too. Without it storage would read "no audience" and
+// apply every scope, narrowing a tenant-wide request's reaction to the
+// caller's own rows.
+func TestMetadataFromContext_KeepsTheDataScope(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"x-w17-data-scope", "owner",
+		"x-w17-data-scope", "tenant",
 		"x-w17-scope-org_id", "org-7",
 	))
 	md := eventbus.MetadataFromContext(ctx)
-	if got, ok := md["x-w17-data-scope"]; ok {
-		t.Errorf("the envelope carries x-w17-data-scope=%q", got)
-	}
-	if md["x-w17-scope-org_id"] != "org-7" {
-		t.Errorf("the caller's scope did not ride along: %v", md)
+	if md["x-w17-data-scope"] != "tenant" || md["x-w17-scope-org_id"] != "org-7" {
+		t.Errorf("the envelope lost the caller's range or scope: %v", md)
 	}
 }

@@ -49,9 +49,8 @@ func DataScope(ctx context.Context) string {
 			return v[0]
 		}
 	}
-	// An unknown value, or several, is read as the narrowest range rather
-	// than ignored: ignoring it would be "no audience", the request a gateway
-	// without audiences makes, and a stamp that went wrong must not read as
-	// that.
+	// An unknown value, or several, is read as the narrowest range: the
+	// request did come through an audience gateway, and a caller asking which
+	// range applies gets the strictest one rather than "no audience".
 	return DataScopeOwner
 }
