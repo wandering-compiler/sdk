@@ -26,8 +26,8 @@ func TestDataScope(t *testing.T) {
 		// A typo must not read as "no audience", which applies every scope
 		// too but is indistinguishable from intent.
 		{"unknown reads as the narrowest", in(principal.DataScopeMetadataKey, "everything"), principal.DataScopeOwner},
-		// Two values are not one range; the request carries none it can name.
-		{"two values: none", in(principal.DataScopeMetadataKey, "all", principal.DataScopeMetadataKey, "owner"), ""},
+		// Two values are not one range: a stamp that went wrong is not "no audience".
+		{"two values: the narrowest", in(principal.DataScopeMetadataKey, "all", principal.DataScopeMetadataKey, "tenant"), principal.DataScopeOwner},
 	} {
 		if got := principal.DataScope(tc.ctx); got != tc.want {
 			t.Errorf("%s: DataScope = %q, want %q", tc.name, got, tc.want)

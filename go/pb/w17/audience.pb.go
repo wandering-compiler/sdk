@@ -231,7 +231,13 @@ type MembershipPolicy struct {
 	// codegen refuses it. Until it is, the tenant is an OAuth grant's
 	// organization, then the W17-Org selector, then the caller's only
 	// organization of an admitted kind.
-	TenantFrom    []TenantSource `protobuf:"varint,2,rep,packed,name=tenant_from,json=tenantFrom,proto3,enum=w17.TenantSource" json:"tenant_from,omitempty"`
+	TenantFrom []TenantSource `protobuf:"varint,2,rep,packed,name=tenant_from,json=tenantFrom,proto3,enum=w17.TenantSource" json:"tenant_from,omitempty"`
+	// Membership kinds a caller this audience admits may invite. Empty = the
+	// audience's own kinds. The auth plugin refuses an invitation of any other
+	// kind from such a caller, so a client cannot hand out a staff membership;
+	// a caller with no membership of the organization (a backoffice admin) or
+	// its owner may invite any kind.
+	Invites       []string `protobuf:"bytes,3,rep,name=invites,proto3" json:"invites,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -280,6 +286,13 @@ func (x *MembershipPolicy) GetTenantFrom() []TenantSource {
 	return nil
 }
 
+func (x *MembershipPolicy) GetInvites() []string {
+	if x != nil {
+		return x.Invites
+	}
+	return nil
+}
+
 var file_w17_audience_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MethodOptions)(nil),
@@ -312,11 +325,12 @@ const file_w17_audience_proto_rawDesc = "" +
 	"\rdefault_scope\x18\x02 \x01(\x0e2\x0e.w17.DataScopeR\fdefaultScope\x125\n" +
 	"\n" +
 	"membership\x18\x03 \x01(\v2\x15.w17.MembershipPolicyR\n" +
-	"membership\"\\\n" +
+	"membership\"v\n" +
 	"\x10MembershipPolicy\x12\x14\n" +
 	"\x05kinds\x18\x01 \x03(\tR\x05kinds\x122\n" +
 	"\vtenant_from\x18\x02 \x03(\x0e2\x11.w17.TenantSourceR\n" +
-	"tenantFrom*h\n" +
+	"tenantFrom\x12\x18\n" +
+	"\ainvites\x18\x03 \x03(\tR\ainvites*h\n" +
 	"\tDataScope\x12\x1a\n" +
 	"\x16DATA_SCOPE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10DATA_SCOPE_OWNER\x10\x01\x12\x15\n" +

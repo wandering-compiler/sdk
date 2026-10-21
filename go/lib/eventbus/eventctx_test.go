@@ -161,3 +161,20 @@ func TestMetadataFromContext_DropsTheTransactionHeader(t *testing.T) {
 		t.Errorf("scope metadata = %q, want it carried across", md["x-w17-scope-org_id"])
 	}
 }
+
+// An audience gateway's data range belongs to the request it served, not to
+// the subscribers that react to it: replayed, it would narrow an internal
+// job's storage reads to that caller's own rows.
+func TestMetadataFromContext_DropsTheDataScope(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"x-w17-data-scope", "owner",
+		"x-w17-scope-org_id", "org-7",
+	))
+	md := eventbus.MetadataFromContext(ctx)
+	if got, ok := md["x-w17-data-scope"]; ok {
+		t.Errorf("the envelope carries x-w17-data-scope=%q", got)
+	}
+	if md["x-w17-scope-org_id"] != "org-7" {
+		t.Errorf("the caller's scope did not ride along: %v", md)
+	}
+}

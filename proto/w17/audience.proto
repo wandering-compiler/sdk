@@ -83,6 +83,13 @@ message MembershipPolicy {
   // organization, then the W17-Org selector, then the caller's only
   // organization of an admitted kind.
   repeated TenantSource tenant_from = 2;
+
+  // Membership kinds a caller this audience admits may invite. Empty = the
+  // audience's own kinds. The auth plugin refuses an invitation of any other
+  // kind from such a caller, so a client cannot hand out a staff membership;
+  // a caller with no membership of the organization (a backoffice admin) or
+  // its owner may invite any kind.
+  repeated string invites = 3;
 }
 
 // TenantSource — one place the tenant of a request can come from.

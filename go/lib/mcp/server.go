@@ -207,8 +207,22 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 // [principal.MembershipKindsKey]). The keys must be gateway-owned (`x-w17-*`):
 // [CollectAuthHeaders] writes them after every client source, so no caller
 // can supply them.
+//
+// The map is copied and its keys lower-cased; a key outside `x-w17-`, or one
+// of the keys CollectAuthHeaders stamps itself (surface, method, client
+// address, MCP resource), is dropped — this is a channel for the gateway's
+// own context, not a way to replace a credential or what the server says
+// about the request.
 func (s *Server) SetGatewayHeaders(h map[string]string) {
-	s.gatewayHeaders = h
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		k = strings.ToLower(k)
+		if !strings.HasPrefix(k, "x-w17-") || stampedAuthKeys[k] {
+			continue
+		}
+		out[k] = v
+	}
+	s.gatewayHeaders = out
 }
 
 // SetPermResolver turns permission gating ON: the resolver is consulted

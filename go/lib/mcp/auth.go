@@ -229,3 +229,12 @@ func envKey(key string) string {
 	}
 	return string(out)
 }
+
+// stampedAuthKeys are the auth-context keys CollectAuthHeaders writes from
+// what the server itself knows; SetGatewayHeaders never overrides them.
+var stampedAuthKeys = map[string]bool{
+	principal.SurfaceKey:     true,
+	principal.MethodKey:      true,
+	principal.ClientAddrKey:  true,
+	principal.MCPResourceKey: true,
+}

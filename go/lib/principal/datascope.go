@@ -39,15 +39,19 @@ func DataScope(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	if v := md.Get(DataScopeMetadataKey); len(v) == 1 {
+	v := md.Get(DataScopeMetadataKey)
+	if len(v) == 0 {
+		return ""
+	}
+	if len(v) == 1 {
 		switch v[0] {
 		case DataScopeOwner, DataScopeTenant, DataScopeAll:
 			return v[0]
 		}
-		// An unknown value is read as the narrowest range rather than
-		// ignored: ignoring it would be "no audience", which applies every
-		// scope too, but a typo should not be indistinguishable from intent.
-		return DataScopeOwner
 	}
-	return ""
+	// An unknown value, or several, is read as the narrowest range rather
+	// than ignored: ignoring it would be "no audience", the request a gateway
+	// without audiences makes, and a stamp that went wrong must not read as
+	// that.
+	return DataScopeOwner
 }
