@@ -31,6 +31,7 @@ package ratelimit
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/netip"
@@ -117,7 +118,8 @@ type Config struct {
 // [Config.TrustedProxies]. The keyword [TrustPrivateRanges] (`private`)
 // trusts every loopback and private range, as earlier versions did by
 // default; use it only when every hop in those ranges appends its own entry.
-// `none` states the default explicitly.
+// `none` states the default explicitly. A surface's boot requires it set
+// outside W17_ENV=dev ([RequireTrustedProxies]).
 //
 // Unset means ON at the defaults, not off. A protection that must be
 // switched on is one that is off everywhere it was never thought about, and
@@ -271,6 +273,40 @@ func FromEnvScope(prefix, scope, transport string) Config {
 		}
 	}
 	return cfg
+}
+
+// EnvEnvironment names the deployment environment, as fieldcrypt reads it;
+// under DevEnvironment [RequireTrustedProxies] lets the variable stay unset.
+const (
+	EnvEnvironment = "W17_ENV"
+	DevEnvironment = "dev"
+)
+
+// RequireTrustedProxies refuses a start without an explicit
+// `<PREFIX>_<SCOPE>_RATELIMIT_TRUSTED_PROXIES` (or the bare
+// `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` it inherits) outside W17_ENV=dev. A
+// surface's boot calls it for the scope that limits its sign-ins: PUBLIC for
+// the gateway, LOGIN for the admin.
+//
+// Unset, the limiter trusts no proxy, and that is right only when no HTTP
+// terminator stands in front of the binary. Behind one, every caller is keyed
+// by the terminator's address and shares one bucket: a few wrong passwords a
+// minute from anyone refuse every sign-in, and the only sign of it was a log
+// line ([Limiter.warnUntrustedForwarder]) nobody reads until sign-ins fail.
+// The binary cannot tell the two cases apart at start, so the deployment
+// says which it is: `none` for no proxy, CIDRs or `private` for the ones in
+// front. A development stack (W17_ENV=dev) keeps the default.
+func RequireTrustedProxies(prefix, scope string) error {
+	if os.Getenv(EnvEnvironment) == DevEnvironment {
+		return nil
+	}
+	name := prefix + "_" + scope + "_RATELIMIT_TRUSTED_PROXIES"
+	if strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(os.Getenv(prefix+"_RATELIMIT_TRUSTED_PROXIES")) != "" {
+		return nil
+	}
+	return fmt.Errorf("%s is not set\n"+
+		"  why: the per-address limit on the sign-in methods keys each caller by the nearest peer it does not trust as a proxy; behind an HTTP terminator that is not listed, every caller shares the terminator's one bucket, and a few wrong passwords a minute from anyone refuse every sign-in\n"+
+		"  fix: set %s to the terminators in front of this binary (CIDRs, or %q when every private-range hop appends the client address to X-Forwarded-For), or to \"none\" when clients reach it directly", name, name, TrustPrivateRanges)
 }
 
 // scopeMeaning says, in the OFF line, what is now unlimited.
