@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// Packages: what a tenant can be given. A project names, in its domain's
+// protos, the sets of methods (and audiences) it offers tenants — what it
+// sells; the backoffice switches whole packages on for a tenant, and nothing
+// else. The auth plugin's `org_packages` feature holds which packages each
+// organization has and enforces them on every request:
+//
+//   - a caller acting in an organization holds a project method's
+//     permission only when one of the organization's packages lists the
+//     method — whatever their roles say, the owner included. A method no
+//     package lists is held by nobody in any organization (default deny);
+//   - an audience gateway admits a caller only for an organization one of
+//     whose packages opens that audience, when any package names audiences;
+//   - roles are handed out under the same ceiling: nobody grants what they
+//     do not hold, and nobody in an organization holds more than its
+//     packages.
+//
+// Plugin methods (sign-in, the account's own settings, …) are outside the
+// ceiling unless a package lists them, and realm-wide grants (the
+// backoffice's own) are never narrowed.
+//
+// At most one `(w17.packages)` per domain.
+//
+//   option (w17.packages) = {
+//     packages: [
+//       { name: "base", title: "Base", audiences: [ "staff", "client" ],
+//         methods: [ "example.NoteQuery.ListNotes", "example.NoteMutation.CreateNote" ] },
+//       { name: "pro", title: "Pro", includes: [ "base" ], audiences: [ "client_mcp" ],
+//         methods: [ "example.NoteQuery.ListTenantNotes" ] }
+//     ]
+//   };
+message Packages {
+  repeated Package packages = 1;
+}
+
+// Package is one thing a tenant can be given.
+message Package {
+  // name identifies the package: snake_case, unique in the domain. It is what
+  // the backoffice switches on and what the organization's rows store.
+  string name = 1;
+  // title and description are for the people who switch it on.
+  string title       = 2;
+  string description = 3;
+  // includes names other packages of the domain whose methods and audiences
+  // this one carries too.
+  repeated string includes = 4;
+  // methods are `<module>.<Service>.<Method>` of the domain's services: the
+  // permissions the package grants a tenant.
+  repeated string methods = 5;
+  // audiences are the audience surfaces the package opens to the tenant's
+  // members (w17/audience.proto). When no package of the domain names an
+  // audience, the audience axis is off.
+  repeated string audiences = 6;
+}
+
+extend google.protobuf.FileOptions {
+  Packages packages = 50196;
+}
