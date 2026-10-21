@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package w17;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// GrantClient — the CONTRACT a product may implement for the grant side to
+// call: told when what an organization can hold or show changes, so the
+// product can react (provision an engine, refresh a cache, notify its
+// people). Nothing calls it yet; the auth plugin's org_packages and the grant
+// plugin hold the state and enforce it themselves. Declared so a product's
+// handler and a future caller agree on one shape.
+service GrantClient {
+  // PackagesChanged — an organization was given or lost packages.
+  rpc PackagesChanged(PackagesChangedReq) returns (PackagesChangedResp);
+  // EnvelopeDecided — an organization's envelope was approved or rejected.
+  rpc EnvelopeDecided(EnvelopeDecidedReq) returns (EnvelopeDecidedResp);
+}
+
+message PackagesChangedReq {
+  string org_id = 1;
+  // packages are the organization's live packages after the change.
+  repeated string packages = 2;
+}
+message PackagesChangedResp {}
+
+message EnvelopeDecidedReq {
+  string org_id      = 1;
+  string envelope_id = 2;
+  // status is "approved" or "rejected".
+  string status = 3;
+}
+message EnvelopeDecidedResp {}
