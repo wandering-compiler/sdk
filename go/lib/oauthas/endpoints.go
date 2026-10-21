@@ -146,7 +146,7 @@ func errorPage(w http.ResponseWriter, oe *Error) {
 	_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>Sign-in request refused</title>` +
 		`<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">` +
 		`<h1 style="font-size:1.25rem">This sign-in request cannot be completed</h1><p>` +
-		html.EscapeString(oe.Description) + `</p><p style="color:#666">Error: ` + html.EscapeString(oe.Code) +
+		html.EscapeString(oe.Description) + `</p><p style="color:dimgray">Error: ` + html.EscapeString(oe.Code) +
 		`</p><p>Close this window and start again from the application.</p></body>`))
 }
 

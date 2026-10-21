@@ -21,7 +21,7 @@ import (
 )
 
 // The HTTP transport as an OAuth 2.1 protected resource — the MCP
-// authorization specification (2025-11-25): RFC 9728 metadata, RFC 6750
+// authorization specification: RFC 9728 metadata, RFC 6750
 // challenges, and the resource (RFC 8707 audience) told to the auth method.
 //
 // A client calling the endpoint without a token is answered 401 with a
