@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v5.29.3
-// source: w17/grant_client.proto
+// source: w17/grant/hooks.proto
 
-package w17pb
+package grantpb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -22,7 +22,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// EnvelopeDecision — what the backoffice decided.
+// EnvelopeDecision — what the backoffice decided. A handler refuses
+// UNSPECIFIED (InvalidArgument): it is a caller that set nothing, never a
+// decision.
 type EnvelopeDecision int32
 
 const (
@@ -56,11 +58,11 @@ func (x EnvelopeDecision) String() string {
 }
 
 func (EnvelopeDecision) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_grant_client_proto_enumTypes[0].Descriptor()
+	return file_w17_grant_hooks_proto_enumTypes[0].Descriptor()
 }
 
 func (EnvelopeDecision) Type() protoreflect.EnumType {
-	return &file_w17_grant_client_proto_enumTypes[0]
+	return &file_w17_grant_hooks_proto_enumTypes[0]
 }
 
 func (x EnvelopeDecision) Number() protoreflect.EnumNumber {
@@ -69,25 +71,29 @@ func (x EnvelopeDecision) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EnvelopeDecision.Descriptor instead.
 func (EnvelopeDecision) EnumDescriptor() ([]byte, []int) {
-	return file_w17_grant_client_proto_rawDescGZIP(), []int{0}
+	return file_w17_grant_hooks_proto_rawDescGZIP(), []int{0}
 }
 
 type PackagesChangedReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OrgId string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	// packages are the organization's live packages after the change, as
-	// given — names, includes not expanded (the domain's protos expand them).
+	// packages are every package the organization holds after the change —
+	// the domain's default packages included — by name, includes not expanded
+	// (the domain's protos expand them). A deploy that changes which packages
+	// are default changes every organization's holdings and sends no call: a
+	// product reading defaults re-reads them on deploy.
 	Packages []string `protobuf:"bytes,2,rep,name=packages,proto3" json:"packages,omitempty"`
-	// changed_at orders deliveries: a product applies a call only when it is
-	// newer than the last one it applied for the organization.
-	ChangedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=changed_at,json=changedAt,proto3" json:"changed_at,omitempty"`
+	// revision increases with every change of the organization's packages;
+	// it orders deliveries (two changes never share one).
+	Revision      int64                  `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	ChangedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=changed_at,json=changedAt,proto3" json:"changed_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PackagesChangedReq) Reset() {
 	*x = PackagesChangedReq{}
-	mi := &file_w17_grant_client_proto_msgTypes[0]
+	mi := &file_w17_grant_hooks_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -99,7 +105,7 @@ func (x *PackagesChangedReq) String() string {
 func (*PackagesChangedReq) ProtoMessage() {}
 
 func (x *PackagesChangedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_grant_client_proto_msgTypes[0]
+	mi := &file_w17_grant_hooks_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -112,7 +118,7 @@ func (x *PackagesChangedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PackagesChangedReq.ProtoReflect.Descriptor instead.
 func (*PackagesChangedReq) Descriptor() ([]byte, []int) {
-	return file_w17_grant_client_proto_rawDescGZIP(), []int{0}
+	return file_w17_grant_hooks_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PackagesChangedReq) GetOrgId() string {
@@ -127,6 +133,13 @@ func (x *PackagesChangedReq) GetPackages() []string {
 		return x.Packages
 	}
 	return nil
+}
+
+func (x *PackagesChangedReq) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
 }
 
 func (x *PackagesChangedReq) GetChangedAt() *timestamppb.Timestamp {
@@ -144,7 +157,7 @@ type PackagesChangedResp struct {
 
 func (x *PackagesChangedResp) Reset() {
 	*x = PackagesChangedResp{}
-	mi := &file_w17_grant_client_proto_msgTypes[1]
+	mi := &file_w17_grant_hooks_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -156,7 +169,7 @@ func (x *PackagesChangedResp) String() string {
 func (*PackagesChangedResp) ProtoMessage() {}
 
 func (x *PackagesChangedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_grant_client_proto_msgTypes[1]
+	mi := &file_w17_grant_hooks_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -169,22 +182,26 @@ func (x *PackagesChangedResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PackagesChangedResp.ProtoReflect.Descriptor instead.
 func (*PackagesChangedResp) Descriptor() ([]byte, []int) {
-	return file_w17_grant_client_proto_rawDescGZIP(), []int{1}
+	return file_w17_grant_hooks_proto_rawDescGZIP(), []int{1}
 }
 
 type EnvelopeDecidedReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OrgId         string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	EnvelopeId    string                 `protobuf:"bytes,2,opt,name=envelope_id,json=envelopeId,proto3" json:"envelope_id,omitempty"`
-	Decision      EnvelopeDecision       `protobuf:"varint,3,opt,name=decision,proto3,enum=w17.EnvelopeDecision" json:"decision,omitempty"`
-	DecidedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=decided_at,json=decidedAt,proto3" json:"decided_at,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	OrgId      string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
+	EnvelopeId string                 `protobuf:"bytes,2,opt,name=envelope_id,json=envelopeId,proto3" json:"envelope_id,omitempty"`
+	Decision   EnvelopeDecision       `protobuf:"varint,3,opt,name=decision,proto3,enum=w17.grant.EnvelopeDecision" json:"decision,omitempty"`
+	// revision increases with every decision on the organization's envelopes;
+	// it orders deliveries, so a late APPROVED never overwrites a later
+	// REJECTED.
+	Revision      int64                  `protobuf:"varint,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	DecidedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=decided_at,json=decidedAt,proto3" json:"decided_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EnvelopeDecidedReq) Reset() {
 	*x = EnvelopeDecidedReq{}
-	mi := &file_w17_grant_client_proto_msgTypes[2]
+	mi := &file_w17_grant_hooks_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -196,7 +213,7 @@ func (x *EnvelopeDecidedReq) String() string {
 func (*EnvelopeDecidedReq) ProtoMessage() {}
 
 func (x *EnvelopeDecidedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_grant_client_proto_msgTypes[2]
+	mi := &file_w17_grant_hooks_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -209,7 +226,7 @@ func (x *EnvelopeDecidedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvelopeDecidedReq.ProtoReflect.Descriptor instead.
 func (*EnvelopeDecidedReq) Descriptor() ([]byte, []int) {
-	return file_w17_grant_client_proto_rawDescGZIP(), []int{2}
+	return file_w17_grant_hooks_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EnvelopeDecidedReq) GetOrgId() string {
@@ -233,6 +250,13 @@ func (x *EnvelopeDecidedReq) GetDecision() EnvelopeDecision {
 	return EnvelopeDecision_ENVELOPE_DECISION_UNSPECIFIED
 }
 
+func (x *EnvelopeDecidedReq) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
 func (x *EnvelopeDecidedReq) GetDecidedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.DecidedAt
@@ -248,7 +272,7 @@ type EnvelopeDecidedResp struct {
 
 func (x *EnvelopeDecidedResp) Reset() {
 	*x = EnvelopeDecidedResp{}
-	mi := &file_w17_grant_client_proto_msgTypes[3]
+	mi := &file_w17_grant_hooks_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -260,7 +284,7 @@ func (x *EnvelopeDecidedResp) String() string {
 func (*EnvelopeDecidedResp) ProtoMessage() {}
 
 func (x *EnvelopeDecidedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_grant_client_proto_msgTypes[3]
+	mi := &file_w17_grant_hooks_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -273,66 +297,69 @@ func (x *EnvelopeDecidedResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvelopeDecidedResp.ProtoReflect.Descriptor instead.
 func (*EnvelopeDecidedResp) Descriptor() ([]byte, []int) {
-	return file_w17_grant_client_proto_rawDescGZIP(), []int{3}
+	return file_w17_grant_hooks_proto_rawDescGZIP(), []int{3}
 }
 
-var File_w17_grant_client_proto protoreflect.FileDescriptor
+var File_w17_grant_hooks_proto protoreflect.FileDescriptor
 
-const file_w17_grant_client_proto_rawDesc = "" +
+const file_w17_grant_hooks_proto_rawDesc = "" +
 	"\n" +
-	"\x16w17/grant_client.proto\x12\x03w17\x1a\x1fgoogle/protobuf/timestamp.proto\"\x82\x01\n" +
+	"\x15w17/grant/hooks.proto\x12\tw17.grant\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9e\x01\n" +
 	"\x12PackagesChangedReq\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x1a\n" +
-	"\bpackages\x18\x02 \x03(\tR\bpackages\x129\n" +
+	"\bpackages\x18\x02 \x03(\tR\bpackages\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\x03R\brevision\x129\n" +
 	"\n" +
-	"changed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tchangedAt\"\x15\n" +
-	"\x13PackagesChangedResp\"\xba\x01\n" +
+	"changed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tchangedAt\"\x15\n" +
+	"\x13PackagesChangedResp\"\xdc\x01\n" +
 	"\x12EnvelopeDecidedReq\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x1f\n" +
 	"\venvelope_id\x18\x02 \x01(\tR\n" +
-	"envelopeId\x121\n" +
-	"\bdecision\x18\x03 \x01(\x0e2\x15.w17.EnvelopeDecisionR\bdecision\x129\n" +
+	"envelopeId\x127\n" +
+	"\bdecision\x18\x03 \x01(\x0e2\x1b.w17.grant.EnvelopeDecisionR\bdecision\x12\x1a\n" +
+	"\brevision\x18\x04 \x01(\x03R\brevision\x129\n" +
 	"\n" +
-	"decided_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"\x15\n" +
+	"decided_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"\x15\n" +
 	"\x13EnvelopeDecidedResp*u\n" +
 	"\x10EnvelopeDecision\x12!\n" +
 	"\x1dENVELOPE_DECISION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aENVELOPE_DECISION_APPROVED\x10\x01\x12\x1e\n" +
-	"\x1aENVELOPE_DECISION_REJECTED\x10\x022\x99\x01\n" +
-	"\vGrantClient\x12D\n" +
-	"\x0fPackagesChanged\x12\x17.w17.PackagesChangedReq\x1a\x18.w17.PackagesChangedResp\x12D\n" +
-	"\x0fEnvelopeDecided\x12\x17.w17.EnvelopeDecidedReq\x1a\x18.w17.EnvelopeDecidedRespB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
+	"\x1aENVELOPE_DECISION_REJECTED\x10\x022\xb0\x01\n" +
+	"\n" +
+	"GrantHooks\x12P\n" +
+	"\x0fPackagesChanged\x12\x1d.w17.grant.PackagesChangedReq\x1a\x1e.w17.grant.PackagesChangedResp\x12P\n" +
+	"\x0fEnvelopeDecided\x12\x1d.w17.grant.EnvelopeDecidedReq\x1a\x1e.w17.grant.EnvelopeDecidedRespB;Z9github.com/wandering-compiler/sdk/go/pb/w17/grant;grantpbb\x06proto3"
 
 var (
-	file_w17_grant_client_proto_rawDescOnce sync.Once
-	file_w17_grant_client_proto_rawDescData []byte
+	file_w17_grant_hooks_proto_rawDescOnce sync.Once
+	file_w17_grant_hooks_proto_rawDescData []byte
 )
 
-func file_w17_grant_client_proto_rawDescGZIP() []byte {
-	file_w17_grant_client_proto_rawDescOnce.Do(func() {
-		file_w17_grant_client_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_w17_grant_client_proto_rawDesc), len(file_w17_grant_client_proto_rawDesc)))
+func file_w17_grant_hooks_proto_rawDescGZIP() []byte {
+	file_w17_grant_hooks_proto_rawDescOnce.Do(func() {
+		file_w17_grant_hooks_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_w17_grant_hooks_proto_rawDesc), len(file_w17_grant_hooks_proto_rawDesc)))
 	})
-	return file_w17_grant_client_proto_rawDescData
+	return file_w17_grant_hooks_proto_rawDescData
 }
 
-var file_w17_grant_client_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_w17_grant_client_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_w17_grant_client_proto_goTypes = []any{
-	(EnvelopeDecision)(0),         // 0: w17.EnvelopeDecision
-	(*PackagesChangedReq)(nil),    // 1: w17.PackagesChangedReq
-	(*PackagesChangedResp)(nil),   // 2: w17.PackagesChangedResp
-	(*EnvelopeDecidedReq)(nil),    // 3: w17.EnvelopeDecidedReq
-	(*EnvelopeDecidedResp)(nil),   // 4: w17.EnvelopeDecidedResp
+var file_w17_grant_hooks_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_w17_grant_hooks_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_w17_grant_hooks_proto_goTypes = []any{
+	(EnvelopeDecision)(0),         // 0: w17.grant.EnvelopeDecision
+	(*PackagesChangedReq)(nil),    // 1: w17.grant.PackagesChangedReq
+	(*PackagesChangedResp)(nil),   // 2: w17.grant.PackagesChangedResp
+	(*EnvelopeDecidedReq)(nil),    // 3: w17.grant.EnvelopeDecidedReq
+	(*EnvelopeDecidedResp)(nil),   // 4: w17.grant.EnvelopeDecidedResp
 	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
 }
-var file_w17_grant_client_proto_depIdxs = []int32{
-	5, // 0: w17.PackagesChangedReq.changed_at:type_name -> google.protobuf.Timestamp
-	0, // 1: w17.EnvelopeDecidedReq.decision:type_name -> w17.EnvelopeDecision
-	5, // 2: w17.EnvelopeDecidedReq.decided_at:type_name -> google.protobuf.Timestamp
-	1, // 3: w17.GrantClient.PackagesChanged:input_type -> w17.PackagesChangedReq
-	3, // 4: w17.GrantClient.EnvelopeDecided:input_type -> w17.EnvelopeDecidedReq
-	2, // 5: w17.GrantClient.PackagesChanged:output_type -> w17.PackagesChangedResp
-	4, // 6: w17.GrantClient.EnvelopeDecided:output_type -> w17.EnvelopeDecidedResp
+var file_w17_grant_hooks_proto_depIdxs = []int32{
+	5, // 0: w17.grant.PackagesChangedReq.changed_at:type_name -> google.protobuf.Timestamp
+	0, // 1: w17.grant.EnvelopeDecidedReq.decision:type_name -> w17.grant.EnvelopeDecision
+	5, // 2: w17.grant.EnvelopeDecidedReq.decided_at:type_name -> google.protobuf.Timestamp
+	1, // 3: w17.grant.GrantHooks.PackagesChanged:input_type -> w17.grant.PackagesChangedReq
+	3, // 4: w17.grant.GrantHooks.EnvelopeDecided:input_type -> w17.grant.EnvelopeDecidedReq
+	2, // 5: w17.grant.GrantHooks.PackagesChanged:output_type -> w17.grant.PackagesChangedResp
+	4, // 6: w17.grant.GrantHooks.EnvelopeDecided:output_type -> w17.grant.EnvelopeDecidedResp
 	5, // [5:7] is the sub-list for method output_type
 	3, // [3:5] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
@@ -340,27 +367,27 @@ var file_w17_grant_client_proto_depIdxs = []int32{
 	0, // [0:3] is the sub-list for field type_name
 }
 
-func init() { file_w17_grant_client_proto_init() }
-func file_w17_grant_client_proto_init() {
-	if File_w17_grant_client_proto != nil {
+func init() { file_w17_grant_hooks_proto_init() }
+func file_w17_grant_hooks_proto_init() {
+	if File_w17_grant_hooks_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_grant_client_proto_rawDesc), len(file_w17_grant_client_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_grant_hooks_proto_rawDesc), len(file_w17_grant_hooks_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_w17_grant_client_proto_goTypes,
-		DependencyIndexes: file_w17_grant_client_proto_depIdxs,
-		EnumInfos:         file_w17_grant_client_proto_enumTypes,
-		MessageInfos:      file_w17_grant_client_proto_msgTypes,
+		GoTypes:           file_w17_grant_hooks_proto_goTypes,
+		DependencyIndexes: file_w17_grant_hooks_proto_depIdxs,
+		EnumInfos:         file_w17_grant_hooks_proto_enumTypes,
+		MessageInfos:      file_w17_grant_hooks_proto_msgTypes,
 	}.Build()
-	File_w17_grant_client_proto = out.File
-	file_w17_grant_client_proto_goTypes = nil
-	file_w17_grant_client_proto_depIdxs = nil
+	File_w17_grant_hooks_proto = out.File
+	file_w17_grant_hooks_proto_goTypes = nil
+	file_w17_grant_hooks_proto_depIdxs = nil
 }

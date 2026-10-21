@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v5.29.3
-// source: w17/grant_client.proto
+// source: w17/grant/hooks.proto
 
-package w17pb
+package grantpb
 
 import (
 	context "context"
@@ -19,161 +19,171 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GrantClient_PackagesChanged_FullMethodName = "/w17.GrantClient/PackagesChanged"
-	GrantClient_EnvelopeDecided_FullMethodName = "/w17.GrantClient/EnvelopeDecided"
+	GrantHooks_PackagesChanged_FullMethodName = "/w17.grant.GrantHooks/PackagesChanged"
+	GrantHooks_EnvelopeDecided_FullMethodName = "/w17.grant.GrantHooks/EnvelopeDecided"
 )
 
-// GrantClientClient is the client API for GrantClient service.
+// GrantHooksClient is the client API for GrantHooks service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// GrantClient — the CONTRACT a product may implement for the grant side to
+// GrantHooks — the CONTRACT a product may implement for the grant side to
 // call: told when what an organization can hold or show changes, so the
 // product can react (provision an engine, refresh a cache, notify its
 // people). Nothing calls it yet; the auth plugin's org_packages and the grant
 // plugin hold the state and enforce it themselves. Declared, with its gRPC
 // server and client generated, so a product's handler and a future caller
-// agree on one shape.
-type GrantClientClient interface {
+// agree on one shape. Its own package, so w17pb (the vocabulary) does not
+// link gRPC.
+//
+// Deliveries may repeat and arrive out of order: a product applies one only
+// when its revision is above the last it applied for the organization, and
+// otherwise answers OK without applying it.
+type GrantHooksClient interface {
 	// PackagesChanged — an organization was given or lost packages.
 	PackagesChanged(ctx context.Context, in *PackagesChangedReq, opts ...grpc.CallOption) (*PackagesChangedResp, error)
 	// EnvelopeDecided — an organization's envelope was approved or rejected.
 	EnvelopeDecided(ctx context.Context, in *EnvelopeDecidedReq, opts ...grpc.CallOption) (*EnvelopeDecidedResp, error)
 }
 
-type grantClientClient struct {
+type grantHooksClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewGrantClientClient(cc grpc.ClientConnInterface) GrantClientClient {
-	return &grantClientClient{cc}
+func NewGrantHooksClient(cc grpc.ClientConnInterface) GrantHooksClient {
+	return &grantHooksClient{cc}
 }
 
-func (c *grantClientClient) PackagesChanged(ctx context.Context, in *PackagesChangedReq, opts ...grpc.CallOption) (*PackagesChangedResp, error) {
+func (c *grantHooksClient) PackagesChanged(ctx context.Context, in *PackagesChangedReq, opts ...grpc.CallOption) (*PackagesChangedResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PackagesChangedResp)
-	err := c.cc.Invoke(ctx, GrantClient_PackagesChanged_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GrantHooks_PackagesChanged_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *grantClientClient) EnvelopeDecided(ctx context.Context, in *EnvelopeDecidedReq, opts ...grpc.CallOption) (*EnvelopeDecidedResp, error) {
+func (c *grantHooksClient) EnvelopeDecided(ctx context.Context, in *EnvelopeDecidedReq, opts ...grpc.CallOption) (*EnvelopeDecidedResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnvelopeDecidedResp)
-	err := c.cc.Invoke(ctx, GrantClient_EnvelopeDecided_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, GrantHooks_EnvelopeDecided_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// GrantClientServer is the server API for GrantClient service.
-// All implementations must embed UnimplementedGrantClientServer
+// GrantHooksServer is the server API for GrantHooks service.
+// All implementations must embed UnimplementedGrantHooksServer
 // for forward compatibility.
 //
-// GrantClient — the CONTRACT a product may implement for the grant side to
+// GrantHooks — the CONTRACT a product may implement for the grant side to
 // call: told when what an organization can hold or show changes, so the
 // product can react (provision an engine, refresh a cache, notify its
 // people). Nothing calls it yet; the auth plugin's org_packages and the grant
 // plugin hold the state and enforce it themselves. Declared, with its gRPC
 // server and client generated, so a product's handler and a future caller
-// agree on one shape.
-type GrantClientServer interface {
+// agree on one shape. Its own package, so w17pb (the vocabulary) does not
+// link gRPC.
+//
+// Deliveries may repeat and arrive out of order: a product applies one only
+// when its revision is above the last it applied for the organization, and
+// otherwise answers OK without applying it.
+type GrantHooksServer interface {
 	// PackagesChanged — an organization was given or lost packages.
 	PackagesChanged(context.Context, *PackagesChangedReq) (*PackagesChangedResp, error)
 	// EnvelopeDecided — an organization's envelope was approved or rejected.
 	EnvelopeDecided(context.Context, *EnvelopeDecidedReq) (*EnvelopeDecidedResp, error)
-	mustEmbedUnimplementedGrantClientServer()
+	mustEmbedUnimplementedGrantHooksServer()
 }
 
-// UnimplementedGrantClientServer must be embedded to have
+// UnimplementedGrantHooksServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedGrantClientServer struct{}
+type UnimplementedGrantHooksServer struct{}
 
-func (UnimplementedGrantClientServer) PackagesChanged(context.Context, *PackagesChangedReq) (*PackagesChangedResp, error) {
+func (UnimplementedGrantHooksServer) PackagesChanged(context.Context, *PackagesChangedReq) (*PackagesChangedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method PackagesChanged not implemented")
 }
-func (UnimplementedGrantClientServer) EnvelopeDecided(context.Context, *EnvelopeDecidedReq) (*EnvelopeDecidedResp, error) {
+func (UnimplementedGrantHooksServer) EnvelopeDecided(context.Context, *EnvelopeDecidedReq) (*EnvelopeDecidedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnvelopeDecided not implemented")
 }
-func (UnimplementedGrantClientServer) mustEmbedUnimplementedGrantClientServer() {}
-func (UnimplementedGrantClientServer) testEmbeddedByValue()                     {}
+func (UnimplementedGrantHooksServer) mustEmbedUnimplementedGrantHooksServer() {}
+func (UnimplementedGrantHooksServer) testEmbeddedByValue()                    {}
 
-// UnsafeGrantClientServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to GrantClientServer will
+// UnsafeGrantHooksServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to GrantHooksServer will
 // result in compilation errors.
-type UnsafeGrantClientServer interface {
-	mustEmbedUnimplementedGrantClientServer()
+type UnsafeGrantHooksServer interface {
+	mustEmbedUnimplementedGrantHooksServer()
 }
 
-func RegisterGrantClientServer(s grpc.ServiceRegistrar, srv GrantClientServer) {
-	// If the following call panics, it indicates UnimplementedGrantClientServer was
+func RegisterGrantHooksServer(s grpc.ServiceRegistrar, srv GrantHooksServer) {
+	// If the following call panics, it indicates UnimplementedGrantHooksServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&GrantClient_ServiceDesc, srv)
+	s.RegisterService(&GrantHooks_ServiceDesc, srv)
 }
 
-func _GrantClient_PackagesChanged_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GrantHooks_PackagesChanged_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PackagesChangedReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GrantClientServer).PackagesChanged(ctx, in)
+		return srv.(GrantHooksServer).PackagesChanged(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GrantClient_PackagesChanged_FullMethodName,
+		FullMethod: GrantHooks_PackagesChanged_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GrantClientServer).PackagesChanged(ctx, req.(*PackagesChangedReq))
+		return srv.(GrantHooksServer).PackagesChanged(ctx, req.(*PackagesChangedReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GrantClient_EnvelopeDecided_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _GrantHooks_EnvelopeDecided_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EnvelopeDecidedReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GrantClientServer).EnvelopeDecided(ctx, in)
+		return srv.(GrantHooksServer).EnvelopeDecided(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GrantClient_EnvelopeDecided_FullMethodName,
+		FullMethod: GrantHooks_EnvelopeDecided_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GrantClientServer).EnvelopeDecided(ctx, req.(*EnvelopeDecidedReq))
+		return srv.(GrantHooksServer).EnvelopeDecided(ctx, req.(*EnvelopeDecidedReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// GrantClient_ServiceDesc is the grpc.ServiceDesc for GrantClient service.
+// GrantHooks_ServiceDesc is the grpc.ServiceDesc for GrantHooks service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var GrantClient_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "w17.GrantClient",
-	HandlerType: (*GrantClientServer)(nil),
+var GrantHooks_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "w17.grant.GrantHooks",
+	HandlerType: (*GrantHooksServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "PackagesChanged",
-			Handler:    _GrantClient_PackagesChanged_Handler,
+			Handler:    _GrantHooks_PackagesChanged_Handler,
 		},
 		{
 			MethodName: "EnvelopeDecided",
-			Handler:    _GrantClient_EnvelopeDecided_Handler,
+			Handler:    _GrantHooks_EnvelopeDecided_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "w17/grant_client.proto",
+	Metadata: "w17/grant/hooks.proto",
 }

@@ -30,14 +30,16 @@ outside the compiler can resolve them** — which is what a plugin author needs.
 | `acl.proto` | permissions, roles, scope |
 | `audience.proto` | audience surfaces: who a surface serves, its default data range, the memberships it admits |
 | `packages.proto` | what a tenant can be given: a domain's packages of methods and audiences |
-| `grant_client.proto` | the `GrantClient` contract a product may implement (nothing calls it yet) |
+| `grant/hooks.proto` | the `GrantHooks` contract a product may implement (nothing calls it yet), in its own Go package |
 | `contrib.proto` | **plugin features** — the one a plugin author reaches for first |
 | `paging.proto`, `rpc.proto`, `mcp.proto`, `cli.proto`, `client.proto`, `error.proto`, `lock.proto` | the remaining surfaces |
 | `pg/`, `mysql/`, `sqlite/` | the per-dialect escape hatches — a native column type, a dialect-only module or project setting |
 
 **27 files.** The five under `pg/`, `mysql/` and `sqlite/` are easy to miss and
 are part of the contract: `(w17.pg.column)` and its siblings are what a project
-writes when it needs a type the portable vocabulary does not name.
+writes when it needs a type the portable vocabulary does not name. `grant/`
+holds a service contract, not vocabulary: its own Go package, so the
+vocabulary's does not link gRPC.
 
 They import nothing but each other and
 `google/protobuf/{descriptor,timestamp}.proto`, which every `protoc` and `buf`

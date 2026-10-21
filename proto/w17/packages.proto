@@ -16,11 +16,16 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 //     permission only when one of the organization's packages lists the
 //     method — whatever their roles say, the owner included. A method no
 //     package lists is held by nobody in any organization (default deny);
-//   - an audience a package names is opened only to the organizations one
-//     of whose packages names it; an audience no package names stays open;
+//   - an audience a package names is opened, to a caller acting in an
+//     organization, only when one of the organization's packages names it.
+//     An audience no package names stays open, so gating an audience means
+//     naming it in a package — and dropping the last package that names it
+//     opens it again;
 //   - a `default` package is every organization's without being given — the
 //     floor a domain adopting packages starts its existing organizations on,
-//     and every new organization's first package;
+//     and where every new one starts. No row is stored for it: it is the
+//     protos' to give, and turning `default` off takes it from every
+//     organization not given it on its own (give those rows first);
 //   - roles are handed out under the same ceiling: nobody grants what they
 //     do not hold, and nobody in an organization holds more than its
 //     packages.
@@ -28,13 +33,17 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // Plugin methods (sign-in, the account's own settings, …) are outside the
 // ceiling unless a package lists them — and a plugin method one package lists
 // is then bounded for every organization, like a project method. Realm-wide
-// grants (the backoffice's own) are never narrowed.
+// grants and requests acting in no organization (the backoffice's own) are
+// never narrowed.
 //
 // At most one `(w17.packages)` per domain, in any of its files; codegen
 // refuses a second, a name that is not snake_case or is declared twice, an
 // include that names no package of the domain or closes a cycle, a method
-// that is not `<module>.<Service>.<Method>` of the domain, and an audience the
-// domain does not publish.
+// that is not `<module>.<Service>.<Method>` of the domain or that the endpoint
+// ACL does not gate (it has no permission to bound), an audience the domain
+// does not publish, and packages no activation of the domain enforces (the
+// auth plugin's `org_packages`). A project method outside the endpoint ACL is
+// not bounded.
 //
 //   option (w17.packages) = {
 //     packages: [
@@ -66,9 +75,11 @@ message Package {
   // members (w17/audience.proto). An audience no package of the domain names
   // is open to every organization.
   repeated string audiences = 6;
-  // default — every organization holds this package without being given it
-  // (and cannot lose it). The floor: what a domain adopting packages leaves
-  // its existing organizations, and what a new one starts with.
+  // default — every organization holds this package without being given it;
+  // the backoffice neither gives nor takes it. The floor: what a domain
+  // adopting packages leaves its existing organizations, and where a new one
+  // starts. Held by the protos, not by rows: set it false and organizations
+  // keep it only where the backoffice gave it.
   bool default = 7;
 }
 
