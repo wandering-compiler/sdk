@@ -42,10 +42,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // trackerPrefix is the well-known object-key prefix used for

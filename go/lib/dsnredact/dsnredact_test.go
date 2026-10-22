@@ -16,6 +16,11 @@ func TestString_MasksCredentials(t *testing.T) {
 		"pg://db/x?sslmode=require&password=s3cret&a": "pg://db/x?sslmode=require&password=xxxxx&a",
 		"postgres://db:5432/main?sslmode=disable":     "postgres://db:5432/main?sslmode=disable",
 		"sqlite://./data/app.db":                      "sqlite://./data/app.db",
+		"nats://716668ed4248c9@console-nats:4222":     "nats://xxxxx@console-nats:4222",
+		"tls://s3cret@broker:4222":                    "tls://xxxxx@broker:4222",
+		"nats://app:s3cret@broker:4222":               "nats://app:xxxxx@broker:4222",
+		"nats://broker:4222":                          "nats://broker:4222",
+		"postgres://app@db:5432/main":                 "postgres://app@db:5432/main",
 	}
 	for in, want := range cases {
 		if got := String(in); got != want {

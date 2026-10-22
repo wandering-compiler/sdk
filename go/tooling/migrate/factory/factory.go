@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/mysql"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/nats"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"

@@ -50,6 +50,7 @@ import (
 	natsgo "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
@@ -109,7 +110,7 @@ func (a *Applier) connect() (jetstream.JetStream, error) {
 	}
 	nc, err := natsgo.Connect(a.dsn)
 	if err != nil {
-		return nil, fmt.Errorf("nats connect %s: %w", a.dsn, err)
+		return nil, fmt.Errorf("nats connect %s: %w", dsnredact.String(a.dsn), err)
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {

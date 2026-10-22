@@ -11,9 +11,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"github.com/wandering-compiler/sdk/go/lib/sqlitecollate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Snapshotter is the SQLite dump/restore driver for the dev DB

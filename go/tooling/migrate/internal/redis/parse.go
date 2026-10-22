@@ -5,7 +5,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 )
 
 // Config is the parsed + validated redis DSN, expressed as the
