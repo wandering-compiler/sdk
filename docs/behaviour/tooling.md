@@ -50,7 +50,7 @@ generated e2e test → runner.RunScenario(steps, callers, opts)
 | T12 | Fake apply | `go/tooling/migrate/orchestrator.go` — `applyFake`; `go/tooling/migrate/content_hash.go` — `preflightBound` |
 | T13 | Drift gate | `go/tooling/migrate/pre_fingerprint.go` — `checkPreFingerprint` |
 | T14 | Rollback planning and execution | `go/tooling/migrate/orchestrator.go` — `PlanRollback`, `RunRollback` |
-| T15 | Dialect appliers and run locks | `go/tooling/migrate/internal/{postgres,mysql,sqlite,redis,nats,s3}/`; `go/tooling/migrate/factory/factory.go` — `FromTargets`, `SeedCandidate`; `go/tooling/migrate/internal/dsnredact` |
+| T15 | Dialect appliers and run locks | `go/tooling/migrate/internal/{postgres,mysql,sqlite,redis,nats,s3}/`; `go/tooling/migrate/factory/factory.go` — `FromTargets`, `SeedCandidate`; `go/lib/dsnredact` |
 | T16 | Data migrations | `go/tooling/datamigrate/`; `go/tooling/migrate/internal/redis/datamigrate.go`; `go/tooling/migrate/internal/s3/datamigrate.go` |
 | T17 | Dev apply, store state, snapshots, render provenance | `go/tooling/migrate/dev_apply.go` — `DevApply`; `store_state.go` — `StoreSchemaStateOf`; `snapshot.go`; `renderprov.go` — `StaleRenders` |
 | T18 | Fingerprint and observation | `go/tooling/fingerprint/` — `Format`, `FingerprintHex`, `Observe` |
