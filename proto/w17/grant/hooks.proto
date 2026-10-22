@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package w17.grant;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17/grant;grantpb";
+
+// GrantHooks — the CONTRACT a product may implement for the grant side to
+// call: told when what an organization can hold or show changes, so the
+// product can react (provision an engine, refresh a cache, notify its
+// people). Nothing calls it yet; the auth plugin's org_packages and the grant
+// plugin hold the state and enforce it themselves. Declared, with its gRPC
+// server and client generated, so a product's handler and a future caller
+// agree on one shape. Its own package, so w17pb (the vocabulary) does not
+// link gRPC.
+//
+// Deliveries may repeat and arrive out of order: a product applies one only
+// when its revision is above the last it applied for the organization, and
+// otherwise answers OK without applying it.
+service GrantHooks {
+  // PackagesChanged — an organization was given or lost packages.
+  rpc PackagesChanged(PackagesChangedReq) returns (PackagesChangedResp);
+  // EnvelopeDecided — an organization's envelope was approved or rejected.
+  rpc EnvelopeDecided(EnvelopeDecidedReq) returns (EnvelopeDecidedResp);
+}
+
+message PackagesChangedReq {
+  string org_id = 1;
+  // packages are every package the organization holds after the change —
+  // the domain's default packages included — by name, includes not expanded
+  // (the domain's protos expand them). A deploy that changes which packages
+  // are default changes every organization's holdings and sends no call: a
+  // product reading defaults re-reads them on deploy.
+  repeated string packages = 2;
+  // revision increases with every change of the organization's packages;
+  // it orders deliveries (two changes never share one).
+  int64 revision = 3;
+  google.protobuf.Timestamp changed_at = 4;
+}
+message PackagesChangedResp {}
+
+// EnvelopeDecision — what the backoffice decided. A handler refuses
+// UNSPECIFIED (InvalidArgument): it is a caller that set nothing, never a
+// decision.
+enum EnvelopeDecision {
+  ENVELOPE_DECISION_UNSPECIFIED = 0;
+  ENVELOPE_DECISION_APPROVED    = 1;
+  ENVELOPE_DECISION_REJECTED    = 2;
+}
+
+message EnvelopeDecidedReq {
+  string org_id      = 1;
+  string envelope_id = 2;
+  EnvelopeDecision decision = 3;
+  // revision increases with every decision on the organization's envelopes;
+  // it orders deliveries, so a late APPROVED never overwrites a later
+  // REJECTED.
+  int64 revision = 4;
+  google.protobuf.Timestamp decided_at = 5;
+}
+message EnvelopeDecidedResp {}
