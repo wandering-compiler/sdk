@@ -15,10 +15,12 @@
 // comes from the generated `w17.lock.rpc.proto` stub (M-mapped to this
 // package). This mirror only carries the message types w17ctl needs.
 //
-// Only the fields the console-app build actually compiles are mirrored: the
-// `two_factor` (mfa_required/challenge_id) + `devices` (device_trust_token)
-// SignInResp fields are gated OFF in the console build, so they are omitted
-// here — adding them later stays wire-compatible (field numbers preserved).
+// Only the fields the console-app build actually compiles are mirrored. The
+// console makes the second factor mandatory (`two_factor`), so a right
+// password answers with mfa_required + challenge_id instead of a token, and
+// VerifyMfa completes the sign-in; the `devices` SignInResp field
+// (device_trust_token) is gated off there and omitted here — adding it later
+// stays wire-compatible (field numbers preserved).
 
 package authpb
 
@@ -91,9 +93,14 @@ func (x *SignInReq) GetPassword() string {
 }
 
 type SignInResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	UserId string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Token  string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	// The second factor is due: no token yet. VerifyMfa with this challenge
+	// and the code (an authenticator's, a recovery code, or the e-mailed one)
+	// mints it, signed by the same device key as this sign-in.
+	MfaRequired   bool   `protobuf:"varint,3,opt,name=mfa_required,json=mfaRequired,proto3" json:"mfa_required,omitempty"`
+	ChallengeId   string `protobuf:"bytes,4,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -142,6 +149,126 @@ func (x *SignInResp) GetToken() string {
 	return ""
 }
 
+func (x *SignInResp) GetMfaRequired() bool {
+	if x != nil {
+		return x.MfaRequired
+	}
+	return false
+}
+
+func (x *SignInResp) GetChallengeId() string {
+	if x != nil {
+		return x.ChallengeId
+	}
+	return ""
+}
+
+// VerifyMfaReq / VerifyMfaResp — the second step of a challenged sign-in
+// (unauthenticated — the challenge stands in for the token).
+type VerifyMfaReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChallengeId   string                 `protobuf:"bytes,1,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
+	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyMfaReq) Reset() {
+	*x = VerifyMfaReq{}
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyMfaReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyMfaReq) ProtoMessage() {}
+
+func (x *VerifyMfaReq) ProtoReflect() protoreflect.Message {
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyMfaReq.ProtoReflect.Descriptor instead.
+func (*VerifyMfaReq) Descriptor() ([]byte, []int) {
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *VerifyMfaReq) GetChallengeId() string {
+	if x != nil {
+		return x.ChallengeId
+	}
+	return ""
+}
+
+func (x *VerifyMfaReq) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+type VerifyMfaResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyMfaResp) Reset() {
+	*x = VerifyMfaResp{}
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyMfaResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyMfaResp) ProtoMessage() {}
+
+func (x *VerifyMfaResp) ProtoReflect() protoreflect.Message {
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyMfaResp.ProtoReflect.Descriptor instead.
+func (*VerifyMfaResp) Descriptor() ([]byte, []int) {
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *VerifyMfaResp) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *VerifyMfaResp) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
 // CliTokenReq / CliTokenResp — PKCE authorization-code redeem (cli_login).
 // Kept for completeness (the auth rpc group exposes it as a public method);
 // the redesigned w17ctl login uses SignIn, not this.
@@ -155,7 +282,7 @@ type CliTokenReq struct {
 
 func (x *CliTokenReq) Reset() {
 	*x = CliTokenReq{}
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[2]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -167,7 +294,7 @@ func (x *CliTokenReq) String() string {
 func (*CliTokenReq) ProtoMessage() {}
 
 func (x *CliTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[2]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -180,7 +307,7 @@ func (x *CliTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CliTokenReq.ProtoReflect.Descriptor instead.
 func (*CliTokenReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{2}
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CliTokenReq) GetCode() string {
@@ -207,7 +334,7 @@ type CliTokenResp struct {
 
 func (x *CliTokenResp) Reset() {
 	*x = CliTokenResp{}
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[3]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -219,7 +346,7 @@ func (x *CliTokenResp) String() string {
 func (*CliTokenResp) ProtoMessage() {}
 
 func (x *CliTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[3]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -232,7 +359,7 @@ func (x *CliTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CliTokenResp.ProtoReflect.Descriptor instead.
 func (*CliTokenResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{3}
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CliTokenResp) GetToken() string {
@@ -259,7 +386,7 @@ type ListMyOrgsReq struct {
 
 func (x *ListMyOrgsReq) Reset() {
 	*x = ListMyOrgsReq{}
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[4]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +398,7 @@ func (x *ListMyOrgsReq) String() string {
 func (*ListMyOrgsReq) ProtoMessage() {}
 
 func (x *ListMyOrgsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[4]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +411,7 @@ func (x *ListMyOrgsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyOrgsReq.ProtoReflect.Descriptor instead.
 func (*ListMyOrgsReq) Descriptor() ([]byte, []int) {
-	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{4}
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{6}
 }
 
 type ListMyOrgsResp struct {
@@ -296,7 +423,7 @@ type ListMyOrgsResp struct {
 
 func (x *ListMyOrgsResp) Reset() {
 	*x = ListMyOrgsResp{}
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[5]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -308,7 +435,7 @@ func (x *ListMyOrgsResp) String() string {
 func (*ListMyOrgsResp) ProtoMessage() {}
 
 func (x *ListMyOrgsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[5]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -321,7 +448,7 @@ func (x *ListMyOrgsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyOrgsResp.ProtoReflect.Descriptor instead.
 func (*ListMyOrgsResp) Descriptor() ([]byte, []int) {
-	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{5}
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListMyOrgsResp) GetOrgs() []*UserOrg {
@@ -347,7 +474,7 @@ type UserOrg struct {
 
 func (x *UserOrg) Reset() {
 	*x = UserOrg{}
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[6]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -359,7 +486,7 @@ func (x *UserOrg) String() string {
 func (*UserOrg) ProtoMessage() {}
 
 func (x *UserOrg) ProtoReflect() protoreflect.Message {
-	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[6]
+	mi := &file_domains_console_auth_business_auth_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -372,7 +499,7 @@ func (x *UserOrg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserOrg.ProtoReflect.Descriptor instead.
 func (*UserOrg) Descriptor() ([]byte, []int) {
-	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{6}
+	return file_domains_console_auth_business_auth_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UserOrg) GetOrgId() string {
@@ -417,9 +544,17 @@ const file_domains_console_auth_business_auth_service_proto_rawDesc = "" +
 	"0domains/console/auth/business/auth_service.proto\x12\fconsole.auth\"=\n" +
 	"\tSignInReq\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\";\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"\x81\x01\n" +
 	"\n" +
 	"SignInResp\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12!\n" +
+	"\fmfa_required\x18\x03 \x01(\bR\vmfaRequired\x12!\n" +
+	"\fchallenge_id\x18\x04 \x01(\tR\vchallengeId\"E\n" +
+	"\fVerifyMfaReq\x12!\n" +
+	"\fchallenge_id\x18\x01 \x01(\tR\vchallengeId\x12\x12\n" +
+	"\x04code\x18\x02 \x01(\tR\x04code\">\n" +
+	"\rVerifyMfaResp\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\"F\n" +
 	"\vCliTokenReq\x12\x12\n" +
@@ -450,18 +585,20 @@ func file_domains_console_auth_business_auth_service_proto_rawDescGZIP() []byte 
 	return file_domains_console_auth_business_auth_service_proto_rawDescData
 }
 
-var file_domains_console_auth_business_auth_service_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_domains_console_auth_business_auth_service_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_domains_console_auth_business_auth_service_proto_goTypes = []any{
 	(*SignInReq)(nil),      // 0: console.auth.SignInReq
 	(*SignInResp)(nil),     // 1: console.auth.SignInResp
-	(*CliTokenReq)(nil),    // 2: console.auth.CliTokenReq
-	(*CliTokenResp)(nil),   // 3: console.auth.CliTokenResp
-	(*ListMyOrgsReq)(nil),  // 4: console.auth.ListMyOrgsReq
-	(*ListMyOrgsResp)(nil), // 5: console.auth.ListMyOrgsResp
-	(*UserOrg)(nil),        // 6: console.auth.UserOrg
+	(*VerifyMfaReq)(nil),   // 2: console.auth.VerifyMfaReq
+	(*VerifyMfaResp)(nil),  // 3: console.auth.VerifyMfaResp
+	(*CliTokenReq)(nil),    // 4: console.auth.CliTokenReq
+	(*CliTokenResp)(nil),   // 5: console.auth.CliTokenResp
+	(*ListMyOrgsReq)(nil),  // 6: console.auth.ListMyOrgsReq
+	(*ListMyOrgsResp)(nil), // 7: console.auth.ListMyOrgsResp
+	(*UserOrg)(nil),        // 8: console.auth.UserOrg
 }
 var file_domains_console_auth_business_auth_service_proto_depIdxs = []int32{
-	6, // 0: console.auth.ListMyOrgsResp.orgs:type_name -> console.auth.UserOrg
+	8, // 0: console.auth.ListMyOrgsResp.orgs:type_name -> console.auth.UserOrg
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -480,7 +617,7 @@ func file_domains_console_auth_business_auth_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_domains_console_auth_business_auth_service_proto_rawDesc), len(file_domains_console_auth_business_auth_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
