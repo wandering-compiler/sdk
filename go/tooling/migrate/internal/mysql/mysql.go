@@ -26,10 +26,10 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/fingerprint"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Applier is the per-connection MySQL apply driver.

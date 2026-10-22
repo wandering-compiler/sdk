@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -210,21 +210,9 @@ func NewRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	defer cancel()
 	if err := b.client.Ping(ctx).Err(); err != nil {
 		_ = b.client.Close()
-		return nil, fmt.Errorf("redis connect %s: %w", redactDSN(opts.DSN), err)
+		return nil, fmt.Errorf("redis connect %s: %w", dsnredact.String(opts.DSN), err)
 	}
 	return b, nil
-}
-
-// redactDSN removes the password from a DSN quoted in an error.
-func redactDSN(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil || u.User == nil {
-		return dsn
-	}
-	if _, has := u.User.Password(); has {
-		u.User = url.UserPassword(u.User.Username(), "xxxxx")
-	}
-	return u.String()
 }
 
 // newRedisBus validates options and builds the bus without contacting
@@ -238,7 +226,7 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	}
 	parsed, err := goredis.ParseURL(opts.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("RedisBusOptions: DSN %q: %w", opts.DSN, err)
+		return nil, fmt.Errorf("RedisBusOptions: DSN %q: %w", dsnredact.String(opts.DSN), dsnredact.Err(err))
 	}
 	// go-redis ignores a context deadline unless told otherwise. Without
 	// this PublishTimeout bounded nothing: a broker that stopped answering

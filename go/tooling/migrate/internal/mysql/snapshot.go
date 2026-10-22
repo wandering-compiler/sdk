@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Snapshotter is the MySQL dump/restore driver for the dev DB

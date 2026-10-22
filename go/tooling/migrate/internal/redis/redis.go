@@ -30,10 +30,10 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/datamigrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
 )
 
 // Applier wraps a single go-redis client. Lazy-connect: New

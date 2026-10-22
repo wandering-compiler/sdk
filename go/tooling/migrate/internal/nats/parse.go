@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/dsnredact"
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 )
 
 // Config is the parsed + validated nats DSN. Today this is the

@@ -48,6 +48,7 @@ func TestNewNatsBus_AcceptsTLSScheme(t *testing.T) {
 	_, err := NewNatsBus(NatsBusOptions{
 		DSN:           "tls://no-such-host.invalid:4222",
 		DurablePrefix: "users",
+		ConnectWait:   -1, // one attempt: the scheme is what is under test
 	})
 	if err == nil {
 		t.Fatal("expected connect failure (no broker), got nil")

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,7 +93,22 @@ type NatsBusOptions struct {
 	// is reported to the Observer) instead of holding its caller for the
 	// client's full request timeout during a broker outage.
 	PublishTimeout time.Duration
+
+	// ConnectWait is how long NewNatsBus keeps retrying a broker it cannot
+	// REACH (name not resolvable yet, connection refused) before it gives
+	// up. Zero -> [DefaultConnectWait]; negative -> one attempt. A broker
+	// that answers and refuses (bad token) fails at once whatever this is.
+	ConnectWait time.Duration
 }
+
+// DefaultConnectWait is [NatsBusOptions.ConnectWait] when unset.
+//
+// Long enough for a broker started in the same deploy: Swarm has no
+// depends_on, and on 2026-10-22 the console's first deploy with console-nats
+// started console-app about a second before the new service's name resolved.
+// The process exited, Swarm read that as a failed update and rolled the whole
+// console back.
+const DefaultConnectWait = 30 * time.Second
 
 // NatsBus implements Dispatcher + SubscriberFactory against a
 // NATS JetStream cluster.
@@ -173,7 +190,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		return nil, errors.New("NatsBusOptions: DurablePrefix is empty")
 	}
 	if !strings.HasPrefix(opts.DSN, "nats://") && !strings.HasPrefix(opts.DSN, "tls://") {
-		return nil, fmt.Errorf("NatsBusOptions: DSN %q must use nats:// or tls:// scheme", opts.DSN)
+		return nil, fmt.Errorf("NatsBusOptions: DSN %q must use nats:// or tls:// scheme", dsnredact.String(opts.DSN))
 	}
 	// The prefix starts every JetStream consumer name, which forbids `.`,
 	// `*`, `>` and whitespace: refuse it here rather than at the first
@@ -195,6 +212,9 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	if opts.DefaultAckWait == 0 {
 		opts.DefaultAckWait = 30 * time.Second
 	}
+	if opts.ConnectWait == 0 {
+		opts.ConnectWait = DefaultConnectWait
+	}
 	// Nil -> DefaultObserver; every callback made panic-safe.
 	opts.Observer = guardObserver(opts.Observer)
 	if opts.InstanceID == "" {
@@ -215,7 +235,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	// between "the bus is quiet because nothing was emitted" and "the bus is
 	// quiet because it is not connected" visible from a log, which is the only
 	// place an operator can look.
-	nc, err := natsgo.Connect(opts.DSN,
+	natsOpts := []natsgo.Option{
 		// A close THIS process asks for (NatsBus.Close at shutdown) fires no
 		// handler at all; one with any other cause still fires them all.
 		//
@@ -254,9 +274,12 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 			}
 			log.Printf("eventbus nats: async error on %q: %v", subject, aerr)
 		}),
-	)
+	}
+	nc, err := connectNats(opts.DSN, opts.ConnectWait, natsOpts)
 	if err != nil {
-		return nil, fmt.Errorf("nats connect %s: %w", opts.DSN, err)
+		// The DSN carries the broker's credential (a bare userinfo is the
+		// whole token), and this error goes to the log.
+		return nil, fmt.Errorf("nats connect %s: %w", dsnredact.String(opts.DSN), err)
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {
@@ -269,6 +292,35 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		js:      js,
 		streams: map[string]bool{},
 	}, nil
+}
+
+// connectNats dials the broker, retrying for up to wait while it cannot be
+// reached at all. Only a network error is retried: a broker that answered and
+// refused (authorization, a bad DSN) gives the same answer a second later.
+func connectNats(dsn string, wait time.Duration, natsOpts []natsgo.Option) (*natsgo.Conn, error) {
+	deadline := time.Now().Add(wait)
+	logged := false
+	for {
+		nc, err := natsgo.Connect(dsn, natsOpts...)
+		if err == nil || !brokerUnreachable(err) || !time.Now().Before(deadline) {
+			return nc, err
+		}
+		if !logged {
+			log.Printf("eventbus nats: broker %s not reachable yet (%v) — retrying for up to %s",
+				dsnredact.String(dsn), err, wait)
+			logged = true
+		}
+		time.Sleep(connectRetryInterval)
+	}
+}
+
+// connectRetryInterval spaces the attempts of [connectNats].
+const connectRetryInterval = 500 * time.Millisecond
+
+// brokerUnreachable reports whether a connect error means no broker answered.
+func brokerUnreachable(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, natsgo.ErrNoServers)
 }
 
 // Close drains every subscriber + closes the underlying NATS
