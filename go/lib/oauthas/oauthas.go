@@ -208,6 +208,7 @@ func Mount(r Router, cfg Config, b Backend) error {
 	r.Handle(TokenPath, http.HandlerFunc(s.token))
 	r.Handle(RegisterPath, http.HandlerFunc(s.register))
 	r.Handle(RevokePath, http.HandlerFunc(s.revoke))
+	r.Handle(CodePath, http.HandlerFunc(s.codePage))
 	return nil
 }
 
