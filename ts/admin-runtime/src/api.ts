@@ -101,7 +101,13 @@ async function decodeBody(res: Response, codec: WireCodec | undefined): Promise<
   const contentType = res.headers.get("Content-Type") ?? "";
   if (codec && contentType.includes(MIME_PROTOBUF)) {
     const buf = await res.arrayBuffer();
-    if (buf.byteLength === 0) return null;
+    // Zero bytes is a message too: the encoding of one whose every field is
+    // at its default — a list that matched no row (an empty `repeated` is not
+    // written at all). Read on success as that message, `{}`-shaped like the
+    // JSON answer would be; it was null, and a list page that found nothing
+    // failed with "Cannot convert undefined or null to object" where its
+    // JSON twin rendered an empty table.
+    if (buf.byteLength === 0 && !res.ok) return null;
     try {
       return codec.decode(new Uint8Array(buf));
     } catch {

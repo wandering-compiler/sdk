@@ -14,6 +14,7 @@
 //     shape as ActionModal; typed inputs are not wired yet.
 
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Anchor,
   Button,
@@ -32,7 +33,9 @@ import {
 import { apiDelete, apiGet, apiPatch, apiPost, displayString } from "./api";
 import { useT } from "./i18n";
 import { columnHeader, humanizeLabel } from "./format";
-import type { AdminInlineSpec, AdminPageSpec, AdminSpec } from "./types";
+import { formatContextFor } from "./cellFormat";
+import { RefCell, columnText } from "./listCell";
+import type { AdminColumnSpec, AdminInlineSpec, AdminPageSpec, AdminSpec } from "./types";
 
 export interface InlineSectionProps {
   spec: AdminSpec;
@@ -121,6 +124,27 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
     ? targetPage.list?.detail_link_column || columnNames[0]
     : undefined;
 
+  // A cell reads as it does on the target page's own list (listCell): a ref
+  // column its referenced title with a link to that row, an enum its choice
+  // label, a formatted column its format. A ref column is its own link, so it
+  // takes precedence over the detail link, as on the list page.
+  const formatCtx = formatContextFor(spec);
+  const cellOf = (col: AdminColumnSpec, row: Row): { display: ReactNode; isRef: boolean } =>
+    col.ref
+      ? {
+          display: (
+            <RefCell
+              refSpec={col.ref}
+              record={row}
+              field={col.name}
+              header={columnHeader(col, t)}
+              onOpen={onSelectChild}
+            />
+          ),
+          isRef: true,
+        }
+      : { display: columnText(targetPage, col.name, row[col.name], formatCtx, t), isRef: false };
+
   // Editable field list for the create/update form. Prefer the
   // child page's `detail.fields` (those are the consumer's
   // authored editable set); fall back to list.columns minus
@@ -202,12 +226,12 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
                 <Stack gap={4}>
                   {columns.map((col) => {
                     const c = col.name;
-                    const display = renderCell(row[c]);
-                    if (c === linkCol) {
+                    const { display, isRef } = cellOf(col, row);
+                    if (c === linkCol && !isRef) {
                       return (
                         <Group key={c} gap={4}>
                           <Text size="xs" c="dimmed" tt="uppercase">
-                            {columnHeader(col)}
+                            {columnHeader(col, t)}
                           </Text>
                           <Anchor
                             component="button"
@@ -222,7 +246,7 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
                     return (
                       <Group key={c} gap={4}>
                         <Text size="xs" c="dimmed" tt="uppercase">
-                          {columnHeader(col)}
+                          {columnHeader(col, t)}
                         </Text>
                         <Text size="sm">{display}</Text>
                       </Group>
@@ -257,7 +281,7 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
           <Table.Thead>
             <Table.Tr>
               {columns.map((col) => (
-                <Table.Th key={col.name}>{columnHeader(col)}</Table.Th>
+                <Table.Th key={col.name}>{columnHeader(col, t)}</Table.Th>
               ))}
               {(canUpdate || canDelete) && (
                 <Table.Th style={{ textAlign: "right" }}>{/* actions */}</Table.Th>
@@ -271,8 +295,8 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
                 <Table.Tr key={id}>
                   {columns.map((col) => {
                     const c = col.name;
-                    const display = renderCell(row[c]);
-                    if (c === linkCol) {
+                    const { display, isRef } = cellOf(col, row);
+                    if (c === linkCol && !isRef) {
                       return (
                         <Table.Td key={c}>
                           <Anchor component="button" onClick={() => onSelectChild(inline.page, id)}>
@@ -466,7 +490,8 @@ function InlineFormModal({
   );
 }
 
-function extractRows(resp: ListResp): Row[] {
+function extractRows(resp: ListResp | null | undefined): Row[] {
+  if (!resp || typeof resp !== "object") return [];
   for (const k of Object.keys(resp)) {
     const v = resp[k];
     if (Array.isArray(v)) return v as Row[];
@@ -477,8 +502,4 @@ function extractRows(resp: ListResp): Row[] {
 function getRowId(row: Row, fallback: number): string | number {
   if (row.id != null) return displayString(row.id);
   return fallback;
-}
-
-function renderCell(v: unknown): string {
-  return displayString(v);
 }

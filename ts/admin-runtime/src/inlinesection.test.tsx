@@ -290,3 +290,95 @@ describe("the inline form and a secret column", () => {
     expect(vi.mocked(apiPatch).mock.calls[0][1]).toEqual({ secret: "" });
   });
 });
+
+// An inline table borrows the target page's list columns, and must read them as
+// that page's own list does: a ref column shows the referenced title (linking to
+// it), an enum its value's label. It rendered every cell raw — the client's
+// uuid, the goal's state as a number — while the list page beside it was right.
+describe("an inline cell reads as the target page's list cell", () => {
+  const goals: AdminInlineSpec = {
+    page: "Goals",
+    endpoint: "/admin/api/inline/client/{id}/goals",
+    layout: "TABULAR",
+  };
+  const goalsSpec = (): AdminSpec =>
+    ({
+      name: "Admin",
+      schema_version: "3",
+      auth: { login_endpoint: "/login", whoami_endpoint: "/whoami" },
+      pages: {
+        Goals: {
+          name: "Goals",
+          list: {
+            columns: [
+              { name: "name" },
+              {
+                name: "subject_id",
+                label: "Client",
+                ref: { title: "client_name", page: "Clients" },
+              },
+              { name: "state" },
+            ],
+            column_choices: {
+              state: {
+                enum_fqn: "app.GoalState",
+                carrier: "scalar_int32",
+                values: [
+                  { value: 1, label: "Open" },
+                  { value: 2, label: "Reached" },
+                ],
+              },
+            },
+          },
+        },
+      },
+      overview: { widgets: [] },
+    }) as unknown as AdminSpec;
+
+  it("shows the ref's title with its link, and the enum's label", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      items: [
+        {
+          id: "g1",
+          name: "House",
+          subject_id: "0190aaaa-uuid",
+          client_name: "Ada Lovelace",
+          state: 2,
+        },
+      ],
+    });
+    render(
+      <MantineProvider>
+        <InlineSection
+          spec={goalsSpec()}
+          inline={goals}
+          parentId="c1"
+          onSelectChild={onSelectChild}
+        />
+      </MantineProvider>,
+    );
+    const title = await screen.findByText("Ada Lovelace");
+    expect(screen.getByText("Reached")).toBeTruthy();
+    expect(screen.queryByText("0190aaaa-uuid")).toBeNull();
+    expect(screen.queryByText("2")).toBeNull();
+    await userEvent.click(title);
+    expect(onSelectChild).toHaveBeenCalledWith("Clients", "0190aaaa-uuid");
+  });
+
+  // A list that matched nothing may come back with no body at all (zero bytes
+  // on the protobuf wire): no rows, not a failure.
+  it("says there is nothing when the answer carries no body", async () => {
+    vi.mocked(apiGet).mockResolvedValue(null);
+    render(
+      <MantineProvider>
+        <InlineSection
+          spec={goalsSpec()}
+          inline={goals}
+          parentId="c1"
+          onSelectChild={onSelectChild}
+        />
+      </MantineProvider>,
+    );
+    expect(await screen.findByText(/No related/)).toBeTruthy();
+  });
+});
