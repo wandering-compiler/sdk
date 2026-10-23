@@ -19,7 +19,6 @@ import {
   Stack,
   Text,
   TextInput,
-  Tooltip,
 } from "@mantine/core";
 import { DataTable } from "mantine-datatable";
 import type { DataTableColumn, DataTableSortStatus } from "mantine-datatable";
@@ -28,19 +27,17 @@ import { ActionModal } from "./ActionModal";
 import { PageHeader, StateView } from "./components";
 import { IconSearch } from "./icons";
 import { columnHeader, humanizeLabel, pageLabel } from "./format";
-import { resolveChoiceLabel, translateChoiceLabel } from "./choiceLabel";
 import { AdminApiError, apiGet, displayString, formatTitle, readErrorEnvelope } from "./api";
-import { formatCellValue, formatContextFor } from "./cellFormat";
+import { formatContextFor } from "./cellFormat";
+import { RefCell, columnText } from "./listCell";
 import { useT } from "./i18n";
 import { wireNumberText } from "./wireNumber";
-import type { Translate } from "./i18n";
-import type { FormatContext, FormatTemplate } from "./cellFormat";
+import type { FormatContext } from "./cellFormat";
 import { hasAllPermissions } from "./auth";
 import { listColumnSlotKey, listRowActionSlotKey } from "./types";
 import type {
   AdminActionSpec,
   AdminChoicesSpec,
-  AdminColumnRefSpec,
   AdminListPagingSpec,
   AdminPageSpec,
   AdminSpec,
@@ -310,7 +307,6 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
   // setting (the browser's own language), falling back to the surface's
   // default_language — a Czech user running an English admin still wants
   // 26.07.2026, which is the whole point of §3 of the formatting spec.
-  const columnFormats = page.list?.column_formats || {};
   const formatCtx: FormatContext = formatContextFor(spec);
   // The link cell exists only when there is a detail to open. The SPA
   // defaults it to the first column ON ITS OWN, so suppressing the
@@ -332,7 +328,6 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
     const SlotComp = slots?.[listColumnSlotKey(page.name, c)];
     const ref = col.ref;
     const header = columnHeader(col, t);
-    const choices = page.list?.column_choices?.[c];
     columns.push({
       accessor: c,
       title: header,
@@ -343,40 +338,14 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
         // an identifying tooltip, plus an optional cross-page link. An
         // explicit custom-JS slot overrides.
         if (ref && !SlotComp) {
-          const { label, tooltip, link } = resolveRefCell(ref, record, c, header);
-          const body = link ? (
-            <Anchor
-              component="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectRow(link.page, link.id);
-              }}
-            >
-              {label}
-            </Anchor>
-          ) : (
-            label
-          );
-          // Tooltip only when it says something the cell doesn't. A
-          // title-less ref shows the header and the tooltip carries the
-          // id, so that case is always worth wrapping; an empty FK
-          // renders blank with nothing to hover.
-          if (!tooltip || tooltip === label) return body;
           return (
-            <Tooltip label={tooltip} withinPortal openDelay={250}>
-              <span>{body}</span>
-            </Tooltip>
+            <RefCell refSpec={ref} record={record} field={c} header={header} onOpen={onSelectRow} />
           );
         }
         const cellBody = SlotComp ? (
           <SlotComp row={record} field={c} value={val} page={page} />
         ) : (
-          renderCell(
-            choices ? translateChoiceLabel(resolveChoiceLabel(choices, val), t) : val,
-            choices ? undefined : columnFormats[c],
-            formatCtx,
-            t,
-          )
+          columnText(page, c, val, formatCtx, t)
         );
         if (c === linkCol) {
           const id = String(idAccessor(record));
@@ -709,8 +678,8 @@ function CursorPager({
 // number carve-out; that exception broke this reader on the binary wire and
 // narrowed formatCount for its other caller, so it was removed rather than
 // propagated.
-function readPageEnvelope(resp: ListResp, pagingField: string): PageEnvelope {
-  const raw = resp[pagingField];
+function readPageEnvelope(resp: ListResp | null | undefined, pagingField: string): PageEnvelope {
+  const raw = resp?.[pagingField];
   const env = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   return {
     total: wireNumberText(env.total) ?? "0",
@@ -722,8 +691,10 @@ function readPageEnvelope(resp: ListResp, pagingField: string): PageEnvelope {
 // extractRows pulls the first array-typed property out of a
 // list response. Storage list responses follow the convention
 // `repeated <Msg> <items_field> = 1` — the items_field name
-// varies (users / tasks / orders), so the runtime accepts any.
-function extractRows(resp: ListResp): Row[] {
+// varies (users / tasks / orders), so the runtime accepts any. No body
+// at all is no rows, not a failure.
+function extractRows(resp: ListResp | null | undefined): Row[] {
+  if (!resp || typeof resp !== "object") return [];
   for (const k of Object.keys(resp)) {
     const v = resp[k];
     if (Array.isArray(v)) {
@@ -733,77 +704,13 @@ function extractRows(resp: ListResp): Row[] {
   return [];
 }
 
-// renderCell turns a JSON-decoded value into something a table cell can
-// display. A column carrying a `column_formats` entry goes through the
-// locale-aware formatter — the compiler already decided this cell is MONEY
-// or a DATETIME and lowered it to a msgid plus one slot. Everything else
-// falls through to displayString: strings / numbers / booleans pass through,
-// null / undefined render empty, objects render as JSON.
-//
-// The formatter can decline (a template with no slots), and then the raw
-// rendering stands. A cell must never come back blank because its format
-// had nothing to say.
-function renderCell(
-  v: unknown,
-  tmpl: FormatTemplate | undefined,
-  fmt: FormatContext,
-  t: Translate,
-): string {
-  const formatted = formatCellValue(v, tmpl, fmt, t);
-  return formatted !== undefined ? formatted : displayString(v);
-}
-
-// resolveRefCell computes what a foreign-key column cell shows
-// (ADMIN-FK): its visible text, its hover tooltip, and the link target
-// (page + id) when the ref declares a `page` and the id is non-empty.
-// Pure (no React) so the decision is unit-testable independent of the
-// DataTable render seam, which does not produce rows under jsdom.
-//
-// The runtime never fetches the referenced row: `title` must be a
-// field the list method already projects (e.g. a DQL JOIN that
-// returns `organization_name` next to `org_id`).
-//
-// TEXT — the ref's `title` resolved ROW-LOCALLY when the author
-// declared one ("Acme"); otherwise the COLUMN HEADER ("Organization",
-// "Wallet"). The header fallback is what makes the no-title case
-// usable: several FK columns side by side used to render an identical
-// placeholder (or a raw UUID), so thirty rows down — with the real
-// headers scrolled off — there was no telling which link went where.
-// Falling back to the header also means a technical child table that
-// has no name of its own (a user's wallet / limits / subscription)
-// simply declares no `title` and reads as its own column name, instead
-// of repeating the owner's name in four adjacent cells.
-//
-// TOOLTIP — always identifies the exact row behind that text:
-// "<title> #<id>" when a title resolved, "#<id>" when only the id is
-// known. That is the other half of the trade: the cell may now show
-// static text, so hovering has to reveal what is behind it.
-//
-// A ref with NEITHER a resolved title NOR an id is an empty FK — it
-// renders blank, never the bare header, which would read as a link to
-// something that isn't there.
-export function resolveRefCell(
-  ref: AdminColumnRefSpec,
-  row: Record<string, unknown>,
-  field: string,
-  header: string,
-): { label: string; tooltip: string; link?: { page: string; id: string } } {
-  const rawId = displayString(row[field]);
-  const resolved = ref.title ? formatTitle(`{${ref.title}}`, row) : "";
-  if (resolved === "" && rawId === "") return { label: "", tooltip: "" };
-  const label = resolved !== "" ? resolved : header;
-  const idPart = rawId !== "" ? `#${rawId}` : "";
-  const tooltip = resolved !== "" && idPart !== "" ? `${resolved} ${idPart}` : resolved || idPart;
-  if (ref.page && rawId !== "") {
-    return { label, tooltip, link: { page: ref.page, id: rawId } };
-  }
-  return { label, tooltip };
-}
-
 // formatRowTitle resolves the spec's title template against a
 // row record. Kept here for future use (FK-picker rendering,
 // detail breadcrumb) — currently unused.
 export const _formatRowTitle = formatTitle;
+
+// resolveRefCell lives with the cell rendering both tables share.
+export { resolveRefCell } from "./listCell";
 
 // FilterInput dispatches a Mantine input component based on the
 // filter field's declared type. All inputs flow strings up to

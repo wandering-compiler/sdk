@@ -11,6 +11,7 @@ import {
   serverMessage,
 } from "./api";
 import { setToken } from "./auth";
+import { MIME_PROTOBUF, configureWire } from "./wire";
 
 // The fetch wrapper threads the auth header, encodes the body, and
 // decodes JSON-or-text into a typed result / AdminApiError. These tests
@@ -85,6 +86,44 @@ describe("response decoding", () => {
   it("empty body → null", async () => {
     mockFetch(200, "");
     expect(await apiGet("/x")).toBeNull();
+  });
+
+  // A list that matched nothing answers an empty message, and an empty
+  // message is zero bytes on the protobuf wire. It must read as that message
+  // (`{}`, what JSON sends), not as null: the list page died on null with
+  // "Cannot convert undefined or null to object" while its JSON twin showed an
+  // empty table. A failure with no body stays null.
+  it("an empty protobuf body is the empty message on success, null on failure", async () => {
+    const decoded: Uint8Array[] = [];
+    configureWire(
+      { ".app.ListResp": { encode: () => new Uint8Array(), decode: (b) => (decoded.push(b), {}) } },
+      true,
+    );
+    try {
+      const pb = (status: number) =>
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(() =>
+            Promise.resolve(
+              new Response(new Uint8Array(), {
+                status,
+                headers: { "Content-Type": MIME_PROTOBUF },
+              }),
+            ),
+          ),
+        );
+      pb(200);
+      expect(await apiGet("/x", { response: ".app.ListResp" })).toEqual({});
+      expect(decoded).toHaveLength(1);
+      pb(500);
+      await expect(apiGet("/x", { response: ".app.ListResp" })).rejects.toMatchObject({
+        status: 500,
+        body: null,
+      });
+      expect(decoded).toHaveLength(1);
+    } finally {
+      configureWire({}, false);
+    }
   });
 
   it("non-JSON body falls back to the raw text", async () => {
