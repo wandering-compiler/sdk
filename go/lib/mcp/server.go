@@ -81,11 +81,10 @@ type Server struct {
 	// (SetToolMethod), told to the auth method as the call's method.
 	toolMethods map[string]string
 
-	// resource, resourceURL and checks make the HTTP transport an OAuth
-	// protected resource (SetResourceServer, resource.go); nil = not one.
+	// resource and resourceURL make the HTTP transport an OAuth protected
+	// resource (SetResourceServer, resource.go); nil = not one.
 	resource    *ResourceServer
 	resourceURL *url.URL
-	checks      *tokenChecks
 }
 
 // SetTrustedProxies names the proxies whose X-Forwarded-For is believed when
