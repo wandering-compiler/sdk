@@ -627,6 +627,8 @@ message LockEditIntent {
     SetClientStubIntent set_client_stub = 26;
     SetInfraIntent set_infra = 27;
     EditInfraIntent edit_infra = 28;
+    RemoveGrpcClientIntent remove_grpc_client = 29;
+    RemoveBusinessBundleIntent remove_business_bundle = 30;
   }
 }
 
@@ -898,6 +900,22 @@ message UnsetReplicasIntent {
 message AddGrpcClientIntent {
   string language = 1;
   string output_root = 2;
+}
+
+// RemoveGrpcClientIntent drops the generated_code.grpc_clients[] entry at
+// output_root (empty: the entry that derives its root from the stubs).
+// Refused when no entry claims it. The tree on disk is the client's to
+// delete: the lock stops generating it, it does not erase it.
+message RemoveGrpcClientIntent {
+  string output_root = 1;
+}
+
+// RemoveBusinessBundleIntent drops a domain's generated_code.business_bundles[]
+// entry. Refused when the domain has none. The generated bundle on disk and
+// the project's own RegisterBusiness package are the client's: the lock stops
+// generating the bundle, it does not erase anything.
+message RemoveBusinessBundleIntent {
+  string domain = 1;
 }
 
 // ComposeBinaryIntent sets (replace-or-append) a domain's
