@@ -51,10 +51,10 @@ const DefaultRecordCeiling = 64 << 10
 
 // AuthFields are the numbers of the project's auth response fields the
 // record reads the caller from: user_id is 2 by contract; scopes (a
-// map<string,string>) and marketing_consent (a bool) are the project's, 0
-// when it does not declare them.
+// map<string,string>), marketing_consent (a bool) and membership_kind (a
+// string) are the project's, 0 when it does not declare them.
 type AuthFields struct {
-	Scopes, MarketingConsent protowire.Number
+	Scopes, MarketingConsent, MembershipKind protowire.Number
 }
 
 // Purposes are what a surface's records serve.
@@ -276,11 +276,11 @@ type Record struct {
 	httpStatus int32
 	grpcCode   int32
 
-	userID, orgID, traceID, requestID string
-	span                              trace.SpanContext
-	otel                              bool // sampled for the telemetry sink
-	consent, consentKnown             bool
-	purposes                          uint8 // bit 0 audit, bit 1 marketing
+	userID, orgID, kind, traceID, requestID string
+	span                                    trace.SpanContext
+	otel                                    bool // sampled for the telemetry sink
+	consent, consentKnown                   bool
+	purposes                                uint8 // bit 0 audit, bit 1 marketing
 
 	ip, userAgent, referrer string
 	utm                     map[string]string
@@ -456,9 +456,10 @@ func (rec *Record) Done(ctx context.Context, resp proto.Message, httpStatus int,
 var orgScopes = [...]string{"org_id", "tenant_id"}
 
 // readCaller decodes the caller from the stamped metadata: the auth
-// response's user_id (field 2) and marketing_consent, and the organization
-// from the scopes ([orgScopes]): the stamped `x-w17-scope-*` first, the auth
-// response's scopes map when the metadata carries none.
+// response's user_id (field 2), marketing_consent and membership_kind, and
+// the organization from the scopes ([orgScopes]): the stamped
+// `x-w17-scope-*` first, the auth response's scopes map when the metadata
+// carries none.
 func (rec *Record) readCaller(md metadata.MD) {
 	org, rank := "", len(orgScopes)
 	take := func(key, val string) {
@@ -501,6 +502,14 @@ func (rec *Record) readCaller(md metadata.MD) {
 				return
 			}
 			rec.userID = string(b)
+			raw = raw[n:]
+			continue
+		case auth.MembershipKind != 0 && num == auth.MembershipKind && typ == protowire.BytesType:
+			b, n := protowire.ConsumeBytes(raw)
+			if n < 0 {
+				return
+			}
+			rec.kind = string(b)
 			raw = raw[n:]
 			continue
 		case auth.MarketingConsent != 0 && num == auth.MarketingConsent && typ == protowire.VarintType:
@@ -622,6 +631,7 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	m.DurationMicros = rec.dur.Microseconds()
 	m.UserId = rec.userID
 	m.OrgId = rec.orgID
+	m.MembershipKind = rec.kind
 	if rec.consentKnown {
 		m.MarketingConsent = proto.Bool(rec.consent)
 	}

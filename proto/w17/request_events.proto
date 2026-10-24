@@ -161,6 +161,16 @@ message RequestEventMeta {
   // without the domain's lock (the method names their types).
   int32 request_field = 19;
   int32 response_field = 20;
+
+  // The kind of the caller's membership in the organization the request
+  // acts in (`org_id`): `staff`, `client`, … — what the project calls an
+  // account type, from the principal (the auth response's
+  // `string membership_kind`). Like `org_id` it is the request's context,
+  // never a property of the person: someone may be staff of one
+  // organization and a client of another. Empty when the project's auth
+  // does not keep kinds, when the request acts in no organization, or on
+  // an anonymous request.
+  string membership_kind = 21;
 }
 
 // RequestClient is what the request says about the client. All of it is

@@ -610,3 +610,43 @@ func TestRecorder_SyncIsAuditOnly(t *testing.T) {
 	close(gate)
 	closeRecorder(t, r)
 }
+
+// The membership kind is read from the auth response's field the project
+// declares, and only from it: a project without kinds records none, even
+// when its response has a string under the same number.
+func TestRecorder_MembershipKindFromTheDeclaredField(t *testing.T) {
+	const kindField protowire.Number = 8
+	md := func(user, kind string) metadata.MD {
+		md := authMD(user, true, "org-1")
+		raw, _ := base64.StdEncoding.DecodeString(md.Get("x-w17-user")[0])
+		if kind != "" {
+			raw = protowire.AppendTag(raw, kindField, protowire.BytesType)
+			raw = protowire.AppendString(raw, kind)
+		}
+		return metadata.Pairs("x-w17-user", base64.StdEncoding.EncodeToString(raw))
+	}
+	surfaces := map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Marketing: true}}
+	kinds, ck := newTestRecorder(t, surfaces, func(cfg *RecorderConfig) {
+		cfg.Auth = AuthFields{Scopes: scopesField, MarketingConsent: consentField, MembershipKind: kindField}
+	})
+	s := kinds.Surface(w17pb.RequestApi_REQUEST_API_REST)
+	s.Start(testMethod).Done(context.Background(), nil, 200, nil, md("u-client", "client"))
+	s.Start(testMethod).Done(context.Background(), nil, 200, nil, md("u-none", ""))
+	closeRecorder(t, kinds)
+
+	none, cn := newTestRecorder(t, surfaces)
+	none.Surface(w17pb.RequestApi_REQUEST_API_REST).Start(testMethod).Done(context.Background(), nil, 200, nil, md("u-undeclared", "client"))
+	closeRecorder(t, none)
+
+	want := map[string]string{"u-client": "client", "u-none": "", "u-undeclared": ""}
+	recs := append(ck.records(w17pb.RequestApi_REQUEST_API_REST), cn.records(w17pb.RequestApi_REQUEST_API_REST)...)
+	if len(recs) != len(want) {
+		t.Fatalf("%d records, want %d", len(recs), len(want))
+	}
+	for _, raw := range recs {
+		m := decodeEnvelope(t, raw).meta
+		if w, ok := want[m.GetUserId()]; !ok || m.GetMembershipKind() != w || m.GetOrgId() != "org-1" {
+			t.Errorf("%s: kind %q org %q, want kind %q", m.GetUserId(), m.GetMembershipKind(), m.GetOrgId(), w)
+		}
+	}
+}

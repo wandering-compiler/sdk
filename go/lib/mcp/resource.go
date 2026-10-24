@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -73,16 +70,6 @@ const DefaultScope = "mcp"
 // client looks first.
 const ProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
 
-// tokenCheckTTL bounds how long one token's check is reused: a session's
-// tool calls arrive as separate HTTP requests, and each would otherwise run
-// the auth method once for the gate here and again for the call. Revocation
-// therefore takes effect within this window on this replica.
-const tokenCheckTTL = 10 * time.Second
-
-// tokenCheckMax caps the cache; past it the cache is emptied (a burst of
-// distinct tokens costs auth calls, never memory).
-const tokenCheckMax = 10000
-
 // SetResourceServer turns the HTTP transport into a protected resource. It
 // needs the permission resolver (SetPermResolver): the token check IS the
 // auth method's answer. Call before serving; an invalid configuration is an
@@ -109,7 +96,6 @@ func (s *Server) SetResourceServer(rs ResourceServer) error {
 	}
 	s.resource = &rs
 	s.resourceURL = u
-	s.checks = &tokenChecks{entries: map[[32]byte]tokenCheck{}}
 	return nil
 }
 
@@ -168,8 +154,7 @@ func (s *Server) mountResourceServer(mux *http.ServeMux) {
 // past it is the per-tool gate, as on a surface without OAuth.
 func (s *Server) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := bearerToken(r.Header.Get("Authorization"))
-		if !ok {
+		if _, ok := bearerToken(r.Header.Get("Authorization")); !ok {
 			s.challenge(w, http.StatusUnauthorized, "", "")
 			return
 		}
@@ -180,7 +165,7 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 			Resource:    s.resource.Resource,
 			Gateway:     s.gatewayHeaders,
 		}
-		perms, err := s.checkToken(r.Context(), token, conn)
+		perms, err := s.checkToken(r.Context(), conn)
 		switch {
 		case err == nil && len(perms) == 0:
 			s.challenge(w, http.StatusForbidden, "insufficient_scope", "the token holds no permission on this server")
@@ -226,42 +211,14 @@ func bearerToken(h string) (string, bool) {
 	return tok, tok != ""
 }
 
-type tokenCheck struct {
-	perms []int32
-	until time.Time
-}
-
-type tokenChecks struct {
-	mu      sync.Mutex
-	entries map[[32]byte]tokenCheck
-}
-
-// checkToken runs the permission resolver for the token, reusing an
-// admitting answer younger than tokenCheckTTL. A refusal is not kept.
-func (s *Server) checkToken(ctx context.Context, token string, conn ConnectionInfo) ([]int32, error) {
-	key := sha256.Sum256([]byte(conn.ClientAddr + "\x00" + token))
-	now := time.Now()
-	s.checks.mu.Lock()
-	if c, ok := s.checks.entries[key]; ok && now.Before(c.until) {
-		s.checks.mu.Unlock()
-		return c.perms, nil
-	}
-	s.checks.mu.Unlock()
-
-	perms, err := s.resolveForGate(ctx, conn)
-	if err != nil {
-		// Only an answer that admits is reused: a refusal is asked again,
-		// so a token that was just refreshed is not refused from the cache,
-		// and a failure of the auth service is retried.
-		return nil, err
-	}
-	s.checks.mu.Lock()
-	if len(s.checks.entries) >= tokenCheckMax {
-		s.checks.entries = map[[32]byte]tokenCheck{}
-	}
-	s.checks.entries[key] = tokenCheck{perms: perms, until: now.Add(tokenCheckTTL)}
-	s.checks.mu.Unlock()
-	return perms, err
+// checkToken asks the auth method about the token on every request, never
+// from an earlier answer: a token revoked a moment ago is refused with the
+// 401 that sends its client back to authorization, not admitted to an MCP
+// session whose every tool call then fails. (The tool calls ask the auth
+// method again, for their own method, so an answer kept here would have
+// saved nothing but that 401.)
+func (s *Server) checkToken(ctx context.Context, conn ConnectionInfo) ([]int32, error) {
+	return s.resolveForGate(ctx, conn)
 }
 
 // resolveForGate runs the resolver, a panic counted as a failure.

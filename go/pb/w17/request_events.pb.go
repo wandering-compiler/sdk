@@ -416,8 +416,17 @@ type RequestEventMeta struct {
 	// without the domain's lock (the method names their types).
 	RequestField  int32 `protobuf:"varint,19,opt,name=request_field,json=requestField,proto3" json:"request_field,omitempty"`
 	ResponseField int32 `protobuf:"varint,20,opt,name=response_field,json=responseField,proto3" json:"response_field,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The kind of the caller's membership in the organization the request
+	// acts in (`org_id`): `staff`, `client`, … — what the project calls an
+	// account type, from the principal (the auth response's
+	// `string membership_kind`). Like `org_id` it is the request's context,
+	// never a property of the person: someone may be staff of one
+	// organization and a client of another. Empty when the project's auth
+	// does not keep kinds, when the request acts in no organization, or on
+	// an anonymous request.
+	MembershipKind string `protobuf:"bytes,21,opt,name=membership_kind,json=membershipKind,proto3" json:"membership_kind,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RequestEventMeta) Reset() {
@@ -590,6 +599,13 @@ func (x *RequestEventMeta) GetResponseField() int32 {
 	return 0
 }
 
+func (x *RequestEventMeta) GetMembershipKind() string {
+	if x != nil {
+		return x.MembershipKind
+	}
+	return ""
+}
+
 // RequestClient is what the request says about the client. All of it is
 // personal data.
 type RequestClient struct {
@@ -697,7 +713,7 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\bresponse\x18\x02 \x01(\bR\bresponse\x125\n" +
 	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\x12-\n" +
 	"\n" +
-	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xcf\x05\n" +
+	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xf8\x05\n" +
 	"\x10RequestEventMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12/\n" +
 	"\bpurposes\x18\x02 \x03(\x0e2\x13.w17.RequestPurposeR\bpurposes\x12!\n" +
@@ -721,7 +737,8 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x12 \x01(\tR\trequestId\x12#\n" +
 	"\rrequest_field\x18\x13 \x01(\x05R\frequestField\x12%\n" +
-	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseFieldB\x14\n" +
+	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseField\x12'\n" +
+	"\x0fmembership_kind\x18\x15 \x01(\tR\x0emembershipKindB\x14\n" +
 	"\x12_marketing_consent\"\xe5\x01\n" +
 	"\rRequestClient\x12\x17\n" +
 	"\x02ip\x18\x01 \x01(\tB\a\xca\xf3\x18\x03\x98\x02\x01R\x02ip\x12&\n" +

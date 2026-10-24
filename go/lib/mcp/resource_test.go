@@ -131,27 +131,30 @@ func TestResourceServer_ResourceReachesTheAuthMethod(t *testing.T) {
 	}
 }
 
-// One token's answer is reused for a short while: a session's requests do
-// not each cost an auth call. A failure is not kept.
-func TestResourceServer_CheckIsReused(t *testing.T) {
+// Every request asks the auth method: a token revoked a moment ago gets the
+// 401 that sends its client back to authorization on its very next request,
+// not a session whose tool calls fail while an old answer is reused.
+func TestResourceServer_RevokedTokenIsRefusedAtOnce(t *testing.T) {
 	var asked atomic.Int32
-	fail := true
+	var revoked atomic.Bool
 	_, h := protectedServer(t, func(context.Context, ConnectionInfo) ([]int32, error) {
 		asked.Add(1)
-		if fail {
-			return nil, status.Error(codes.Unavailable, "down")
+		if revoked.Load() {
+			return nil, status.Error(codes.Unauthenticated, "revoked")
 		}
 		return []int32{1}, nil
 	})
-	call(h, http.MethodPost, "/mcp", "Bearer t")
-	fail = false
-	for range 3 {
+	for range 2 {
 		if w := call(h, http.MethodPost, "/mcp", "Bearer t"); w.Code != http.StatusTeapot {
 			t.Fatalf("code %d", w.Code)
 		}
 	}
-	if asked.Load() != 2 {
-		t.Errorf("auth asked %d times, want 2 (the failure, then one answer reused)", asked.Load())
+	revoked.Store(true)
+	if w := call(h, http.MethodPost, "/mcp", "Bearer t"); w.Code != http.StatusUnauthorized {
+		t.Errorf("the request after the revocation: %d, want 401", w.Code)
+	}
+	if asked.Load() != 3 {
+		t.Errorf("auth asked %d times, want 3 (once per request)", asked.Load())
 	}
 }
 
