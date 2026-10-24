@@ -74,6 +74,11 @@ type Method struct {
 	// Sync: an audit record of this method holds its request until the
 	// stream acknowledged it (within RecorderConfig.SyncWait).
 	Sync bool
+	// URLCredential: the route carries its credential in the URL
+	// (`RestEndpoint.credential`). The page that called it is then one a
+	// capability link opened, and its address (the Referer) holds that
+	// credential too, so the record leaves the referrer out.
+	URLCredential bool
 }
 
 // RecorderConfig configures a [Recorder].
@@ -302,10 +307,14 @@ func (s *Surface) Start(m *Method) *Record {
 	return &Record{s: s, method: m, start: time.Now()}
 }
 
-// SetClient records what the request says about the client.
+// SetClient records what the request says about the client; the referrer
+// only when the method takes no credential in its URL (Method.URLCredential).
 func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]string) {
 	if rec == nil {
 		return
+	}
+	if rec.method.URLCredential {
+		referrer = ""
 	}
 	rec.ip, rec.userAgent, rec.referrer, rec.utm = ip, userAgent, referrer, utm
 }
