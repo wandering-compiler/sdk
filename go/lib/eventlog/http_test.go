@@ -49,6 +49,44 @@ func TestHTTPMiddleware_FinishesTheRecordTheHandlerBegan(t *testing.T) {
 	}
 }
 
+// A route that takes its credential in the URL records no referrer: the
+// page that called it was opened from a capability link, and its address
+// carries the same credential. The rest of the client stays.
+func TestHTTPMiddleware_URLCredentialRouteRecordsNoReferrer(t *testing.T) {
+	r, c := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}})
+	s := r.Surface(w17pb.RequestApi_REQUEST_API_REST)
+	link := &Method{FullName: "/acme.docs.DocService/GetPublic", Route: "/public/docs/{token}", RequestTag: reqTag, URLCredential: true}
+	mw := s.HTTPMiddleware(nil, nil)
+	for _, m := range []*Method{link, testMethod} {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			Begin(req.Context(), s, m).SetRequest(sampleReq())
+			w.WriteHeader(http.StatusOK)
+		})
+		req := httptest.NewRequest("GET", "/public/docs/tok-123", nil)
+		req.Header.Set("User-Agent", "test-agent")
+		req.Header.Set("Referer", "https://app.example.com/invoice/tok-123")
+		mw(handler).ServeHTTP(httptest.NewRecorder(), req)
+	}
+	closeRecorder(t, r)
+
+	recs := c.records(w17pb.RequestApi_REQUEST_API_REST)
+	if len(recs) != 2 {
+		t.Fatalf("%d records", len(recs))
+	}
+	got := map[string]*w17pb.RequestClient{}
+	for _, raw := range recs {
+		m := decodeEnvelope(t, raw).meta
+		got[m.GetMethod()] = m.GetClient()
+	}
+	if cl := got[link.FullName]; cl.GetReferrer() != "" || cl.GetUserAgent() != "test-agent" {
+		t.Errorf("credential route client %v: want no referrer, the rest kept", cl)
+	}
+	// The decoy: the same request on an ordinary route keeps its referrer.
+	if cl := got[testMethod.FullName]; cl.GetReferrer() != "https://app.example.com/invoice/tok-123" {
+		t.Errorf("ordinary route client %v: want the referrer", cl)
+	}
+}
+
 func TestHTTPMiddleware_OffSurfaceAndNoSlot(t *testing.T) {
 	var s *Surface
 	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})

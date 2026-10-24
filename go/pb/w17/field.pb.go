@@ -1230,9 +1230,14 @@ type Field struct {
 	// sensitive — must not leave the request in any form, for a reason this
 	// label does not say: an internal amount, commercial terms, a national
 	// identifier. Left out of every sink above. Automatic on `type: PASSWORD`,
-	// `type: SECRET` and `type: CRYPTED_SECRET`, and on credentials
-	// (`(w17.rest_api)` `credential`) — writing it there is allowed and changes
-	// nothing. On a message-typed field it covers the whole sub-message.
+	// `type: SECRET` and `type: CRYPTED_SECRET`; on the request field a URL
+	// credential binds (`(w17.rest_api)` endpoint `credential`, its
+	// `path_param` or `query_param` naming a field of the request); and on an
+	// auth method's request `headers`, which carry the caller's Authorization —
+	// writing it there is allowed and changes nothing. Only the request is
+	// covered: the same value elsewhere (a response, a stored column holding
+	// the link's token) is the project's to label. On a message-typed field it
+	// covers the whole sub-message.
 	Sensitive bool `protobuf:"varint,36,opt,name=sensitive,proto3" json:"sensitive,omitempty"`
 	// --- Enumerated choices (string carriers) ---
 	// FQN of a proto enum reachable from this file. The IR builder resolves
