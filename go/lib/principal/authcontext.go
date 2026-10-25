@@ -39,6 +39,11 @@ const (
 	// port: the Host header, or X-Forwarded-Host when the peer is a trusted
 	// proxy. Written on REST; absent where a transport has no host.
 	HostKey = "x-w17-host"
+	// ProductKey names the product domain whose gateway asks — set by a
+	// product's gateway authenticating against its identity domain
+	// ((w17.domain).identity). The identity answers the role keys the caller
+	// holds in that product.
+	ProductKey = "x-w17-product"
 )
 
 // The TenantFromKey values, one per w17.TenantSource.

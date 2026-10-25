@@ -1,5 +1,7 @@
 package acllock
 
+import "slices"
+
 // HasPermission reports whether `id` is present in the granted
 // permission slice `ids`. Linear scan — n is small (typically
 // the union of permissions across a user's roles, dozens at
@@ -148,4 +150,29 @@ func StringByID(lock *Lock, id int) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// PermissionsOfRoles returns the permission ids the role keys in `keys`
+// carry, by `roles` (role key → its ids): the union, sorted, without
+// duplicates. A key `roles` does not name carries nothing — a role the
+// identity still assigns but this domain no longer declares grants no
+// permission, it is not an error on a request.
+//
+// Used by the gateway of a product domain ((w17.domain).identity): the
+// identity answers the KEYS of the caller's roles in the product, and the
+// product's own (w17.acl_roles), baked by codegen into `roles`, say what
+// each key means here.
+func PermissionsOfRoles(roles map[string][]int32, keys []string) []int32 {
+	seen := map[int32]bool{}
+	var out []int32
+	for _, k := range keys {
+		for _, id := range roles[k] {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }

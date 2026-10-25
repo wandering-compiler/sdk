@@ -59,6 +59,25 @@ message Domain {
   // register one module have two tables of one shape, each with its own
   // rows.
   repeated SharedRegistration register = 2;
+
+  // The domain whose auth plugin is this domain's identity. Set on a
+  // PRODUCT domain of a project with one identity and several products: the
+  // product activates no auth plugin and keeps no users. Its surfaces
+  // authenticate against the identity domain's auth plugin, which answers,
+  // for this product, the KEYS of the roles the caller holds here (the
+  // identity's `product_roles` feature). The product's own `(w17.acl_roles)`
+  // say what each key means: codegen turns them into the product's table of
+  // key → permission ids, so the identity never stores another domain's
+  // permission ids, and a product deploy alone changes what its roles mean.
+  // Unset = the domain is its own identity (or has none).
+  DomainIdentity identity = 3;
+}
+
+// DomainIdentity names the domain a product authenticates against.
+message DomainIdentity {
+  // The identity domain: one of this project's domains, activating the
+  // auth plugin with `product_roles`.
+  string domain = 1;
 }
 
 // SharedRegistration is one row of (w17.domain).register.
