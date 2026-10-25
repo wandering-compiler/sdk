@@ -89,13 +89,15 @@ const (
 	TenantSource_TENANT_SOURCE_UNSPECIFIED TenantSource = 0
 	// The invitation the caller is accepting (sign-up, membership acceptance).
 	TenantSource_TENANT_SOURCE_INVITATION TenantSource = 1
-	// The host the request arrived on (a white-label or co-brand host bound
-	// to one tenant). On MCP, a host bound to a tenant decides it and the
-	// consent page offers no choice.
+	// The host the request arrived on (a white-label or co-brand host the
+	// backoffice bound to one tenant, the auth plugin's org_hosts). Read on
+	// REST; an unbound host names nothing and the next source is tried. On
+	// MCP the tenant is the grant's, chosen on the consent page.
 	TenantSource_TENANT_SOURCE_HOST TenantSource = 2
 	// The caller's own choice among their memberships of an accepted kind:
-	// `W17-Org` on REST, the consent page on MCP; with exactly one such
-	// membership, that one.
+	// `W17-Org` (or the organization in the path) on REST, the consent page
+	// on MCP; with exactly one such membership, that one — unless the auth
+	// plugin's org_from_sole_membership is off.
 	TenantSource_TENANT_SOURCE_DEFAULT TenantSource = 3
 )
 
@@ -227,10 +229,15 @@ type MembershipPolicy struct {
 	// project names the kinds; the auth plugin carries them. Empty = any
 	// membership, or none at all: the audience does not filter by kind.
 	Kinds []string `protobuf:"bytes,1,rep,name=kinds,proto3" json:"kinds,omitempty"`
-	// Where the tenant comes from, tried in order. NOT IMPLEMENTED YET:
-	// codegen refuses it. Until it is, the tenant is an OAuth grant's
-	// organization, then the W17-Org selector, then the caller's only
-	// organization of an admitted kind.
+	// Where the tenant comes from, tried in order; the first that names an
+	// organization decides, and the caller must hold an admitted membership
+	// there. Empty = an OAuth grant's organization, then the W17-Org
+	// selector, then the caller's only organization of an admitted kind.
+	//
+	// A W17-Org selector (or an organization in the path) is read only when
+	// DEFAULT is listed, and one naming another organization than the host
+	// decided is refused, never overridden. Nothing named leaves the request
+	// in no organization, which a scoped read refuses.
 	TenantFrom []TenantSource `protobuf:"varint,2,rep,packed,name=tenant_from,json=tenantFrom,proto3,enum=w17.TenantSource" json:"tenant_from,omitempty"`
 	// Membership kinds a caller this audience admits may invite. Empty = the
 	// audience's own kinds. The auth plugin refuses an invitation of any other
