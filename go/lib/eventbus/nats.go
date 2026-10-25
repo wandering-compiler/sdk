@@ -257,7 +257,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 			// recreated rather than restarted, its JetStream state went with
 			// it: the streams and consumers this process was using are gone,
 			// and the consume loop below is what reports that.
-			log.Printf("eventbus nats: reconnected to %s — verifying consumers", c.ConnectedUrl())
+			log.Printf("eventbus nats: reconnected to %s — verifying consumers", dsnredact.String(c.ConnectedUrl()))
 		}),
 		natsgo.ClosedHandler(func(_ *natsgo.Conn) {
 			// Terminal. nats.go gives up after MaxReconnects and never tries

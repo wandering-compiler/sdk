@@ -27,6 +27,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
+	"github.com/wandering-compiler/sdk/go/lib/secheaders"
 )
 
 // PermResolver resolves the calling connection's effective permission
@@ -466,7 +467,8 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	// Liveness for `<binary> health` and any orchestrator probe. Outside the
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
-	httpSrv.Handler = mux
+	// The security headers every published listener sends (lib/secheaders).
+	httpSrv.Handler = secheaders.Middleware(mux)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(addr) }()

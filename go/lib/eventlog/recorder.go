@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"github.com/wandering-compiler/sdk/go/lib/redact"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
@@ -247,7 +248,7 @@ func Open(ctx context.Context, dsn string, cfg RecorderConfig) (*Recorder, error
 			log.Printf("eventlog nats: connection LOST (%v) — request records wait, then take the failure path", err)
 		}),
 		nats.ReconnectHandler(func(c *nats.Conn) {
-			log.Printf("eventlog nats: reconnected to %s", c.ConnectedUrl())
+			log.Printf("eventlog nats: reconnected to %s", dsnredact.String(c.ConnectedUrl()))
 		}),
 	)
 	if err != nil {
