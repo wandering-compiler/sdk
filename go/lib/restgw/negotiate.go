@@ -53,7 +53,8 @@ const (
 // body from its Content-Type header. Anything that isn't the
 // protobuf media type (including an empty header, `application/
 // json`, or form types) decodes as JSON — so GET requests and
-// legacy JSON callers are unaffected.
+// legacy JSON callers are unaffected; a form body is first turned
+// into a JSON object of its fields (DecodeRequest).
 func RequestFormat(r *http.Request) WireFormat {
 	if r == nil {
 		return WireJSON

@@ -31,6 +31,25 @@ const (
 	// membership of one of them, and resolves the tenant among those.
 	// Absent when the audience accepts any.
 	MembershipKindsKey = "x-w17-membership-kinds"
+	// TenantFromKey is the comma-separated, ordered places the audience
+	// takes a request's tenant from: the TenantFrom* values. Absent when the
+	// audience names none, which is the selector or the sole membership.
+	TenantFromKey = "x-w17-tenant-from"
+	// HostKey is the host the request arrived on, lower-case and without a
+	// port: the Host header, or X-Forwarded-Host when the peer is a trusted
+	// proxy. Written on REST; absent where a transport has no host.
+	HostKey = "x-w17-host"
+)
+
+// The TenantFromKey values, one per w17.TenantSource.
+const (
+	// TenantFromInvitation is the invitation being accepted.
+	TenantFromInvitation = "invitation"
+	// TenantFromHost is the organization the request's host is bound to.
+	TenantFromHost = "host"
+	// TenantFromDefault is the caller's own choice (the W17-Org selector),
+	// or their sole membership where the auth plugin infers it.
+	TenantFromDefault = "default"
 )
 
 // The SurfaceKey values.

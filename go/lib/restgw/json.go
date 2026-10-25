@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -132,9 +133,13 @@ var MaxRequestBodyBytes int64 = 10 << 20
 //
 // The body format is negotiated from Content-Type (C9): a
 // protobuf media type decodes via binary proto.Unmarshal,
-// everything else (the default) via the JSON path. The
-// REST-alias rewrite is JSON-only — the binary wire keys on
-// field numbers, not names, so aliases don't apply there.
+// everything else (the default) via the JSON path. An
+// application/x-www-form-urlencoded body — what a browser's HTML
+// form POSTs, the way an OAuth provider with response_mode
+// form_post comes back — enters the JSON path as an object of its
+// fields (see formToJSON). The REST-alias rewrite applies to JSON
+// and form bodies — the binary wire keys on field numbers, not
+// names, so aliases don't apply there.
 func DecodeRequest(r *http.Request, msg proto.Message) error {
 	return DecodeRequestRewrite(r, msg, nil)
 }
@@ -179,10 +184,40 @@ func DecodeRequestRewrite(r *http.Request, msg proto.Message, rewriteJSON func([
 		}
 		return nil
 	}
+	if isFormMedia(mediaType(r.Header.Get("Content-Type"))) {
+		if body, err = formToJSON(body); err != nil {
+			return err
+		}
+	}
 	if rewriteJSON != nil && len(bytes.TrimSpace(body)) > 0 {
 		body = rewriteJSON(body)
 	}
 	return UnmarshalProto(body, msg)
+}
+
+// isFormMedia reports an HTML form's encoding.
+func isFormMedia(mt string) bool { return mt == "application/x-www-form-urlencoded" }
+
+// formToJSON turns a form body into the JSON object the request decodes
+// from: each field a string, a field given more than once a list of them
+// (a repeated field). A value is always a JSON string, which protojson
+// takes for a string, an enum name or an integer field — not for a bool or
+// a message, which a form cannot express. An empty form is the empty
+// object, so it leaves the message as an empty JSON body does.
+func formToJSON(body []byte) ([]byte, error) {
+	vals, err := url.ParseQuery(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("invalid form body: %w", err)
+	}
+	obj := make(map[string]any, len(vals))
+	for k, v := range vals {
+		if len(v) == 1 {
+			obj[k] = v[0]
+			continue
+		}
+		obj[k] = v
+	}
+	return json.Marshal(obj)
 }
 
 // UnmarshalProto decodes JSON bytes into a proto message

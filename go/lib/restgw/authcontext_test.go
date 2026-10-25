@@ -82,3 +82,89 @@ func TestAuthMethod_RoundTrips(t *testing.T) {
 		t.Fatalf("method = %q", got)
 	}
 }
+
+// The host a request arrived on: X-Forwarded-Host only from a trusted proxy,
+// else Host — normalised, so a binding of `acme.example.com` matches however
+// the client spelled it.
+func TestClientAddrMiddleware_RecordsTheHost(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	for _, c := range []struct {
+		name, peer, host, fwd, want string
+	}{
+		{"the Host header", "203.0.113.7:5000", "Acme.Example.com:8443", "", "acme.example.com"},
+		{"a trailing dot", "203.0.113.7:5000", "acme.example.com.", "", "acme.example.com"},
+		{"a trusted proxy's X-Forwarded-Host", "10.0.0.1:443", "gateway:8080", "acme.example.com, inner.example", "acme.example.com"},
+		{"an untrusted peer's X-Forwarded-Host is ignored", "203.0.113.7:5000", "acme.example.com", "evil.example.com", "acme.example.com"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/x", nil)
+			r.RemoteAddr = c.peer
+			r.Host = c.host
+			if c.fwd != "" {
+				r.Header.Set("X-Forwarded-Host", c.fwd)
+			}
+			var got string
+			restgw.ClientAddrMiddleware(trusted)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = restgw.RequestHostFrom(r.Context())
+			})).ServeHTTP(httptest.NewRecorder(), r)
+			if got != c.want {
+				t.Errorf("host = %q, want %q", got, c.want)
+			}
+		})
+	}
+	if got := restgw.RequestHostFrom(context.Background()); got != "" {
+		t.Errorf("without the middleware = %q", got)
+	}
+}
+
+// fromHost is fromAddr's request arriving on host.
+func fromHost(t *testing.T, host string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.RemoteAddr = "203.0.113.7:5000"
+	r.Host = host
+	r.Header.Set("Authorization", "Bearer bot-token")
+	var out *http.Request
+	restgw.ClientAddrMiddleware(nil)(
+		http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { out = r }),
+	).ServeHTTP(httptest.NewRecorder(), r)
+	return out
+}
+
+// An auth result may depend on the host (an audience taking the organization
+// from it): one made for one host is never answered to another, for the same
+// caller at the same address — in every cache.
+func TestAuthCaches_KeyByHost(t *testing.T) {
+	var calls atomic.Int32
+	inner := func(_ context.Context, r *http.Request) ([]byte, error) {
+		calls.Add(1)
+		return []byte(restgw.RequestHostFrom(r.Context())), nil
+	}
+	for name, auth := range map[string]restgw.AuthFunc{
+		"key headers": restgw.CachedAuthFuncWithKeyHeaders(inner, time.Minute, nil),
+		"decision": restgw.CachedAuthFuncWithDecision(inner, time.Minute, nil, func(context.Context, *http.Request) restgw.AuthCacheDecision {
+			return restgw.AuthCacheDecision{Namespace: "dpop:jkt"}
+		}),
+	} {
+		calls.Store(0)
+		a, b := fromHost(t, "acme.example.com"), fromHost(t, "globex.example.com")
+		for _, r := range []*http.Request{a, a, b} {
+			got, err := auth(r.Context(), r)
+			if err != nil || string(got) != restgw.RequestHostFrom(r.Context()) {
+				t.Fatalf("%s: answered %q to %s", name, got, restgw.RequestHostFrom(r.Context()))
+			}
+		}
+		if calls.Load() != 2 {
+			t.Errorf("%s: %d inner calls, want 2 (one per host)", name, calls.Load())
+		}
+	}
+
+	c := restgw.NewAuthLookupCache(time.Minute)
+	c.Put(fromHost(t, "acme.example.com"), &w17pb.AdminSignInOption{Label: "allowed"})
+	if c.Get(fromHost(t, "globex.example.com"), &w17pb.AdminSignInOption{}) {
+		t.Error("the admin lookup cache answered another host")
+	}
+	if !c.Get(fromHost(t, "acme.example.com"), &w17pb.AdminSignInOption{}) {
+		t.Error("the admin lookup cache missed the same host")
+	}
+}
