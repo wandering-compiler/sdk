@@ -203,12 +203,13 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 
 // SetGatewayHeaders sets request context the gateway owns that every
 // connection hands the auth method — an audience gateway's audience and the
-// membership kinds it accepts ([principal.AudienceKey],
-// [principal.MembershipKindsKey]). The keys must be gateway-owned (`x-w17-*`):
+// membership kinds it accepts and where it takes the tenant from
+// ([principal.AudienceKey], [principal.MembershipKindsKey],
+// [principal.TenantFromKey]). The keys must be gateway-owned (`x-w17-*`):
 // [CollectAuthHeaders] writes them after every client source, so no caller
 // can supply them.
 //
-// Only those two keys are accepted, compared case-insensitively, and the map
+// Only those keys are accepted, compared case-insensitively, and the map
 // is copied. Anything else — a credential slot, the principal envelope, a key
 // the server stamps itself — or one key given twice in different cases
 // panics: the caller is generated code passing constants, so either is a
@@ -218,8 +219,8 @@ func (s *Server) SetGatewayHeaders(h map[string]string) {
 	for k, v := range h {
 		lk := strings.ToLower(k)
 		if !gatewayHeaderKeys[lk] {
-			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q is not a gateway auth-context key (want %s or %s)",
-				k, principal.AudienceKey, principal.MembershipKindsKey))
+			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q is not a gateway auth-context key (want %s, %s or %s)",
+				k, principal.AudienceKey, principal.MembershipKindsKey, principal.TenantFromKey))
 		}
 		if _, dup := out[lk]; dup {
 			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q given twice", lk))
@@ -234,6 +235,7 @@ func (s *Server) SetGatewayHeaders(h map[string]string) {
 var gatewayHeaderKeys = map[string]bool{
 	principal.AudienceKey:        true,
 	principal.MembershipKindsKey: true,
+	principal.TenantFromKey:      true,
 }
 
 // SetPermResolver turns permission gating ON: the resolver is consulted
