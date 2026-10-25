@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/grpc/metadata"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
 
@@ -26,6 +29,38 @@ func ClientAddrMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handle
 			ctx := context.WithValue(r.Context(), clientAddrCtxKey{}, ratelimit.HTTPClientAddr(r, trusted))
 			ctx = context.WithValue(ctx, requestHostCtxKey{}, requestHost(r, trusted))
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// AudienceContextMiddleware puts an audience gateway's own context on every
+// request's outgoing metadata, so the backend reads it on calls that run no
+// auth method too — a registration, which takes the organization from the
+// host and the account type from the audience. stamps are the gateway's
+// constants (principal.AudienceKey, MembershipKindsKey, TenantFromKey);
+// withHost adds principal.HostKey, the host [ClientAddrMiddleware] recorded,
+// so it must run inside it. Every key is `x-w17-*`: the edge strips a
+// client's copy before this runs, and the auth headers carry the same
+// values, written the same way.
+func AudienceContextMiddleware(stamps map[string]string, withHost bool) func(http.Handler) http.Handler {
+	var pairs []string
+	for k, v := range stamps {
+		if v != "" {
+			pairs = append(pairs, strings.ToLower(k), v)
+		}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			kv := pairs
+			if withHost {
+				if h := RequestHostFrom(r.Context()); h != "" {
+					kv = append(append([]string(nil), pairs...), principal.HostKey, h)
+				}
+			}
+			if len(kv) > 0 {
+				r = r.WithContext(metadata.AppendToOutgoingContext(r.Context(), kv...))
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
