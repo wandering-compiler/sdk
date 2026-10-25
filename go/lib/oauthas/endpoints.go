@@ -141,7 +141,7 @@ func (s *server) redirectError(w http.ResponseWriter, r *http.Request, req Autho
 func errorPage(w http.ResponseWriter, oe *Error) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>Sign-in request refused</title>` +
 		`<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">` +
