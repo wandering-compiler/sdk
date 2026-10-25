@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -458,7 +459,7 @@ func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) 
 			log.Printf("eventlog consumers nats: connection LOST (%v) — consuming stops until it returns", err)
 		}),
 		nats.ReconnectHandler(func(c *nats.Conn) {
-			log.Printf("eventlog consumers nats: reconnected to %s", c.ConnectedUrl())
+			log.Printf("eventlog consumers nats: reconnected to %s", dsnredact.String(c.ConnectedUrl()))
 		}),
 	)
 	if err != nil {
