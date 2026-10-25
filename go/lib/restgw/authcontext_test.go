@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/metadata"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
@@ -166,5 +169,38 @@ func TestAuthCaches_KeyByHost(t *testing.T) {
 	}
 	if !c.Get(fromHost(t, "acme.example.com"), &w17pb.AdminSignInOption{}) {
 		t.Error("the admin lookup cache missed the same host")
+	}
+}
+
+// An audience gateway's context reaches the backend on every call — the
+// constants and, inside ClientAddrMiddleware, the host — under the
+// principal keys, whatever the client sent.
+func TestAudienceContextMiddleware(t *testing.T) {
+	var got metadata.MD
+	h := restgw.ClientAddrMiddleware(nil)(restgw.AudienceContextMiddleware(map[string]string{
+		principal.AudienceKey:        "client",
+		principal.MembershipKindsKey: "client",
+		principal.TenantFromKey:      "host,default",
+	}, true)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ = metadata.FromOutgoingContext(r.Context())
+	})))
+	r := httptest.NewRequest(http.MethodPost, "/auth/register", nil)
+	r.Host = "Acme.Example.com"
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	for k, want := range map[string]string{
+		principal.AudienceKey: "client", principal.MembershipKindsKey: "client",
+		principal.TenantFromKey: "host,default", principal.HostKey: "acme.example.com",
+	} {
+		if v := got.Get(k); len(v) != 1 || v[0] != want {
+			t.Errorf("%s = %v, want %q", k, v, want)
+		}
+	}
+
+	got = nil
+	restgw.AudienceContextMiddleware(map[string]string{principal.AudienceKey: "staff"}, false)(
+		http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got, _ = metadata.FromOutgoingContext(r.Context()) }),
+	).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	if v := got.Get(principal.HostKey); len(v) != 0 {
+		t.Errorf("a gateway that does not read the host stamped one: %v", v)
 	}
 }
