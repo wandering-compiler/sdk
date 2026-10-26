@@ -676,6 +676,18 @@ func (s *natsSubscriber) claimPoisonOutcome(ctx context.Context, consumer string
 	return owned, nil
 }
 
+// releasePoisonOutcome gives up a claim taken by claimPoisonOutcome whose
+// owner could not settle the message (its DLQ write failed), so the next
+// delivery or the advisory can claim it. Best effort: a release that fails
+// leaves the claim, which is how it was before releases existed.
+func (s *natsSubscriber) releasePoisonOutcome(ctx context.Context, consumer string, seq uint64) {
+	kv, err := s.bus.ensureDLQClaims(ctx)
+	if err != nil {
+		return
+	}
+	_ = kv.Delete(ctx, natsDLQClaimKey(s.channel, consumer, seq))
+}
+
 // natsFanOutInactiveThreshold is how long the server keeps a fan-out
 // consumer that has stopped pulling. It only has to outlive a transient
 // disconnect: the consumer belongs to ONE process and its state (which
@@ -858,8 +870,9 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		// The consumer stops at the channel's MaxDeliver; a topic that
 		// asks for fewer reaches its final attempt here, below that cap,
 		// and this path dead-letters it as at the cap.
-		plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait)
+		plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait).forMode(s.bus.opts.Delivery)
 		finalAttempt := meta != nil && metaErr == nil && plan.maxDeliver > 0 && meta.NumDelivered >= uint64(plan.maxDeliver)
+		claimed := false
 		if finalAttempt {
 			claimCtx, claimCancel := context.WithTimeout(bgCtx, 10*time.Second)
 			owned, claimErr := s.claimPoisonOutcome(claimCtx, consumerName, meta.Sequence.Stream, natsDLQClaimRoleDelivery)
@@ -868,6 +881,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 				_ = msg.Ack()
 				return
 			}
+			claimed = claimErr == nil && owned
 		}
 
 		start := time.Now()
@@ -893,6 +907,16 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 				} else {
 					// DLQ write failed — leave it for redelivery / the
 					// advisory fallback rather than acking it into the void.
+					// The outcome is no longer this delivery's to settle, so
+					// its claim goes too: kept, it would make the next
+					// delivery (below the consumer's cap a topic's lower cap
+					// is redelivered) or the advisory take this message for
+					// settled and Ack it into the void instead.
+					if claimed {
+						relCtx, relCancel := context.WithTimeout(bgCtx, 10*time.Second)
+						s.releasePoisonOutcome(relCtx, consumerName, meta.Sequence.Stream)
+						relCancel()
+					}
 					_ = msg.Nak()
 				}
 				return

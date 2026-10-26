@@ -127,14 +127,26 @@ func resolveTopicRetry(overrides map[string]ChannelRetry, channel, topic string,
 	return plan
 }
 
+// forMode adjusts a plan to the subscription's delivery mode. A fan-out
+// surface (a gateway's live hub) redelivers without backoff: what it
+// delivers is live, and a minute's wait would hand a browser a stale
+// event as news. Its caps still apply.
+func (p retryPlan) forMode(mode DeliveryMode) retryPlan {
+	if mode == DeliveryFanOut {
+		p.backoff = BackoffNone
+	}
+	return p
+}
+
 // hasTopicRetries reports whether channel's retry varies by topic or
 // spaces its redeliveries — whether settling a delivery needs its plan.
-func hasTopicRetries(overrides map[string]ChannelRetry, channel string) bool {
+// A fan-out surface ignores a backoff, so only topics count there.
+func hasTopicRetries(overrides map[string]ChannelRetry, channel string, mode DeliveryMode) bool {
 	ch, ok := overrides[channel]
 	if !ok {
 		return false
 	}
-	if ch.Backoff != BackoffNone {
+	if ch.Backoff != BackoffNone && mode != DeliveryFanOut {
 		return true
 	}
 	return len(ch.Topics) > 0

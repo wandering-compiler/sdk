@@ -145,3 +145,93 @@ func TestRedisBus_TopicRetry_Embedded(t *testing.T) {
 		t.Errorf("probe.poison redelivered %v after a failure, want its constant 400ms backoff", gap)
 	}
 }
+
+// INVARIANT: on Redis Streams a backoff counts from the failure, as on
+// NATS. The entry's idle time counts from its delivery, so a handler that
+// ran for most of the delay used to be redelivered almost at once.
+func TestRedisBus_BackoffCountsFromTheFailure_Embedded(t *testing.T) {
+	obs := &recordingObserver{}
+	bus, err := eventbus.NewRedisBus(eventbus.RedisBusOptions{
+		DSN:            startEmbeddedRedis(t),
+		GroupPrefix:    "backofffromfailure-subscribers",
+		DefaultAckWait: 100 * time.Millisecond,
+		ChannelRetries: map[string]eventbus.ChannelRetry{
+			"default": {MaxDeliver: 2, Backoff: eventbus.BackoffConstant, AckWait: 400 * time.Millisecond},
+		},
+		Observer: obs,
+	})
+	if err != nil {
+		t.Fatalf("NewRedisBus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close(timeout(t, 5*time.Second)) })
+
+	sub, _ := bus.Subscriber(context.Background(), "default")
+	var mu sync.Mutex
+	var started, failed []time.Time
+	_ = sub.Subscribe(context.Background(), "**", func(context.Context, string, []byte) error {
+		mu.Lock()
+		started = append(started, time.Now())
+		mu.Unlock()
+		time.Sleep(300 * time.Millisecond)
+		mu.Lock()
+		failed = append(failed, time.Now())
+		mu.Unlock()
+		return errors.New("slow, then fails")
+	})
+	_ = bus.Dispatch(context.Background(), "default", "slow", wrapperspb.String("doomed"))
+
+	waitFor(t, 10*time.Second, "dead-lettered", func() bool {
+		_, drops := topicOutcomes(obs, "slow")
+		return drops >= 1
+	})
+	_ = sub.Drain(timeout(t, 3*time.Second))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(started) != 2 {
+		t.Fatalf("delivered %d times, want 2", len(started))
+	}
+	if gap := started[1].Sub(failed[0]); gap < 350*time.Millisecond {
+		t.Errorf("redelivered %v after the failure, want the 400ms backoff from it", gap)
+	}
+}
+
+// INVARIANT: entries waiting out a long backoff do not hide due ones
+// behind them. More than one XPENDING page of them sits ahead of an entry
+// whose short backoff is due; it is reclaimed and dead-lettered all the
+// same.
+func TestRedisBus_BackoffDoesNotHideDueEntries_Embedded(t *testing.T) {
+	obs := &recordingObserver{}
+	bus, err := eventbus.NewRedisBus(eventbus.RedisBusOptions{
+		DSN:            startEmbeddedRedis(t),
+		GroupPrefix:    "backoffwindow-subscribers",
+		DefaultAckWait: 100 * time.Millisecond,
+		ChannelRetries: map[string]eventbus.ChannelRetry{
+			"default": {MaxDeliver: 5, Topics: map[string]eventbus.TopicRetry{
+				"slow": {Backoff: eventbus.BackoffConstant, AckWait: time.Minute},
+				"fast": {MaxDeliver: 2, Backoff: eventbus.BackoffConstant, AckWait: 200 * time.Millisecond},
+			}},
+		},
+		ReadBatch: 200,
+		Observer:  obs,
+	})
+	if err != nil {
+		t.Fatalf("NewRedisBus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close(timeout(t, 5*time.Second)) })
+
+	for i := 0; i < 150; i++ {
+		_ = bus.Dispatch(context.Background(), "default", "slow", wrapperspb.String("waits"))
+	}
+	_ = bus.Dispatch(context.Background(), "default", "fast", wrapperspb.String("due"))
+
+	sub, _ := bus.Subscriber(context.Background(), "default")
+	_ = sub.Subscribe(context.Background(), "**", func(context.Context, string, []byte) error {
+		return errors.New("always fails")
+	})
+
+	waitFor(t, 10*time.Second, "the fast topic dead-lettered behind 150 waiting entries", func() bool {
+		_, drops := topicOutcomes(obs, "fast")
+		return drops >= 1
+	})
+}
