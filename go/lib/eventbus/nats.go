@@ -25,10 +25,8 @@ import (
 // optional `user:pass@`); DurablePrefix scopes the JetStream
 // durable consumer names so multiple subscriber surfaces /
 // projects sharing one broker don't collide. DefaultRetry
-// flows into every consumer's MaxDeliver + AckWait; per-event
-// override (carried by parser.ResolvedRetry) is plumbed in a
-// future slice when the Subscriber interface grows a retry
-// arg.
+// flows into every consumer's MaxDeliver + AckWait;
+// ChannelRetries narrows it per channel and per topic.
 type NatsBusOptions struct {
 	// DSN — `nats://[user:pass@]host:port[,host:port,...]`.
 	// Empty rejects with a descriptive error at New time.
@@ -855,7 +853,13 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		// ERROR proceeds as before the claim existed: at-least-once bias,
 		// and the window is no worse than the pre-claim code. Below the
 		// cap no claim is taken — the happy path pays no broker RTT.
-		finalAttempt := meta != nil && metaErr == nil && maxDeliver > 0 && meta.NumDelivered >= uint64(maxDeliver)
+		// The topic's own retry, when its channel has one: a lower cap
+		// than the consumer's, and the delay before the next attempt.
+		// The consumer stops at the channel's MaxDeliver; a topic that
+		// asks for fewer reaches its final attempt here, below that cap,
+		// and this path dead-letters it as at the cap.
+		plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait)
+		finalAttempt := meta != nil && metaErr == nil && plan.maxDeliver > 0 && meta.NumDelivered >= uint64(plan.maxDeliver)
 		if finalAttempt {
 			claimCtx, claimCancel := context.WithTimeout(bgCtx, 10*time.Second)
 			owned, claimErr := s.claimPoisonOutcome(claimCtx, consumerName, meta.Sequence.Stream, natsDLQClaimRoleDelivery)
@@ -897,6 +901,16 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			// config; once exhausted, the server fires a MAX_DELIVERIES
 			// advisory the per-handle subscription below surfaces (the
 			// fallback for a handler that never completes its last attempt).
+			// With a backoff the redelivery waits for it: NakWithDelay, as
+			// a plain Nak is redelivered at once.
+			attempt := 1
+			if meta != nil && metaErr == nil {
+				attempt = int(meta.NumDelivered)
+			}
+			if d := plan.delay(attempt); d > 0 {
+				_ = msg.NakWithDelay(d)
+				return
+			}
 			_ = msg.Nak()
 			return
 		}

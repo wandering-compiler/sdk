@@ -826,6 +826,7 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 	if err != nil {
 		return err
 	}
+	perTopic := hasTopicRetries(s.bus.opts.ChannelRetries, s.channel)
 	for _, p := range pendings {
 		// Skip a message this consumer is still processing BEFORE the
 		// max-deliver/DLQ branch: a message whose
@@ -837,6 +838,28 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 		// success it XACKs itself (no DLQ); on failure it stays in the PEL
 		// and the next tick — no longer in-flight — routes it to the DLQ.
 		if s.inFlightBusy(p.ID) {
+			continue
+		}
+		// The topic's own retry, when its channel has one: a lower cap,
+		// and a backoff that keeps the entry pending longer before its
+		// redelivery. Never shorter than ackWait: a failed delivery
+		// leaves the entry exactly as one still running on another
+		// replica does, and ackWait is how long that one may run. The
+		// topic is read from the entry; when that fails the channel's
+		// figures apply, as before topics had any.
+		limit, minIdle := maxDeliver, ackWait
+		if perTopic {
+			if topic, ok := s.pendingTopic(ctx, p.ID); ok {
+				plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait)
+				limit = plan.maxDeliver
+				if p.RetryCount < int64(limit) {
+					if d := plan.delay(int(p.RetryCount)); d > minIdle {
+						minIdle = d
+					}
+				}
+			}
+		}
+		if p.Idle < minIdle {
 			continue
 		}
 		// RE-CLAIM BEFORE ACTING, on both branches. XPENDING above is a
@@ -858,13 +881,13 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 			Stream:   s.channel,
 			Group:    s.group,
 			Consumer: s.bus.opts.ConsumerName,
-			MinIdle:  ackWait,
+			MinIdle:  minIdle,
 			Messages: []string{p.ID},
 		}).Result()
 		if err != nil || len(claimed) == 0 {
 			continue
 		}
-		if p.RetryCount >= int64(maxDeliver) {
+		if p.RetryCount >= int64(limit) {
 			s.routeToDLQ(ctx, p.ID)
 			continue
 		}
@@ -878,6 +901,17 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 		}
 	}
 	return nil
+}
+
+// pendingTopic reads the topic of the stream entry id, which XPENDING
+// does not carry. False when the entry cannot be read.
+func (s *redisSubscription) pendingTopic(ctx context.Context, id string) (string, bool) {
+	msgs, err := s.bus.client.XRange(ctx, s.channel, id, id).Result()
+	if err != nil || len(msgs) == 0 {
+		return "", false
+	}
+	topic, ok := msgs[0].Values[redisFieldTopic].(string)
+	return topic, ok
 }
 
 // retryFor returns the effective (MaxDeliver, AckWait) for

@@ -2,7 +2,6 @@ package eventbus
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
@@ -149,8 +148,20 @@ func (DefaultObserver) OnDeliverFailure(channel, topic string, err error) {
 	reportBusFailure("deliver", channel, topic, err)
 }
 
+// OnDrop says what happened to the message, not that something failed:
+// "eventbus drop failed" read as a second fault when the drop was the
+// outcome itself.
 func (DefaultObserver) OnDrop(channel, topic, reason string) {
-	reportBusFailure("drop", channel, topic, errors.New(reason))
+	what := reason
+	switch reason {
+	case DropReasonMaxDeliverExceeded:
+		what = reason + ": every delivery failed; the message is in the channel's DLQ"
+	case DropReasonBufferFull:
+		what = reason + ": the channel's buffer stayed full; the message is lost"
+	}
+	err := fmt.Errorf("eventbus dropped a message: channel=%s topic=%s: %s", channel, topic, what)
+	log.Print(err)
+	observx.ReportError(context.Background(), err)
 }
 
 // reportBusFailure writes the one line an operator needs to identify
