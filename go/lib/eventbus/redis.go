@@ -880,7 +880,10 @@ func nextStreamID(id string) (string, bool) {
 // redelivered, or dead-lettered past its cap.
 func (s *redisSubscription) claimEntries(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration, pendings []goredis.XPendingExt) {
 	perTopic := hasTopicRetries(s.bus.opts.ChannelRetries, s.channel, s.bus.opts.Delivery)
-	byTopic := len(s.bus.opts.ChannelRetries[s.channel].Topics) > 0
+	var topics map[string]string
+	if perTopic && len(s.bus.opts.ChannelRetries[s.channel].Topics) > 0 {
+		topics = s.pendingTopics(ctx, pendings)
+	}
 	for _, p := range pendings {
 		// Skip a message this consumer is still processing BEFORE the
 		// max-deliver/DLQ branch: a message whose
@@ -906,8 +909,8 @@ func (s *redisSubscription) claimEntries(ctx context.Context, h HandlerFunc, max
 		limit, minIdle := maxDeliver, ackWait
 		if perTopic {
 			topic, ok := "", true
-			if byTopic {
-				topic, ok = s.pendingTopic(ctx, p.ID)
+			if topics != nil {
+				topic, ok = topics[p.ID]
 			}
 			if ok {
 				plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait).forMode(s.bus.opts.Delivery)
@@ -975,22 +978,39 @@ func (s *redisSubscription) restartIdle(ctx context.Context, msgID string) {
 		End:    msgID,
 		Count:  1,
 	}).Result()
-	if err != nil || len(pend) == 0 {
+	// Owned by another consumer, the entry was reclaimed while this
+	// delivery ran (it overran ackWait): that consumer is running it now,
+	// and a re-claim would take it back from under that run and write
+	// back the count from before its claim.
+	if err != nil || len(pend) == 0 || pend[0].Consumer != s.bus.opts.ConsumerName {
 		return
 	}
 	_ = s.bus.client.Do(ctx, "XCLAIM", s.channel, s.group, s.bus.opts.ConsumerName, 0, msgID,
 		"RETRYCOUNT", pend[0].RetryCount, "JUSTID").Err()
 }
 
-// pendingTopic reads the topic of the stream entry id, which XPENDING
-// does not carry. False when the entry cannot be read.
-func (s *redisSubscription) pendingTopic(ctx context.Context, id string) (string, bool) {
-	msgs, err := s.bus.client.XRange(ctx, s.channel, id, id).Result()
-	if err != nil || len(msgs) == 0 {
-		return "", false
+// pendingTopics reads the topic of each pending entry, which XPENDING
+// does not carry, in one pipelined round trip for the page. An entry that
+// cannot be read is missing from the map.
+func (s *redisSubscription) pendingTopics(ctx context.Context, pendings []goredis.XPendingExt) map[string]string {
+	cmds := make([]*goredis.XMessageSliceCmd, len(pendings))
+	_, _ = s.bus.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
+		for i, p := range pendings {
+			cmds[i] = pipe.XRange(ctx, s.channel, p.ID, p.ID)
+		}
+		return nil
+	})
+	topics := make(map[string]string, len(pendings))
+	for i, cmd := range cmds {
+		msgs, err := cmd.Result()
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		if topic, ok := msgs[0].Values[redisFieldTopic].(string); ok {
+			topics[pendings[i].ID] = topic
+		}
 	}
-	topic, ok := msgs[0].Values[redisFieldTopic].(string)
-	return topic, ok
+	return topics
 }
 
 // retryFor returns the effective (MaxDeliver, AckWait) for

@@ -688,6 +688,35 @@ func (s *natsSubscriber) releasePoisonOutcome(ctx context.Context, consumer stri
 	_ = kv.Delete(ctx, natsDLQClaimKey(s.channel, consumer, seq))
 }
 
+// deadLetterFinal settles a message whose final attempt failed: into the
+// DLQ, then Ack so the server treats it as done and no (duplicate)
+// advisory fires. When the DLQ write fails the message is left for
+// redelivery / the advisory fallback rather than acked into the void, and
+// its claim goes too: the outcome is no longer this delivery's to settle,
+// and kept, the claim would make the next delivery (below the consumer's
+// cap a topic's lower cap is redelivered) or the advisory take the message
+// for settled and Ack it into the void instead. The redelivery waits out
+// the topic's backoff, so a DLQ that stays down is not hammered.
+func (s *natsSubscriber) deadLetterFinal(bgCtx context.Context, msg jetstream.Msg, topic, consumerName string, meta *jetstream.MsgMetadata, plan retryPlan, claimed bool) {
+	dlqCtx, dlqCancel := context.WithTimeout(bgCtx, 10*time.Second)
+	ok := s.routeToDLQDirect(dlqCtx, topic, msg.Data())
+	dlqCancel()
+	if ok {
+		_ = msg.Ack()
+		return
+	}
+	if claimed {
+		relCtx, relCancel := context.WithTimeout(bgCtx, 10*time.Second)
+		s.releasePoisonOutcome(relCtx, consumerName, meta.Sequence.Stream)
+		relCancel()
+	}
+	if d := plan.delay(int(meta.NumDelivered)); d > 0 {
+		_ = msg.NakWithDelay(d)
+		return
+	}
+	_ = msg.Nak()
+}
+
 // natsFanOutInactiveThreshold is how long the server keeps a fan-out
 // consumer that has stopped pulling. It only has to outlive a transient
 // disconnect: the consumer belongs to ONE process and its state (which
@@ -884,6 +913,16 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			claimed = claimErr == nil && owned
 		}
 
+		// A delivery past the topic's cap — the redelivery of a final
+		// attempt whose DLQ write failed, below the consumer's own cap —
+		// has no attempt left: the handler does not run again, and the
+		// message goes to the DLQ as the Redis claim loop sends an entry
+		// past its cap, without a delivery.
+		if finalAttempt && meta.NumDelivered > uint64(plan.maxDeliver) {
+			s.deadLetterFinal(bgCtx, msg, topic, consumerName, meta, plan, claimed)
+			return
+		}
+
 		start := time.Now()
 		err := h(bgCtx, topic, msg.Data())
 		reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))
@@ -899,26 +938,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			// as done and no (duplicate) advisory fires. Below the cap, Nak
 			// for normal redelivery.
 			if finalAttempt {
-				dlqCtx, dlqCancel := context.WithTimeout(bgCtx, 10*time.Second)
-				ok := s.routeToDLQDirect(dlqCtx, topic, msg.Data())
-				dlqCancel()
-				if ok {
-					_ = msg.Ack()
-				} else {
-					// DLQ write failed — leave it for redelivery / the
-					// advisory fallback rather than acking it into the void.
-					// The outcome is no longer this delivery's to settle, so
-					// its claim goes too: kept, it would make the next
-					// delivery (below the consumer's cap a topic's lower cap
-					// is redelivered) or the advisory take this message for
-					// settled and Ack it into the void instead.
-					if claimed {
-						relCtx, relCancel := context.WithTimeout(bgCtx, 10*time.Second)
-						s.releasePoisonOutcome(relCtx, consumerName, meta.Sequence.Stream)
-						relCancel()
-					}
-					_ = msg.Nak()
-				}
+				s.deadLetterFinal(bgCtx, msg, topic, consumerName, meta, plan, claimed)
 				return
 			}
 			// Nak triggers redelivery up to MaxDeliver per the consumer
