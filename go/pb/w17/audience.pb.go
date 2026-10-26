@@ -242,8 +242,8 @@ type MembershipPolicy struct {
 	// Membership kinds a caller this audience admits may invite. Empty = the
 	// audience's own kinds. The auth plugin refuses an invitation of any other
 	// kind from such a caller, so a client cannot hand out a staff membership;
-	// a caller with no membership of the organization (a backoffice admin) or
-	// its owner may invite any kind.
+	// a caller with no membership of the organization (a backoffice admin) may
+	// invite any kind.
 	Invites       []string `protobuf:"bytes,3,rep,name=invites,proto3" json:"invites,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -245,7 +245,9 @@ func ScopeKey(name string) string {
 // `w17-label-<name>` broadcast label, the verified device id
 // ([DeviceMetadataKey]) when the gateway checked a DPoP proof, and a token
 // mint's verified key ([MintKeyMetadataKey]), and an audience gateway's data
-// range ([DataScopeMetadataKey]) — and nothing else. The range is relayed so
+// range ([DataScopeMetadataKey]) and its own context ([AudienceKey],
+// [MembershipKindsKey], [TenantFromKey], [HostKey]) — and nothing else. The
+// range is relayed so
 // a facade's storage calls see what the request may see; a facade serving an
 // audience request cannot widen it for its own calls, since the relayed
 // value replaces its own (a wider range is declared on the method,
@@ -254,6 +256,16 @@ func ScopeKey(name string) string {
 // propagation and are deliberately left alone; blanket-forwarding paging in
 // particular would bleed one query's LIMIT / keyset onto sibling storage
 // calls.
+//
+// The audience's context is here because a backend reads it on calls that
+// run no auth method — a registration takes the organization from the host
+// and the kind of membership from the audience — and project code that wraps
+// such a call (a facade signing people up) reaches the plugin one hop later.
+// Dropped there, the registration saw no host and no audience, and an
+// organization's open sign-up policy never applied. The gateway writes these
+// keys from its own constants and the request's host
+// (restgw.AudienceContextMiddleware), after the edge cleared the client's
+// copies, so relaying them is as safe as relaying the scopes.
 //
 // The labels are here because they decide an event's AUDIENCE exactly as the
 // scopes decide its rows, and an emit fires from whichever tier the call
@@ -333,6 +345,10 @@ func isRelayedKey(key string) bool {
 		key == DataScopeMetadataKey ||
 		key == DeviceMetadataKey ||
 		key == MintKeyMetadataKey ||
+		key == AudienceKey ||
+		key == MembershipKindsKey ||
+		key == TenantFromKey ||
+		key == HostKey ||
 		strings.HasPrefix(key, scopeKeyPrefix) ||
 		strings.HasPrefix(key, LabelKeyPrefix)
 }

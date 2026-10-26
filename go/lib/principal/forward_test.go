@@ -214,3 +214,35 @@ func TestForwardToOutgoing_NoIncomingIsNoop(t *testing.T) {
 		t.Errorf("expected no outgoing metadata without an incoming principal, got %v", md)
 	}
 }
+
+// TestForwardToOutgoing_RelaysTheAudienceContext: the audience's context the
+// gateway stamps (restgw.AudienceContextMiddleware) reaches the next hop, so
+// a registration that project code wraps still sees the host and the
+// audience's kinds and tenant sources. Without it the organization's open
+// sign-up policy never applied behind a facade.
+func TestForwardToOutgoing_RelaysTheAudienceContext(t *testing.T) {
+	want := map[string]string{
+		principal.AudienceKey:        "client",
+		principal.MembershipKindsKey: "client",
+		principal.TenantFromKey:      "host,default",
+		principal.HostKey:            "acme.example.com",
+	}
+	in := metadata.MD{}
+	for k, v := range want {
+		in.Set(k, v)
+	}
+	ctx := principal.ForwardToOutgoing(metadata.NewIncomingContext(context.Background(), in))
+	out, _ := metadata.FromOutgoingContext(ctx)
+	for k, v := range want {
+		if got := out.Get(k); len(got) != 1 || got[0] != v {
+			t.Errorf("outgoing[%q] = %v, want [%q]", k, got, v)
+		}
+	}
+	// The product a product's gateway names is said to its identity
+	// directly and is no part of a request's context downstream.
+	ctx = principal.ForwardToOutgoing(metadata.NewIncomingContext(context.Background(), metadata.Pairs(principal.ProductKey, "alpha", "x-w17-user", "env")))
+	out, _ = metadata.FromOutgoingContext(ctx)
+	if got := out.Get(principal.ProductKey); len(got) != 0 {
+		t.Errorf("outgoing[%q] = %v, want it left out", principal.ProductKey, got)
+	}
+}

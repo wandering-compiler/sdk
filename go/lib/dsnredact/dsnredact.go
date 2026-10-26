@@ -25,9 +25,8 @@ var (
 	userinfo = regexp.MustCompile(`(://[^:/@\s]*:)[^\s]*@`)
 	// `nats://secret@host` — NATS reads a userinfo with no `:` as a TOKEN,
 	// the whole credential, where every other scheme here has a username
-	// that is not a secret. The production console's bus DSN has this
-	// shape, and a failed connect printed it whole into the log
-	// (2026-10-22).
+	// that is not a secret. A bus DSN of this shape printed by a failed
+	// connect would otherwise land in the log whole.
 	natsToken = regexp.MustCompile(`((?i:nats|tls)://)[^:/@\s]+@`)
 	// `password=secret` in a libpq keyword DSN or a URL query, and the
 	// other parameter names drivers use for a secret.

@@ -15,9 +15,10 @@ import (
 
 // The metadata a gateway hands its first backend hop: everything it stamps
 // from the verified auth response (the principal envelope, the data scopes,
-// the broadcast labels — all relayed onward on every hop by design) plus
-// three namespaces that are deliberately NOT relayed across a wire hop — tx
-// routing, the proxy conn id, and the request language.
+// the broadcast labels) and the audience's context — all relayed onward on
+// every hop by design — plus three namespaces that are deliberately NOT
+// relayed across a wire hop — tx routing, the proxy conn id, and the request
+// language.
 //
 // `w17-tx-id` is the sharp one: principal.ForwardToOutgoing relays the
 // gateway-stamped set and nothing else, and lib/principal/forward_test.go
@@ -31,19 +32,21 @@ const (
 	mdTxID     = "w17-tx-id"
 	mdConnID   = "w17-conn-id"
 	mdLanguage = "w17-language"
+	mdHost     = "x-w17-host"
 )
 
 // relayed is the exact key set a hop beyond the first may see — what the
 // gateway wrote from its verified auth response, in sorted order. Spelled
 // once: every nested-hop assertion below compares against this, so a
 // namespace that starts or stops riding along changes one list.
-var relayed = []string{mdLabelOrg, mdScopeOrg, mdUser}
+var relayed = []string{mdLabelOrg, mdHost, mdScopeOrg, mdUser}
 
 func gatewayMD() metadata.MD {
 	return metadata.Pairs(
 		mdUser, "envelope-bytes",
 		mdScopeOrg, "org-7",
 		mdLabelOrg, "org-7",
+		mdHost, "acme.example.com",
 		mdTxID, "tx-abc",
 		mdConnID, "conn-9",
 		mdLanguage, "cs",
