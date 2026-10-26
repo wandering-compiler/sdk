@@ -47,7 +47,7 @@ func minGap(at []time.Time) time.Duration {
 
 // topicRetries is a channel that allows 6 deliveries redelivered at
 // once, and one topic on it that allows 3 spaced 300ms apart — the
-// deinvo probe: an event's own retry under its channel's.
+// consumer's probe: an event's own retry under its channel's.
 func topicRetries() map[string]eventbus.ChannelRetry {
 	return map[string]eventbus.ChannelRetry{
 		"default": {MaxDeliver: 6, Topics: map[string]eventbus.TopicRetry{
