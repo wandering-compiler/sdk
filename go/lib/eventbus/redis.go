@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -814,17 +815,74 @@ func (f *redisLoopFailure) recovered(stage, channel, group string) {
 // claimPending walks the PEL once. Entries past MaxDeliver
 // go to DLQ; others get XCLAIM'd + replayed. Returns the XPENDING
 // error, the one failure that stops the walk.
+//
+// The walk pages through XPENDING. One page used to be all of it, which a
+// backoff made a trap: entries still waiting out their delay are returned
+// (they are idle past ackWait), skipped, and fill the page, so entries
+// behind them that are due were never reached. It stops at a short page
+// or after redisClaimPages.
 func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration) error {
-	pendings, err := s.bus.client.XPendingExt(ctx, &goredis.XPendingExtArgs{
-		Stream: s.channel,
-		Group:  s.group,
-		Idle:   ackWait,
-		Start:  "-",
-		End:    "+",
-		Count:  100,
-	}).Result()
+	start := "-"
+	for page := 0; page < redisClaimPages; page++ {
+		pendings, err := s.bus.client.XPendingExt(ctx, &goredis.XPendingExtArgs{
+			Stream: s.channel,
+			Group:  s.group,
+			Idle:   ackWait,
+			Start:  start,
+			End:    "+",
+			Count:  redisClaimPageSize,
+		}).Result()
+		if err != nil {
+			return err
+		}
+		s.claimEntries(ctx, h, maxDeliver, ackWait, pendings)
+		if len(pendings) < redisClaimPageSize {
+			return nil
+		}
+		next, ok := nextStreamID(pendings[len(pendings)-1].ID)
+		if !ok {
+			return nil
+		}
+		start = next
+	}
+	return nil
+}
+
+// redisClaimPageSize / redisClaimPages bound one claim-loop tick: up to
+// 1000 pending entries looked at, the rest on the next tick.
+const (
+	redisClaimPageSize = 100
+	redisClaimPages    = 10
+)
+
+// nextStreamID is the smallest stream id after id ("<ms>-<seq>"), the
+// exclusive start of the next XPENDING page.
+func nextStreamID(id string) (string, bool) {
+	ms, seq, ok := strings.Cut(id, "-")
+	if !ok {
+		return "", false
+	}
+	n, err := strconv.ParseUint(seq, 10, 64)
 	if err != nil {
-		return err
+		return "", false
+	}
+	if n == math.MaxUint64 {
+		m, err := strconv.ParseUint(ms, 10, 64)
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatUint(m+1, 10) + "-0", true
+	}
+	return ms + "-" + strconv.FormatUint(n+1, 10), true
+}
+
+// claimEntries acts on one XPENDING page: each entry due is reclaimed and
+// redelivered, or dead-lettered past its cap.
+func (s *redisSubscription) claimEntries(ctx context.Context, h HandlerFunc, maxDeliver int, ackWait time.Duration, pendings []goredis.XPendingExt) {
+	perTopic := hasTopicRetries(s.bus.opts.ChannelRetries, s.channel, s.bus.opts.Delivery)
+	var topics map[string]string
+	if perTopic && len(s.bus.opts.ChannelRetries[s.channel].Topics) > 0 {
+		topics = s.pendingTopics(ctx, pendings)
 	}
 	for _, p := range pendings {
 		// Skip a message this consumer is still processing BEFORE the
@@ -837,6 +895,34 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 		// success it XACKs itself (no DLQ); on failure it stays in the PEL
 		// and the next tick — no longer in-flight — routes it to the DLQ.
 		if s.inFlightBusy(p.ID) {
+			continue
+		}
+		// The topic's own retry, when its channel has one: a lower cap,
+		// and a backoff that keeps the entry pending longer before its
+		// redelivery. Never shorter than ackWait: a failed delivery
+		// leaves the entry exactly as one still running on another
+		// replica does, and ackWait is how long that one may run. The
+		// topic is read from the entry; when that fails the channel's
+		// figures apply, as before topics had any.
+		// A channel that only spaces its redeliveries, with no topic of
+		// its own, has one plan for every entry: no read is needed.
+		limit, minIdle := maxDeliver, ackWait
+		if perTopic {
+			topic, ok := "", true
+			if topics != nil {
+				topic, ok = topics[p.ID]
+			}
+			if ok {
+				plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait).forMode(s.bus.opts.Delivery)
+				limit = plan.maxDeliver
+				if p.RetryCount < int64(limit) {
+					if d := plan.delay(int(p.RetryCount)); d > minIdle {
+						minIdle = d
+					}
+				}
+			}
+		}
+		if p.Idle < minIdle {
 			continue
 		}
 		// RE-CLAIM BEFORE ACTING, on both branches. XPENDING above is a
@@ -858,13 +944,13 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 			Stream:   s.channel,
 			Group:    s.group,
 			Consumer: s.bus.opts.ConsumerName,
-			MinIdle:  ackWait,
+			MinIdle:  minIdle,
 			Messages: []string{p.ID},
 		}).Result()
 		if err != nil || len(claimed) == 0 {
 			continue
 		}
-		if p.RetryCount >= int64(maxDeliver) {
+		if p.RetryCount >= int64(limit) {
 			s.routeToDLQ(ctx, p.ID)
 			continue
 		}
@@ -877,7 +963,54 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 			release()
 		}
 	}
-	return nil
+}
+
+// restartIdle re-claims a pending entry to this consumer so its idle time
+// counts from now, keeping its delivery count: XCLAIM increments the count
+// unless told otherwise, and only the RETRYCOUNT option says the same thing
+// to every server (Redis leaves it for JUSTID; others do not). Best effort —
+// an entry that cannot be re-claimed keeps the idle time it had.
+func (s *redisSubscription) restartIdle(ctx context.Context, msgID string) {
+	pend, err := s.bus.client.XPendingExt(ctx, &goredis.XPendingExtArgs{
+		Stream: s.channel,
+		Group:  s.group,
+		Start:  msgID,
+		End:    msgID,
+		Count:  1,
+	}).Result()
+	// Owned by another consumer, the entry was reclaimed while this
+	// delivery ran (it overran ackWait): that consumer is running it now,
+	// and a re-claim would take it back from under that run and write
+	// back the count from before its claim.
+	if err != nil || len(pend) == 0 || pend[0].Consumer != s.bus.opts.ConsumerName {
+		return
+	}
+	_ = s.bus.client.Do(ctx, "XCLAIM", s.channel, s.group, s.bus.opts.ConsumerName, 0, msgID,
+		"RETRYCOUNT", pend[0].RetryCount, "JUSTID").Err()
+}
+
+// pendingTopics reads the topic of each pending entry, which XPENDING
+// does not carry, in one pipelined round trip for the page. An entry that
+// cannot be read is missing from the map.
+func (s *redisSubscription) pendingTopics(ctx context.Context, pendings []goredis.XPendingExt) map[string]string {
+	cmds := make([]*goredis.XMessageSliceCmd, len(pendings))
+	_, _ = s.bus.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
+		for i, p := range pendings {
+			cmds[i] = pipe.XRange(ctx, s.channel, p.ID, p.ID)
+		}
+		return nil
+	})
+	topics := make(map[string]string, len(pendings))
+	for i, cmd := range cmds {
+		msgs, err := cmd.Result()
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		if topic, ok := msgs[0].Values[redisFieldTopic].(string); ok {
+			topics[pendings[i].ID] = topic
+		}
+	}
+	return topics
 }
 
 // retryFor returns the effective (MaxDeliver, AckWait) for
@@ -930,6 +1063,13 @@ func (s *redisSubscription) processMessage(
 		// Don't ack; PEL retains the entry. Claim loop
 		// picks it up after AckWait.
 		s.bus.opts.Observer.OnDeliverFailure(s.channel, topic, err)
+		// A backoff counts from the failure, as NATS's NakWithDelay does.
+		// The entry's idle time counts from its delivery, so a handler
+		// that ran for most of the delay would be redelivered almost at
+		// once. Re-claiming it resets the idle time.
+		if hasTopicRetries(s.bus.opts.ChannelRetries, s.channel, s.bus.opts.Delivery) {
+			s.restartIdle(ctx, msgID)
+		}
 		return
 	}
 	s.bus.opts.Observer.OnDeliverSuccess(s.channel, topic)

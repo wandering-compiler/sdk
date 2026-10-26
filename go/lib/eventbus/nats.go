@@ -25,10 +25,8 @@ import (
 // optional `user:pass@`); DurablePrefix scopes the JetStream
 // durable consumer names so multiple subscriber surfaces /
 // projects sharing one broker don't collide. DefaultRetry
-// flows into every consumer's MaxDeliver + AckWait; per-event
-// override (carried by parser.ResolvedRetry) is plumbed in a
-// future slice when the Subscriber interface grows a retry
-// arg.
+// flows into every consumer's MaxDeliver + AckWait;
+// ChannelRetries narrows it per channel and per topic.
 type NatsBusOptions struct {
 	// DSN — `nats://[user:pass@]host:port[,host:port,...]`.
 	// Empty rejects with a descriptive error at New time.
@@ -678,6 +676,47 @@ func (s *natsSubscriber) claimPoisonOutcome(ctx context.Context, consumer string
 	return owned, nil
 }
 
+// releasePoisonOutcome gives up a claim taken by claimPoisonOutcome whose
+// owner could not settle the message (its DLQ write failed), so the next
+// delivery or the advisory can claim it. Best effort: a release that fails
+// leaves the claim, which is how it was before releases existed.
+func (s *natsSubscriber) releasePoisonOutcome(ctx context.Context, consumer string, seq uint64) {
+	kv, err := s.bus.ensureDLQClaims(ctx)
+	if err != nil {
+		return
+	}
+	_ = kv.Delete(ctx, natsDLQClaimKey(s.channel, consumer, seq))
+}
+
+// deadLetterFinal settles a message whose final attempt failed: into the
+// DLQ, then Ack so the server treats it as done and no (duplicate)
+// advisory fires. When the DLQ write fails the message is left for
+// redelivery / the advisory fallback rather than acked into the void, and
+// its claim goes too: the outcome is no longer this delivery's to settle,
+// and kept, the claim would make the next delivery (below the consumer's
+// cap a topic's lower cap is redelivered) or the advisory take the message
+// for settled and Ack it into the void instead. The redelivery waits out
+// the topic's backoff, so a DLQ that stays down is not hammered.
+func (s *natsSubscriber) deadLetterFinal(bgCtx context.Context, msg jetstream.Msg, topic, consumerName string, meta *jetstream.MsgMetadata, plan retryPlan, claimed bool) {
+	dlqCtx, dlqCancel := context.WithTimeout(bgCtx, 10*time.Second)
+	ok := s.routeToDLQDirect(dlqCtx, topic, msg.Data())
+	dlqCancel()
+	if ok {
+		_ = msg.Ack()
+		return
+	}
+	if claimed {
+		relCtx, relCancel := context.WithTimeout(bgCtx, 10*time.Second)
+		s.releasePoisonOutcome(relCtx, consumerName, meta.Sequence.Stream)
+		relCancel()
+	}
+	if d := plan.delay(int(meta.NumDelivered)); d > 0 {
+		_ = msg.NakWithDelay(d)
+		return
+	}
+	_ = msg.Nak()
+}
+
 // natsFanOutInactiveThreshold is how long the server keeps a fan-out
 // consumer that has stopped pulling. It only has to outlive a transient
 // disconnect: the consumer belongs to ONE process and its state (which
@@ -855,7 +894,14 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		// ERROR proceeds as before the claim existed: at-least-once bias,
 		// and the window is no worse than the pre-claim code. Below the
 		// cap no claim is taken — the happy path pays no broker RTT.
-		finalAttempt := meta != nil && metaErr == nil && maxDeliver > 0 && meta.NumDelivered >= uint64(maxDeliver)
+		// The topic's own retry, when its channel has one: a lower cap
+		// than the consumer's, and the delay before the next attempt.
+		// The consumer stops at the channel's MaxDeliver; a topic that
+		// asks for fewer reaches its final attempt here, below that cap,
+		// and this path dead-letters it as at the cap.
+		plan := resolveTopicRetry(s.bus.opts.ChannelRetries, s.channel, topic, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait).forMode(s.bus.opts.Delivery)
+		finalAttempt := meta != nil && metaErr == nil && plan.maxDeliver > 0 && meta.NumDelivered >= uint64(plan.maxDeliver)
+		claimed := false
 		if finalAttempt {
 			claimCtx, claimCancel := context.WithTimeout(bgCtx, 10*time.Second)
 			owned, claimErr := s.claimPoisonOutcome(claimCtx, consumerName, meta.Sequence.Stream, natsDLQClaimRoleDelivery)
@@ -864,6 +910,17 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 				_ = msg.Ack()
 				return
 			}
+			claimed = claimErr == nil && owned
+		}
+
+		// A delivery past the topic's cap — the redelivery of a final
+		// attempt whose DLQ write failed, below the consumer's own cap —
+		// has no attempt left: the handler does not run again, and the
+		// message goes to the DLQ as the Redis claim loop sends an entry
+		// past its cap, without a delivery.
+		if finalAttempt && meta.NumDelivered > uint64(plan.maxDeliver) {
+			s.deadLetterFinal(bgCtx, msg, topic, consumerName, meta, plan, claimed)
+			return
 		}
 
 		start := time.Now()
@@ -881,22 +938,23 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			// as done and no (duplicate) advisory fires. Below the cap, Nak
 			// for normal redelivery.
 			if finalAttempt {
-				dlqCtx, dlqCancel := context.WithTimeout(bgCtx, 10*time.Second)
-				ok := s.routeToDLQDirect(dlqCtx, topic, msg.Data())
-				dlqCancel()
-				if ok {
-					_ = msg.Ack()
-				} else {
-					// DLQ write failed — leave it for redelivery / the
-					// advisory fallback rather than acking it into the void.
-					_ = msg.Nak()
-				}
+				s.deadLetterFinal(bgCtx, msg, topic, consumerName, meta, plan, claimed)
 				return
 			}
 			// Nak triggers redelivery up to MaxDeliver per the consumer
 			// config; once exhausted, the server fires a MAX_DELIVERIES
 			// advisory the per-handle subscription below surfaces (the
 			// fallback for a handler that never completes its last attempt).
+			// With a backoff the redelivery waits for it: NakWithDelay, as
+			// a plain Nak is redelivered at once.
+			attempt := 1
+			if meta != nil && metaErr == nil {
+				attempt = int(meta.NumDelivered)
+			}
+			if d := plan.delay(attempt); d > 0 {
+				_ = msg.NakWithDelay(d)
+				return
+			}
 			_ = msg.Nak()
 			return
 		}
