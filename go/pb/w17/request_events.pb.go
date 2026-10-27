@@ -425,8 +425,13 @@ type RequestEventMeta struct {
 	// does not keep kinds, when the request acts in no organization, or on
 	// an anonymous request.
 	MembershipKind string `protobuf:"bytes,21,opt,name=membership_kind,json=membershipKind,proto3" json:"membership_kind,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The calling SERVICE on a private surface ((w17.private_api)): its
+	// verified identity, `spiffe://w17/<domain>/<bundle>`. A private surface's
+	// caller is a service, never a person; a person's credential travelling as
+	// data shows nowhere here. Empty on every other surface.
+	CallerService string `protobuf:"bytes,22,opt,name=caller_service,json=callerService,proto3" json:"caller_service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RequestEventMeta) Reset() {
@@ -606,6 +611,13 @@ func (x *RequestEventMeta) GetMembershipKind() string {
 	return ""
 }
 
+func (x *RequestEventMeta) GetCallerService() string {
+	if x != nil {
+		return x.CallerService
+	}
+	return ""
+}
+
 // RequestClient is what the request says about the client. All of it is
 // personal data.
 type RequestClient struct {
@@ -713,7 +725,7 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\bresponse\x18\x02 \x01(\bR\bresponse\x125\n" +
 	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\x12-\n" +
 	"\n" +
-	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xf8\x05\n" +
+	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\x9f\x06\n" +
 	"\x10RequestEventMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12/\n" +
 	"\bpurposes\x18\x02 \x03(\x0e2\x13.w17.RequestPurposeR\bpurposes\x12!\n" +
@@ -738,7 +750,8 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"request_id\x18\x12 \x01(\tR\trequestId\x12#\n" +
 	"\rrequest_field\x18\x13 \x01(\x05R\frequestField\x12%\n" +
 	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseField\x12'\n" +
-	"\x0fmembership_kind\x18\x15 \x01(\tR\x0emembershipKindB\x14\n" +
+	"\x0fmembership_kind\x18\x15 \x01(\tR\x0emembershipKind\x12%\n" +
+	"\x0ecaller_service\x18\x16 \x01(\tR\rcallerServiceB\x14\n" +
 	"\x12_marketing_consent\"\xe5\x01\n" +
 	"\rRequestClient\x12\x17\n" +
 	"\x02ip\x18\x01 \x01(\tB\a\xca\xf3\x18\x03\x98\x02\x01R\x02ip\x12&\n" +

@@ -3037,6 +3037,13 @@ message GatewayTarget {
   // listens in one process, so each absorbed one gets its own (10, 20, …).
   // 0 everywhere else.
   int32 port_offset = 23;
+
+  // Private: this target is the domain's PRIVATE gateway
+  // (`<domain>-gateway-private`, env prefix `<DOMAIN>_GATEWAY_PRIVATE`) — the
+  // gRPC surface its `(w17.private_api)` declares, served to other domains'
+  // services only: mutual TLS, :50061, callers admitted by domain, never on
+  // the public edge. It serves no REST / MCP.
+  bool private = 24;
 }
 
 // AbsorbedGateway — one audience gateway folded into a composed binary.
@@ -3059,6 +3066,11 @@ message AbsorbedGateway {
   // The transports it serves beside REST.
   bool has_mcp = 6;
   bool has_rpc = 7;
+
+  // Private: the absorbed gateway is the domain's private one — its gRPC
+  // listener is the private surface's (mutual TLS, :50061), and it has no
+  // REST / MCP listener.
+  bool private = 8;
 }
 
 // AdminTarget drives the per-binary admin bundle emit

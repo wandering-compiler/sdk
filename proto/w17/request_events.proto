@@ -171,6 +171,12 @@ message RequestEventMeta {
   // does not keep kinds, when the request acts in no organization, or on
   // an anonymous request.
   string membership_kind = 21;
+
+  // The calling SERVICE on a private surface ((w17.private_api)): its
+  // verified identity, `spiffe://w17/<domain>/<bundle>`. A private surface's
+  // caller is a service, never a person; a person's credential travelling as
+  // data shows nowhere here. Empty on every other surface.
+  string caller_service = 22;
 }
 
 // RequestClient is what the request says about the client. All of it is

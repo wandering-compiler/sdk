@@ -39,11 +39,13 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/wandering-compiler/sdk/go/core/healthz"
 	"github.com/wandering-compiler/sdk/go/lib/grpcclient"
 	"github.com/wandering-compiler/sdk/go/lib/grpcserver"
+	"github.com/wandering-compiler/sdk/go/lib/privatesurface"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/binroots"
 )
 
@@ -62,6 +64,7 @@ const (
 	kindHTTP kind = iota
 	kindGRPC
 	kindPublicGRPC
+	kindPrivateGRPC
 )
 
 // Probe is one listener to ask. Build it with [HTTP] or [GRPC].
@@ -94,6 +97,16 @@ func GRPC(name, listenAddr string) Probe {
 // serving gateway as down on every stack that encrypts its internal hops.
 func PublicGRPC(name, listenAddr string) Probe {
 	return Probe{Name: name, Addr: listenAddr, kind: kindPublicGRPC}
+}
+
+// PrivateGRPC probes a PRIVATE gRPC listener ((w17.private_api)), which is
+// mutual TLS whatever the mesh switch says: the probe presents this
+// container's own private identity (privatesurface.EnvCert / EnvKey) and
+// verifies the listener against the private CA, as "localhost" (every dev
+// leaf carries it). Health is the one method the listener answers without the
+// proxy's identity.
+func PrivateGRPC(name, listenAddr string) Probe {
+	return Probe{Name: name, Addr: listenAddr, kind: kindPrivateGRPC}
 }
 
 // Options is what the generated binary knows and this package does not.
@@ -247,6 +260,8 @@ func (p Probe) check(ctx context.Context, getenv func(string) string) error {
 		return checkGRPC(ctx, tgt, getenv)
 	case kindPublicGRPC:
 		return checkGRPC(ctx, tgt, noEnv)
+	case kindPrivateGRPC:
+		return checkPrivateGRPC(ctx, tgt, getenv)
 	default:
 		return checkHTTP(ctx, tgt)
 	}
@@ -426,4 +441,24 @@ func leafServerName(leaf *x509.Certificate) (string, error) {
 		return leaf.IPAddresses[0].String(), nil
 	}
 	return "", errors.New("this container's leaf carries no DNS or IP SAN to verify the listener against")
+}
+
+func checkPrivateGRPC(ctx context.Context, tgt string, getenv func(string) string) error {
+	cfg, err := privatesurface.ClientTLS(privatesurface.LookupFunc(getenv), "localhost")
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(tgt, grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	resp, err := grpc_health_v1.NewHealthClient(conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+	if err != nil {
+		return err
+	}
+	if s := resp.GetStatus(); s != grpc_health_v1.HealthCheckResponse_SERVING {
+		return fmt.Errorf("grpc.health.v1 status %s", s)
+	}
+	return nil
 }

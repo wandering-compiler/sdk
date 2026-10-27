@@ -313,6 +313,7 @@ type Record struct {
 	grpcCode   int32
 
 	userID, orgID, kind, traceID, requestID string
+	callerService                           string
 	span                                    trace.SpanContext
 	otel                                    bool // sampled for the telemetry sink
 	consent, consentKnown                   bool
@@ -405,6 +406,14 @@ func (rec *Record) SetResult(resp proto.Message, err error) {
 func (rec *Record) SetCaller(md metadata.MD) {
 	if rec != nil {
 		rec.readCaller(md)
+	}
+}
+
+// SetCallerService records the calling service on a private surface: its
+// verified identity (`spiffe://w17/<domain>/<bundle>`).
+func (rec *Record) SetCallerService(identity string) {
+	if rec != nil {
+		rec.callerService = identity
 	}
 }
 
@@ -672,6 +681,7 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	m.UserId = rec.userID
 	m.OrgId = rec.orgID
 	m.MembershipKind = rec.kind
+	m.CallerService = rec.callerService
 	if rec.consentKnown {
 		m.MarketingConsent = proto.Bool(rec.consent)
 	}
