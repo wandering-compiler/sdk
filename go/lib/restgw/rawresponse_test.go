@@ -148,7 +148,7 @@ func TestWriteRawResponse_ScriptableTypesAreSandboxed(t *testing.T) {
 // A bidi override or C1 control in a handler's file name would let the save
 // dialog show a different extension than the one saved.
 func TestWriteRawResponse_FilenameDropsFormatCharacters(t *testing.T) {
-	rec := rawResult(t, http.MethodGet, nil, restgw.RawResponse{Body: []byte("x"), Filename: "invoice‮fdp.exe\u0085"})
+	rec := rawResult(t, http.MethodGet, nil, restgw.RawResponse{Body: []byte("x"), Filename: "invoice\u202efdp.exe\u0085"})
 	if got, want := rec.Header().Get("Content-Disposition"), "attachment; filename=invoicefdp.exe"; got != want {
 		t.Errorf("Content-Disposition = %q, want %q", got, want)
 	}
