@@ -231,8 +231,14 @@ message Field {
   //   - a presence-bearing parameter → an omitted value is refused, naming
   //                        the parameter. This is the case `null` cannot
   //                        express.
+  //   - a repeated or map field → an EMPTY one is refused, naming the
+  //                        field. A list's absent value is empty, as
+  //                        `(w17.validate)` rules and DQL's `?` already
+  //                        treat it — so a lookup by `repeated int64 ids`
+  //                        declared `required: true` never runs as an
+  //                        empty `IN ()` that answers "nothing".
   //
-  // A field with no presence and no column cannot report absence at all: a
+  // A scalar with no presence and no column cannot report absence at all: a
   // proto3 scalar's zero value is indistinguishable from an omitted one. The
   // annotation is accepted there and means what `null: false` means; it does
   // not invent a distinction the wire does not carry.
