@@ -30,7 +30,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I17 | Shared value validators | `go/lib/typere/typere.go` — `UUID`, `Slug`, `URL`, `MAC`, `ValidEmail`, `FitsDecimal` |
 | I18 | Random tokens | `go/lib/randstr/randstr.go` — `Token` |
 | I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
-| I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `otel.go` |
+| I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `redisstream.go` — `RedisSink`; `otel.go` |
 | I21 | Request event consumers | `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers`, `DecodeBatch` |
 
 ---
@@ -718,7 +718,7 @@ field 2 each record as `Encode` wrote it, so a consumer decodes it with its own 
 
 ## I20. Request event recorder
 
-**Code.** `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Recorder.Surface`, `Surface.Start`, `Record`; `go/lib/eventlog/http.go` — `Surface.HTTPMiddleware`, `Begin`; `go/lib/eventlog/conn.go` — `Surface.Conn`; `go/lib/eventlog/natssink.go` — `NATSSink`, `EnsureStream`, `NATSBatchBytes`; `go/lib/eventlog/otel.go`
+**Code.** `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Recorder.Surface`, `Surface.Start`, `Record`; `go/lib/eventlog/http.go` — `Surface.HTTPMiddleware`, `Begin`; `go/lib/eventlog/conn.go` — `Surface.Conn`; `go/lib/eventlog/natssink.go` — `NATSSink`, `EnsureStream`, `NATSBatchBytes`; `go/lib/eventlog/redisstream.go` — `RedisSink`, `IsRedisDSN`; `go/lib/eventlog/otel.go`
 
 **Purpose.** Records the requests of a gateway's surfaces into the request event stream:
 one record per request on `w17.requests.<domain>.<api>` (the `W17_REQUESTS` stream), for
@@ -736,7 +736,8 @@ it; the batcher builds the envelope: the request and response by their redaction
 | `RecordCeiling` | 64 KiB per record; the request and response share it |
 | `Stream` | the stream's limits when it creates it: 7 days, 10 GiB (halved, down to 64 MiB, while the server has no room for it, and logged), 1 replica, 2-minute duplicate window; an existing stream keeps its own |
 | `Fail` | default: each undelivered record as numbered log lines (base64, under 16 KiB a line), and a report at most once a second |
-| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection |
+| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection; a `redis://` / `rediss://` DSN stores the stream on Redis Streams instead (`{w17:requests}`) |
+| `Redis` | instead of `JS` / `NC`: the Redis client the batches are stored through, for a project whose bus is Redis alone; the stream is bounded by `Stream.MaxAge` (trimmed on publish) — Redis has no byte cap of its own |
 
 **Guarantees.**
 
@@ -761,6 +762,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.17 | `EnsureStream` MUST create a missing stream within the server's storage, halving its cap while it does not fit, and MUST leave an existing stream's limits as they are. | `TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone` |
 | I20.18 | The caller's marketing consent MUST be carried, never applied: a signed-in request on a marketing surface MUST be recorded whether its consent is yes, no or not kept, and the record's `marketing_consent` MUST be the principal's value, unset when the auth response does not declare the field. | `TestRecorder_ConsentIsCarriedNotApplied` |
 | I20.19 | A record's organization MUST be the caller's `org_id` scope, else its `tenant_id` scope (a `tenant_scope` project's tenant is its organization), from the stamped metadata or the auth response; `org_id` MUST win when both are there, and no other scope MAY name one. | `TestRecorder_TenantIsTheOrganization` |
+| I20.20 | On Redis, each surface's batch MUST be stored with its subject, its id and its organizations as entry fields, a re-sent batch MUST be stored once within the duplicate window, and entries past the max age MUST be trimmed on publish. | `TestRedisSink_StoresTheBatchWithItsSubjectAndOrgs`, `TestRedisSink_ARetriedBatchIsStoredOnce`, `TestRedisSink_TrimsPastMaxAge` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
@@ -769,7 +771,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 
 ## I21. Request event consumers
 
-**Code.** `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers.Marketing`, `Consumers.Audit`, `Consumers.Run`, `Consumers.Serve`, `DecodeBatch`
+**Code.** `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers.Marketing`, `Consumers.Audit`, `Consumers.Run`, `Consumers.Serve`, `DecodeBatch`; `go/lib/eventlog/redisstream.go` (the Redis stream)
 
 **Purpose.** The contract a project's marketing and audit integrations read the request
 event stream through. A purpose is a method, so a consumer cannot be registered for the
@@ -788,6 +790,7 @@ method's own types when the binary links them.
 | `AckWait` | 30s per Consume |
 | `Backoff` | 1s doubling to 1m between offers |
 | `Stream` | the dead letter stream's limits, as the recorder's but 1 GiB |
+| `Redis` | instead of `JS`: consume `{w17:requests}`, one consumer group per registered consumer (named as the durable), dead letters on `{w17:requests}:dlq`; `ConsumerName` (default `<hostname>-<pid>`) names this process in each group, `ClaimInterval` (1s) how often a failed batch is looked at for its retry |
 
 **Guarantees.**
 
@@ -799,6 +802,8 @@ method's own types when the binary links them.
 | I21.4 | Registration MUST refuse a bad name, a subject outside the stream and a duplicate of one purpose. | `TestConsumers_Registration` |
 | I21.5 | A record whose method the binary does not link MUST keep its bytes; a record without meta MUST NOT decode. | `TestDecodeBatch_UnlinkedTypesKeepTheirBytes` |
 | I21.6 | `Serve` MUST refuse an empty DSN and, with NATS down, wait for it until its context ends. | `TestConsumers_ServeNeedsADSNAndStopsWithItsContext` |
+| I21.7 | On Redis, I21.1–I21.3 MUST hold as on JetStream: each consumer its purpose and its own group, a failed batch offered again after its backoff without another consumer receiving it twice, MaxDeliver failures moved to the dead letter stream with the reason and subject and then acknowledged; a batch on a subject the consumer does not read MUST be acknowledged without calling it. | `TestRedisConsumers_EachItsPurposeAndItsOwnProgress`, `TestRedisConsumers_DeadLetterAfterMaxDeliver`, `TestRedisConsumers_AnotherSubjectIsNotOffered`, `TestSubjectMatches` |
+| I21.8 | `Open` and `Serve` MUST pick the backend by the DSN's scheme. | `TestRedisDSN_OpenAndServe` |
 
 **Deliberate limits.**
 - Delivery is at least once: a consumer deduplicates on the record id.

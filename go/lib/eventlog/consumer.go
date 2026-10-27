@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -127,6 +128,15 @@ func (cs *Consumers) Len() int {
 // ConsumerConfig configures [Consumers.Run].
 type ConsumerConfig struct {
 	JS jetstream.JetStream
+	// Redis, instead of JS, consumes the Redis request stream: one consumer
+	// group per registered consumer, named as the durable would be.
+	Redis goredis.UniversalClient
+	// ConsumerName names this process within each group (Redis). Default
+	// <hostname>-<pid>.
+	ConsumerName string
+	// ClaimInterval is how often pending batches are looked at for a retry
+	// (Redis). Default 1s.
+	ClaimInterval time.Duration
 	// DurablePrefix prefixes each consumer's durable name
 	// (`<prefix>-<purpose>-<name>`), so two deployments do not share
 	// progress. Required.
@@ -163,8 +173,8 @@ const DeadLetterMaxBytes = 1 << 30
 // MaxDeliver offers. A batch with no record of the consumer's purpose is
 // acknowledged without calling it.
 func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
-	if cfg.JS == nil || cfg.DurablePrefix == "" {
-		return errors.New("eventlog: Run needs JetStream and a DurablePrefix")
+	if (cfg.JS == nil && cfg.Redis == nil) || cfg.DurablePrefix == "" {
+		return errors.New("eventlog: Run needs JetStream or Redis, and a DurablePrefix")
 	}
 	if cfg.MaxDeliver <= 0 {
 		cfg.MaxDeliver = 5
@@ -185,6 +195,9 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 		<-ctx.Done()
 		return nil
 	}
+	if cfg.Redis != nil {
+		return cs.runRedis(ctx, cfg, list)
+	}
 	if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, StreamLimits{}); err != nil {
 		return err
 	}
@@ -202,7 +215,7 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	var wg sync.WaitGroup
 	errs := make(chan error, len(list))
 	for _, r := range list {
-		purpose := strings.ToLower(strings.TrimPrefix(r.purpose.String(), "REQUEST_PURPOSE_"))
+		purpose := purposeName(r.purpose)
 		durable := cfg.DurablePrefix + "-" + purpose + "-" + r.name
 		cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 			Durable:        durable,
@@ -446,9 +459,20 @@ func decodeAs(t protoreflect.MessageType, raw []byte) proto.Message {
 // Serve dials NATS at dsn and runs the consumers until ctx ends — what the
 // generated subscriber calls. NATS not up yet is not an error: the
 // connection keeps trying.
+//
+// A redis:// or rediss:// dsn consumes the Redis request stream instead.
 func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) error {
 	if dsn == "" {
-		return errors.New("eventlog: request consumers need a NATS DSN (the request stream lives in JetStream)")
+		return errors.New("eventlog: request consumers need the bus DSN the request stream lives on (NATS or Redis)")
+	}
+	if IsRedisDSN(dsn) {
+		c, err := dialRedis(ctx, dsn)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = c.Close() }()
+		cfg.Redis = c
+		return cs.serveLoop(ctx, cfg)
 	}
 	nc, err := nats.Connect(dsn,
 		nats.Name("w17-request-consumers"),
@@ -471,10 +495,14 @@ func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) 
 		return fmt.Errorf("eventlog: jetstream: %w", err)
 	}
 	cfg.JS = js
-	// The stream may not exist yet (no gateway has recorded): wait for it
-	// rather than fail the subscriber's boot.
+	return cs.serveLoop(ctx, cfg)
+}
+
+// serveLoop runs the consumers, retrying while the stream is not there yet
+// (no gateway has recorded) rather than failing the subscriber's boot.
+func (cs *Consumers) serveLoop(ctx context.Context, cfg ConsumerConfig) error {
 	for {
-		err = cs.Run(ctx, cfg)
+		err := cs.Run(ctx, cfg)
 		if err == nil || ctx.Err() != nil {
 			return nil
 		}

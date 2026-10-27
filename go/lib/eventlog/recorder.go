@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -88,6 +89,9 @@ type RecorderConfig struct {
 	// JS publishes the batches; NC gives the server's payload limit.
 	JS jetstream.JetStream
 	NC *nats.Conn
+	// Redis, instead of JS and NC, stores the batches on the Redis request
+	// stream ([RedisStreamKey]) — a project whose bus is Redis Streams.
+	Redis goredis.UniversalClient
 	// Purposes per surface with the stream on.
 	Surfaces map[w17pb.RequestApi]Purposes
 	Auth     AuthFields
@@ -105,7 +109,7 @@ type RecorderConfig struct {
 	// the stream's acknowledgement, the wait for queue room included.
 	// Default 2s.
 	SyncWait time.Duration
-	// Sink overrides the NATS sink (tests).
+	// Sink overrides the NATS / Redis sink (tests).
 	Sink func(api w17pb.RequestApi) func(context.Context, *Batch) error
 }
 
@@ -117,7 +121,8 @@ type Recorder struct {
 	surfaces map[w17pb.RequestApi]*Surface
 	fail     func(Failure)
 
-	conn *nats.Conn // owned when [Open] dialed it
+	conn  *nats.Conn      // owned when [Open] dialed it
+	redis *goredis.Client // owned when [Open] dialed it
 
 	syncWait time.Duration
 	syncLate atomic.Int64 // last sync-wait report, unix nanos
@@ -154,7 +159,9 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 	}
 	batchBytes := 1<<20 - natsHeaderRoom // NATS's default max_payload until the server says
 	var ensure func(context.Context) error
-	if cfg.Sink == nil {
+	if cfg.Sink == nil && cfg.Redis != nil {
+		batchBytes = RedisBatchBytes
+	} else if cfg.Sink == nil {
 		if cfg.JS == nil || cfg.NC == nil {
 			return nil, errors.New("eventlog: Recorder needs a JetStream connection")
 		}
@@ -180,9 +187,12 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 		}
 		sink := cfg.Sink
 		var sf func(context.Context, *Batch) error
-		if sink != nil {
+		switch {
+		case sink != nil:
 			sf = sink(api)
-		} else {
+		case cfg.Redis != nil:
+			sf = (&RedisSink{Client: cfg.Redis, Subject: Subject(cfg.Domain, api), Stream: cfg.Stream}).Sink
+		default:
 			sf = (&NATSSink{JS: cfg.JS, Subject: Subject(cfg.Domain, api), Ensure: ensure}).Sink
 		}
 		s := &Surface{r: r, api: api, purposes: purposes}
@@ -231,6 +241,9 @@ func (r *Recorder) Close(ctx context.Context) error {
 			r.conn.Close()
 		}
 	}
+	if r.redis != nil {
+		_ = r.redis.Close()
+	}
 	return errors.Join(errs...)
 }
 
@@ -238,7 +251,24 @@ func (r *Recorder) Close(ctx context.Context) error {
 // connection. NATS not up yet is not an error: the connection keeps trying
 // (and the stream is created on the first publish), and every drop and
 // return is logged — a stream that stops must be visible in the log.
+//
+// A redis:// or rediss:// dsn stores the stream on Redis Streams instead
+// (see [RedisSink]), for a project that runs no NATS.
 func Open(ctx context.Context, dsn string, cfg RecorderConfig) (*Recorder, error) {
+	if IsRedisDSN(dsn) {
+		c, err := dialRedis(ctx, dsn)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Redis = c
+		r, err := NewRecorder(ctx, cfg)
+		if err != nil {
+			_ = c.Close()
+			return nil, err
+		}
+		r.redis = c
+		return r, nil
+	}
 	nc, err := nats.Connect(dsn,
 		nats.Name("w17-requests-"+cfg.Domain),
 		nats.RetryOnFailedConnect(true),
