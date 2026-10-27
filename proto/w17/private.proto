@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package w17;
+
+import "google/protobuf/descriptor.proto";
+import "w17/request_events.proto";
+import "w17/rpc.proto";
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// Private gRPC surface — the ONE way another domain reaches this one's
+// services.
+//
+// A domain's internal services (its storage and business tiers) serve that
+// domain alone: never exposed on the network for another domain, never named
+// as another domain's backend. A product authenticating at its identity, one
+// domain reading another's data — anything crossing a domain boundary goes
+// through a gateway, and a private surface is the gateway for SERVICES: its
+// callers are other domains' bundles, never people.
+//
+// How it differs from the public surfaces (rest / rpc / mcp):
+//
+//   - The caller is a service, identified by its CLIENT CERTIFICATE (mutual
+//     TLS, always — on one machine as across regions). The certificate's URI
+//     SAN names it: `spiffe://w17/<domain>/<bundle>`.
+//   - Access is decided by the calling DOMAIN (`callers`) and the method
+//     (`groups`, `include`), not by a person's permissions. A person's
+//     credential, when one travels (a token the identity checks), is data.
+//   - It never rides the public edge. It runs as its own bundle,
+//     `<domain>-gateway-private` (a composed `-server` serves it as one more
+//     listener), on :50061, and is reached through the private proxy: the
+//     proxy terminates the caller's mTLS, checks the source address, and
+//     re-originates mTLS to the bundle with its own identity, forwarding the
+//     caller's. The bundle answers the proxy only.
+//
+// Declared in `proto/domains/<domain>/private.proto`; one per domain.
+message PrivateApi {
+  string description = 1;
+
+  // The domain's own methods this surface serves, by group — the same refs
+  // as `(w17.rpc_api)` groups (`<module>.<Service>` or
+  // `<module>.<Service>.<Method>`). A group serves under its original
+  // service name, so a caller's generated client needs no alias.
+  repeated RpcGroup groups = 2;
+
+  // Plugin methods this surface serves, picked from the plugin's `rpc`
+  // preset. Nothing of a preset is served until it is named here, method by
+  // method: the author confirms each one.
+  repeated PrivateInclude include = 3;
+
+  // The domains admitted. A caller whose certificate names another domain is
+  // refused before any method runs. Empty refuses the build: a private
+  // surface no one may call is a mistake, and one anyone may call is not
+  // private.
+  repeated string callers = 4;
+
+  // Records each call (who called, which method, the outcome), like the
+  // public surfaces' request events.
+  RequestEvents request_events = 5;
+}
+
+// One plugin's methods on a private surface.
+message PrivateInclude {
+  // The activation's registered name (`auth`, `grant`, …).
+  string plugin = 1;
+  // Plugin-relative `<Service>.<Method>` refs, each one the plugin's `rpc`
+  // preset offers.
+  repeated string methods = 2;
+}
+
+extend google.protobuf.FileOptions {
+  // (w17.private_api) — file-level option declaring this file as the
+  // domain's private surface. See PrivateApi.
+  PrivateApi private_api = 50116;
+}

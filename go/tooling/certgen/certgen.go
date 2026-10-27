@@ -34,9 +34,11 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -235,7 +237,7 @@ func ensureLeaf(dir string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, s
 // leafStaleReason reports why an existing leaf cannot be kept, or "" when
 // it can: it must chain to caCert, cover every SAN a fresh leaf would
 // carry, be inside its validity window, and match its key.
-func leafStaleReason(cert *x509.Certificate, key *ecdsa.PrivateKey, caCert *x509.Certificate, sans []string, now time.Time) string {
+func leafStaleReason(cert *x509.Certificate, key *ecdsa.PrivateKey, caCert *x509.Certificate, sans []string, now time.Time, uris ...*url.URL) string {
 	if err := cert.CheckSignatureFrom(caCert); err != nil {
 		return "not signed by the current CA"
 	}
@@ -265,13 +267,18 @@ func leafStaleReason(cert *x509.Certificate, key *ecdsa.PrivateKey, caCert *x509
 			return fmt.Sprintf("missing SAN %s", ip)
 		}
 	}
+	for _, u := range uris {
+		if !slices.ContainsFunc(cert.URIs, func(c *url.URL) bool { return c.String() == u.String() }) {
+			return fmt.Sprintf("missing SAN %s", u)
+		}
+	}
 	return ""
 }
 
 // mintLeaf signs a fresh leaf with the CA and writes the pair. It carries
 // both ServerAuth and ClientAuth: the node presents it as its server
 // certificate, and as its client certificate under mutual TLS.
-func mintLeaf(certPath, keyPath string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, sans []string) ([]string, error) {
+func mintLeaf(certPath, keyPath string, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, sans []string, uris ...*url.URL) ([]string, error) {
 	dns, ips := splitSANs(sans)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -284,13 +291,14 @@ func mintLeaf(certPath, keyPath string, caCert *x509.Certificate, caKey *ecdsa.P
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "w17 dev.local server"},
+		Subject:      pkix.Name{CommonName: leafCommonName(uris)},
 		NotBefore:    now.Add(-1 * time.Hour),
 		NotAfter:     now.Add(devCertValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		DNSNames:     dns,
 		IPAddresses:  ips,
+		URIs:         uris,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
 	if err != nil {
@@ -439,4 +447,65 @@ func loadCert(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey, e
 		return nil, nil, err
 	}
 	return cert, key, nil
+}
+
+// leafCommonName names a leaf: the identity it carries, else the shared
+// server leaf's name.
+func leafCommonName(uris []*url.URL) string {
+	if len(uris) > 0 {
+		return uris[0].String()
+	}
+	return "w17 dev.local server"
+}
+
+// EnsureIdentity makes sure dir holds a leaf for ONE service identity,
+// signed by the same CA as EnsureCerts' (created when absent): `<name>.crt`
+// and `<name>.key`, carrying the identity as a URI SAN (a private surface's
+// caller and proxy are told apart by it: `spiffe://w17/<domain>/<bundle>`)
+// plus dnsSANs for the names it is dialed by when it serves. ServerAuth and
+// ClientAuth both: a private gateway serves with it, a caller and the proxy
+// present it. Kept when it still chains to the CA, carries every SAN and is
+// valid; re-minted otherwise. Returns the files written.
+func EnsureIdentity(dir, name, identity string, dnsSANs []string) ([]string, error) {
+	u, err := url.Parse(identity)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("certgen: identity %q is not a URI (spiffe://w17/<domain>/<bundle>)", identity)
+	}
+	if name == "" || strings.ContainsAny(name, "/\\") || name == "ca" || name == "server" {
+		return nil, fmt.Errorf("certgen: identity file name %q is not usable", name)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("certgen: mkdir %q: %w", dir, err)
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	gitignorePath := filepath.Join(dir, gitignoreFile)
+	if !fileExists(gitignorePath) {
+		if err := os.WriteFile(gitignorePath, []byte(gitignoreBody), 0o644); err != nil {
+			return nil, fmt.Errorf("certgen: write %q: %w", gitignorePath, err)
+		}
+	}
+	caCert, caKey, written, err := ensureCA(filepath.Join(dir, caFile), filepath.Join(dir, caKeyFile))
+	if err != nil {
+		return nil, err
+	}
+	certPath, keyPath := filepath.Join(dir, name+".crt"), filepath.Join(dir, name+".key")
+	certThere, keyThere := fileExists(certPath), fileExists(keyPath)
+	switch {
+	case certThere && keyThere:
+		cert, key, err := loadCert(certPath, keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("certgen: reuse %s: %w — delete %q + %q to re-mint", name, err, certPath, keyPath)
+		}
+		if leafStaleReason(cert, key, caCert, dnsSANs, time.Now(), u) == "" {
+			return written, nil
+		}
+	case certThere != keyThere:
+		return nil, fmt.Errorf("certgen: %s half-present — restore the missing file or remove both to re-mint", name)
+	}
+	leaf, err := mintLeaf(certPath, keyPath, caCert, caKey, dnsSANs, u)
+	return append(written, leaf...), err
 }

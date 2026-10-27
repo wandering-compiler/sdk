@@ -11122,7 +11122,13 @@ type GatewayTarget struct {
 	// MCP 8081, gRPC 8082): every audience gateway of a composed binary
 	// listens in one process, so each absorbed one gets its own (10, 20, …).
 	// 0 everywhere else.
-	PortOffset    int32 `protobuf:"varint,23,opt,name=port_offset,json=portOffset,proto3" json:"port_offset,omitempty"`
+	PortOffset int32 `protobuf:"varint,23,opt,name=port_offset,json=portOffset,proto3" json:"port_offset,omitempty"`
+	// Private: this target is the domain's PRIVATE gateway
+	// (`<domain>-gateway-private`, env prefix `<DOMAIN>_GATEWAY_PRIVATE`) — the
+	// gRPC surface its `(w17.private_api)` declares, served to other domains'
+	// services only: mutual TLS, :50061, callers admitted by domain, never on
+	// the public edge. It serves no REST / MCP.
+	Private       bool `protobuf:"varint,24,opt,name=private,proto3" json:"private,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11311,6 +11317,13 @@ func (x *GatewayTarget) GetPortOffset() int32 {
 	return 0
 }
 
+func (x *GatewayTarget) GetPrivate() bool {
+	if x != nil {
+		return x.Private
+	}
+	return false
+}
+
 // AbsorbedGateway — one audience gateway folded into a composed binary.
 type AbsorbedGateway struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -11326,8 +11339,12 @@ type AbsorbedGateway struct {
 	EnvPrefix  string `protobuf:"bytes,4,opt,name=env_prefix,json=envPrefix,proto3" json:"env_prefix,omitempty"`
 	PortOffset int32  `protobuf:"varint,5,opt,name=port_offset,json=portOffset,proto3" json:"port_offset,omitempty"`
 	// The transports it serves beside REST.
-	HasMcp        bool `protobuf:"varint,6,opt,name=has_mcp,json=hasMcp,proto3" json:"has_mcp,omitempty"`
-	HasRpc        bool `protobuf:"varint,7,opt,name=has_rpc,json=hasRpc,proto3" json:"has_rpc,omitempty"`
+	HasMcp bool `protobuf:"varint,6,opt,name=has_mcp,json=hasMcp,proto3" json:"has_mcp,omitempty"`
+	HasRpc bool `protobuf:"varint,7,opt,name=has_rpc,json=hasRpc,proto3" json:"has_rpc,omitempty"`
+	// Private: the absorbed gateway is the domain's private one — its gRPC
+	// listener is the private surface's (mutual TLS, :50061), and it has no
+	// REST / MCP listener.
+	Private       bool `protobuf:"varint,8,opt,name=private,proto3" json:"private,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11407,6 +11424,13 @@ func (x *AbsorbedGateway) GetHasMcp() bool {
 func (x *AbsorbedGateway) GetHasRpc() bool {
 	if x != nil {
 		return x.HasRpc
+	}
+	return false
+}
+
+func (x *AbsorbedGateway) GetPrivate() bool {
+	if x != nil {
+		return x.Private
 	}
 	return false
 }
@@ -13036,7 +13060,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	" \x01(\tR\x05goChi\x12\x17\n" +
 	"\anats_go\x18\v \x01(\tR\x06natsGo\x12\x15\n" +
 	"\x06mcp_go\x18\f \x01(\tR\x05mcpGo\x12\x15\n" +
-	"\x06sdk_go\x18\r \x01(\tR\x05sdkGoJ\x04\b\a\x10\bR\x03gox\"\xa0\b\n" +
+	"\x06sdk_go\x18\r \x01(\tR\x05sdkGoJ\x04\b\a\x10\bR\x03gox\"\xba\b\n" +
 	"\rGatewayTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
@@ -13063,7 +13087,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x11absorbed_gateways\x18\x15 \x03(\v2$.w17.storage.codegen.AbsorbedGatewayR\x10absorbedGateways\x12!\n" +
 	"\flibrary_only\x18\x16 \x01(\bR\vlibraryOnly\x12\x1f\n" +
 	"\vport_offset\x18\x17 \x01(\x05R\n" +
-	"portOffsetJ\x04\b\x12\x10\x13R\bemit_ctl\"\xda\x01\n" +
+	"portOffset\x12\x18\n" +
+	"\aprivate\x18\x18 \x01(\bR\aprivateJ\x04\b\x12\x10\x13R\bemit_ctl\"\xf4\x01\n" +
 	"\x0fAbsorbedGateway\x12\x1a\n" +
 	"\baudience\x18\x01 \x01(\tR\baudience\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12!\n" +
@@ -13073,7 +13098,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\vport_offset\x18\x05 \x01(\x05R\n" +
 	"portOffset\x12\x17\n" +
 	"\ahas_mcp\x18\x06 \x01(\bR\x06hasMcp\x12\x17\n" +
-	"\ahas_rpc\x18\a \x01(\bR\x06hasRpc\"\xa1\x03\n" +
+	"\ahas_rpc\x18\a \x01(\bR\x06hasRpc\x12\x18\n" +
+	"\aprivate\x18\b \x01(\bR\aprivate\"\xa1\x03\n" +
 	"\vAdminTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
