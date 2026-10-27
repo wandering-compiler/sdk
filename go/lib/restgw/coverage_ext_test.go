@@ -472,8 +472,8 @@ func TestProcessFilePart_TmpDirError(t *testing.T) {
 		MaxSizeBytes:      1024,
 		AllowedExtensions: []string{"pdf"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "mkdir tmp") {
-		t.Errorf("want mkdir-tmp error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "mkdir staging dir") {
+		t.Errorf("want mkdir-staging-dir error, got %v", err)
 	}
 }
 

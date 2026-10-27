@@ -803,6 +803,69 @@ message RestEndpoint {
   // gateway says so once at start, so a project turns captchas on by
   // configuring a key and off by removing it.
   Captcha captcha = 22;
+
+  // raw_response — the response's one `bytes` field IS the HTTP body,
+  // the mirror of `raw_body_field` for the answer: a PDF the handler
+  // rendered, a CSV export, an image it composed. Without it the bytes
+  // travel as base64 inside a JSON document, a third larger, and a link
+  // to the endpoint opens a JSON page instead of the file.
+  //
+  // The file is made per request and held in memory for it: the handler
+  // returns it in one gRPC message, so it is bounded by the transport's
+  // message limit (4 MiB by default). A file that is large, or that should
+  // be rendered once and served many times, belongs in a store: a field
+  // declared `upload.writer: BUSINESS`, put by the handler, served by a
+  // download endpoint (ETag, Range, Cache-Control, any size).
+  //
+  // Mutually exclusive with `browser_redirect` and `paged`, and only on a
+  // unary method. See `RawResponse`.
+  RawResponse raw_response = 23;
+}
+
+// RawResponse names the response fields the HTTP answer is made of.
+//
+// Every name is checked against the resolved response type at parse time —
+// a name that does not exist, or exists with another type, is refused there
+// rather than producing a gateway that answers an empty body.
+//
+// The gateway answers 200 with the body verbatim, `Content-Type` and
+// `Content-Length`, a strong `ETag` (the body's sha256) and the endpoint's
+// `Cache-Control`; a request whose `If-None-Match` names that ETag gets 304
+// with no body (GET / HEAD; another method always gets the whole body, its
+// side effect having run). The ETag saves the transfer, not the render: the
+// handler runs on every request, because the gateway only knows the tag once
+// it has the bytes. Error responses stay the usual JSON envelope.
+message RawResponse {
+  // The `bytes` response field sent as the body. Required.
+  string body_field = 1;
+
+  // The body's media type, e.g. "application/pdf". Required unless
+  // `content_type_field` is set; with both, a non-empty field value wins
+  // and this is the fallback. A field value that is empty with no literal
+  // behind it, or is not a media type, goes out as
+  // `application/octet-stream`; an HTML, SVG or XML type is sent with a
+  // sandboxing Content-Security-Policy.
+  string content_type = 2;
+
+  // A `string` response field carrying the media type, for a method whose
+  // answer is not always one type (an export in a chosen format).
+  string content_type_field = 3;
+
+  // A `string` response field carrying the file name the browser saves the
+  // body under (`Content-Disposition: attachment; filename=…`, with the
+  // RFC 2231 `filename*` form for a non-ASCII name). Optional: empty, at
+  // parse time or at runtime, sends no file name — `inline` alone when
+  // `inline` is set, no disposition otherwise, and the browser decides.
+  string filename_field = 4;
+
+  // Ask the browser to SHOW the body (`Content-Disposition: inline`) rather
+  // than save it — a PDF opened in a tab. The file name, when there is one,
+  // still names it.
+  bool inline = 5;
+
+  // `Cache-Control` value. Empty = "private, no-cache": a client may keep
+  // the file and must revalidate it, which the ETag makes a 304.
+  string cache_control = 6;
 }
 
 // MetadataBinding — one HTTP-slot → gRPC-metadata

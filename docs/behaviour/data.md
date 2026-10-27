@@ -407,7 +407,7 @@ Stamp table: `w17_collation`.
 
 ## D13. Blob store for uploads
 
-**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`.
+**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`.
 
 **Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys.
 
@@ -430,7 +430,9 @@ Stamp table: `w17_collation`.
 | D13.6 | Delete MUST be idempotent; Open, Stat and OpenSeekable of a missing key MUST return `ErrNotFound`. | `local_fs_test.go`, `memory/*_test.go` |
 | D13.7 | Keys MUST NOT carry a leading `/`, so upload and download paths agree across drivers. | `kvfs_test.go` |
 | D13.8 | The published mode MUST NOT depend on which publish branch ran. | `TestPutFromTempFile_PublishedModeIsBranchIndependent` |
-| D13.9 | Readers (business tier) MUST receive only the `Reader` half; only the gateway writes. | `TestReader_CarriesNoWriteMethod` (the interface; the generated business `ClientSet` is not covered here) |
+| D13.9 | A connection has ONE writer: the gateway for an upload connection, the business tier for one whose fields declare `upload.writer: BUSINESS`. Every other holder MUST receive only the `Reader` half. | `TestReader_CarriesNoWriteMethod` (the interface; the generated business `ClientSet` is not covered here) |
+| D13.10 | `Put` MUST store the body under `BuildKey(placement.BucketPath, ObjectKey(sha256), …)` — the key an upload of the same field gets — and return that handle; two puts of one body MUST be two objects. | `TestPut_PlacesUnderTheFieldsLayoutAndReadsBack`, `TestPut_IdenticalBodiesAreDistinctObjects` |
+| D13.11 | A body past `MaxSizeBytes`, or a failing driver, MUST store nothing and leave no staging file. | `TestPut_TooLargeStoresNothing`, `TestPut_DriverErrorCleansUp` |
 
 **Deliberate limits.**
 - No `fsync` before or after rename; durability across power loss is not guaranteed.

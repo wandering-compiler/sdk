@@ -89,6 +89,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E39 | DPoP TypeScript client | `ts/dpop` — `createDpopFetch`, `createProof`, `jwkThumbprint`, `IndexedDBKeyStore`, `issueStreamTicket` |
 | E40 | DPoP in the admin runtime | `ts/admin-runtime/src` — `auth.ts` (`configureAuth`, `deviceFetch`), `api.ts`, `oauth.ts`, `Login.tsx`, `App.tsx` |
 | E41 | Captcha verification | `go/lib/captcha` — `Verifier`, `New`, `NewFromEnv`; `go/lib/restgw` — `RequireCaptcha` |
+| E42 | Raw responses | `go/lib/restgw/rawresponse.go` — `WriteRawResponse` |
 
 ---
 
@@ -1637,3 +1638,26 @@ backend is called. Off unless the gateway has the provider's secret.
 **Deliberate limits.**
 - Fails closed: an unreachable provider refuses the call.
 - One provider; the siteverify shape is the one hCaptcha and reCAPTCHA share.
+
+---
+
+## E42. Raw responses
+
+**Code.** `go/lib/restgw/rawresponse.go` — `WriteRawResponse`, `RawResponse`.
+
+**Purpose.** Answers an endpoint declared `raw_response` with the handler's bytes as the HTTP body
+instead of a JSON document — a file a link opens.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E42.1 | The body MUST go out verbatim with its Content-Type (`application/octet-stream` when empty), Content-Length, `nosniff`, a strong ETag (sha256) and Cache-Control (`private, no-cache` when empty) | `TestWriteRawResponse_TheBodyIsTheFile`, `TestWriteRawResponse_CacheControlOverride` |
+| E42.2 | `If-None-Match` naming the ETag MUST answer 304 with no body; a changed body MUST not | `TestWriteRawResponse_IfNoneMatchIs304` |
+| E42.3 | `Range` MUST answer 206 and `HEAD` MUST send no body | `TestWriteRawResponse_RangeAndHead` |
+| E42.4 | The file name MUST be reduced to its last path segment and stripped of control characters; a non-ASCII name MUST use RFC 2231 `filename*` | `TestWriteRawResponse_FilenameIsSanitised` |
+| E42.5 | A method other than GET / HEAD MUST answer 200 with the whole body whatever its `If-None-Match` / `Range` — the handler already ran | `TestWriteRawResponse_NonGetAlwaysSendsTheWholeBody` |
+| E42.6 | A scriptable type (HTML, XHTML, SVG, XML) MUST carry `Content-Security-Policy: sandbox`; a file name MUST lose format characters (bidi overrides) and C1 controls | `TestWriteRawResponse_ScriptableTypesAreSandboxed`, `TestWriteRawResponse_FilenameDropsFormatCharacters` |
+
+**Deliberate limits.**
+- The body is held in memory; the ETag saves the transfer, not the handler's render.
