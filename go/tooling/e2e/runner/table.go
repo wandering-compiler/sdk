@@ -90,6 +90,12 @@ type Endpoint struct {
 	// cannot be exercised through a client that rewrites them.
 	RawBodyField string
 
+	// RawResponse mirrors `raw_response` on the endpoint: the success body
+	// IS the answer — a PDF, a text file — not a JSON document. The runner
+	// reports it through WireKey only (with the body and its
+	// Content-Disposition), since there are no fields to decode.
+	RawResponse bool
+
 	// --- MCP routing (Transport == "mcp") ---
 
 	// ToolName is the MCP tool the ref maps to (`tools/call` name).

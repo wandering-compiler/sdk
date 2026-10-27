@@ -1677,7 +1677,23 @@ type RestEndpoint struct {
 	// (`<PREFIX>_CAPTCHA_SECRET`): without one nothing is checked and the
 	// gateway says so once at start, so a project turns captchas on by
 	// configuring a key and off by removing it.
-	Captcha       Captcha `protobuf:"varint,22,opt,name=captcha,proto3,enum=w17.Captcha" json:"captcha,omitempty"`
+	Captcha Captcha `protobuf:"varint,22,opt,name=captcha,proto3,enum=w17.Captcha" json:"captcha,omitempty"`
+	// raw_response — the response's one `bytes` field IS the HTTP body,
+	// the mirror of `raw_body_field` for the answer: a PDF the handler
+	// rendered, a CSV export, an image it composed. Without it the bytes
+	// travel as base64 inside a JSON document, a third larger, and a link
+	// to the endpoint opens a JSON page instead of the file.
+	//
+	// The file is made per request and held in memory for it: the handler
+	// returns it in one gRPC message, so it is bounded by the transport's
+	// message limit (4 MiB by default). A file that is large, or that should
+	// be rendered once and served many times, belongs in a store: a field
+	// declared `upload.writer: BUSINESS`, put by the handler, served by a
+	// download endpoint (ETag, Range, Cache-Control, any size).
+	//
+	// Mutually exclusive with `browser_redirect` and `paged`, and only on a
+	// unary method. See `RawResponse`.
+	RawResponse   *RawResponse `protobuf:"bytes,23,opt,name=raw_response,json=rawResponse,proto3" json:"raw_response,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1845,6 +1861,129 @@ func (x *RestEndpoint) GetCaptcha() Captcha {
 	return Captcha_CAPTCHA_UNSPECIFIED
 }
 
+func (x *RestEndpoint) GetRawResponse() *RawResponse {
+	if x != nil {
+		return x.RawResponse
+	}
+	return nil
+}
+
+// RawResponse names the response fields the HTTP answer is made of.
+//
+// Every name is checked against the resolved response type at parse time —
+// a name that does not exist, or exists with another type, is refused there
+// rather than producing a gateway that answers an empty body.
+//
+// The gateway answers 200 with the body verbatim, `Content-Type` and
+// `Content-Length`, a strong `ETag` (the body's sha256) and the endpoint's
+// `Cache-Control`; a request whose `If-None-Match` names that ETag gets 304
+// with no body (GET / HEAD; another method always gets the whole body, its
+// side effect having run). The ETag saves the transfer, not the render: the
+// handler runs on every request, because the gateway only knows the tag once
+// it has the bytes. Error responses stay the usual JSON envelope.
+type RawResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The `bytes` response field sent as the body. Required.
+	BodyField string `protobuf:"bytes,1,opt,name=body_field,json=bodyField,proto3" json:"body_field,omitempty"`
+	// The body's media type, e.g. "application/pdf". Required unless
+	// `content_type_field` is set; with both, a non-empty field value wins
+	// and this is the fallback. A field value that is empty with no literal
+	// behind it, or is not a media type, goes out as
+	// `application/octet-stream`; an HTML, SVG or XML type is sent with a
+	// sandboxing Content-Security-Policy.
+	ContentType string `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	// A `string` response field carrying the media type, for a method whose
+	// answer is not always one type (an export in a chosen format).
+	ContentTypeField string `protobuf:"bytes,3,opt,name=content_type_field,json=contentTypeField,proto3" json:"content_type_field,omitempty"`
+	// A `string` response field carrying the file name the browser saves the
+	// body under (`Content-Disposition: attachment; filename=…`, with the
+	// RFC 2231 `filename*` form for a non-ASCII name). Optional: empty, at
+	// parse time or at runtime, sends no file name — `inline` alone when
+	// `inline` is set, no disposition otherwise, and the browser decides.
+	FilenameField string `protobuf:"bytes,4,opt,name=filename_field,json=filenameField,proto3" json:"filename_field,omitempty"`
+	// Ask the browser to SHOW the body (`Content-Disposition: inline`) rather
+	// than save it — a PDF opened in a tab. The file name, when there is one,
+	// still names it.
+	Inline bool `protobuf:"varint,5,opt,name=inline,proto3" json:"inline,omitempty"`
+	// `Cache-Control` value. Empty = "private, no-cache": a client may keep
+	// the file and must revalidate it, which the ETag makes a 304.
+	CacheControl  string `protobuf:"bytes,6,opt,name=cache_control,json=cacheControl,proto3" json:"cache_control,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RawResponse) Reset() {
+	*x = RawResponse{}
+	mi := &file_w17_rest_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RawResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RawResponse) ProtoMessage() {}
+
+func (x *RawResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rest_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RawResponse.ProtoReflect.Descriptor instead.
+func (*RawResponse) Descriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RawResponse) GetBodyField() string {
+	if x != nil {
+		return x.BodyField
+	}
+	return ""
+}
+
+func (x *RawResponse) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *RawResponse) GetContentTypeField() string {
+	if x != nil {
+		return x.ContentTypeField
+	}
+	return ""
+}
+
+func (x *RawResponse) GetFilenameField() string {
+	if x != nil {
+		return x.FilenameField
+	}
+	return ""
+}
+
+func (x *RawResponse) GetInline() bool {
+	if x != nil {
+		return x.Inline
+	}
+	return false
+}
+
+func (x *RawResponse) GetCacheControl() string {
+	if x != nil {
+		return x.CacheControl
+	}
+	return ""
+}
+
 // MetadataBinding — one HTTP-slot → gRPC-metadata
 // routing entry. Sibling of `FieldBinding` which
 // targets a request-msg field; this one targets a metadata key.
@@ -1873,7 +2012,7 @@ type MetadataBinding struct {
 
 func (x *MetadataBinding) Reset() {
 	*x = MetadataBinding{}
-	mi := &file_w17_rest_proto_msgTypes[9]
+	mi := &file_w17_rest_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1885,7 +2024,7 @@ func (x *MetadataBinding) String() string {
 func (*MetadataBinding) ProtoMessage() {}
 
 func (x *MetadataBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[9]
+	mi := &file_w17_rest_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1898,7 +2037,7 @@ func (x *MetadataBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataBinding.ProtoReflect.Descriptor instead.
 func (*MetadataBinding) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{9}
+	return file_w17_rest_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *MetadataBinding) GetRef() string {
@@ -1956,7 +2095,7 @@ type PagedConfig struct {
 
 func (x *PagedConfig) Reset() {
 	*x = PagedConfig{}
-	mi := &file_w17_rest_proto_msgTypes[10]
+	mi := &file_w17_rest_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1968,7 +2107,7 @@ func (x *PagedConfig) String() string {
 func (*PagedConfig) ProtoMessage() {}
 
 func (x *PagedConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[10]
+	mi := &file_w17_rest_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1981,7 +2120,7 @@ func (x *PagedConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PagedConfig.ProtoReflect.Descriptor instead.
 func (*PagedConfig) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{10}
+	return file_w17_rest_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PagedConfig) GetEnabled() bool {
@@ -2047,7 +2186,7 @@ type FieldBinding struct {
 
 func (x *FieldBinding) Reset() {
 	*x = FieldBinding{}
-	mi := &file_w17_rest_proto_msgTypes[11]
+	mi := &file_w17_rest_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2059,7 +2198,7 @@ func (x *FieldBinding) String() string {
 func (*FieldBinding) ProtoMessage() {}
 
 func (x *FieldBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[11]
+	mi := &file_w17_rest_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2072,7 +2211,7 @@ func (x *FieldBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldBinding.ProtoReflect.Descriptor instead.
 func (*FieldBinding) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{11}
+	return file_w17_rest_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *FieldBinding) GetRef() string {
@@ -2206,7 +2345,7 @@ type RestStream struct {
 
 func (x *RestStream) Reset() {
 	*x = RestStream{}
-	mi := &file_w17_rest_proto_msgTypes[12]
+	mi := &file_w17_rest_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2218,7 +2357,7 @@ func (x *RestStream) String() string {
 func (*RestStream) ProtoMessage() {}
 
 func (x *RestStream) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[12]
+	mi := &file_w17_rest_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2231,7 +2370,7 @@ func (x *RestStream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestStream.ProtoReflect.Descriptor instead.
 func (*RestStream) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{12}
+	return file_w17_rest_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RestStream) GetRef() string {
@@ -2380,7 +2519,7 @@ type DownloadEndpoint struct {
 
 func (x *DownloadEndpoint) Reset() {
 	*x = DownloadEndpoint{}
-	mi := &file_w17_rest_proto_msgTypes[13]
+	mi := &file_w17_rest_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2392,7 +2531,7 @@ func (x *DownloadEndpoint) String() string {
 func (*DownloadEndpoint) ProtoMessage() {}
 
 func (x *DownloadEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rest_proto_msgTypes[13]
+	mi := &file_w17_rest_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2405,7 +2544,7 @@ func (x *DownloadEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadEndpoint.ProtoReflect.Descriptor instead.
 func (*DownloadEndpoint) Descriptor() ([]byte, []int) {
-	return file_w17_rest_proto_rawDescGZIP(), []int{13}
+	return file_w17_rest_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *DownloadEndpoint) GetPath() string {
@@ -2547,7 +2686,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\x89\x06\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\xbe\x06\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2570,7 +2709,16 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\rorg_from_path\x18\x13 \x01(\tR\vorgFromPath\x123\n" +
 	"\fpublic_limit\x18\x14 \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimit\x12\x1b\n" +
 	"\tdpop_mint\x18\x15 \x01(\bR\bdpopMint\x12&\n" +
-	"\acaptcha\x18\x16 \x01(\x0e2\f.w17.CaptchaR\acaptchaJ\x04\b\x05\x10\x06R\vauth_scopes\"e\n" +
+	"\acaptcha\x18\x16 \x01(\x0e2\f.w17.CaptchaR\acaptcha\x123\n" +
+	"\fraw_response\x18\x17 \x01(\v2\x10.w17.RawResponseR\vrawResponseJ\x04\b\x05\x10\x06R\vauth_scopes\"\xe1\x01\n" +
+	"\vRawResponse\x12\x1d\n" +
+	"\n" +
+	"body_field\x18\x01 \x01(\tR\tbodyField\x12!\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12,\n" +
+	"\x12content_type_field\x18\x03 \x01(\tR\x10contentTypeField\x12%\n" +
+	"\x0efilename_field\x18\x04 \x01(\tR\rfilenameField\x12\x16\n" +
+	"\x06inline\x18\x05 \x01(\bR\x06inline\x12#\n" +
+	"\rcache_control\x18\x06 \x01(\tR\fcacheControl\"e\n" +
 	"\x0fMetadataBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1a\n" +
@@ -2668,7 +2816,7 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 }
 
 var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
 	(FieldSource)(0),                 // 1: w17.FieldSource
@@ -2687,51 +2835,53 @@ var file_w17_rest_proto_goTypes = []any{
 	(*HeaderRename)(nil),             // 14: w17.HeaderRename
 	(*RestGroup)(nil),                // 15: w17.RestGroup
 	(*RestEndpoint)(nil),             // 16: w17.RestEndpoint
-	(*MetadataBinding)(nil),          // 17: w17.MetadataBinding
-	(*PagedConfig)(nil),              // 18: w17.PagedConfig
-	(*FieldBinding)(nil),             // 19: w17.FieldBinding
-	(*RestStream)(nil),               // 20: w17.RestStream
-	(*DownloadEndpoint)(nil),         // 21: w17.DownloadEndpoint
-	(*RequestEvents)(nil),            // 22: w17.RequestEvents
-	(*Audience)(nil),                 // 23: w17.Audience
-	(*descriptorpb.FileOptions)(nil), // 24: google.protobuf.FileOptions
+	(*RawResponse)(nil),              // 17: w17.RawResponse
+	(*MetadataBinding)(nil),          // 18: w17.MetadataBinding
+	(*PagedConfig)(nil),              // 19: w17.PagedConfig
+	(*FieldBinding)(nil),             // 20: w17.FieldBinding
+	(*RestStream)(nil),               // 21: w17.RestStream
+	(*DownloadEndpoint)(nil),         // 22: w17.DownloadEndpoint
+	(*RequestEvents)(nil),            // 23: w17.RequestEvents
+	(*Audience)(nil),                 // 24: w17.Audience
+	(*descriptorpb.FileOptions)(nil), // 25: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
 	11, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
 	15, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
 	13, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
 	9,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
-	22, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
-	23, // 5: w17.RestApi.audience:type_name -> w17.Audience
+	23, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
+	24, // 5: w17.RestApi.audience:type_name -> w17.Audience
 	0,  // 6: w17.AuthMethod.token_types:type_name -> w17.TokenType
 	14, // 7: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
 	16, // 8: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	20, // 9: w17.RestGroup.streams:type_name -> w17.RestStream
-	21, // 10: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	21, // 9: w17.RestGroup.streams:type_name -> w17.RestStream
+	22, // 10: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
 	6,  // 11: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	19, // 12: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	18, // 13: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	17, // 14: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	20, // 12: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	19, // 13: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	18, // 14: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
 	12, // 15: w17.RestEndpoint.credential:type_name -> w17.Credential
 	10, // 16: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
 	4,  // 17: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
 	5,  // 18: w17.RestEndpoint.captcha:type_name -> w17.Captcha
-	1,  // 19: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 20: w17.FieldBinding.from:type_name -> w17.FieldSource
-	7,  // 21: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	17, // 22: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	19, // 23: w17.RestStream.fields:type_name -> w17.FieldBinding
-	12, // 24: w17.RestStream.credential:type_name -> w17.Credential
-	6,  // 25: w17.RestStream.method:type_name -> w17.HttpMethod
-	3,  // 26: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 27: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	24, // 28: w17.rest_api:extendee -> google.protobuf.FileOptions
-	8,  // 29: w17.rest_api:type_name -> w17.RestApi
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	29, // [29:30] is the sub-list for extension type_name
-	28, // [28:29] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	17, // 19: w17.RestEndpoint.raw_response:type_name -> w17.RawResponse
+	1,  // 20: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 21: w17.FieldBinding.from:type_name -> w17.FieldSource
+	7,  // 22: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	18, // 23: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	20, // 24: w17.RestStream.fields:type_name -> w17.FieldBinding
+	12, // 25: w17.RestStream.credential:type_name -> w17.Credential
+	6,  // 26: w17.RestStream.method:type_name -> w17.HttpMethod
+	3,  // 27: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 28: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	25, // 29: w17.rest_api:extendee -> google.protobuf.FileOptions
+	8,  // 30: w17.rest_api:type_name -> w17.RestApi
+	31, // [31:31] is the sub-list for method output_type
+	31, // [31:31] is the sub-list for method input_type
+	30, // [30:31] is the sub-list for extension type_name
+	29, // [29:30] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2747,7 +2897,7 @@ func file_w17_rest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 1,
 			NumServices:   0,
 		},

@@ -315,7 +315,26 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 	if resp.StatusCode >= 400 {
 		return nil, newCallError(fmt.Sprintf("rest %s %s", method, target), resp.StatusCode, raw)
 	}
+	if ep.RawResponse {
+		return rawWire(raw, resp.Header), nil
+	}
 	return decodeWithWire(raw, resp.Header.Get("Content-Type"))
+}
+
+// rawWire reports a `raw_response` answer: the WireKey facts plus what a
+// file answer is made of — its bytes (as text, so `eq` can name a small
+// body), its Content-Disposition and its ETag. Never decoded: the body is
+// the file, and a JSON-looking one is still a file.
+func rawWire(raw []byte, h http.Header) map[string]any {
+	trimmed := bytes.TrimSpace(raw)
+	return map[string]any{WireKey: map[string]any{
+		"content_type":        mediaType(h.Get("Content-Type")),
+		"size":                float64(len(raw)),
+		"json":                len(trimmed) > 0 && json.Valid(trimmed),
+		"body":                string(raw),
+		"content_disposition": h.Get("Content-Disposition"),
+		"etag":                h.Get("ETag"),
+	}}
 }
 
 // WireKey is the synthetic response field carrying the WIRE facts of an

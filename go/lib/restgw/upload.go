@@ -19,7 +19,7 @@
 //      the body-level MaxBytesReader, which only caps the sum.
 //   3. Validates the extension against the allowlist.
 //   4. Names the object: the content hash plus a per-upload
-//      random suffix (see objectKeyFor), then derives the
+//      random suffix (see kvfs.ObjectKey), then derives the
 //      hash-based sub-bucket path from that name.
 //   5. Atomically moves the tmp file to its final location
 //      via the driver's PutFromTempFile primitive.
@@ -36,8 +36,6 @@ package restgw
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -162,7 +160,9 @@ func ProcessFilePart(ctx context.Context, r *http.Request, cfg FilePartConfig) (
 		return "", err
 	}
 
-	objectKey, err := objectKeyFor(hash)
+	// kvfs.ObjectKey — the derivation every writer of a connection shares,
+	// so a file the business tier puts (kvfs.Put) is keyed like an upload.
+	objectKey, err := kvfs.ObjectKey(hash)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		return "", err
@@ -184,29 +184,6 @@ func ProcessFilePart(ctx context.Context, r *http.Request, cfg FilePartConfig) (
 	// expected case.
 	_ = os.Remove(tmpPath)
 	return handle, nil
-}
-
-// objectKeyFor names the stored object for one upload: the sha256 of the
-// body followed by a random 128-bit suffix.
-//
-// Every upload gets its OWN object, even when its bytes match an object that
-// already exists. A purely content-derived key made identical uploads share
-// one object, and nothing tracks how many rows reference it: a request that
-// failed after its upload rolled back (RollbackUploads → Delete) the object a
-// different, committed request still pointed at, and an application deleting
-// the file of one row removed it for every other row with the same content.
-// Per-upload keys make "delete what this request stored" mean exactly that,
-// including for two identical uploads in flight at once. The cost is that
-// identical bodies are stored once per upload instead of once in total.
-//
-// The hash prefix keeps the key traceable to its content; the suffix is what
-// makes it unique.
-func objectKeyFor(hash string) (string, error) {
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", fmt.Errorf("restgw: object key nonce: %w", err)
-	}
-	return hash + "-" + hex.EncodeToString(nonce[:]), nil
 }
 
 // resolveStagingDir decides where the streaming write lands.
@@ -239,9 +216,8 @@ func resolveStagingDir(cfg FilePartConfig) (string, error) {
 }
 
 // streamToTempFile copies body to a fresh tmp file under
-// tmpDir while computing its sha256. Enforces maxSize by
-// wrapping the body with io.LimitReader+1; any extra byte
-// surfaces as ErrUploadTooLarge.
+// tmpDir while computing its sha256 (kvfs.StageTempFile). Enforces
+// maxSize: any byte past it surfaces as ErrUploadTooLarge.
 //
 // maxSize == 0 means UNLIMITED — no per-file cap is applied and
 // the whole part is streamed. The REST gateway never hits this
@@ -249,49 +225,17 @@ func resolveStagingDir(cfg FilePartConfig) (string, error) {
 // max_size_bytes is unset / 0, so a generated FilePartConfig
 // always carries a positive cap. The unlimited branch exists for
 // direct non-REST callers of this package that deliberately omit
-// a cap; treating 0 as "reject everything" (the old LimitReader
-// +1 == 1-byte-limit behaviour) was a foot-gun that bounced even
-// a 1-byte upload.
+// a cap.
 //
 // Caller closes body. Returns (tmpPath, hashHex, err); on
 // error the tmp file is unlinked.
 func streamToTempFile(body io.Reader, tmpDir string, maxSize uint64) (string, string, error) {
-	if tmpDir == "" {
-		tmpDir = os.TempDir()
-	}
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return "", "", fmt.Errorf("restgw: mkdir tmp: %w", err)
-	}
-	tmp, err := os.CreateTemp(tmpDir, "w17-upload-*")
-	if err != nil {
-		return "", "", fmt.Errorf("restgw: create tmp: %w", err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-	}
-
-	// LimitReader cap = max+1; if the source had more bytes
-	// than max, the +1 catches the overflow. Standard
-	// trick. maxSize == 0 disables the cap (unlimited) — see
-	// the doc comment above.
-	src := body
-	if maxSize > 0 {
-		src = io.LimitReader(body, int64(maxSize)+1)
-	}
-	hashHex, n, err := kvfs.HashFromReader(io.TeeReader(src, tmp))
-	if err != nil {
-		cleanup()
-		return "", "", fmt.Errorf("restgw: stream upload: %w", err)
-	}
-	if maxSize > 0 && uint64(n) > maxSize {
-		cleanup()
+	tmpPath, hashHex, err := kvfs.StageTempFile(body, tmpDir, maxSize)
+	if errors.Is(err, kvfs.ErrTooLarge) {
 		return "", "", fmt.Errorf("%w (limit=%d bytes)", ErrUploadTooLarge, maxSize)
 	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", "", fmt.Errorf("restgw: close tmp: %w", err)
+	if err != nil {
+		return "", "", fmt.Errorf("restgw: stage upload: %w", err)
 	}
 	return tmpPath, hashHex, nil
 }
@@ -401,7 +345,7 @@ type UploadedObject struct {
 // and no orphan posture exists anywhere in the stack.
 //
 // Only objects the failed request itself created are passed here, and
-// ProcessFilePart gives every upload its own key (objectKeyFor), so a
+// ProcessFilePart gives every upload its own key (kvfs.ObjectKey), so a
 // rollback can never remove an object another request stored — even one with
 // identical bytes, committed earlier or still in flight.
 //

@@ -410,7 +410,8 @@ const (
 	// verbatim — it already carries bucket_path and sub-bucket. The reader
 	// is READ-ONLY on purpose: the gateway derives keys and is the
 	// connection's only writer, so a second writer would be a second key
-	// layout.
+	// layout. A file the business tier MAKES goes on a connection of its
+	// own, declared by `upload.writer: BUSINESS` (see Upload.Writer).
 	//
 	// Required companion config: `(w17.field).upload` submessage with
 	// connection / bucket_path / sub-bucketing knobs. The parser
@@ -864,6 +865,79 @@ func (x ImageFormat) Number() protoreflect.EnumNumber {
 // Deprecated: Use ImageFormat.Descriptor instead.
 func (ImageFormat) EnumDescriptor() ([]byte, []int) {
 	return file_w17_field_proto_rawDescGZIP(), []int{5}
+}
+
+// Writer — which tier puts the files this field's handles name.
+//
+// A connection has ONE writer, because the writer is what derives a key
+// from the field's `bucket_path` + sub-bucketing knobs, and two derivers
+// are two key layouts. GATEWAY (the default) is an upload: a multipart
+// endpoint's FILE_PART binding streams the request's file in and the
+// business tier only reads it back. BUSINESS is a file the business tier
+// makes itself — a rendered PDF, an export — and puts through the store
+// its ClientSet hands it for the connection (`<Conn>Store()`, a
+// `kvfs.Driver`), keyed by `kvfs.Put` from this field's placement; the
+// handle it returns goes into this column.
+//
+// The rules that keep one writer per connection, refused at build:
+//
+//   - every field naming a connection declares the same writer (a
+//     connection two tiers write is two layouts);
+//   - a FILE_PART binding to a BUSINESS field is refused (the gateway
+//     would be a second writer);
+//   - `variants` / `pregenerate` are refused on a BUSINESS field (the
+//     gateway renders and stores variants: a write).
+//
+// A BUSINESS UPLOADED_FILE needs no `extensions`: the list filters a
+// client's upload by its filename, and nothing is uploaded into it.
+//
+// Download endpoints serve a BUSINESS field like an uploaded one — ETag,
+// Range, Cache-Control, signed URLs — so a generated file is fetched by a
+// plain link.
+type Upload_Writer int32
+
+const (
+	Upload_GATEWAY  Upload_Writer = 0
+	Upload_BUSINESS Upload_Writer = 1
+)
+
+// Enum value maps for Upload_Writer.
+var (
+	Upload_Writer_name = map[int32]string{
+		0: "GATEWAY",
+		1: "BUSINESS",
+	}
+	Upload_Writer_value = map[string]int32{
+		"GATEWAY":  0,
+		"BUSINESS": 1,
+	}
+)
+
+func (x Upload_Writer) Enum() *Upload_Writer {
+	p := new(Upload_Writer)
+	*p = x
+	return p
+}
+
+func (x Upload_Writer) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Upload_Writer) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_field_proto_enumTypes[6].Descriptor()
+}
+
+func (Upload_Writer) Type() protoreflect.EnumType {
+	return &file_w17_field_proto_enumTypes[6]
+}
+
+func (x Upload_Writer) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Upload_Writer.Descriptor instead.
+func (Upload_Writer) EnumDescriptor() ([]byte, []int) {
+	return file_w17_field_proto_rawDescGZIP(), []int{4, 0}
 }
 
 // Validate is the carrier for cross-field rules on a message.
@@ -1988,7 +2062,8 @@ type Upload struct {
 	// relational). A name that resolves to nothing, or to a
 	// connection whose resolved capability isn't KV, is a build
 	// error. The connection's dialect picks the runtime driver
-	// (`LOCAL_FS` today; `REDIS` / future `OBJECT_STORAGE`).
+	// (`LOCAL_FS` or `S3`: the root variable's value, a directory or an
+	// `s3://` URL, selects the driver at boot).
 	//
 	// Not checked when the batch declares no connections at all —
 	// a subset compile can't tell a typo from a project default.
@@ -2031,7 +2106,8 @@ type Upload struct {
 	// nothing depends on the background work having finished — a burst of
 	// uploads (a mass import) is spread over the gateway's variant workers
 	// (`<PREFIX>_VARIANT_WORKERS`) rather than refused.
-	Pregenerate   *bool `protobuf:"varint,7,opt,name=pregenerate,proto3,oneof" json:"pregenerate,omitempty"`
+	Pregenerate   *bool         `protobuf:"varint,7,opt,name=pregenerate,proto3,oneof" json:"pregenerate,omitempty"`
+	Writer        Upload_Writer `protobuf:"varint,8,opt,name=writer,proto3,enum=w17.Upload_Writer" json:"writer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2113,6 +2189,13 @@ func (x *Upload) GetPregenerate() bool {
 		return *x.Pregenerate
 	}
 	return false
+}
+
+func (x *Upload) GetWriter() Upload_Writer {
+	if x != nil {
+		return x.Writer
+	}
+	return Upload_GATEWAY
 }
 
 // EnumValueDisplay is the body of `(w17.value_display)`. Pure
@@ -2468,7 +2551,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"orphanable\"V\n" +
 	"\x11ValidationMessage\x12'\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x13.w17.ValidationTypeR\x04type\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xa6\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xf7\x02\n" +
 	"\x06Upload\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
@@ -2479,7 +2562,11 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0emax_per_bucket\x18\x04 \x01(\rR\fmaxPerBucket\x12$\n" +
 	"\x0emax_size_bytes\x18\x05 \x01(\x04R\fmaxSizeBytes\x12-\n" +
 	"\bvariants\x18\x06 \x03(\v2\x11.w17.ImageVariantR\bvariants\x12%\n" +
-	"\vpregenerate\x18\a \x01(\bH\x00R\vpregenerate\x88\x01\x01B\x0e\n" +
+	"\vpregenerate\x18\a \x01(\bH\x00R\vpregenerate\x88\x01\x01\x12*\n" +
+	"\x06writer\x18\b \x01(\x0e2\x12.w17.Upload.WriterR\x06writer\"#\n" +
+	"\x06Writer\x12\v\n" +
+	"\aGATEWAY\x10\x00\x12\f\n" +
+	"\bBUSINESS\x10\x01B\x0e\n" +
 	"\f_pregenerate\"j\n" +
 	"\x10EnumValueDisplay\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12 \n" +
@@ -2608,7 +2695,7 @@ func file_w17_field_proto_rawDescGZIP() []byte {
 	return file_w17_field_proto_rawDescData
 }
 
-var file_w17_field_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_w17_field_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_w17_field_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_w17_field_proto_goTypes = []any{
 	(ValidationRuleKind)(0),               // 0: w17.ValidationRuleKind
@@ -2617,39 +2704,41 @@ var file_w17_field_proto_goTypes = []any{
 	(Type)(0),                             // 3: w17.Type
 	(AutoDefault)(0),                      // 4: w17.AutoDefault
 	(ImageFormat)(0),                      // 5: w17.ImageFormat
-	(*Validate)(nil),                      // 6: w17.Validate
-	(*ValidationRule)(nil),                // 7: w17.ValidationRule
-	(*Field)(nil),                         // 8: w17.Field
-	(*ValidationMessage)(nil),             // 9: w17.ValidationMessage
-	(*Upload)(nil),                        // 10: w17.Upload
-	(*EnumValueDisplay)(nil),              // 11: w17.EnumValueDisplay
-	(*ImageVariant)(nil),                  // 12: w17.ImageVariant
-	(*descriptorpb.FieldOptions)(nil),     // 13: google.protobuf.FieldOptions
-	(*descriptorpb.MessageOptions)(nil),   // 14: google.protobuf.MessageOptions
-	(*descriptorpb.EnumValueOptions)(nil), // 15: google.protobuf.EnumValueOptions
+	(Upload_Writer)(0),                    // 6: w17.Upload.Writer
+	(*Validate)(nil),                      // 7: w17.Validate
+	(*ValidationRule)(nil),                // 8: w17.ValidationRule
+	(*Field)(nil),                         // 9: w17.Field
+	(*ValidationMessage)(nil),             // 10: w17.ValidationMessage
+	(*Upload)(nil),                        // 11: w17.Upload
+	(*EnumValueDisplay)(nil),              // 12: w17.EnumValueDisplay
+	(*ImageVariant)(nil),                  // 13: w17.ImageVariant
+	(*descriptorpb.FieldOptions)(nil),     // 14: google.protobuf.FieldOptions
+	(*descriptorpb.MessageOptions)(nil),   // 15: google.protobuf.MessageOptions
+	(*descriptorpb.EnumValueOptions)(nil), // 16: google.protobuf.EnumValueOptions
 }
 var file_w17_field_proto_depIdxs = []int32{
-	7,  // 0: w17.Validate.rules:type_name -> w17.ValidationRule
+	8,  // 0: w17.Validate.rules:type_name -> w17.ValidationRule
 	0,  // 1: w17.ValidationRule.kind:type_name -> w17.ValidationRuleKind
 	3,  // 2: w17.Field.type:type_name -> w17.Type
 	4,  // 3: w17.Field.default_auto:type_name -> w17.AutoDefault
-	10, // 4: w17.Field.upload:type_name -> w17.Upload
-	9,  // 5: w17.Field.validation_messages:type_name -> w17.ValidationMessage
+	11, // 4: w17.Field.upload:type_name -> w17.Upload
+	10, // 5: w17.Field.validation_messages:type_name -> w17.ValidationMessage
 	1,  // 6: w17.Field.auto_choices:type_name -> w17.AutoChoices
 	2,  // 7: w17.ValidationMessage.type:type_name -> w17.ValidationType
-	12, // 8: w17.Upload.variants:type_name -> w17.ImageVariant
-	5,  // 9: w17.ImageVariant.format:type_name -> w17.ImageFormat
-	13, // 10: w17.field:extendee -> google.protobuf.FieldOptions
-	14, // 11: w17.validate:extendee -> google.protobuf.MessageOptions
-	15, // 12: w17.value_display:extendee -> google.protobuf.EnumValueOptions
-	8,  // 13: w17.field:type_name -> w17.Field
-	6,  // 14: w17.validate:type_name -> w17.Validate
-	11, // 15: w17.value_display:type_name -> w17.EnumValueDisplay
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	13, // [13:16] is the sub-list for extension type_name
-	10, // [10:13] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	13, // 8: w17.Upload.variants:type_name -> w17.ImageVariant
+	6,  // 9: w17.Upload.writer:type_name -> w17.Upload.Writer
+	5,  // 10: w17.ImageVariant.format:type_name -> w17.ImageFormat
+	14, // 11: w17.field:extendee -> google.protobuf.FieldOptions
+	15, // 12: w17.validate:extendee -> google.protobuf.MessageOptions
+	16, // 13: w17.value_display:extendee -> google.protobuf.EnumValueOptions
+	9,  // 14: w17.field:type_name -> w17.Field
+	7,  // 15: w17.validate:type_name -> w17.Validate
+	12, // 16: w17.value_display:type_name -> w17.EnumValueDisplay
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	14, // [14:17] is the sub-list for extension type_name
+	11, // [11:14] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_w17_field_proto_init() }
@@ -2669,7 +2758,7 @@ func file_w17_field_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_field_proto_rawDesc), len(file_w17_field_proto_rawDesc)),
-			NumEnums:      6,
+			NumEnums:      7,
 			NumMessages:   7,
 			NumExtensions: 3,
 			NumServices:   0,

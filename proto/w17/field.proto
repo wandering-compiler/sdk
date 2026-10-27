@@ -810,7 +810,8 @@ message Upload {
   // relational). A name that resolves to nothing, or to a
   // connection whose resolved capability isn't KV, is a build
   // error. The connection's dialect picks the runtime driver
-  // (`LOCAL_FS` today; `REDIS` / future `OBJECT_STORAGE`).
+  // (`LOCAL_FS` or `S3`: the root variable's value, a directory or an
+  // `s3://` URL, selects the driver at boot).
   //
   // Not checked when the batch declares no connections at all —
   // a subset compile can't tell a typo from a project default.
@@ -860,6 +861,39 @@ message Upload {
   // uploads (a mass import) is spread over the gateway's variant workers
   // (`<PREFIX>_VARIANT_WORKERS`) rather than refused.
   optional bool pregenerate = 7;
+
+  // Writer — which tier puts the files this field's handles name.
+  //
+  // A connection has ONE writer, because the writer is what derives a key
+  // from the field's `bucket_path` + sub-bucketing knobs, and two derivers
+  // are two key layouts. GATEWAY (the default) is an upload: a multipart
+  // endpoint's FILE_PART binding streams the request's file in and the
+  // business tier only reads it back. BUSINESS is a file the business tier
+  // makes itself — a rendered PDF, an export — and puts through the store
+  // its ClientSet hands it for the connection (`<Conn>Store()`, a
+  // `kvfs.Driver`), keyed by `kvfs.Put` from this field's placement; the
+  // handle it returns goes into this column.
+  //
+  // The rules that keep one writer per connection, refused at build:
+  //
+  //   - every field naming a connection declares the same writer (a
+  //     connection two tiers write is two layouts);
+  //   - a FILE_PART binding to a BUSINESS field is refused (the gateway
+  //     would be a second writer);
+  //   - `variants` / `pregenerate` are refused on a BUSINESS field (the
+  //     gateway renders and stores variants: a write).
+  //
+  // A BUSINESS UPLOADED_FILE needs no `extensions`: the list filters a
+  // client's upload by its filename, and nothing is uploaded into it.
+  //
+  // Download endpoints serve a BUSINESS field like an uploaded one — ETag,
+  // Range, Cache-Control, signed URLs — so a generated file is fetched by a
+  // plain link.
+  enum Writer {
+    GATEWAY = 0;
+    BUSINESS = 1;
+  }
+  Writer writer = 8;
 }
 
 // Type — semantic subtype refining the proto carrier into a SQL column type
@@ -959,7 +993,8 @@ enum Type {
   // verbatim — it already carries bucket_path and sub-bucket. The reader
   // is READ-ONLY on purpose: the gateway derives keys and is the
   // connection's only writer, so a second writer would be a second key
-  // layout.
+  // layout. A file the business tier MAKES goes on a connection of its
+  // own, declared by `upload.writer: BUSINESS` (see Upload.Writer).
   //
   // Required companion config: `(w17.field).upload` submessage with
   // connection / bucket_path / sub-bucketing knobs. The parser
