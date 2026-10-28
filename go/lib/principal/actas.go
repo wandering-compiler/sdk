@@ -21,19 +21,31 @@ import (
 // behalf. A private surface admits services, not people: its gateway drops
 // any principal a caller sends, so a method that acts for someone takes
 // them as request fields — the user, the organization — and the domain,
-// having admitted the caller, vouches for them when it calls its own plugin:
+// having admitted the caller, vouches for them when it calls its own plugin.
 //
-//	ctx, err := principal.ActAs(ctx, &pb.AuthResp{UserId: req.GetUserId()},
-//		map[string]string{"org_id": req.GetOrgId()})
+// The envelope is what every check downstream reads, the permissions
+// included, so stamp the one this domain resolves for the person — with the
+// auth plugin, AuthService.ResolveUser, which answers what Authenticate would
+// for their session there:
+//
+//	who, err := s.clients.AuthService().ResolveUser(ctx, &authpb.ResolveUserReq{
+//		UserId:  req.GetUserId(),
+//		Headers: map[string]string{principal.OrgScopeHeader: req.GetOrg()},
+//	})
+//	if err != nil {
+//		return nil, err
+//	}
+//	ctx, err = principal.ActAs(ctx, who, who.GetScopes())
 //	if err != nil {
 //		return nil, err
 //	}
 //	res, err := s.clients.AuthService().InviteToOrg(ctx, &authpb.InviteToOrgReq{…})
 //
-// Only the user id and the scopes travel. Permissions are another domain's
-// (permission ids are per domain), so a method acting for a product's user
-// does not borrow them: what the user may do here is decided here, from
-// this domain's own data.
+// An envelope carrying only a user id holds nothing: a check that compares
+// what the caller holds — the auth plugin's role ceiling — refuses every role
+// that grants a permission. The caller's own permissions never travel:
+// permission ids are per domain, so what the person may do here is what this
+// domain resolves.
 //
 // The principal is replaced, never merged. Every gateway-stamped key on the
 // incoming side is dropped too, so a later [ForwardToOutgoing] on the
