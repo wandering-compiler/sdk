@@ -147,12 +147,16 @@ func imageSize(raw []byte) (int, int, bool) {
 	return cfg.Width, cfg.Height, true
 }
 
+// maxImageSide bounds a generated image, as the spec does: a size off by a
+// few zeros is an error here, not gigabytes of pixels.
+const maxImageSide = 4096
+
 // renderImage encodes a generated image of the declared size. The pixels are
 // a gradient rather than one flat colour, so a resize has something to
 // resample and the encoded size depends on the dimensions.
 func renderImage(f ImageFile) ([]byte, error) {
-	if f.Width <= 0 || f.Height <= 0 {
-		return nil, fmt.Errorf("image %dx%d: width and height must be positive", f.Width, f.Height)
+	if f.Width <= 0 || f.Height <= 0 || f.Width > maxImageSide || f.Height > maxImageSide {
+		return nil, fmt.Errorf("image %dx%d: width and height must be between 1 and %d", f.Width, f.Height, maxImageSide)
 	}
 	img := image.NewRGBA(image.Rect(0, 0, f.Width, f.Height))
 	for y := 0; y < f.Height; y++ {

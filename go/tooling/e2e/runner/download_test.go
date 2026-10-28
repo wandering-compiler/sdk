@@ -224,4 +224,7 @@ func TestRenderImage(t *testing.T) {
 	if _, err := renderImage(ImageFile{Format: "png", Width: 0, Height: 1}); err == nil {
 		t.Error("0x1: no error, want one")
 	}
+	if _, err := renderImage(ImageFile{Format: "png", Width: 100000, Height: 100000}); err == nil {
+		t.Error("100000x100000: no error, want one rather than gigabytes of pixels")
+	}
 }
