@@ -22,8 +22,9 @@
 // client) with the upstream status, the attempt count and the upstream's
 // error body, truncated. The DSN never appears in an error or a span.
 //
-// A project may serve a client by hand instead: implement `<Name>ApiServer`
-// and register it in place of [Register]; callers do not change.
+// A project may serve a client by hand instead: implement `<Name>ApiServer`,
+// register it on a connection of its own and point the project's `egress`
+// package at that connection (its Use); callers do not change.
 package egress
 
 import (

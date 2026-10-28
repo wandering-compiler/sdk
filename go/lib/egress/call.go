@@ -173,8 +173,9 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 			return callError(code, c.client, ReasonTransport, "call ended: "+ctx.Err().Error(),
 				map[string]string{"attempts": strconv.Itoa(attempt)})
 		case err != nil:
-			cause = "transport: " + err.Error()
-			final = callError(codes.Unavailable, c.client, ReasonTransport, "upstream unreachable: "+err.Error(),
+			msg := transportText(err)
+			cause = "transport: " + msg
+			final = callError(codes.Unavailable, c.client, ReasonTransport, "upstream unreachable: "+msg,
 				map[string]string{"attempts": strconv.Itoa(attempt)})
 		default:
 			span.SetAttributes(attribute.Int("http.response.status_code", status))
@@ -277,6 +278,23 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 	return resp.StatusCode, nil, 0, nil
 }
 
+// transportText is a transport error without the request URL. net/http
+// wraps it in a *url.Error whose text is the whole URL, query included —
+// and an api_key credential travels in the query. The operation and the
+// cause are what a reader needs; the host is on the span already.
+func transportText(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		inner := ue.Err
+		var nested *url.Error
+		for errors.As(inner, &nested) {
+			inner = nested.Err
+		}
+		return ue.Op + ": " + inner.Error()
+	}
+	return err.Error()
+}
+
 // target is the request URL: the DSN's base, the path template filled in,
 // the query.
 func (c *caller) target(call *w17pb.EgressCall, req *wire.Request) (*url.URL, error) {
@@ -315,6 +333,11 @@ func fillPath(tmpl string, params map[string]string) (string, error) {
 		v, ok := params[name]
 		if !ok || v == "" {
 			return "", errors.New("path parameter " + strconv.Quote(name) + " is empty")
+		}
+		// A dot segment is resolved away by servers and proxies
+		// (`/orders/..` is `/`): another resource, like an empty one.
+		if v == "." || v == ".." {
+			return "", errors.New("path parameter " + strconv.Quote(name) + " is a dot segment")
 		}
 		b.WriteString(tmpl[:i])
 		b.WriteString(v)

@@ -32,10 +32,13 @@ var shop = func() protoreflect.FileDescriptor {
 	if err != nil {
 		panic(err)
 	}
-	const path = "clients/feature_shop/feature_shop.proto"
+	return compile("clients/feature_shop/feature_shop.proto", string(src))
+}()
+
+func compile(path, src string) protoreflect.FileDescriptor {
 	c := protocompile.Compiler{Resolver: protocompile.WithStandardImports(protocompile.ResolverFunc(func(p string) (protocompile.SearchResult, error) {
 		if p == path {
-			return protocompile.SearchResult{Source: strings.NewReader(string(src))}, nil
+			return protocompile.SearchResult{Source: strings.NewReader(src)}, nil
 		}
 		fd, err := protoregistry.GlobalFiles.FindFileByPath(p)
 		if err != nil {
@@ -48,7 +51,7 @@ var shop = func() protoreflect.FileDescriptor {
 		panic(err)
 	}
 	return files[0]
-}()
+}
 
 var svc = shop.Services().ByName("FeatureShopApi")
 
@@ -388,6 +391,7 @@ func TestParseDSN(t *testing.T) {
 		"https://u:p@api.example.com?auth=bearer&token=x",
 		"https://api.example.com?timeout=soon",
 		"https://api.example.com?max_attempts=0",
+		"https://api.example.com?timeout=30s", // never applies inside the 30 s total
 	} {
 		if _, err := ParseDSN(bad); err == nil {
 			t.Errorf("%s: accepted", bad)
@@ -402,5 +406,78 @@ func TestTruncateKeepsValidUTF8(t *testing.T) {
 	}
 	if s := truncate([]byte{0xff, 'a'}, 10); !strings.Contains(s, "a") || !proto.Equal(&errdetails.ErrorInfo{Reason: s}, &errdetails.ErrorInfo{Reason: s}) {
 		t.Errorf("invalid bytes: %q", s)
+	}
+}
+
+// A POST without an idempotency header is sent once: a retry could create
+// the order twice.
+func TestCall_PostWithoutIdempotencyIsSentOnce(t *testing.T) {
+	fd := compile("clients/ledger/ledger.proto", `syntax = "proto3";
+package clients.ledger;
+import "w17/egress.proto";
+option (w17.egress_client) = { name: "ledger" };
+service LedgerApi {
+  rpc Post(PostRequest) returns (Entry) {
+    option (w17.egress_call) = { method: "POST" path: "/entries" request_encoding: EGRESS_ENCODING_JSON };
+  }
+}
+message PostRequest {
+  message Body { string memo = 1 [(w17.egress_field) = { name: "memo" }]; }
+  Body body = 1 [(w17.egress_field) = { in: EGRESS_IN_BODY required: true }];
+}
+message Entry { string id = 1 [(w17.egress_field) = { name: "id" }]; }
+`)
+	ledger := fd.Services().ByName("LedgerApi")
+	up := &upstream{t: t, replies: []reply{{status: 503}, {status: 200, body: `{"id":"e1"}`}}}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	dsn, _ := ParseDSN(srv.URL)
+	conn := inprocgrpc.New()
+	if err := Register(conn, ledger, dsn); err != nil {
+		t.Fatal(err)
+	}
+	in := dynamicpb.NewMessage(fd.Messages().ByName("PostRequest"))
+	if err := protojson.Unmarshal([]byte(`{"body":{"memo":"m"}}`), in); err != nil {
+		t.Fatal(err)
+	}
+	err := conn.Invoke(context.Background(), "/clients.ledger.LedgerApi/Post", in, dynamicpb.NewMessage(fd.Messages().ByName("Entry")))
+	if status.Code(err) != codes.Unavailable || len(up.reqs) != 1 {
+		t.Errorf("err = %v after %d requests, want UNAVAILABLE after exactly 1", err, len(up.reqs))
+	}
+	if up.bodies[0] != `{"memo":"m"}` || up.reqs[0].Header.Get("Content-Type") != "application/json" {
+		t.Errorf("body %q (%s)", up.bodies[0], up.reqs[0].Header.Get("Content-Type"))
+	}
+}
+
+// A transport error's text is the request URL, query and all; an api_key
+// sent in the query must not ride out in the status, nor in a retry event.
+func TestCall_TransportErrorDoesNotCarryTheQueryKey(t *testing.T) {
+	dsn, err := ParseDSN("http://127.0.0.1:1/v2?auth=api_key&in=query&key_name=apikey&key=SECRET-KEY-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := inprocgrpc.New()
+	if err := Register(conn, svc, dsn); err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Invoke(context.Background(), svcPath+"GetOrdersByOrderId", msg(t, "GetOrdersByOrderIdRequest", `{"orderId":"o1"}`), out("GetOrdersByOrderId"))
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("err = %v, want UNAVAILABLE", err)
+	}
+	if strings.Contains(err.Error(), "SECRET-KEY-1") || strings.Contains(info(t, err).String(), "SECRET-KEY-1") {
+		t.Errorf("the key leaked: %v", err)
+	}
+}
+
+func TestCall_DotSegmentIsRefused(t *testing.T) {
+	conn, up := serve(t, "", reply{status: 204})
+	for _, v := range []string{".", ".."} {
+		err := conn.Invoke(context.Background(), svcPath+"DeleteOrder", msg(t, "DeleteOrderRequest", `{"orderId":"`+v+`"}`), out("DeleteOrder"))
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%q: %v, want INVALID_ARGUMENT", v, err)
+		}
+	}
+	if len(up.reqs) != 0 {
+		t.Errorf("%d requests sent, want none", len(up.reqs))
 	}
 }

@@ -123,6 +123,11 @@ func ParseDSN(s string) (*DSN, error) {
 		if d.Timeout, err = time.ParseDuration(t); err != nil || d.Timeout <= 0 {
 			return nil, fmt.Errorf("egress DSN: timeout=%q is not a positive Go duration", t)
 		}
+		// Every attempt runs inside the call's total deadline; a longer
+		// attempt timeout would never apply.
+		if d.Timeout >= TotalTimeout {
+			return nil, fmt.Errorf("egress DSN: timeout=%s is not below the call's total deadline (%s)", d.Timeout, TotalTimeout)
+		}
 	}
 	if m := q.Get("max_attempts"); m != "" {
 		if d.MaxAttempts, err = strconv.Atoi(m); err != nil || d.MaxAttempts < 1 {
