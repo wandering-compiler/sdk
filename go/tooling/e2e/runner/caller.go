@@ -321,20 +321,28 @@ func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any
 	return decodeWithWire(raw, resp.Header.Get("Content-Type"))
 }
 
-// rawWire reports a `raw_response` answer: the WireKey facts plus what a
-// file answer is made of — its bytes (as text, so `eq` can name a small
-// body), its Content-Disposition and its ETag. Never decoded: the body is
-// the file, and a JSON-looking one is still a file.
+// rawWire reports a file answer — a `raw_response` endpoint's or a
+// download's: the WireKey facts plus what a file is made of — its bytes (as
+// text, so `eq` can name a small body), its Content-Disposition, ETag and
+// Cache-Control, and, when the bytes are an image, its `width` and `height`.
+// Never decoded into fields: the body is the file, and a JSON-looking one is
+// still a file. The dimensions come from the BYTES, not the media type, so a
+// body labelled image/png that is not one has none to assert.
 func rawWire(raw []byte, h http.Header) map[string]any {
 	trimmed := bytes.TrimSpace(raw)
-	return map[string]any{WireKey: map[string]any{
+	wire := map[string]any{
 		"content_type":        mediaType(h.Get("Content-Type")),
 		"size":                float64(len(raw)),
 		"json":                len(trimmed) > 0 && json.Valid(trimmed),
 		"body":                string(raw),
 		"content_disposition": h.Get("Content-Disposition"),
 		"etag":                h.Get("ETag"),
-	}}
+		"cache_control":       h.Get("Cache-Control"),
+	}
+	if w, ht, ok := imageSize(raw); ok {
+		wire["width"], wire["height"] = float64(w), float64(ht)
+	}
+	return map[string]any{WireKey: wire}
 }
 
 // WireKey is the synthetic response field carrying the WIRE facts of an
@@ -543,7 +551,13 @@ func multipartBody(ep Endpoint, input map[string]any, files []FilePart) ([]byte,
 		if err != nil {
 			return nil, "", fmt.Errorf("rest %s: multipart file part %q: %w", ep.Ref, f.Part, err)
 		}
-		if _, err := io.WriteString(part, f.Content); err != nil {
+		body := []byte(f.Content)
+		if f.Image != nil {
+			if body, err = renderImage(*f.Image); err != nil {
+				return nil, "", fmt.Errorf("rest %s: multipart file part %q: %w", ep.Ref, f.Part, err)
+			}
+		}
+		if _, err := part.Write(body); err != nil {
 			return nil, "", fmt.Errorf("rest %s: multipart file part %q: write: %w", ep.Ref, f.Part, err)
 		}
 	}

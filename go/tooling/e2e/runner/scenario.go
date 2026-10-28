@@ -155,6 +155,11 @@ type Step struct {
 	// non-empty the REST caller switches the request to
 	// `multipart/form-data` — see FilePart.
 	Files []FilePart
+
+	// Download, when set, makes the step fetch a stored file through a
+	// download route instead of calling Endpoint's method — see Download.
+	// The runner derives the step's Endpoint from it.
+	Download *Download
 }
 
 // RunScenario executes one scenario — an ordered, flattened step
@@ -281,6 +286,13 @@ func emitStep(n, total int, status string, s Step, errMsg string) {
 // one), and asserts the response — which also binds this step's
 // captures into the shared scope.
 func runStep(ctx context.Context, scope *runtime.Scope, s Step, callers map[string]Caller, cfg runCfg) error {
+	if s.Download != nil {
+		ep, query, err := resolveDownload(*s.Download, scope)
+		if err != nil {
+			return err
+		}
+		s.Endpoint, s.Input = ep, query
+	}
 	caller, ok := callers[s.Endpoint.Transport]
 	if !ok {
 		return fmt.Errorf("no caller for transport %q", s.Endpoint.Transport)
@@ -649,6 +661,10 @@ type FilePart struct {
 	Part     string
 	Filename string
 	Content  string
+
+	// Image, when set, is the body instead of Content: an image the runner
+	// generates — see ImageFile.
+	Image *ImageFile
 }
 
 type ExpectError struct {
