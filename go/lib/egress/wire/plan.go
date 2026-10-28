@@ -122,6 +122,23 @@ func fieldOptions(fd protoreflect.FieldDescriptor) *w17pb.EgressField {
 	return nil
 }
 
+// Call is a method's (w17.egress_call): the HTTP request it makes. Nil
+// when the method carries none — it is not an egress call.
+func Call(md protoreflect.MethodDescriptor) *w17pb.EgressCall {
+	if v := typedOption(md.Options(), w17pb.E_EgressCall); v != nil {
+		return v.(*w17pb.EgressCall)
+	}
+	return nil
+}
+
+// Client is a file's (w17.egress_client). Nil when the file carries none.
+func Client(fd protoreflect.FileDescriptor) *w17pb.EgressClient {
+	if v := typedOption(fd.Options(), w17pb.E_EgressClient); v != nil {
+		return v.(*w17pb.EgressClient)
+	}
+	return nil
+}
+
 // enumWire maps an enum's values to and from the upstream's strings.
 type enumWire struct {
 	toWire   map[protoreflect.EnumNumber]string
@@ -178,6 +195,10 @@ func retype(opts proto.Message) proto.Message {
 		typed = &descriptorpb.OneofOptions{}
 	case "google.protobuf.EnumValueOptions":
 		typed = &descriptorpb.EnumValueOptions{}
+	case "google.protobuf.MethodOptions":
+		typed = &descriptorpb.MethodOptions{}
+	case "google.protobuf.FileOptions":
+		typed = &descriptorpb.FileOptions{}
 	default:
 		return nil
 	}
