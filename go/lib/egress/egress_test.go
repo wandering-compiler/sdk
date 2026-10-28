@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/bufbuild/protocompile"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -452,6 +455,11 @@ message Entry { string id = 1 [(w17.egress_field) = { name: "id" }]; }
 // A transport error's text is the request URL, query and all; an api_key
 // sent in the query must not ride out in the status, nor in a retry event.
 func TestCall_TransportErrorDoesNotCarryTheQueryKey(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
 	dsn, err := ParseDSN("http://127.0.0.1:1/v2?auth=api_key&in=query&key_name=apikey&key=SECRET-KEY-1")
 	if err != nil {
 		t.Fatal(err)
@@ -466,6 +474,41 @@ func TestCall_TransportErrorDoesNotCarryTheQueryKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SECRET-KEY-1") || strings.Contains(info(t, err).String(), "SECRET-KEY-1") {
 		t.Errorf("the key leaked: %v", err)
+	}
+	retries := 0
+	for _, sp := range rec.Ended() {
+		if strings.Contains(sp.Status().Description, "SECRET-KEY-1") {
+			t.Errorf("span %q status leaks the key: %s", sp.Name(), sp.Status().Description)
+		}
+		for _, ev := range sp.Events() {
+			if ev.Name == "egress.retry" {
+				retries++
+			}
+			for _, a := range ev.Attributes {
+				if strings.Contains(a.Value.Emit(), "SECRET-KEY-1") {
+					t.Errorf("span %q event %s leaks the key: %s", sp.Name(), ev.Name, a.Value.Emit())
+				}
+			}
+		}
+	}
+	if retries != 2 {
+		t.Errorf("retry events = %d, want 2 (the check must have looked at them)", retries)
+	}
+}
+
+// A deadline that runs out while the call waits to retry is the answer —
+// DEADLINE_EXCEEDED, the failure it was waiting on in the metadata — not
+// the last attempt's UNAVAILABLE.
+func TestCall_DeadlineDuringBackoff(t *testing.T) {
+	stub := sleep
+	sleep = func(ctx context.Context, _ time.Duration) error { <-ctx.Done(); return ctx.Err() }
+	t.Cleanup(func() { sleep = stub })
+	conn, _ := serve(t, "", reply{status: 503, header: map[string]string{"Retry-After": "5"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := conn.Invoke(ctx, svcPath+"GetOrdersByOrderId", msg(t, "GetOrdersByOrderIdRequest", `{"orderId":"o1"}`), out("GetOrdersByOrderId"))
+	if status.Code(err) != codes.DeadlineExceeded || info(t, err).Metadata["last_failure"] != "HTTP 503" {
+		t.Errorf("err = %v (%v), want DEADLINE_EXCEEDED after HTTP 503", err, info(t, err).Metadata)
 	}
 }
 

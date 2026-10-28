@@ -164,14 +164,7 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 		case err != nil && errors.Is(err, errStop):
 			return err.(stopError).err
 		case err != nil && ctx.Err() != nil:
-			// The caller's deadline (or the call's total one) ran out, or
-			// the caller went away: that is the answer, not the upstream.
-			code := codes.DeadlineExceeded
-			if errors.Is(ctx.Err(), context.Canceled) {
-				code = codes.Canceled
-			}
-			return callError(code, c.client, ReasonTransport, "call ended: "+ctx.Err().Error(),
-				map[string]string{"attempts": strconv.Itoa(attempt)})
+			return c.ended(ctx, attempt, "")
 		case err != nil:
 			msg := transportText(err)
 			cause = "transport: " + msg
@@ -200,9 +193,25 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 			attribute.String("backoff", d.String()),
 		))
 		if sleep(ctx, d) != nil {
-			return final
+			return c.ended(ctx, attempt, cause)
 		}
 	}
+}
+
+// ended is the error of a call whose context ran out — the caller's
+// deadline or the call's total one, or the caller went away: that is the
+// answer, not the upstream. last is the failure the call was waiting to
+// retry, if any.
+func (c *caller) ended(ctx context.Context, attempts int, last string) error {
+	code := codes.DeadlineExceeded
+	if errors.Is(ctx.Err(), context.Canceled) {
+		code = codes.Canceled
+	}
+	meta := map[string]string{"attempts": strconv.Itoa(attempts)}
+	if last != "" {
+		meta["last_failure"] = last
+	}
+	return callError(code, c.client, ReasonTransport, "call ended: "+ctx.Err().Error(), meta)
 }
 
 // errStop marks an error that ends the call as it is, without a retry: a
@@ -228,7 +237,7 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 	}
 	r, err := http.NewRequestWithContext(ctx, m.call.GetMethod(), target.String(), rd)
 	if err != nil {
-		return 0, nil, 0, stop(callError(codes.InvalidArgument, c.client, ReasonBadRequest, err.Error(), nil))
+		return 0, nil, 0, stop(callError(codes.InvalidArgument, c.client, ReasonBadRequest, transportText(err), nil))
 	}
 	r.Header = header.Clone()
 	r.Header.Set("Accept", "application/json")
