@@ -164,7 +164,9 @@ func TestDownloadStep_FailsWhenTheRouteRefuses(t *testing.T) {
 func TestResolveDownload(t *testing.T) {
 	scope := newScope()
 	scope.Capture("cover.url", "/api/files/covers/aa/k1")
-	scope.Capture("cover.abs", "https://cdn.example/api/blobs/covers/aa/k1?x=1")
+	scope.Capture("cover.abs", "https://cdn.example/api/blobs/covers/aa/k1")
+	scope.Capture("cover.proxied", "https://example.com/app/api/files/covers/aa/k1")
+	scope.Capture("cover.signed", "https://cdn.example/api/blobs/covers/aa/k1?sig=x")
 
 	for _, tc := range []struct {
 		name, url, route, variant string
@@ -175,6 +177,7 @@ func TestResolveDownload(t *testing.T) {
 		{name: "own route", url: "${cover.url}", wantPath: "/api/files/covers/aa/k1", wantInput: map[string]any{}},
 		{name: "variant", url: "${cover.url}", variant: "thumb", wantPath: "/api/files/covers/aa/k1", wantInput: map[string]any{"variant": "thumb"}},
 		{name: "absolute keeps only the path", url: "${cover.abs}", wantPath: "/api/blobs/covers/aa/k1", wantAuth: true, wantInput: map[string]any{}},
+		{name: "public host with a path", url: "${cover.proxied}", wantPath: "/api/files/covers/aa/k1", wantInput: map[string]any{}},
 		{name: "another route", url: "${cover.url}", route: "/api/blobs", wantPath: "/api/blobs/covers/aa/k1", wantAuth: true, wantInput: map[string]any{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,6 +198,7 @@ func TestResolveDownload(t *testing.T) {
 		{name: "under no route", url: "/api/other/k1", want: "under no download route"},
 		{name: "unknown route", url: "${cover.url}", route: "/api/nope", want: `route "/api/nope" is not a download route`},
 		{name: "empty", url: "${cover.none}", want: "expand url"},
+		{name: "a query", url: "${cover.signed}", want: "carries a query"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := resolveDownload(Download{URL: tc.url, Route: tc.route, Routes: fileRoutes}, scope)

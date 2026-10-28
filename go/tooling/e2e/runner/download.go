@@ -27,9 +27,13 @@ import (
 // error envelope, asserted with `expect_error`.
 type Download struct {
 	// URL is the file's URL as a response rendered it for an UPLOADED_*
-	// field, interpolated (`${cover.image_path}`). Only its PATH is used: a
-	// URL_FORM_ABSOLUTE value carries the public host the deployment was
-	// configured with, which is not where this run's gateway listens.
+	// field, interpolated (`${cover.image_path}`). Only its PATH from the
+	// route prefix on is used: a URL_FORM_ABSOLUTE value carries the public
+	// host the deployment was configured with — possibly with a path, behind
+	// a sub-path proxy — which is not where this run's gateway listens. A URL
+	// with a query is refused: no rendered URL carries one today, and one
+	// that did (a signature) would be dropped, so a refusal could pass for
+	// the wrong reason.
 	URL string
 
 	// Route, when set, is the composed prefix of the download route to ask
@@ -79,11 +83,15 @@ func resolveDownload(d Download, scope *runtime.Scope) (Endpoint, map[string]any
 	if err != nil {
 		return Endpoint{}, nil, fmt.Errorf("download: url %q: %w", raw, err)
 	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return Endpoint{}, nil, fmt.Errorf("download: url %q carries a query or fragment — the step sends only the path and `variant`, so it would not be what the response rendered", raw)
+	}
 	path := u.EscapedPath()
-	own, ok := routeOf(path, d.Routes)
+	own, at, ok := routeOf(path, d.Routes)
 	if !ok {
 		return Endpoint{}, nil, fmt.Errorf("download: %q is under no download route of this surface (%s) — a field no route covers comes back as the raw stored handle, not a URL", raw, routePrefixes(d.Routes))
 	}
+	path = path[at:]
 	route := own
 	if d.Route != "" {
 		found := false
@@ -113,17 +121,21 @@ func resolveDownload(d Download, scope *runtime.Scope) (Endpoint, map[string]any
 	return ep, input, nil
 }
 
-// routeOf is the route a path is under: the longest prefix it continues past
-// a `/`, the same rule the gateway's own mux applies.
-func routeOf(path string, routes []DownloadRoute) (DownloadRoute, bool) {
+// routeOf is the route a path is under and the offset its prefix starts at:
+// the longest prefix the path continues past a `/`, the same rule the
+// gateway's own mux applies. A path the public host prefixed (`/app` behind
+// a sub-path proxy) matches where the earliest route prefix starts.
+func routeOf(path string, routes []DownloadRoute) (DownloadRoute, int, bool) {
 	var best DownloadRoute
-	found := false
+	at, found := 0, false
 	for _, r := range routes {
-		if strings.HasPrefix(path, r.Prefix+"/") && len(r.Prefix) >= len(best.Prefix) {
-			best, found = r, true
+		i := strings.Index(path, r.Prefix+"/")
+		if i < 0 || (found && i > at) || (found && i == at && len(r.Prefix) < len(best.Prefix)) {
+			continue
 		}
+		best, at, found = r, i, true
 	}
-	return best, found
+	return best, at, found
 }
 
 func routePrefixes(routes []DownloadRoute) string {
