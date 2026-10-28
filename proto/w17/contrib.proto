@@ -114,6 +114,21 @@ extend google.protobuf.MethodOptions {
   // always emitted (untagged baseline).
   string plugin_feature_rpc = 51025;
 
+  // (w17.contrib.plugin_internal_rpc) on an `rpc` — the method serves its
+  // activating domain's OWN code and nothing else: no surface may put it on
+  // the network. A REST endpoint or auth method, an `rpc_api` or private
+  // group, an admin source or sign-in, and an MCP tool naming it are refused
+  // by codegen; a whole-service ref (`<module>.<Service>`) leaves it out.
+  //
+  // For a method that trusts its caller with something only the domain may
+  // decide — the auth plugin's `ResolveUser` answers any user's envelope,
+  // which code acting for that person stamps with principal.ActAs. Exposed,
+  // it would hand every caller anyone's identity, and with an ACL role that
+  // includes the whole service, every signed-in account would hold it. A
+  // preset that leaves the method out is not a guard: a project's own refs
+  // reach every staged method.
+  bool plugin_internal_rpc = 51028;
+
   // ⛔ 51027 IS BURNED — DO NOT REUSE IT.
   //
   // It was `plugin_feature_rpc_unless`, the INVERSE gate: emit this rpc
