@@ -159,10 +159,11 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 			return nil
 		}
 		var final error
-		cause := ""
+		var cause string
+		var stopped stopError
 		switch {
-		case err != nil && errors.Is(err, errStop):
-			return err.(stopError).err
+		case errors.As(err, &stopped):
+			return stopped.err
 		case err != nil && ctx.Err() != nil:
 			return c.ended(ctx, attempt, "")
 		case err != nil:
@@ -214,14 +215,11 @@ func (c *caller) ended(ctx context.Context, attempts int, last string) error {
 	return callError(code, c.client, ReasonTransport, "call ended: "+ctx.Err().Error(), meta)
 }
 
-// errStop marks an error that ends the call as it is, without a retry: a
+// stopError wraps an error that ends the call as it is, without a retry: a
 // hook's refusal, a body over the cap, an undecodable success.
-var errStop = errors.New("stop")
-
 type stopError struct{ err error }
 
-func (stopError) Error() string   { return "stop" }
-func (stopError) Is(t error) bool { return t == errStop }
+func (e stopError) Error() string { return e.err.Error() }
 
 func stop(err error) error { return stopError{err} }
 
@@ -254,7 +252,7 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 	if err != nil {
 		return 0, nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	for _, h := range hooksFor(&after, m) {
 		if err := h(ctx, resp); err != nil {
 			return 0, nil, 0, stop(callError(codes.Internal, c.client, "HOOK_REFUSED", "after-response hook: "+err.Error(), nil))

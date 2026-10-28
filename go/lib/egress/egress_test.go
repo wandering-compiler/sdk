@@ -485,8 +485,8 @@ func TestCall_TransportErrorDoesNotCarryTheQueryKey(t *testing.T) {
 				retries++
 			}
 			for _, a := range ev.Attributes {
-				if strings.Contains(a.Value.Emit(), "SECRET-KEY-1") {
-					t.Errorf("span %q event %s leaks the key: %s", sp.Name(), ev.Name, a.Value.Emit())
+				if strings.Contains(a.Value.String(), "SECRET-KEY-1") {
+					t.Errorf("span %q event %s leaks the key: %s", sp.Name(), ev.Name, a.Value.String())
 				}
 			}
 		}
