@@ -663,6 +663,16 @@ message Field {
   // agree by accident.
   int32 srid = 72;
 
+  // --- VECTOR parameter (db_type VECTOR only) ---
+  //
+  // dimensions is N in `vector(N)` — how many floats every value holds.
+  // Required on a VECTOR column, refused on any other: an undimensioned
+  // vector column accepts values of any length, so two embeddings from
+  // different models land side by side and compare as if they meant
+  // something, and no HNSW / IVFFlat index can be built over it. pgvector
+  // caps a column at 16000 dimensions and an indexed one at 2000.
+  int32 dimensions = 73;
+
   // Field numbers 3 (fk) and 15 (orphanable) have moved to
   // (w17.db.column) — they're DB-specific rules (like indexes /
   // constraints), not data semantics.

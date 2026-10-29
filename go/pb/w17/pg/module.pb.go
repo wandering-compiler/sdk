@@ -35,8 +35,10 @@ type PgModule struct {
 	CustomTypes []*CustomType `protobuf:"bytes,1,rep,name=custom_types,json=customTypes,proto3" json:"custom_types,omitempty"`
 	// Domain-level custom_functions
 	// registry. Author registers PG functions / operators that DQL
-	// queries reference (pgvector `<->`, postgis `ST_*`, custom
-	// plpgsql functions). DQL typecheck consults this set after
+	// queries reference (postgis `ST_*`, custom plpgsql functions).
+	// pgvector's distance operators are not registered here: DQL spells
+	// `<->` / `<=>` / `<#>` / `<+>` itself over a db_type VECTOR column. DQL
+	// typecheck consults this set after
 	// builtins; unknown name = "function not found" diag.
 	//
 	// Names must be unique within domain; cannot collide with

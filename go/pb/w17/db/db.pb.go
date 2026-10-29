@@ -462,20 +462,32 @@ const (
 	// module — outside the structured Index surface).
 	IndexMethod_FULLTEXT IndexMethod = 7
 	IndexMethod_SPATIAL  IndexMethod = 8
+	// pgvector's approximate-nearest-neighbour methods, PG only, over a
+	// db_type VECTOR column. The distance the index serves is the field's
+	// opclass — `vector_l2_ops` (`<->`), `vector_cosine_ops` (`<=>`),
+	// `vector_ip_ops` (`<#>`), `vector_l1_ops` (`<+>`, HNSW only) — and is
+	// REQUIRED: an index built for one distance is not used by a query
+	// ordering by another, so leaving it to the default (L2) silently gives a
+	// cosine query a sequential scan. Build knobs ride on `storage`: `m` /
+	// `ef_construction` for HNSW, `lists` for IVFFLAT.
+	IndexMethod_HNSW    IndexMethod = 9
+	IndexMethod_IVFFLAT IndexMethod = 10
 )
 
 // Enum value maps for IndexMethod.
 var (
 	IndexMethod_name = map[int32]string{
-		0: "INDEX_METHOD_UNSPECIFIED",
-		1: "BTREE",
-		2: "GIN",
-		3: "GIST",
-		4: "BRIN",
-		5: "HASH",
-		6: "SPGIST",
-		7: "FULLTEXT",
-		8: "SPATIAL",
+		0:  "INDEX_METHOD_UNSPECIFIED",
+		1:  "BTREE",
+		2:  "GIN",
+		3:  "GIST",
+		4:  "BRIN",
+		5:  "HASH",
+		6:  "SPGIST",
+		7:  "FULLTEXT",
+		8:  "SPATIAL",
+		9:  "HNSW",
+		10: "IVFFLAT",
 	}
 	IndexMethod_value = map[string]int32{
 		"INDEX_METHOD_UNSPECIFIED": 0,
@@ -487,6 +499,8 @@ var (
 		"SPGIST":                   6,
 		"FULLTEXT":                 7,
 		"SPATIAL":                  8,
+		"HNSW":                     9,
+		"IVFFLAT":                  10,
 	}
 )
 
@@ -569,8 +583,8 @@ func (NullsOrder) EnumDescriptor() ([]byte, []int) {
 
 // DbType — enumerated SQL column types, covering the common cross-dialect
 // set + PG-native types. Emitters map each value to the dialect-native
-// storage. For types not enumerated here (pgvector, PostGIS geometry,
-// custom DOMAINs), use (w17.pg.field).custom_type — that remains the
+// storage. For types not enumerated here (custom DOMAINs, extension types
+// w17 does not model), use (w17.pg.field).custom_type — that remains the
 // opaque escape hatch.
 //
 // Convention exception: zero value is `AUTO`,
@@ -640,6 +654,24 @@ const (
 	// substituting something that stores the bytes and cannot index them.
 	DbType_GEOMETRY  DbType = 100
 	DbType_GEOGRAPHY DbType = 101
+	// --- Vector (PG-native, requires the pgvector extension `vector`) ---
+	//
+	// `vector(N)`: an embedding of N single-precision floats, compared by
+	// distance (`<->` L2, `<=>` cosine, `<#>` negative inner product, `<+>`
+	// L1 — DQL spells all four) and indexed with method HNSW or IVFFLAT. The
+	// dimension comes from (w17.field).dimensions and is REQUIRED: an
+	// undimensioned column takes vectors of any length, and an HNSW / IVFFlat
+	// index refuses to build over one.
+	//
+	// Carrier is `string`, in pgvector's own text form both ways:
+	// `[0.12,-0.5,3]`. That is what the extension parses on the way in and
+	// prints on the way out, so a plain string parameter works with no
+	// conversion w17 would have to define.
+	//
+	// POSTGRES ONLY. MySQL 9's community server has a VECTOR type with no
+	// distance function and no index over it, and SQLite needs an extension;
+	// both emitters REFUSE by name.
+	DbType_VECTOR DbType = 110
 )
 
 // Enum value maps for DbType.
@@ -673,6 +705,7 @@ var (
 		90:  "BOOLEAN",
 		100: "GEOMETRY",
 		101: "GEOGRAPHY",
+		110: "VECTOR",
 	}
 	DbType_value = map[string]int32{
 		"AUTO":             0,
@@ -703,6 +736,7 @@ var (
 		"BOOLEAN":          90,
 		"GEOMETRY":         100,
 		"GEOGRAPHY":        101,
+		"VECTOR":           110,
 	}
 )
 
@@ -3560,7 +3594,7 @@ const file_w17_db_proto_rawDesc = "" +
 	"\x18REDIS_LAYOUT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11REDIS_LAYOUT_JSON\x10\x01\x12\x15\n" +
 	"\x11REDIS_LAYOUT_HASH\x10\x02\x12\x1e\n" +
-	"\x1aREDIS_LAYOUT_HASH_BUCKETED\x10\x03*\x84\x01\n" +
+	"\x1aREDIS_LAYOUT_HASH_BUCKETED\x10\x03*\x9b\x01\n" +
 	"\vIndexMethod\x12\x1c\n" +
 	"\x18INDEX_METHOD_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05BTREE\x10\x01\x12\a\n" +
@@ -3571,13 +3605,16 @@ const file_w17_db_proto_rawDesc = "" +
 	"\n" +
 	"\x06SPGIST\x10\x06\x12\f\n" +
 	"\bFULLTEXT\x10\a\x12\v\n" +
-	"\aSPATIAL\x10\b*J\n" +
+	"\aSPATIAL\x10\b\x12\b\n" +
+	"\x04HNSW\x10\t\x12\v\n" +
+	"\aIVFFLAT\x10\n" +
+	"*J\n" +
 	"\n" +
 	"NullsOrder\x12\x1b\n" +
 	"\x17NULLS_ORDER_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vNULLS_FIRST\x10\x01\x12\x0e\n" +
 	"\n" +
-	"NULLS_LAST\x10\x02*\xe4\x02\n" +
+	"NULLS_LAST\x10\x02*\xf0\x02\n" +
 	"\x06DbType\x12\b\n" +
 	"\x04AUTO\x10\x00\x12\b\n" +
 	"\x04TEXT\x10\x01\x12\v\n" +
@@ -3610,7 +3647,9 @@ const file_w17_db_proto_rawDesc = "" +
 	"\x04BLOB\x10Q\x12\v\n" +
 	"\aBOOLEAN\x10Z\x12\f\n" +
 	"\bGEOMETRY\x10d\x12\r\n" +
-	"\tGEOGRAPHY\x10e*\\\n" +
+	"\tGEOGRAPHY\x10e\x12\n" +
+	"\n" +
+	"\x06VECTOR\x10n*\\\n" +
 	"\fDeletionRule\x12\x1d\n" +
 	"\x19DELETION_RULE_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aCASCADE\x10\x01\x12\n" +

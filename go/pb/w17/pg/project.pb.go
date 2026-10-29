@@ -30,8 +30,7 @@ type PgProject struct {
 	// domain registries (collision = compile error, no shadowing).
 	//
 	// Typical entries: common PG types every domain references (HSTORE,
-	// CITEXT, MACADDR), shared vocabularies like embedding dimension
-	// aliases (embedding_384, embedding_1536), shared geometry SRIDs.
+	// CITEXT, MACADDR), shared contrib types (LTREE), shared DOMAINs.
 	//
 	// Domain-specific types (only one domain uses them) belong in the
 	// domain's (w17.pg.module).custom_types instead — keeps project file
@@ -40,8 +39,7 @@ type PgProject struct {
 	// Project-wide custom_functions
 	// registry. Same shape + collision rules as
 	// PgModule.custom_functions, but visible to every domain.
-	// Typical entries: ST_* (postgis), pgvector helpers, shared
-	// text-processing UDFs.
+	// Typical entries: ST_* (postgis), shared text-processing UDFs.
 	//
 	// Domain-specific functions (only one domain uses them) belong
 	// in the domain's (w17.pg.module).custom_functions instead.

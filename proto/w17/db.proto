@@ -1376,6 +1376,16 @@ enum IndexMethod {
   // module — outside the structured Index surface).
   FULLTEXT = 7;
   SPATIAL  = 8;
+  // pgvector's approximate-nearest-neighbour methods, PG only, over a
+  // db_type VECTOR column. The distance the index serves is the field's
+  // opclass — `vector_l2_ops` (`<->`), `vector_cosine_ops` (`<=>`),
+  // `vector_ip_ops` (`<#>`), `vector_l1_ops` (`<+>`, HNSW only) — and is
+  // REQUIRED: an index built for one distance is not used by a query
+  // ordering by another, so leaving it to the default (L2) silently gives a
+  // cosine query a sequential scan. Build knobs ride on `storage`: `m` /
+  // `ef_construction` for HNSW, `lists` for IVFFLAT.
+  HNSW    = 9;
+  IVFFLAT = 10;
 }
 
 // NullsOrder — NULL-position directive for ordered index fields.
@@ -1586,8 +1596,8 @@ message EnumValueColumn {
 
 // DbType — enumerated SQL column types, covering the common cross-dialect
 // set + PG-native types. Emitters map each value to the dialect-native
-// storage. For types not enumerated here (pgvector, PostGIS geometry,
-// custom DOMAINs), use (w17.pg.field).custom_type — that remains the
+// storage. For types not enumerated here (custom DOMAINs, extension types
+// w17 does not model), use (w17.pg.field).custom_type — that remains the
 // opaque escape hatch.
 //
 // Convention exception: zero value is `AUTO`,
@@ -1665,6 +1675,25 @@ enum DbType {
   // substituting something that stores the bytes and cannot index them.
   GEOMETRY  = 100;
   GEOGRAPHY = 101;
+
+  // --- Vector (PG-native, requires the pgvector extension `vector`) ---
+  //
+  // `vector(N)`: an embedding of N single-precision floats, compared by
+  // distance (`<->` L2, `<=>` cosine, `<#>` negative inner product, `<+>`
+  // L1 — DQL spells all four) and indexed with method HNSW or IVFFLAT. The
+  // dimension comes from (w17.field).dimensions and is REQUIRED: an
+  // undimensioned column takes vectors of any length, and an HNSW / IVFFlat
+  // index refuses to build over one.
+  //
+  // Carrier is `string`, in pgvector's own text form both ways:
+  // `[0.12,-0.5,3]`. That is what the extension parses on the way in and
+  // prints on the way out, so a plain string parameter works with no
+  // conversion w17 would have to define.
+  //
+  // POSTGRES ONLY. MySQL 9's community server has a VECTOR type with no
+  // distance function and no index over it, and SQLite needs an extension;
+  // both emitters REFUSE by name.
+  VECTOR = 110;
 }
 
 // DeletionRule expresses the post-parent-deletion behaviour as a rule of
