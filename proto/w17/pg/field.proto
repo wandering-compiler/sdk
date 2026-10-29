@@ -49,8 +49,9 @@ message PgField {
   // The alias of a CustomType declared in (w17.pg.project).custom_types or
   // (w17.pg.module).custom_types. Its `sql_type` becomes this column's SQL
   // type and the emitter SKIPS the (w17.field).type dispatch. Use for
-  // dialect extensions the vocabulary doesn't cover (pgvector, PostGIS
-  // geometry, custom DOMAINs, contrib types like HSTORE / LTREE). All other
+  // dialect extensions the vocabulary doesn't cover (custom DOMAINs, contrib
+  // types like LTREE). Geometry and pgvector are db_types (GEOMETRY,
+  // VECTOR), not custom types. All other
   // (w17.field) semantics — `null`, `unique`, bounds, CHECK constraints,
   // defaults — still apply, and the proto carrier stays `string`.
   //

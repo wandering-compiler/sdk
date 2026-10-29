@@ -1629,7 +1629,16 @@ type Field struct {
 	// the geospatial equivalent of adding metres to feet — PostGIS refuses to
 	// compare them, which is the good case; the bad case is two columns that
 	// agree by accident.
-	Srid          int32 `protobuf:"varint,72,opt,name=srid,proto3" json:"srid,omitempty"`
+	Srid int32 `protobuf:"varint,72,opt,name=srid,proto3" json:"srid,omitempty"`
+	// --- VECTOR parameter (db_type VECTOR only) ---
+	//
+	// dimensions is N in `vector(N)` — how many floats every value holds.
+	// Required on a VECTOR column, refused on any other: an undimensioned
+	// vector column accepts values of any length, so two embeddings from
+	// different models land side by side and compare as if they meant
+	// something, and no HNSW / IVFFlat index can be built over it. pgvector
+	// caps a column at 16000 dimensions and an indexed one at 2000.
+	Dimensions    int32 `protobuf:"varint,73,opt,name=dimensions,proto3" json:"dimensions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1927,6 +1936,13 @@ func (x *Field) GetGeometryType() string {
 func (x *Field) GetSrid() int32 {
 	if x != nil {
 		return x.Srid
+	}
+	return 0
+}
+
+func (x *Field) GetDimensions() int32 {
+	if x != nil {
+		return x.Dimensions
 	}
 	return 0
 }
@@ -2502,7 +2518,8 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\xe2\t\n" +
+	" \x01(\tR\amessage\"\x82\n" +
+	"\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
 	"\x02pk\x18\x02 \x01(\bR\x02pk\x12\x1c\n" +
@@ -2544,7 +2561,10 @@ const file_w17_field_proto_rawDesc = "" +
 	"\fauto_choices\x18\x1f \x01(\x0e2\x10.w17.AutoChoicesR\vautoChoices\x12\x16\n" +
 	"\x06format\x18  \x01(\tR\x06format\x12#\n" +
 	"\rgeometry_type\x18G \x01(\tR\fgeometryType\x12\x12\n" +
-	"\x04srid\x18H \x01(\x05R\x04sridB\t\n" +
+	"\x04srid\x18H \x01(\x05R\x04srid\x12\x1e\n" +
+	"\n" +
+	"dimensions\x18I \x01(\x05R\n" +
+	"dimensionsB\t\n" +
 	"\adefaultB\v\n" +
 	"\t_requiredB\n" +
 	"\n" +
