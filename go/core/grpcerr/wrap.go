@@ -180,6 +180,10 @@ const (
 	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
 	CodeTooManyValues   = "TOO_MANY_VALUES"
 	CodeInternal        = "INTERNAL"
+	// CodeConstraintAtCommit: a constraint checked at COMMIT (a deferred
+	// foreign key) was still violated when the transaction committed, so
+	// the whole transaction rolled back.
+	CodeConstraintAtCommit = "CONSTRAINT_AT_COMMIT"
 	// CodeDatabaseUnavailable: the database could not be reached, so the
 	// call ran nothing and may be retried as it is.
 	CodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
@@ -591,6 +595,35 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		return st.Err()
 	}
 	return with.Err()
+}
+
+// CommitConstraint maps a failed COMMIT that is a constraint violation — a
+// key declared `deferrable` that a statement of the transaction left broken —
+// to the status a statement-level violation of the same kind gets, with the
+// CodeConstraintAtCommit detail. ok is false for any other error.
+//
+// A COMMIT has no method, and its caller's transaction spans several, so no
+// registry can name the request field: the constraint and the table go to
+// the operator's message instead. The dialect is not known at the COMMIT
+// either; the three parsers recognise only their own driver's errors.
+func CommitConstraint(ctx context.Context, method string, err error) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	for _, d := range []Dialect{DialectPostgres, DialectMySQL, DialectSQLite} {
+		ce, ok := parseByDialect(err, d)
+		if !ok {
+			continue
+		}
+		observx.ReportEvent(ctx, fmt.Errorf("%s: %s constraint violated at commit (name=%q table=%q): %w", method, ce.Kind, ce.Name, ce.Table, err))
+		dev := ce.Kind + " violation at commit"
+		if ce.Name != "" {
+			dev += " (constraint " + ce.Name + " on " + ce.Table + ")"
+		}
+		c := codeForKind(ce.Kind)
+		return forCaller(ctx, c, method, dev, CodeConstraintAtCommit, UserMsgid(c), nil), true
+	}
+	return nil, false
 }
 
 // parseByDialect dispatches to the right adapter. Falls

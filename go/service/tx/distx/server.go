@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
@@ -195,6 +196,13 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 		}
 		if errors.Is(err, txregistry.ErrTxBusy) {
 			return nil, status.Errorf(codes.FailedPrecondition, "commit: %v", err)
+		}
+		// A key checked at COMMIT ((w17.db.column).deferrable) that a
+		// statement of this transaction left broken fails HERE, not at the
+		// statement, so it is mapped here as the storage layer maps one at
+		// a statement — not reported as an internal fault.
+		if mapped, ok := grpcerr.CommitConstraint(ctx, "commit", err); ok {
+			return nil, mapped
 		}
 		return nil, status.Errorf(codes.Internal, "commit: %v", err)
 	}

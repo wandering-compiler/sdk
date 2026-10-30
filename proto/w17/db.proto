@@ -1584,9 +1584,14 @@ message Column {
   // reference may point at a missing parent for a while — a full
   // delete-and-reload of the parent table re-inserting the same ids, a
   // cycle of rows that reference each other — and the transaction fails at
-  // COMMIT only if a reference is still broken then. CASCADE and SET NULL
-  // still act at the parent's delete, so a reload of the parent under
-  // CASCADE still deletes the children. Use BLOCK to keep them: a deferred
+  // COMMIT only if a reference is still broken then: a storage call's own
+  // transaction answers as for a violation at a statement, and the
+  // distributed transaction's Commit with INVALID_ARGUMENT and the
+  // CONSTRAINT_AT_COMMIT detail code. CASCADE and
+  // SET NULL still act at the parent's delete — and they are the default
+  // without a deletion_rule (CASCADE, or ORPHAN on a nullable field) — so a
+  // reload of the parent under them still deletes or nulls the children.
+  // Use BLOCK to keep them: a deferred
   // BLOCK key refuses a missing parent at COMMIT (it is emitted as NO
   // ACTION, because Postgres and SQLite check RESTRICT immediately even
   // when the key is deferred).
