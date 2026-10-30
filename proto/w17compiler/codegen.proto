@@ -2286,6 +2286,14 @@ message ObservedForeignKey {
   // a database before PostgreSQL 15 (which has no list): the server then
   // does not compare the list — absent is not a value.
   bool delete_set_columns_read = 9;
+
+  // The key is checked at COMMIT: `DEFERRABLE INITIALLY DEFERRED`
+  // (`pg_constraint.condeferred`).
+  bool deferred = 10;
+
+  // Whether deferred was read. False from an old client: the server then
+  // does not compare it — absent is not a value.
+  bool deferred_read = 11;
 }
 
 // ObservedTable is one table as the database reports it.

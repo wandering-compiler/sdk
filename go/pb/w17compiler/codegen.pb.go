@@ -9453,8 +9453,14 @@ type ObservedForeignKey struct {
 	// a database before PostgreSQL 15 (which has no list): the server then
 	// does not compare the list — absent is not a value.
 	DeleteSetColumnsRead bool `protobuf:"varint,9,opt,name=delete_set_columns_read,json=deleteSetColumnsRead,proto3" json:"delete_set_columns_read,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// The key is checked at COMMIT: `DEFERRABLE INITIALLY DEFERRED`
+	// (`pg_constraint.condeferred`).
+	Deferred bool `protobuf:"varint,10,opt,name=deferred,proto3" json:"deferred,omitempty"`
+	// Whether deferred was read. False from an old client: the server then
+	// does not compare it — absent is not a value.
+	DeferredRead  bool `protobuf:"varint,11,opt,name=deferred_read,json=deferredRead,proto3" json:"deferred_read,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ObservedForeignKey) Reset() {
@@ -9546,6 +9552,20 @@ func (x *ObservedForeignKey) GetDeleteSetColumns() []string {
 func (x *ObservedForeignKey) GetDeleteSetColumnsRead() bool {
 	if x != nil {
 		return x.DeleteSetColumnsRead
+	}
+	return false
+}
+
+func (x *ObservedForeignKey) GetDeferred() bool {
+	if x != nil {
+		return x.Deferred
+	}
+	return false
+}
+
+func (x *ObservedForeignKey) GetDeferredRead() bool {
+	if x != nil {
+		return x.DeferredRead
 	}
 	return false
 }
@@ -12945,7 +12965,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x06unique\x18\x02 \x01(\bR\x06unique\x12\x1e\n" +
 	"\n" +
 	"definition\x18\x03 \x01(\tR\n" +
-	"definition\"\xd8\x02\n" +
+	"definition\"\x99\x03\n" +
 	"\x12ObservedForeignKey\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acolumns\x18\x02 \x03(\tR\acolumns\x12!\n" +
@@ -12955,7 +12975,10 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\rtarget_schema\x18\x06 \x01(\tR\ftargetSchema\x12%\n" +
 	"\x0etarget_columns\x18\a \x03(\tR\rtargetColumns\x12,\n" +
 	"\x12delete_set_columns\x18\b \x03(\tR\x10deleteSetColumns\x125\n" +
-	"\x17delete_set_columns_read\x18\t \x01(\bR\x14deleteSetColumnsRead\"\x97\x06\n" +
+	"\x17delete_set_columns_read\x18\t \x01(\bR\x14deleteSetColumnsRead\x12\x1a\n" +
+	"\bdeferred\x18\n" +
+	" \x01(\bR\bdeferred\x12#\n" +
+	"\rdeferred_read\x18\v \x01(\bR\fdeferredRead\"\x97\x06\n" +
 	"\rObservedTable\x12\x16\n" +
 	"\x06schema\x18\x01 \x01(\tR\x06schema\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12=\n" +
