@@ -25,11 +25,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -287,6 +289,7 @@ func Dial(addr string, lookup LookupFunc) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	go warnUnresolvable(host, addr)
 	return grpc.NewClient(addr,
 		grpc.WithTransportCredentials(credentials.NewTLS(cfg)),
 		grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
@@ -296,6 +299,32 @@ func Dial(addr string, lookup LookupFunc) (*grpc.ClientConn, error) {
 			return streamer(principal.ForwardToOutgoing(ctx), desc, cc, method, opts...)
 		}),
 	)
+}
+
+// resolveHost is the lookup warnUnresolvable makes; tests stub it.
+var resolveHost = func(ctx context.Context, host string) error {
+	_, err := net.DefaultResolver.LookupHost(ctx, host)
+	return err
+}
+
+// warnLog is where warnUnresolvable writes; tests stub it.
+var warnLog = log.Printf
+
+// warnUnresolvable says once, at boot, that the private surface's host does
+// not resolve. The connection is lazy, so a missing host otherwise shows only
+// on the first call — as UNAVAILABLE, which a gateway renders as a passing
+// outage ("temporarily unavailable"), and a developer goes looking for one.
+// The usual cause is local: the private proxy that answers for the domain
+// under that name is not running. An IP address is not looked up.
+func warnUnresolvable(host, addr string) {
+	if net.ParseIP(host) != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := resolveHost(ctx, host); err != nil {
+		warnLog("private surface %s: the host %q does not resolve (%v) — every call will fail as UNAVAILABLE until it does. It is the name the private proxy answers under for that domain: in a local stack, start the private-proxy service (w17/services/private-proxy; `docker compose ps private-proxy`); elsewhere, check the address the service was given.", addr, host, err)
+	}
 }
 
 // DefaultAddr is where a caller reaches domain's private surface: the
