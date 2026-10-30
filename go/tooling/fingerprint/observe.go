@@ -135,6 +135,11 @@ type ObservedForeignKey struct {
 	// DeleteSetColumnsRead says DeleteSetColumns was read. False from an
 	// older reader or a database before PostgreSQL 15: do not compare.
 	DeleteSetColumnsRead bool
+	// Deferred says the key is checked at COMMIT (`DEFERRABLE INITIALLY
+	// DEFERRED`, pg_constraint.condeferred). DeferredRead says it was read:
+	// false from an older reader — do not compare.
+	Deferred     bool
+	DeferredRead bool
 }
 
 // ObservedIndex is one index as the database defines it.
@@ -455,6 +460,7 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		                   FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
 		                   JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum), '{}'),
 		       c.confdeltype,
+		       c.condeferred,
 		       -- confdelsetcols exists from PostgreSQL 15; read through
 		       -- to_jsonb so the query also runs on an older server, where
 		       -- the key is absent and the list is reported as not read.
@@ -483,9 +489,9 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 		var name, def, target, targetSchema string
 		var cols, targetCols []string
 		var kind, delType byte
-		var delSetRead bool
+		var delSetRead, deferred bool
 		var delSetCols []string
-		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetSchema, &targetCols, &delType, &delSetRead, &delSetCols); err != nil {
+		if err := rows.Scan(&name, &kind, &def, &cols, &target, &targetSchema, &targetCols, &delType, &deferred, &delSetRead, &delSetCols); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("postgres observe scan constraint %s.%s: %w", schema, table, err)
 		}
 		switch kind {
@@ -494,6 +500,7 @@ func pgObserveConstraints(ctx context.Context, conn PgxQuerier, schema, table st
 				Name: name, Columns: cols, TargetTable: target, TargetSchema: targetSchema,
 				TargetColumns: targetCols, OnDelete: fkRuleSQL(delType),
 				DeleteSetColumns: delSetCols, DeleteSetColumnsRead: delSetRead,
+				Deferred: deferred, DeferredRead: true,
 			}
 			if len(targetCols) > 0 {
 				fk.TargetColumn = targetCols[0]

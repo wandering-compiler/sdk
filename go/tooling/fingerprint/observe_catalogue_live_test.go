@@ -170,3 +170,41 @@ func TestObservePostgresReportsUniques(t *testing.T) {
 		}
 	}
 }
+
+// When a foreign key is checked is observed: a key created DEFERRABLE
+// INITIALLY DEFERRED reports Deferred, a plain one and a DEFERRABLE
+// INITIALLY IMMEDIATE one do not, and all three say it was read.
+func TestObservePostgresReportsDeferredForeignKeys(t *testing.T) {
+	conn := liveConn(t)
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE TABLE area (id bigint PRIMARY KEY)`,
+		`CREATE TABLE measure (id bigint PRIMARY KEY,
+			deferred_id  bigint CONSTRAINT m_deferred REFERENCES area (id) DEFERRABLE INITIALLY DEFERRED,
+			immediate_id bigint CONSTRAINT m_immediate REFERENCES area (id) DEFERRABLE INITIALLY IMMEDIATE,
+			plain_id     bigint CONSTRAINT m_plain REFERENCES area (id))`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	obs, err := ObservePostgres(ctx, conn)
+	if err != nil {
+		t.Fatalf("ObservePostgres: %v", err)
+	}
+	got := map[string]ObservedForeignKey{}
+	for _, tb := range obs.Tables {
+		for _, fk := range tb.ForeignKeys {
+			got[fk.Name] = fk
+		}
+	}
+	for name, want := range map[string]bool{"m_deferred": true, "m_immediate": false, "m_plain": false} {
+		fk, ok := got[name]
+		if !ok {
+			t.Fatalf("key %s not observed (have %v)", name, got)
+		}
+		if !fk.DeferredRead || fk.Deferred != want {
+			t.Errorf("%s: Deferred=%v DeferredRead=%v, want Deferred=%v read", name, fk.Deferred, fk.DeferredRead, want)
+		}
+	}
+}
