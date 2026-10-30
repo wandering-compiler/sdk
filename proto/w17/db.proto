@@ -1574,6 +1574,32 @@ message Column {
   // relaxed a constraint that was never there, and the day the axes DO line
   // up the annotation starts having an effect nobody reviewed.
   bool fk_cross_scope = 9;
+
+  // deferrable checks this column's foreign key at COMMIT instead of after
+  // every statement: the constraint is emitted `DEFERRABLE INITIALLY
+  // DEFERRED`. Applies only when `fk` is set.
+  //
+  // `deletion_rule` says what happens to the CHILD when the parent goes;
+  // this says WHEN the reference is checked. Within one transaction the
+  // reference may point at a missing parent for a while — a full
+  // delete-and-reload of the parent table re-inserting the same ids, a
+  // cycle of rows that reference each other — and the transaction fails at
+  // COMMIT only if a reference is still broken then. CASCADE and SET NULL
+  // still act at the parent's delete, so a reload of the parent under
+  // CASCADE still deletes the children. Use BLOCK to keep them: a deferred
+  // BLOCK key refuses a missing parent at COMMIT (it is emitted as NO
+  // ACTION, because Postgres and SQLite check RESTRICT immediately even
+  // when the key is deferred).
+  //
+  // Postgres and SQLite only. MySQL has no deferred constraints and refuses
+  // the field at build.
+  //
+  // Usage:
+  //   string area_id = 2 [
+  //     (w17.field)     = { type: UUID },
+  //     (w17.db.column) = { fk: "area.Area", deletion_rule: BLOCK, deferrable: true }
+  //   ];
+  bool deferrable = 10;
 }
 
 // EnumValueColumn is the body of `(w17.db.enum_value)`.

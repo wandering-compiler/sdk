@@ -2896,7 +2896,33 @@ type Column struct {
 	// shape that hides a typo'd scope name — the author believes they have
 	// relaxed a constraint that was never there, and the day the axes DO line
 	// up the annotation starts having an effect nobody reviewed.
-	FkCrossScope  bool `protobuf:"varint,9,opt,name=fk_cross_scope,json=fkCrossScope,proto3" json:"fk_cross_scope,omitempty"`
+	FkCrossScope bool `protobuf:"varint,9,opt,name=fk_cross_scope,json=fkCrossScope,proto3" json:"fk_cross_scope,omitempty"`
+	// deferrable checks this column's foreign key at COMMIT instead of after
+	// every statement: the constraint is emitted `DEFERRABLE INITIALLY
+	// DEFERRED`. Applies only when `fk` is set.
+	//
+	// `deletion_rule` says what happens to the CHILD when the parent goes;
+	// this says WHEN the reference is checked. Within one transaction the
+	// reference may point at a missing parent for a while — a full
+	// delete-and-reload of the parent table re-inserting the same ids, a
+	// cycle of rows that reference each other — and the transaction fails at
+	// COMMIT only if a reference is still broken then. CASCADE and SET NULL
+	// still act at the parent's delete, so a reload of the parent under
+	// CASCADE still deletes the children. Use BLOCK to keep them: a deferred
+	// BLOCK key refuses a missing parent at COMMIT (it is emitted as NO
+	// ACTION, because Postgres and SQLite check RESTRICT immediately even
+	// when the key is deferred).
+	//
+	// Postgres and SQLite only. MySQL has no deferred constraints and refuses
+	// the field at build.
+	//
+	// Usage:
+	//
+	//	string area_id = 2 [
+	//	  (w17.field)     = { type: UUID },
+	//	  (w17.db.column) = { fk: "area.Area", deletion_rule: BLOCK, deferrable: true }
+	//	];
+	Deferrable    bool `protobuf:"varint,10,opt,name=deferrable,proto3" json:"deferrable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2990,6 +3016,13 @@ func (x *Column) GetExclude() bool {
 func (x *Column) GetFkCrossScope() bool {
 	if x != nil {
 		return x.FkCrossScope
+	}
+	return false
+}
+
+func (x *Column) GetDeferrable() bool {
+	if x != nil {
+		return x.Deferrable
 	}
 	return false
 }
@@ -3551,7 +3584,7 @@ const file_w17_db_proto_rawDesc = "" +
 	"\bRawIndex\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06unique\x18\x02 \x01(\bR\x06unique\x12\x12\n" +
-	"\x04body\x18\x03 \x01(\tR\x04body\"\xa7\x02\n" +
+	"\x04body\x18\x03 \x01(\tR\x04body\"\xc7\x02\n" +
 	"\x06Column\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\bR\x05index\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x0e\n" +
@@ -3561,7 +3594,11 @@ const file_w17_db_proto_rawDesc = "" +
 	"\x0egenerated_expr\x18\x06 \x01(\tR\rgeneratedExpr\x12\x18\n" +
 	"\acomment\x18\a \x01(\tR\acomment\x12\x18\n" +
 	"\aexclude\x18\b \x01(\bR\aexclude\x12$\n" +
-	"\x0efk_cross_scope\x18\t \x01(\bR\ffkCrossScope\",\n" +
+	"\x0efk_cross_scope\x18\t \x01(\bR\ffkCrossScope\x12\x1e\n" +
+	"\n" +
+	"deferrable\x18\n" +
+	" \x01(\bR\n" +
+	"deferrable\",\n" +
 	"\x0fEnumValueColumn\x12\x19\n" +
 	"\bsort_sql\x18\x01 \x01(\tR\asortSql*T\n" +
 	"\tScopeAxis\x12\x1a\n" +
