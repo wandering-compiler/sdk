@@ -2913,8 +2913,8 @@ type Column struct {
 	// ACTION, because Postgres and SQLite check RESTRICT immediately even
 	// when the key is deferred).
 	//
-	// Postgres and SQLite only. MySQL has no deferred constraints and refuses
-	// the field at build.
+	// Postgres and SQLite only. MySQL has no deferred constraints, and a
+	// migration plan for a MySQL connection refuses the field.
 	//
 	// Usage:
 	//
