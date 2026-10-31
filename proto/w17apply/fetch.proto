@@ -159,6 +159,33 @@ message Migration {
   // compiler's types. A client that cannot parse it simply has nothing to
   // check — an additive field must never turn into a refused apply.
   string manifest_json = 12;
+
+  // checks — the migration's pre-apply data checks (the planner's
+  // NEEDS_CONFIRM probes, `SELECT count(*) … LIMIT 1`: a non-zero count means
+  // rows the migration would refuse or lose). They travel so a deploy can run
+  // them OPT-IN (`migrate apply --checks`, or W17_MIGRATE_CHECKS=1) before
+  // the migration and refuse with the check's name, row count and rationale;
+  // by default apply ignores them (docs/decisions/checksql-preapply-optin-ci).
+  //
+  // BOUND by content_sha256 (migrate.ContentHashWithChecks) — an executed
+  // check is as trusted as the bodies, and the loader refuses an artifact
+  // carrying checks its digest does not cover. A migration without checks
+  // hashes as it did before they existed. The console serves only checks the
+  // stored digest binds.
+  repeated Check checks = 13;
+}
+
+// Check is one pre-apply (or, with down set, pre-rollback) data probe.
+message Check {
+  string name = 1;
+  // sql counts the violating rows: `SELECT count(*) FROM … WHERE … LIMIT 1`
+  // (or a row-shape probe whose every row is one), in the connection's
+  // dialect. The applier accepts only a single read-only SELECT.
+  string sql = 2;
+  // rationale — what the probe guards against, for the refusal message.
+  string rationale = 3;
+  // down marks a pre-rollback check (run against the post-up database).
+  bool down = 4;
 }
 
 // FixtureFetch is the console-served, irpb-free face of fixture seeding: it

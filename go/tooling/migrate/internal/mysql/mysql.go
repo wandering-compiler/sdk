@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -24,7 +25,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/lib/dbsession"
 
-	_ "github.com/go-sql-driver/mysql"
+	gomysql "github.com/go-sql-driver/mysql"
 
 	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
@@ -35,6 +36,9 @@ import (
 // Applier is the per-connection MySQL apply driver.
 type Applier struct {
 	db *sql.DB
+	// checkDSN opens the pre-apply checks' own pool: the bodies' DSN with
+	// multiStatements off (see RunCheck).
+	checkDSN string
 }
 
 var _ migrate.Applier = (*Applier)(nil)
@@ -60,7 +64,18 @@ func New(ctx context.Context, urlDSN string) (*Applier, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("mysql.New: ping: %w", err)
 	}
-	return &Applier{db: db}, nil
+	return &Applier{db: db, checkDSN: checkDriverDSN(driverDSN)}, nil
+}
+
+// checkDriverDSN is the bodies' DSN with multiStatements OFF, for the
+// pre-apply checks (see RunCheck); "" when it cannot be parsed.
+func checkDriverDSN(driverDSN string) string {
+	cfg, err := gomysql.ParseDSN(driverDSN)
+	if err != nil {
+		return ""
+	}
+	cfg.MultiStatements = false
+	return cfg.FormatDSN()
 }
 
 // AppliedHead returns the id of the most recently applied
@@ -123,14 +138,14 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	// migration) would make MySQL's empty COM_QUERY abort with ER 1065; skip the
 	// Exec (up_post_tx, if any, still runs below).
 	if up := m.GetUpSql(); up != "" {
-		if _, err := a.db.ExecContext(ctx, up); err != nil {
+		if err := a.execBody(ctx, up); err != nil {
 			return fmt.Errorf("mysql apply up_sql: %w", err)
 		}
 	}
 	if pt := m.GetUpPostTx(); pt != "" {
 		slog.Warn("mysql: running non-empty up_post_tx as a separate step after up_sql committed; a crash between them is NOT resumable — up_sql's DDL commits with no applied-state row (recorded at the end of up_post_tx), so a re-run re-executes up_sql and wedges on the already-committed DDL",
 			slog.String("migration_id", m.GetId()))
-		if _, err := a.db.ExecContext(ctx, pt); err != nil {
+		if err := a.execBody(ctx, pt); err != nil {
 			return fmt.Errorf("mysql apply up_post_tx: %w", err)
 		}
 	}
@@ -144,14 +159,36 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // body executes in a single ExecContext call.
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if pre := m.GetDownPreTx(); pre != "" {
-		if _, err := a.db.ExecContext(ctx, pre); err != nil {
+		if err := a.execBody(ctx, pre); err != nil {
 			return fmt.Errorf("mysql rollback down_pre_tx: %w", err)
 		}
 	}
 	if down := m.GetDownSql(); down != "" {
-		if _, err := a.db.ExecContext(ctx, down); err != nil {
+		if err := a.execBody(ctx, down); err != nil {
 			return fmt.Errorf("mysql rollback down_sql: %w", err)
 		}
+	}
+	return nil
+}
+
+// execBody runs one migration body (a multi-statement string) on ONE
+// connection taken from the pool, and keeps that connection out of the pool
+// when the body fails. A body leaves session state behind when it stops
+// part-way: a migration that turns FOREIGN_KEY_CHECKS off around one ADD
+// CONSTRAINT (the down of a dropped parent table) and fails before turning
+// it back, or an open transaction that the next borrower's BEGIN would
+// implicitly commit (go-sql-driver's ResetSession sends no
+// COM_RESET_CONNECTION). Returned to the pool, the next migration or query
+// on that connection would inherit it; discarded, the pool dials afresh.
+func (a *Applier) execBody(ctx context.Context, body string) error {
+	conn, err := a.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, body); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return err
 	}
 	return nil
 }
@@ -311,4 +348,63 @@ func URLToDriverDSN(urlDSN string) (string, error) {
 	}
 
 	return fmt.Sprintf("%stcp(%s)/%s%s", userInfo, u.Host, db, suffix), nil
+}
+
+var _ migrate.CheckRunner = (*Applier)(nil)
+
+// RunCheck runs one pre-apply check (migrate.CheckRunner).
+//
+// Only a single read-only SELECT is accepted (migrate.ValidateMigrationCheckSQL), and
+// it runs on a pool of its OWN opened WITHOUT multiStatements (the bodies'
+// pool runs several statements per call, which is how `SELECT 0; COMMIT;
+// DELETE …` would leave the READ ONLY transaction), never the run lock's
+// session, inside a READ ONLY transaction with max_execution_time. A failure
+// reports the MySQL error number only: the server's message can carry the
+// data the probe read.
+func (a *Applier) RunCheck(ctx context.Context, query, body string) (int64, error) {
+	if err := migrate.ValidateMigrationCheckSQL(query, body, migrate.CheckMySQL); err != nil {
+		return 0, err
+	}
+	if a.checkDSN == "" {
+		return 0, errors.New("the check has no connection to run on")
+	}
+	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)
+	defer cancel()
+	db, err := sql.Open("mysql", a.checkDSN)
+	if err != nil {
+		return 0, errors.New("the check connection could not be opened")
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return 0, myCheckErr(err)
+	}
+	defer func() { _ = conn.Close() }()
+	for _, st := range []string{
+		fmt.Sprintf("SET SESSION max_execution_time = %d", migrate.CheckTimeout.Milliseconds()),
+		"START TRANSACTION READ ONLY",
+	} {
+		if _, err := conn.ExecContext(ctx, st); err != nil {
+			return 0, myCheckErr(err)
+		}
+	}
+	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK") }()
+	var n int64
+	if err := conn.QueryRowContext(ctx, migrate.CheckCountSQL(query)).Scan(&n); err != nil {
+		return 0, myCheckErr(err)
+	}
+	return n, nil
+}
+
+// myCheckErr reduces a check failure to its MySQL error number.
+func myCheckErr(err error) error {
+	var me *gomysql.MySQLError
+	if errors.As(err, &me) {
+		return fmt.Errorf("the check failed (MySQL error %d)", me.Number)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("the check timed out")
+	}
+	return errors.New("the check failed")
 }

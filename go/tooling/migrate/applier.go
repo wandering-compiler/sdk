@@ -116,6 +116,21 @@ const (
 // it reads MigrationPhase before applying and, on PhasePending,
 // resumes via ApplyPostTx instead of re-running the full Apply.
 // Appliers without it always take the plain Apply path.
+// CheckRunner is the optional capability `migrate apply --checks` needs: run
+// one pre-apply data check (a planner probe in the connection's dialect) and
+// return its count — a non-zero count is rows the migration would refuse or
+// lose.
+//
+// body is the migration's up SQL (both halves): the check may also call a
+// function it calls. An implementation accepts only a single read-only SELECT
+// (ValidateMigrationCheckSQL), runs it on a connection of its own (never the run
+// lock's) in a read-only transaction with a statement timeout
+// (CheckTimeout), reads it through CheckCountSQL, and reports a failure by
+// the database's error code only.
+type CheckRunner interface {
+	RunCheck(ctx context.Context, sql, body string) (int64, error)
+}
+
 type ResumableApplier interface {
 	// MigrationPhase reports the applied-state phase of the migration
 	// `id` on the target. A missing table / missing row is PhaseFresh

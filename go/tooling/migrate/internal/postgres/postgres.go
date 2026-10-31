@@ -467,8 +467,8 @@ func splitStatements(sql string) []string {
 	return out
 }
 
-// dollarTag returns the `$tag$` opening delimiter at b[i] (tag ∈ [A-Za-z0-9_]*,
-// not starting with a digit), or "" when b[i] doesn't start one.
+// dollarTag returns the `$tag$` opening delimiter at b[i] (tag ∈ identifier
+// bytes — [A-Za-z0-9_] and UTF-8 runes — not starting with a digit), or "" when b[i] doesn't start one.
 func dollarTag(b []byte, i int) string {
 	if b[i] != '$' {
 		return ""
@@ -477,7 +477,10 @@ func dollarTag(b []byte, i int) string {
 	if j < len(b) && b[j] >= '0' && b[j] <= '9' {
 		return "" // a positional parameter ($1), not a quote
 	}
-	for j < len(b) && (b[j] == '_' || (b[j] >= 'a' && b[j] <= 'z') || (b[j] >= 'A' && b[j] <= 'Z') || (b[j] >= '0' && b[j] <= '9')) {
+	// A tag follows identifier rules, and Postgres lets a multi-byte UTF-8
+	// rune into an identifier: `$é$` is a tag too. Read as no tag, its body
+	// was split at every `;` inside it.
+	for j < len(b) && (b[j] == '_' || b[j] >= 0x80 || (b[j] >= 'a' && b[j] <= 'z') || (b[j] >= 'A' && b[j] <= 'Z') || (b[j] >= '0' && b[j] <= '9')) {
 		j++
 	}
 	if j < len(b) && b[j] == '$' {
@@ -617,4 +620,69 @@ func (a *Applier) ExecSeed(ctx context.Context, stmts []migrate.SeedStmt) error 
 // rather than silently missing.
 func (a *Applier) Observe(ctx context.Context) (fingerprint.Observed, error) {
 	return fingerprint.ObservePostgres(ctx, a.conn)
+}
+
+var _ migrate.CheckRunner = (*Applier)(nil)
+
+// RunCheck runs one pre-apply check (migrate.CheckRunner).
+//
+// Only a single read-only SELECT is accepted (migrate.ValidateMigrationCheckSQL), and
+// it runs on a connection of its OWN — never the applier's, which holds the
+// run lock (a check calling pg_advisory_unlock_all() there would drop it) —
+// inside a READ ONLY transaction with a statement and a lock timeout, always
+// rolled back. A failure reports the SQLSTATE only: the server's message can
+// carry the data the probe read (a failed cast quotes the value).
+func (a *Applier) RunCheck(ctx context.Context, query, body string) (int64, error) {
+	if err := migrate.ValidateMigrationCheckSQL(query, body, migrate.CheckPostgres); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dbsession.ApplyPGDSNParams(a.dsn))
+	if err != nil {
+		return 0, fmt.Errorf("check connection: %w", pgCheckErr(err))
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, pgCheckErr(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	for _, st := range []string{
+		fmt.Sprintf("SET LOCAL statement_timeout = %d", migrate.CheckTimeout.Milliseconds()),
+		"SET LOCAL lock_timeout = 5000",
+	} {
+		if _, err := tx.Exec(ctx, st); err != nil {
+			return 0, pgCheckErr(err)
+		}
+	}
+	// temp_file_limit bounds the disk a probe's sort or hash may spill. It is
+	// a superuser setting, so a migration role may not be allowed to lower it:
+	// tried under a savepoint, and the check runs on without it (bounded by
+	// the statement timeout) when the server refuses.
+	if _, err := tx.Exec(ctx, "SAVEPOINT w17_check_limits"); err != nil {
+		return 0, pgCheckErr(err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL temp_file_limit = '1GB'"); err != nil {
+		if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT w17_check_limits"); err != nil {
+			return 0, pgCheckErr(err)
+		}
+	}
+	var n int64
+	if err := tx.QueryRow(ctx, migrate.CheckCountSQL(query)).Scan(&n); err != nil {
+		return 0, pgCheckErr(err)
+	}
+	return n, nil
+}
+
+// pgCheckErr reduces a check failure to its SQLSTATE.
+func pgCheckErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return fmt.Errorf("the check failed (SQLSTATE %s)", pe.Code)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("the check timed out")
+	}
+	return errors.New("the check failed")
 }

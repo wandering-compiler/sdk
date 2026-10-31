@@ -233,6 +233,11 @@ flags (apply):
                       the token was issued for) when the console binds tokens
                       to a device key; unset, the token goes as a plain bearer
   --dry-run           print what would apply, apply nothing
+  --checks            run each pending migration's pre-apply data checks (the
+                      planner's NEEDS_CONFIRM probes) before it, and refuse it
+                      with the check's name, row count and rationale when one
+                      finds rows. Off by default — each probe is a table scan.
+                      W17_MIGRATE_CHECKS=1 turns it on for every apply
   --log-format text|json
   --parallel N        worker count for KV data migrations; 0 = the migration's own
 
@@ -288,6 +293,8 @@ type applyFlags struct {
 	logFormat string
 	parallel  int
 	fake      bool
+	// checks: apply runs each migration's pre-apply checks first.
+	checks bool
 	// exitCode: status fails while anything is pending.
 	exitCode bool
 	lockWait time.Duration
@@ -307,6 +314,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
+	fs.BoolVar(&f.checks, "checks", false, "apply only: run each pending migration's pre-apply data checks first and refuse it when one finds rows (also W17_MIGRATE_CHECKS=1)")
 	fs.BoolVar(&f.fake, "fake", false, "apply only: RECORD each pending migration without running it — for a database that already holds what they describe. Each is checked against the database first and refused if it does not match")
 	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that are older than the fixtures beside them (the deliberate override — a stale render seeds yesterday's rows)")
 	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "fixtures only: succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
@@ -384,6 +392,7 @@ var flagVerbs = map[string]map[string]bool{
 	"dry-run":      {"apply": true, "rollback": true, "fixtures apply": true},
 	"log-format":   {"apply": true, "rollback": true},
 	"fake":         {"apply": true},
+	"checks":       {"apply": true},
 	"exit-code":    {"status": true},
 	"to":           {"rollback": true},
 	"fixtures":     {"fixtures apply": true},
@@ -406,6 +415,7 @@ func runApply(ctx context.Context, args []string, opts Options, out io.Writer) e
 	cfg.DryRun = f.dryRun
 	cfg.LogFormat = f.logFormat
 	cfg.Fake = f.fake
+	cfg.Checks = f.checks || checksFromEnv(opts.getenv())
 	cfg.LockWait = lockWaitOf(f.lockWait)
 	if f.fake && f.dryRun {
 		// Both mean "do not run the body", and they disagree about the
@@ -794,4 +804,15 @@ func lockWaitOf(d time.Duration) time.Duration {
 		return -1
 	}
 	return d
+}
+
+// checksFromEnv reads the deploy-wide setting for --checks:
+// W17_MIGRATE_CHECKS=1 (or true) runs the pre-apply checks on every apply of
+// this environment without changing the command line.
+func checksFromEnv(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("W17_MIGRATE_CHECKS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

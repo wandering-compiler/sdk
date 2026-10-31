@@ -111,6 +111,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | `--console ADDR` | `W17_CONSOLE_ADDR` | flag overrides the variable |
 | `--dry-run` | off | refused together with `--fake` |
 | `--fake` | off | see T12 |
+| `--checks` | off; `W17_MIGRATE_CHECKS=1` (also `true`/`yes`/`on`) turns it on | `apply` only; runs each pending migration's forward pre-apply checks first (see T2.11–T2.14) |
 | `--log-format` | `text` | `text` or `json`; anything else refused |
 | `--parallel N` | the data migration's own setting | `<= 0` keeps the migration's own setting |
 | `--lock-wait D` | 5m (`migrate.DefaultLockWait`) | how long `apply` and `rollback` wait for another run's run lock; `0` fails at once |
@@ -133,9 +134,18 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.8 | A connection listed twice in the lock MUST be refused by planning and rollback planning before any applier is used. | `TestRun_RefusesAConnectionListedTwice` |
 | T2.9 | Every flag a verb accepts MUST take effect on that verb. | `TestParseFlags_AllowNoDSNOnlyOnFixtures`, `TestParseFlags_AFlagTheVerbDoesNotReadIsRefused`, `TestFlagVerbs_CoversEveryDefinedFlag` |
 | T2.10 | `--allow-no-dsn` on any verb other than `fixtures apply` MUST be refused with a message naming where it applies. | `TestParseFlags_AllowNoDSNOnlyOnFixtures` |
+| T2.11 | With `--checks` (or `W17_MIGRATE_CHECKS=1`), a forward check of a pending migration that counts rows MUST refuse that migration before its body runs, naming the check, the row count and its rationale. | `TestRun_ChecksRefuseAViolatingMigration`, `TestApply_ChecksReachTheRun` |
+| T2.12 | Without `--checks` and the setting, no check MUST run. Down checks MUST NOT run before an apply. | `TestRun_ChecksAreOptIn`, `TestRun_ChecksPassAndSkipDownChecks`, `TestChecksFlagAndSetting` |
+| T2.13 | With `--checks`, a store that cannot run checks MUST refuse a migration that carries some, not skip them. | `TestRun_ChecksRefuseWhereTheyCannotRun` |
+| T2.14 | A check MUST be bound by the migration's content hash (the loader refuses an artifact carrying unbound checks; `--checks` asks again before one runs), MUST be a single SELECT built only from the words and functions the planner's probe templates use (an allowlist, tokenized per dialect; any identifier, quoted or not, before a `(` is a call) or a call or parenthesized group the same migration's up body contains token for token outside its strings and comments (an expression index's probe repeats the author's expression; a `;` and unbalanced parentheses stay refused; the body is tokenized as its server reads it — non-ASCII dollar tags, MySQL `/*! */`/`/*+ */` as comments, SQLite `[…]` identifiers — or admits nothing), and MUST run on its own connection — never the run lock's, which is asked again after the checks — read-only with a statement timeout, reporting a failure by error code only. | `TestChecks_AreBoundByTheDigest`, `TestContentHash_BindsEveryCheckField`, `TestValidateCheckSQL`, `TestValidateMigrationCheckSQL`, `TestValidateMigrationCheckSQL_BodyReadAsTheServerReadsIt`, `TestRunCheck_WithoutTheTempFileLimitPrivilege_Live`, `TestRunCheck_CountsAndCannotWrite_Live` (Postgres, MySQL), `TestRunCheck_CountsAndCannotWrite` (SQLite) |
 
 **Deliberate limits.**
 - Unpinned connections are warned about, not refused: a KV connection can stay unpinned for good.
+- `--checks` runs none for `--fake` or for a Postgres migration resumed in its post-transaction
+  phase; `rollback` has no `--checks` (down checks travel in the artefact but are not run).
+- The console renders each dialect's probes in its own SQL and does not carry a probe a dialect
+  cannot express (the plan's risk findings name it), so a MySQL or SQLite migration carries fewer
+  checks than its Postgres twin.
 
 ## T3. `migrate status`
 
@@ -457,7 +467,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 
 | Capability | Postgres | MySQL | SQLite | Redis | NATS | S3 |
 |---|---|---|---|---|---|---|
-| Apply | body's own `BEGIN…COMMIT`, one simple-protocol exec | body through the pool; DDL commits implicitly | one dedicated connection, `foreign_keys=ON` | commands line by line | commands line by line | commands line by line |
+| Apply | body's own `BEGIN…COMMIT`, one simple-protocol exec | each body on one connection, discarded when the body fails; DDL commits implicitly | one dedicated connection, `foreign_keys=ON` | commands line by line | commands line by line | commands line by line |
 | Post-transaction resume | yes | no (warned at run time) | no (warned) | — | — | — |
 | Fingerprint / Observe | yes / yes | yes / no | yes / no | schemaless | schemaless | schemaless |
 | Seed | yes (the only seed candidate) | no | no | no | no | no |
@@ -482,6 +492,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.13 | The S3 run lock MUST judge staleness on the store's clock only, so a taker whose local clock runs ahead cannot take over a live lock; a store that reports no time MUST be refused, never judged on the local clock. | `TestS3RunLock_ClockSkewedTakerCannotTakeOverALiveLock`, `TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness` |
 | T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | `TestRunLock_CheckReportsALostLockSession_Live` |
 | T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
+| T15.16 | A MySQL body that fails MUST NOT hand its connection back to the pool (a `FOREIGN_KEY_CHECKS` it turned off, or a transaction it left open, would reach the next borrower). | `TestApply_AFailedBodyDoesNotReturnItsSessionToThePool` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.
