@@ -87,6 +87,10 @@ const (
 	tokString
 	tokNumber
 	tokPunct
+	// tokOther is what only a body has (lenient scan): a byte or word no
+	// check contains, kept as a token so the tokens either side of it are
+	// never read as adjacent.
+	tokOther
 )
 
 type checkTok struct {
@@ -118,10 +122,11 @@ func ValidateCheckSQL(sql string, d CheckDialect) error {
 // hash. Nothing else widens: outside such a span every rule of
 // ValidateCheckSQL stands, and a `;` is refused even inside one.
 func ValidateMigrationCheckSQL(sql, body string, d CheckDialect) error {
-	if strings.TrimSpace(body) == "" {
+	b, err := scanCheck(body, d, true)
+	if err != nil || len(b) == 0 {
+		// a body this scanner cannot read as the server does admits nothing
 		return validateCheck(sql, d, nil)
 	}
-	b, _ := scanCheck(body, d, true)
 	return validateCheck(sql, d, b)
 }
 
@@ -236,39 +241,49 @@ func tokenizeCheck(sql string, d CheckDialect) ([]checkTok, error) {
 }
 
 // scanCheck tokenizes s the way d's server reads it. Strict (a check), it
-// refuses whatever no probe template contains; lenient (a migration body, see
-// ValidateMigrationCheckSQL), it reads past those instead and stops at an unterminated quote
-// or comment.
+// refuses whatever no probe template contains. Lenient (a migration body, see
+// ValidateMigrationCheckSQL), it keeps what no check contains as tokOther —
+// a word with a non-ASCII byte or a `$`, a number running into a word, any
+// other byte — so nothing is split or joined the server would not split or
+// join; and it returns an error for whatever it cannot delimit exactly as the
+// server does (an unterminated quote or comment, a MySQL executable or hint
+// comment whose end a quote inside could move), and such a body admits
+// nothing.
 func scanCheck(s string, d CheckDialect, lenient bool) ([]checkTok, error) {
 	var out []checkTok
 	refuse := func(what string) ([]checkTok, error) {
-		if lenient {
-			return out, nil
-		}
 		return nil, fmt.Errorf("%w: %s", ErrCheckRefused, what)
 	}
 	for i := 0; i < len(s); {
 		c := s[i]
 		switch {
 		// ---- (lenient only) what a body has and a check never does
-		case lenient && c == '$' && d == CheckPostgres:
+		case lenient && c == '$' && d == CheckPostgres && pgDollarTag(s, i) != "":
 			// A dollar-quoted string — a routine's body among them: what it
 			// calls runs when the routine does, not when the migration does.
-			j := i + 1
-			for j < len(s) && isCheckWordByte(s[j]) {
-				j++
-			}
-			if j >= len(s) || s[j] != '$' {
-				i = j
-				continue
-			}
-			tag := s[i : j+1]
-			end := strings.Index(s[j+1:], tag)
+			// Its tag follows identifier rules, a non-ASCII byte included
+			// (`$é$`).
+			tag := pgDollarTag(s, i)
+			end := strings.Index(s[i+len(tag):], tag)
 			if end < 0 {
-				return out, nil
+				return refuse("an unterminated dollar quote")
 			}
-			out = append(out, checkTok{tokString, s[i : j+1+end+len(tag)]})
-			i = j + 1 + end + len(tag)
+			out = append(out, checkTok{tokString, s[i : i+len(tag)+end+len(tag)]})
+			i += len(tag) + end + len(tag)
+		case lenient && (c == '$' || c >= 0x80 || isCheckWordStart(c) || c >= '0' && c <= '9') && bodyOtherWord(s, i) > i:
+			// a word no check can contain — `$1`, `é…`, `a$b`, `1abc` — is
+			// one token, as the server reads it
+			j := bodyOtherWord(s, i)
+			out = append(out, checkTok{tokOther, s[i:j]})
+			i = j
+		case lenient && c == '[' && d == CheckSQLite:
+			// SQLite reads […] as a quoted identifier (no escape inside)
+			end := strings.IndexByte(s[i+1:], ']')
+			if end < 0 {
+				return refuse("an unterminated [identifier]")
+			}
+			out = append(out, checkTok{tokIdent, s[i : i+end+2]})
+			i += end + 2
 		case lenient && d == CheckPostgres && (c == 'e' || c == 'E') && i+1 < len(s) && s[i+1] == '\'' &&
 			(i == 0 || !isCheckWordByte(s[i-1])):
 			// E'…': backslash escapes.
@@ -287,7 +302,7 @@ func scanCheck(s string, d CheckDialect, lenient bool) ([]checkTok, error) {
 				}
 			}
 			if j >= len(s) {
-				return out, nil
+				return refuse("an unterminated quote")
 			}
 			out = append(out, checkTok{tokString, s[i : j+1]})
 			i = j + 1
@@ -305,12 +320,20 @@ func scanCheck(s string, d CheckDialect, lenient bool) ([]checkTok, error) {
 			}
 		case c == '/' && i+1 < len(s) && s[i+1] == '*':
 			if d == CheckMySQL && i+2 < len(s) && (s[i+2] == '!' || s[i+2] == '+') {
-				if lenient {
-					// its content is code the server runs: read on
-					i += 3
-					continue
+				if !lenient {
+					return refuse("an executable comment")
 				}
-				return refuse("an executable comment")
+				// In a body, read as a comment: what it holds is never a span
+				// a check may repeat. The server lexes its content as code, so
+				// a quote or comment inside could end it later than the first
+				// `*/`: such a body is not read at all.
+				end := strings.Index(s[i+3:], "*/")
+				if end < 0 || strings.ContainsAny(s[i+3:i+3+end], "'\"`#") ||
+					strings.Contains(s[i+3:i+3+end], "--") || strings.Contains(s[i+3:i+3+end], "/*") {
+					return refuse("an executable comment this scanner cannot delimit")
+				}
+				i += 3 + end + 2
+				continue
 			}
 			if d == CheckPostgres {
 				depth, j := 1, i+2
@@ -345,6 +368,7 @@ func scanCheck(s string, d CheckDialect, lenient bool) ([]checkTok, error) {
 			}
 			if c == '`' && d == CheckPostgres {
 				if lenient {
+					out = append(out, checkTok{tokOther, "`"})
 					i++
 					continue
 				}
@@ -412,6 +436,7 @@ func scanCheck(s string, d CheckDialect, lenient bool) ([]checkTok, error) {
 			i++
 		default:
 			if lenient {
+				out = append(out, checkTok{tokOther, string(c)})
 				i++
 				continue
 			}
@@ -419,6 +444,54 @@ func scanCheck(s string, d CheckDialect, lenient bool) ([]checkTok, error) {
 		}
 	}
 	return out, nil
+}
+
+// pgDollarTag returns the `$tag$` opening a dollar quote at s[i], or "": the
+// rule of sqlsplit's dollarTag — identifier bytes, a byte ≥ 0x80 among them,
+// not starting with a digit (`$1` is a parameter).
+func pgDollarTag(s string, i int) string {
+	j := i + 1
+	if j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		return ""
+	}
+	for j < len(s) && (isCheckWordByte(s[j]) || s[j] >= 0x80) {
+		j++
+	}
+	if j < len(s) && s[j] == '$' {
+		return s[i : j+1]
+	}
+	return ""
+}
+
+// bodyOtherWord returns the end of the word at s[i] when the server reads one
+// there that no check can contain — one holding a byte ≥ 0x80 or a `$`
+// (identifier bytes on every dialect), or a number running into a word —
+// and i otherwise (an ASCII word or a plain number, tokenized as a check's).
+func bodyOtherWord(s string, i int) int {
+	j, other := i, false
+	digitsFirst := s[i] >= '0' && s[i] <= '9'
+	for j < len(s) {
+		c := s[j]
+		switch {
+		case c >= 0x80 || c == '$':
+			other = true
+		case isCheckWordStart(c):
+			if digitsFirst && j > i && !(c == 'e' || c == 'E') {
+				other = true
+			}
+		case c >= '0' && c <= '9':
+		default:
+			if other {
+				return j
+			}
+			return i
+		}
+		j++
+	}
+	if other {
+		return j
+	}
+	return i
 }
 
 func isCheckWordStart(c byte) bool {

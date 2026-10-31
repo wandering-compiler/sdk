@@ -140,11 +140,53 @@ func TestValidateMigrationCheckSQL(t *testing.T) {
 			t.Errorf("%s: accepted %q (err %v)", c.name, c.sql, err)
 		}
 	}
-	// MySQL: what an executable comment runs is body code; a # comment is not
-	myBody := "CREATE INDEX i ON t ((upper(x))); /*!80000 SELECT (md5(y)) */ SELECT 'x' # (sqrt(z))\n"
-	for q, want := range map[string]bool{"SELECT (upper(x))": true, "SELECT (md5(y))": true, "SELECT (sqrt(z))": false} {
+	// MySQL: an executable or hint comment in a body is a comment — what it
+	// holds is never a span a check may repeat — and so is a # comment
+	myBody := "CREATE INDEX i ON t ((upper(x))); /*!80000 SELECT (md5(y)) */ /*+ (sleep(5)) */ SELECT 'x' # (sqrt(z))\n"
+	for q, want := range map[string]bool{"SELECT (upper(x))": true, "SELECT (md5(y))": false, "SELECT (sleep(5))": false, "SELECT (sqrt(z))": false} {
 		if err := migrate.ValidateMigrationCheckSQL(q, myBody, my); (err == nil) != want {
 			t.Errorf("mysql %q: err %v, want accepted=%v", q, err, want)
+		}
+	}
+}
+
+// The body is read exactly as its server reads it, or it admits nothing: a
+// span this scanner would see where the server sees a string, a comment, an
+// identifier or a longer name is never one a check may repeat.
+func TestValidateMigrationCheckSQL_BodyReadAsTheServerReadsIt(t *testing.T) {
+	pg, my, lite := migrate.CheckPostgres, migrate.CheckMySQL, migrate.CheckSQLite
+	refused := []struct {
+		name, sql, body string
+		d               migrate.CheckDialect
+	}{
+		{"pg: a non-ASCII dollar tag", `SELECT (pg_sleep(600))`, `CREATE FUNCTION f() RETURNS void AS $é$ SELECT (pg_sleep(600)) $é$ LANGUAGE sql;`, pg},
+		{"pg: a non-ASCII byte starts the name", `SELECT count(*) FROM t WHERE pg_sleep(1) IS NOT NULL LIMIT 1`, `CREATE INDEX i ON t ((épg_sleep(1)));`, pg},
+		{"pg: a $ inside the name", `SELECT count(*) FROM t WHERE pg_sleep(1) IS NOT NULL LIMIT 1`, `CREATE INDEX i ON t ((x$pg_sleep(1)));`, pg},
+		{"pg: an unterminated dollar quote", `SELECT (lower(x))`, `CREATE INDEX i ON t ((lower(x))); SELECT $q$ never closed`, pg},
+		{"mysql: an executable comment", `SELECT (sleep(5))`, `/*!80000 CREATE INDEX i ON t ((sleep(5))) */;`, my},
+		{"mysql: a hint comment", `SELECT (sleep(5))`, `SELECT /*+ (sleep(5)) */ 1;`, my},
+		{"mysql: a quote inside an executable comment", `SELECT (upper(x))`, "CREATE INDEX i ON t ((upper(x))); /*! '*/ (sleep(5)) ' */", my},
+		{"mysql: an identifier starting with digits", `SELECT count(*) FROM t WHERE sleep(5) IS NOT NULL LIMIT 1`, `CREATE INDEX i ON t ((1sleep(5)));`, my},
+		{"sqlite: a [bracketed] identifier", `SELECT count(*) FROM t WHERE (randomblob(9)) IS NOT NULL LIMIT 1`, `CREATE INDEX i ON t ([(randomblob(9))]);`, lite},
+		{"sqlite: an unterminated [identifier]", `SELECT (lower(x))`, `CREATE INDEX i ON t ((lower(x))); SELECT [never closed`, lite},
+		{"an unterminated quote", `SELECT (lower(x))`, `CREATE INDEX i ON t ((lower(x))); SELECT 'x`, pg},
+	}
+	for _, c := range refused {
+		if err := migrate.ValidateMigrationCheckSQL(c.sql, c.body, c.d); !errors.Is(err, migrate.ErrCheckRefused) {
+			t.Errorf("%s: accepted %q (err %v)", c.name, c.sql, err)
+		}
+	}
+	accepted := []struct {
+		name, sql, body string
+		d               migrate.CheckDialect
+	}{
+		{"sqlite: a [bracketed] table beside the expression", `SELECT (lower(x)), count(*) FROM "t" GROUP BY (lower(x)) HAVING count(*) > 1 LIMIT 1`, `CREATE UNIQUE INDEX i ON [t] ((lower(x)));`, lite},
+		{"pg: an ASCII dollar-quoted routine beside the index", `SELECT (lower(x))`, `CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql; CREATE INDEX i ON t ((lower(x)));`, pg},
+		{"pg: a non-ASCII name elsewhere", `SELECT (lower(x))`, `COMMENT ON TABLE "t" IS 'é'; CREATE INDEX "é_i" ON t ((lower(x)));`, pg},
+	}
+	for _, c := range accepted {
+		if err := migrate.ValidateMigrationCheckSQL(c.sql, c.body, c.d); err != nil {
+			t.Errorf("%s: refused %q: %v", c.name, c.sql, err)
 		}
 	}
 }
