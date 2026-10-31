@@ -25,6 +25,9 @@ func TestSplitStatements_QuotedIdentifiersAndEscapeStrings(t *testing.T) {
 			[]string{"SELECT $1;", "SELECT $2;"}},
 		{"dollar body", "DO $$ BEGIN PERFORM 1; END $$; SELECT 1",
 			[]string{"DO $$ BEGIN PERFORM 1; END $$;", "SELECT 1;"}},
+		// A tag follows identifier rules, which admit a UTF-8 rune.
+		{"non-ASCII dollar tag", "COMMENT ON TABLE t IS $é$a; b$é$; SELECT 1",
+			[]string{"COMMENT ON TABLE t IS $é$a; b$é$;", "SELECT 1;"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

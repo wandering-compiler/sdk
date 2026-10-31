@@ -467,8 +467,8 @@ func splitStatements(sql string) []string {
 	return out
 }
 
-// dollarTag returns the `$tag$` opening delimiter at b[i] (tag ∈ [A-Za-z0-9_]*,
-// not starting with a digit), or "" when b[i] doesn't start one.
+// dollarTag returns the `$tag$` opening delimiter at b[i] (tag ∈ identifier
+// bytes — [A-Za-z0-9_] and UTF-8 runes — not starting with a digit), or "" when b[i] doesn't start one.
 func dollarTag(b []byte, i int) string {
 	if b[i] != '$' {
 		return ""
@@ -477,7 +477,10 @@ func dollarTag(b []byte, i int) string {
 	if j < len(b) && b[j] >= '0' && b[j] <= '9' {
 		return "" // a positional parameter ($1), not a quote
 	}
-	for j < len(b) && (b[j] == '_' || (b[j] >= 'a' && b[j] <= 'z') || (b[j] >= 'A' && b[j] <= 'Z') || (b[j] >= '0' && b[j] <= '9')) {
+	// A tag follows identifier rules, and Postgres lets a multi-byte UTF-8
+	// rune into an identifier: `$é$` is a tag too. Read as no tag, its body
+	// was split at every `;` inside it.
+	for j < len(b) && (b[j] == '_' || b[j] >= 0x80 || (b[j] >= 'a' && b[j] <= 'z') || (b[j] >= 'A' && b[j] <= 'Z') || (b[j] >= '0' && b[j] <= '9')) {
 		j++
 	}
 	if j < len(b) && b[j] == '$' {
