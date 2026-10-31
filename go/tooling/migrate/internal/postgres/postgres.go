@@ -624,17 +624,53 @@ func (a *Applier) Observe(ctx context.Context) (fingerprint.Observed, error) {
 
 var _ migrate.CheckRunner = (*Applier)(nil)
 
-// RunCheck runs one pre-apply check (migrate.CheckRunner) in a READ ONLY
-// transaction it always rolls back, and returns the count it selects.
-func (a *Applier) RunCheck(ctx context.Context, sql string) (int64, error) {
-	tx, err := a.conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
+// RunCheck runs one pre-apply check (migrate.CheckRunner).
+//
+// Only a single read-only SELECT is accepted (migrate.ValidateCheckSQL), and
+// it runs on a connection of its OWN — never the applier's, which holds the
+// run lock (a check calling pg_advisory_unlock_all() there would drop it) —
+// inside a READ ONLY transaction with a statement and a lock timeout, always
+// rolled back. A failure reports the SQLSTATE only: the server's message can
+// carry the data the probe read (a failed cast quotes the value).
+func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
+	if err := migrate.ValidateCheckSQL(query, false); err != nil {
 		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dbsession.ApplyPGDSNParams(a.dsn))
+	if err != nil {
+		return 0, fmt.Errorf("check connection: %w", pgCheckErr(err))
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, pgCheckErr(err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	for _, st := range []string{
+		fmt.Sprintf("SET LOCAL statement_timeout = %d", migrate.CheckTimeout.Milliseconds()),
+		"SET LOCAL lock_timeout = 5000",
+	} {
+		if _, err := tx.Exec(ctx, st); err != nil {
+			return 0, pgCheckErr(err)
+		}
+	}
 	var n int64
-	if err := tx.QueryRow(ctx, sql).Scan(&n); err != nil {
-		return 0, err
+	if err := tx.QueryRow(ctx, migrate.CheckCountSQL(query)).Scan(&n); err != nil {
+		return 0, pgCheckErr(err)
 	}
 	return n, nil
+}
+
+// pgCheckErr reduces a check failure to its SQLSTATE.
+func pgCheckErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return fmt.Errorf("the check failed (SQLSTATE %s)", pe.Code)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("the check timed out")
+	}
+	return errors.New("the check failed")
 }

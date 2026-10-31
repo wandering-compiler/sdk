@@ -302,9 +302,11 @@ type Migration struct {
 	// the migration and refuse with the check's name, row count and rationale;
 	// by default apply ignores them (docs/decisions/checksql-preapply-optin-ci).
 	//
-	// Not covered by content_sha256 or the body signature: a check changes no
-	// data, and the client runs each one inside a READ ONLY transaction, so a
-	// tampered check can refuse an apply but not write.
+	// BOUND by content_sha256 (migrate.ContentHashWithChecks) — an executed
+	// check is as trusted as the bodies, and the loader refuses an artifact
+	// carrying checks its digest does not cover. A migration without checks
+	// hashes as it did before they existed. The console serves only checks the
+	// stored digest binds.
 	Checks        []*Check `protobuf:"bytes,13,rep,name=checks,proto3" json:"checks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -435,8 +437,9 @@ func (x *Migration) GetChecks() []*Check {
 type Check struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// sql counts the violating rows: `SELECT count(*) FROM … WHERE … LIMIT 1`.
-	// Its identifiers are double-quoted (ANSI), on every dialect.
+	// sql counts the violating rows: `SELECT count(*) FROM … WHERE … LIMIT 1`
+	// (or a row-shape probe whose every row is one), in the connection's
+	// dialect. The applier accepts only a single read-only SELECT.
 	Sql string `protobuf:"bytes,2,opt,name=sql,proto3" json:"sql,omitempty"`
 	// rationale — what the probe guards against, for the refusal message.
 	Rationale string `protobuf:"bytes,3,opt,name=rationale,proto3" json:"rationale,omitempty"`

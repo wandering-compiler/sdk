@@ -57,7 +57,7 @@ func TestApply_ChecksReachTheRun(t *testing.T) {
 				Checks: []*applyfetchpb.Check{{Name: "fk_add_c_pid", Sql: `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`, Rationale: "every child row holding a value is an orphan"}}}
 			seed.ContentSha256 = migrate.ContentHash(seed.GetUpSql(), "", "", "", "", nil, "", "")
 			m.PrevContentSha256 = seed.GetContentSha256()
-			m.ContentSha256 = migrate.ContentHash(m.GetUpSql(), "", "", "", m.GetPrevContentSha256(), nil, "", "")
+			m.ContentSha256 = migrate.ContentHashWithChecks(m.GetUpSql(), "", "", "", m.GetPrevContentSha256(), nil, "", "", "", m.GetChecks())
 			dir := t.TempDir()
 			for _, x := range []*applyfetchpb.Migration{seed, m} {
 				if err := migrate.WriteMigration(dir, x); err != nil {

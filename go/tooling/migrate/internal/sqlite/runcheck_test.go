@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -9,11 +10,13 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/sqlite"
 )
 
-// RunCheck counts what a check selects, cannot write (query_only), and hands
-// the connection back writable.
+// RunCheck counts what a check selects, refuses the round-5 attacks (PRAGMA
+// query_only = OFF then a write; ATTACH creating a file), and hands the
+// connection back writable.
 func TestRunCheck_CountsAndCannotWrite(t *testing.T) {
 	ctx := context.Background()
-	a, err := sqlite.New(ctx, "sqlite://"+filepath.Join(t.TempDir(), "db.sqlite"))
+	dir := t.TempDir()
+	a, err := sqlite.New(ctx, "sqlite://"+filepath.Join(dir, "db.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,8 +28,21 @@ func TestRunCheck_CountsAndCannotWrite(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
-	if _, err := a.RunCheck(ctx, `DELETE FROM "c" RETURNING 1`); err == nil {
-		t.Fatal("a check wrote: query_only did not hold")
+	attached := filepath.Join(dir, "attached.db")
+	for _, attack := range []string{
+		`PRAGMA query_only = OFF; DELETE FROM "c"`,
+		`SELECT 0; PRAGMA query_only = OFF; DELETE FROM "c"`,
+		`ATTACH '` + attached + `' AS x`,
+		`SELECT 0; ATTACH '` + attached + `' AS x`,
+		`DELETE FROM "c" RETURNING 1`,
+		`SELECT load_extension('x')`,
+	} {
+		if _, err := a.RunCheck(ctx, attack); err == nil {
+			t.Errorf("ran %q", attack)
+		}
+	}
+	if _, err := os.Stat(attached); err == nil {
+		t.Fatal("a check created a file")
 	}
 	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: `INSERT INTO "c" VALUES (3, 1);`}); err != nil {
 		t.Fatalf("the connection stayed read-only after a check: %v", err)

@@ -2,6 +2,7 @@ package mysql_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,9 +10,10 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/mysql"
 )
 
-// RunCheck runs the planner's double-quoted check (ANSI_QUOTES) and counts
-// what it selects; it cannot write (READ ONLY transaction), and the session
-// mode does not leak into the pool.
+// RunCheck counts what a check selects and refuses the round-5 attack (a
+// multi-statement check that COMMITs out of the READ ONLY transaction and
+// deletes), off a pool without multiStatements; a failure reports the error
+// number only.
 func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 	dsn, _ := liveMySQL(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -21,24 +23,33 @@ func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() { _ = a.Close() }()
-	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: "CREATE TABLE `c` (id BIGINT PRIMARY KEY, pid BIGINT); INSERT INTO `c` VALUES (1, 7), (2, NULL);"}); err != nil {
+	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: "CREATE TABLE `c` (id BIGINT PRIMARY KEY, pid BIGINT, s TEXT); INSERT INTO `c` VALUES (1, 7, 'secret-value'), (2, NULL, NULL);"}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`)
+	n, err := a.RunCheck(ctx, "SELECT count(*) FROM `c` WHERE `pid` IS NOT NULL LIMIT 1")
 	if err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
-	// multiStatements is on: a smuggled write runs inside the READ ONLY
-	// transaction and is refused (1792)
-	if _, err := a.RunCheck(ctx, `DELETE FROM "c"; SELECT 1`); err == nil {
-		t.Fatal("a check wrote: the READ ONLY transaction did not hold")
+	for _, attack := range []string{
+		"SELECT 0; COMMIT; DELETE FROM `c`; SELECT 0",
+		"SELECT SLEEP(600)",
+		"SELECT RELEASE_ALL_LOCKS()",
+		"SELECT 1 INTO OUTFILE '/tmp/w17-check'",
+		"SELECT /*! 1; DELETE FROM c */ 0",
+	} {
+		if _, err := a.RunCheck(ctx, attack); err == nil {
+			t.Errorf("ran %q", attack)
+		}
 	}
-	if n, err = a.RunCheck(ctx, `SELECT count(*) FROM "c"`); err != nil || n != 2 {
-		t.Fatalf("rows after the refused write: %d, %v", n, err)
+	if n, err = a.RunCheck(ctx, "SELECT count(*) FROM `c`"); err != nil || n != 2 {
+		t.Fatalf("rows after the refused writes: %d, %v", n, err)
 	}
-	// a plain apply after a check still parses backticks and treats "x" as a
-	// string, i.e. ANSI_QUOTES did not stay on a pooled connection
-	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: "INSERT INTO `c` VALUES (3, LENGTH(\"xy\"));"}); err != nil {
-		t.Fatalf("the session mode of a check leaked into an apply: %v", err)
+	_, err = a.RunCheck(ctx, "SELECT count(*) FROM `missing_secret_table` LIMIT 1")
+	if err == nil || strings.Contains(err.Error(), "missing_secret") || !strings.Contains(err.Error(), "MySQL error 1146") {
+		t.Fatalf("a failure must report only its error number: %v", err)
+	}
+	// the bodies' pool is untouched by a check's session
+	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: "INSERT INTO `c` VALUES (3, LENGTH(\"xy\"), NULL);"}); err != nil {
+		t.Fatalf("an apply after the checks: %v", err)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/stub"
@@ -30,6 +32,7 @@ func checkedMigration() *applyfetchpb.Migration {
 		{Name: "fk_add_c_pid", Sql: `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`, Rationale: "every child row holding a value is an orphan"},
 		{Name: "down_only", Sql: "SELECT 99", Down: true},
 	}
+	m.ContentSha256 = migrate.ContentHashWithChecks(m.GetUpSql(), "", "", m.GetDownSql(), "", nil, "", "", "", m.GetChecks())
 	return m
 }
 
@@ -100,5 +103,28 @@ func TestRun_ChecksRefuseWhereTheyCannotRun(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot run") || len(a.Calls()) != 0 {
 		t.Fatalf("err %v, calls %v", err, a.Calls())
+	}
+}
+
+// A check is as trusted as the body: the digest binds it, so an artifact
+// whose check was replaced, or that carries checks its digest does not
+// cover, is refused before anything runs.
+func TestChecks_AreBoundByTheDigest(t *testing.T) {
+	m := checkedMigration()
+	if !migrate.ChecksBound(m) {
+		t.Fatal("a migration minted with its checks does not verify")
+	}
+	if err := migrate.WriteMigration(t.TempDir(), m); err != nil {
+		t.Fatalf("a bound artifact is refused: %v", err)
+	}
+	tampered := proto.Clone(m).(*applyfetchpb.Migration)
+	tampered.Checks[0].Sql = `SELECT count(*) FROM "c" WHERE false LIMIT 1`
+	if migrate.ChecksBound(tampered) || migrate.WriteMigration(t.TempDir(), tampered) == nil {
+		t.Error("an artifact whose check was replaced is accepted")
+	}
+	unbound := proto.Clone(m).(*applyfetchpb.Migration)
+	unbound.ContentSha256 = migrate.ContentHash(unbound.GetUpSql(), "", "", unbound.GetDownSql(), "", nil, "", "")
+	if migrate.ChecksBound(unbound) || migrate.WriteMigration(t.TempDir(), unbound) == nil {
+		t.Error("an artifact carrying checks its digest does not bind is accepted")
 	}
 }

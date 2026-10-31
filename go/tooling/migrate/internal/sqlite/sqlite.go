@@ -22,6 +22,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -335,19 +336,28 @@ func (a *Applier) stampCollation(ctx context.Context) error {
 
 var _ migrate.CheckRunner = (*Applier)(nil)
 
-// RunCheck runs one pre-apply check (migrate.CheckRunner) on a connection of
-// its own with PRAGMA query_only on, so it cannot write, and turns it off
-// again before the connection goes back to the pool; one whose pragma cannot
-// be turned off is discarded instead. (Not discarded always: an in-memory
-// database lives in its connection.)
-func (a *Applier) RunCheck(ctx context.Context, sql string) (int64, error) {
+// RunCheck runs one pre-apply check (migrate.CheckRunner).
+//
+// Only a single read-only SELECT is accepted (migrate.ValidateCheckSQL: no
+// PRAGMA — which could turn query_only back off — and no ATTACH, which
+// creates files), on a connection of its own with PRAGMA query_only on, reset
+// before the connection goes back to the pool (a connection whose reset fails
+// is discarded; an in-memory database lives in its connection, so it is not
+// discarded always). Bounded by migrate.CheckTimeout. A failure reports the
+// SQLite result code only.
+func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
+	if err := migrate.ValidateCheckSQL(query, false); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)
+	defer cancel()
 	conn, err := a.db.Conn(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("acquire conn: %w", err)
+		return 0, liteCheckErr(err)
 	}
 	defer func() { _ = conn.Close() }()
 	if _, err := conn.ExecContext(ctx, "PRAGMA query_only = ON"); err != nil {
-		return 0, err
+		return 0, liteCheckErr(err)
 	}
 	defer func() {
 		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA query_only = OFF"); err != nil {
@@ -355,8 +365,20 @@ func (a *Applier) RunCheck(ctx context.Context, sql string) (int64, error) {
 		}
 	}()
 	var n int64
-	if err := conn.QueryRowContext(ctx, sql).Scan(&n); err != nil {
-		return 0, err
+	if err := conn.QueryRowContext(ctx, migrate.CheckCountSQL(query)).Scan(&n); err != nil {
+		return 0, liteCheckErr(err)
 	}
 	return n, nil
+}
+
+// liteCheckErr reduces a check failure to its SQLite result code.
+func liteCheckErr(err error) error {
+	var se interface{ Code() int }
+	if errors.As(err, &se) {
+		return fmt.Errorf("the check failed (SQLite code %d)", se.Code())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("the check timed out")
+	}
+	return errors.New("the check failed")
 }

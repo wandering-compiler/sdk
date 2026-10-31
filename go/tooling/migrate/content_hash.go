@@ -137,8 +137,35 @@ func ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev string, sup
 	// fetched artifact LICENSES a run that would have been refused. That is
 	// the same direction as a replaced adopt_preflight_sql, which is why that
 	// one is bound too (by ContentHashWithPreflight).
+	return ContentHashWithChecks(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, manifestJSON, nil)
+}
+
+// ContentHashWithChecks is [ContentHashWithPreflight] with the migration's
+// pre-apply checks bound too, so a check is exactly as trusted as the bodies:
+// `apply --checks` EXECUTES them, and an unbound check is SQL anybody holding
+// the artifact could have replaced. With no checks it is byte-identical to
+// ContentHashWithPreflight, so every digest minted for a migration without
+// checks keeps its value.
+//
+// The checks are hashed as a SET in a canonical order (direction, then name):
+// the console serves them sorted, but a reordering is not an edit anything
+// acts on. Each contributes its name, direction, SQL and rationale — the
+// rationale is printed in the refusal, and a replaced one could misdirect the
+// operator.
+func ContentHashWithChecks(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL, manifestJSON string, checks []*applyfetchpb.Check) string {
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
-	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts)
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts, checks)
+}
+
+// ChecksBound reports whether m's content_sha256 covers its checks —
+// trivially so when it carries none. The loader refuses an artifact whose
+// checks are not bound, and `apply --checks` asks again before it runs one.
+func ChecksBound(m *applyfetchpb.Migration) bool {
+	if len(m.GetChecks()) == 0 {
+		return true
+	}
+	want := m.GetContentSha256()
+	return want != "" && ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()) == want
 }
 
 // ContentHashMatches reports whether `want` is a digest this content can
@@ -169,7 +196,7 @@ func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersede
 		return false
 	}
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
-	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts) == want {
+	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts, nil) == want {
 		return true
 	}
 	if len(exts) == 0 {
@@ -177,13 +204,19 @@ func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersede
 		return false
 	}
 	// The pre-segment formula: identical but for the extension set.
-	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", nil) == want
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", nil, nil) == want
 }
 
 // migrationHashMatches is the artifact check the loader and WriteMigration
 // apply: the digest is either one that binds the adopt preflight, or one of
 // the formulas [ContentHashMatches] accepts, which do not.
 func migrationHashMatches(m *applyfetchpb.Migration) bool {
+	// An artifact that carries checks verifies only under the formula that
+	// binds them: checks travel only on migrations whose digest binds them, so
+	// one that does not bind them was edited (or its checks were added).
+	if len(m.GetChecks()) > 0 {
+		return ChecksBound(m)
+	}
 	if m.GetAdoptPreflightSql() != "" && preflightBound(m) {
 		return true
 	}
@@ -200,13 +233,13 @@ func preflightBound(m *applyfetchpb.Migration) bool {
 		return true
 	}
 	want := m.GetContentSha256()
-	return want != "" && ContentHashWithPreflight(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson()) == want
+	return want != "" && ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()) == want
 }
 
-func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL string, exts []string) string {
+func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL string, exts []string, checks []*applyfetchpb.Check) string {
 
 	var b strings.Builder
-	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && adoptPreflightSQL == "" && len(exts) == 0 {
+	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && adoptPreflightSQL == "" && len(exts) == 0 && len(checks) == 0 {
 		b.WriteString("w17.content.v1\n")
 	} else {
 		b.WriteString("w17.content.v2\n")
@@ -243,6 +276,28 @@ func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 		writeSeg(&b, "reqext.n", strconv.Itoa(len(exts)))
 		for _, e := range exts {
 			writeSeg(&b, "reqext", e)
+		}
+	}
+	// Written only when non-empty, so a migration without checks keeps the
+	// digest it had before checks were bound.
+	if len(checks) > 0 {
+		sorted := append([]*applyfetchpb.Check(nil), checks...)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			if sorted[i].GetDown() != sorted[j].GetDown() {
+				return !sorted[i].GetDown()
+			}
+			return sorted[i].GetName() < sorted[j].GetName()
+		})
+		writeSeg(&b, "checks.n", strconv.Itoa(len(sorted)))
+		for _, c := range sorted {
+			dir := "up"
+			if c.GetDown() {
+				dir = "down"
+			}
+			writeSeg(&b, "check.name", c.GetName())
+			writeSeg(&b, "check.dir", dir)
+			writeSeg(&b, "check.sql", c.GetSql())
+			writeSeg(&b, "check.why", c.GetRationale())
 		}
 	}
 	sum := sha256.Sum256([]byte(b.String()))

@@ -575,7 +575,14 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			return err
 		}
 		if cfg.Checks {
-			if err := runPreApplyChecks(ctx, applier, p, out); err != nil {
+			err := runPreApplyChecks(ctx, applier, p, out)
+			if err == nil {
+				// The checks ran on connections of their own, but the run lock
+				// is asked again before the body all the same: a check that
+				// reached it must not leave the body running unguarded.
+				err = ac.checkHeld(ctx, p.Connection)
+			}
+			if err != nil {
 				logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), err)
 				captureMigrationError("apply", p.Connection, p.Migration, err)
 				return err
@@ -619,6 +626,14 @@ func runPreApplyChecks(ctx context.Context, applier Applier, p Pending, out io.W
 		if phase == PhasePending {
 			return nil
 		}
+	}
+	// The checks are bound into the content hash at mint time; the loader
+	// already refuses an artifact whose checks it does not cover, and this is
+	// asked again right before one EXECUTES.
+	if !ChecksBound(p.Migration) {
+		return fmt.Errorf("apply %s/%s: --checks: the migration's content_sha256 does not cover its checks, so they cannot be trusted to be the ones the console minted\n"+
+			"  fix: fetch the migration again; nothing was applied",
+			p.Connection, p.Migration.GetId())
 	}
 	cr, ok := applier.(CheckRunner)
 	if !ok {
@@ -1546,7 +1561,7 @@ func loadConnectionMigrations(fsys fs.FS, connection string) ([]*applyfetchpb.Mi
 		if !migrationHashMatches(m) {
 			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is a real edit",
 				path, m.GetContentSha256(),
-				ContentHashWithPreflight(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson()))
+				ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()))
 		}
 		// Backfill connection_name when missing (older fetches that
 		// didn't stamp; harmless self-heal).
@@ -1596,7 +1611,7 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 	if !migrationHashMatches(m) {
 		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s) — the artifact does not hash to its own digest under this compiler's formula or the one that predates required-extension binding. Unlike the load-side check this one reads a FRESH fetch, so re-fetching cannot help: the console and this client disagree about the artifact, which is either a console-side mutation or wire tampering",
 			m.GetId(), m.GetContentSha256(),
-			ContentHashWithPreflight(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson()))
+			ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()))
 	}
 	// The segment check above is the refusal; the containment check is the
 	// backstop, so a future change to what a segment may hold cannot reopen

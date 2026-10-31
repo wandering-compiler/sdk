@@ -28,11 +28,6 @@ import (
 func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 	excused := map[string]string{
 		"content_sha256": "the digest itself — it cannot be an input to its own computation",
-		"checks": "executed only opt-in (`apply --checks`) and only READ-ONLY — a Postgres READ ONLY " +
-			"transaction, a MySQL READ ONLY transaction, SQLite query_only — so a replaced check can " +
-			"refuse an apply but cannot change the target; TestRunCheck_CountsAndCannotWrite(_Live) " +
-			"in each applier pins that a write inside a check is refused. Binding it would re-hash " +
-			"every stored migration that carries checks and break the pinned locks",
 		"connection": "the DIRECTORY the artifact lives in is the authority — routing reads `ct.Connection`, " +
 			"never this field, so hashing it would bind a value nothing acts on. " +
 			"loadConnectionMigrations backfills it only when EMPTY (a self-heal for older fetches), " +
@@ -95,6 +90,18 @@ func fieldMovesTheDigest(t *testing.T, fd protoreflect.FieldDescriptor) bool {
 			r.Mutable(fd).List().Append(protoreflect.ValueOfString(v))
 		case !fd.IsList() && fd.Kind() == protoreflect.StringKind:
 			r.Set(fd, protoreflect.ValueOfString(v))
+		case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
+			// One element with every string field set to the probe value; each
+			// field of the element is probed on its own by
+			// TestContentHash_BindsEveryCheckField.
+			el := r.Mutable(fd).List().NewElement()
+			fs := el.Message().Descriptor().Fields()
+			for i := 0; i < fs.Len(); i++ {
+				if f := fs.Get(i); f.Kind() == protoreflect.StringKind && !f.IsList() {
+					el.Message().Set(f, protoreflect.ValueOfString(v))
+				}
+			}
+			r.Mutable(fd).List().Append(el)
 		default:
 			// Refusing to guess is the point: a field shape this gate cannot
 			// probe is a field whose coverage nobody has established.
@@ -107,9 +114,41 @@ func fieldMovesTheDigest(t *testing.T, fd protoreflect.FieldDescriptor) bool {
 }
 
 func digestOf(m *applyfetchpb.Migration) string {
-	return migrate.ContentHashWithPreflight(
+	return migrate.ContentHashWithChecks(
 		m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(),
-		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson())
+		m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks())
+}
+
+// Every field of a check moves the digest — the SQL that runs, the name and
+// rationale the refusal prints, and the direction that decides when it runs —
+// and a migration without checks keeps the digest it had before checks were
+// bound.
+func TestContentHash_BindsEveryCheckField(t *testing.T) {
+	base := &applyfetchpb.Check{Name: "n", Sql: "SELECT count(*) FROM t LIMIT 1", Rationale: "why"}
+	digest := func(cs ...*applyfetchpb.Check) string {
+		return migrate.ContentHashWithChecks("SELECT 1;", "", "", "", "", nil, "", "", "", cs)
+	}
+	ref := digest(base)
+	for name, c := range map[string]*applyfetchpb.Check{
+		"name":      {Name: "m", Sql: base.Sql, Rationale: base.Rationale},
+		"sql":       {Name: base.Name, Sql: "SELECT count(*) FROM u LIMIT 1", Rationale: base.Rationale},
+		"rationale": {Name: base.Name, Sql: base.Sql, Rationale: "other"},
+		"down":      {Name: base.Name, Sql: base.Sql, Rationale: base.Rationale, Down: true},
+	} {
+		if digest(c) == ref {
+			t.Errorf("changing the check's %s leaves the digest unchanged", name)
+		}
+	}
+	if digest() != migrate.ContentHash("SELECT 1;", "", "", "", "", nil, "", "") {
+		t.Error("a migration without checks no longer hashes as it did before checks were bound")
+	}
+	a, b := &applyfetchpb.Check{Name: "a", Sql: "x"}, &applyfetchpb.Check{Name: "b", Sql: "y"}
+	if digest(a, b) != digest(b, a) {
+		t.Error("the checks are a set: their order moved the digest")
+	}
+	if digest(a, b) == digest(a) {
+		t.Error("dropping a check leaves the digest unchanged")
+	}
 }
 
 // The excuse above says manifest_json is bound by its projection. This is the

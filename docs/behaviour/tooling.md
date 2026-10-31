@@ -137,14 +137,15 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.11 | With `--checks` (or `W17_MIGRATE_CHECKS=1`), a forward check of a pending migration that counts rows MUST refuse that migration before its body runs, naming the check, the row count and its rationale. | `TestRun_ChecksRefuseAViolatingMigration`, `TestApply_ChecksReachTheRun` |
 | T2.12 | Without `--checks` and the setting, no check MUST run. Down checks MUST NOT run before an apply. | `TestRun_ChecksAreOptIn`, `TestRun_ChecksPassAndSkipDownChecks`, `TestChecksFlagAndSetting` |
 | T2.13 | With `--checks`, a store that cannot run checks MUST refuse a migration that carries some, not skip them. | `TestRun_ChecksRefuseWhereTheyCannotRun` |
-| T2.14 | A check MUST run read-only (Postgres `READ ONLY` transaction; MySQL `READ ONLY` transaction with `ANSI_QUOTES`, on a connection then discarded; SQLite `query_only`, reset after) — checks are not covered by the content hash. | `TestRunCheck_CountsAndCannotWrite_Live` (Postgres, MySQL), `TestRunCheck_CountsAndCannotWrite` (SQLite) |
+| T2.14 | A check MUST be bound by the migration's content hash (the loader refuses an artifact carrying unbound checks; `--checks` asks again before one runs), MUST be a single read-only SELECT (no `;` outside quotes, no transaction/session/write/lock/file statement, no administrative function), and MUST run on its own connection — never the run lock's, which is asked again after the checks — read-only with a statement timeout, reporting a failure by error code only. | `TestChecks_AreBoundByTheDigest`, `TestContentHash_BindsEveryCheckField`, `TestValidateCheckSQL`, `TestRunCheck_CountsAndCannotWrite_Live` (Postgres, MySQL), `TestRunCheck_CountsAndCannotWrite` (SQLite) |
 
 **Deliberate limits.**
 - Unpinned connections are warned about, not refused: a KV connection can stay unpinned for good.
 - `--checks` runs none for `--fake` or for a Postgres migration resumed in its post-transaction
   phase; `rollback` has no `--checks` (down checks travel in the artefact but are not run).
-- The checks are rendered Postgres-flavoured: on MySQL or SQLite a probe using a PG-only function
-  fails, and `--checks` then refuses its migration.
+- The console renders each dialect's probes in its own SQL and does not carry a probe a dialect
+  cannot express (the plan's risk findings name it), so a MySQL or SQLite migration carries fewer
+  checks than its Postgres twin.
 
 ## T3. `migrate status`
 

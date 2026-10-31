@@ -167,17 +167,20 @@ message Migration {
   // the migration and refuse with the check's name, row count and rationale;
   // by default apply ignores them (docs/decisions/checksql-preapply-optin-ci).
   //
-  // Not covered by content_sha256 or the body signature: a check changes no
-  // data, and the client runs each one inside a READ ONLY transaction, so a
-  // tampered check can refuse an apply but not write.
+  // BOUND by content_sha256 (migrate.ContentHashWithChecks) — an executed
+  // check is as trusted as the bodies, and the loader refuses an artifact
+  // carrying checks its digest does not cover. A migration without checks
+  // hashes as it did before they existed. The console serves only checks the
+  // stored digest binds.
   repeated Check checks = 13;
 }
 
 // Check is one pre-apply (or, with down set, pre-rollback) data probe.
 message Check {
   string name = 1;
-  // sql counts the violating rows: `SELECT count(*) FROM … WHERE … LIMIT 1`.
-  // Its identifiers are double-quoted (ANSI), on every dialect.
+  // sql counts the violating rows: `SELECT count(*) FROM … WHERE … LIMIT 1`
+  // (or a row-shape probe whose every row is one), in the connection's
+  // dialect. The applier accepts only a single read-only SELECT.
   string sql = 2;
   // rationale — what the probe guards against, for the refusal message.
   string rationale = 3;
