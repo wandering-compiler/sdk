@@ -346,7 +346,7 @@ var _ migrate.CheckRunner = (*Applier)(nil)
 // discarded always). Bounded by migrate.CheckTimeout. A failure reports the
 // SQLite result code only.
 func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
-	if err := migrate.ValidateCheckSQL(query, false); err != nil {
+	if err := migrate.ValidateCheckSQL(query, migrate.CheckSQLite); err != nil {
 		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)

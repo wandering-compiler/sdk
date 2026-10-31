@@ -2,9 +2,13 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"
@@ -56,8 +60,42 @@ func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 	if n, err = a.RunCheck(ctx, `SELECT count(*) FROM "c"`); err != nil || n != 2 {
 		t.Fatalf("rows after the refused writes: %d, %v", n, err)
 	}
-	_, err = a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "s"::int > 0 LIMIT 1`)
+	_, err = a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "s"::numeric > 0 LIMIT 1`)
 	if err == nil || strings.Contains(err.Error(), "secret") || !strings.Contains(err.Error(), "SQLSTATE 22P02") {
 		t.Fatalf("a failed cast must report only its SQLSTATE: %v", err)
+	}
+}
+
+// A role that may not lower temp_file_limit still runs its checks: the limit
+// is best-effort, the statement timeout is not.
+func TestRunCheck_WithoutTheTempFileLimitPrivilege_Live(t *testing.T) {
+	dsn := liveDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := fmt.Sprintf("w17_check_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DROP OWNED BY `+role+`; DROP ROLE IF EXISTS `+role, pgx.QueryExecModeSimpleProtocol)
+		_ = admin.Close(context.Background())
+	})
+	if _, err := admin.Exec(ctx, `CREATE TABLE "c" (id BIGINT PRIMARY KEY); INSERT INTO "c" VALUES (1);
+		CREATE ROLE `+role+` LOGIN PASSWORD 'p'; GRANT SELECT ON "c" TO `+role+`;`, pgx.QueryExecModeSimpleProtocol); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(role, "p")
+	a, err := postgres.New(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect as %s: %v", role, err)
+	}
+	defer func() { _ = a.Close() }()
+	if n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" LIMIT 1`); err != nil || n != 1 {
+		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
 }

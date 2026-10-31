@@ -362,7 +362,7 @@ var _ migrate.CheckRunner = (*Applier)(nil)
 // reports the MySQL error number only: the server's message can carry the
 // data the probe read.
 func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
-	if err := migrate.ValidateCheckSQL(query, true); err != nil {
+	if err := migrate.ValidateCheckSQL(query, migrate.CheckMySQL); err != nil {
 		return 0, err
 	}
 	if a.checkDSN == "" {

@@ -633,7 +633,7 @@ var _ migrate.CheckRunner = (*Applier)(nil)
 // rolled back. A failure reports the SQLSTATE only: the server's message can
 // carry the data the probe read (a failed cast quotes the value).
 func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
-	if err := migrate.ValidateCheckSQL(query, false); err != nil {
+	if err := migrate.ValidateCheckSQL(query, migrate.CheckPostgres); err != nil {
 		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)
@@ -653,6 +653,18 @@ func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
 		"SET LOCAL lock_timeout = 5000",
 	} {
 		if _, err := tx.Exec(ctx, st); err != nil {
+			return 0, pgCheckErr(err)
+		}
+	}
+	// temp_file_limit bounds the disk a probe's sort or hash may spill. It is
+	// a superuser setting, so a migration role may not be allowed to lower it:
+	// tried under a savepoint, and the check runs on without it (bounded by
+	// the statement timeout) when the server refuses.
+	if _, err := tx.Exec(ctx, "SAVEPOINT w17_check_limits"); err != nil {
+		return 0, pgCheckErr(err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL temp_file_limit = '1GB'"); err != nil {
+		if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT w17_check_limits"); err != nil {
 			return 0, pgCheckErr(err)
 		}
 	}
