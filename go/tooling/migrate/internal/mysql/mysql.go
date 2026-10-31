@@ -334,3 +334,35 @@ func URLToDriverDSN(urlDSN string) (string, error) {
 
 	return fmt.Sprintf("%stcp(%s)/%s%s", userInfo, u.Host, db, suffix), nil
 }
+
+var _ migrate.CheckRunner = (*Applier)(nil)
+
+// RunCheck runs one pre-apply check (migrate.CheckRunner): on a connection
+// of its own, with ANSI_QUOTES added to the session's sql_mode (the planner
+// double-quotes identifiers, as standard SQL does) inside a READ ONLY
+// transaction. The connection is discarded afterwards rather than returned
+// to the pool with that session mode.
+func (a *Applier) RunCheck(ctx context.Context, sql string) (int64, error) {
+	conn, err := a.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire conn: %w", err)
+	}
+	defer func() {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		_ = conn.Close()
+	}()
+	for _, st := range []string{
+		"SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',ANSI_QUOTES')",
+		"START TRANSACTION READ ONLY",
+	} {
+		if _, err := conn.ExecContext(ctx, st); err != nil {
+			return 0, err
+		}
+	}
+	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK") }()
+	var n int64
+	if err := conn.QueryRowContext(ctx, sql).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}

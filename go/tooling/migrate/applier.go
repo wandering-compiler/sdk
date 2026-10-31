@@ -116,6 +116,19 @@ const (
 // it reads MigrationPhase before applying and, on PhasePending,
 // resumes via ApplyPostTx instead of re-running the full Apply.
 // Appliers without it always take the plain Apply path.
+// CheckRunner is the optional capability `migrate apply --checks` needs: run
+// one pre-apply data check (a `SELECT count(*) … LIMIT 1` the planner
+// rendered with double-quoted identifiers) and return its count. A non-zero
+// count is rows the migration would refuse or lose.
+//
+// The check runs inside a READ ONLY transaction (MySQL additionally with
+// ANSI_QUOTES, so the double-quoted identifiers parse; SQLite with
+// query_only): the checks are not covered by the content hash or the body
+// signature, so whatever a check says, it cannot write.
+type CheckRunner interface {
+	RunCheck(ctx context.Context, sql string) (int64, error)
+}
+
 type ResumableApplier interface {
 	// MigrationPhase reports the applied-state phase of the migration
 	// `id` on the target. A missing table / missing row is PhaseFresh

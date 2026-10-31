@@ -28,6 +28,11 @@ import (
 func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 	excused := map[string]string{
 		"content_sha256": "the digest itself — it cannot be an input to its own computation",
+		"checks": "executed only opt-in (`apply --checks`) and only READ-ONLY — a Postgres READ ONLY " +
+			"transaction, a MySQL READ ONLY transaction, SQLite query_only — so a replaced check can " +
+			"refuse an apply but cannot change the target; TestRunCheck_CountsAndCannotWrite(_Live) " +
+			"in each applier pins that a write inside a check is refused. Binding it would re-hash " +
+			"every stored migration that carries checks and break the pinned locks",
 		"connection": "the DIRECTORY the artifact lives in is the authority — routing reads `ct.Connection`, " +
 			"never this field, so hashing it would bind a value nothing acts on. " +
 			"loadConnectionMigrations backfills it only when EMPTY (a self-heal for older fetches), " +

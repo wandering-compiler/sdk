@@ -120,6 +120,15 @@ type Config struct {
 	// holds (several replicas migrating at boot): 0 means
 	// [DefaultLockWait], a negative value fails at once.
 	LockWait time.Duration
+
+	// Checks = true runs each pending migration's forward pre-apply checks
+	// (Migration.checks, the planner's NEEDS_CONFIRM probes) before its body
+	// and refuses the apply, naming the check, its row count and rationale,
+	// when one finds rows. OPT-IN: the default apply runs none
+	// (docs/decisions/checksql-preapply-optin-ci.md) — a probe is a
+	// full-table scan. Not for --fake (no body runs) or a resumed migration
+	// (its in-tx half already committed).
+	Checks bool
 }
 
 // Pending is one migration the orchestrator wants to apply (or
@@ -565,6 +574,13 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			captureMigrationError("apply", p.Connection, p.Migration, err)
 			return err
 		}
+		if cfg.Checks {
+			if err := runPreApplyChecks(ctx, applier, p, out); err != nil {
+				logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), err)
+				captureMigrationError("apply", p.Connection, p.Migration, err)
+				return err
+			}
+		}
 		if err := applyOrResume(ctx, applier, p.Migration, out); err != nil {
 			dur := time.Since(started)
 			err = fmt.Errorf("apply %s/%s: %w", p.Connection, p.Migration.GetId(), err)
@@ -576,6 +592,61 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		applied++
 	}
 	fmt.Fprintln(out, closingLine(applied, adopted, faked, skipped))
+	return nil
+}
+
+// runPreApplyChecks runs the forward checks of one pending migration (see
+// Config.Checks) and refuses it when one finds rows. A migration resumed
+// after its in-tx half committed is past the point a check could stop, so it
+// runs none. A dialect that cannot run checks refuses the migration that
+// carries some: the operator asked for them, and skipping them silently would
+// read as a pass.
+func runPreApplyChecks(ctx context.Context, applier Applier, p Pending, out io.Writer) error {
+	var forward []*applyfetchpb.Check
+	for _, c := range p.Migration.GetChecks() {
+		if !c.GetDown() && strings.TrimSpace(c.GetSql()) != "" {
+			forward = append(forward, c)
+		}
+	}
+	if len(forward) == 0 {
+		return nil
+	}
+	if ra, ok := applier.(ResumableApplier); ok {
+		phase, err := ra.MigrationPhase(ctx, p.Migration.GetId())
+		if err != nil {
+			return fmt.Errorf("apply %s/%s: phase check: %w", p.Connection, p.Migration.GetId(), err)
+		}
+		if phase == PhasePending {
+			return nil
+		}
+	}
+	cr, ok := applier.(CheckRunner)
+	if !ok {
+		return fmt.Errorf("apply %s/%s: --checks: this connection's store cannot run the migration's %d pre-apply check(s)\n"+
+			"  why: the checks are SQL probes; only the relational appliers run them\n"+
+			"  fix: drop --checks (and W17_MIGRATE_CHECKS) for this run, and run the probes another way",
+			p.Connection, p.Migration.GetId(), len(forward))
+	}
+	for _, c := range forward {
+		n, err := cr.RunCheck(ctx, c.GetSql())
+		if err != nil {
+			return fmt.Errorf("apply %s/%s: pre-apply check %s could not run: %w\n"+
+				"  why: --checks refuses a migration whose probe cannot answer — an unanswered probe is not a pass\n"+
+				"  fix: run the probe by hand (%s), or drop --checks for this run",
+				p.Connection, p.Migration.GetId(), c.GetName(), err, c.GetSql())
+		}
+		if n > 0 {
+			why := c.GetRationale()
+			if why == "" {
+				why = "the migration would refuse or lose these rows"
+			}
+			return fmt.Errorf("apply %s/%s: pre-apply check %s refused the migration: %d row(s) violate it. %s\n"+
+				"  probe: %s\n"+
+				"  fix: correct the rows the probe finds, then apply again; nothing was applied",
+				p.Connection, p.Migration.GetId(), c.GetName(), n, why, c.GetSql())
+		}
+		fmt.Fprintf(out, "apply:   check %s passed\n", c.GetName())
+	}
 	return nil
 }
 

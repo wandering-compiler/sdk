@@ -621,3 +621,20 @@ func (a *Applier) ExecSeed(ctx context.Context, stmts []migrate.SeedStmt) error 
 func (a *Applier) Observe(ctx context.Context) (fingerprint.Observed, error) {
 	return fingerprint.ObservePostgres(ctx, a.conn)
 }
+
+var _ migrate.CheckRunner = (*Applier)(nil)
+
+// RunCheck runs one pre-apply check (migrate.CheckRunner) in a READ ONLY
+// transaction it always rolls back, and returns the count it selects.
+func (a *Applier) RunCheck(ctx context.Context, sql string) (int64, error) {
+	tx, err := a.conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var n int64
+	if err := tx.QueryRow(ctx, sql).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}

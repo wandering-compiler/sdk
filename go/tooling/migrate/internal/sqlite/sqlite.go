@@ -21,6 +21,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -330,4 +331,32 @@ func (a *Applier) stampCollation(ctx context.Context) error {
 		return fmt.Errorf("sqlite apply: %w", err)
 	}
 	return nil
+}
+
+var _ migrate.CheckRunner = (*Applier)(nil)
+
+// RunCheck runs one pre-apply check (migrate.CheckRunner) on a connection of
+// its own with PRAGMA query_only on, so it cannot write, and turns it off
+// again before the connection goes back to the pool; one whose pragma cannot
+// be turned off is discarded instead. (Not discarded always: an in-memory
+// database lives in its connection.)
+func (a *Applier) RunCheck(ctx context.Context, sql string) (int64, error) {
+	conn, err := a.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire conn: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "PRAGMA query_only = ON"); err != nil {
+		return 0, err
+	}
+	defer func() {
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA query_only = OFF"); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
+	var n int64
+	if err := conn.QueryRowContext(ctx, sql).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
