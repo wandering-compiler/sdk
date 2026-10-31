@@ -123,14 +123,14 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	// migration) would make MySQL's empty COM_QUERY abort with ER 1065; skip the
 	// Exec (up_post_tx, if any, still runs below).
 	if up := m.GetUpSql(); up != "" {
-		if _, err := a.db.ExecContext(ctx, up); err != nil {
+		if err := a.execBody(ctx, up); err != nil {
 			return fmt.Errorf("mysql apply up_sql: %w", err)
 		}
 	}
 	if pt := m.GetUpPostTx(); pt != "" {
 		slog.Warn("mysql: running non-empty up_post_tx as a separate step after up_sql committed; a crash between them is NOT resumable — up_sql's DDL commits with no applied-state row (recorded at the end of up_post_tx), so a re-run re-executes up_sql and wedges on the already-committed DDL",
 			slog.String("migration_id", m.GetId()))
-		if _, err := a.db.ExecContext(ctx, pt); err != nil {
+		if err := a.execBody(ctx, pt); err != nil {
 			return fmt.Errorf("mysql apply up_post_tx: %w", err)
 		}
 	}
@@ -144,14 +144,36 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // body executes in a single ExecContext call.
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
 	if pre := m.GetDownPreTx(); pre != "" {
-		if _, err := a.db.ExecContext(ctx, pre); err != nil {
+		if err := a.execBody(ctx, pre); err != nil {
 			return fmt.Errorf("mysql rollback down_pre_tx: %w", err)
 		}
 	}
 	if down := m.GetDownSql(); down != "" {
-		if _, err := a.db.ExecContext(ctx, down); err != nil {
+		if err := a.execBody(ctx, down); err != nil {
 			return fmt.Errorf("mysql rollback down_sql: %w", err)
 		}
+	}
+	return nil
+}
+
+// execBody runs one migration body (a multi-statement string) on ONE
+// connection taken from the pool, and keeps that connection out of the pool
+// when the body fails. A body leaves session state behind when it stops
+// part-way: a migration that turns FOREIGN_KEY_CHECKS off around one ADD
+// CONSTRAINT (the down of a dropped parent table) and fails before turning
+// it back, or an open transaction that the next borrower's BEGIN would
+// implicitly commit (go-sql-driver's ResetSession sends no
+// COM_RESET_CONNECTION). Returned to the pool, the next migration or query
+// on that connection would inherit it; discarded, the pool dials afresh.
+func (a *Applier) execBody(ctx context.Context, body string) error {
+	conn, err := a.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, body); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return err
 	}
 	return nil
 }
