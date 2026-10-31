@@ -26,7 +26,7 @@ func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: "CREATE TABLE `c` (id BIGINT PRIMARY KEY, pid BIGINT, s TEXT); INSERT INTO `c` VALUES (1, 7, 'secret-value'), (2, NULL, NULL);"}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := a.RunCheck(ctx, "SELECT count(*) FROM `c` WHERE `pid` IS NOT NULL LIMIT 1")
+	n, err := a.RunCheck(ctx, "SELECT count(*) FROM `c` WHERE `pid` IS NOT NULL LIMIT 1", "")
 	if err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
@@ -37,14 +37,14 @@ func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 		"SELECT 1 INTO OUTFILE '/tmp/w17-check'",
 		"SELECT /*! 1; DELETE FROM c */ 0",
 	} {
-		if _, err := a.RunCheck(ctx, attack); err == nil {
+		if _, err := a.RunCheck(ctx, attack, ""); err == nil {
 			t.Errorf("ran %q", attack)
 		}
 	}
-	if n, err = a.RunCheck(ctx, "SELECT count(*) FROM `c`"); err != nil || n != 2 {
+	if n, err = a.RunCheck(ctx, "SELECT count(*) FROM `c`", ""); err != nil || n != 2 {
 		t.Fatalf("rows after the refused writes: %d, %v", n, err)
 	}
-	_, err = a.RunCheck(ctx, "SELECT count(*) FROM `missing_secret_table` LIMIT 1")
+	_, err = a.RunCheck(ctx, "SELECT count(*) FROM `missing_secret_table` LIMIT 1", "")
 	if err == nil || strings.Contains(err.Error(), "missing_secret") || !strings.Contains(err.Error(), "MySQL error 1146") {
 		t.Fatalf("a failure must report only its error number: %v", err)
 	}

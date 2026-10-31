@@ -354,15 +354,15 @@ var _ migrate.CheckRunner = (*Applier)(nil)
 
 // RunCheck runs one pre-apply check (migrate.CheckRunner).
 //
-// Only a single read-only SELECT is accepted (migrate.ValidateCheckSQL), and
+// Only a single read-only SELECT is accepted (migrate.ValidateMigrationCheckSQL), and
 // it runs on a pool of its OWN opened WITHOUT multiStatements (the bodies'
 // pool runs several statements per call, which is how `SELECT 0; COMMIT;
 // DELETE …` would leave the READ ONLY transaction), never the run lock's
 // session, inside a READ ONLY transaction with max_execution_time. A failure
 // reports the MySQL error number only: the server's message can carry the
 // data the probe read.
-func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
-	if err := migrate.ValidateCheckSQL(query, migrate.CheckMySQL); err != nil {
+func (a *Applier) RunCheck(ctx context.Context, query, body string) (int64, error) {
+	if err := migrate.ValidateMigrationCheckSQL(query, body, migrate.CheckMySQL); err != nil {
 		return 0, err
 	}
 	if a.checkDSN == "" {

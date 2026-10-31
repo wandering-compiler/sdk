@@ -91,3 +91,60 @@ func TestCheckCountSQL(t *testing.T) {
 		t.Errorf("row shape: %q", got)
 	}
 }
+
+// A check may repeat, token for token, a call or a parenthesized group its own
+// migration's body contains — an expression index's uniqueness probe repeats
+// the expression, bare column names and casts included — and nothing else: not
+// a name the body only mentions in a string, a comment or a routine's body,
+// not a function the body calls over other arguments, not the body's other
+// words, and never a second statement.
+func TestValidateMigrationCheckSQL(t *testing.T) {
+	pg, my, lite := migrate.CheckPostgres, migrate.CheckMySQL, migrate.CheckSQLite
+	const probe = `SELECT (lower(email)), (coalesce(nick, '')), count(*) FROM "u" WHERE ((lower(email)), (coalesce(nick, ''))) IS NOT NULL GROUP BY (lower(email)), (coalesce(nick, '')) HAVING count(*) > 1 LIMIT 1`
+	const body = `CREATE UNIQUE INDEX "u_email" ON "u" ((lower(email)), (coalesce(nick, '')));`
+	if err := migrate.ValidateMigrationCheckSQL(probe, body, pg); err != nil {
+		t.Fatalf("refused the expression index's own probe: %v", err)
+	}
+	if err := migrate.ValidateCheckSQL(probe, pg); !errors.Is(err, migrate.ErrCheckRefused) {
+		t.Fatalf("lower() passed without a body holding it: %v", err)
+	}
+	// a cast and a bare call (no group of its own) are spans too
+	if err := migrate.ValidateMigrationCheckSQL(`SELECT lower((v)::varchar), count(*) FROM "t" GROUP BY lower((v)::varchar) HAVING count(*) > 1 LIMIT 1`,
+		`CREATE UNIQUE INDEX t_v ON public.t USING btree (lower((v)::varchar));`, pg); err != nil {
+		t.Errorf("cast inside a call: %v", err)
+	}
+	if err := migrate.ValidateMigrationCheckSQL("SELECT (lower(`email`)), count(*) FROM `u` GROUP BY (lower(`email`)) HAVING count(*) > 1 LIMIT 1",
+		"CREATE UNIQUE INDEX `u_email` ON `u` ((lower(`email`)));", my); err != nil {
+		t.Errorf("mysql: %v", err)
+	}
+	if err := migrate.ValidateMigrationCheckSQL(probe, body, lite); err != nil {
+		t.Errorf("sqlite: %v", err)
+	}
+
+	refused := []struct{ name, sql, body string }{
+		{"in neither templates nor body", `SELECT count(*) FROM "u" WHERE pg_read_file('/etc/passwd') IS NOT NULL LIMIT 1`, body},
+		{"no body", probe, ""},
+		{"the body's function over other arguments", `SELECT count(*) FROM "u" WHERE lower(pg_read_file('/etc/passwd')) IS NOT NULL LIMIT 1`, body},
+		{"only in a string", `SELECT (pg_sleep(600))`, `COMMENT ON TABLE "u" IS '(pg_sleep(600))';`},
+		{"only in an E string", `SELECT (pg_sleep(600))`, `COMMENT ON TABLE "u" IS E'\' (pg_sleep(600))';`},
+		{"only in a comment", `SELECT (pg_sleep(600))`, "-- (pg_sleep(600))\n/* (pg_sleep(1)) */ SELECT 1;"},
+		{"only in a routine body", `SELECT (pg_sleep(600))`, `CREATE FUNCTION f() RETURNS void AS $fn$ SELECT (pg_sleep(600)) $fn$ LANGUAGE sql;`},
+		{"a quoted name", `SELECT "lower"(email), count(*) FROM "u" GROUP BY 1 HAVING count(*) > 1 LIMIT 1`, body},
+		{"a body word outside a span", `WITH d AS (DELETE FROM "u" RETURNING 1) SELECT count(*) FROM d`, `DELETE FROM "u" WHERE (lower(email)) = '';`},
+		{"a second statement", `SELECT (lower(email)) FROM "u"; DELETE FROM "u"`, `DELETE FROM "u" WHERE (lower(email)) = '';`},
+		{"a statement break inside a span", `SELECT count(*) FROM "u" WHERE x IN (SELECT 1; DELETE FROM "u")`, `CREATE RULE r AS ON INSERT TO v DO ALSO (SELECT 1; DELETE FROM "u");`},
+		{"an unbalanced group", `SELECT count(*) FROM "u" WHERE (lower(email)`, body},
+	}
+	for _, c := range refused {
+		if err := migrate.ValidateMigrationCheckSQL(c.sql, c.body, pg); !errors.Is(err, migrate.ErrCheckRefused) {
+			t.Errorf("%s: accepted %q (err %v)", c.name, c.sql, err)
+		}
+	}
+	// MySQL: what an executable comment runs is body code; a # comment is not
+	myBody := "CREATE INDEX i ON t ((upper(x))); /*!80000 SELECT (md5(y)) */ SELECT 'x' # (sqrt(z))\n"
+	for q, want := range map[string]bool{"SELECT (upper(x))": true, "SELECT (md5(y))": true, "SELECT (sqrt(z))": false} {
+		if err := migrate.ValidateMigrationCheckSQL(q, myBody, my); (err == nil) != want {
+			t.Errorf("mysql %q: err %v, want accepted=%v", q, err, want)
+		}
+	}
+}

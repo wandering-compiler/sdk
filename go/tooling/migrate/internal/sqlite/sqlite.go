@@ -338,15 +338,15 @@ var _ migrate.CheckRunner = (*Applier)(nil)
 
 // RunCheck runs one pre-apply check (migrate.CheckRunner).
 //
-// Only a single read-only SELECT is accepted (migrate.ValidateCheckSQL: no
+// Only a single read-only SELECT is accepted (migrate.ValidateMigrationCheckSQL: no
 // PRAGMA — which could turn query_only back off — and no ATTACH, which
 // creates files), on a connection of its own with PRAGMA query_only on, reset
 // before the connection goes back to the pool (a connection whose reset fails
 // is discarded; an in-memory database lives in its connection, so it is not
 // discarded always). Bounded by migrate.CheckTimeout. A failure reports the
 // SQLite result code only.
-func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
-	if err := migrate.ValidateCheckSQL(query, migrate.CheckSQLite); err != nil {
+func (a *Applier) RunCheck(ctx context.Context, query, body string) (int64, error) {
+	if err := migrate.ValidateMigrationCheckSQL(query, body, migrate.CheckSQLite); err != nil {
 		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)

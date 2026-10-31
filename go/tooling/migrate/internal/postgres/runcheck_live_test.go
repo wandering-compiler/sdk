@@ -35,11 +35,11 @@ func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 	}
 	defer func() { _ = lock.Release(context.Background()) }()
 
-	n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`)
+	n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`, "")
 	if err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
-	if n, err = a.RunCheck(ctx, `SELECT "pid", count(*) FROM "c" WHERE ("pid") IS NOT NULL GROUP BY "pid" HAVING count(*) > 0 LIMIT 1`); err != nil || n != 1 {
+	if n, err = a.RunCheck(ctx, `SELECT "pid", count(*) FROM "c" WHERE ("pid") IS NOT NULL GROUP BY "pid" HAVING count(*) > 0 LIMIT 1`, ""); err != nil || n != 1 {
 		t.Fatalf("row-shape count = %d, %v; want 1", n, err)
 	}
 	for _, attack := range []string{
@@ -50,17 +50,25 @@ func TestRunCheck_CountsAndCannotWrite_Live(t *testing.T) {
 		`WITH d AS (DELETE FROM "c" RETURNING 1) SELECT count(*) FROM d`,
 		`SELECT 0; DELETE FROM "c"`,
 	} {
-		if _, err := a.RunCheck(ctx, attack); err == nil {
+		if _, err := a.RunCheck(ctx, attack, ""); err == nil {
 			t.Errorf("ran %q", attack)
 		}
 	}
 	if err := lock.(interface{ Check(context.Context) error }).Check(ctx); err != nil {
 		t.Fatalf("the run lock did not survive the checks: %v", err)
 	}
-	if n, err = a.RunCheck(ctx, `SELECT count(*) FROM "c"`); err != nil || n != 2 {
+	if n, err = a.RunCheck(ctx, `SELECT count(*) FROM "c"`, ""); err != nil || n != 2 {
 		t.Fatalf("rows after the refused writes: %d, %v", n, err)
 	}
-	_, err = a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "s"::numeric > 0 LIMIT 1`)
+	// an expression index's probe calls what the index body calls
+	lowerProbe := `SELECT (lower(s)), count(*) FROM "c" WHERE ((lower(s))) IS NOT NULL GROUP BY (lower(s)) HAVING count(*) > 0 LIMIT 1`
+	if _, err = a.RunCheck(ctx, lowerProbe, ""); err == nil {
+		t.Fatal("lower() ran without a body holding it")
+	}
+	if n, err = a.RunCheck(ctx, lowerProbe, `CREATE UNIQUE INDEX "c_s" ON "c" ((lower(s)));`); err != nil || n != 1 {
+		t.Fatalf("expression probe = %d, %v; want 1", n, err)
+	}
+	_, err = a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "s"::numeric > 0 LIMIT 1`, "")
 	if err == nil || strings.Contains(err.Error(), "secret") || !strings.Contains(err.Error(), "SQLSTATE 22P02") {
 		t.Fatalf("a failed cast must report only its SQLSTATE: %v", err)
 	}
@@ -95,7 +103,7 @@ func TestRunCheck_WithoutTheTempFileLimitPrivilege_Live(t *testing.T) {
 		t.Fatalf("connect as %s: %v", role, err)
 	}
 	defer func() { _ = a.Close() }()
-	if n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" LIMIT 1`); err != nil || n != 1 {
+	if n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" LIMIT 1`, ""); err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
 }

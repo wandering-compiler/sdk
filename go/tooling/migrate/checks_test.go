@@ -19,10 +19,12 @@ type checkingApplier struct {
 	*stub.Applier
 	counts map[string]int64
 	ran    []string
+	bodies []string
 }
 
-func (c *checkingApplier) RunCheck(_ context.Context, sql string) (int64, error) {
+func (c *checkingApplier) RunCheck(_ context.Context, sql, body string) (int64, error) {
 	c.ran = append(c.ran, sql)
+	c.bodies = append(c.bodies, body)
 	return c.counts[sql], nil
 }
 
@@ -76,6 +78,10 @@ func TestRun_ChecksPassAndSkipDownChecks(t *testing.T) {
 	}
 	if len(a.Calls()) != 1 || len(a.ran) != 1 || strings.Contains(a.ran[0], "99") {
 		t.Fatalf("calls %v, checks run %q", a.Calls(), a.ran)
+	}
+	// the check is validated against the body of the migration it guards
+	if !strings.Contains(a.bodies[0], "ADD CONSTRAINT c_fk") {
+		t.Errorf("the check ran without its migration's body: %q", a.bodies[0])
 	}
 	if !strings.Contains(out, "check fk_add_c_pid passed") {
 		t.Errorf("output does not report the check: %s", out)

@@ -642,8 +642,9 @@ func runPreApplyChecks(ctx context.Context, applier Applier, p Pending, out io.W
 			"  fix: drop --checks (and W17_MIGRATE_CHECKS) for this run, and run the probes another way",
 			p.Connection, p.Migration.GetId(), len(forward))
 	}
+	body := p.Migration.GetUpSql() + "\n" + p.Migration.GetUpPostTx()
 	for _, c := range forward {
-		n, err := cr.RunCheck(ctx, c.GetSql())
+		n, err := cr.RunCheck(ctx, c.GetSql(), body)
 		if err != nil {
 			return fmt.Errorf("apply %s/%s: pre-apply check %s could not run: %w\n"+
 				"  why: --checks refuses a migration whose probe cannot answer — an unanswered probe is not a pass\n"+

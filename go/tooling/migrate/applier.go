@@ -121,13 +121,14 @@ const (
 // return its count — a non-zero count is rows the migration would refuse or
 // lose.
 //
-// An implementation accepts only a single read-only SELECT
-// (ValidateCheckSQL), runs it on a connection of its own (never the run
+// body is the migration's up SQL (both halves): the check may also call a
+// function it calls. An implementation accepts only a single read-only SELECT
+// (ValidateMigrationCheckSQL), runs it on a connection of its own (never the run
 // lock's) in a read-only transaction with a statement timeout
 // (CheckTimeout), reads it through CheckCountSQL, and reports a failure by
 // the database's error code only.
 type CheckRunner interface {
-	RunCheck(ctx context.Context, sql string) (int64, error)
+	RunCheck(ctx context.Context, sql, body string) (int64, error)
 }
 
 type ResumableApplier interface {

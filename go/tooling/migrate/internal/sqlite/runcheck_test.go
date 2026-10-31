@@ -24,7 +24,7 @@ func TestRunCheck_CountsAndCannotWrite(t *testing.T) {
 	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: `CREATE TABLE "c" (id INTEGER PRIMARY KEY, pid INTEGER); INSERT INTO "c" VALUES (1, 7), (2, NULL);`}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`)
+	n, err := a.RunCheck(ctx, `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`, "")
 	if err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
@@ -37,7 +37,7 @@ func TestRunCheck_CountsAndCannotWrite(t *testing.T) {
 		`DELETE FROM "c" RETURNING 1`,
 		`SELECT load_extension('x')`,
 	} {
-		if _, err := a.RunCheck(ctx, attack); err == nil {
+		if _, err := a.RunCheck(ctx, attack, ""); err == nil {
 			t.Errorf("ran %q", attack)
 		}
 	}
@@ -47,7 +47,7 @@ func TestRunCheck_CountsAndCannotWrite(t *testing.T) {
 	if err := a.Apply(ctx, &applyfetchpb.Migration{UpSql: `INSERT INTO "c" VALUES (3, 1);`}); err != nil {
 		t.Fatalf("the connection stayed read-only after a check: %v", err)
 	}
-	if n, err = a.RunCheck(ctx, `SELECT count(*) FROM "c"`); err != nil || n != 3 {
+	if n, err = a.RunCheck(ctx, `SELECT count(*) FROM "c"`, ""); err != nil || n != 3 {
 		t.Fatalf("rows: %d, %v; want 3", n, err)
 	}
 }

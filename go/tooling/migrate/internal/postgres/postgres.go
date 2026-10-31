@@ -626,14 +626,14 @@ var _ migrate.CheckRunner = (*Applier)(nil)
 
 // RunCheck runs one pre-apply check (migrate.CheckRunner).
 //
-// Only a single read-only SELECT is accepted (migrate.ValidateCheckSQL), and
+// Only a single read-only SELECT is accepted (migrate.ValidateMigrationCheckSQL), and
 // it runs on a connection of its OWN — never the applier's, which holds the
 // run lock (a check calling pg_advisory_unlock_all() there would drop it) —
 // inside a READ ONLY transaction with a statement and a lock timeout, always
 // rolled back. A failure reports the SQLSTATE only: the server's message can
 // carry the data the probe read (a failed cast quotes the value).
-func (a *Applier) RunCheck(ctx context.Context, query string) (int64, error) {
-	if err := migrate.ValidateCheckSQL(query, migrate.CheckPostgres); err != nil {
+func (a *Applier) RunCheck(ctx context.Context, query, body string) (int64, error) {
+	if err := migrate.ValidateMigrationCheckSQL(query, body, migrate.CheckPostgres); err != nil {
 		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, migrate.CheckTimeout)
