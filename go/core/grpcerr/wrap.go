@@ -201,6 +201,17 @@ const (
 	CodeMissingPermission = "MISSING_PERMISSION"
 	CodeNoPermissions     = "NO_PERMISSIONS_RESOLVED"
 	CodeNoPrincipal       = "NO_PRINCIPAL"
+
+	// CodeOrganizationRequired is the gate's fourth answer, and the one that is
+	// NOT a PERMISSION_DENIED: FAILED_PRECONDITION (REST 400). The request
+	// names no organization, and the permission it needs is one the caller
+	// holds inside an organization (acllock.HeldInAnOrganization) — a member
+	// of several, or of one where the deployment never infers it. "You do not
+	// have access" is false there and sends a person to an administrator; the
+	// fix is to say where (the W17-Org header), so it gets its own code and
+	// its own sentence. A caller who names an organization and still lacks the
+	// permission is MISSING_PERMISSION, as ever.
+	CodeOrganizationRequired = "ORGANIZATION_REQUIRED"
 )
 
 // UserMsgid is the sentence a PERSON gets for a gRPC code when nobody wrote
@@ -277,10 +288,11 @@ func Vocabulary() []string {
 		}
 	}
 	// The ACL gate's sentences are not per-code — PERMISSION_DENIED has three
-	// causes worth telling apart — so they are listed rather than derived. They
+	// causes worth telling apart, and an unnamed organization a fourth — so
+	// they are listed rather than derived. They
 	// still have to be HARVESTED, or a translator never sees them and the
 	// caller gets English.
-	for _, m := range []string{MsgidNoPermissions} {
+	for _, m := range []string{MsgidNoPermissions, MsgidOrganizationRequired} {
 		if !seen[m] {
 			seen[m] = true
 			out = append(out, m)
@@ -305,14 +317,30 @@ func Vocabulary() []string {
 // test can pin the cause and a browser learns nothing it did not already send.
 // See CodeMissingPermission and its siblings.
 const (
-	// Only ONE extra sentence, and the asymmetry is the point. An empty
-	// permission set has an ACTION behind it (choose an organization), so it
-	// earns its own sentence. A missing principal does not: the caller cannot
+	// One extra sentence per cause with an ACTION behind it, and the asymmetry
+	// is the point. An empty permission set has one (choose an organization),
+	// so it earns its own sentence. A missing principal does not: the caller cannot
 	// tell a missing credential from a misconfigured gateway, so they get the
 	// code's own sentence and NO_PRINCIPAL in the detail. A msgid nothing can
 	// show is a sentence harvested for translators to no purpose.
 	MsgidNoPermissions = "No permissions are in effect for you here. If access is scoped by organization, choose one and try again."
+
+	// The sentence of CodeOrganizationRequired. Unconditional where
+	// MsgidNoPermissions hedges ("if access is scoped"): this one is said only
+	// when the identity reported that the caller holds the permission inside
+	// an organization, so there is nothing to hedge. It names the header and
+	// what it takes, like the auth plugin's ORG_NOT_MEMBER, and no
+	// organization — the caller knows their own.
+	MsgidOrganizationRequired = "Choose the organization to act in: name it in the W17-Org header (the organization's slug) and try again."
 )
+
+// OrganizationRequired is the gate's refusal of a request that names no
+// organization while the permission it needs is held inside one (see
+// CodeOrganizationRequired). `dev` is the operator's copy and may name the
+// permission; the caller gets the code and the sentence.
+func OrganizationRequired(ctx context.Context, method, dev string) error {
+	return forCaller(ctx, codes.FailedPrecondition, method, dev, CodeOrganizationRequired, MsgidOrganizationRequired, nil)
+}
 
 // ForUser builds an error that says one thing to an operator and another to a
 // person — the shape every hand-written handler should reach for.

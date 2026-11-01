@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 )
 
@@ -168,6 +169,43 @@ func WriteForbiddenCtx(ctx context.Context, w http.ResponseWriter, perm string) 
 	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.PermissionDenied),
 		GRPCCodeName(codes.PermissionDenied), sentence,
 		[]FieldError{{Code: grpcerr.CodeMissingPermission, Message: sentence}})
+}
+
+// WriteDeniedCtx is the gate's refusal of a caller who lacks permission `id`
+// (named `perm` for the operator), told apart by the auth response's scopes.
+//
+// When the identity reported that the caller holds `id` inside an organization
+// this request did not name (acllock.HeldInAnOrganization), the answer is
+// FAILED_PRECONDITION / ORGANIZATION_REQUIRED (400) — "say which organization",
+// a request the caller can fix by resending it with the W17-Org header.
+// Everything else is WriteForbiddenCtx's 403 / MISSING_PERMISSION, unchanged:
+// the hint can make a refusal more precise, never an admission.
+//
+// ⚠️ It is not a 403 on purpose. A 403 tells a client that THIS identity may
+// not do THIS, and a client that branches on it shows "no access" or hides the
+// feature — the very answer that was wrong. FAILED_PRECONDITION is the code
+// the repository already uses for "valid request, the state it needs is
+// missing" (the grant plugin's "name an organization" refusal is one), and it
+// maps to 400 (HTTPStatusFromGRPCCode).
+//
+// `scopes` is the decoded auth response's scopes; nil (a surface whose auth
+// response declares none) always answers 403.
+func WriteDeniedCtx(ctx context.Context, w http.ResponseWriter, perm string, id int32, scopes map[string]string) {
+	if !acllock.HeldInAnOrganization(scopes, id) {
+		WriteForbiddenCtx(ctx, w, perm)
+		return
+	}
+	operator := "organization required: the caller holds permission " + perm +
+		" only inside an organization, and the request names none (W17-Org)"
+	sentence := i18n.T(ctx, grpcerr.MsgidOrganizationRequired, nil)
+	reportByCode(ctx, codes.FailedPrecondition, status.Error(codes.FailedPrecondition, operator))
+	// Same shape as WriteForbiddenCtx's: the sentence at the top and in the
+	// detail, beside the detail code a client branches on — and the shape
+	// the rpc gate's grpcerr.OrganizationRequired arrives in through
+	// ClientError.
+	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.FailedPrecondition),
+		GRPCCodeName(codes.FailedPrecondition), sentence,
+		[]FieldError{{Code: grpcerr.CodeOrganizationRequired, Message: sentence}})
 }
 
 // WriteUnauthorizedCtx writes the canonical 401 without naming the credential
