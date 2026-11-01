@@ -76,7 +76,7 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	// stack build` follows. A fixture of another store never reaches this
 	// one: refused, or skipped with a note when this binary cannot tell
 	// which domains are its own.
-	seeds, want, wantFromRender, err := routeSeeds(seeds, targets, scope, f.connection, out)
+	seeds, want, wantFromRender, err := routeSeeds(seeds, targets, specs, scope, f.connection, out)
 	if err != nil {
 		return err
 	}
@@ -235,10 +235,19 @@ func seedScope(flagDomain string, own []string) (domainScope, error) {
 // the binary does not know its own — there the foreign seeds are expected, and
 // refusing would fail every run of a multi-domain project.
 //
+// A rendered name never makes a seed unseedable. A render that named a store
+// with no seed support (a console that recorded the domain's FIRST relational
+// connection — app-mysql — for a fixture whose tables are all on app-postgres)
+// is set aside with a note and the seedable connection is inferred as before;
+// letting it win stopped role seeding outright. An explicit --connection wins
+// over the rendered name, with a note: it is the operator's correction for
+// exactly such a render, and openSeedTarget still refuses one this binary does
+// not serve or that cannot seed.
+//
 // It returns the seeds to apply, the connection they go to ("" = not named
 // by the render; openSeedTarget infers it as before) and whether that name
 // came from the render rather than from --connection.
-func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, scope domainScope, flagConn string, out io.Writer) ([]migrate.FixtureSeed, string, bool, error) {
+func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, specs []factory.TargetSpec, scope domainScope, flagConn string, out io.Writer) ([]migrate.FixtureSeed, string, bool, error) {
 	owned := map[string]bool{}
 	ownedNames := make([]string, 0, len(targets))
 	for _, t := range targets {
@@ -271,6 +280,16 @@ func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, scope
 			"  note: each is seeded by the binary that serves its store\n",
 			len(skipped), strings.Join(skipped, ", "))
 	}
+	// A named store this bundle serves with a DSN that cannot take a seed
+	// (MySQL, SQLite, KV) is not where these rows go, whatever the render says.
+	for _, sp := range specs {
+		if named[sp.Connection] && !factory.SeedCandidate(sp.DSN) {
+			delete(named, sp.Connection)
+			fmt.Fprintf(out, "fixtures: note: the render names %q for these fixtures, a store with no seed support — ignored; seeding the bundle's seedable connection instead\n"+
+				"  why: an older console recorded a domain's first relational store, not the store of the fixture's own tables; re-run `w17ctl fixtures render` against a current console\n",
+				sp.Connection)
+		}
+	}
 	switch len(named) {
 	case 0:
 		return kept, flagConn, false, nil
@@ -280,11 +299,8 @@ func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, scope
 			conn = c
 		}
 		if flagConn != "" && flagConn != conn {
-			return nil, "", false, fmt.Errorf(
-				"fixtures: --connection %q, but the renderer put these fixtures on %q\n"+
-					"  why: a fixture's rows belong in the store its domain lives on\n"+
-					"  fix: drop --connection, or pass --connection %s",
-				flagConn, conn, conn)
+			fmt.Fprintf(out, "fixtures: note: --connection %q overrides the store the render names (%q)\n", flagConn, conn)
+			return kept, flagConn, false, nil
 		}
 		return kept, conn, flagConn == "", nil
 	default:

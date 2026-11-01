@@ -256,8 +256,12 @@ own rows out of it. Two rules do that, in this order:
    (`FetchFixtureSeedResponse.connection`, written into the `.seed.json` and returned by
    `--fetch`), the rule `w17ctl stack build` routes by. A seed naming a connection the binary does
    not serve is refused when the scope was chosen (own domains or `--domain`), and skipped with a
-   note when every domain is in scope. The named connection is the seed target; a `--connection`
-   naming another is refused, and seeds naming two owned connections ask for `--domain`. A seed
+   note when every domain is in scope. The named connection is the seed target unless the binary
+   serves it with a store that cannot seed (an older console recorded a domain's first relational
+   store, e.g. MySQL, for a fixture on Postgres): then it is ignored with a note and the seedable
+   connection is inferred. An explicit `--connection` wins over the rendered name with a note
+   (openSeedTarget still refuses one the binary does not serve or that cannot seed); seeds naming
+   two seedable owned connections ask for `--domain`. A seed
    with no recorded connection (an older render) falls back to `--connection` or the
    single-candidate inference.
 
@@ -272,7 +276,7 @@ connections (`Options.Connections`), and a migration belongs to exactly one conn
 | `--fetch` | off | — |
 | `--group` | default group | `.` and a trailing `/` normalise to the default group |
 | `--domain` | the binary's own domain(s) (`Options.Domains`); every domain when that is empty | a domain the binary does not serve is refused |
-| `--connection` | the connection the render names; else the one seedable connection | required when two connections can seed and the render names none; refused when it differs from the one the render names; only Postgres connections can seed |
+| `--connection` | the connection the render names (unless it cannot seed); else the one seedable connection | required when two connections can seed and the render names none; overrides the rendered name with a note; only Postgres connections can seed |
 | `--dry-run` | off | — |
 | `--allow-stale` | off | accepts a render older than its fixture |
 | `--allow-no-dsn` | off | accepts a run with no DSN anywhere; accepted by `fixtures apply` only (T2.10) |
@@ -290,7 +294,7 @@ connections (`Options.Connections`), and a migration belongs to exactly one conn
 | T6.7 | An unknown `fixtures` subcommand MUST print the fixtures usage. | `TestFixtures_UnknownSubcommandPrintsFixturesUsage` |
 | T6.8 | A bundle whose only candidate store cannot seed MUST be refused with a message that fixtures seed into Postgres only, before the store is opened; an explicit `--connection` naming such a store MUST be refused. | `TestFixturesApply_OnlyAStoreThatCannotSeedIsRefusedClearly`, `TestFixturesApply_ExplicitConnectionThatCannotSeedIsRefused` |
 | T6.9 | With `Options.Domains` set, a run with no `--domain` MUST seed only those domains' fixtures, from disk and over `--fetch` (filtered client-side as well as asked of the console); a `--domain` outside them MUST be refused before any store is opened. | `TestFixturesApply_DefaultsToTheBinarysOwnDomain`, `TestFixturesApply_AForeignDomainIsRefused`, `TestFixturesApply_FetchSeedsOnlyTheOwnDomain`, `TestFixturesApply_DryRunListsOnlyTheOwnDomain`, `TestFixturesApply_EachBinarySeedsOnlyItsOwnStore_Live` |
-| T6.10 | A seed whose render names a connection the binary does not serve MUST NOT reach its store: refused when the scope was chosen, skipped with a note when every domain is in scope. A `--connection` other than the rendered one MUST be refused; seeds on two owned connections MUST be refused. | `TestFixturesApply_AnOwnDomainSeedOnAForeignStoreIsRefused`, `TestFixturesApply_UnknownIdentitySkipsOtherStoresByTheRenderedConnection`, `TestFixturesApply_ConnectionFlagCannotOverrideTheRenderedStore`, `TestFixturesApply_SeedsOnTwoOwnedStoresAskForADomain` |
+| T6.10 | A seed whose render names a connection the binary does not serve MUST NOT reach its store: refused when the scope was chosen, skipped with a note when every domain is in scope. A rendered connection the binary serves with a store that cannot seed MUST NOT be the target (ignored with a note); an explicit `--connection` MUST win over the rendered name with a note; seeds on two seedable owned connections MUST be refused. | `TestFixturesApply_AnOwnDomainSeedOnAForeignStoreIsRefused`, `TestFixturesApply_UnknownIdentitySkipsOtherStoresByTheRenderedConnection`, `TestFixturesApply_AnUnseedableRenderedStoreDoesNotWin`, `TestFixturesApply_ConnectionFlagOverridesTheRenderedStoreWithANote`, `TestFixturesApply_SeedsOnTwoOwnedStoresAskForADomain` |
 | T6.11 | A rendered seed MUST carry its connection through write and load; one with none MUST write the same bytes as before the field. | `TestFixtureSeed_ConnectionRoundTrips` |
 
 **Deliberate limits.**

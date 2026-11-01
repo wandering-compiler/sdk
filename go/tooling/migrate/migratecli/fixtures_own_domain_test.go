@@ -168,18 +168,56 @@ func TestFixturesApply_AnOwnDomainSeedOnAForeignStoreIsRefused(t *testing.T) {
 	}
 }
 
-// --connection cannot send rows to a store other than the one the render
-// put them on.
-func TestFixturesApply_ConnectionFlagCannotOverrideTheRenderedStore(t *testing.T) {
-	withOpenedSeeder(t)
+// An explicit --connection the binary serves and can seed wins over the
+// rendered name, with a note — it is the operator's correction for a render
+// that named the wrong store.
+func TestFixturesApply_ConnectionFlagOverridesTheRenderedStoreWithANote(t *testing.T) {
+	o := withOpenedSeeder(t)
 	dir := twoDomainTree(t, true)
 	lock := writeLock(t, migrate.LockConnection{Name: "basic-postgres"}, migrate.LockConnection{Name: "basic-replica"})
 	var out strings.Builder
 	err := runFixtures(context.Background(), []string{"apply", "--lock", lock, "--fixtures", dir, "--connection", "basic-replica"},
 		Options{Connections: []string{"basic-postgres", "basic-replica"}, Domains: []string{"basic"},
 			Getenv: envMap{"W17_TARGET_BASIC_POSTGRES": "postgres://x/b", "W17_TARGET_BASIC_REPLICA": "postgres://x/r"}.get}, &out)
-	if err == nil || !strings.Contains(err.Error(), `--connection "basic-replica", but the renderer put these fixtures on "basic-postgres"`) {
-		t.Fatalf("want the conflicting --connection refusal, got %v", err)
+	if err != nil {
+		t.Fatalf("runFixtures: %v\n%s", err, out.String())
+	}
+	if len(o.opened) != 1 || o.opened[0] != "basic-replica" {
+		t.Errorf("opened %v, want the --connection the operator named", o.opened)
+	}
+	if !strings.Contains(out.String(), `--connection "basic-replica" overrides the store the render names ("basic-postgres")`) {
+		t.Errorf("the override was not reported:\n%s", out.String())
+	}
+}
+
+// A rendered name never makes a seed unseedable. An older console recorded a
+// domain's FIRST relational store — app-mysql — for an acl-roles fixture whose
+// tables are all on app-postgres; routing to it was refused as "no seed
+// support" and role seeding stopped, with --connection app-postgres refused
+// as a conflict. The unseedable name is set aside, the seedable connection is
+// used, and --connection naming it is accepted.
+func TestFixturesApply_AnUnseedableRenderedStoreDoesNotWin(t *testing.T) {
+	dir := seedDir(t, migrate.FixtureSeed{Domain: "app", Name: "acl-roles", Connection: "app-mysql",
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO auth_role")}})
+	lock := writeLock(t, migrate.LockConnection{Name: "app-mysql"}, migrate.LockConnection{Name: "app-postgres"})
+	env := envMap{"W17_TARGET_APP_MYSQL": "mysql://u:p@tcp(db:3306)/app", "W17_TARGET_APP_POSTGRES": "postgres://x/app"}.get
+	for _, args := range [][]string{nil, {"--connection", "app-postgres"}} {
+		o := withOpenedSeeder(t)
+		var out strings.Builder
+		err := runFixtures(context.Background(), append([]string{"apply", "--lock", lock, "--fixtures", dir}, args...),
+			Options{Connections: []string{"app-mysql", "app-postgres"}, Domains: []string{"app"}, Getenv: env}, &out)
+		if err != nil {
+			t.Fatalf("%v: runFixtures: %v\n%s", args, err, out.String())
+		}
+		if len(o.opened) != 1 || o.opened[0] != "app-postgres" {
+			t.Errorf("%v: opened %v, want app-postgres", args, o.opened)
+		}
+		if got := o.sql(); len(got) != 1 {
+			t.Errorf("%v: seeded %v", args, got)
+		}
+		if !strings.Contains(out.String(), `the render names "app-mysql" for these fixtures, a store with no seed support`) {
+			t.Errorf("%v: the ignored name was not reported:\n%s", args, out.String())
+		}
 	}
 }
 
