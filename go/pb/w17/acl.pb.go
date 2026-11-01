@@ -174,16 +174,17 @@ type AclRole struct {
 	// (atomic COUNT==0 guard). The bootstrap-admin pattern. At most
 	// one role per realm may set it.
 	//
-	// ⚠️ On a role that grants everything (`all_permissions`, or
-	// `include: ["*"]` with no `exclude`) it is refused unless the role
-	// also sets `all_permissions_at_signup: true` — see that field.
+	// ⚠️ On a role whose resolved grants are the whole catalogue or include
+	// a sensitive permission it is refused unless the role also sets
+	// `all_permissions_at_signup: true` — see that field.
 	FirstUser bool `protobuf:"varint,5,opt,name=first_user,json=firstUser,proto3" json:"first_user,omitempty"`
 	// default — assign this role to every signup AFTER the first.
 	// At most one role per realm may set it.
 	//
-	// ⚠️ Same rule as `first_user`: a role that grants everything and is
-	// handed out by `default` makes EVERY sign-up a superuser, so it is
-	// refused unless the role sets `all_permissions_at_signup: true`.
+	// ⚠️ Same rule as `first_user`: a role handed out by `default` whose
+	// resolved grants are the whole catalogue or include a sensitive
+	// permission gives that to EVERY sign-up, so it is refused unless the
+	// role sets `all_permissions_at_signup: true`.
 	Default bool `protobuf:"varint,6,opt,name=default,proto3" json:"default,omitempty"`
 	// all_permissions — runtime WILDCARD grant. A holder of this
 	// role passes EVERY ACL permission check, regardless of what
@@ -239,10 +240,15 @@ type AclRole struct {
 	// authoritative over the roles it declares.
 	NoPermissions bool `protobuf:"varint,11,opt,name=no_permissions,json=noPermissions,proto3" json:"no_permissions,omitempty"`
 	// all_permissions_at_signup — the acknowledgement that a sign-up is
-	// handed EVERY permission. Required on a role that grants everything
-	// (`all_permissions`, or `include: ["*"]` with no `exclude`) and is
-	// assigned at sign-up (`first_user` or `default`); refused anywhere
-	// else, so it cannot be left behind meaning nothing.
+	// handed everything, or something sensitive. Required on a role assigned
+	// at sign-up (`first_user` or `default`) whose grants, RESOLVED against
+	// the domain's catalogue (never read off the glob text), are the whole
+	// catalogue (`all_permissions` included) or contain a sensitive
+	// permission: role and permission management, membership or
+	// organization removal, account erasure or disabling, user deletion,
+	// credential minting (API / bot tokens). The compiler holds that list in
+	// one place and names the permissions it found. Refused anywhere else,
+	// so it cannot be left behind meaning nothing.
 	//
 	// With `default` it makes every registration a superuser and turns
 	// the ACL into a no-op for that realm — almost never intended outside
