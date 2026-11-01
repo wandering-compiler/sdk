@@ -55,6 +55,16 @@ type Options struct {
 	// recorded beside each seed.
 	Domains []string
 
+	// Dialects maps each of Connections to its store's dialect ("postgres",
+	// "mysql", "sqlite", "redis", …), as the generated bundle declares it.
+	// Seeding reads it to tell a store that can take a fixture from one that
+	// cannot WITHOUT that store's DSN: a binary serving app-postgres and
+	// app-mysql, run with only the Postgres DSN set, must still know that an
+	// old render's "app-mysql" names a store no seed goes to. Absent entries
+	// (and a nil map, from a binary generated before the field) fall back to
+	// the DSN's scheme, where one is set.
+	Dialects map[string]string
+
 	// Out is the progress sink. Defaults to os.Stdout.
 	Out io.Writer
 

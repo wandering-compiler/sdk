@@ -76,7 +76,7 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	// stack build` follows. A fixture of another store never reaches this
 	// one: refused, or skipped with a note when this binary cannot tell
 	// which domains are its own.
-	seeds, want, wantFromRender, err := routeSeeds(seeds, targets, specs, scope, f.connection, out)
+	seeds, want, wantFromRender, err := routeSeeds(seeds, targets, specs, opts.Dialects, scope, f.connection, out)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func seedScope(flagDomain string, own []string) (domainScope, error) {
 // It returns the seeds to apply, the connection they go to ("" = not named
 // by the render; openSeedTarget infers it as before) and whether that name
 // came from the render rather than from --connection.
-func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, specs []factory.TargetSpec, scope domainScope, flagConn string, out io.Writer) ([]migrate.FixtureSeed, string, bool, error) {
+func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, specs []factory.TargetSpec, dialects map[string]string, scope domainScope, flagConn string, out io.Writer) ([]migrate.FixtureSeed, string, bool, error) {
 	owned := map[string]bool{}
 	ownedNames := make([]string, 0, len(targets))
 	for _, t := range targets {
@@ -280,14 +280,28 @@ func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, specs
 			"  note: each is seeded by the binary that serves its store\n",
 			len(skipped), strings.Join(skipped, ", "))
 	}
-	// A named store this bundle serves with a DSN that cannot take a seed
-	// (MySQL, SQLite, KV) is not where these rows go, whatever the render says.
+	// A named store this bundle serves that cannot take a seed (MySQL,
+	// SQLite, KV) is not where these rows go, whatever the render says.
+	// Decided from the store's DIALECT, which the generated bundle declares,
+	// and only failing that from its DSN — whether a DSN happens to be set is
+	// not what makes a store seedable, and keying on it refused a run that
+	// set only the Postgres DSN with "set W17_TARGET_APP_MYSQL".
+	dsnOf := map[string]string{}
 	for _, sp := range specs {
-		if named[sp.Connection] && !factory.SeedCandidate(sp.DSN) {
-			delete(named, sp.Connection)
+		dsnOf[sp.Connection] = sp.DSN
+	}
+	for _, c := range sortedNames(named) {
+		seedable, known := false, false
+		if d, ok := dialects[c]; ok && d != "" {
+			seedable, known = d == "postgres", true
+		} else if dsn, ok := dsnOf[c]; ok {
+			seedable, known = factory.SeedCandidate(dsn), true
+		}
+		if known && !seedable {
+			delete(named, c)
 			fmt.Fprintf(out, "fixtures: note: the render names %q for these fixtures, a store with no seed support — ignored; seeding the bundle's seedable connection instead\n"+
 				"  why: an older console recorded a domain's first relational store, not the store of the fixture's own tables; re-run `w17ctl fixtures render` against a current console\n",
-				sp.Connection)
+				c)
 		}
 	}
 	switch len(named) {
@@ -546,4 +560,14 @@ func refuseStaleRender(dir string, scope domainScope, group string) error {
 	return fmt.Errorf("fixtures: the rendered seeds in %s are older than the fixtures they came from:\n%s\n"+
 		"  override: --allow-stale seeds from the render as it is",
 		dir, migrate.FormatStaleRenders(mine))
+}
+
+// sortedNames returns a set's members in a stable order.
+func sortedNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

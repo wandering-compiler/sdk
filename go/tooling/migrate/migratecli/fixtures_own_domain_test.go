@@ -221,6 +221,28 @@ func TestFixturesApply_AnUnseedableRenderedStoreDoesNotWin(t *testing.T) {
 	}
 }
 
+// Seedability comes from the store's dialect, not from whether its DSN is
+// set: with only the Postgres DSN exported, an old render naming app-mysql
+// must still be set aside — it used to be refused with "set
+// W17_TARGET_APP_MYSQL", a variable the seed never needed.
+func TestFixturesApply_AnUnseedableRenderedStoreWithoutADSNDoesNotWin(t *testing.T) {
+	o := withOpenedSeeder(t)
+	dir := seedDir(t, migrate.FixtureSeed{Domain: "app", Name: "acl-roles", Connection: "app-mysql",
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO auth_role")}})
+	lock := writeLock(t, migrate.LockConnection{Name: "app-mysql"}, migrate.LockConnection{Name: "app-postgres"})
+	var out strings.Builder
+	err := runFixtures(context.Background(), []string{"apply", "--lock", lock, "--fixtures", dir},
+		Options{Connections: []string{"app-mysql", "app-postgres"}, Domains: []string{"app"},
+			Dialects: map[string]string{"app-mysql": "mysql", "app-postgres": "postgres"},
+			Getenv:   envMap{"W17_TARGET_APP_POSTGRES": "postgres://x/app"}.get}, &out)
+	if err != nil {
+		t.Fatalf("runFixtures: %v\n%s", err, out.String())
+	}
+	if len(o.opened) != 1 || o.opened[0] != "app-postgres" {
+		t.Errorf("opened %v, want app-postgres", o.opened)
+	}
+}
+
 // One run is one transaction on one store; seeds the render puts on two
 // stores cannot be it.
 func TestFixturesApply_SeedsOnTwoOwnedStoresAskForADomain(t *testing.T) {
