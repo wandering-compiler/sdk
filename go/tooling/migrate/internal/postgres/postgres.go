@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wandering-compiler/sdk/go/lib/dbsession"
+	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -79,7 +80,7 @@ func New(ctx context.Context, dsn string) (*Applier, error) {
 	// `w17_migrations`) resolve through it, so an applier running as a role
 	// that owns a same-named schema creates the tables somewhere the
 	// runtime never looks.
-	conn, err := pgx.Connect(ctx, dbsession.ApplyPGDSNParams(dsn))
+	conn, err := connectPrintingWarnings(ctx, dbsession.ApplyPGDSNParams(dsn))
 	if err != nil {
 		return nil, fmt.Errorf("postgres.New: %w", err)
 	}
@@ -702,4 +703,21 @@ func pgCheckErr(err error) error {
 		return errors.New("the check timed out")
 	}
 	return errors.New("the check failed")
+}
+
+// connectPrintingWarnings is pgx.Connect with the server's WARNINGs printed to
+// stderr. pgx drops notices unless asked, and a seed says things at apply time
+// that must not vanish — the role seed warns, for one, when it withdraws a
+// preset that accounts still hold (most often a renamed key).
+func connectPrintingWarnings(ctx context.Context, dsn string) (*pgx.Conn, error) {
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	cfg.OnNotice = func(_ *pgconn.PgConn, n *pgconn.Notice) {
+		if n.Severity == "WARNING" {
+			fmt.Fprintf(os.Stderr, "⚠️  WARNING: %s\n", n.Message)
+		}
+	}
+	return pgx.ConnectConfig(ctx, cfg)
 }
