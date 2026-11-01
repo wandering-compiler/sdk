@@ -430,8 +430,14 @@ type RequestEventMeta struct {
 	// caller is a service, never a person; a person's credential travelling as
 	// data shows nowhere here. Empty on every other surface.
 	CallerService string `protobuf:"bytes,22,opt,name=caller_service,json=callerService,proto3" json:"caller_service,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// On a stream (server-sent events, a WebSocket, a streaming RPC), the
+	// messages sent to the client and received from it over the whole
+	// stream: a stream is ONE record, written when it closes, with its total
+	// duration. Both 0 on a unary request.
+	MessagesSent     int64 `protobuf:"varint,23,opt,name=messages_sent,json=messagesSent,proto3" json:"messages_sent,omitempty"`
+	MessagesReceived int64 `protobuf:"varint,24,opt,name=messages_received,json=messagesReceived,proto3" json:"messages_received,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RequestEventMeta) Reset() {
@@ -618,6 +624,20 @@ func (x *RequestEventMeta) GetCallerService() string {
 	return ""
 }
 
+func (x *RequestEventMeta) GetMessagesSent() int64 {
+	if x != nil {
+		return x.MessagesSent
+	}
+	return 0
+}
+
+func (x *RequestEventMeta) GetMessagesReceived() int64 {
+	if x != nil {
+		return x.MessagesReceived
+	}
+	return 0
+}
+
 // RequestClient is what the request says about the client. All of it is
 // personal data.
 type RequestClient struct {
@@ -725,7 +745,7 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\bresponse\x18\x02 \x01(\bR\bresponse\x125\n" +
 	"\fbackpressure\x18\x03 \x01(\x0e2\x11.w17.BackpressureR\fbackpressure\x12-\n" +
 	"\n" +
-	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\x9f\x06\n" +
+	"audit_mode\x18\x04 \x01(\x0e2\x0e.w17.AuditModeR\tauditMode\"\xf1\x06\n" +
 	"\x10RequestEventMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12/\n" +
 	"\bpurposes\x18\x02 \x03(\x0e2\x13.w17.RequestPurposeR\bpurposes\x12!\n" +
@@ -751,7 +771,9 @@ const file_w17_request_events_proto_rawDesc = "" +
 	"\rrequest_field\x18\x13 \x01(\x05R\frequestField\x12%\n" +
 	"\x0eresponse_field\x18\x14 \x01(\x05R\rresponseField\x12'\n" +
 	"\x0fmembership_kind\x18\x15 \x01(\tR\x0emembershipKind\x12%\n" +
-	"\x0ecaller_service\x18\x16 \x01(\tR\rcallerServiceB\x14\n" +
+	"\x0ecaller_service\x18\x16 \x01(\tR\rcallerService\x12#\n" +
+	"\rmessages_sent\x18\x17 \x01(\x03R\fmessagesSent\x12+\n" +
+	"\x11messages_received\x18\x18 \x01(\x03R\x10messagesReceivedB\x14\n" +
 	"\x12_marketing_consent\"\xe5\x01\n" +
 	"\rRequestClient\x12\x17\n" +
 	"\x02ip\x18\x01 \x01(\tB\a\xca\xf3\x18\x03\x98\x02\x01R\x02ip\x12&\n" +

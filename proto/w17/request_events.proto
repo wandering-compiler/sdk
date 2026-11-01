@@ -177,6 +177,12 @@ message RequestEventMeta {
   // caller is a service, never a person; a person's credential travelling as
   // data shows nowhere here. Empty on every other surface.
   string caller_service = 22;
+  // On a stream (server-sent events, a WebSocket, a streaming RPC), the
+  // messages sent to the client and received from it over the whole
+  // stream: a stream is ONE record, written when it closes, with its total
+  // duration. Both 0 on a unary request.
+  int64 messages_sent = 23;
+  int64 messages_received = 24;
 }
 
 // RequestClient is what the request says about the client. All of it is

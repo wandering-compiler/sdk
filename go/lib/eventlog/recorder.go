@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -322,6 +323,10 @@ type Record struct {
 	ip, userAgent, referrer string
 	utm                     map[string]string
 
+	// A stream's messages, counted from the goroutines that send and
+	// receive them (a WebSocket's pump is a second one).
+	sent, received atomic.Int64
+
 	finished bool // Finish ran: a later call (the middleware's) does nothing
 }
 
@@ -386,6 +391,61 @@ func (rec *Record) FinishUnary(ctx context.Context, resp any, err error) {
 	}
 	rec.setResultAny(resp, err)
 	rec.Finish(ctx, 0)
+}
+
+// MessageSent counts one message of a stream written to the client.
+func (rec *Record) MessageSent() {
+	if rec != nil {
+		rec.sent.Add(1)
+	}
+}
+
+// MessageReceived counts one message of a stream read from the client.
+func (rec *Record) MessageReceived() {
+	if rec != nil {
+		rec.received.Add(1)
+	}
+}
+
+// CountStream wraps a gRPC server stream so the record counts its messages
+// and holds the first message the client sent as its request (a
+// server-streaming call's only one). A nil Record returns ss unchanged.
+func (rec *Record) CountStream(ss grpc.ServerStream) grpc.ServerStream {
+	if rec == nil {
+		return ss
+	}
+	return &countedStream{ServerStream: ss, rec: rec}
+}
+
+// FinishStream is Finish for a streaming RPC: its error (the gRPC code), no
+// response (a stream has many) and no HTTP status.
+func (rec *Record) FinishStream(ctx context.Context, err error) {
+	if rec == nil {
+		return
+	}
+	rec.grpcCode = int32(status.Code(err))
+	rec.Finish(ctx, 0)
+}
+
+type countedStream struct {
+	grpc.ServerStream
+	rec *Record
+}
+
+func (s *countedStream) SendMsg(m any) error {
+	err := s.ServerStream.SendMsg(m)
+	if err == nil {
+		s.rec.sent.Add(1)
+	}
+	return err
+}
+
+func (s *countedStream) RecvMsg(m any) error {
+	err := s.ServerStream.RecvMsg(m)
+	if err == nil && s.rec.received.Add(1) == 1 {
+		s.rec.SetRequestAny(m)
+	}
+	return err
 }
 
 // SetResult records the call's outcome: its error (the gRPC code) and,
@@ -682,6 +742,8 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	m.OrgId = rec.orgID
 	m.MembershipKind = rec.kind
 	m.CallerService = rec.callerService
+	m.MessagesSent = rec.sent.Load()
+	m.MessagesReceived = rec.received.Load()
 	if rec.consentKnown {
 		m.MarketingConsent = proto.Bool(rec.consent)
 	}

@@ -1314,7 +1314,9 @@ type Field struct {
 	// credential binds (`(w17.rest_api)` endpoint `credential`, its
 	// `path_param` or `query_param` naming a field of the request); and on an
 	// auth method's request `headers`, which carry the caller's Authorization —
-	// writing it there is allowed and changes nothing. Only the request is
+	// writing it there is allowed and changes nothing; and on the field a REST
+	// endpoint's raw body lands in (`raw_body_field`, a webhook's signed
+	// payload). Only the request is
 	// covered: the same value elsewhere (a response, a stored column holding
 	// the link's token) is the project's to label. On a message-typed field it
 	// covers the whole sub-message.
