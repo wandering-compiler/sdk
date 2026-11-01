@@ -154,8 +154,9 @@ func (s *Server) mountResourceServer(mux *http.ServeMux) {
 // permission at all on this surface is a 403 insufficient_scope. A token the
 // auth method ACCEPTED but will not let act where the request asks — the
 // auth plugin's ORG_NOT_MEMBER, PERMISSION_DENIED — is a 403 too, with the
-// refusal's envelope: a 401 there would send the client to authorize again
-// over a token that is fine. Everything past it is the per-tool gate, as on a
+// refusal's envelope and no challenge: a 401 there would send the client to
+// authorize again, and insufficient_scope to step up, over a token that is
+// fine. Everything past it is the per-tool gate, as on a
 // surface without OAuth.
 func (s *Server) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +178,11 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 		case err == nil:
 			next.ServeHTTP(w, r)
 		case status.Code(err) == codes.PermissionDenied:
-			s.setChallenge(w, "insufficient_scope", "the token may not act where this request asks")
+			// No challenge: the token is fine. invalid_token would send the
+			// client to sign in again, insufficient_scope to step up for
+			// scopes it already holds — a re-consent loop. The envelope says
+			// what is wrong (ORG_NOT_MEMBER).
+			w.Header().Set("Cache-Control", "no-store")
 			restgw.WriteGRPCErrorCtx(r.Context(), w, err)
 		case isUnauthenticated(err):
 			s.challenge(w, http.StatusUnauthorized, "invalid_token", "the token is not valid for this resource")
@@ -201,19 +206,13 @@ func isUnauthenticated(err error) bool {
 
 // challenge writes the RFC 6750 / RFC 9728 answer.
 func (s *Server) challenge(w http.ResponseWriter, code int, errCode, desc string) {
-	s.setChallenge(w, errCode, desc)
-	w.WriteHeader(code)
-}
-
-// setChallenge sets the challenge headers without writing the status, for an
-// answer whose body another writer renders.
-func (s *Server) setChallenge(w http.ResponseWriter, errCode, desc string) {
 	v := fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, s.metadataURL(), strings.Join(s.resource.Scopes, " "))
 	if errCode != "" {
 		v += fmt.Sprintf(`, error=%q, error_description=%q`, errCode, desc)
 	}
 	w.Header().Set("WWW-Authenticate", v)
 	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
 }
 
 // bearerToken reads `Authorization: Bearer <token>` (scheme case-insensitive).

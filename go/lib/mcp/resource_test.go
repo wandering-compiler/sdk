@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/principal"
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
 func protectedServer(t *testing.T, resolve PermResolver) (*Server, http.Handler) {
@@ -86,8 +87,7 @@ func TestResourceServer_NoTokenIsAChallenge(t *testing.T) {
 }
 
 // A token the auth method refuses is invalid_token; one that holds nothing
-// here, or that it accepted but will not let act where the request asks
-// (PERMISSION_DENIED — ORG_NOT_MEMBER), is insufficient_scope, never a 401; a working one passes; a failing auth service
+// here is insufficient_scope; a working one passes; a failing auth service
 // is a 503, never a challenge that sends the user to sign in again.
 func TestResourceServer_TokenOutcomes(t *testing.T) {
 	cases := []struct {
@@ -99,7 +99,6 @@ func TestResourceServer_TokenOutcomes(t *testing.T) {
 	}{
 		{"refused", nil, status.Error(codes.Unauthenticated, "no"), http.StatusUnauthorized, `error="invalid_token"`},
 		{"no permission", nil, nil, http.StatusForbidden, `error="insufficient_scope"`},
-		{"accepted, not in the organization", nil, status.Error(codes.PermissionDenied, "not a member"), http.StatusForbidden, `error="insufficient_scope"`},
 		{"ok", []int32{7}, nil, http.StatusTeapot, ""},
 		{"auth down", nil, status.Error(codes.Unavailable, "down"), http.StatusServiceUnavailable, ""},
 		{"plain error", nil, errors.New("boom"), http.StatusServiceUnavailable, ""},
@@ -209,5 +208,29 @@ func TestResourceServerFromEnv(t *testing.T) {
 	}
 	if _, err := ResourceServerFromEnv("FIN", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "FIN_MCP_PUBLIC_URL") {
 		t.Errorf("missing settings: %v", err)
+	}
+}
+
+// A token the auth method ACCEPTED but will not let act where the request
+// asks (PERMISSION_DENIED — the auth plugin's ORG_NOT_MEMBER) is a 403 with the
+// refusal's envelope and NO challenge: the token is fine, so neither
+// invalid_token (sign in again) nor insufficient_scope (step up for scopes it
+// already holds — a re-consent loop) is true of it.
+func TestResourceServer_AcceptedButDeniedIsNoChallenge(t *testing.T) {
+	st, err := status.New(codes.PermissionDenied, "not a member").
+		WithDetails(&w17pb.ErrorDetail{Code: "ORG_NOT_MEMBER", Message: "You are not a member of the organization this request names."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, h := protectedServer(t, func(context.Context, ConnectionInfo) ([]int32, error) { return nil, st.Err() })
+	w := call(h, http.MethodPost, "/mcp", "Bearer tok")
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", w.Code)
+	}
+	if c := w.Header().Get("WWW-Authenticate"); c != "" {
+		t.Errorf("a challenge was sent for a token that is fine: %q", c)
+	}
+	if !strings.Contains(w.Body.String(), "ORG_NOT_MEMBER") || !strings.Contains(w.Body.String(), "PERMISSION_DENIED") {
+		t.Errorf("body = %s, want the refusal's envelope", w.Body.String())
 	}
 }
