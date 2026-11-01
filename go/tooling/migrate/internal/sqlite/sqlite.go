@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -241,6 +243,115 @@ func observeForeignKeys(ctx context.Context, conn *sql.Conn) (*fkState, error) {
 	return st, rows.Err()
 }
 
+// renameStmt is one `ALTER TABLE <t> RENAME [COLUMN] <a> TO <b>` or
+// `ALTER TABLE <t> RENAME TO <b>`, identifiers bare, double-quoted, backquoted or bracketed.
+var renameStmt = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(` + sqliteIdent + `)\s+RENAME\s+(?:(?:COLUMN\s+)?(` + sqliteIdent + `)\s+)?TO\s+(` + sqliteIdent + `)`)
+
+const sqliteIdent = "\"(?:[^\"]|\"\")+\"|`(?:[^`]|``)+`|\\[[^\\]]+\\]|[A-Za-z_][A-Za-z0-9_$]*"
+
+func unquoteIdent(s string) string {
+	switch {
+	case strings.HasPrefix(s, `"`):
+		s = strings.ReplaceAll(s[1:len(s)-1], `""`, `"`)
+	case strings.HasPrefix(s, "`"):
+		s = strings.ReplaceAll(s[1:len(s)-1], "``", "`")
+	case strings.HasPrefix(s, "["):
+		s = s[1 : len(s)-1]
+	}
+	return strings.ToLower(s)
+}
+
+// renamed is st with every table and column renamed the way body's
+// `ALTER TABLE … RENAME …` statements rename them, applied in order (a
+// rebuild's `x_new RENAME TO x` names no table st knows and changes
+// nothing).
+func (st *fkState) renamed(body string) *fkState {
+	keys := make([]fkKey, 0, len(st.keys))
+	for k := range st.keys {
+		keys = append(keys, k)
+	}
+	cur := make([]fkKey, len(keys))
+	copy(cur, keys)
+	renameCols := func(list, from, to string) string {
+		cols := strings.Split(list, ",")
+		for i, c := range cols {
+			if c == from {
+				cols[i] = to
+			}
+		}
+		return strings.Join(cols, ",")
+	}
+	for _, m := range renameStmt.FindAllStringSubmatch(body, -1) {
+		table, col, to := unquoteIdent(m[1]), "", unquoteIdent(m[3])
+		if m[2] != "" {
+			col = unquoteIdent(m[2])
+		}
+		for i := range cur {
+			k := &cur[i]
+			switch {
+			case col == "" && k.table == table && k.parent == table:
+				k.table, k.parent = to, to
+			case col == "" && k.table == table:
+				k.table = to
+			case col == "" && k.parent == table:
+				k.parent = to
+			default:
+				if k.table == table {
+					k.from = renameCols(k.from, col, to)
+				}
+				if k.parent == table {
+					k.to = renameCols(k.to, col, to)
+				}
+			}
+		}
+	}
+	out := &fkState{keys: map[fkKey]bool{}, violations: map[fkKey]int{}}
+	for i, k := range keys {
+		out.keys[cur[i]] = true
+		out.violations[cur[i]] += st.violations[k]
+	}
+	return out
+}
+
+// matchAfter pairs each of after's keys with the key of st (renamed) it is:
+// the same key exactly, or — when a rebuild changed its columns' names by
+// the copy, which no RENAME states — the one key of st between the same
+// child and parent that after no longer holds. A key with no pair is one the
+// migration added.
+func (st *fkState) matchAfter(after *fkState) map[fkKey]fkKey {
+	out := map[fkKey]fkKey{}
+	gone := map[[2]string][]fkKey{}
+	for k := range st.keys {
+		if !after.keys[k] {
+			g := [2]string{k.table, k.parent}
+			gone[g] = append(gone[g], k)
+		}
+	}
+	for _, c := range gone {
+		sort.Slice(c, func(i, j int) bool { return c[i].String() < c[j].String() })
+	}
+	var added []fkKey
+	for k := range after.keys {
+		if st.keys[k] {
+			out[k] = k
+		} else {
+			added = append(added, k)
+		}
+	}
+	sort.Slice(added, func(i, j int) bool { return added[i].String() < added[j].String() })
+	for _, k := range added {
+		if _, ok := out[k]; ok {
+			continue
+		}
+		g := [2]string{k.table, k.parent}
+		if cands := gone[g]; len(cands) > 0 {
+			out[k] = cands[0]
+			gone[g] = cands[1:]
+		}
+	}
+	return out
+}
+
 // tableForeignKeys maps each of table's foreign key ids to its fkKey.
 func tableForeignKeys(ctx context.Context, conn *sql.Conn, table string) (map[int64]fkKey, error) {
 	rows, err := conn.QueryContext(ctx, `SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq`, table)
@@ -321,15 +432,22 @@ func assertNoForeignKeyViolations(ctx context.Context, conn *sql.Conn, body, mig
 	if err != nil {
 		return fmt.Errorf("sqlite apply (migration %s): %w", migID, err)
 	}
+	// Before's keys under the names this body gives their tables and
+	// columns: a rebuild may rename the child or the parent in the same
+	// migration, and a key it carried across must still be recognised as the
+	// key it was — its new orphans are the rebuild's, not the data's.
+	prev := before.renamed(body)
+	existed := prev.matchAfter(after)
 	var introduced []string
 	for k, n := range after.violations {
-		if !before.keys[k] {
+		old, ok := existed[k]
+		if !ok {
 			slog.Warn("sqlite: a foreign key this migration added over existing rows has orphans: the rows were left as they are (no parent row matches them) and new writes are checked; repair them without deleting — re-create the missing parent or end the child",
 				slog.String("migration_id", migID), slog.String("foreign_key", k.String()), slog.Int("orphan_rows", n))
 			continue
 		}
-		if n > before.violations[k] {
-			introduced = append(introduced, fmt.Sprintf("%s: %d row(s), %d before", k, n, before.violations[k]))
+		if had := prev.violations[old]; n > had {
+			introduced = append(introduced, fmt.Sprintf("%s: %d row(s), %d before", k, n, had))
 		}
 	}
 	if len(introduced) > 0 {

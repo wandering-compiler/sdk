@@ -170,3 +170,61 @@ func TestApply_RebuildFKClean_Succeeds(t *testing.T) {
 		t.Fatalf("B4 guard: clean rebuild must succeed, got: %v", err)
 	}
 }
+
+// A rebuild that renames a table in the same migration still knows the keys
+// it carries: here the parent is renamed and then re-created without its
+// rows, orphaning a child row the key held. The key now names the new parent,
+// and must be recognised as the old key — the orphan is the rebuild's, not
+// the data's, and fails the migration rather than being reported as a key
+// added over existing rows.
+func TestApply_RenameAndRebuildOrphaningAKey_Caught(t *testing.T) {
+	a, ctx := fkApplier(t)
+	if err := a.Apply(ctx, &applyfetchpb.Migration{
+		Id: "m1",
+		UpSql: "BEGIN;\n" +
+			"CREATE TABLE parent (id INTEGER PRIMARY KEY);\n" +
+			"CREATE TABLE child (id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));\n" +
+			"INSERT INTO parent (id) VALUES (1);\n" +
+			"INSERT INTO child (id, pid) VALUES (1, 1);\n" +
+			"COMMIT;",
+	}); err != nil {
+		t.Fatalf("Apply seed: %v", err)
+	}
+	up := "PRAGMA foreign_keys=OFF;\n\nBEGIN;\n\n" +
+		"ALTER TABLE \"child\" RENAME TO \"kid\";\n" +
+		"ALTER TABLE \"parent\" RENAME TO \"folk\";\n" +
+		"CREATE TABLE \"folk__w17_new\" (id INTEGER PRIMARY KEY);\n" +
+		"DROP TABLE \"folk\";\n" +
+		"ALTER TABLE \"folk__w17_new\" RENAME TO \"folk\";\n\n" +
+		"PRAGMA foreign_key_check;\n\nCOMMIT;\n\nPRAGMA foreign_keys=ON;\n"
+	err := a.Apply(ctx, &applyfetchpb.Migration{Id: "m2", UpSql: up})
+	if err == nil || !strings.Contains(err.Error(), "introduced foreign-key violation") || !strings.Contains(err.Error(), "kid(pid) -> folk(id)") {
+		t.Fatalf("a rename+rebuild that orphans rows of a carried key must fail naming it, got: %v", err)
+	}
+}
+
+// The other way round: a rename+rebuild that ADDS a key over orphans the
+// renamed table already held reports them and applies.
+func TestApply_RenameAndRebuildAddingAKeyOverOrphans_Reports(t *testing.T) {
+	a, ctx := fkApplier(t)
+	if err := a.Apply(ctx, &applyfetchpb.Migration{
+		Id: "m1",
+		UpSql: "BEGIN;\n" +
+			"CREATE TABLE parent (id INTEGER PRIMARY KEY);\n" +
+			"CREATE TABLE child (id INTEGER PRIMARY KEY, pid INTEGER);\n" +
+			"INSERT INTO child (id, pid) VALUES (1, 999);\n" +
+			"COMMIT;",
+	}); err != nil {
+		t.Fatalf("Apply seed: %v", err)
+	}
+	up := "PRAGMA foreign_keys=OFF;\n\nBEGIN;\n\n" +
+		"ALTER TABLE \"child\" RENAME TO \"kid\";\n" +
+		"CREATE TABLE \"kid__w17_new\" (id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id));\n" +
+		"INSERT INTO \"kid__w17_new\" SELECT * FROM \"kid\";\n" +
+		"DROP TABLE \"kid\";\n" +
+		"ALTER TABLE \"kid__w17_new\" RENAME TO \"kid\";\n\n" +
+		"PRAGMA foreign_key_check;\n\nCOMMIT;\n\nPRAGMA foreign_keys=ON;\n"
+	if err := a.Apply(ctx, &applyfetchpb.Migration{Id: "m2", UpSql: up}); err != nil {
+		t.Fatalf("a rename+rebuild adding a key over existing orphans must apply, got: %v", err)
+	}
+}

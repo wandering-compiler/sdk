@@ -56,6 +56,12 @@ message FetchMigrationsRequest {
   // (the lock connection's target_migration_id). The client reads these from
   // its local lock; connections with no pinned target are simply omitted.
   repeated Target targets = 2;
+  // The client knows Check.severity: it verifies a WARN check's digest and
+  // runs it as a report. Unset on every client before severity existed — the
+  // console refuses to serve such a client a migration that carries a WARN
+  // check, with an "update the SDK" message, instead of letting it fail the
+  // digest as if the artifact were tampered with.
+  bool understands_check_severity = 3;
 }
 
 message Target {

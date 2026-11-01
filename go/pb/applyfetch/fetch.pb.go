@@ -112,9 +112,15 @@ type FetchMigrationsRequest struct {
 	// Targets enumerate the connections to fetch + each one's pinned ceiling
 	// (the lock connection's target_migration_id). The client reads these from
 	// its local lock; connections with no pinned target are simply omitted.
-	Targets       []*Target `protobuf:"bytes,2,rep,name=targets,proto3" json:"targets,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Targets []*Target `protobuf:"bytes,2,rep,name=targets,proto3" json:"targets,omitempty"`
+	// The client knows Check.severity: it verifies a WARN check's digest and
+	// runs it as a report. Unset on every client before severity existed — the
+	// console refuses to serve such a client a migration that carries a WARN
+	// check, with an "update the SDK" message, instead of letting it fail the
+	// digest as if the artifact were tampered with.
+	UnderstandsCheckSeverity bool `protobuf:"varint,3,opt,name=understands_check_severity,json=understandsCheckSeverity,proto3" json:"understands_check_severity,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *FetchMigrationsRequest) Reset() {
@@ -159,6 +165,13 @@ func (x *FetchMigrationsRequest) GetTargets() []*Target {
 		return x.Targets
 	}
 	return nil
+}
+
+func (x *FetchMigrationsRequest) GetUnderstandsCheckSeverity() bool {
+	if x != nil {
+		return x.UnderstandsCheckSeverity
+	}
+	return false
 }
 
 type Target struct {
@@ -998,11 +1011,12 @@ var File_w17apply_fetch_proto protoreflect.FileDescriptor
 
 const file_w17apply_fetch_proto_rawDesc = "" +
 	"\n" +
-	"\x14w17apply/fetch.proto\x12\tw17.apply\x1a\x1cgoogle/protobuf/struct.proto\"d\n" +
+	"\x14w17apply/fetch.proto\x12\tw17.apply\x1a\x1cgoogle/protobuf/struct.proto\"\xa2\x01\n" +
 	"\x16FetchMigrationsRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12+\n" +
-	"\atargets\x18\x02 \x03(\v2\x11.w17.apply.TargetR\atargets\"U\n" +
+	"\atargets\x18\x02 \x03(\v2\x11.w17.apply.TargetR\atargets\x12<\n" +
+	"\x1aunderstands_check_severity\x18\x03 \x01(\bR\x18understandsCheckSeverity\"U\n" +
 	"\x06Target\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
