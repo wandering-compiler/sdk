@@ -127,8 +127,11 @@ message RpcApi {
   // that checks a presented credential and the token types it handles.
   // The gRPC gateway reads the credential from the `authorization`
   // metadata key and dispatches on its scheme exactly as REST does on
-  // the header; a call whose credential no method accepts is refused
-  // UNAUTHENTICATED before any backend is reached.
+  // the header: the entries whose token_types cover the scheme are
+  // tried in declaration order (first success wins), ANY-typed entries
+  // catch a scheme nothing specific handles, and a call no entry
+  // accepts is refused UNAUTHENTICATED before any backend is reached.
+  // (URL_TOKEN entries never apply here: gRPC has no URL credential.)
   //
   // Auth is a property of the GATEWAY, not of one transport: a domain
   // (one audience of it) has one gateway, and REST, gRPC and the
@@ -189,6 +192,15 @@ message RpcApi {
   // with `(w17.db.scope)`: those are refused on a public surface, since
   // nothing would supply who is calling.
   bool unauthenticated = 9;
+
+  // Methods of THIS surface callable without a credential, by ref
+  // (`<module>.<Service>.<Method>`, as `groups[].refs` name them): the
+  // gRPC twin of `RestEndpoint.exclude_auth` — a sign-in, a token mint.
+  // Each must be picked on this surface. A REST endpoint's exclude_auth
+  // says nothing here: a method public on REST is still authenticated
+  // over gRPC unless it is listed. The gateway's own auth methods are
+  // exempt on every surface without being listed.
+  repeated string exclude_auth = 10;
 }
 
 // RpcGroup buckets backend methods under one public gRPC service

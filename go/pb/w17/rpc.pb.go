@@ -51,8 +51,11 @@ type RpcApi struct {
 	// that checks a presented credential and the token types it handles.
 	// The gRPC gateway reads the credential from the `authorization`
 	// metadata key and dispatches on its scheme exactly as REST does on
-	// the header; a call whose credential no method accepts is refused
-	// UNAUTHENTICATED before any backend is reached.
+	// the header: the entries whose token_types cover the scheme are
+	// tried in declaration order (first success wins), ANY-typed entries
+	// catch a scheme nothing specific handles, and a call no entry
+	// accepts is refused UNAUTHENTICATED before any backend is reached.
+	// (URL_TOKEN entries never apply here: gRPC has no URL credential.)
 	//
 	// Auth is a property of the GATEWAY, not of one transport: a domain
 	// (one audience of it) has one gateway, and REST, gRPC and the
@@ -109,8 +112,16 @@ type RpcApi struct {
 	// with `(w17.db.scope)`: those are refused on a public surface, since
 	// nothing would supply who is calling.
 	Unauthenticated bool `protobuf:"varint,9,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Methods of THIS surface callable without a credential, by ref
+	// (`<module>.<Service>.<Method>`, as `groups[].refs` name them): the
+	// gRPC twin of `RestEndpoint.exclude_auth` — a sign-in, a token mint.
+	// Each must be picked on this surface. A REST endpoint's exclude_auth
+	// says nothing here: a method public on REST is still authenticated
+	// over gRPC unless it is listed. The gateway's own auth methods are
+	// exempt on every surface without being listed.
+	ExcludeAuth   []string `protobuf:"bytes,10,rep,name=exclude_auth,json=excludeAuth,proto3" json:"exclude_auth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RpcApi) Reset() {
@@ -204,6 +215,13 @@ func (x *RpcApi) GetUnauthenticated() bool {
 		return x.Unauthenticated
 	}
 	return false
+}
+
+func (x *RpcApi) GetExcludeAuth() []string {
+	if x != nil {
+		return x.ExcludeAuth
+	}
+	return nil
 }
 
 // RpcGroup buckets backend methods under one public gRPC service
@@ -410,7 +428,7 @@ var File_w17_rpc_proto protoreflect.FileDescriptor
 
 const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xe3\x02\n" +
+	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\x86\x03\n" +
 	"\x06RpcApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -422,7 +440,9 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groups\x129\n" +
 	"\x0erequest_events\x18\a \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12)\n" +
 	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\x12(\n" +
-	"\x0funauthenticated\x18\t \x01(\bR\x0funauthenticated\"s\n" +
+	"\x0funauthenticated\x18\t \x01(\bR\x0funauthenticated\x12!\n" +
+	"\fexclude_auth\x18\n" +
+	" \x03(\tR\vexcludeAuth\"s\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +

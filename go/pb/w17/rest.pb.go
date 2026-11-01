@@ -681,10 +681,13 @@ type RestApi struct {
 	// gateway, env names and permission ids it has always had.
 	Audience *Audience `protobuf:"bytes,11,opt,name=audience,proto3" json:"audience,omitempty"`
 	// The explicit opt-out: this surface is deliberately public and its
-	// gateway authenticates no one. Codegen refuses a surface that serves
-	// endpoints with no auth method unless this is set — "no auth" is
-	// never the silent default. (One endpoint can be public on an
-	// authenticated surface without it: `RestEndpoint.exclude_auth`.)
+	// gateway authenticates no one. Codegen refuses a REST registry with
+	// no auth method unless this is set — whatever it serves: endpoints,
+	// downloads, the `/w17-events` hub, even when every endpoint says
+	// exclude_auth. "No auth" is never the silent default. (One endpoint
+	// can be public on an authenticated surface without it:
+	// `RestEndpoint.exclude_auth`, which is REST's alone — the method stays
+	// authenticated on the gRPC and MCP surfaces.)
 	//
 	// Refused together with auth methods (declared on any of the domain's
 	// surfaces, or supplied by an activated auth plugin) — the gateway
@@ -1481,6 +1484,10 @@ type RestEndpoint struct {
 	// Skip the auth middleware for this endpoint even when
 	// `RestApi.auth_methods[]` is populated. Use for sign-in /
 	// health / metrics endpoints. Default false.
+	//
+	// REST only: the same method picked on the gRPC surface stays
+	// authenticated there unless `RpcApi.exclude_auth` lists it, and an
+	// MCP tool has no exemption.
 	ExcludeAuth bool `protobuf:"varint,4,opt,name=exclude_auth,json=excludeAuth,proto3" json:"exclude_auth,omitempty"`
 	// Response-message field names (proto names — snake_case as
 	// declared in the .proto) the gateway clears before

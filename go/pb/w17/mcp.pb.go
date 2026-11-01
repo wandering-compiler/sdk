@@ -123,9 +123,9 @@ type McpApi struct {
 	// `(w17.db.scope)`). Same field as `RestApi.unauthenticated` and
 	// `RpcApi.unauthenticated`.
 	//
-	// It governs the tools the GATEWAY serves. A standalone
-	// `<domain>-mcp-server` bundle (`tools[]` served on its own) has no
-	// auth step at all and is for trusted callers only — see above.
+	// There is no per-tool exemption: a REST endpoint's exclude_auth does
+	// not make its method a public MCP tool. Every tool the gateway serves
+	// runs behind the auth step, the gateway's own auth methods aside.
 	Unauthenticated bool `protobuf:"varint,10,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
