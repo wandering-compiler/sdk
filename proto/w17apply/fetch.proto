@@ -188,6 +188,22 @@ message Check {
   string rationale = 3;
   // down marks a pre-rollback check (run against the post-up database).
   bool down = 4;
+
+  // Severity — what `migrate apply --checks` does when the probe finds rows.
+  enum Severity {
+    // REFUSE (the default, and every check minted before severity existed):
+    // the migration is not applied; the rows would fail it or be lost.
+    SEVERITY_REFUSE = 0;
+    // WARN: the count is printed with the rationale and the migration is
+    // applied anyway — the migration tolerates the rows (a foreign key added
+    // over a table that holds orphans is added without validating them), and
+    // the probe tells the operator what to repair afterwards.
+    SEVERITY_WARN = 1;
+  }
+  // Bound into content_sha256 with the rest of the check (only when WARN, so
+  // a check without it keeps its digest): stripping it would turn a report
+  // into a refusal, setting it would turn a guard into a report.
+  Severity severity = 5;
 }
 
 // FixtureFetch is the console-served, irpb-free face of fixture seeding: it

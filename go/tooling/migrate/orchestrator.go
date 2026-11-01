@@ -612,6 +612,11 @@ func Run(ctx context.Context, cfg Config) (err error) {
 // runMigrationChecks runs the checks of one migration for one direction and
 // refuses it when one finds rows: the forward checks before an apply (see
 // Config.Checks), the down checks before a rollback (RollbackConfig.Checks).
+// A check of severity WARN refuses nothing: the migration tolerates the rows
+// it counts (a foreign key added over a table that holds orphans), so the
+// count is printed with its rationale and the run goes on. Only its ANSWER is
+// optional — a warning probe that cannot run still refuses, as an unanswered
+// probe is not a pass.
 // A migration resumed after its in-tx half committed is past the point a
 // forward check could stop, so an apply runs none for it. A dialect that
 // cannot run checks refuses the migration that carries some: the operator
@@ -669,6 +674,12 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 				"  why: --checks refuses a migration whose probe cannot answer — an unanswered probe is not a pass\n"+
 				"  fix: run the probe by hand (%s), or drop --checks for this run",
 				verb, p.Connection, p.Migration.GetId(), when, c.GetName(), err, c.GetSql())
+		}
+		if n > 0 && c.GetSeverity() == applyfetchpb.Check_SEVERITY_WARN {
+			fmt.Fprintf(out, "%s:   check %s WARNING: %d row(s) found; the %s goes ahead. %s\n"+
+				"%s:     probe: %s\n",
+				verb, c.GetName(), n, migrationWord(down), c.GetRationale(), verb, c.GetSql())
+			continue
 		}
 		if n > 0 {
 			why := c.GetRationale()

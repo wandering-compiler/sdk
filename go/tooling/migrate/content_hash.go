@@ -151,7 +151,7 @@ func ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev string, sup
 // the console serves them sorted, but a reordering is not an edit anything
 // acts on. Each contributes its name, direction, SQL and rationale — the
 // rationale is printed in the refusal, and a replaced one could misdirect the
-// operator.
+// operator — and, when it only warns, its severity.
 func ContentHashWithChecks(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL, manifestJSON string, checks []*applyfetchpb.Check) string {
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
 	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts, checks)
@@ -298,6 +298,14 @@ func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 			writeSeg(&b, "check.dir", dir)
 			writeSeg(&b, "check.sql", c.GetSql())
 			writeSeg(&b, "check.why", c.GetRationale())
+			// Only a check that warns writes its severity, so every check
+			// that refuses — all of them, before severity existed — keeps the
+			// digest it was minted with. It is bound because it decides what
+			// --checks does with the rows: stripped, a report would refuse the
+			// deploy; added, a guard would let the rows through.
+			if c.GetSeverity() == applyfetchpb.Check_SEVERITY_WARN {
+				writeSeg(&b, "check.severity", "warn")
+			}
 		}
 	}
 	sum := sha256.Sum256([]byte(b.String()))
