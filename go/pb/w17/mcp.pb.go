@@ -97,16 +97,38 @@ type McpApi struct {
 	// resource (the MCP authorization specification): it serves RFC 9728
 	// metadata naming the authorization server, answers a request without a
 	// valid token with a 401 challenge, and tells the auth method its
-	// resource so a token issued for another is refused. Absent = today's
-	// behaviour (public, or a bearer the auth method checks).
+	// resource so a token issued for another is refused. Absent = a bearer
+	// the auth method checks (or, with `unauthenticated`, no auth at all).
 	Oauth *McpOAuth `protobuf:"bytes,7,opt,name=oauth,proto3" json:"oauth,omitempty"`
 	// The audience this surface is for, when its domain publishes more than
 	// one (`mcp_<audience>.proto`): see `w17/audience.proto`. Unset on a
 	// domain with a single audience, which keeps `mcp.proto` and the
 	// gateway, env names and permission ids it has always had.
-	Audience      *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Audience *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
+	// Authentication for the gateway-embedded MCP — the same `AuthMethod`
+	// list, with the same meaning, as `RestApi.auth_methods` and
+	// `RpcApi.auth_methods`. They are one declaration: the domain's
+	// gateway runs one auth step for every transport it serves, so write
+	// it on any of its surfaces (an MCP-only domain writes it here), or
+	// identically on several; different lists are refused at codegen. An
+	// activated auth plugin supplies it, so most projects write nothing.
+	// `oauth` above needs it: the auth method is what checks the token.
+	AuthMethods []*AuthMethod `protobuf:"bytes,9,rep,name=auth_methods,json=authMethods,proto3" json:"auth_methods,omitempty"`
+	// The explicit opt-out: the MCP surface is deliberately public and
+	// authenticates no one. Codegen refuses a surface that serves tools
+	// with no auth method unless this is set — a public MCP server is a
+	// legitimate choice, but it is stated, never the silent default.
+	// Refused together with auth methods, with `oauth`, and on a tool that
+	// needs a principal (ACL-gated, or reading a model with
+	// `(w17.db.scope)`). Same field as `RestApi.unauthenticated` and
+	// `RpcApi.unauthenticated`.
+	//
+	// There is no per-tool exemption: a REST endpoint's exclude_auth does
+	// not make its method a public MCP tool. Every tool the gateway serves
+	// runs behind the auth step, the gateway's own auth methods aside.
+	Unauthenticated bool `protobuf:"varint,10,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *McpApi) Reset() {
@@ -193,6 +215,20 @@ func (x *McpApi) GetAudience() *Audience {
 		return x.Audience
 	}
 	return nil
+}
+
+func (x *McpApi) GetAuthMethods() []*AuthMethod {
+	if x != nil {
+		return x.AuthMethods
+	}
+	return nil
+}
+
+func (x *McpApi) GetUnauthenticated() bool {
+	if x != nil {
+		return x.Unauthenticated
+	}
+	return false
 }
 
 // McpOAuth names where the surface's tokens come from. The public URLs are
@@ -456,7 +492,7 @@ var File_w17_mcp_proto protoreflect.FileDescriptor
 
 const file_w17_mcp_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\xa1\x02\n" +
+	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xff\x02\n" +
 	"\x06McpApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -465,7 +501,10 @@ const file_w17_mcp_proto_rawDesc = "" +
 	"\ainclude\x18\x05 \x03(\tR\ainclude\x129\n" +
 	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12#\n" +
 	"\x05oauth\x18\a \x01(\v2\r.w17.McpOAuthR\x05oauth\x12)\n" +
-	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\"+\n" +
+	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\x122\n" +
+	"\fauth_methods\x18\t \x03(\v2\x0f.w17.AuthMethodR\vauthMethods\x12(\n" +
+	"\x0funauthenticated\x18\n" +
+	" \x01(\bR\x0funauthenticated\"+\n" +
 	"\bMcpOAuth\x12\x1f\n" +
 	"\vauth_domain\x18\x01 \x01(\tR\n" +
 	"authDomain\"\x89\x01\n" +
@@ -499,25 +538,27 @@ var file_w17_mcp_proto_goTypes = []any{
 	(*McpTool)(nil),                    // 2: w17.McpTool
 	(*RequestEvents)(nil),              // 3: w17.RequestEvents
 	(*Audience)(nil),                   // 4: w17.Audience
-	(*descriptorpb.MethodOptions)(nil), // 5: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 6: google.protobuf.FileOptions
+	(*AuthMethod)(nil),                 // 5: w17.AuthMethod
+	(*descriptorpb.MethodOptions)(nil), // 6: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 7: google.protobuf.FileOptions
 }
 var file_w17_mcp_proto_depIdxs = []int32{
 	2,  // 0: w17.McpApi.tools:type_name -> w17.McpTool
 	3,  // 1: w17.McpApi.request_events:type_name -> w17.RequestEvents
 	1,  // 2: w17.McpApi.oauth:type_name -> w17.McpOAuth
 	4,  // 3: w17.McpApi.audience:type_name -> w17.Audience
-	5,  // 4: w17.mcp:extendee -> google.protobuf.MethodOptions
-	5,  // 5: w17.mcp_description:extendee -> google.protobuf.MethodOptions
-	5,  // 6: w17.mcp_name:extendee -> google.protobuf.MethodOptions
-	5,  // 7: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
-	6,  // 8: w17.mcp_api:extendee -> google.protobuf.FileOptions
-	0,  // 9: w17.mcp_api:type_name -> w17.McpApi
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	9,  // [9:10] is the sub-list for extension type_name
-	4,  // [4:9] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	5,  // 4: w17.McpApi.auth_methods:type_name -> w17.AuthMethod
+	6,  // 5: w17.mcp:extendee -> google.protobuf.MethodOptions
+	6,  // 6: w17.mcp_description:extendee -> google.protobuf.MethodOptions
+	6,  // 7: w17.mcp_name:extendee -> google.protobuf.MethodOptions
+	6,  // 8: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
+	7,  // 9: w17.mcp_api:extendee -> google.protobuf.FileOptions
+	0,  // 10: w17.mcp_api:type_name -> w17.McpApi
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	10, // [10:11] is the sub-list for extension type_name
+	5,  // [5:10] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_w17_mcp_proto_init() }
@@ -527,6 +568,7 @@ func file_w17_mcp_proto_init() {
 	}
 	file_w17_audience_proto_init()
 	file_w17_request_events_proto_init()
+	file_w17_rest_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

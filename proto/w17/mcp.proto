@@ -5,6 +5,7 @@ package w17;
 import "google/protobuf/descriptor.proto";
 import "w17/audience.proto";
 import "w17/request_events.proto";
+import "w17/rest.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
@@ -163,8 +164,8 @@ message McpApi {
   // resource (the MCP authorization specification): it serves RFC 9728
   // metadata naming the authorization server, answers a request without a
   // valid token with a 401 challenge, and tells the auth method its
-  // resource so a token issued for another is refused. Absent = today's
-  // behaviour (public, or a bearer the auth method checks).
+  // resource so a token issued for another is refused. Absent = a bearer
+  // the auth method checks (or, with `unauthenticated`, no auth at all).
   McpOAuth oauth = 7;
 
   // The audience this surface is for, when its domain publishes more than
@@ -172,6 +173,30 @@ message McpApi {
   // domain with a single audience, which keeps `mcp.proto` and the
   // gateway, env names and permission ids it has always had.
   Audience audience = 8;
+
+  // Authentication for the gateway-embedded MCP — the same `AuthMethod`
+  // list, with the same meaning, as `RestApi.auth_methods` and
+  // `RpcApi.auth_methods`. They are one declaration: the domain's
+  // gateway runs one auth step for every transport it serves, so write
+  // it on any of its surfaces (an MCP-only domain writes it here), or
+  // identically on several; different lists are refused at codegen. An
+  // activated auth plugin supplies it, so most projects write nothing.
+  // `oauth` above needs it: the auth method is what checks the token.
+  repeated AuthMethod auth_methods = 9;
+
+  // The explicit opt-out: the MCP surface is deliberately public and
+  // authenticates no one. Codegen refuses a surface that serves tools
+  // with no auth method unless this is set — a public MCP server is a
+  // legitimate choice, but it is stated, never the silent default.
+  // Refused together with auth methods, with `oauth`, and on a tool that
+  // needs a principal (ACL-gated, or reading a model with
+  // `(w17.db.scope)`). Same field as `RestApi.unauthenticated` and
+  // `RpcApi.unauthenticated`.
+  //
+  // There is no per-tool exemption: a REST endpoint's exclude_auth does
+  // not make its method a public MCP tool. Every tool the gateway serves
+  // runs behind the auth step, the gateway's own auth methods aside.
+  bool unauthenticated = 10;
 }
 
 // McpOAuth names where the surface's tokens come from. The public URLs are

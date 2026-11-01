@@ -566,9 +566,20 @@ type RestApi struct {
 	// Authentication methods for this surface. Each
 	// entry references one RPC (by `<module>.<Service>.<Method>`
 	// ref) and declares which credential token types it handles.
-	// Empty list = surface has no auth middleware; endpoints on
-	// such a surface still emit handler code but skip the auth
-	// call entirely.
+	//
+	// The list belongs to the domain's GATEWAY, not to REST alone: the
+	// gRPC (`RpcApi.auth_methods`) and MCP (`McpApi.auth_methods`)
+	// surfaces of the same domain (and audience) carry the same field,
+	// and all three resolve to one auth step that every transport runs.
+	// Write it on any one of them, or identically on several; two
+	// DIFFERENT lists are refused at codegen. An activated auth plugin
+	// injects its preset auth methods, so most projects write nothing.
+	//
+	// Empty, with no auth plugin and no other surface declaring it, the
+	// gateway authenticates no one — codegen refuses that unless the
+	// surface says `unauthenticated: true` (field 12). It used to be the
+	// silent default: endpoints still emitted handler code and simply
+	// skipped the auth call.
 	//
 	// Dispatch is by token type (Bearer / Basic / catch-all). The
 	// gateway peeks the request's Authorization scheme, picks the
@@ -668,9 +679,25 @@ type RestApi struct {
 	// one (`rest_<audience>.proto`): see `w17/audience.proto`. Unset on a
 	// domain with a single audience, which keeps `rest.proto` and the
 	// gateway, env names and permission ids it has always had.
-	Audience      *Audience `protobuf:"bytes,11,opt,name=audience,proto3" json:"audience,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Audience *Audience `protobuf:"bytes,11,opt,name=audience,proto3" json:"audience,omitempty"`
+	// The explicit opt-out: this surface is deliberately public and its
+	// gateway authenticates no one. Codegen refuses a REST registry with
+	// no auth method unless this is set — whatever it serves: endpoints,
+	// downloads, the `/w17-events` hub, even when every endpoint says
+	// exclude_auth. "No auth" is never the silent default. (One endpoint
+	// can be public on an authenticated surface without it:
+	// `RestEndpoint.exclude_auth`, which is REST's alone — the method stays
+	// authenticated on the gRPC and MCP surfaces.)
+	//
+	// Refused together with auth methods (declared on any of the domain's
+	// surfaces, or supplied by an activated auth plugin) — the gateway
+	// authenticates every surface it serves — and on a surface with a
+	// method that needs a principal (ACL-gated, or reading a model with
+	// `(w17.db.scope)`). Same field as `RpcApi.unauthenticated` and
+	// `McpApi.unauthenticated`.
+	Unauthenticated bool `protobuf:"varint,12,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RestApi) Reset() {
@@ -778,6 +805,13 @@ func (x *RestApi) GetAudience() *Audience {
 		return x.Audience
 	}
 	return nil
+}
+
+func (x *RestApi) GetUnauthenticated() bool {
+	if x != nil {
+		return x.Unauthenticated
+	}
+	return false
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
@@ -965,7 +999,8 @@ func (x *BrowserRedirect) GetAllowExternal() bool {
 	return false
 }
 
-// AuthMethod — one entry of `RestApi.auth_methods[]`.
+// AuthMethod — one entry of `RestApi.auth_methods[]` (and of
+// `RpcApi.auth_methods[]` / `McpApi.auth_methods[]`, the same list).
 // Pairs a method ref with the credential token types the method
 // claims to handle. Gateway dispatches per request by peeking
 // the Authorization scheme + matching against declared token
@@ -1449,6 +1484,10 @@ type RestEndpoint struct {
 	// Skip the auth middleware for this endpoint even when
 	// `RestApi.auth_methods[]` is populated. Use for sign-in /
 	// health / metrics endpoints. Default false.
+	//
+	// REST only: the same method picked on the gRPC surface stays
+	// authenticated there unless `RpcApi.exclude_auth` lists it, and an
+	// MCP tool has no exemption.
 	ExcludeAuth bool `protobuf:"varint,4,opt,name=exclude_auth,json=excludeAuth,proto3" json:"exclude_auth,omitempty"`
 	// Response-message field names (proto names — snake_case as
 	// declared in the .proto) the gateway clears before
@@ -2637,7 +2676,7 @@ var File_w17_rest_proto protoreflect.FileDescriptor
 
 const file_w17_rest_proto_rawDesc = "" +
 	"\n" +
-	"\x0ew17/rest.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\xd9\x03\n" +
+	"\x0ew17/rest.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\x83\x04\n" +
 	"\aRestApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
@@ -2650,7 +2689,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\ainclude\x18\t \x03(\v2\x12.w17.PluginIncludeR\ainclude\x129\n" +
 	"\x0erequest_events\x18\n" +
 	" \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12)\n" +
-	"\baudience\x18\v \x01(\v2\r.w17.AudienceR\baudience\"=\n" +
+	"\baudience\x18\v \x01(\v2\r.w17.AudienceR\baudience\x12(\n" +
+	"\x0funauthenticated\x18\f \x01(\bR\x0funauthenticated\"=\n" +
 	"\rPluginInclude\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x14\n" +
 	"\x05mount\x18\x02 \x01(\tR\x05mount\"\xb9\x01\n" +
