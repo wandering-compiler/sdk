@@ -111,8 +111,9 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 	defer func() { _ = conn.Close() }()
 
 	resp, err := applyfetchpb.NewMigrationFetchClient(conn).FetchMigrations(ctx, &applyfetchpb.FetchMigrationsRequest{
-		ProjectId: projectID,
-		Targets:   want,
+		ProjectId:                projectID,
+		Targets:                  want,
+		UnderstandsCheckSeverity: true,
 	})
 	if err != nil {
 		return nil, fetchRefusal("migrate", "fetch", addr, auth, err)

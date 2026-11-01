@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -133,6 +135,10 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON;"); err != nil {
 		return fmt.Errorf("sqlite apply: PRAGMA foreign_keys=ON: %w", err)
 	}
+	before, err := observeForeignKeysBefore(ctx, conn, m.GetUpSql())
+	if err != nil {
+		return fmt.Errorf("sqlite apply (migration %s): %w", m.GetId(), err)
+	}
 	if _, err := conn.ExecContext(ctx, m.GetUpSql()); err != nil {
 		return fmt.Errorf("sqlite apply up_sql: %w", err)
 	}
@@ -152,32 +158,303 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	// silently-inconsistent database. (Detection is post-commit: the rebuild is
 	// already committed, so the operator must repair the data — but it is
 	// detected + loud, not silent.)
-	if err := assertNoForeignKeyViolations(ctx, conn, m.GetUpSql(), m.GetId()); err != nil {
+	//
+	// Only violations the migration INTRODUCED fail it: more orphans of a key
+	// the database already had. A key the migration ADDS over a table that
+	// already held orphans is the case the migrator tolerates
+	// (fk-add-over-existing-rows) — Postgres adds it NOT VALID, MySQL with the
+	// checks off — so its orphans are reported, not refused; and orphans an
+	// earlier such key left behind must not fail every later rebuild.
+	if err := assertNoForeignKeyViolations(ctx, conn, m.GetUpSql(), m.GetId(), before); err != nil {
 		return err
 	}
 	return nil
 }
 
-// assertNoForeignKeyViolations runs `PRAGMA foreign_key_check` as a query and
-// returns an error if the database holds any FK violation. It only fires for a
-// rebuild migration — detected by the `PRAGMA foreign_key_check` marker the
-// emit body embeds for the 12-step recipe (a non-rebuild migration enforces FKs
-// inline under `foreign_keys=ON`, so there is nothing extra to verify and no
-// reason to pay for the scan). foreign_key_check reports one row per violation
-// (child table, rowid, parent table, fk id); a non-empty result is a failure.
-func assertNoForeignKeyViolations(ctx context.Context, conn *sql.Conn, upSQL, migID string) error {
-	if !strings.Contains(upSQL, "PRAGMA foreign_key_check") {
-		return nil
+// fkKey identifies a foreign key by what it constrains, not by its position:
+// the child table, its columns, the parent table and the parent's columns
+// (empty when the key names the parent's primary key implicitly). A rebuild
+// renumbers pragma_foreign_key_list's ids, and a table's rowids with it, so
+// neither can tell one key, or one orphan, from another across the apply.
+type fkKey struct{ table, from, parent, to string }
+
+func (k fkKey) String() string {
+	return fmt.Sprintf("%s(%s) -> %s(%s)", k.table, k.from, k.parent, k.to)
+}
+
+// fkState is a database's foreign keys and how many rows violate each.
+type fkState struct {
+	keys       map[fkKey]bool
+	violations map[fkKey]int
+}
+
+// observeForeignKeysBefore reads the database's foreign keys and their
+// violations ahead of a rebuild migration (one carrying the rebuild's
+// `PRAGMA foreign_key_check` marker); nil for any other, which enforces its
+// keys inline and is not checked after.
+func observeForeignKeysBefore(ctx context.Context, conn *sql.Conn, body string) (*fkState, error) {
+	if !strings.Contains(body, "PRAGMA foreign_key_check") {
+		return nil, nil
+	}
+	return observeForeignKeys(ctx, conn)
+}
+
+// observeForeignKeys reads every user table's foreign keys
+// (pragma_foreign_key_list) and counts the rows `PRAGMA foreign_key_check`
+// reports against each.
+func observeForeignKeys(ctx context.Context, conn *sql.Conn) (*fkState, error) {
+	st := &fkState{keys: map[fkKey]bool{}, violations: map[fkKey]int{}}
+	tables, err := queryStrings(ctx, conn, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	byID := map[string]map[int64]fkKey{} // lower(table) → key id → key
+	for _, t := range tables {
+		ids, err := tableForeignKeys(ctx, conn, t)
+		if err != nil {
+			return nil, err
+		}
+		byID[strings.ToLower(t)] = ids
+		for _, k := range ids {
+			st.keys[k] = true
+		}
 	}
 	rows, err := conn.QueryContext(ctx, "PRAGMA foreign_key_check;")
 	if err != nil {
-		return fmt.Errorf("sqlite apply: PRAGMA foreign_key_check (migration %s): %w", migID, err)
+		return nil, fmt.Errorf("PRAGMA foreign_key_check: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	if rows.Next() {
-		return fmt.Errorf("sqlite apply: migration %s introduced foreign-key violation(s) — the rebuild ran under foreign_keys=OFF and PRAGMA foreign_key_check found dangling reference(s); the schema change is committed but the data is now inconsistent (repair the offending rows, or restore and re-run against clean data)", migID)
+	for rows.Next() {
+		var table, parent string
+		var rowid sql.NullInt64
+		var id int64
+		if err := rows.Scan(&table, &rowid, &parent, &id); err != nil {
+			return nil, fmt.Errorf("PRAGMA foreign_key_check: %w", err)
+		}
+		k, ok := byID[strings.ToLower(table)][id]
+		if !ok {
+			// A key the listing did not show (cannot happen on one
+			// connection between two reads): counted under a key no earlier
+			// state holds, so it is never mistaken for an old one's.
+			k = fkKey{table: strings.ToLower(table), parent: strings.ToLower(parent), from: fmt.Sprintf("#%d", id)}
+		}
+		st.violations[k]++
 	}
-	return rows.Err()
+	return st, rows.Err()
+}
+
+// renameStmt is one `ALTER TABLE <t> RENAME [COLUMN] <a> TO <b>` or
+// `ALTER TABLE <t> RENAME TO <b>`, identifiers bare, double-quoted, backquoted or bracketed.
+var renameStmt = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(` + sqliteIdent + `)\s+RENAME\s+(?:(?:COLUMN\s+)?(` + sqliteIdent + `)\s+)?TO\s+(` + sqliteIdent + `)`)
+
+const sqliteIdent = "\"(?:[^\"]|\"\")+\"|`(?:[^`]|``)+`|\\[[^\\]]+\\]|[A-Za-z_][A-Za-z0-9_$]*"
+
+func unquoteIdent(s string) string {
+	switch {
+	case strings.HasPrefix(s, `"`):
+		s = strings.ReplaceAll(s[1:len(s)-1], `""`, `"`)
+	case strings.HasPrefix(s, "`"):
+		s = strings.ReplaceAll(s[1:len(s)-1], "``", "`")
+	case strings.HasPrefix(s, "["):
+		s = s[1 : len(s)-1]
+	}
+	return strings.ToLower(s)
+}
+
+// renamed is st with every table and column renamed the way body's
+// `ALTER TABLE … RENAME …` statements rename them, applied in order (a
+// rebuild's `x_new RENAME TO x` names no table st knows and changes
+// nothing).
+func (st *fkState) renamed(body string) *fkState {
+	keys := make([]fkKey, 0, len(st.keys))
+	for k := range st.keys {
+		keys = append(keys, k)
+	}
+	cur := make([]fkKey, len(keys))
+	copy(cur, keys)
+	renameCols := func(list, from, to string) string {
+		cols := strings.Split(list, ",")
+		for i, c := range cols {
+			if c == from {
+				cols[i] = to
+			}
+		}
+		return strings.Join(cols, ",")
+	}
+	for _, m := range renameStmt.FindAllStringSubmatch(body, -1) {
+		table, col, to := unquoteIdent(m[1]), "", unquoteIdent(m[3])
+		if m[2] != "" {
+			col = unquoteIdent(m[2])
+		}
+		for i := range cur {
+			k := &cur[i]
+			switch {
+			case col == "" && k.table == table && k.parent == table:
+				k.table, k.parent = to, to
+			case col == "" && k.table == table:
+				k.table = to
+			case col == "" && k.parent == table:
+				k.parent = to
+			default:
+				if k.table == table {
+					k.from = renameCols(k.from, col, to)
+				}
+				if k.parent == table {
+					k.to = renameCols(k.to, col, to)
+				}
+			}
+		}
+	}
+	out := &fkState{keys: map[fkKey]bool{}, violations: map[fkKey]int{}}
+	for i, k := range keys {
+		out.keys[cur[i]] = true
+		out.violations[cur[i]] += st.violations[k]
+	}
+	return out
+}
+
+// matchAfter pairs each of after's keys with the key of st (renamed) it is:
+// the same key exactly, or — when a rebuild changed its columns' names by
+// the copy, which no RENAME states — the one key of st between the same
+// child and parent that after no longer holds. A key with no pair is one the
+// migration added.
+func (st *fkState) matchAfter(after *fkState) map[fkKey]fkKey {
+	out := map[fkKey]fkKey{}
+	gone := map[[2]string][]fkKey{}
+	for k := range st.keys {
+		if !after.keys[k] {
+			g := [2]string{k.table, k.parent}
+			gone[g] = append(gone[g], k)
+		}
+	}
+	for _, c := range gone {
+		sort.Slice(c, func(i, j int) bool { return c[i].String() < c[j].String() })
+	}
+	var added []fkKey
+	for k := range after.keys {
+		if st.keys[k] {
+			out[k] = k
+		} else {
+			added = append(added, k)
+		}
+	}
+	sort.Slice(added, func(i, j int) bool { return added[i].String() < added[j].String() })
+	for _, k := range added {
+		if _, ok := out[k]; ok {
+			continue
+		}
+		g := [2]string{k.table, k.parent}
+		if cands := gone[g]; len(cands) > 0 {
+			out[k] = cands[0]
+			gone[g] = cands[1:]
+		}
+	}
+	return out
+}
+
+// tableForeignKeys maps each of table's foreign key ids to its fkKey.
+func tableForeignKeys(ctx context.Context, conn *sql.Conn, table string) (map[int64]fkKey, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq`, table)
+	if err != nil {
+		return nil, fmt.Errorf("foreign keys of %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	type acc struct {
+		parent   string
+		from, to []string
+	}
+	keys := map[int64]*acc{}
+	var order []int64
+	for rows.Next() {
+		var id int64
+		var parent, from string
+		var to sql.NullString
+		if err := rows.Scan(&id, &parent, &from, &to); err != nil {
+			return nil, fmt.Errorf("foreign keys of %s: %w", table, err)
+		}
+		a, ok := keys[id]
+		if !ok {
+			a = &acc{parent: parent}
+			keys[id] = a
+			order = append(order, id)
+		}
+		a.from = append(a.from, strings.ToLower(from))
+		a.to = append(a.to, strings.ToLower(to.String))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("foreign keys of %s: %w", table, err)
+	}
+	out := make(map[int64]fkKey, len(keys))
+	for _, id := range order {
+		a := keys[id]
+		to := strings.Join(a.to, ",")
+		if strings.Trim(to, ",") == "" {
+			to = ""
+		}
+		out[id] = fkKey{table: strings.ToLower(table), from: strings.Join(a.from, ","), parent: strings.ToLower(a.parent), to: to}
+	}
+	return out, nil
+}
+
+func queryStrings(ctx context.Context, conn *sql.Conn, q string) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// assertNoForeignKeyViolations runs `PRAGMA foreign_key_check` after a
+// rebuild migration — detected by the `PRAGMA foreign_key_check` marker the
+// emit body embeds for the 12-step recipe (a non-rebuild migration enforces FKs
+// inline under `foreign_keys=ON`, so there is nothing extra to verify and no
+// reason to pay for the scan) — and fails it on a violation it introduced:
+// a key the database had before (before, read by observeForeignKeysBefore)
+// with more violating rows than it had then. A key the migration added is
+// reported with its count and left as it is: the table held those rows
+// already, and the migrator adds such a key without refusing them
+// (fk-add-over-existing-rows). New writes are checked under foreign_keys=ON
+// either way.
+func assertNoForeignKeyViolations(ctx context.Context, conn *sql.Conn, body, migID string, before *fkState) error {
+	if before == nil || !strings.Contains(body, "PRAGMA foreign_key_check") {
+		return nil
+	}
+	after, err := observeForeignKeys(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("sqlite apply (migration %s): %w", migID, err)
+	}
+	// Before's keys under the names this body gives their tables and
+	// columns: a rebuild may rename the child or the parent in the same
+	// migration, and a key it carried across must still be recognised as the
+	// key it was — its new orphans are the rebuild's, not the data's.
+	prev := before.renamed(body)
+	existed := prev.matchAfter(after)
+	var introduced []string
+	for k, n := range after.violations {
+		old, ok := existed[k]
+		if !ok {
+			slog.Warn("sqlite: a foreign key this migration added over existing rows has orphans: the rows were left as they are (no parent row matches them) and new writes are checked; repair them without deleting — re-create the missing parent or end the child",
+				slog.String("migration_id", migID), slog.String("foreign_key", k.String()), slog.Int("orphan_rows", n))
+			continue
+		}
+		if had := prev.violations[old]; n > had {
+			introduced = append(introduced, fmt.Sprintf("%s: %d row(s), %d before", k, n, had))
+		}
+	}
+	if len(introduced) > 0 {
+		return fmt.Errorf("sqlite apply: migration %s introduced foreign-key violation(s) — the rebuild ran under foreign_keys=OFF and PRAGMA foreign_key_check found dangling reference(s) the database did not hold before (%s); the schema change is committed but the data is now inconsistent (repair the offending rows, or restore and re-run against clean data)",
+			migID, strings.Join(introduced, "; "))
+	}
+	return nil
 }
 
 // Rollback runs the migration's down payload. Order:
@@ -200,6 +477,10 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON;"); err != nil {
 		return fmt.Errorf("sqlite rollback: PRAGMA foreign_keys=ON: %w", err)
 	}
+	before, err := observeForeignKeysBefore(ctx, conn, m.GetDownSql()+m.GetDownPreTx())
+	if err != nil {
+		return fmt.Errorf("sqlite rollback (migration %s): %w", m.GetId(), err)
+	}
 	if pre := m.GetDownPreTx(); pre != "" {
 		if _, err := conn.ExecContext(ctx, pre); err != nil {
 			return fmt.Errorf("sqlite rollback down_pre_tx: %w", err)
@@ -212,7 +493,7 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 	}
 	// B4: a rebuild rollback runs under foreign_keys=OFF too — verify it left no
 	// dangling references (checks down_sql, then down_pre_tx, for the marker).
-	if err := assertNoForeignKeyViolations(ctx, conn, m.GetDownSql()+m.GetDownPreTx(), m.GetId()); err != nil {
+	if err := assertNoForeignKeyViolations(ctx, conn, m.GetDownSql()+m.GetDownPreTx(), m.GetId(), before); err != nil {
 		return err
 	}
 	return nil

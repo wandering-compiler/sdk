@@ -52,6 +52,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Severity — what `migrate apply --checks` does when the probe finds rows.
+type Check_Severity int32
+
+const (
+	// REFUSE (the default, and every check minted before severity existed):
+	// the migration is not applied; the rows would fail it or be lost.
+	Check_SEVERITY_REFUSE Check_Severity = 0
+	// WARN: the count is printed with the rationale and the migration is
+	// applied anyway — the migration tolerates the rows (a foreign key added
+	// over a table that holds orphans is added without validating them), and
+	// the probe tells the operator what to repair afterwards.
+	Check_SEVERITY_WARN Check_Severity = 1
+)
+
+// Enum value maps for Check_Severity.
+var (
+	Check_Severity_name = map[int32]string{
+		0: "SEVERITY_REFUSE",
+		1: "SEVERITY_WARN",
+	}
+	Check_Severity_value = map[string]int32{
+		"SEVERITY_REFUSE": 0,
+		"SEVERITY_WARN":   1,
+	}
+)
+
+func (x Check_Severity) Enum() *Check_Severity {
+	p := new(Check_Severity)
+	*p = x
+	return p
+}
+
+func (x Check_Severity) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Check_Severity) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17apply_fetch_proto_enumTypes[0].Descriptor()
+}
+
+func (Check_Severity) Type() protoreflect.EnumType {
+	return &file_w17apply_fetch_proto_enumTypes[0]
+}
+
+func (x Check_Severity) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Check_Severity.Descriptor instead.
+func (Check_Severity) EnumDescriptor() ([]byte, []int) {
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{4, 0}
+}
+
 type FetchMigrationsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ProjectID is the registry project key (the lock's project_id).
@@ -59,9 +112,15 @@ type FetchMigrationsRequest struct {
 	// Targets enumerate the connections to fetch + each one's pinned ceiling
 	// (the lock connection's target_migration_id). The client reads these from
 	// its local lock; connections with no pinned target are simply omitted.
-	Targets       []*Target `protobuf:"bytes,2,rep,name=targets,proto3" json:"targets,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Targets []*Target `protobuf:"bytes,2,rep,name=targets,proto3" json:"targets,omitempty"`
+	// The client knows Check.severity: it verifies a WARN check's digest and
+	// runs it as a report. Unset on every client before severity existed — the
+	// console refuses to serve such a client a migration that carries a WARN
+	// check, with an "update the SDK" message, instead of letting it fail the
+	// digest as if the artifact were tampered with.
+	UnderstandsCheckSeverity bool `protobuf:"varint,3,opt,name=understands_check_severity,json=understandsCheckSeverity,proto3" json:"understands_check_severity,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *FetchMigrationsRequest) Reset() {
@@ -106,6 +165,13 @@ func (x *FetchMigrationsRequest) GetTargets() []*Target {
 		return x.Targets
 	}
 	return nil
+}
+
+func (x *FetchMigrationsRequest) GetUnderstandsCheckSeverity() bool {
+	if x != nil {
+		return x.UnderstandsCheckSeverity
+	}
+	return false
 }
 
 type Target struct {
@@ -446,7 +512,11 @@ type Check struct {
 	// rationale — what the probe guards against, for the refusal message.
 	Rationale string `protobuf:"bytes,3,opt,name=rationale,proto3" json:"rationale,omitempty"`
 	// down marks a pre-rollback check (run against the post-up database).
-	Down          bool `protobuf:"varint,4,opt,name=down,proto3" json:"down,omitempty"`
+	Down bool `protobuf:"varint,4,opt,name=down,proto3" json:"down,omitempty"`
+	// Bound into content_sha256 with the rest of the check (only when WARN, so
+	// a check without it keeps its digest): stripping it would turn a report
+	// into a refusal, setting it would turn a guard into a report.
+	Severity      Check_Severity `protobuf:"varint,5,opt,name=severity,proto3,enum=w17.apply.Check_Severity" json:"severity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -507,6 +577,13 @@ func (x *Check) GetDown() bool {
 		return x.Down
 	}
 	return false
+}
+
+func (x *Check) GetSeverity() Check_Severity {
+	if x != nil {
+		return x.Severity
+	}
+	return Check_SEVERITY_REFUSE
 }
 
 type RenderFixtureSeedRequest struct {
@@ -934,11 +1011,12 @@ var File_w17apply_fetch_proto protoreflect.FileDescriptor
 
 const file_w17apply_fetch_proto_rawDesc = "" +
 	"\n" +
-	"\x14w17apply/fetch.proto\x12\tw17.apply\x1a\x1cgoogle/protobuf/struct.proto\"d\n" +
+	"\x14w17apply/fetch.proto\x12\tw17.apply\x1a\x1cgoogle/protobuf/struct.proto\"\xa2\x01\n" +
 	"\x16FetchMigrationsRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12+\n" +
-	"\atargets\x18\x02 \x03(\v2\x11.w17.apply.TargetR\atargets\"U\n" +
+	"\atargets\x18\x02 \x03(\v2\x11.w17.apply.TargetR\atargets\x12<\n" +
+	"\x1aunderstands_check_severity\x18\x03 \x01(\bR\x18understandsCheckSeverity\"U\n" +
 	"\x06Target\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
@@ -967,12 +1045,16 @@ const file_w17apply_fetch_proto_rawDesc = "" +
 	"\tadopt_sql\x18\t \x01(\tR\badoptSql\x12.\n" +
 	"\x13adopt_preflight_sql\x18\v \x01(\tR\x11adoptPreflightSql\x12#\n" +
 	"\rmanifest_json\x18\f \x01(\tR\fmanifestJson\x12(\n" +
-	"\x06checks\x18\r \x03(\v2\x10.w17.apply.CheckR\x06checks\"_\n" +
+	"\x06checks\x18\r \x03(\v2\x10.w17.apply.CheckR\x06checks\"\xca\x01\n" +
 	"\x05Check\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03sql\x18\x02 \x01(\tR\x03sql\x12\x1c\n" +
 	"\trationale\x18\x03 \x01(\tR\trationale\x12\x12\n" +
-	"\x04down\x18\x04 \x01(\bR\x04down\"V\n" +
+	"\x04down\x18\x04 \x01(\bR\x04down\x125\n" +
+	"\bseverity\x18\x05 \x01(\x0e2\x19.w17.apply.Check.SeverityR\bseverity\"2\n" +
+	"\bSeverity\x12\x13\n" +
+	"\x0fSEVERITY_REFUSE\x10\x00\x12\x11\n" +
+	"\rSEVERITY_WARN\x10\x01\"V\n" +
 	"\x18RenderFixtureSeedRequest\x12\x0e\n" +
 	"\x02ir\x18\x01 \x01(\fR\x02ir\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x12\n" +
@@ -1022,42 +1104,45 @@ func file_w17apply_fetch_proto_rawDescGZIP() []byte {
 	return file_w17apply_fetch_proto_rawDescData
 }
 
+var file_w17apply_fetch_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_w17apply_fetch_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_w17apply_fetch_proto_goTypes = []any{
-	(*FetchMigrationsRequest)(nil),    // 0: w17.apply.FetchMigrationsRequest
-	(*Target)(nil),                    // 1: w17.apply.Target
-	(*FetchMigrationsResponse)(nil),   // 2: w17.apply.FetchMigrationsResponse
-	(*Migration)(nil),                 // 3: w17.apply.Migration
-	(*Check)(nil),                     // 4: w17.apply.Check
-	(*RenderFixtureSeedRequest)(nil),  // 5: w17.apply.RenderFixtureSeedRequest
-	(*FetchFixtureSeedRequest)(nil),   // 6: w17.apply.FetchFixtureSeedRequest
-	(*FetchFixtureSeedResponse)(nil),  // 7: w17.apply.FetchFixtureSeedResponse
-	(*SeedStmt)(nil),                  // 8: w17.apply.SeedStmt
-	(*FetchFixtureFilesRequest)(nil),  // 9: w17.apply.FetchFixtureFilesRequest
-	(*FetchFixtureFilesResponse)(nil), // 10: w17.apply.FetchFixtureFilesResponse
-	(*FixtureFile)(nil),               // 11: w17.apply.FixtureFile
-	(*structpb.Value)(nil),            // 12: google.protobuf.Value
+	(Check_Severity)(0),               // 0: w17.apply.Check.Severity
+	(*FetchMigrationsRequest)(nil),    // 1: w17.apply.FetchMigrationsRequest
+	(*Target)(nil),                    // 2: w17.apply.Target
+	(*FetchMigrationsResponse)(nil),   // 3: w17.apply.FetchMigrationsResponse
+	(*Migration)(nil),                 // 4: w17.apply.Migration
+	(*Check)(nil),                     // 5: w17.apply.Check
+	(*RenderFixtureSeedRequest)(nil),  // 6: w17.apply.RenderFixtureSeedRequest
+	(*FetchFixtureSeedRequest)(nil),   // 7: w17.apply.FetchFixtureSeedRequest
+	(*FetchFixtureSeedResponse)(nil),  // 8: w17.apply.FetchFixtureSeedResponse
+	(*SeedStmt)(nil),                  // 9: w17.apply.SeedStmt
+	(*FetchFixtureFilesRequest)(nil),  // 10: w17.apply.FetchFixtureFilesRequest
+	(*FetchFixtureFilesResponse)(nil), // 11: w17.apply.FetchFixtureFilesResponse
+	(*FixtureFile)(nil),               // 12: w17.apply.FixtureFile
+	(*structpb.Value)(nil),            // 13: google.protobuf.Value
 }
 var file_w17apply_fetch_proto_depIdxs = []int32{
-	1,  // 0: w17.apply.FetchMigrationsRequest.targets:type_name -> w17.apply.Target
-	3,  // 1: w17.apply.FetchMigrationsResponse.migrations:type_name -> w17.apply.Migration
-	4,  // 2: w17.apply.Migration.checks:type_name -> w17.apply.Check
-	8,  // 3: w17.apply.FetchFixtureSeedResponse.statements:type_name -> w17.apply.SeedStmt
-	12, // 4: w17.apply.SeedStmt.args:type_name -> google.protobuf.Value
-	11, // 5: w17.apply.FetchFixtureFilesResponse.files:type_name -> w17.apply.FixtureFile
-	0,  // 6: w17.apply.MigrationFetch.FetchMigrations:input_type -> w17.apply.FetchMigrationsRequest
-	6,  // 7: w17.apply.FixtureFetch.FetchFixtureSeed:input_type -> w17.apply.FetchFixtureSeedRequest
-	9,  // 8: w17.apply.FixtureFetch.FetchFixtureFiles:input_type -> w17.apply.FetchFixtureFilesRequest
-	5,  // 9: w17.apply.FixtureFetch.RenderFixtureSeed:input_type -> w17.apply.RenderFixtureSeedRequest
-	2,  // 10: w17.apply.MigrationFetch.FetchMigrations:output_type -> w17.apply.FetchMigrationsResponse
-	7,  // 11: w17.apply.FixtureFetch.FetchFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
-	10, // 12: w17.apply.FixtureFetch.FetchFixtureFiles:output_type -> w17.apply.FetchFixtureFilesResponse
-	7,  // 13: w17.apply.FixtureFetch.RenderFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
-	10, // [10:14] is the sub-list for method output_type
-	6,  // [6:10] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	2,  // 0: w17.apply.FetchMigrationsRequest.targets:type_name -> w17.apply.Target
+	4,  // 1: w17.apply.FetchMigrationsResponse.migrations:type_name -> w17.apply.Migration
+	5,  // 2: w17.apply.Migration.checks:type_name -> w17.apply.Check
+	0,  // 3: w17.apply.Check.severity:type_name -> w17.apply.Check.Severity
+	9,  // 4: w17.apply.FetchFixtureSeedResponse.statements:type_name -> w17.apply.SeedStmt
+	13, // 5: w17.apply.SeedStmt.args:type_name -> google.protobuf.Value
+	12, // 6: w17.apply.FetchFixtureFilesResponse.files:type_name -> w17.apply.FixtureFile
+	1,  // 7: w17.apply.MigrationFetch.FetchMigrations:input_type -> w17.apply.FetchMigrationsRequest
+	7,  // 8: w17.apply.FixtureFetch.FetchFixtureSeed:input_type -> w17.apply.FetchFixtureSeedRequest
+	10, // 9: w17.apply.FixtureFetch.FetchFixtureFiles:input_type -> w17.apply.FetchFixtureFilesRequest
+	6,  // 10: w17.apply.FixtureFetch.RenderFixtureSeed:input_type -> w17.apply.RenderFixtureSeedRequest
+	3,  // 11: w17.apply.MigrationFetch.FetchMigrations:output_type -> w17.apply.FetchMigrationsResponse
+	8,  // 12: w17.apply.FixtureFetch.FetchFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
+	11, // 13: w17.apply.FixtureFetch.FetchFixtureFiles:output_type -> w17.apply.FetchFixtureFilesResponse
+	8,  // 14: w17.apply.FixtureFetch.RenderFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
+	11, // [11:15] is the sub-list for method output_type
+	7,  // [7:11] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_w17apply_fetch_proto_init() }
@@ -1070,13 +1155,14 @@ func file_w17apply_fetch_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17apply_fetch_proto_rawDesc), len(file_w17apply_fetch_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
 		GoTypes:           file_w17apply_fetch_proto_goTypes,
 		DependencyIndexes: file_w17apply_fetch_proto_depIdxs,
+		EnumInfos:         file_w17apply_fetch_proto_enumTypes,
 		MessageInfos:      file_w17apply_fetch_proto_msgTypes,
 	}.Build()
 	File_w17apply_fetch_proto = out.File
