@@ -41,6 +41,30 @@ type Options struct {
 	// project wants and what a test harness passes.
 	Connections []string
 
+	// Domains the calling bundle serves — the w17 domain(s) whose storage
+	// tier this binary is. `fixtures apply` seeds these domains' fixtures and
+	// no others: the image ships the project's WHOLE rendered fixtures tree,
+	// and without this a run with no --domain seeded every domain's rows into
+	// this bundle's store — failing on a table that store does not have, or
+	// writing silently into a same-named one. A --domain naming any other
+	// domain is refused.
+	//
+	// Empty means the bundle's identity is unknown (a binary generated before
+	// the field existed, or a test harness): every domain is in scope, and
+	// what keeps another store's rows out is the connection the renderer
+	// recorded beside each seed.
+	Domains []string
+
+	// Dialects maps each of Connections to its store's dialect ("postgres",
+	// "mysql", "sqlite", "redis", …), as the generated bundle declares it.
+	// Seeding reads it to tell a store that can take a fixture from one that
+	// cannot WITHOUT that store's DSN: a binary serving app-postgres and
+	// app-mysql, run with only the Postgres DSN set, must still know that an
+	// old render's "app-mysql" names a store no seed goes to. Absent entries
+	// (and a nil map, from a binary generated before the field) fall back to
+	// the DSN's scheme, where one is set.
+	Dialects map[string]string
+
 	// Out is the progress sink. Defaults to os.Stdout.
 	Out io.Writer
 
@@ -199,8 +223,11 @@ files, so a half-applied group is a state no fixture describes.
   --fetch            render over the wire instead of reading DIR; needs W17_CONSOLE_ADDR
   --console ADDR     console endpoint; overrides W17_CONSOLE_ADDR
   --group GROUP      fixture group to seed; omitted = the default group
-  --domain DOMAIN    seed just this domain; omitted = every domain
-  --connection CONN  which owned connection to seed (needed if the bundle serves several)
+  --domain DOMAIN    seed just this domain; omitted = the domain(s) this binary
+                     serves. A domain the binary does not serve is refused:
+                     its rows belong in the store that domain's bundle owns
+  --connection CONN  which owned connection to seed (needed if the bundle serves
+                     several and the render does not name the store)
   --dry-run          list what would be applied, apply nothing
   --allow-stale      seed even when the rendered seeds are older than the
                      fixtures beside them (refused by default: a stale render
@@ -209,6 +236,13 @@ files, so a half-applied group is a state no fixture describes.
 Groups are a CONVENTION, not a safety gate: what "dev" and "prod" mean is the
 project's to decide by naming its groups, and what a given environment applies
 is the deploy's call. Nothing here refuses to seed a production database.
+
+A binary seeds ITS OWN store and nothing else. The image carries every
+domain's rendered fixtures, so two rules keep another domain's rows out: the
+default scope is the domain(s) this binary serves, and a fixture whose render
+names a connection this binary does not serve is refused (or, when the
+binary's own domains are unknown and no --domain was given, skipped with a
+note). Each domain's fixtures are seeded by that domain's binary.
 
 The DSN comes from W17_TARGET_<CONNECTION>, never a flag.
 `
@@ -314,7 +348,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.console, "console", "", "console endpoint; overrides W17_CONSOLE_ADDR")
 	fs.StringVar(&f.to, "to", "", "rollback only: highest migration id to KEEP applied")
 	fs.StringVar(&f.fixtures, "fixtures", "w17/fixtures", "fixtures only: directory of rendered seeds a render step produced")
-	fs.StringVar(&f.domain, "domain", "", "fixtures only: seed just this domain (empty = every domain)")
+	fs.StringVar(&f.domain, "domain", "", "fixtures only: seed just this domain (empty = the domain(s) this binary serves); another domain is refused")
 	fs.StringVar(&f.group, "group", "", "fixtures only: fixture group to seed; empty = the default group")
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")

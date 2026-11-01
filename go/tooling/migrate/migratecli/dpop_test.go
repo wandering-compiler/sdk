@@ -310,7 +310,7 @@ func fetchSeedsWithin(t *testing.T, env map[string]string) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := fetchSeeds(ctx, applyFlags{}, &migrate.LockView{ProjectID: "p-1"}, Options{Getenv: fetchEnv(env)}, io.Discard)
+	_, err := fetchSeeds(ctx, applyFlags{}, domainScope{}, &migrate.LockView{ProjectID: "p-1"}, Options{Getenv: fetchEnv(env)}, io.Discard)
 	return err
 }
 

@@ -64,7 +64,19 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	}
 	specs, withoutDSN := seedSpecs(targets, opts.getenv())
 
-	seeds, err := loadSeeds(ctx, f, lk, opts, out)
+	scope, err := seedScope(f.domain, opts.Domains)
+	if err != nil {
+		return err
+	}
+	seeds, err := loadSeeds(ctx, f, scope, lk, opts, out)
+	if err != nil {
+		return err
+	}
+	// Which store the rows go to, as the RENDERER says — the rule `w17ctl
+	// stack build` follows. A fixture of another store never reaches this
+	// one: refused, or skipped with a note when this binary cannot tell
+	// which domains are its own.
+	seeds, want, wantFromRender, err := routeSeeds(seeds, targets, specs, opts.Dialects, scope, f.connection, out)
 	if err != nil {
 		return err
 	}
@@ -79,10 +91,7 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 		if f.fetch {
 			where = "the console (--fetch)"
 		}
-		domain := f.domain
-		if domain == "" {
-			domain = "(every domain)"
-		}
+		domain := scope.label()
 		fmt.Fprintf(out, "fixtures: nothing to seed in group %s\n  looked in: %s\n  domain:    %s\n"+
 			"  note: this is a SUCCESS — no fixture matched. If you expected rows, check that a render step wrote them there.\n",
 			groupLabel(f.group), where, domain)
@@ -117,15 +126,19 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	}
 
 	if f.dryRun {
-		fmt.Fprintf(out, "fixtures: would apply %d fixture(s), %d statement(s) in group %s\n",
-			len(seeds), len(stmts), groupLabel(f.group))
+		into := ""
+		if want != "" {
+			into = " on " + want
+		}
+		fmt.Fprintf(out, "fixtures: would apply %d fixture(s), %d statement(s) in group %s%s\n",
+			len(seeds), len(stmts), groupLabel(f.group), into)
 		for _, s := range seeds {
 			fmt.Fprintf(out, "  %s/%s (%d statement(s))\n", s.Domain, s.Name, len(s.Statements))
 		}
 		return nil
 	}
 
-	conn, seeder, closeSeeder, err := openSeedTarget(specs, withoutDSN, f.connection)
+	conn, seeder, closeSeeder, err := openSeedTarget(specs, withoutDSN, want, wantFromRender)
 	if err != nil {
 		return err
 	}
@@ -139,8 +152,186 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	return nil
 }
 
+// domainScope is the set of domains one seeding run reads fixtures for.
+type domainScope struct {
+	// domains, sorted; nil = every domain in the tree.
+	domains []string
+	// own: the scope is this binary's own domains (Options.Domains), not a
+	// --domain the operator typed.
+	own bool
+}
+
+// every reports whether the scope is unbounded — the binary does not know
+// its own domains and no --domain was given.
+func (s domainScope) every() bool { return len(s.domains) == 0 }
+
+// has reports whether domain is in scope.
+func (s domainScope) has(domain string) bool {
+	if s.every() {
+		return true
+	}
+	for _, d := range s.domains {
+		if d == domain {
+			return true
+		}
+	}
+	return false
+}
+
+// label renders the scope for human output.
+func (s domainScope) label() string {
+	switch {
+	case s.every():
+		return "(every domain — this binary does not name its own)"
+	case s.own:
+		return strings.Join(s.domains, ", ") + " (this binary's own)"
+	default:
+		return strings.Join(s.domains, ", ")
+	}
+}
+
+// seedScope resolves which domains' fixtures a run seeds.
+//
+// The image ships the project's whole rendered fixtures tree, so "every
+// domain" used to be the default, and every domain's rows went into this
+// bundle's one store. A binary that knows which domains it serves (own)
+// defaults to exactly those, and refuses a --domain naming any other: that
+// domain's rows belong in the store its own bundle owns, and seeding them
+// here is either an error about a missing table or — where a same-named
+// table exists — a silent write into the wrong database.
+func seedScope(flagDomain string, own []string) (domainScope, error) {
+	if len(own) == 0 {
+		if flagDomain == "" {
+			return domainScope{}, nil
+		}
+		return domainScope{domains: []string{flagDomain}}, nil
+	}
+	mine := append([]string(nil), own...)
+	sort.Strings(mine)
+	if flagDomain == "" {
+		return domainScope{domains: mine, own: true}, nil
+	}
+	for _, d := range mine {
+		if d == flagDomain {
+			return domainScope{domains: []string{flagDomain}}, nil
+		}
+	}
+	return domainScope{}, fmt.Errorf(
+		"fixtures: --domain %q is not a domain this binary serves (it serves: %s)\n"+
+			"  why: a binary seeds its own store; %q's rows belong in the store that domain's bundle owns,\n"+
+			"       and seeding them here would write them into the wrong database\n"+
+			"  fix: run `fixtures apply` with the %s bundle's binary, or drop --domain to seed %s",
+		flagDomain, strings.Join(mine, ", "), flagDomain, flagDomain, strings.Join(mine, ", "))
+}
+
+// routeSeeds decides the store from what the renderer named, and keeps every
+// other store's rows out of this one.
+//
+// The renderer records, beside each seed, the connection its domain lives on
+// (FixtureSeed.Connection) — the same answer `w17ctl stack build` routes by.
+// A seed naming a connection this binary does not serve is not this run's to
+// apply: refused when the scope was chosen (the binary's own domains, or a
+// --domain), and skipped with a note when the scope is "every domain" because
+// the binary does not know its own — there the foreign seeds are expected, and
+// refusing would fail every run of a multi-domain project.
+//
+// A rendered name never makes a seed unseedable. A render that named a store
+// with no seed support (a console that recorded the domain's FIRST relational
+// connection — app-mysql — for a fixture whose tables are all on app-postgres)
+// is set aside with a note and the seedable connection is inferred as before;
+// letting it win stopped role seeding outright. An explicit --connection wins
+// over the rendered name, with a note: it is the operator's correction for
+// exactly such a render, and openSeedTarget still refuses one this binary does
+// not serve or that cannot seed.
+//
+// It returns the seeds to apply, the connection they go to ("" = not named
+// by the render; openSeedTarget infers it as before) and whether that name
+// came from the render rather than from --connection.
+func routeSeeds(seeds []migrate.FixtureSeed, targets []migrate.ConnTarget, specs []factory.TargetSpec, dialects map[string]string, scope domainScope, flagConn string, out io.Writer) ([]migrate.FixtureSeed, string, bool, error) {
+	owned := map[string]bool{}
+	ownedNames := make([]string, 0, len(targets))
+	for _, t := range targets {
+		owned[t.Connection] = true
+		ownedNames = append(ownedNames, t.Connection)
+	}
+	sort.Strings(ownedNames)
+	var kept []migrate.FixtureSeed
+	var skipped []string
+	named := map[string]bool{}
+	for _, s := range seeds {
+		if s.Connection != "" && !owned[s.Connection] {
+			if scope.every() {
+				skipped = append(skipped, fmt.Sprintf("%s/%s (%s)", s.Domain, s.Name, s.Connection))
+				continue
+			}
+			return nil, "", false, fmt.Errorf(
+				"fixtures: %s/%s belongs to connection %q, which this binary does not serve (it serves: %s)\n"+
+					"  why: the renderer put domain %q on that store; seeding it here would write its rows into the wrong database\n"+
+					"  fix: seed it with the binary that serves %q",
+				s.Domain, s.Name, s.Connection, strings.Join(ownedNames, ", "), s.Domain, s.Connection)
+		}
+		if s.Connection != "" {
+			named[s.Connection] = true
+		}
+		kept = append(kept, s)
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(out, "fixtures: skipped %d fixture(s) of stores this binary does not serve: %s\n"+
+			"  note: each is seeded by the binary that serves its store\n",
+			len(skipped), strings.Join(skipped, ", "))
+	}
+	// A named store this bundle serves that cannot take a seed (MySQL,
+	// SQLite, KV) is not where these rows go, whatever the render says.
+	// Decided from the store's DIALECT, which the generated bundle declares,
+	// and only failing that from its DSN — whether a DSN happens to be set is
+	// not what makes a store seedable, and keying on it refused a run that
+	// set only the Postgres DSN with "set W17_TARGET_APP_MYSQL".
+	dsnOf := map[string]string{}
+	for _, sp := range specs {
+		dsnOf[sp.Connection] = sp.DSN
+	}
+	for _, c := range sortedNames(named) {
+		seedable, known := false, false
+		if d, ok := dialects[c]; ok && d != "" {
+			seedable, known = d == "postgres", true
+		} else if dsn, ok := dsnOf[c]; ok {
+			seedable, known = factory.SeedCandidate(dsn), true
+		}
+		if known && !seedable {
+			delete(named, c)
+			fmt.Fprintf(out, "fixtures: note: the render names %q for these fixtures, a store with no seed support — ignored; seeding the bundle's seedable connection instead\n"+
+				"  why: an older console recorded a domain's first relational store, not the store of the fixture's own tables; re-run `w17ctl fixtures render` against a current console\n",
+				c)
+		}
+	}
+	switch len(named) {
+	case 0:
+		return kept, flagConn, false, nil
+	case 1:
+		var conn string
+		for c := range named {
+			conn = c
+		}
+		if flagConn != "" && flagConn != conn {
+			fmt.Fprintf(out, "fixtures: note: --connection %q overrides the store the render names (%q)\n", flagConn, conn)
+			return kept, flagConn, false, nil
+		}
+		return kept, conn, flagConn == "", nil
+	default:
+		names := make([]string, 0, len(named))
+		for c := range named {
+			names = append(names, c)
+		}
+		sort.Strings(names)
+		return nil, "", false, fmt.Errorf(
+			"fixtures: the fixtures in scope belong to %d stores (%s), and one run seeds one store as one transaction\n"+
+				"  fix: --domain <domain>, once per domain",
+			len(names), strings.Join(names, ", "))
+	}
+}
+
 // loadSeeds resolves the rendered fixtures, from disk or from the console.
-func loadSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Options, out io.Writer) ([]migrate.FixtureSeed, error) {
+func loadSeeds(ctx context.Context, f applyFlags, scope domainScope, lk *migrate.LockView, opts Options, out io.Writer) ([]migrate.FixtureSeed, error) {
 	if !f.fetch {
 		// A render older than its fixture seeds yesterday's rows — the roles
 		// without the permission the new endpoint needs, and an endpoint that
@@ -150,27 +341,38 @@ func loadSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Opt
 		// render, and there StaleRenders has nothing to compare and says so
 		// by returning nothing.
 		if !f.allowStale {
-			if err := refuseStaleRender(f.fixtures, f.domain, f.group); err != nil {
+			if err := refuseStaleRender(f.fixtures, scope, f.group); err != nil {
 				return nil, err
 			}
 		}
 		fsys := os.DirFS(f.fixtures)
-		seeds, err := migrate.LoadFixtureSeeds(fsys, f.domain, f.group)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"fixtures: read %s: %w\n"+
-					"  why: without --fetch the seeds are read from disk, where an earlier render wrote them\n"+
-					"  fix: run the render step that populates %s, or pass --fetch to render over the wire",
-				f.fixtures, err, f.fixtures)
+		// One read per domain in scope, so another domain's files are never
+		// even parsed: a broken render in a domain this binary does not
+		// serve is not this binary's failure.
+		domains := scope.domains
+		if scope.every() {
+			domains = []string{""}
+		}
+		var seeds []migrate.FixtureSeed
+		for _, d := range domains {
+			got, err := migrate.LoadFixtureSeeds(fsys, d, f.group)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"fixtures: read %s: %w\n"+
+						"  why: without --fetch the seeds are read from disk, where an earlier render wrote them\n"+
+						"  fix: run the render step that populates %s, or pass --fetch to render over the wire",
+					f.fixtures, err, f.fixtures)
+			}
+			seeds = append(seeds, got...)
 		}
 		return seeds, nil
 	}
-	return fetchSeeds(ctx, f, lk, opts, out)
+	return fetchSeeds(ctx, f, scope, lk, opts, out)
 }
 
 // fetchSeeds renders the group over the wire — the form for an environment
 // that can reach the console and would rather not carry an artefact.
-func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Options, out io.Writer) ([]migrate.FixtureSeed, error) {
+func fetchSeeds(ctx context.Context, f applyFlags, scope domainScope, lk *migrate.LockView, opts Options, out io.Writer) ([]migrate.FixtureSeed, error) {
 	getenv := consoleAddrOf(f.console, opts.getenv())
 	addr := getenv(envConsoleAddr)
 	if addr == "" {
@@ -188,20 +390,29 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	listed, err := cl.FetchFixtureFiles(ctx, &applyfetchpb.FetchFixtureFilesRequest{
-		ProjectId: lk.ProjectID,
-		Domain:    f.domain, // "" = every domain
-	})
-	if err != nil {
-		return nil, fetchRefusal("fixtures", "list", addr, auth, err)
+	domains := scope.domains
+	if scope.every() {
+		domains = []string{""} // "" = every domain
 	}
 	var seeds []migrate.FixtureSeed
-	for _, file := range listed.GetFiles() {
-		s := migrate.FixtureSeed{Domain: file.GetDomain(), Name: file.GetName()}
-		if s.Group() != f.group {
-			continue
+	for _, d := range domains {
+		listed, err := cl.FetchFixtureFiles(ctx, &applyfetchpb.FetchFixtureFilesRequest{
+			ProjectId: lk.ProjectID,
+			Domain:    d,
+		})
+		if err != nil {
+			return nil, fetchRefusal("fixtures", "list", addr, auth, err)
 		}
-		seeds = append(seeds, s)
+		for _, file := range listed.GetFiles() {
+			s := migrate.FixtureSeed{Domain: file.GetDomain(), Name: file.GetName()}
+			// Checked here as well as asked of the console: the scope is
+			// what keeps another domain's rows out of this store, and it
+			// must not rest on the server honouring a filter.
+			if s.Group() != f.group || !scope.has(s.Domain) {
+				continue
+			}
+			seeds = append(seeds, s)
+		}
 	}
 	sort.Slice(seeds, func(i, j int) bool {
 		if seeds[i].Domain != seeds[j].Domain {
@@ -219,6 +430,7 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 			return nil, fetchRefusal("fixtures", "render of "+seeds[i].Domain+"/"+seeds[i].Name, addr, auth, rerr)
 		}
 		seeds[i].Statements = resp.GetStatements()
+		seeds[i].Connection = resp.GetConnection()
 	}
 	fmt.Fprintf(out, "fixtures: rendered %d fixture(s) from the console (in memory; nothing written)\n", len(seeds))
 	return seeds, nil
@@ -226,11 +438,15 @@ func fetchSeeds(ctx context.Context, f applyFlags, lk *migrate.LockView, opts Op
 
 // openSeedTarget picks the connection to seed and opens it.
 //
-// Named explicitly with --connection, or inferred when the bundle owns exactly
-// one store that could take rows. Inference stops at ONE on purpose: a bundle
+// Named by the render or with --connection, or inferred when the bundle owns
+// exactly one store that could take rows. Inference stops at ONE on purpose: a bundle
 // serving two databases has no defensible default, and picking the first would
 // put a project's rows in whichever connection happened to sort earlier.
-func openSeedTarget(specs []factory.TargetSpec, withoutDSN []string, want string) (string, migrate.SeedCapable, func(), error) {
+//
+// want named by the RENDER (fromRender) is not a choice the operator made, so
+// a refusal about it says where the name came from instead of blaming a
+// --connection nobody typed.
+func openSeedTarget(specs []factory.TargetSpec, withoutDSN []string, want string, fromRender bool) (string, migrate.SeedCapable, func(), error) {
 	var candidates []factory.TargetSpec
 	for _, s := range specs {
 		if want != "" {
@@ -251,6 +467,12 @@ func openSeedTarget(specs []factory.TargetSpec, withoutDSN []string, want string
 		unset := ""
 		if len(withoutDSN) > 0 {
 			unset = "\n  no DSN set for: " + strings.Join(withoutDSN, ", ")
+		}
+		if want != "" && fromRender {
+			return "", nil, nil, fmt.Errorf(
+				"fixtures: the render puts these fixtures on connection %q, which this bundle serves with no DSN (have: %s)%s\n"+
+					"  fix: set %s",
+				want, connectionNames(specs), unset, migrate.TargetEnvVar(want))
 		}
 		if want != "" {
 			return "", nil, nil, fmt.Errorf(
@@ -313,7 +535,7 @@ func groupLabel(group string) string {
 // longer match the fixtures they were rendered from. Scoped to what this run
 // applies: a stale fixture in another domain, or in a group this run does not
 // seed, is not this run's to refuse.
-func refuseStaleRender(dir, domain, group string) error {
+func refuseStaleRender(dir string, scope domainScope, group string) error {
 	stale, err := migrate.StaleRenders(dir)
 	if err != nil {
 		return fmt.Errorf("fixtures: %w", err)
@@ -324,7 +546,7 @@ func refuseStaleRender(dir, domain, group string) error {
 		if len(segs) < 2 {
 			continue
 		}
-		if domain != "" && segs[0] != domain {
+		if !scope.has(segs[0]) {
 			continue
 		}
 		if strings.Join(segs[1:len(segs)-1], "/") != group {
@@ -338,4 +560,14 @@ func refuseStaleRender(dir, domain, group string) error {
 	return fmt.Errorf("fixtures: the rendered seeds in %s are older than the fixtures they came from:\n%s\n"+
 		"  override: --allow-stale seeds from the render as it is",
 		dir, migrate.FormatStaleRenders(mine))
+}
+
+// sortedNames returns a set's members in a stable order.
+func sortedNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

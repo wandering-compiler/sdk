@@ -53,6 +53,16 @@ type FixtureSeed struct {
 	Name string
 	// Statements run in order: FK targets before referrers.
 	Statements []*applyfetchpb.SeedStmt
+	// Connection is the store the renderer put these statements on — the
+	// `name` of the connection the fixture's domain is scoped to
+	// (FetchFixtureSeedResponse.connection). Written into the rendered file
+	// so the binary that applies it can tell its own store's rows from
+	// another domain's: the image ships the whole fixtures tree, and only
+	// the renderer knows which domain lives on which store.
+	//
+	// Empty from a render that predates the field, or from a console that
+	// does not send it. A reader treats empty as "unknown", never as "mine".
+	Connection string
 }
 
 // Group is the group Name belongs to — everything up to the last "/", empty
@@ -109,7 +119,7 @@ func WriteFixtureSeed(root string, seed FixtureSeed) error {
 // a 64-bit id is not rounded through a float on the way.
 func marshalSeedStable(seed FixtureSeed) ([]byte, error) {
 	raw, err := protojson.MarshalOptions{UseProtoNames: true}.
-		Marshal(&applyfetchpb.FetchFixtureSeedResponse{Statements: seed.Statements})
+		Marshal(&applyfetchpb.FetchFixtureSeedResponse{Statements: seed.Statements, Connection: seed.Connection})
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +176,7 @@ func LoadFixtureSeeds(fsys fs.FS, domain, group string) ([]FixtureSeed, error) {
 			return fmt.Errorf("parse %s: %w", p, uerr)
 		}
 		seed.Statements = resp.GetStatements()
+		seed.Connection = resp.GetConnection()
 		out = append(out, seed)
 		return nil
 	})
