@@ -14,6 +14,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
+	"github.com/wandering-compiler/sdk/go/lib/redisdsn"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -144,7 +145,7 @@ type RedisBusOptions struct {
 //     go-redis client.
 type RedisBus struct {
 	opts   RedisBusOptions
-	client *goredis.Client
+	client goredis.UniversalClient
 
 	mu          sync.Mutex
 	groups      map[string]bool
@@ -225,16 +226,19 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	if opts.GroupPrefix == "" {
 		return nil, errors.New("RedisBusOptions: GroupPrefix is empty")
 	}
-	parsed, err := goredis.ParseURL(opts.DSN)
+	// One server, or a cluster with `cluster=true` (lib/redisdsn): each
+	// channel is one stream key, so every command stays in one slot.
+	//
+	// go-redis ignores a context deadline unless told otherwise. Without
+	// ContextTimeout PublishTimeout bounded nothing: a broker that stopped
+	// answering held each Dispatch — on the committing goroutine — for the
+	// client's read timeout on every retry.
+	client, err := redisdsn.Open(opts.DSN, redisdsn.Options{ContextTimeout: true})
 	if err != nil {
 		return nil, fmt.Errorf("RedisBusOptions: DSN %q: %w", dsnredact.String(opts.DSN), dsnredact.Err(err))
 	}
-	// go-redis ignores a context deadline unless told otherwise. Without
-	// this PublishTimeout bounded nothing: a broker that stopped answering
-	// held each Dispatch — on the committing goroutine — for the client's
-	// read timeout on every retry.
-	parsed.ContextTimeoutEnabled = true
 	if err := validateChannelKeys("RedisBusOptions.ChannelRetries", opts.ChannelRetries); err != nil {
+		_ = client.Close()
 		return nil, err
 	}
 	if opts.PublishTimeout <= 0 {
@@ -265,7 +269,7 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 	}
 	return &RedisBus{
 		opts:   opts,
-		client: goredis.NewClient(parsed),
+		client: client,
 		groups: map[string]bool{},
 	}, nil
 }

@@ -122,8 +122,8 @@ type Recorder struct {
 	surfaces map[w17pb.RequestApi]*Surface
 	fail     func(Failure)
 
-	conn  *nats.Conn      // owned when [Open] dialed it
-	redis *goredis.Client // owned when [Open] dialed it
+	conn  *nats.Conn              // owned when [Open] dialed it
+	redis goredis.UniversalClient // owned when [Open] dialed it
 
 	syncWait time.Duration
 	syncLate atomic.Int64 // last sync-wait report, unix nanos

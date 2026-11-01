@@ -90,6 +90,26 @@ jobs:
               for i in $(seq 1 60); do wget -q -O /dev/null http://minio:9000/minio/health/live && break; sleep 1; done
               go test -race -count=1 ./lib/kvfs/s3/...'
 
+  # The Redis bus, the request stream and lib/redisdsn against a live
+  # 3-shard Redis Cluster: what a cluster-mode ElastiCache / MemoryDB is. The
+  # cluster announces 127.0.0.1, so the tests share its network namespace.
+  redis-cluster:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Redis Cluster
+        run: |
+          docker run -d --name rcluster -e IP=127.0.0.1 \
+            grokzen/redis-cluster@sha256:f130dd8a322fc4dc595380ec94907539c341d5841de7d31e679223aec04d30f6
+          for _ in $(seq 1 60); do docker exec rcluster redis-cli -p 7000 cluster info 2>/dev/null | grep -q cluster_state:ok && break; sleep 1; done
+      - name: go test (cluster)
+        run: |
+          docker run --rm --network container:rcluster \
+            -e GOFLAGS=-buildvcs=false -e W17_REQUIRE_LIVE_REDIS_CLUSTER=1 \
+            -e W17_TEST_REDIS_CLUSTER_DSN='redis://127.0.0.1:7000?cluster=true' \
+            -v "$PWD/go:/w" -w /w golang:1.26 \
+            go test -race -count=1 -run Cluster ./lib/eventbus/ ./lib/eventlog/ ./lib/redisdsn/
+
   lint:
     runs-on: ubuntu-latest
     container: golang:1.26
