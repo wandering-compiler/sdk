@@ -5,6 +5,7 @@ package w17;
 import "google/protobuf/descriptor.proto";
 import "w17/audience.proto";
 import "w17/request_events.proto";
+import "w17/rest.proto";
 
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
@@ -121,19 +122,42 @@ message RpcApi {
   // internal-only surface can keep its shape unadvertised.
   bool reflection = 4;
 
-  // Field 5 reserved for `repeated AuthMethod auth_methods` — the
-  // bearer/basic surface auth declaration, mirroring
-  // `RestApi.auth_methods`. Wired by the separate auth
-  // task; kept off the number space so it lands without a renumber.
-  reserved 5;
-  reserved "auth_methods";
+  // Authentication for this surface — the same `AuthMethod` list, with
+  // the same meaning, as `RestApi.auth_methods`: each entry names the RPC
+  // that checks a presented credential and the token types it handles.
+  // The gRPC gateway reads the credential from the `authorization`
+  // metadata key and dispatches on its scheme exactly as REST does on
+  // the header; a call whose credential no method accepts is refused
+  // UNAUTHENTICATED before any backend is reached.
+  //
+  // Auth is a property of the GATEWAY, not of one transport: a domain
+  // (one audience of it) has one gateway, and REST, gRPC and the
+  // embedded MCP all run behind the same auth step. So this list and
+  // `RestApi.auth_methods` (and `McpApi.auth_methods`) are one
+  // declaration that may be written on any of the domain's surfaces. A
+  // gRPC-only domain declares it here; a domain with several surfaces
+  // writes it once, or repeats it identically. Two surfaces declaring
+  // DIFFERENT lists are refused at codegen.
+  //
+  // An activated auth plugin supplies it for you (its preset auth
+  // methods are injected whenever the plugin is active), so most
+  // projects write nothing here.
+  //
+  // Empty, with no auth plugin and no other surface declaring it, the
+  // surface authenticates no one — and codegen REFUSES that unless the
+  // surface says so with `unauthenticated: true` below.
+  repeated AuthMethod auth_methods = 5;
 
   // Logical groupings of the public surface — mirrors
   // `RestApi.groups`. Each group's `name` is a public
   // gRPC service in the emitted `w17.lock.rpc.proto`; its `refs`
   // name the backend methods that service wraps. The picked
   // methods carry the gateway-tier concerns (event emit, auth,
-  // ACL cascade) verbatim. Empty `groups` + no inline `(w17.rpc)`
+  // ACL cascade) verbatim — auth meaning the gateway's auth methods
+  // (`auth_methods` above, or the same list declared on another of the
+  // domain's surfaces): with none, there is no principal to carry, and
+  // codegen refuses the surface unless it is `unauthenticated`.
+  // Empty `groups` + no inline `(w17.rpc)`
   // marks = empty surface (the gateway emit produces nothing).
   //
   // Inline `(w17.rpc)` / `(w17.rpc_service)` marks still work and
@@ -151,6 +175,20 @@ message RpcApi {
   // domain with a single audience, which keeps `rpc.proto` and the
   // gateway, env names and permission ids it has always had.
   Audience audience = 8;
+
+  // The explicit opt-out: this surface is deliberately public and its
+  // gateway authenticates no one. Codegen refuses a surface that serves
+  // methods with no auth method unless this is set — "no auth" is never
+  // the silent default.
+  //
+  // It cannot coexist with auth: a gateway with auth methods (declared
+  // on any of the domain's surfaces, or supplied by an activated auth
+  // plugin) authenticates every surface it serves, so `unauthenticated`
+  // there is a contradiction and is refused. Neither can it cover a
+  // method that needs a principal — one gated by ACL, or reading a model
+  // with `(w17.db.scope)`: those are refused on a public surface, since
+  // nothing would supply who is calling.
+  bool unauthenticated = 9;
 }
 
 // RpcGroup buckets backend methods under one public gRPC service

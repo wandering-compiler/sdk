@@ -46,12 +46,41 @@ type RpcApi struct {
 	// discover the surface, but it stays an explicit opt-in so an
 	// internal-only surface can keep its shape unadvertised.
 	Reflection bool `protobuf:"varint,4,opt,name=reflection,proto3" json:"reflection,omitempty"`
+	// Authentication for this surface — the same `AuthMethod` list, with
+	// the same meaning, as `RestApi.auth_methods`: each entry names the RPC
+	// that checks a presented credential and the token types it handles.
+	// The gRPC gateway reads the credential from the `authorization`
+	// metadata key and dispatches on its scheme exactly as REST does on
+	// the header; a call whose credential no method accepts is refused
+	// UNAUTHENTICATED before any backend is reached.
+	//
+	// Auth is a property of the GATEWAY, not of one transport: a domain
+	// (one audience of it) has one gateway, and REST, gRPC and the
+	// embedded MCP all run behind the same auth step. So this list and
+	// `RestApi.auth_methods` (and `McpApi.auth_methods`) are one
+	// declaration that may be written on any of the domain's surfaces. A
+	// gRPC-only domain declares it here; a domain with several surfaces
+	// writes it once, or repeats it identically. Two surfaces declaring
+	// DIFFERENT lists are refused at codegen.
+	//
+	// An activated auth plugin supplies it for you (its preset auth
+	// methods are injected whenever the plugin is active), so most
+	// projects write nothing here.
+	//
+	// Empty, with no auth plugin and no other surface declaring it, the
+	// surface authenticates no one — and codegen REFUSES that unless the
+	// surface says so with `unauthenticated: true` below.
+	AuthMethods []*AuthMethod `protobuf:"bytes,5,rep,name=auth_methods,json=authMethods,proto3" json:"auth_methods,omitempty"`
 	// Logical groupings of the public surface — mirrors
 	// `RestApi.groups`. Each group's `name` is a public
 	// gRPC service in the emitted `w17.lock.rpc.proto`; its `refs`
 	// name the backend methods that service wraps. The picked
 	// methods carry the gateway-tier concerns (event emit, auth,
-	// ACL cascade) verbatim. Empty `groups` + no inline `(w17.rpc)`
+	// ACL cascade) verbatim — auth meaning the gateway's auth methods
+	// (`auth_methods` above, or the same list declared on another of the
+	// domain's surfaces): with none, there is no principal to carry, and
+	// codegen refuses the surface unless it is `unauthenticated`.
+	// Empty `groups` + no inline `(w17.rpc)`
 	// marks = empty surface (the gateway emit produces nothing).
 	//
 	// Inline `(w17.rpc)` / `(w17.rpc_service)` marks still work and
@@ -66,9 +95,22 @@ type RpcApi struct {
 	// one (`rpc_<audience>.proto`): see `w17/audience.proto`. Unset on a
 	// domain with a single audience, which keeps `rpc.proto` and the
 	// gateway, env names and permission ids it has always had.
-	Audience      *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Audience *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
+	// The explicit opt-out: this surface is deliberately public and its
+	// gateway authenticates no one. Codegen refuses a surface that serves
+	// methods with no auth method unless this is set — "no auth" is never
+	// the silent default.
+	//
+	// It cannot coexist with auth: a gateway with auth methods (declared
+	// on any of the domain's surfaces, or supplied by an activated auth
+	// plugin) authenticates every surface it serves, so `unauthenticated`
+	// there is a contradiction and is refused. Neither can it cover a
+	// method that needs a principal — one gated by ACL, or reading a model
+	// with `(w17.db.scope)`: those are refused on a public surface, since
+	// nothing would supply who is calling.
+	Unauthenticated bool `protobuf:"varint,9,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RpcApi) Reset() {
@@ -129,6 +171,13 @@ func (x *RpcApi) GetReflection() bool {
 	return false
 }
 
+func (x *RpcApi) GetAuthMethods() []*AuthMethod {
+	if x != nil {
+		return x.AuthMethods
+	}
+	return nil
+}
+
 func (x *RpcApi) GetGroups() []*RpcGroup {
 	if x != nil {
 		return x.Groups
@@ -148,6 +197,13 @@ func (x *RpcApi) GetAudience() *Audience {
 		return x.Audience
 	}
 	return nil
+}
+
+func (x *RpcApi) GetUnauthenticated() bool {
+	if x != nil {
+		return x.Unauthenticated
+	}
+	return false
 }
 
 // RpcGroup buckets backend methods under one public gRPC service
@@ -354,17 +410,19 @@ var File_w17_rpc_proto protoreflect.FileDescriptor
 
 const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\x99\x02\n" +
+	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xe3\x02\n" +
 	"\x06RpcApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"reflection\x18\x04 \x01(\bR\n" +
-	"reflection\x12%\n" +
+	"reflection\x122\n" +
+	"\fauth_methods\x18\x05 \x03(\v2\x0f.w17.AuthMethodR\vauthMethods\x12%\n" +
 	"\x06groups\x18\x06 \x03(\v2\r.w17.RpcGroupR\x06groups\x129\n" +
 	"\x0erequest_events\x18\a \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12)\n" +
-	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudienceJ\x04\b\x05\x10\x06R\fauth_methods\"s\n" +
+	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\x12(\n" +
+	"\x0funauthenticated\x18\t \x01(\bR\x0funauthenticated\"s\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
@@ -392,24 +450,26 @@ var file_w17_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_w17_rpc_proto_goTypes = []any{
 	(*RpcApi)(nil),                     // 0: w17.RpcApi
 	(*RpcGroup)(nil),                   // 1: w17.RpcGroup
-	(*RequestEvents)(nil),              // 2: w17.RequestEvents
-	(*Audience)(nil),                   // 3: w17.Audience
-	(*descriptorpb.MethodOptions)(nil), // 4: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 5: google.protobuf.FileOptions
+	(*AuthMethod)(nil),                 // 2: w17.AuthMethod
+	(*RequestEvents)(nil),              // 3: w17.RequestEvents
+	(*Audience)(nil),                   // 4: w17.Audience
+	(*descriptorpb.MethodOptions)(nil), // 5: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 6: google.protobuf.FileOptions
 }
 var file_w17_rpc_proto_depIdxs = []int32{
-	1, // 0: w17.RpcApi.groups:type_name -> w17.RpcGroup
-	2, // 1: w17.RpcApi.request_events:type_name -> w17.RequestEvents
-	3, // 2: w17.RpcApi.audience:type_name -> w17.Audience
-	4, // 3: w17.rpc:extendee -> google.protobuf.MethodOptions
-	4, // 4: w17.rpc_service:extendee -> google.protobuf.MethodOptions
-	5, // 5: w17.rpc_api:extendee -> google.protobuf.FileOptions
-	0, // 6: w17.rpc_api:type_name -> w17.RpcApi
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	6, // [6:7] is the sub-list for extension type_name
-	3, // [3:6] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	2, // 0: w17.RpcApi.auth_methods:type_name -> w17.AuthMethod
+	1, // 1: w17.RpcApi.groups:type_name -> w17.RpcGroup
+	3, // 2: w17.RpcApi.request_events:type_name -> w17.RequestEvents
+	4, // 3: w17.RpcApi.audience:type_name -> w17.Audience
+	5, // 4: w17.rpc:extendee -> google.protobuf.MethodOptions
+	5, // 5: w17.rpc_service:extendee -> google.protobuf.MethodOptions
+	6, // 6: w17.rpc_api:extendee -> google.protobuf.FileOptions
+	0, // 7: w17.rpc_api:type_name -> w17.RpcApi
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	7, // [7:8] is the sub-list for extension type_name
+	4, // [4:7] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_w17_rpc_proto_init() }
@@ -419,6 +479,7 @@ func file_w17_rpc_proto_init() {
 	}
 	file_w17_audience_proto_init()
 	file_w17_request_events_proto_init()
+	file_w17_rest_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

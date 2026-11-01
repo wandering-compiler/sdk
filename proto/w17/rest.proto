@@ -77,9 +77,20 @@ message RestApi {
   // Authentication methods for this surface. Each
   // entry references one RPC (by `<module>.<Service>.<Method>`
   // ref) and declares which credential token types it handles.
-  // Empty list = surface has no auth middleware; endpoints on
-  // such a surface still emit handler code but skip the auth
-  // call entirely.
+  //
+  // The list belongs to the domain's GATEWAY, not to REST alone: the
+  // gRPC (`RpcApi.auth_methods`) and MCP (`McpApi.auth_methods`)
+  // surfaces of the same domain (and audience) carry the same field,
+  // and all three resolve to one auth step that every transport runs.
+  // Write it on any one of them, or identically on several; two
+  // DIFFERENT lists are refused at codegen. An activated auth plugin
+  // injects its preset auth methods, so most projects write nothing.
+  //
+  // Empty, with no auth plugin and no other surface declaring it, the
+  // gateway authenticates no one — codegen refuses that unless the
+  // surface says `unauthenticated: true` (field 12). It used to be the
+  // silent default: endpoints still emitted handler code and simply
+  // skipped the auth call.
   //
   // Dispatch is by token type (Bearer / Basic / catch-all). The
   // gateway peeks the request's Authorization scheme, picks the
@@ -184,6 +195,20 @@ message RestApi {
   // domain with a single audience, which keeps `rest.proto` and the
   // gateway, env names and permission ids it has always had.
   Audience audience = 11;
+
+  // The explicit opt-out: this surface is deliberately public and its
+  // gateway authenticates no one. Codegen refuses a surface that serves
+  // endpoints with no auth method unless this is set — "no auth" is
+  // never the silent default. (One endpoint can be public on an
+  // authenticated surface without it: `RestEndpoint.exclude_auth`.)
+  //
+  // Refused together with auth methods (declared on any of the domain's
+  // surfaces, or supplied by an activated auth plugin) — the gateway
+  // authenticates every surface it serves — and on a surface with a
+  // method that needs a principal (ACL-gated, or reading a model with
+  // `(w17.db.scope)`). Same field as `RpcApi.unauthenticated` and
+  // `McpApi.unauthenticated`.
+  bool unauthenticated = 12;
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
@@ -260,7 +285,8 @@ message BrowserRedirect {
   bool allow_external = 5;
 }
 
-// AuthMethod — one entry of `RestApi.auth_methods[]`.
+// AuthMethod — one entry of `RestApi.auth_methods[]` (and of
+// `RpcApi.auth_methods[]` / `McpApi.auth_methods[]`, the same list).
 // Pairs a method ref with the credential token types the method
 // claims to handle. Gateway dispatches per request by peeking
 // the Authorization scheme + matching against declared token
