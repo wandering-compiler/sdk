@@ -125,7 +125,7 @@ type Config struct {
 	// (Migration.checks, the planner's NEEDS_CONFIRM probes) before its body
 	// and refuses the apply, naming the check, its row count and rationale,
 	// when one finds rows. OPT-IN: the default apply runs none
-	// (docs/decisions/checksql-preapply-optin-ci.md) — a probe is a
+	// because a probe is a
 	// full-table scan. Not for --fake (no body runs) or a resumed migration
 	// (its in-tx half already committed).
 	Checks bool
