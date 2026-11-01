@@ -86,7 +86,8 @@ func TestResourceServer_NoTokenIsAChallenge(t *testing.T) {
 }
 
 // A token the auth method refuses is invalid_token; one that holds nothing
-// here is insufficient_scope; a working one passes; a failing auth service
+// here, or that it accepted but will not let act where the request asks
+// (PERMISSION_DENIED — ORG_NOT_MEMBER), is insufficient_scope, never a 401; a working one passes; a failing auth service
 // is a 503, never a challenge that sends the user to sign in again.
 func TestResourceServer_TokenOutcomes(t *testing.T) {
 	cases := []struct {
@@ -98,6 +99,7 @@ func TestResourceServer_TokenOutcomes(t *testing.T) {
 	}{
 		{"refused", nil, status.Error(codes.Unauthenticated, "no"), http.StatusUnauthorized, `error="invalid_token"`},
 		{"no permission", nil, nil, http.StatusForbidden, `error="insufficient_scope"`},
+		{"accepted, not in the organization", nil, status.Error(codes.PermissionDenied, "not a member"), http.StatusForbidden, `error="insufficient_scope"`},
 		{"ok", []int32{7}, nil, http.StatusTeapot, ""},
 		{"auth down", nil, status.Error(codes.Unavailable, "down"), http.StatusServiceUnavailable, ""},
 		{"plain error", nil, errors.New("boom"), http.StatusServiceUnavailable, ""},

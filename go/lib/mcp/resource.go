@@ -15,6 +15,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
+	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
 // The HTTP transport as an OAuth 2.1 protected resource — the MCP
@@ -150,8 +151,12 @@ func (s *Server) mountResourceServer(mux *http.ServeMux) {
 
 // requireToken is the gate in front of the MCP endpoint: no bearer, or one
 // the auth method refuses, is a 401 challenge; a token that holds no
-// permission at all on this surface is a 403 insufficient_scope. Everything
-// past it is the per-tool gate, as on a surface without OAuth.
+// permission at all on this surface is a 403 insufficient_scope. A token the
+// auth method ACCEPTED but will not let act where the request asks — the
+// auth plugin's ORG_NOT_MEMBER, PERMISSION_DENIED — is a 403 too, with the
+// refusal's envelope: a 401 there would send the client to authorize again
+// over a token that is fine. Everything past it is the per-tool gate, as on a
+// surface without OAuth.
 func (s *Server) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := bearerToken(r.Header.Get("Authorization")); !ok {
@@ -171,6 +176,9 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 			s.challenge(w, http.StatusForbidden, "insufficient_scope", "the token holds no permission on this server")
 		case err == nil:
 			next.ServeHTTP(w, r)
+		case status.Code(err) == codes.PermissionDenied:
+			s.setChallenge(w, "insufficient_scope", "the token may not act where this request asks")
+			restgw.WriteGRPCErrorCtx(r.Context(), w, err)
 		case isUnauthenticated(err):
 			s.challenge(w, http.StatusUnauthorized, "invalid_token", "the token is not valid for this resource")
 		default:
@@ -182,9 +190,10 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 
 // isUnauthenticated reports whether the auth method refused the token, as
 // opposed to failing: a refusal is the caller's, a failure is ours.
+// PERMISSION_DENIED is not one — requireToken answers it 403 before this.
 func isUnauthenticated(err error) bool {
 	switch status.Code(err) {
-	case codes.Unauthenticated, codes.PermissionDenied, codes.NotFound, codes.InvalidArgument:
+	case codes.Unauthenticated, codes.NotFound, codes.InvalidArgument:
 		return true
 	}
 	return false
@@ -192,13 +201,19 @@ func isUnauthenticated(err error) bool {
 
 // challenge writes the RFC 6750 / RFC 9728 answer.
 func (s *Server) challenge(w http.ResponseWriter, code int, errCode, desc string) {
+	s.setChallenge(w, errCode, desc)
+	w.WriteHeader(code)
+}
+
+// setChallenge sets the challenge headers without writing the status, for an
+// answer whose body another writer renders.
+func (s *Server) setChallenge(w http.ResponseWriter, errCode, desc string) {
 	v := fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, s.metadataURL(), strings.Join(s.resource.Scopes, " "))
 	if errCode != "" {
 		v += fmt.Sprintf(`, error=%q, error_description=%q`, errCode, desc)
 	}
 	w.Header().Set("WWW-Authenticate", v)
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
 }
 
 // bearerToken reads `Authorization: Bearer <token>` (scheme case-insensitive).
