@@ -111,7 +111,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | `--console ADDR` | `W17_CONSOLE_ADDR` | flag overrides the variable |
 | `--dry-run` | off | refused together with `--fake` |
 | `--fake` | off | see T12 |
-| `--checks` | off; `W17_MIGRATE_CHECKS=1` (also `true`/`yes`/`on`) turns it on | `apply` only; runs each pending migration's forward pre-apply checks first (see T2.11–T2.14) |
+| `--checks` | off; `W17_MIGRATE_CHECKS=1` (also `true`/`yes`/`on`) turns it on | `apply` and `rollback`; runs each migration's checks for that direction before its body: forward checks on `apply` (see T2.11–T2.15), down checks on `rollback` (T5.5–T5.7) |
 | `--log-format` | `text` | `text` or `json`; anything else refused |
 | `--parallel N` | the data migration's own setting | `<= 0` keeps the migration's own setting |
 | `--lock-wait D` | 5m (`migrate.DefaultLockWait`) | how long `apply` and `rollback` wait for another run's run lock; `0` fails at once |
@@ -138,11 +138,19 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.12 | Without `--checks` and the setting, no check MUST run. Down checks MUST NOT run before an apply. | `TestRun_ChecksAreOptIn`, `TestRun_ChecksPassAndSkipDownChecks`, `TestChecksFlagAndSetting` |
 | T2.13 | With `--checks`, a store that cannot run checks MUST refuse a migration that carries some, not skip them. | `TestRun_ChecksRefuseWhereTheyCannotRun` |
 | T2.14 | A check MUST be bound by the migration's content hash (the loader refuses an artifact carrying unbound checks; `--checks` asks again before one runs), MUST be a single SELECT built only from the words and functions the planner's probe templates use (an allowlist, tokenized per dialect; any identifier, quoted or not, before a `(` is a call) or a call or parenthesized group the same migration's up body contains token for token outside its strings and comments (an expression index's probe repeats the author's expression; a `;` and unbalanced parentheses stay refused; the body is tokenized as its server reads it — non-ASCII dollar tags, MySQL `/*! */`/`/*+ */` as comments, SQLite `[…]` identifiers — or admits nothing), and MUST run on its own connection — never the run lock's, which is asked again after the checks — read-only with a statement timeout, reporting a failure by error code only. | `TestChecks_AreBoundByTheDigest`, `TestContentHash_BindsEveryCheckField`, `TestValidateCheckSQL`, `TestValidateMigrationCheckSQL`, `TestValidateMigrationCheckSQL_BodyReadAsTheServerReadsIt`, `TestRunCheck_WithoutTheTempFileLimitPrivilege_Live`, `TestRunCheck_CountsAndCannotWrite_Live` (Postgres, MySQL), `TestRunCheck_CountsAndCannotWrite` (SQLite) |
+| T2.15 | On Postgres a check MUST run in one process (`max_parallel_workers_per_gather = 0`) with `work_mem` lowered to at most 64MB, for any role; as a role that may set `temp_file_limit` (a superuser, or one granted `SET` on it) it MUST run under `temp_file_limit = 1GB`, and a probe spilling past it MUST fail with SQLSTATE 53400, reported by that code alone. A role that may not set it MUST still run its checks, under the `temp_file_limit` a superuser set for the role or database (if any) and the statement timeout. | `TestRunCheck_TempFileLimitBoundsASuperuser_Live`, `TestRunCheck_ANonSuperuserIsBoundByItsRoleLimit_Live`, `TestRunCheck_WithoutTheTempFileLimitPrivilege_Live` |
 
 **Deliberate limits.**
 - Unpinned connections are warned about, not refused: a KV connection can stay unpinned for good.
 - `--checks` runs none for `--fake` or for a Postgres migration resumed in its post-transaction
-  phase; `rollback` has no `--checks` (down checks travel in the artefact but are not run).
+  phase.
+- A check's disk is bounded on Postgres only as far as the role allows. `temp_file_limit` is a
+  superuser setting: a migration role that is neither a superuser nor granted
+  `SET ON PARAMETER temp_file_limit` (Postgres 15+) cannot lower it, and its probe's sorts and
+  hashes may spill to temp files until the 30-second statement timeout ends it — unless a
+  superuser set a limit for the role or database (`ALTER ROLE <role> SET temp_file_limit = '1GB'`),
+  which then applies. The memory bound (`work_mem`, one process) holds for every role. MySQL
+  bounds a check by `max_execution_time`; SQLite runs it in-process under the context deadline.
 - The console renders each dialect's probes in its own SQL and does not carry a probe a dialect
   cannot express (the plan's risk findings name it), so a MySQL or SQLite migration carries fewer
   checks than its Postgres twin.
@@ -217,6 +225,7 @@ prints that half. `W17_DPOP_KEY` and `W17_CONSOLE_DPOP_ORIGIN` mean what they me
 |---|---|---|
 | `--to ID` | required | `--to=""` explicitly means "roll back everything" |
 | `--dry-run` | off | prints `down_pre_tx`, then `down_sql` |
+| `--checks` | off; `W17_MIGRATE_CHECKS=1` turns it on | runs each migration's down checks before its down body (T5.5–T5.7) |
 
 **Guarantees.**
 
@@ -226,6 +235,9 @@ prints that half. `W17_DPOP_KEY` and `W17_CONSOLE_DPOP_ORIGIN` mean what they me
 | T5.2 | An explicit empty `--to` MUST be accepted. | `TestRollback_ExplicitEmptyToIsAccepted` |
 | T5.3 | `--dry-run` MUST print the pre-transaction half before the down SQL. | `TestRunRollback_DryRunPrintsPreTx` |
 | T5.4 | A non-empty `--to` that is not the id of a migration on one of the connections being rolled back MUST be refused, planning nothing. | `TestPlanRollback_RefusesAnUnknownTarget` |
+| T5.5 | With `--checks` (or `W17_MIGRATE_CHECKS=1`), a down check of a migration being rolled back that counts rows MUST refuse that rollback before its down body runs, naming the check, the row count and its rationale; it MUST be validated, run and reported as T2.14 says, with the migration's down body (and its up body) as the body it may repeat, and the run lock asked again before the down body. | `TestRollback_ChecksRefuseAViolatingRollback`, `TestRollback_ChecksReachTheRun` |
+| T5.6 | Without `--checks` and the setting, no down check MUST run; forward checks MUST NOT run before a rollback. | `TestRollback_ChecksAreOptIn`, `TestRollback_ChecksPassAndSkipForwardChecks`, `TestChecksFlagAndSetting` |
+| T5.7 | With `--checks`, a store that cannot run checks MUST refuse a rollback whose migration carries down checks, not skip them. | `TestRollback_ChecksRefuseWhereTheyCannotRun` |
 
 ## T6. `fixtures apply`
 

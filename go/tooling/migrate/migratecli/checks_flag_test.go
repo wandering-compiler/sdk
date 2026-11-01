@@ -11,8 +11,9 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
 
-// --checks is an apply flag (refused elsewhere), and W17_MIGRATE_CHECKS turns
-// it on for every apply of an environment.
+// --checks is an apply and a rollback flag (refused elsewhere), and
+// W17_MIGRATE_CHECKS turns it on for every apply and rollback of an
+// environment.
 func TestChecksFlagAndSetting(t *testing.T) {
 	f, err := parseFlags("apply", []string{"--checks"}, &strings.Builder{})
 	if err != nil || !f.checks {
@@ -20,6 +21,9 @@ func TestChecksFlagAndSetting(t *testing.T) {
 	}
 	if f, err = parseFlags("apply", nil, &strings.Builder{}); err != nil || f.checks {
 		t.Fatalf("apply: checks on by default (%v, %v)", f.checks, err)
+	}
+	if f, err = parseFlags("rollback", []string{"--checks"}, &strings.Builder{}); err != nil || !f.checks {
+		t.Fatalf("rollback --checks: checks=%v, %v", f.checks, err)
 	}
 	if _, err := parseFlags("status", []string{"--checks"}, &strings.Builder{}); err == nil {
 		t.Fatal("status --checks accepted and ignored")
@@ -85,6 +89,76 @@ func TestApply_ChecksReachTheRun(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("apply without checks: %v\n%s", err, out.String())
+			}
+		})
+	}
+}
+
+// The real `migrate rollback` entry on a real SQLite store: a down check
+// that counts a row refuses the rollback under --checks or
+// W17_MIGRATE_CHECKS=1 and leaves the migration applied; without either the
+// rollback runs. The forward check, which would refuse too, is never run.
+func TestRollback_ChecksReachTheRun(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		flag    bool
+		env     string
+		refused bool
+	}{
+		{"flag", true, "", true},
+		{"setting", false, "1", true},
+		{"neither", false, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := filepath.Join(t.TempDir(), "app.db")
+			seed := &applyfetchpb.Migration{Id: "ts-1", Connection: "app-sqlite",
+				UpSql: `CREATE TABLE w17_migrations (timestamp TEXT PRIMARY KEY, content_sha256 TEXT NOT NULL); CREATE TABLE "c" (id INTEGER PRIMARY KEY, pid INTEGER); INSERT INTO "c" VALUES (1, 7); INSERT INTO w17_migrations VALUES ('ts-1', 'x');`}
+			m := &applyfetchpb.Migration{Id: "ts-2", Connection: "app-sqlite",
+				UpSql:   `ALTER TABLE "c" ADD COLUMN x INTEGER; INSERT INTO w17_migrations VALUES ('ts-2', 'y');`,
+				DownSql: `ALTER TABLE "c" DROP COLUMN x; DELETE FROM w17_migrations WHERE timestamp = 'ts-2';`,
+				Checks: []*applyfetchpb.Check{
+					{Name: "fwd", Sql: `SELECT count(*) FROM "c" LIMIT 1`},
+					{Name: "down_narrow_c_pid", Sql: `SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`, Rationale: "the rollback would lose these values", Down: true},
+				}}
+			seed.ContentSha256 = migrate.ContentHash(seed.GetUpSql(), "", "", "", "", nil, "", "")
+			m.PrevContentSha256 = seed.GetContentSha256()
+			m.ContentSha256 = migrate.ContentHashWithChecks(m.GetUpSql(), "", "", m.GetDownSql(), m.GetPrevContentSha256(), nil, "", "", "", m.GetChecks())
+			dir := t.TempDir()
+			for _, x := range []*applyfetchpb.Migration{seed, m} {
+				if err := migrate.WriteMigration(dir, x); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out strings.Builder
+			plain := Options{Getenv: envMap{"W17_TARGET_APP_SQLITE": "sqlite://" + db}.get, Out: &out}
+			lock := writeLock(t, migrate.LockConnection{Name: "app-sqlite", TargetMigrationID: "ts-2", TargetContentSha256: m.GetContentSha256()})
+			if err := runApply(context.Background(), []string{"--lock", lock, "--migrations", dir}, plain, &out); err != nil {
+				t.Fatalf("apply: %v\n%s", err, out.String())
+			}
+			args := []string{"--lock", lock, "--migrations", dir, "--to", "ts-1"}
+			if tc.flag {
+				args = append(args, "--checks")
+			}
+			env := envMap{"W17_TARGET_APP_SQLITE": "sqlite://" + db, "W17_MIGRATE_CHECKS": tc.env}
+			err := runRollback(context.Background(), args, Options{Getenv: env.get, Out: &out}, &out)
+			var status strings.Builder
+			if serr := runStatus(context.Background(), []string{"--lock", lock, "--migrations", dir}, plain, &status); serr != nil {
+				t.Fatalf("status: %v", serr)
+			}
+			if tc.refused {
+				if err == nil || !strings.Contains(err.Error(), "down_narrow_c_pid") || !strings.Contains(err.Error(), "1 row(s)") || strings.Contains(err.Error(), "fwd") {
+					t.Fatalf("want the down check to refuse the rollback of ts-2, got %v\n%s", err, out.String())
+				}
+				if strings.Contains(status.String(), "ts-2") {
+					t.Fatalf("ts-2 rolled back after its check refused:\n%s", status.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("rollback without checks: %v\n%s", err, out.String())
+			}
+			if !strings.Contains(status.String(), "ts-2") {
+				t.Fatalf("ts-2 still applied after the rollback:\n%s", status.String())
 			}
 		})
 	}

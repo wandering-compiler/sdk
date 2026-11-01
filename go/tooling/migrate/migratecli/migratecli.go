@@ -250,6 +250,11 @@ flags (rollback):
                       rollback is destructive, and an omitted value that meant
                       "everything" would be one forgotten flag away from an
                       empty database. Pass --to="" to mean everything, and mean it.
+  --checks            run each migration's DOWN checks (the planner's probes for
+                      a rollback that would refuse or lose data) before its down
+                      body, and refuse it when one finds rows — as apply --checks
+                      does forward. Off by default; W17_MIGRATE_CHECKS=1 turns it
+                      on for every rollback too
 
 Database DSNs are read from W17_TARGET_<CONNECTION> environment variables,
 never from flags — a credential in a flag lands in shell history and in every
@@ -314,7 +319,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.StringVar(&f.connection, "connection", "", "fixtures only: which owned connection to seed; needed when the bundle serves more than one")
 	fs.BoolVar(&f.fetch, "fetch", false, "pull artefacts from the console and apply in memory (no disk)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
-	fs.BoolVar(&f.checks, "checks", false, "apply only: run each pending migration's pre-apply data checks first and refuse it when one finds rows (also W17_MIGRATE_CHECKS=1)")
+	fs.BoolVar(&f.checks, "checks", false, "apply/rollback: run each migration's data checks for that direction before its body and refuse it when one finds rows (also W17_MIGRATE_CHECKS=1)")
 	fs.BoolVar(&f.fake, "fake", false, "apply only: RECORD each pending migration without running it — for a database that already holds what they describe. Each is checked against the database first and refused if it does not match")
 	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that are older than the fixtures beside them (the deliberate override — a stale render seeds yesterday's rows)")
 	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "fixtures only: succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
@@ -392,7 +397,7 @@ var flagVerbs = map[string]map[string]bool{
 	"dry-run":      {"apply": true, "rollback": true, "fixtures apply": true},
 	"log-format":   {"apply": true, "rollback": true},
 	"fake":         {"apply": true},
-	"checks":       {"apply": true},
+	"checks":       {"apply": true, "rollback": true},
 	"exit-code":    {"status": true},
 	"to":           {"rollback": true},
 	"fixtures":     {"fixtures apply": true},
@@ -504,6 +509,7 @@ func runRollback(ctx context.Context, args []string, opts Options, out io.Writer
 		LogFormat:     f.logFormat,
 		ToMigrationID: f.to,
 		LockWait:      lockWaitOf(f.lockWait),
+		Checks:        f.checks || checksFromEnv(opts.getenv()),
 	})
 }
 
@@ -807,8 +813,8 @@ func lockWaitOf(d time.Duration) time.Duration {
 }
 
 // checksFromEnv reads the deploy-wide setting for --checks:
-// W17_MIGRATE_CHECKS=1 (or true) runs the pre-apply checks on every apply of
-// this environment without changing the command line.
+// W17_MIGRATE_CHECKS=1 (or true) runs the checks on every apply and rollback
+// of this environment without changing the command line.
 func checksFromEnv(getenv func(string) string) bool {
 	switch strings.ToLower(strings.TrimSpace(getenv("W17_MIGRATE_CHECKS"))) {
 	case "1", "true", "yes", "on":
