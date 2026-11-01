@@ -134,3 +134,80 @@ func TestChecks_AreBoundByTheDigest(t *testing.T) {
 		t.Error("an artifact carrying checks its digest does not bind is accepted")
 	}
 }
+
+func runRollbackChecked(t *testing.T, checks bool, counts map[string]int64) (*checkingApplier, string, error) {
+	t.Helper()
+	m := checkedMigration()
+	dir := seedDir(t, m)
+	a := &checkingApplier{Applier: stub.New(), counts: counts}
+	a.Head = m.GetId()
+	var out bytes.Buffer
+	err := migrate.RunRollback(context.Background(), migrate.RollbackConfig{
+		Targets: targets(lockTarget{"main", m.GetId(), m.GetContentSha256()}), MigrationsDir: dir, Out: &out,
+		ApplierFor:    func(string) (migrate.Applier, error) { return a, nil },
+		ToMigrationID: "",
+		Checks:        checks,
+	})
+	return a, out.String(), err
+}
+
+// rollback --checks runs a migration's DOWN checks before its down body and
+// refuses the rollback when one finds rows, naming it; nothing rolls back.
+func TestRollback_ChecksRefuseAViolatingRollback(t *testing.T) {
+	a, _, err := runRollbackChecked(t, true, map[string]int64{"SELECT 99": 2})
+	if err == nil {
+		t.Fatal("rolled back over a down check that found rows")
+	}
+	for _, want := range []string{"rollback main/ts-1", "pre-rollback check down_only", "2 row(s)", "nothing was rolled back"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal lacks %q: %v", want, err)
+		}
+	}
+	if len(a.RollbackCalls()) != 0 {
+		t.Errorf("the down body ran after its check refused it: %v", a.RollbackCalls())
+	}
+}
+
+// A down check that finds nothing lets the rollback through, and a forward
+// check is not run before a rollback (here it would refuse).
+func TestRollback_ChecksPassAndSkipForwardChecks(t *testing.T) {
+	a, out, err := runRollbackChecked(t, true, map[string]int64{`SELECT count(*) FROM "c" WHERE "pid" IS NOT NULL LIMIT 1`: 3})
+	if err != nil {
+		t.Fatalf("RunRollback: %v", err)
+	}
+	if len(a.RollbackCalls()) != 1 || len(a.ran) != 1 || a.ran[0] != "SELECT 99" {
+		t.Fatalf("rollbacks %v, checks run %q", a.RollbackCalls(), a.ran)
+	}
+	// a down check is validated against the down body (and the up body)
+	if !strings.Contains(a.bodies[0], "-- down for ts-1") || !strings.Contains(a.bodies[0], "ADD CONSTRAINT c_fk") {
+		t.Errorf("the down check ran without its migration's bodies: %q", a.bodies[0])
+	}
+	if !strings.Contains(out, "rollback:   check down_only passed") {
+		t.Errorf("output does not report the check: %s", out)
+	}
+}
+
+// Off by default: without Checks no down check runs and the rollback goes on.
+func TestRollback_ChecksAreOptIn(t *testing.T) {
+	a, _, err := runRollbackChecked(t, false, map[string]int64{"SELECT 99": 2})
+	if err != nil || len(a.ran) != 0 || len(a.RollbackCalls()) != 1 {
+		t.Fatalf("err %v, checks run %q, rollbacks %v", err, a.ran, a.RollbackCalls())
+	}
+}
+
+// rollback --checks on a store that cannot run checks refuses a migration
+// carrying down checks instead of skipping them as if they passed.
+func TestRollback_ChecksRefuseWhereTheyCannotRun(t *testing.T) {
+	m := checkedMigration()
+	dir := seedDir(t, m)
+	a := stub.New()
+	a.Head = m.GetId()
+	err := migrate.RunRollback(context.Background(), migrate.RollbackConfig{
+		Targets: targets(lockTarget{"main", m.GetId(), m.GetContentSha256()}), MigrationsDir: dir,
+		ApplierFor: func(string) (migrate.Applier, error) { return a, nil },
+		Checks:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot run") || len(a.RollbackCalls()) != 0 {
+		t.Fatalf("err %v, rollbacks %v", err, a.RollbackCalls())
+	}
+}

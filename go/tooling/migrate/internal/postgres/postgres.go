@@ -624,6 +624,13 @@ func (a *Applier) Observe(ctx context.Context) (fingerprint.Observed, error) {
 
 var _ migrate.CheckRunner = (*Applier)(nil)
 
+// The resource bounds of one pre-apply check (RunCheck); variables so a test
+// can prove each takes effect without spilling a gigabyte.
+var (
+	checkTempFileLimit = "1GB"
+	checkWorkMem       = "64MB"
+)
+
 // RunCheck runs one pre-apply check (migrate.CheckRunner).
 //
 // Only a single read-only SELECT is accepted (migrate.ValidateMigrationCheckSQL), and
@@ -648,22 +655,32 @@ func (a *Applier) RunCheck(ctx context.Context, query, body string) (int64, erro
 		return 0, pgCheckErr(err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// Every role may set these. statement_timeout bounds how long a probe
+	// runs — and so how much it can spill; one process (no parallel workers,
+	// each of which would get its own work_mem and its own temp_file_limit);
+	// work_mem capped at checkWorkMem (lowered only, never raised past what
+	// the role has) bounds the memory each sort or hash of it holds.
 	for _, st := range []string{
 		fmt.Sprintf("SET LOCAL statement_timeout = %d", migrate.CheckTimeout.Milliseconds()),
 		"SET LOCAL lock_timeout = 5000",
+		"SET LOCAL max_parallel_workers_per_gather = 0",
+		"SELECT set_config('work_mem', '" + checkWorkMem + "', true) WHERE pg_size_bytes(current_setting('work_mem')) > pg_size_bytes('" + checkWorkMem + "')",
 	} {
 		if _, err := tx.Exec(ctx, st); err != nil {
 			return 0, pgCheckErr(err)
 		}
 	}
-	// temp_file_limit bounds the disk a probe's sort or hash may spill. It is
-	// a superuser setting, so a migration role may not be allowed to lower it:
-	// tried under a savepoint, and the check runs on without it (bounded by
-	// the statement timeout) when the server refuses.
+	// temp_file_limit bounds the disk a probe's sort or hash may spill
+	// (SQLSTATE 53400 past it). It is a superuser setting: a role may lower it
+	// only as a superuser or with SET granted on it (Postgres 15+: GRANT SET ON
+	// PARAMETER temp_file_limit). Tried under a savepoint, and when the server
+	// refuses the check runs on with the role's own limit — one a superuser set
+	// for the role or the database (ALTER ROLE … SET temp_file_limit) still
+	// applies, otherwise none — and the statement timeout.
 	if _, err := tx.Exec(ctx, "SAVEPOINT w17_check_limits"); err != nil {
 		return 0, pgCheckErr(err)
 	}
-	if _, err := tx.Exec(ctx, "SET LOCAL temp_file_limit = '1GB'"); err != nil {
+	if _, err := tx.Exec(ctx, "SET LOCAL temp_file_limit = '"+checkTempFileLimit+"'"); err != nil {
 		if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT w17_check_limits"); err != nil {
 			return 0, pgCheckErr(err)
 		}

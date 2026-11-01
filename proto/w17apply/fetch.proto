@@ -164,8 +164,10 @@ message Migration {
   // NEEDS_CONFIRM probes, `SELECT count(*) … LIMIT 1`: a non-zero count means
   // rows the migration would refuse or lose). They travel so a deploy can run
   // them OPT-IN (`migrate apply --checks`, or W17_MIGRATE_CHECKS=1) before
-  // the migration and refuse with the check's name, row count and rationale;
-  // by default apply ignores them, since each probe scans its whole table.
+  // the migration and refuse with the check's name, row count and rationale —
+  // and the down ones before a rollback (`migrate rollback --checks`). They
+  // are opt-in because a probe can scan a whole table: by default neither
+  // apply nor rollback runs them.
   //
   // BOUND by content_sha256 (migrate.ContentHashWithChecks) — an executed
   // check is as trusted as the bodies, and the loader refuses an artifact
