@@ -96,11 +96,23 @@ func (AclRoleScope) EnumDescriptor() ([]byte, []int) {
 }
 
 // AclRole declares one role in a domain's role catalogue
-// (`(w17.acl_roles)`). The permission membership is expressed as
-// include/exclude globs over the domain's `AclPermission`
-// catalogue (the same glob shape as DownloadEndpoint selectors);
-// no include + no exclude = ALL permissions. Signup-assignment
-// flags let a turnkey auth plugin grant roles automatically.
+// (`(w17.acl_roles)`). What the role grants is ALWAYS stated, in exactly
+// one of three ways:
+//
+//   - `include` (+ optional `exclude`): globs over the domain's
+//     `AclPermission` catalogue (the same glob shape as DownloadEndpoint
+//     selectors). `include: ["*"]` is "every permission the catalogue
+//     has at this codegen".
+//   - `all_permissions: true`: a runtime wildcard (see the field).
+//   - `no_permissions: true`: nothing — a role that exists so a
+//     membership or an invitation has something to name.
+//
+// A role that states none of them is a codegen error. Omitting `include`
+// used to mean EVERY permission, silently, and `include: []` cannot be
+// told apart from omission in proto3 — so a role meant to grant nothing
+// granted everything, and nothing could express "nothing" at all.
+// Signup-assignment flags let a turnkey auth plugin grant roles
+// automatically.
 type AclRole struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Role name — becomes a Role row (SLUG). Required, unique within
@@ -145,18 +157,33 @@ type AclRole struct {
 	Realm string `protobuf:"bytes,2,opt,name=realm,proto3" json:"realm,omitempty"`
 	// include / exclude — globs over the domain's AclPermission
 	// catalogue (`<module>.<Service>.<Method>` /
-	// `<module>.<Model>#<action>`). No include + no exclude = every
-	// permission; include = only those; exclude subtracts. Resolved
-	// against acl.lock.json at codegen — a glob matching zero
-	// permissions is a codegen error (typo guard).
+	// `<module>.<Model>#<action>`). include = only those; exclude
+	// subtracts from what include selected. Resolved against
+	// acl.lock.json at codegen — a glob matching zero permissions is a
+	// codegen error (typo guard).
+	//
+	// ⚠️ `include` is REQUIRED unless the role sets `all_permissions` or
+	// `no_permissions`. "Everything" is written `include: ["*"]`
+	// (a snapshot of today's catalogue, extended by `exclude` as
+	// needed); "nothing" is `no_permissions: true`. An `exclude` with
+	// no `include` is refused as well — it used to mean "everything
+	// except", and that is now `include: ["*"]` plus the `exclude`.
 	Include []string `protobuf:"bytes,3,rep,name=include,proto3" json:"include,omitempty"`
 	Exclude []string `protobuf:"bytes,4,rep,name=exclude,proto3" json:"exclude,omitempty"`
 	// first_user — assign this role to the FIRST registered user
 	// (atomic COUNT==0 guard). The bootstrap-admin pattern. At most
 	// one role per realm may set it.
+	//
+	// ⚠️ On a role that grants everything (`all_permissions`, or
+	// `include: ["*"]` with no `exclude`) it is refused unless the role
+	// also sets `all_permissions_at_signup: true` — see that field.
 	FirstUser bool `protobuf:"varint,5,opt,name=first_user,json=firstUser,proto3" json:"first_user,omitempty"`
 	// default — assign this role to every signup AFTER the first.
 	// At most one role per realm may set it.
+	//
+	// ⚠️ Same rule as `first_user`: a role that grants everything and is
+	// handed out by `default` makes EVERY sign-up a superuser, so it is
+	// refused unless the role sets `all_permissions_at_signup: true`.
 	Default bool `protobuf:"varint,6,opt,name=default,proto3" json:"default,omitempty"`
 	// all_permissions — runtime WILDCARD grant. A holder of this
 	// role passes EVERY ACL permission check, regardless of what
@@ -167,12 +194,11 @@ type AclRole struct {
 	// This is the superuser / superadmin knob; it is realm-scoped
 	// like any other role and is NOT admin-specific (a normal API
 	// realm can carry a full-access role too). Mutually exclusive
-	// with include/exclude (a wildcard that also filters is a
-	// contradiction — the parser rejects it). Contrast with the
-	// "no include + no exclude" shape above, which materialises
-	// the CURRENT catalogue as seed rows (a snapshot that does
-	// not follow future permissions); prefer all_permissions for
-	// a durable full-access role.
+	// with include/exclude and with no_permissions (a wildcard that also
+	// filters is a contradiction — the parser rejects it). Contrast with
+	// `include: ["*"]`, which materialises the CURRENT catalogue as seed
+	// rows (a snapshot that does not follow future permissions); prefer
+	// all_permissions for a durable full-access role.
 	AllPermissions bool `protobuf:"varint,7,opt,name=all_permissions,json=allPermissions,proto3" json:"all_permissions,omitempty"`
 	// activation — which plugin activation's RBAC tables this role is
 	// seeded into, by `registered_as` (e.g. "admin_auth"). A domain may
@@ -195,9 +221,38 @@ type AclRole struct {
 	//
 	// Per role, not per catalogue: one domain may seed a bootstrap admin
 	// into the admin realm and a default member role into the app realm.
-	Activation    string `protobuf:"bytes,8,opt,name=activation,proto3" json:"activation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Activation string `protobuf:"bytes,8,opt,name=activation,proto3" json:"activation,omitempty"`
+	// no_permissions — the role grants NOTHING: a `Role` row and no
+	// `RolePermission` rows. For a role that exists so something has a
+	// role to name — an invitation (the auth plugin's InviteToOrg issues
+	// an invitation ON a role), a membership, a product preset — and not
+	// to open anything.
+	//
+	// It is a field of its own, rather than `include: []`, because proto3
+	// cannot tell an empty repeated field from an omitted one: the two
+	// would mean the same thing, and omission is refused. Mutually
+	// exclusive with `include`, `exclude` and `all_permissions`.
+	//
+	// Switching a role that used to carry grants to `no_permissions` ends
+	// them on the next seed apply (`RolePermission.removed_at`), like any
+	// permission a declaration stops selecting — the seed is
+	// authoritative over the roles it declares.
+	NoPermissions bool `protobuf:"varint,11,opt,name=no_permissions,json=noPermissions,proto3" json:"no_permissions,omitempty"`
+	// all_permissions_at_signup — the acknowledgement that a sign-up is
+	// handed EVERY permission. Required on a role that grants everything
+	// (`all_permissions`, or `include: ["*"]` with no `exclude`) and is
+	// assigned at sign-up (`first_user` or `default`); refused anywhere
+	// else, so it cannot be left behind meaning nothing.
+	//
+	// With `default` it makes every registration a superuser and turns
+	// the ACL into a no-op for that realm — almost never intended outside
+	// a test project. With `first_user` it is the bootstrap-admin
+	// pattern, and whoever registers FIRST on a fresh deploy owns it —
+	// on a public sign-up surface that is whoever gets there first.
+	// Either is legitimate, and neither should be inherited by accident.
+	AllPermissionsAtSignup bool `protobuf:"varint,12,opt,name=all_permissions_at_signup,json=allPermissionsAtSignup,proto3" json:"all_permissions_at_signup,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AclRole) Reset() {
@@ -298,6 +353,20 @@ func (x *AclRole) GetActivation() string {
 		return x.Activation
 	}
 	return ""
+}
+
+func (x *AclRole) GetNoPermissions() bool {
+	if x != nil {
+		return x.NoPermissions
+	}
+	return false
+}
+
+func (x *AclRole) GetAllPermissionsAtSignup() bool {
+	if x != nil {
+		return x.AllPermissionsAtSignup
+	}
+	return false
 }
 
 var file_w17_acl_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -436,6 +505,10 @@ var (
 	// before anything has used it, e.g. to pre-assign a role to a user
 	// who has not signed in yet.
 	//
+	// ⚠️ Every role states what it grants: `include`, `all_permissions`
+	// or `no_permissions` (see AclRole). A role with none of them is a
+	// codegen error naming the role and its file.
+	//
 	// ⚠️ A role with `all_permissions` gets a `Role` row and NO
 	// `RolePermission` rows at all. Its grant is a runtime expansion
 	// over the deployed lock, so it follows every permission the lock
@@ -487,7 +560,7 @@ var File_w17_acl_proto protoreflect.FileDescriptor
 
 const file_w17_acl_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/acl.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xa4\x02\n" +
+	"\rw17/acl.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\x86\x03\n" +
 	"\aAclRole\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03key\x18\t \x01(\tR\x03key\x12'\n" +
@@ -502,7 +575,9 @@ const file_w17_acl_proto_rawDesc = "" +
 	"\x0fall_permissions\x18\a \x01(\bR\x0eallPermissions\x12\x1e\n" +
 	"\n" +
 	"activation\x18\b \x01(\tR\n" +
-	"activation*`\n" +
+	"activation\x12%\n" +
+	"\x0eno_permissions\x18\v \x01(\bR\rnoPermissions\x129\n" +
+	"\x19all_permissions_at_signup\x18\f \x01(\bR\x16allPermissionsAtSignup*`\n" +
 	"\fAclRoleScope\x12\x1e\n" +
 	"\x1aACL_ROLE_SCOPE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ACL_ROLE_SCOPE_REALM\x10\x01\x12\x16\n" +
