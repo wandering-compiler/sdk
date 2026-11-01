@@ -16,6 +16,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
+	"github.com/wandering-compiler/sdk/go/lib/redisdsn"
 )
 
 // The request stream on Redis Streams, for a project whose bus is Redis and
@@ -152,21 +153,22 @@ func IsRedisDSN(dsn string) bool {
 	return strings.HasPrefix(dsn, "redis://") || strings.HasPrefix(dsn, "rediss://")
 }
 
-func dialRedis(ctx context.Context, dsn string) (*goredis.Client, error) {
-	opt, err := goredis.ParseURL(dsn)
+// dialRedis opens one server, or a cluster with `cluster=true`
+// (lib/redisdsn): the stream's keys share the {w17:requests} hash tag, so
+// every command and the publish script stay in one slot.
+func dialRedis(ctx context.Context, dsn string) (goredis.UniversalClient, error) {
+	// go-redis ignores a context deadline unless told otherwise; the sink's
+	// Timeout would bound nothing.
+	c, err := redisdsn.Open(dsn, redisdsn.Options{ContextTimeout: true})
 	if err != nil {
 		return nil, fmt.Errorf("eventlog: redis DSN %q: %w", dsnredact.String(dsn), dsnredact.Err(err))
 	}
-	// go-redis ignores a context deadline unless told otherwise; the sink's
-	// Timeout would bound nothing.
-	opt.ContextTimeoutEnabled = true
-	c := goredis.NewClient(opt)
 	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if err := c.Ping(pctx).Err(); err != nil {
 		// Not fatal, as NATS not up yet is not: the client reconnects on
 		// the next command, and a publish that fails takes the failure path.
-		log.Printf("eventlog redis: %s not reachable yet (%v) — request records take the failure path until it is", dsnredact.String(dsn), err)
+		log.Printf("eventlog redis: %s not reachable yet (%q) — request records take the failure path until it is", dsnredact.String(dsn), err.Error()) //nolint:gosec // G706: the DSN is redacted, the error quoted
 	}
 	return c, nil
 }
