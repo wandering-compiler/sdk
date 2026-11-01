@@ -300,7 +300,7 @@ type Migration struct {
 	// rows the migration would refuse or lose). They travel so a deploy can run
 	// them OPT-IN (`migrate apply --checks`, or W17_MIGRATE_CHECKS=1) before
 	// the migration and refuse with the check's name, row count and rationale;
-	// by default apply ignores them (docs/decisions/checksql-preapply-optin-ci).
+	// by default apply ignores them, since each probe scans its whole table.
 	//
 	// BOUND by content_sha256 (migrate.ContentHashWithChecks) — an executed
 	// check is as trusted as the bodies, and the loader refuses an artifact

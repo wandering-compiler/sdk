@@ -8,6 +8,8 @@
 #   make sync-admin-dpop   copy ts/dpop/src into ts/admin-runtime/src/dpop
 #   make check-admin-dpop  fail when that copy has drifted (CI, ts job)
 #
+#   make check-refs  fail on a path into the w17 platform's private repository
+#
 # go/pb/consoleapi/rpc is the exception: the console's own API definition
 # generates it, so it has no source here — the console's maintainers refresh it
 # with a pull request when that API changes. make pb leaves it alone.
@@ -50,3 +52,13 @@ sync-admin-dpop:
 
 check-admin-dpop:
 	@sh tools/admin-dpop.sh check
+
+# Paths that only mean something inside the w17 platform's private repository
+# (its docs, its source tree) point a public reader at nothing. Say the reason
+# in place instead. (`git grep` exits 1 for no match and 2+ for a real failure,
+# which must not read as "clean".)
+.PHONY: check-refs
+check-refs:
+	@hits="$$(git grep -nE 'docs/(todos|decisions|specs|runbooks|audit|archive)/|\bsrcgo/(domains|tests)/' -- ':!Makefile' ':!**/go.sum' ':!**/package-lock.json')"; rc=$$?; \
+	[ $$rc -le 1 ] || { echo "!! git grep failed ($$rc)"; exit 1; }; \
+	if [ -n "$$hits" ]; then echo "!! these cite the platform's private repository:"; echo "$$hits"; exit 1; fi
