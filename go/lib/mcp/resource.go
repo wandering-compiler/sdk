@@ -15,6 +15,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
+	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
 // The HTTP transport as an OAuth 2.1 protected resource — the MCP
@@ -150,8 +151,13 @@ func (s *Server) mountResourceServer(mux *http.ServeMux) {
 
 // requireToken is the gate in front of the MCP endpoint: no bearer, or one
 // the auth method refuses, is a 401 challenge; a token that holds no
-// permission at all on this surface is a 403 insufficient_scope. Everything
-// past it is the per-tool gate, as on a surface without OAuth.
+// permission at all on this surface is a 403 insufficient_scope. A token the
+// auth method ACCEPTED but will not let act where the request asks — the
+// auth plugin's ORG_NOT_MEMBER, PERMISSION_DENIED — is a 403 too, with the
+// refusal's envelope and no challenge: a 401 there would send the client to
+// authorize again, and insufficient_scope to step up, over a token that is
+// fine. Everything past it is the per-tool gate, as on a
+// surface without OAuth.
 func (s *Server) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := bearerToken(r.Header.Get("Authorization")); !ok {
@@ -171,6 +177,13 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 			s.challenge(w, http.StatusForbidden, "insufficient_scope", "the token holds no permission on this server")
 		case err == nil:
 			next.ServeHTTP(w, r)
+		case status.Code(err) == codes.PermissionDenied:
+			// No challenge: the token is fine. invalid_token would send the
+			// client to sign in again, insufficient_scope to step up for
+			// scopes it already holds — a re-consent loop. The envelope says
+			// what is wrong (ORG_NOT_MEMBER).
+			w.Header().Set("Cache-Control", "no-store")
+			restgw.WriteGRPCErrorCtx(r.Context(), w, err)
 		case isUnauthenticated(err):
 			s.challenge(w, http.StatusUnauthorized, "invalid_token", "the token is not valid for this resource")
 		default:
@@ -182,9 +195,10 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 
 // isUnauthenticated reports whether the auth method refused the token, as
 // opposed to failing: a refusal is the caller's, a failure is ours.
+// PERMISSION_DENIED is not one — requireToken answers it 403 before this.
 func isUnauthenticated(err error) bool {
 	switch status.Code(err) {
-	case codes.Unauthenticated, codes.PermissionDenied, codes.NotFound, codes.InvalidArgument:
+	case codes.Unauthenticated, codes.NotFound, codes.InvalidArgument:
 		return true
 	}
 	return false

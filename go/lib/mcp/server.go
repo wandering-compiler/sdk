@@ -21,9 +21,11 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/core/healthz"
 	"github.com/wandering-compiler/sdk/go/core/lifecycle"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
@@ -37,6 +39,12 @@ import (
 // generated main injects one via SetPermResolver only when the surface
 // carries API-token auth.
 type PermResolver func(ctx context.Context, conn ConnectionInfo) (perms []int32, err error)
+
+// PermScopesResolver is PermResolver that also answers the auth response's
+// scopes, so tools/call can tell a caller who must NAME an organization from
+// one who lacks the permission (acllock.HeldInAnOrganization →
+// ORGANIZATION_REQUIRED). Injected with SetPermScopesResolver.
+type PermScopesResolver func(ctx context.Context, conn ConnectionInfo) (perms []int32, scopes map[string]string, err error)
 
 // Server wraps an mcp-go server and centralises the
 // auth/metadata pipeline so generated handler files only
@@ -55,6 +63,9 @@ type Server struct {
 	// call only the tools whose permission id its token covers.
 	permResolver PermResolver
 	toolPerms    map[string][]int32
+	// permScopes is the resolver SetPermScopesResolver installed (it also
+	// backs permResolver); nil when only SetPermResolver was called.
+	permScopes PermScopesResolver
 
 	// authEnv is a prefix-scoped snapshot of the process environment used
 	// as the stdio identity source: on stdio there are no HTTP
@@ -245,7 +256,18 @@ var gatewayHeaderKeys = map[string]bool{
 // on tools/list (to filter) + tools/call (to authorize). Leaving it
 // unset keeps the surface open. Generated main calls this only when the
 // MCP surface declares an auth method.
-func (s *Server) SetPermResolver(r PermResolver) { s.permResolver = r }
+func (s *Server) SetPermResolver(r PermResolver) { s.permResolver = r; s.permScopes = nil }
+
+// SetPermScopesResolver is SetPermResolver for a resolver that also answers
+// the auth response's scopes. Everything SetPermResolver gates, this gates
+// the same way; the scopes only decide WHICH refusal tools/call answers.
+func (s *Server) SetPermScopesResolver(r PermScopesResolver) {
+	s.permScopes = r
+	s.permResolver = func(ctx context.Context, conn ConnectionInfo) ([]int32, error) {
+		perms, _, err := r(ctx, conn)
+		return perms, err
+	}
+}
 
 // SetToolPerm records the permission id a tool requires. A tool with no
 // recorded perm (or perm 0) is ungated — always listed + callable.
@@ -379,6 +401,26 @@ func containsInt32(s []int32, v int32) bool {
 		}
 	}
 	return false
+}
+
+// deniedRefusal is tools/call's answer to a connection whose permissions do
+// not cover the tool: ORGANIZATION_REQUIRED (FAILED_PRECONDITION) when the
+// first missing id is one the caller holds inside an organization the request
+// did not name, the PERMISSION_DENIED it always was otherwise — the same
+// split the REST and rpc gates make (restgw.WriteDeniedCtx, the generated
+// authz).
+func deniedRefusal(ctx context.Context, tool string, held, required []int32, scopes map[string]string) error {
+	for _, id := range required {
+		if containsInt32(held, id) {
+			continue
+		}
+		if acllock.HeldInAnOrganization(scopes, id) {
+			return publicError(ctx, grpcerr.OrganizationRequired(ctx, "mcp",
+				fmt.Sprintf("tool %q needs permission %d, held only inside an organization the request does not name (W17-Org)", tool, id)))
+		}
+		break
+	}
+	return refusal(ctx, codes.PermissionDenied, fmt.Errorf("mcp: permission denied for tool %q", tool))
 }
 
 // coversAllInt32 reports whether held covers EVERY id in required. A
@@ -616,13 +658,19 @@ func (s *Server) CallUnary(
 	// Ungated tools + open surfaces (no PermResolver) skip it.
 	if s.permResolver != nil {
 		if permIDs, gated := s.toolPerms[req.Params.Name]; gated {
-			perms, err := s.permResolver(ctx, conn)
+			var perms []int32
+			var scopes map[string]string
+			var err error
+			if s.permScopes != nil {
+				perms, scopes, err = s.permScopes(ctx, conn)
+			} else {
+				perms, err = s.permResolver(ctx, conn)
+			}
 			if err != nil {
 				return nil, publicError(ctx, fmt.Errorf("mcp auth: %w", err))
 			}
 			if !coversAllInt32(perms, permIDs) {
-				return nil, refusal(ctx, codes.PermissionDenied,
-					fmt.Errorf("mcp: permission denied for tool %q", req.Params.Name))
+				return nil, deniedRefusal(ctx, req.Params.Name, perms, permIDs, scopes)
 			}
 		}
 	}
