@@ -319,9 +319,22 @@ func MarshalProtoAppend(dst []byte, msg proto.Message) ([]byte, error) {
 		}
 		return append(dst, out...), nil
 	}
-	// Reflective fallback. Alias rewrite first (descriptor-aligned, flat),
-	// then collapse oneofs — collapse matches variant keys alias-aware via
-	// wireKey, so the order composes.
+	return MarshalProtoReflective(dst, msg)
+}
+
+// MarshalProtoReflective appends msg's w17-dialect JSON produced by the
+// REFLECTIVE path alone — protojson, the alias rewrite, the oneof collapse —
+// whether or not a generated marshaler is registered for the type.
+//
+// It is the fallback MarshalProtoAppend takes, exported so a codec-parity
+// test can encode one message through both paths and compare the bytes: the
+// two serve the same endpoints, so a message's wire must not depend on which
+// of them ran. Not a production entry point — call MarshalProto.
+func MarshalProtoReflective(dst []byte, msg proto.Message) ([]byte, error) {
+	desc := msg.ProtoReflect().Descriptor()
+	// Alias rewrite first (descriptor-aligned, flat), then collapse oneofs —
+	// collapse matches variant keys alias-aware via wireKey, so the order
+	// composes.
 	raw, err := Marshaller.Marshal(msg)
 	if err != nil {
 		return dst, err

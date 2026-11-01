@@ -140,7 +140,7 @@ func renameForResponse(node any, desc protoreflect.MessageDescriptor) any {
 			fd = fields.ByJSONName(k)
 		}
 		if fd == nil {
-			out[k] = v
+			out[k] = renameCollapsedOneof(v, desc, k)
 			continue
 		}
 		alias := aliasFor(fd)
@@ -151,6 +151,56 @@ func renameForResponse(node any, desc protoreflect.MessageDescriptor) any {
 		out[key] = renameChild(v, fd)
 	}
 	return out
+}
+
+// renameCollapsedOneof renames the aliased fields of a oneof arm that is
+// already in the collapsed dialect — `{"<oneof>": {"w17_discriminator":
+// "<arm>", …arm fields}}`.
+//
+// The two marshal paths reach the rewrite in different shapes. The
+// reflective one renames protojson's FLAT output and collapses after, so an
+// arm's fields are renamed like any other message's. A generated marshaler
+// emits the collapsed dialect directly, and the rewrite then meets a key
+// that names a oneof, not a field. Passing that value through untouched
+// left every alias below a oneof unapplied on the generated path only: one
+// message, two spellings, decided by whether a codec happened to be
+// registered for it. json-dialect.md §2 keeps the alias rewrite for every
+// field, so the generated path is brought to the reflective one.
+//
+// A bare arm (a scalar, a scalar-serialising WKT, an object-shaped WKT)
+// carries no message fields to rename and is returned as is; so is any key
+// that names no genuine oneof.
+func renameCollapsedOneof(v any, desc protoreflect.MessageDescriptor, key string) any {
+	od := desc.Oneofs().ByName(protoreflect.Name(key))
+	if od == nil || od.IsSynthetic() {
+		return v
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	arm, ok := obj[protojsonx.DiscriminatorKey].(string)
+	if !ok {
+		return v
+	}
+	fd := od.Fields().ByName(protoreflect.Name(arm))
+	if fd == nil || !protojsonx.IsDiscriminatorArm(fd) {
+		return v
+	}
+	// The discriminator is the dialect's, not a field of the arm: keep it out
+	// of the arm's rename (an arm field of that very name must not alias it).
+	fieldsOnly := make(map[string]any, len(obj))
+	for k, val := range obj {
+		if k != protojsonx.DiscriminatorKey {
+			fieldsOnly[k] = val
+		}
+	}
+	renamed, _ := renameForResponse(fieldsOnly, fd.Message()).(map[string]any)
+	if renamed == nil {
+		renamed = map[string]any{}
+	}
+	renamed[protojsonx.DiscriminatorKey] = arm
+	return renamed
 }
 
 func renameChild(v any, fd protoreflect.FieldDescriptor) any {
