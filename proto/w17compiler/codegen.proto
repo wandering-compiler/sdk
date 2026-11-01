@@ -924,9 +924,24 @@ message RemoveBusinessBundleIntent {
 // layout. The server validates the component combo (gateway-anchored; a
 // storage-bearing set folds the full tier stack into one <domain>-server)
 // authoritatively before re-signing.
+//
+// With proto_attached, the server also refuses — with the message codegen
+// would print — every composition the project's proto cannot host: a domain
+// with no gateway surface, an admin fold for a domain without an admin
+// surface or whose only gateway is private, a storage fold that leaves the
+// domain's admin outside the binary. Without it (an older client) only the
+// component combination is checked, and codegen refuses the rest later.
 message ComposeBinaryIntent {
   string domain = 1;
   repeated string components = 2;
+  // The project's proto tree, proto-root-relative ("domains/app/rest.proto").
+  // The surfaces a composition needs are read from the files under
+  // domains/; a client may send only those.
+  repeated ProtoFile files = 3;
+  // True when the client sent its proto tree, even an empty one (a project
+  // with no domain yet). Tells "this project declares no surface" apart from
+  // "this client sent nothing".
+  bool proto_attached = 4;
 }
 
 // DecomposeBinaryIntent removes a domain's composed-binary declaration (revert
