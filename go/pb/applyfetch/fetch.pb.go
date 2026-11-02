@@ -871,11 +871,13 @@ type SeedTableDigest struct {
 	Model string `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
 	// table is the SQL table name, for the reader.
 	Table string `protobuf:"bytes,2,opt,name=table,proto3" json:"table,omitempty"`
-	// sha256 is the hex digest of the table's render-relevant schema: columns
-	// (types, nullability, defaults, generated expressions), primary key,
-	// foreign keys, indexes and checks, namespace and connection, and the
-	// custom types its columns use. Source positions, comments and size
-	// estimates are left out: they cannot change a render.
+	// sha256 is the hex digest of the table as the renderer reads it — exactly
+	// the schema fields the render depends on (columns: names, nullability,
+	// semantic type, default presence, generated expression; primary key;
+	// foreign keys; unique indexes; namespace; connection), and nothing else, so
+	// a console release that changes the schema's representation without
+	// changing a render leaves it alone. Opaque to the client: compare, never
+	// parse.
 	Sha256        string `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

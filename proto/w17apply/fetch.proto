@@ -319,11 +319,13 @@ message SeedTableDigest {
   string model = 1;
   // table is the SQL table name, for the reader.
   string table = 2;
-  // sha256 is the hex digest of the table's render-relevant schema: columns
-  // (types, nullability, defaults, generated expressions), primary key,
-  // foreign keys, indexes and checks, namespace and connection, and the
-  // custom types its columns use. Source positions, comments and size
-  // estimates are left out: they cannot change a render.
+  // sha256 is the hex digest of the table as the renderer reads it — exactly
+  // the schema fields the render depends on (columns: names, nullability,
+  // semantic type, default presence, generated expression; primary key;
+  // foreign keys; unique indexes; namespace; connection), and nothing else, so
+  // a console release that changes the schema's representation without
+  // changing a render leaves it alone. Opaque to the client: compare, never
+  // parse.
   string sha256 = 3;
 }
 
