@@ -25,7 +25,8 @@ import { Button, Code, CopyButton, Group, Modal, Stack, Text, TextInput } from "
 import { apiPost, displayString } from "./api";
 import { humanizeLabel } from "./format";
 import { useT } from "./i18n";
-import type { AdminActionSpec } from "./types";
+import { RefPicker } from "./refPicker";
+import type { AdminActionSpec, AdminSpec } from "./types";
 
 export interface ActionModalProps {
   action: AdminActionSpec;
@@ -36,6 +37,10 @@ export interface ActionModalProps {
   // Selected row IDs. Empty array = "apply to all filtered rows".
   // Currently always [] (no selection UI yet).
   selectedIds: string[];
+  // The whole spec: an action field that picks another page's row
+  // (`field_refs`) reads that page's list and title template. Optional so a
+  // host without refs need not thread it — such a field stays a text box.
+  spec?: AdminSpec;
 }
 
 export function ActionModal({
@@ -45,8 +50,9 @@ export function ActionModal({
   onClose,
   onSuccess,
   selectedIds,
+  spec,
 }: ActionModalProps) {
-  const [extras, setExtras] = useState<Record<string, string>>({});
+  const [extras, setExtras] = useState<Record<string, unknown>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(!action.confirm);
@@ -180,25 +186,43 @@ export function ActionModal({
 
         {hasSelection && confirmed && (
           <>
-            {fields.map((f) => (
-              <TextInput
-                key={f}
-                label={humanizeLabel(f)}
-                value={extras[f] || ""}
-                // Read the value BEFORE the updater. React nulls a synthetic event's
-                // `currentTarget` once the handler returns, and a functional updater
-                // runs later — so `e.currentTarget.value` INSIDE it threw
-                // "Cannot read properties of null (reading 'value')" on the first
-                // keystroke. Every extra field of every action was unusable, and
-                // nothing noticed because nothing had ever typed into one: this file
-                // had one of its five functions covered.
-                onChange={(e) => {
-                  const value = e.currentTarget.value;
-                  setExtras((prev) => ({ ...prev, [f]: value }));
-                }}
-                disabled={submitting}
-              />
-            ))}
+            {fields.map((f) => {
+              const fieldRef = action.field_refs?.[f];
+              if (fieldRef && spec) {
+                return (
+                  <RefPicker
+                    key={f}
+                    field={f}
+                    fieldRef={fieldRef}
+                    spec={spec}
+                    value={extras[f]}
+                    onChange={(v) => setExtras((prev) => ({ ...prev, [f]: v }))}
+                    dependsValue={fieldRef.depends_on ? extras[fieldRef.depends_on] : undefined}
+                    disabled={submitting}
+                    t={t}
+                  />
+                );
+              }
+              return (
+                <TextInput
+                  key={f}
+                  label={humanizeLabel(f)}
+                  value={displayString(extras[f])}
+                  // Read the value BEFORE the updater. React nulls a synthetic event's
+                  // `currentTarget` once the handler returns, and a functional updater
+                  // runs later — so `e.currentTarget.value` INSIDE it threw
+                  // "Cannot read properties of null (reading 'value')" on the first
+                  // keystroke. Every extra field of every action was unusable, and
+                  // nothing noticed because nothing had ever typed into one: this file
+                  // had one of its five functions covered.
+                  onChange={(e) => {
+                    const value = e.currentTarget.value;
+                    setExtras((prev) => ({ ...prev, [f]: value }));
+                  }}
+                  disabled={submitting}
+                />
+              );
+            })}
             {error && (
               <Text c="red" size="sm">
                 {error}

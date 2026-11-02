@@ -526,6 +526,43 @@ message AdminColumnRef {
   string page = 2;
 }
 
+// AdminFieldRef makes one form field a picker over another admin page's
+// rows: the operator chooses a row by its text, and the field gets a value
+// of that row. Typed text stays possible for nothing — a uuid known by heart
+// is not an interface.
+//
+// The rows are the page's own list (its list method, its search, its ACL):
+// a page is the one thing the admin already knows how to fetch, search and
+// gate. A value that is not a row of a model (a product name, a role key) is
+// picked the same way, from a page whose list method returns those values.
+message AdminFieldRef {
+  // The form field: a field of the form's request message (create, update
+  // or the action's source). Required.
+  string field = 1;
+
+  // The admin page whose rows are offered. It must have a list. Must match
+  // an AdminPage.name in the same admin_api. Required.
+  string page = 2;
+
+  // Path on the page's list item that the field gets ("id", "org.id").
+  // Empty = the row's identity: the column the page links its detail by.
+  string value = 3;
+
+  // How an option reads: a template over the list item, as
+  // `(w17.admin_title)` is ("{name} ({email})"). Empty = the page model's
+  // `(w17.admin_title)`, else the value itself.
+  string title = 4;
+
+  // Another field of the same form this one narrows by: an option is
+  // offered only while its `parent` equals that field's value (a role of
+  // the product chosen above). Empty = not narrowed.
+  string depends_on = 5;
+
+  // Path on the list item compared with `depends_on`'s value. Required
+  // with depends_on, refused without it.
+  string parent = 6;
+}
+
 // AdminDetail declares the detail view of one admin page.
 message AdminDetail {
   // Storage method ref — read one row. Returns a single
@@ -602,6 +639,12 @@ message AdminDetail {
   // model carries `(w17.acl_model)`. Name the method
   // whatever reads best.
   string create = 7;
+
+  // Form fields that pick a row of another admin page instead of taking
+  // typed text: the operator chooses from that page's rows, by their text,
+  // and the form sends the row's value. Applies to the create and the update
+  // form. Optional.
+  repeated AdminFieldRef field_refs = 8;
 }
 
 // AdminFieldset is one grouped section of fields in an
@@ -673,6 +716,10 @@ message AdminAction {
   // code", "rotate the API key", "generate an invite link". Without
   // it such an action does its work and shows nobody the result.
   AdminActionResult result = 7;
+
+  // The action form's fields that pick a row of another admin page — see
+  // AdminDetail.field_refs. Optional.
+  repeated AdminFieldRef field_refs = 8;
 }
 
 // AdminActionResult names the parts of an action's RESPONSE the admin

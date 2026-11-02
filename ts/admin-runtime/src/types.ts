@@ -302,6 +302,24 @@ export interface AdminInlineSpec {
   delete_endpoint?: string;
 }
 
+// AdminFieldRefSpec makes a form field a picker over another admin page's
+// rows (`AdminFieldRef`): the options are that page's list, an option reads
+// as `title` over the row and the field gets the row's `value`.
+export interface AdminFieldRefSpec {
+  // The admin page whose list rows are offered (a key of `spec.pages`).
+  page: string;
+  // Path on the list item that the field gets ("id", "org.id"). Always set
+  // by the compiler: empty in the declaration means the row's identity.
+  value: string;
+  // A template over the list item ("{name} ({email})"). Absent = the target
+  // page model's title template, else the value itself.
+  title?: string;
+  // Another field of the same form this one narrows by: an option is offered
+  // only while its `parent` path equals that field's value.
+  depends_on?: string;
+  parent?: string;
+}
+
 export interface AdminActionSpec {
   endpoint: string;
   fields: string[];
@@ -311,6 +329,9 @@ export interface AdminActionSpec {
   // itself does ("check upstream", "rebuild the index") rather than
   // for what is selected in it.
   target: "LIST" | "DETAIL" | "BOTH" | "PAGE";
+  // The action form's fields that pick a row of another admin page, keyed
+  // by field (`AdminAction.field_refs`).
+  field_refs?: Record<string, AdminFieldRefSpec>;
   // Cascade-stamped permission IDs required to invoke this
   // action. SPA hides the action button when whoami's
   // permission_ids don't include all of these. UX-only —
@@ -519,6 +540,9 @@ export interface AdminDetailSpec {
   // number. Keyed by field name; absent when the form has no
   // enum-bound field.
   field_choices?: Record<string, AdminChoicesSpec>;
+  // Form fields that pick a row of another admin page, keyed by field
+  // (`AdminDetail.field_refs`). Applies to the create and the update form.
+  field_refs?: Record<string, AdminFieldRefSpec>;
   // Cascade-stamped perms required per endpoint. SPA hides the
   // edit form when read perms missing (no point editing what
   // you can't see), the submit button when update perms

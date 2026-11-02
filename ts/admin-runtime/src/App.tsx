@@ -351,6 +351,7 @@ export function App({ spec, slots }: AppProps) {
           ) : view.kind === "create" ? (
             <CreatePage
               page={spec.pages[view.pageName]}
+              spec={spec}
               whoami={whoami}
               slots={slots}
               onBack={() => navigate({ kind: "list", pageName: view.pageName })}

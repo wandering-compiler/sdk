@@ -27,10 +27,14 @@ import { pageLabel } from "./format";
 import { apiPost } from "./api";
 import { useT } from "./i18n";
 import { hasAllPermissions } from "./auth";
-import type { AdminPageSpec, SlotRegistry, WhoAmIResp } from "./types";
+import type { AdminPageSpec, AdminSpec, SlotRegistry, WhoAmIResp } from "./types";
 
 export interface CreatePageProps {
   page: AdminPageSpec;
+  // The whole spec: a field that picks another page's row (`field_refs`)
+  // reads that page's list and title template. Optional so a host without
+  // refs need not thread it.
+  spec?: AdminSpec;
   whoami?: WhoAmIResp | null;
   slots?: SlotRegistry;
   onBack: () => void;
@@ -40,7 +44,7 @@ export interface CreatePageProps {
   onCreated: (newId: string | undefined) => void;
 }
 
-export function CreatePage({ page, whoami, slots, onBack, onCreated }: CreatePageProps) {
+export function CreatePage({ page, spec, whoami, slots, onBack, onCreated }: CreatePageProps) {
   const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -106,6 +110,8 @@ export function CreatePage({ page, whoami, slots, onBack, onCreated }: CreatePag
                 rawValue: undefined,
                 disabled: saving,
                 choices: page.detail?.field_choices?.[f],
+                fieldRef: page.detail?.field_refs?.[f],
+                spec,
                 t,
                 register,
                 control,
