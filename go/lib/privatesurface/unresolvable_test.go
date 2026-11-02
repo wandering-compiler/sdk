@@ -18,8 +18,8 @@ func TestWarnUnresolvable(t *testing.T) {
 	warnLog = func(format string, a ...any) { logged = append(logged, fmt.Sprintf(format, a...)) }
 
 	resolveHost = func(context.Context, string) error { return errors.New("no such host") }
-	warnUnresolvable("authplatform-private", "authplatform-private:50061")
-	if len(logged) != 1 || !strings.Contains(logged[0], `"authplatform-private" does not resolve`) || !strings.Contains(logged[0], "private-proxy") {
+	warnUnresolvable("accounts-private", "accounts-private:50061")
+	if len(logged) != 1 || !strings.Contains(logged[0], `"accounts-private" does not resolve`) || !strings.Contains(logged[0], "private-proxy") {
 		t.Fatalf("logged = %q, want one warning naming the host and the private proxy", logged)
 	}
 
