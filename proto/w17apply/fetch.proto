@@ -284,6 +284,47 @@ message FetchFixtureSeedResponse {
   // and says so rather than guessing — an old console keeps today's behaviour
   // with a warning, instead of changing what it does under the operator.
   string connection = 2;
+
+  // schema is what these statements were rendered AGAINST: the renderer's
+  // version and a digest of every table the render depends on. A rendered
+  // seed is a function of three inputs — the fixture's bytes, the schema of
+  // the tables it touches, the renderer — and the client could only ever see
+  // the first: it uploads the IR as opaque bytes. A seed rendered while its
+  // tables had no foreign keys was ordered alphabetically, the FKs arrived
+  // with a plugin, and the seed stayed "fresh" until apply inserted a
+  // membership before its user.
+  //
+  // The client records it beside the seed (`w17/fixtures/.rendered-from.json`)
+  // and compares it against the same answer for the current schema. Unset
+  // from a console that predates the field: "cannot tell", never "stale".
+  SeedSchema schema = 3;
+}
+
+// SeedSchema is the schema provenance of one render.
+message SeedSchema {
+  // renderer is the version of the console's fixture renderer. It changes
+  // when the statements it produces for the SAME fixture and schema change —
+  // a seed rendered by an older renderer is stale even when nothing else is.
+  string renderer = 1;
+  // tables are the tables the render depends on, sorted by model: the ones
+  // the fixture writes, prunes, logs into or references, and every table
+  // they reach through a foreign key (the closure that decides load order).
+  repeated SeedTableDigest tables = 2;
+}
+
+// SeedTableDigest is one table's schema, as a render reads it.
+message SeedTableDigest {
+  // model is the fixture-facing name, `<module>.<Message>` — what an author
+  // writes in a row's `model`, and so what a stale report names.
+  string model = 1;
+  // table is the SQL table name, for the reader.
+  string table = 2;
+  // sha256 is the hex digest of the table's render-relevant schema: columns
+  // (types, nullability, defaults, generated expressions), primary key,
+  // foreign keys, indexes and checks, namespace and connection, and the
+  // custom types its columns use. Source positions, comments and size
+  // estimates are left out: they cannot change a render.
+  string sha256 = 3;
 }
 
 // SeedStmt is one parameterized upsert: a SQL string with $1..$N placeholders

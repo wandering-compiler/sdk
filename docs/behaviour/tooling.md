@@ -589,7 +589,10 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 **Purpose.** `DevApply` runs a dev plan per migration with `CONCURRENTLY` stripped and the baseline
 recorded inside the schema transaction. `StoreSchemaStateOf` reports Unknown (no fingerprint),
 Empty (fingerprint of the empty schema) or Populated. Snapshots dump and restore a store.
-`StaleRenders` compares fixture digests with the render manifest.
+`StaleRenders` compares the render manifest with the fixtures beside it and with the current
+schema (`.current-schema.json`): a seed is stale when its fixture changed, is gone or was never
+rendered, or when the renderer or a table the render depends on (the fixture's tables and their
+foreign-key closure, digested by the console) differs from what it was rendered against.
 
 **Guarantees.**
 
@@ -600,6 +603,9 @@ Empty (fingerprint of the empty schema) or Populated. Snapshots dump and restore
 | T17.3 | Statement rewriting MUST NOT alter text inside dollar-quoted bodies and MUST recognise `COMMIT` in any case. | `TestDevApplySQL_IgnoresACommitInsideADollarQuotedBody`, `TestDevApplySQL_RecognisesCommitInAnyCase`, `TestStripConcurrently_LeavesDollarQuotedBodiesAlone`, `TestScanSQL_OpaqueForms`, `TestSplitStatements_QuotedIdentifiersAndEscapeStrings` |
 | T17.4 | Postgres and MySQL snapshot tools MUST receive a URL DSN's password through the environment, not argv. | `TestSnapshotter_ConnFlagsAndChildEnv` |
 | T17.5 | A missing fixture source root MUST read as "cannot tell", not stale. | `TestStaleRenders_CannotTellIsNotStale` |
+| T17.6 | A seed whose recorded schema differs from the current one MUST be stale and name what changed, with or without the authoring tree beside it; an unchanged schema MUST be fresh. | `TestStaleRenders_AnFKAddedAfterTheRenderIsStale`, `TestStaleRenders_AnUnchangedSchemaIsFresh`, `TestStaleRenders_NamesEverySchemaChange`, `TestStaleRenders_TheSchemaAxisWorksWithoutTheAuthoringTree` |
+| T17.7 | A render that recorded no schema MUST be stale against a known current schema and MUST NOT be stale without one. | `TestStaleRenders_AnOldManifestEntryIsStaleOnce` |
+| T17.8 | `fixtures apply` MUST refuse a seed rendered against another schema before seeding anything; `--allow-stale` MUST seed. | `TestFixturesApply_RefusesARenderMadeAgainstAnotherSchema` |
 
 ## T18. Fingerprint and observation
 

@@ -229,9 +229,10 @@ files, so a half-applied group is a state no fixture describes.
   --connection CONN  which owned connection to seed (needed if the bundle serves
                      several and the render does not name the store)
   --dry-run          list what would be applied, apply nothing
-  --allow-stale      seed even when the rendered seeds are older than the
-                     fixtures beside them (refused by default: a stale render
-                     seeds yesterday's rows)
+  --allow-stale      seed even when the rendered seeds no longer match the
+                     fixtures beside them or the schema they were rendered
+                     against (refused by default: a stale render seeds
+                     yesterday's rows, or today's in the wrong order)
 
 Groups are a CONVENTION, not a safety gate: what "dev" and "prod" mean is the
 project's to decide by naming its groups, and what a given environment applies
@@ -325,7 +326,8 @@ type applyFlags struct {
 	fetch      bool
 	dryRun     bool
 	allowNoDSN bool
-	// allowStale: fixtures apply seeds from a render older than its fixtures.
+	// allowStale: fixtures apply seeds from a render older than its fixtures
+	// or rendered against another schema.
 	allowStale bool
 	// verb is the subcommand these flags were parsed for.
 	verb      string
@@ -355,7 +357,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print pending migrations without applying")
 	fs.BoolVar(&f.checks, "checks", false, "apply/rollback: run each migration's data checks for that direction before its body and refuse it when one finds rows (also W17_MIGRATE_CHECKS=1)")
 	fs.BoolVar(&f.fake, "fake", false, "apply only: RECORD each pending migration without running it — for a database that already holds what they describe. Each is checked against the database first and refused if it does not match")
-	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that are older than the fixtures beside them (the deliberate override — a stale render seeds yesterday's rows)")
+	fs.BoolVar(&f.allowStale, "allow-stale", false, "fixtures only: seed from rendered seeds that no longer match the fixtures beside them or the schema they were rendered against (the deliberate override — a stale render seeds yesterday's rows)")
 	fs.BoolVar(&f.allowNoDSN, "allow-no-dsn", false, "fixtures only: succeed instead of failing when NO owned connection has a DSN (opt in to doing nothing)")
 	fs.StringVar(&f.logFormat, "log-format", "text", "per-migration log line format: text or json")
 	fs.BoolVar(&f.exitCode, "exit-code", false, "status only: exit non-zero while anything is pending (for a deploy that can read an exit code, not the output)")
