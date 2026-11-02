@@ -334,7 +334,10 @@ export function DetailPage({
     </Stack>
   );
 
-  const titleTemplate = spec.title_templates?.[page.name];
+  // The row heading is the model's (w17.admin_title), keyed by the model ref
+  // the page shows — the compiler writes it under page.model. A page's own
+  // `title` is its label (navigation, headers), never a template.
+  const titleTemplate = spec.title_templates?.[page.model];
   const resolvedTitle = titleTemplate ? formatTitle(titleTemplate, row).trim() : "";
   const headerTitle = resolvedTitle || pageLabel(page);
   const headerSubtitle = resolvedTitle ? `${pageLabel(page)} · ${rowId}` : `ID: ${rowId}`;

@@ -762,11 +762,12 @@ type AdminPage struct {
 	// Drives the title fallback + FK-picker/inline label rendering.
 	// Required.
 	Model string `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
-	// Per-page title format string override. Empty = inherit
-	// model-level `(w17.admin_title)`. Applies only to THIS
-	// page's chrome (breadcrumb + list row heading + detail
-	// heading); FK pickers + inline labels referencing this
-	// page's model continue to use the model-level annotation.
+	// The page's label: its entry in the navigation, the heading of
+	// its list, "Add <label>", its overview tile. Plain text,
+	// translated like any other msgid. Empty = the page name,
+	// humanized. A `{field}` reference is refused — a label names the
+	// page, not a row; a row's heading is the model's
+	// `(w17.admin_title)`.
 	Title string `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
 	// List view. Optional — pages without a list render the
 	// detail directly (useful for singleton resources like
@@ -2134,10 +2135,9 @@ var (
 	// only be broken: the words inside the braces are field names
 	// resolved against the model, not language.
 	//
-	// Per-page override sits inside `AdminPage.title` and applies
-	// only to that page's own chrome (breadcrumb + heading); FK
-	// pickers and inline labels referencing the same model
-	// continue to use this annotation.
+	// The admin shows it as the heading of a row's detail page, on
+	// every page whose `model` is this message. There is no per-page
+	// override: `AdminPage.title` is the page's label, not a template.
 	//
 	// optional string admin_title = 50161;
 	E_AdminTitle = &file_w17_admin_proto_extTypes[1]

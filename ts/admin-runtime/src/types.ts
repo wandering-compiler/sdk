@@ -17,6 +17,8 @@ export interface AdminSpec {
   prefix: string;
   default_language?: string;
   auth: AdminAuthSpec;
+  // A model's (w17.admin_title), the detail page's row heading, keyed by the
+  // model ref — the page's `model`, not its name.
   title_templates?: Record<string, string>;
   pages: Record<string, AdminPageSpec>;
   nav?: AdminNavGroup[];
@@ -276,6 +278,8 @@ export interface AdminSignInOption {
 export interface AdminPageSpec {
   name: string;
   model: string;
+  // The page's label: navigation, headers, "Add {name}". Plain text; the
+  // compiler refuses a {field} reference here (a label has no row).
   title?: string;
   list?: AdminListSpec;
   // Nullable, and the type has to say so. The Go side emits
