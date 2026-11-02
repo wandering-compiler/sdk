@@ -934,9 +934,11 @@ message RemoveBusinessBundleIntent {
 message ComposeBinaryIntent {
   string domain = 1;
   repeated string components = 2;
-  // The project's proto tree, proto-root-relative ("domains/app/rest.proto").
-  // The surfaces a composition needs are read from the files under
-  // domains/; a client may send only those.
+  // The project's domain proto files, proto-root-relative
+  // ("domains/app/rest.proto"). Only the files under domains/ are read, and
+  // only for the markers in sdk/go/tooling/composefacts. A client sends each
+  // file's composefacts.Extract rather than its full text, so the edit stays
+  // one small message however large the project's protos are.
   repeated ProtoFile files = 3;
   // True when the client sent its proto tree, even an empty one (a project
   // with no domain yet). Tells "this project declares no surface" apart from

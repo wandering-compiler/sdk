@@ -138,6 +138,9 @@ sdk/go/
 │   │                field ops over JSON/proto via a per-object read-modify-write.
 │   ├── fingerprint/ deterministic hash of a target DB's schema state — the drift
 │   │                signal migrations and reconcile compare against.
+│   ├── composefacts/ the proto markers a composed binary is checked against
+│   │                (surfaces, audience registries), and Extract, which reduces
+│   │                a file to them for a compose edit.
 │   ├── certgen/     mints the local dev PKI (self-signed CA + CA-signed leaf) used
 │   │                when the internal-mesh TLS switch (W17_INTERNAL_TLS) is on.
 │   ├── e2e/         the harness the *generated* e2erunner test module compiles

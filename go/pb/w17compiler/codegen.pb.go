@@ -3342,9 +3342,11 @@ type ComposeBinaryIntent struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Domain     string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
 	Components []string               `protobuf:"bytes,2,rep,name=components,proto3" json:"components,omitempty"`
-	// The project's proto tree, proto-root-relative ("domains/app/rest.proto").
-	// The surfaces a composition needs are read from the files under
-	// domains/; a client may send only those.
+	// The project's domain proto files, proto-root-relative
+	// ("domains/app/rest.proto"). Only the files under domains/ are read, and
+	// only for the markers in sdk/go/tooling/composefacts. A client sends each
+	// file's composefacts.Extract rather than its full text, so the edit stays
+	// one small message however large the project's protos are.
 	Files []*ProtoFile `protobuf:"bytes,3,rep,name=files,proto3" json:"files,omitempty"`
 	// True when the client sent its proto tree, even an empty one (a project
 	// with no domain yet). Tells "this project declares no surface" apart from
