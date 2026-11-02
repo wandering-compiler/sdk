@@ -427,7 +427,7 @@ func TestFixturesApply_RefusesARenderOlderThanItsFixture(t *testing.T) {
 	}
 	rec.calls = nil
 	// Another domain's staleness is not this run's.
-	if err := apply("--domain", "billing"); err != nil && strings.Contains(err.Error(), "older than") {
+	if err := apply("--domain", "billing"); err != nil && strings.Contains(err.Error(), "no longer match") {
 		t.Fatalf("a stale fixture in another domain refused this run: %v", err)
 	}
 	// Re-rendered (digest matches again) → seeds.
@@ -441,6 +441,60 @@ func TestFixturesApply_RefusesARenderOlderThanItsFixture(t *testing.T) {
 	}
 	if len(rec.calls) != 1 {
 		t.Fatalf("fresh render not seeded: %+v", rec.calls)
+	}
+}
+
+// The incident, at the place it failed: a deployed image — the render, its
+// manifest and the schema codegen generated against, no authoring tree — whose
+// seed was rendered before its tables had foreign keys. Refused, naming the
+// table, before anything is seeded; --allow-stale still seeds.
+func TestFixturesApply_RefusesARenderMadeAgainstAnotherSchema(t *testing.T) {
+	rec := &recordingSeeder{}
+	withSeeder(t, rec)
+	rendered := t.TempDir()
+	seed := migrate.FixtureSeed{Domain: "app", Name: "seed",
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO app_membership"), seedStmt("INSERT INTO app_user")}}
+	if err := migrate.WriteFixtureSeed(rendered, seed); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.WriteRenderManifest(rendered, &migrate.RenderManifest{
+		SourceRoot: "../../fixtures",
+		Seeds: map[string]migrate.RenderedSource{"app/seed": {Source: "app/seed.json", SHA256: "x",
+			Schema: &migrate.RenderedSchema{Renderer: "1", Tables: map[string]string{"app.Membership": "no-fk", "app.User": "u"}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current := func(membership string) {
+		t.Helper()
+		if err := migrate.WriteCurrentSchema(rendered, &migrate.CurrentSchema{Seeds: map[string]migrate.CurrentSeedSchema{
+			"app/seed": {Schema: &migrate.RenderedSchema{Renderer: "1", Tables: map[string]string{"app.Membership": membership, "app.User": "u"}}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current("with-fk")
+	lock := writeLock(t, migrate.LockConnection{Name: "app-postgres"})
+	env := Options{Getenv: envMap{"W17_TARGET_APP_POSTGRES": "postgres://x/y"}.get}
+	apply := func(extra ...string) error {
+		var out strings.Builder
+		env.Out = &out
+		return runFixtures(context.Background(), append([]string{"apply", "--lock", lock, "--fixtures", rendered}, extra...), env, &out)
+	}
+	err := apply()
+	if err == nil || !strings.Contains(err.Error(), migrate.StaleSchemaChanged) || !strings.Contains(err.Error(), "app.Membership") {
+		t.Fatalf("a render against another schema was not refused: %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("seeded anyway: %+v", rec.calls)
+	}
+	if err := apply("--allow-stale"); err != nil || len(rec.calls) != 1 {
+		t.Fatalf("--allow-stale: %v, %+v", err, rec.calls)
+	}
+	rec.calls = nil
+	// Re-rendered against the schema it now has → seeds.
+	current("no-fk")
+	if err := apply(); err != nil || len(rec.calls) != 1 {
+		t.Fatalf("fresh render: %v, %+v", err, rec.calls)
 	}
 }
 

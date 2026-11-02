@@ -337,9 +337,12 @@ func loadSeeds(ctx context.Context, f applyFlags, scope domainScope, lk *migrate
 		// without the permission the new endpoint needs, and an endpoint that
 		// answers PERMISSION_DENIED with nothing pointing at the seed (a
 		// consumer, twice). Refuse when the authoring tree is beside the
-		// render and disagrees with it; a deployed image carries only the
-		// render, and there StaleRenders has nothing to compare and says so
-		// by returning nothing.
+		// render and disagrees with it. And refuse a render made against
+		// another schema — a seed ordered before its tables had foreign keys
+		// inserts a membership ahead of its user — which needs no authoring
+		// tree: the schema codegen generated against travels beside the
+		// render (.current-schema.json), so a deployed image is checked too.
+		// Where neither can be compared StaleRenders returns nothing.
 		if !f.allowStale {
 			if err := refuseStaleRender(f.fixtures, scope, f.group); err != nil {
 				return nil, err
@@ -557,7 +560,7 @@ func refuseStaleRender(dir string, scope domainScope, group string) error {
 	if len(mine) == 0 {
 		return nil
 	}
-	return fmt.Errorf("fixtures: the rendered seeds in %s are older than the fixtures they came from:\n%s\n"+
+	return fmt.Errorf("fixtures: the rendered seeds in %s no longer match the fixtures or the schema they were rendered from:\n%s\n"+
 		"  override: --allow-stale seeds from the render as it is",
 		dir, migrate.FormatStaleRenders(mine))
 }
