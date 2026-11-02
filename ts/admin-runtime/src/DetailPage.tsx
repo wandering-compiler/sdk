@@ -20,6 +20,7 @@ import {
 import { Control, Controller, useForm, UseFormRegister } from "react-hook-form";
 
 import { ActionModal } from "./ActionModal";
+import { RefField } from "./refPicker";
 import { InlineSection } from "./InlineSection";
 import { PageHeader, StateView } from "./components";
 import { humanizeLabel, pageLabel } from "./format";
@@ -35,6 +36,7 @@ import type { SlotComponent } from "./types";
 import type {
   AdminActionSpec,
   AdminChoicesSpec,
+  AdminFieldRefSpec,
   AdminFieldsetSpec,
   AdminPageSpec,
   AdminSpec,
@@ -274,6 +276,7 @@ export function DetailPage({
           <Stack>
             {hasFieldsets ? (
               <FieldsetSections
+                spec={spec}
                 fieldsets={fieldsets}
                 readonlySet={readonlySet}
                 row={row}
@@ -296,6 +299,8 @@ export function DetailPage({
                     disabled: !detail.update_endpoint || !canUpdate || saving,
                     display: displayFor(f, false),
                     choices: detail.field_choices?.[f],
+                    fieldRef: detail.field_refs?.[f],
+                    spec,
                     t,
                     register,
                     control,
@@ -312,6 +317,8 @@ export function DetailPage({
                     disabled: true,
                     display: displayFor(f, true),
                     choices: detail.field_choices?.[f],
+                    fieldRef: detail.field_refs?.[f],
+                    spec,
                     t,
                     register,
                     control,
@@ -367,6 +374,7 @@ export function DetailPage({
       {detailActions.map(([name, action]) => (
         <ActionModal
           key={name}
+          spec={spec}
           action={action}
           actionName={name}
           open={openAction === name}
@@ -483,6 +491,8 @@ export function renderFieldInput({
   control,
   slots,
   page,
+  fieldRef,
+  spec,
 }: {
   field: string;
   mode: "editable" | "readonly";
@@ -508,6 +518,10 @@ export function renderFieldInput({
   control?: Control<Record<string, unknown>>;
   slots: SlotRegistry | undefined;
   page: AdminPageSpec;
+  // The field picks a row of another page (`detail.field_refs[field]`); with
+  // the spec and a form control it renders a picker instead of a text box.
+  fieldRef?: AdminFieldRefSpec;
+  spec?: AdminSpec;
 }) {
   // renderFieldInput is a plain function invoked during a component's render,
   // not a component itself, so it cannot call useT — the translator arrives as
@@ -567,6 +581,20 @@ export function renderFieldInput({
         // with). Empty submit = "don't change".
         disabled={disabled}
         {...register(field)}
+      />
+    );
+  }
+  if (fieldRef && spec && control) {
+    return (
+      <RefField
+        key={field}
+        field={field}
+        fieldRef={fieldRef}
+        spec={spec}
+        control={control}
+        defaultValue={rawValue}
+        disabled={disabled}
+        t={tr}
       />
     );
   }
@@ -664,6 +692,7 @@ function FieldsetSections({
   displayFor,
   slots,
   page,
+  spec,
 }: {
   fieldsets: AdminFieldsetSpec[];
   readonlySet: Set<string>;
@@ -675,6 +704,7 @@ function FieldsetSections({
   displayFor: (field: string, readonly: boolean) => FieldDisplay | undefined;
   slots: SlotRegistry | undefined;
   page: AdminPageSpec;
+  spec?: AdminSpec;
 }) {
   const t = useT();
   const anyCollapsed = fieldsets.some((fs) => fs.collapsed);
@@ -693,6 +723,7 @@ function FieldsetSections({
             <Accordion.Control>{fs.title ? t(fs.title) : t("Section")}</Accordion.Control>
             <Accordion.Panel>
               <FieldsetBody
+                spec={spec}
                 fields={fs.fields ?? []}
                 readonlySet={readonlySet}
                 row={row}
@@ -717,6 +748,7 @@ function FieldsetSections({
         <Stack key={`fs-${i}`} gap="xs">
           {fs.title && <Title order={5}>{t(fs.title)}</Title>}
           <FieldsetBody
+            spec={spec}
             fields={fs.fields ?? []}
             readonlySet={readonlySet}
             row={row}
@@ -745,6 +777,7 @@ function FieldsetBody({
   displayFor,
   slots,
   page,
+  spec,
 }: {
   fields: string[];
   readonlySet: Set<string>;
@@ -756,6 +789,7 @@ function FieldsetBody({
   displayFor: (field: string, readonly: boolean) => FieldDisplay | undefined;
   slots: SlotRegistry | undefined;
   page: AdminPageSpec;
+  spec?: AdminSpec;
 }) {
   const t = useT();
   return (
@@ -770,6 +804,8 @@ function FieldsetBody({
           disabled: isReadonly || disabled,
           display: displayFor(f, isReadonly),
           choices: page.detail?.field_choices?.[f],
+          fieldRef: page.detail?.field_refs?.[f],
+          spec,
           t,
           register,
           control,
