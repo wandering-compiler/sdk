@@ -148,3 +148,51 @@ describe("DetailPage value formatting", () => {
     expect(screen.getByDisplayValue("2026-07-26T14:03:00Z")).toBeTruthy();
   });
 });
+
+// The row heading comes from the model's (w17.admin_title), which the compiler
+// writes into title_templates under the model ref (page.model). It was read
+// under the page's name instead, so no admin ever showed one: the page name is
+// an identifier ("OrgPlans"), the key a model ref ("billing.PlanLine").
+describe("DetailPage row heading", () => {
+  const titled = {
+    ...spec,
+    title_templates: { "billing.PlanLine": "{org_name} → {product}" },
+  } as AdminSpec;
+
+  it("formats the model's title template for the row", async () => {
+    vi.mocked(apiGet).mockResolvedValue({ org_name: "Acme", product: "maps", amount: "1" });
+    render(
+      <MantineProvider>
+        <DetailPage
+          spec={titled}
+          page={{ ...page(), name: "OrgPlans", model: "billing.PlanLine", title: "Organization plans" }}
+          rowId="1"
+          onBack={() => {}}
+        />
+      </MantineProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Acme → maps")).toBeTruthy();
+    });
+    // The page's own title is its label, shown beside the row's id.
+    expect(screen.getByText("Organization plans · 1")).toBeTruthy();
+  });
+
+  it("falls back to the page label when the model has no template", async () => {
+    vi.mocked(apiGet).mockResolvedValue({ amount: "1" });
+    render(
+      <MantineProvider>
+        <DetailPage
+          spec={titled}
+          page={{ ...page(), name: "Invoices", model: "billing.Invoice", title: "Invoices" }}
+          rowId="1"
+          onBack={() => {}}
+        />
+      </MantineProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("ID: 1")).toBeTruthy();
+    });
+    expect(screen.getByText("Invoices")).toBeTruthy();
+  });
+});
