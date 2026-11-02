@@ -20,7 +20,7 @@ import {
 import { Control, Controller, useForm, UseFormRegister } from "react-hook-form";
 
 import { ActionModal } from "./ActionModal";
-import { RefField } from "./refPicker";
+import { RefField, RefText } from "./refPicker";
 import { InlineSection } from "./InlineSection";
 import { PageHeader, StateView } from "./components";
 import { humanizeLabel, pageLabel } from "./format";
@@ -565,6 +565,9 @@ export function renderFieldInput({
       return (
         <TextInput key={field} label={humanizeLabel(field)} disabled value="••••••••" readOnly />
       );
+    }
+    if (fieldRef && spec) {
+      return <RefText key={field} field={field} fieldRef={fieldRef} spec={spec} value={rawValue} />;
     }
     return <TextInput key={field} label={humanizeLabel(field)} disabled value={value} readOnly />;
   }

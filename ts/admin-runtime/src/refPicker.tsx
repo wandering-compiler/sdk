@@ -7,7 +7,7 @@
 // are the target page's own list — its endpoint, its search, its paging — so
 // a row the operator may not read is not offered either.
 
-import { Select } from "@mantine/core";
+import { Select, TextInput } from "@mantine/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useController, useWatch } from "react-hook-form";
 
@@ -257,4 +257,31 @@ export function RefField({
       t={t}
     />
   );
+}
+
+// RefText is the display-only half: a ref field the form will not submit (a
+// readonly field, or a detail with no update) shows the picked row's text,
+// as the picker would, instead of its id. Until the rows are in, or when the
+// value is not among them (another page of a long list, a row the operator
+// may not read, a list that failed), it shows the value itself.
+export function RefText({
+  field,
+  fieldRef,
+  spec,
+  value,
+}: {
+  field: string;
+  fieldRef: AdminFieldRefSpec;
+  spec: AdminSpec;
+  value: unknown;
+}) {
+  const held = token(value);
+  const target = held == null ? undefined : spec.pages?.[fieldRef.page];
+  const { rows } = useRefRows(target, "");
+  const label = useMemo(() => {
+    if (held == null) return "";
+    const hit = refOptions(rows, fieldRef, spec).find((o) => o.value === held);
+    return hit ? hit.label : held;
+  }, [rows, fieldRef, spec, held]);
+  return <TextInput label={humanizeLabel(field)} disabled value={label} readOnly />;
 }
