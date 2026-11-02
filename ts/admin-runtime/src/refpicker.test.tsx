@@ -210,6 +210,43 @@ describe("a picker on the edit form", () => {
   });
 });
 
+describe("a ref field the form does not submit", () => {
+  // org_id readonly on the edit form; a detail with no update shows every
+  // field display-only. Both read the picked row's text, not its id.
+  const readonlyPage = {
+    ...plansPage,
+    detail: { ...plansPage.detail, readonly_fields: ["org_id"], fields: ["product", "role_key"] },
+  } as unknown as AdminPageSpec;
+  const viewOnlyPage = {
+    ...plansPage,
+    detail: { ...plansPage.detail, update_endpoint: "" },
+  } as unknown as AdminPageSpec;
+  const shown = (name: RegExp) => screen.getByRole<HTMLInputElement>("textbox", { name }).value;
+
+  it("shows a readonly field's row by its text", async () => {
+    serve({ org_id: orgs[1].id, product: "scout", role_key: "geo_reader" });
+    wrap(<DetailPage spec={spec} page={readonlyPage} rowId="1" onBack={vi.fn()} />);
+    await waitFor(() => expect(shown(/org id/i)).toBe("Globex"));
+  });
+
+  it("shows every ref of a view-only detail by its text", async () => {
+    serve({ org_id: orgs[0].id, product: "scout", role_key: "geo_admin" });
+    wrap(<DetailPage spec={spec} page={viewOnlyPage} rowId="1" onBack={vi.fn()} />);
+    await waitFor(() => expect(shown(/org id/i)).toBe("Acme"));
+    expect(shown(/role key/i)).toBe("Geo admin");
+  });
+
+  it("shows the value itself when no row carries it", async () => {
+    serve({
+      org_id: "99999999-dead-4000-8000-000000000000",
+      product: "scout",
+      role_key: "geo_reader",
+    });
+    wrap(<DetailPage spec={spec} page={readonlyPage} rowId="1" onBack={vi.fn()} />);
+    await waitFor(() => expect(shown(/org id/i)).toBe("99999999-dead-4000-8000-000000000000"));
+  });
+});
+
 describe("a picker on an action form", () => {
   it("sends the chosen row's value with the action", async () => {
     serve();
