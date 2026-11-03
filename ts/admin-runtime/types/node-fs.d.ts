@@ -1,5 +1,5 @@
-// The two `node:fs` calls `src/vocab.test.ts` makes, declared here instead of
-// pulling in `@types/node`.
+// The two `node:fs` calls `src/vocab.test.ts` and `src/refpicker.sites.test.ts`
+// make, declared here instead of pulling in `@types/node`.
 //
 // Not a preference. `@types/node` is GLOBAL once installed, and this package is
 // typed for the DOM ("lib": ["ES2022", "DOM", "DOM.Iterable"]) — Node's own
