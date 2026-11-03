@@ -916,7 +916,14 @@ type AdminList struct {
 	// that never came — so a misspelled default silently produced
 	// the empty case, a list opening in the method's own order with
 	// no error and plausible-looking rows. It is enforced now.
-	DefaultSort   string `protobuf:"bytes,4,opt,name=default_sort,json=defaultSort,proto3" json:"default_sort,omitempty"`
+	DefaultSort string `protobuf:"bytes,4,opt,name=default_sort,json=defaultSort,proto3" json:"default_sort,omitempty"`
+	// Filters that pick a row of another admin page instead of taking typed
+	// text — the same pickers as the forms' (`AdminDetail.field_refs`): the
+	// operator filters by an organization's name and the list is asked for
+	// its value. `field` is a filter of this list (a request field of
+	// `source` tagged `(w17.admin_filter)`), `depends_on` another one. A
+	// picker filter can be cleared: empty means no filter. Optional.
+	FieldRefs     []*AdminFieldRef `protobuf:"bytes,7,rep,name=field_refs,json=fieldRefs,proto3" json:"field_refs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -977,6 +984,13 @@ func (x *AdminList) GetDefaultSort() string {
 		return x.DefaultSort
 	}
 	return ""
+}
+
+func (x *AdminList) GetFieldRefs() []*AdminFieldRef {
+	if x != nil {
+		return x.FieldRefs
+	}
+	return nil
 }
 
 // AdminColumn declares one list column: the response-item field to
@@ -1223,8 +1237,8 @@ func (x *AdminColumnRef) GetPage() string {
 // picked the same way, from a page whose list method returns those values.
 type AdminFieldRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The form field: a field of the form's request message (create, update
-	// or the action's source). Required.
+	// The form field: a field of the form's request message (create, update,
+	// the action's or the inline's), or a list's filter. Required.
 	Field string `protobuf:"bytes,1,opt,name=field,proto3" json:"field,omitempty"`
 	// The admin page whose rows are offered. It must have a list. Must match
 	// an AdminPage.name in the same admin_api. Required.
@@ -1787,7 +1801,13 @@ type AdminInline struct {
 	// Storage method ref — update one inline row. Optional.
 	Update string `protobuf:"bytes,11,opt,name=update,proto3" json:"update,omitempty"`
 	// Storage method ref — delete one inline row. Optional.
-	Delete_       string `protobuf:"bytes,12,opt,name=delete_,json=delete,proto3" json:"delete_,omitempty"`
+	Delete_ string `protobuf:"bytes,12,opt,name=delete_,json=delete,proto3" json:"delete_,omitempty"`
+	// Fields of the inline's add / edit form that pick a row of another admin
+	// page, as `AdminDetail.field_refs` does for a page's own form: `field` is
+	// a field of the `create` or `update` request. A field with no entry here
+	// takes the inline page's own `detail.field_refs` entry, when it has one.
+	// Optional.
+	FieldRefs     []*AdminFieldRef `protobuf:"bytes,13,rep,name=field_refs,json=fieldRefs,proto3" json:"field_refs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1869,6 +1889,13 @@ func (x *AdminInline) GetDelete_() string {
 		return x.Delete_
 	}
 	return ""
+}
+
+func (x *AdminInline) GetFieldRefs() []*AdminFieldRef {
+	if x != nil {
+		return x.FieldRefs
+	}
+	return nil
 }
 
 // AdminNavGroup buckets pages under a labeled section in
@@ -2354,12 +2381,14 @@ const file_w17_admin_proto_rawDesc = "" +
 	" \x01(\v2\x0e.w17.AdminListR\x04list\x12(\n" +
 	"\x06detail\x18\v \x01(\v2\x10.w17.AdminDetailR\x06detail\x12*\n" +
 	"\aactions\x18\f \x03(\v2\x10.w17.AdminActionR\aactions\x12*\n" +
-	"\ainlines\x18\r \x03(\v2\x10.w17.AdminInlineR\ainlines\"\xc1\x01\n" +
+	"\ainlines\x18\r \x03(\v2\x10.w17.AdminInlineR\ainlines\"\xf4\x01\n" +
 	"\tAdminList\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12*\n" +
 	"\acolumns\x18\x02 \x03(\v2\x10.w17.AdminColumnR\acolumns\x12,\n" +
 	"\x12detail_link_column\x18\x03 \x01(\tR\x10detailLinkColumn\x12!\n" +
-	"\fdefault_sort\x18\x04 \x01(\tR\vdefaultSortJ\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\x04refsR\rcolumn_labels\"\xbf\x01\n" +
+	"\fdefault_sort\x18\x04 \x01(\tR\vdefaultSort\x121\n" +
+	"\n" +
+	"field_refs\x18\a \x03(\v2\x12.w17.AdminFieldRefR\tfieldRefsJ\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\x04refsR\rcolumn_labels\"\xbf\x01\n" +
 	"\vAdminColumn\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12%\n" +
@@ -2405,7 +2434,7 @@ const file_w17_admin_proto_rawDesc = "" +
 	"field_refs\x18\b \x03(\v2\x12.w17.AdminFieldRefR\tfieldRefs\"C\n" +
 	"\x11AdminActionResult\x12\x16\n" +
 	"\x06fields\x18\x01 \x03(\tR\x06fields\x12\x16\n" +
-	"\x06secret\x18\x02 \x01(\bR\x06secret\"\xc4\x01\n" +
+	"\x06secret\x18\x02 \x01(\bR\x06secret\"\xf7\x01\n" +
 	"\vAdminInline\x12\x12\n" +
 	"\x04page\x18\x01 \x01(\tR\x04page\x12\x12\n" +
 	"\x04link\x18\x02 \x01(\tR\x04link\x12.\n" +
@@ -2414,7 +2443,9 @@ const file_w17_admin_proto_rawDesc = "" +
 	"\x06create\x18\n" +
 	" \x01(\tR\x06create\x12\x16\n" +
 	"\x06update\x18\v \x01(\tR\x06update\x12\x17\n" +
-	"\adelete_\x18\f \x01(\tR\x06delete\";\n" +
+	"\adelete_\x18\f \x01(\tR\x06delete\x121\n" +
+	"\n" +
+	"field_refs\x18\r \x03(\v2\x12.w17.AdminFieldRefR\tfieldRefs\";\n" +
 	"\rAdminNavGroup\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x14\n" +
 	"\x05pages\x18\x02 \x03(\tR\x05pages\";\n" +
@@ -2523,31 +2554,33 @@ var file_w17_admin_proto_depIdxs = []int32{
 	15, // 8: w17.AdminPage.actions:type_name -> w17.AdminAction
 	17, // 9: w17.AdminPage.inlines:type_name -> w17.AdminInline
 	10, // 10: w17.AdminList.columns:type_name -> w17.AdminColumn
-	11, // 11: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
-	14, // 12: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
-	12, // 13: w17.AdminDetail.field_refs:type_name -> w17.AdminFieldRef
-	0,  // 14: w17.AdminAction.target:type_name -> w17.AdminActionTarget
-	16, // 15: w17.AdminAction.result:type_name -> w17.AdminActionResult
-	12, // 16: w17.AdminAction.field_refs:type_name -> w17.AdminFieldRef
-	1,  // 17: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
-	20, // 18: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
-	4,  // 19: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
-	2,  // 20: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
-	21, // 21: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
-	3,  // 22: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
-	21, // 23: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
-	23, // 24: w17.admin_api:extendee -> google.protobuf.FileOptions
-	24, // 25: w17.admin_title:extendee -> google.protobuf.MessageOptions
-	25, // 26: w17.admin_filter:extendee -> google.protobuf.FieldOptions
-	25, // 27: w17.admin_search:extendee -> google.protobuf.FieldOptions
-	25, // 28: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
-	26, // 29: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
-	5,  // 30: w17.admin_api:type_name -> w17.AdminApi
-	31, // [31:31] is the sub-list for method output_type
-	31, // [31:31] is the sub-list for method input_type
-	30, // [30:31] is the sub-list for extension type_name
-	24, // [24:30] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	12, // 11: w17.AdminList.field_refs:type_name -> w17.AdminFieldRef
+	11, // 12: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
+	14, // 13: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
+	12, // 14: w17.AdminDetail.field_refs:type_name -> w17.AdminFieldRef
+	0,  // 15: w17.AdminAction.target:type_name -> w17.AdminActionTarget
+	16, // 16: w17.AdminAction.result:type_name -> w17.AdminActionResult
+	12, // 17: w17.AdminAction.field_refs:type_name -> w17.AdminFieldRef
+	1,  // 18: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
+	12, // 19: w17.AdminInline.field_refs:type_name -> w17.AdminFieldRef
+	20, // 20: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
+	4,  // 21: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
+	2,  // 22: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
+	21, // 23: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
+	3,  // 24: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
+	21, // 25: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
+	23, // 26: w17.admin_api:extendee -> google.protobuf.FileOptions
+	24, // 27: w17.admin_title:extendee -> google.protobuf.MessageOptions
+	25, // 28: w17.admin_filter:extendee -> google.protobuf.FieldOptions
+	25, // 29: w17.admin_search:extendee -> google.protobuf.FieldOptions
+	25, // 30: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
+	26, // 31: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
+	5,  // 32: w17.admin_api:type_name -> w17.AdminApi
+	33, // [33:33] is the sub-list for method output_type
+	33, // [33:33] is the sub-list for method input_type
+	32, // [32:33] is the sub-list for extension type_name
+	26, // [26:32] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_w17_admin_proto_init() }

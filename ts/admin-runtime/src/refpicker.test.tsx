@@ -29,8 +29,8 @@ const orgs = [
   { id: "11111111-0000-4000-8000-000000000002", name: "Globex" },
 ];
 const roles = [
-  { product: "scout", key: "geo_reader", name: "Geo reader" },
-  { product: "scout", key: "geo_admin", name: "Geo admin" },
+  { product: "maps", key: "geo_reader", name: "Geo reader" },
+  { product: "maps", key: "geo_admin", name: "Geo admin" },
   { product: "fin", key: "ledger", name: "Ledger" },
 ];
 
@@ -110,7 +110,7 @@ describe("refOptions", () => {
   });
 
   it("offers a value once however many rows carry it", () => {
-    expect(refOptions(roles, productRef, spec).map((o) => o.value)).toEqual(["scout", "fin"]);
+    expect(refOptions(roles, productRef, spec).map((o) => o.value)).toEqual(["maps", "fin"]);
   });
 
   it("keeps the row's own value for the wire, a number as a number", () => {
@@ -124,7 +124,7 @@ describe("refOptions", () => {
 
   it("narrows by the depends_on value, and offers nothing before it is chosen", () => {
     const all = refOptions(roles, roleRef, spec);
-    expect(narrow(all, roleRef, "scout").map((o) => o.value)).toEqual(["geo_reader", "geo_admin"]);
+    expect(narrow(all, roleRef, "maps").map((o) => o.value)).toEqual(["geo_reader", "geo_admin"]);
     expect(narrow(all, roleRef, undefined)).toEqual([]);
   });
 
@@ -144,7 +144,7 @@ describe("a picker on the create form", () => {
     await user.click(screen.getByRole("combobox", { name: /org id/i }));
     await user.click(await screen.findByText("Globex"));
     await user.click(screen.getByRole("combobox", { name: /^product/i }));
-    await user.click(await screen.findByText("scout"));
+    await user.click(await screen.findByText("maps"));
     await user.click(screen.getByRole("combobox", { name: /role key/i }));
     // Only the chosen product's roles, by their names.
     expect(await screen.findByText("Geo reader")).toBeTruthy();
@@ -154,7 +154,7 @@ describe("a picker on the create form", () => {
 
     await waitFor(() => expect(apiPost).toHaveBeenCalled());
     const [, body] = vi.mocked(apiPost).mock.calls[0];
-    expect(body).toEqual({ org_id: orgs[1].id, product: "scout", role_key: "geo_admin" });
+    expect(body).toEqual({ org_id: orgs[1].id, product: "maps", role_key: "geo_admin" });
   });
 
   it("asks a searchable page for what the operator types", async () => {
@@ -174,7 +174,7 @@ describe("a picker on the create form", () => {
     wrap(<CreatePage page={plansPage} spec={spec} onBack={vi.fn()} onCreated={vi.fn()} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("combobox", { name: /^product/i }));
-    await user.click(await screen.findByText("scout"));
+    await user.click(await screen.findByText("maps"));
     await user.click(screen.getByRole("combobox", { name: /role key/i }));
     await user.click(await screen.findByText("Geo reader"));
     expect(screen.getByDisplayValue("Geo reader")).toBeTruthy();
@@ -187,7 +187,7 @@ describe("a picker on the create form", () => {
 
 describe("a picker on the edit form", () => {
   it("shows the stored value's text, not its id", async () => {
-    serve({ org_id: orgs[0].id, product: "scout", role_key: "geo_reader" });
+    serve({ org_id: orgs[0].id, product: "maps", role_key: "geo_reader" });
     vi.mocked(apiPatch).mockResolvedValue({});
     wrap(<DetailPage spec={spec} page={plansPage} rowId="1" onBack={vi.fn()} />);
 
@@ -201,7 +201,7 @@ describe("a picker on the edit form", () => {
   it("shows the raw value when no option carries it, never a blank", async () => {
     serve({
       org_id: "99999999-dead-4000-8000-000000000000",
-      product: "scout",
+      product: "maps",
       role_key: "geo_reader",
     });
     wrap(<DetailPage spec={spec} page={plansPage} rowId="1" onBack={vi.fn()} />);
@@ -224,13 +224,13 @@ describe("a ref field the form does not submit", () => {
   const shown = (name: RegExp) => screen.getByRole<HTMLInputElement>("textbox", { name }).value;
 
   it("shows a readonly field's row by its text", async () => {
-    serve({ org_id: orgs[1].id, product: "scout", role_key: "geo_reader" });
+    serve({ org_id: orgs[1].id, product: "maps", role_key: "geo_reader" });
     wrap(<DetailPage spec={spec} page={readonlyPage} rowId="1" onBack={vi.fn()} />);
     await waitFor(() => expect(shown(/org id/i)).toBe("Globex"));
   });
 
   it("shows every ref of a view-only detail by its text", async () => {
-    serve({ org_id: orgs[0].id, product: "scout", role_key: "geo_admin" });
+    serve({ org_id: orgs[0].id, product: "maps", role_key: "geo_admin" });
     wrap(<DetailPage spec={spec} page={viewOnlyPage} rowId="1" onBack={vi.fn()} />);
     await waitFor(() => expect(shown(/org id/i)).toBe("Acme"));
     expect(shown(/role key/i)).toBe("Geo admin");
@@ -239,7 +239,7 @@ describe("a ref field the form does not submit", () => {
   it("shows the value itself when no row carries it", async () => {
     serve({
       org_id: "99999999-dead-4000-8000-000000000000",
-      product: "scout",
+      product: "maps",
       role_key: "geo_reader",
     });
     wrap(<DetailPage spec={spec} page={readonlyPage} rowId="1" onBack={vi.fn()} />);

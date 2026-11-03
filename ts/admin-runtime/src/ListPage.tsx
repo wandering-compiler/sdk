@@ -32,6 +32,7 @@ import { buildListURL, extractRows, type ListResp, type Row } from "./listQuery"
 import { formatContextFor } from "./cellFormat";
 import { RefCell, columnText } from "./listCell";
 import { useT } from "./i18n";
+import { RefPicker, refValueText } from "./refPicker";
 import { wireNumberText } from "./wireNumber";
 import type { FormatContext } from "./cellFormat";
 import { hasAllPermissions } from "./auth";
@@ -474,17 +475,41 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
             )}
             {filterFieldNames.length > 0 && (
               <Group gap="xs" align="flex-end">
-                {filterFieldNames.map((f) => (
-                  <FilterInput
-                    key={f}
-                    name={f}
-                    type={page.list?.filter_types?.[f]}
-                    choices={page.list?.filter_choices?.[f]}
-                    t={t}
-                    value={filterValues[f] || ""}
-                    onChange={(v) => setFilterValues((prev) => ({ ...prev, [f]: v }))}
-                  />
-                ))}
+                {filterFieldNames.map((f) => {
+                  // A filter that picks a row of another page (`list.field_refs`):
+                  // the operator chooses by the row's text and the list is asked
+                  // for its value. Clearing the picker clears the filter.
+                  const fieldRef = page.list?.field_refs?.[f];
+                  if (fieldRef) {
+                    return (
+                      <RefPicker
+                        key={f}
+                        field={f}
+                        fieldRef={fieldRef}
+                        spec={spec}
+                        t={t}
+                        value={filterValues[f] || ""}
+                        dependsValue={
+                          fieldRef.depends_on ? filterValues[fieldRef.depends_on] : undefined
+                        }
+                        onChange={(v) =>
+                          setFilterValues((prev) => ({ ...prev, [f]: refValueText(v) }))
+                        }
+                      />
+                    );
+                  }
+                  return (
+                    <FilterInput
+                      key={f}
+                      name={f}
+                      type={page.list?.filter_types?.[f]}
+                      choices={page.list?.filter_choices?.[f]}
+                      t={t}
+                      value={filterValues[f] || ""}
+                      onChange={(v) => setFilterValues((prev) => ({ ...prev, [f]: v }))}
+                    />
+                  );
+                })}
               </Group>
             )}
             <Group justify="flex-end" gap="xs">
