@@ -1,9 +1,13 @@
-// refPicker — a form field that picks a row of another admin page
-// (`AdminFieldRef`, spec `detail.field_refs` / `actions[name].field_refs`).
+// refPicker — a form field or a list filter that picks a row of another
+// admin page (`AdminFieldRef`, spec `detail.field_refs`,
+// `actions[name].field_refs`, `inlines[i].field_refs` and
+// `list.field_refs`). Every input the admin renders for a request field
+// goes through here when the spec names a ref for it — refpicker.sites.test
+// holds that.
 //
 // The operator chooses a row by its TEXT and the field gets the row's VALUE:
 // an organization by its name instead of its uuid, a product role by
-// "scout · Geo reader" instead of `geo_reader` typed from memory. The options
+// "maps · Geo reader" instead of `geo_reader` typed from memory. The options
 // are the target page's own list — its endpoint, its search, its paging — so
 // a row the operator may not read is not offered either.
 
@@ -40,6 +44,12 @@ function token(v: unknown): string | null {
   if (typeof v === "string") return v === "" ? null : v;
   if (typeof v === "number" || typeof v === "bigint" || typeof v === "boolean") return String(v);
   return null;
+}
+
+// refValueText is a picked value as the text a filter or a string-valued
+// form holds: "" for nothing (no filter, an empty field).
+export function refValueText(v: unknown): string {
+  return token(v) ?? "";
 }
 
 export interface RefOption {

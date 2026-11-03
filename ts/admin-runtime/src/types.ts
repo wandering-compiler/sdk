@@ -300,6 +300,15 @@ export interface AdminInlineSpec {
   create_endpoint?: string;
   update_endpoint?: string;
   delete_endpoint?: string;
+  // The add and the edit form's fields: the create / update request's own,
+  // minus what the route stamps (the parent's id, the row's). Absent from
+  // an older spec: the forms then take the inline page's detail fields.
+  create_fields?: string[];
+  update_fields?: string[];
+  // The add / edit form's pickers, keyed by request field
+  // (`AdminInline.field_refs`). A field with no entry takes the inline
+  // page's own `detail.field_refs` entry.
+  field_refs?: Record<string, AdminFieldRefSpec>;
 }
 
 // AdminFieldRefSpec makes a form field a picker over another admin page's
@@ -385,6 +394,9 @@ export interface AdminListSpec {
    * token.
    */
   filter_choices?: Record<string, AdminChoicesSpec>;
+  // Filters picked from another admin page's rows (`AdminList.field_refs`),
+  // keyed by filter field. Empty = no filter, as for any filter.
+  field_refs?: Record<string, AdminFieldRefSpec>;
   // ColumnChoices maps a rendered column name to the enum catalogue
   // behind it. The JSON wire carries an enum's NUMBER, so a cell would
   // otherwise print a bare `1`; this is what lets the runtime show the

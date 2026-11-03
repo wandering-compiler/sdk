@@ -8,10 +8,14 @@
 //   - Per-row `Edit` / `Delete` buttons render when the spec
 //     carries `update_endpoint` / `delete_endpoint`. Update PATCHes
 //     /api/inline/.../{child_id}; Delete DELETEs the same.
-//   - Form pulls editable fields from `spec.pages[inline.page].
-//     detail.fields` when present, falling back to the list's
-//     columns minus "id". Inputs are plain TextInput — same
-//     shape as ActionModal; typed inputs are not wired yet.
+//   - The add / edit form's fields are the inline's create /
+//     update request's (`create_fields` / `update_fields`); a
+//     spec without them falls back to `spec.pages[inline.page].
+//     detail.fields`, then to the list's columns minus "id". Inputs are plain TextInput — same
+//     shape as ActionModal; typed inputs are not wired yet —
+//     except a field picked from another page's rows (the
+//     inline's `field_refs`, else the inline page's
+//     `detail.field_refs`), which is a RefPicker.
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -35,7 +39,14 @@ import { useT } from "./i18n";
 import { columnHeader, humanizeLabel } from "./format";
 import { formatContextFor } from "./cellFormat";
 import { RefCell, columnText } from "./listCell";
-import type { AdminColumnSpec, AdminInlineSpec, AdminPageSpec, AdminSpec } from "./types";
+import { RefPicker, refValueText } from "./refPicker";
+import type {
+  AdminColumnSpec,
+  AdminFieldRefSpec,
+  AdminInlineSpec,
+  AdminPageSpec,
+  AdminSpec,
+} from "./types";
 
 export interface InlineSectionProps {
   spec: AdminSpec;
@@ -339,8 +350,14 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
         <InlineFormModal
           mode={formMode}
           row={formRow}
-          fields={editableFields}
+          fields={
+            (formMode === "add" ? inline.create_fields : inline.update_fields) ?? editableFields
+          }
           fieldTypes={targetPage.detail?.field_types || {}}
+          // The inline's own pickers, else the inline page's form's: the
+          // same fields of the same model.
+          fieldRefs={{ ...targetPage.detail?.field_refs, ...inline.field_refs }}
+          spec={spec}
           inline={inline}
           parentId={parentId}
           onClose={closeForm}
@@ -369,6 +386,9 @@ interface InlineFormModalProps {
   // went back on submit as the new password. Same defect DetailPage carried,
   // one layer down and unmasked.
   fieldTypes: Record<string, string>;
+  // Fields picked from another admin page's rows, keyed by field.
+  fieldRefs: Record<string, AdminFieldRefSpec>;
+  spec: AdminSpec;
   inline: AdminInlineSpec;
   parentId: string;
   onClose: () => void;
@@ -380,6 +400,8 @@ function InlineFormModal({
   row,
   fields,
   fieldTypes,
+  fieldRefs,
+  spec,
   inline,
   parentId,
   onClose,
@@ -436,9 +458,21 @@ function InlineFormModal({
     <Modal opened onClose={onClose} title={title} centered>
       <Stack>
         {fields.map((f) =>
-          fieldTypes[f] === "PASSWORD" ||
-          fieldTypes[f] === "SECRET" ||
-          fieldTypes[f] === "CRYPTED_SECRET" ? (
+          fieldRefs[f] ? (
+            <RefPicker
+              key={f}
+              field={f}
+              fieldRef={fieldRefs[f]}
+              spec={spec}
+              t={t}
+              value={values[f] || ""}
+              dependsValue={fieldRefs[f].depends_on ? values[fieldRefs[f].depends_on] : undefined}
+              onChange={(v) => setValues((prev) => ({ ...prev, [f]: refValueText(v) }))}
+              disabled={submitting}
+            />
+          ) : fieldTypes[f] === "PASSWORD" ||
+            fieldTypes[f] === "SECRET" ||
+            fieldTypes[f] === "CRYPTED_SECRET" ? (
             <PasswordInput
               key={f}
               label={humanizeLabel(f)}

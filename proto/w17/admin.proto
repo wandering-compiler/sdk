@@ -408,6 +408,14 @@ message AdminList {
 
   reserved 5, 6;  // was `repeated AdminColumnRef refs` / `column_labels`
   reserved "refs", "column_labels";
+
+  // Filters that pick a row of another admin page instead of taking typed
+  // text — the same pickers as the forms' (`AdminDetail.field_refs`): the
+  // operator filters by an organization's name and the list is asked for
+  // its value. `field` is a filter of this list (a request field of
+  // `source` tagged `(w17.admin_filter)`), `depends_on` another one. A
+  // picker filter can be cleared: empty means no filter. Optional.
+  repeated AdminFieldRef field_refs = 7;
 }
 
 // AdminColumn declares one list column: the response-item field to
@@ -536,8 +544,8 @@ message AdminColumnRef {
 // gate. A value that is not a row of a model (a product name, a role key) is
 // picked the same way, from a page whose list method returns those values.
 message AdminFieldRef {
-  // The form field: a field of the form's request message (create, update
-  // or the action's source). Required.
+  // The form field: a field of the form's request message (create, update,
+  // the action's or the inline's), or a list's filter. Required.
   string field = 1;
 
   // The admin page whose rows are offered. It must have a list. Must match
@@ -800,6 +808,13 @@ message AdminInline {
 
   // Storage method ref — delete one inline row. Optional.
   string delete_ = 12;
+
+  // Fields of the inline's add / edit form that pick a row of another admin
+  // page, as `AdminDetail.field_refs` does for a page's own form: `field` is
+  // a field of the `create` or `update` request. A field with no entry here
+  // takes the inline page's own `detail.field_refs` entry, when it has one.
+  // Optional.
+  repeated AdminFieldRef field_refs = 13;
 }
 
 enum AdminInlineLayout {
