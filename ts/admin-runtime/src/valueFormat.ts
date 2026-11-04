@@ -22,7 +22,9 @@
 // an int64 arrives as a decimal STRING on the JSON wire (the
 // gateway's JSON dialect) and can exceed 2^53, so
 // every step below is string arithmetic. `decimalString` is the
-// one adapter in, for a MONEY field that really is a double.
+// one adapter in, for a value that really is a double (a NUMBER,
+// PERCENTAGE or RATIO field). MONEY is never one: it is an int64 of
+// minor units and arrives as a decimal string — see formatMoney.
 
 import formatsDoc from "./formats.json";
 
@@ -43,7 +45,24 @@ export interface Formats {
   time_format: string;
   datetime_format: string;
   percent_format: string;
+  /**
+   * The shape money renders in, over `{value}` (the grouped amount, always
+   * unsigned — the sign leads the whole shape) and `{symbol}`.
+   */
+  currency_format: string;
+  /** The locale's own spelling of a currency where it differs (cs: CZK → Kč). */
+  currency_symbols?: Record<string, string>;
   first_day_of_week: number;
+}
+
+/**
+ * One row of the frozen currencies table: CLDR's decimals for the code and,
+ * when CLDR has one, its locale-independent symbol (`US$`, `CA$`, `€`).
+ */
+export interface Currency {
+  code: string;
+  symbol?: string;
+  decimals: number;
 }
 
 /** The project-owned remap that rides in the lock: {cs: {number: "en"}}. */
@@ -62,6 +81,13 @@ for (const [locale, row] of Object.entries(
 )) {
   TABLE.set(normalizeFormatLocale(locale), row);
   SPELLING.set(normalizeFormatLocale(locale), locale);
+}
+const CURRENCIES = new Map<string, Currency>();
+for (const [code, row] of Object.entries(
+  (formatsDoc as { currencies?: Record<string, { symbol?: string; decimals: number }> })
+    .currencies ?? {},
+)) {
+  CURRENCIES.set(code, { code, symbol: row.symbol, decimals: row.decimals });
 }
 
 /** Lowercases and switches `_` to `-` so `CS`, `cs` and `cs_CZ` agree. */
@@ -139,7 +165,8 @@ export function formatNumber(value: string, f: Formats): string {
 
 /**
  * Renders at exactly `places` decimal places, padding and rounding half-up.
- * The `decimal:N` filter, and the preset for MONEY (2) and DECIMAL (scale).
+ * The `decimal:N` filter, and the preset for DECIMAL (scale). MONEY has its
+ * own, formatMoney.
  * A negative `places` means natural precision.
  */
 export function formatDecimal(value: string, places: number, f: Formats): string {
@@ -161,7 +188,108 @@ export function formatPercent(value: string, places: number, f: Formats): string
 }
 
 /**
- * The adapter for a value that really is a JS number (a MONEY double): renders
+ * Trims and uppercases ASCII letters only — `czk` and ` CZK ` are both CZK.
+ * ASCII only because the Go twin must agree byte for byte, and the two
+ * languages' full Unicode case mappings do not.
+ */
+export function normalizeCurrencyCode(code: string): string {
+  return (code ?? "").trim().replace(/[a-z]/g, (c) => c.toUpperCase());
+}
+
+/** The currencies-table row for a code (normalized first), or undefined. */
+export function lookupCurrency(code: string): Currency | undefined {
+  return CURRENCIES.get(normalizeCurrencyCode(code));
+}
+
+/** Every code the currencies table carries, sorted. */
+export function currencyCodes(): string[] {
+  return [...CURRENCIES.keys()].sort();
+}
+
+/**
+ * Renders an amount of MINOR units as money — the `money` filter, and the
+ * MONEY type's preset. The mirror of Go's FormatMoney, byte for byte:
+ *
+ *  1. the value is shifted by `scale` as a decimal-string operation (12345 at
+ *     scale 2 is exactly 123.45; an int64 past 2^53 keeps every digit);
+ *  2. with no currency, that is the result — the scaled number at `scale`
+ *     decimals, grouped, without a symbol;
+ *  3. with one, it is rounded half-up to the CURRENCY's decimals (JPY 0, KWD
+ *     3, most 2) and placed into the locale's `currency_format` with the
+ *     symbol: the locale's own, else the table's, else the code. An unknown
+ *     code renders as itself, at `scale` decimals.
+ *
+ * A symbol that is a word (`CZK`, `CHF`) is never glued to the digits: where
+ * the shape puts the two side by side, a space goes between them.
+ *
+ * A value that is not a plain decimal is returned UNCHANGED.
+ */
+export function formatMoney(
+  value: string,
+  scale: number,
+  currency: string | undefined,
+  f: Formats,
+): string {
+  const parsed = parseDecimal(value);
+  if (!parsed) return value;
+  const sc = scale > 0 ? Math.floor(scale) : 0;
+  let d = shiftDecimal(parsed, sc);
+  const code = normalizeCurrencyCode(currency ?? "");
+  if (code === "") return renderDecimal(roundDecimal(d, sc), f);
+  let places = sc;
+  let symbol = code;
+  const known = CURRENCIES.get(code);
+  if (known) {
+    places = known.decimals;
+    if (known.symbol) symbol = known.symbol;
+  }
+  const own = f.currency_symbols?.[code];
+  if (own) symbol = own;
+  d = roundDecimal(d, places);
+  const neg = d.neg && !isZeroDigits(d.ipart, d.fpart);
+  const amount = renderDecimal({ ...d, neg: false }, f);
+  const shape = spaceWordSymbol(f.currency_format || "{value} {symbol}", symbol);
+  const out = shape.replace(/\{value\}|\{symbol\}/g, (tok) => (tok === "{value}" ? amount : symbol));
+  return neg ? "-" + out : out;
+}
+
+/** Divides by 10^scale by moving the point; strips leading integer zeros (keeps one). */
+function shiftDecimal(d: DecimalParts, scale: number): DecimalParts {
+  if (scale === 0) return d;
+  const digits = d.ipart + d.fpart;
+  const point = d.ipart.length - scale;
+  let ipart: string;
+  let fpart: string;
+  if (point <= 0) {
+    ipart = "0";
+    fpart = "0".repeat(-point) + digits;
+  } else {
+    ipart = digits.slice(0, point);
+    fpart = digits.slice(point);
+  }
+  ipart = ipart.replace(/^0+/, "");
+  return { neg: d.neg, ipart: ipart === "" ? "0" : ipart, fpart };
+}
+
+const LETTER = /^\p{L}$/u;
+
+/** Spaces `{symbol}` from `{value}` where the shape glues them and the touching end is a letter. */
+function spaceWordSymbol(shape: string, symbol: string): string {
+  if (symbol === "") return shape;
+  const chars = [...symbol];
+  let out = shape;
+  if (LETTER.test(chars[chars.length - 1])) {
+    out = out.split("{symbol}{value}").join("{symbol} {value}");
+  }
+  if (LETTER.test(chars[0])) {
+    out = out.split("{value}{symbol}").join("{value} {symbol}");
+  }
+  return out;
+}
+
+/**
+ * The adapter for a value that really is a JS number (a NUMBER / PERCENTAGE /
+ * RATIO double): renders
  * the plain decimal string the formatters take, expanding JS's exponent
  * notation — which kicks in at 1e21 and 1e-7 — because the parser rejects it
  * and Go's `strconv.FormatFloat(v, 'f', -1, 64)` never produces it.

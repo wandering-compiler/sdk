@@ -21,16 +21,25 @@ import {
   formatDate,
   formatDateTime,
   formatDecimal,
+  formatMoney,
   formatNumber,
   formatPercent,
   formatShortDate,
   formatTime,
+  normalizeCurrencyCode,
   resolveFormatsKind,
 } from "./valueFormat";
 
 /** The closed filter set, as the compiler lowers it. */
 export type FormatPreset =
-  "number" | "decimal" | "percent" | "date" | "short_date" | "time" | "datetime";
+  | "number"
+  | "decimal"
+  | "percent"
+  | "money"
+  | "date"
+  | "short_date"
+  | "time"
+  | "datetime";
 
 /**
  * A substitution string carried by a slot. `translatable` records that the
@@ -50,6 +59,19 @@ export interface FormatSlot {
   places?: number;
   /** Zero places is meaningful, so presence cannot be folded into the value. */
   has_places?: boolean;
+  /**
+   * `money` only: the minor-unit scale of the value (12345 at scale 2 is
+   * 123.45). Set on every money slot the compiler emits.
+   */
+  scale?: number;
+  /** `money` only: a fixed ISO 4217 code, uppercase. Wins over the row's. */
+  currency?: string;
+  /**
+   * `money` only: the field of the SAME row/object that carries the code,
+   * when the currency is per row. The caller reads it off the row into
+   * FormatContext.currency (see withRowCurrency).
+   */
+  currency_field?: string;
   /** Substitutes when the value is null / absent. */
   default?: FormatLiteral;
   /** Substitutes when the value is numerically zero. */
@@ -69,6 +91,12 @@ export interface FormatTemplate {
 export interface FormatContext {
   locale: string;
   overrides?: FormatOverrides;
+  /**
+   * The currency of the row being rendered — the value of a money slot's
+   * `currency_field` on that row, resolved by the caller (withRowCurrency).
+   * A slot's own fixed `currency` wins over it.
+   */
+  currency?: string;
 }
 
 /**
@@ -79,13 +107,84 @@ const PRESET_KIND: Record<FormatPreset, FormatKind> = {
   number: "number",
   decimal: "decimal",
   percent: "percent",
+  // Money remaps with the decimal axis: "English-looking numbers" means the
+  // amounts too, and the lock has no separate money kind.
+  money: "decimal",
   date: "date",
   short_date: "date",
   time: "time",
   datetime: "datetime",
 };
 
-const NUMERIC: Record<string, boolean> = { number: true, decimal: true, percent: true };
+const NUMERIC: Record<string, boolean> = {
+  number: true,
+  decimal: true,
+  percent: true,
+  money: true,
+};
+
+/**
+ * The `currency_field` of a template's money slot — the row field the caller
+ * has to read the currency from — or undefined when the template is not per-row
+ * money (no money slot, or one with a fixed currency).
+ */
+export function templateCurrencyField(tmpl: FormatTemplate | undefined): string | undefined {
+  for (const s of tmpl?.slots ?? []) {
+    if (s.preset === "money" && !s.currency && s.currency_field) return s.currency_field;
+  }
+  return undefined;
+}
+
+/**
+ * The currency a row carries for a template: `row[currency_field]` when it is
+ * a non-empty string, else undefined (the value then renders without a
+ * symbol rather than in a guessed currency).
+ */
+export function rowCurrency(
+  tmpl: FormatTemplate | undefined,
+  row: Record<string, unknown> | undefined | null,
+): string | undefined {
+  const field = templateCurrencyField(tmpl);
+  if (!field || !row) return undefined;
+  const v = row[field];
+  return typeof v === "string" && v.trim() !== "" ? v : undefined;
+}
+
+/**
+ * `ctx` with the row's currency filled in for `tmpl` — what every surface that
+ * renders a value off a row (a list cell, a detail field, a STAT tile) passes
+ * to formatTemplateValue. Returns `ctx` itself when nothing changes.
+ */
+export function withRowCurrency(
+  ctx: FormatContext,
+  tmpl: FormatTemplate | undefined,
+  row: Record<string, unknown> | undefined | null,
+): FormatContext {
+  const currency = rowCurrency(tmpl, row);
+  return currency === undefined ? ctx : { ...ctx, currency };
+}
+
+/**
+ * The one currency a SET of rows agrees on for `tmpl` — for a chart, whose
+ * value formatter sees a number and no row. Rows that disagree (or a row with
+ * no code) give undefined, so a mixed-currency chart shows bare amounts rather
+ * than one currency's symbol on another's numbers.
+ */
+export function sharedRowCurrency(
+  tmpl: FormatTemplate | undefined,
+  rows: readonly Record<string, unknown>[] | undefined,
+): string | undefined {
+  if (!templateCurrencyField(tmpl) || !rows || rows.length === 0) return undefined;
+  let agreed: string | undefined;
+  for (const row of rows) {
+    const c = rowCurrency(tmpl, row);
+    if (c === undefined) return undefined;
+    const norm = normalizeCurrencyCode(c);
+    if (agreed === undefined) agreed = norm;
+    else if (agreed !== norm) return undefined;
+  }
+  return agreed;
+}
 
 /**
  * templateIsNumeric reports whether a template's slots are all numeric — i.e.
@@ -135,14 +234,20 @@ export function formatSlotValue(
     return literalText(slot.zero, translate);
   }
   const f = resolveFormatsKind(ctx.locale, PRESET_KIND[preset], ctx.overrides);
-  return renderPreset(text, preset, slot, f);
+  return renderPreset(text, preset, slot, f, ctx);
 }
 
 function literalText(lit: FormatLiteral, translate?: (msgid: string) => string): string {
   return translate && lit.translatable ? translate(lit.text) : lit.text;
 }
 
-function renderPreset(text: string, preset: FormatPreset, slot: FormatSlot, f: Formats): string {
+function renderPreset(
+  text: string,
+  preset: FormatPreset,
+  slot: FormatSlot,
+  f: Formats,
+  ctx: FormatContext,
+): string {
   // An absent `has_places` means natural precision, which the formatters
   // spell as a NEGATIVE places — not zero places, which would round away
   // every fraction digit.
@@ -154,6 +259,8 @@ function renderPreset(text: string, preset: FormatPreset, slot: FormatSlot, f: F
       return formatDecimal(text, places, f);
     case "percent":
       return formatPercent(text, places, f);
+    case "money":
+      return formatMoney(text, slot.scale ?? 0, slot.currency || ctx.currency, f);
     case "date":
       return formatDate(text, f);
     case "short_date":
@@ -189,8 +296,11 @@ function renderPreset(text: string, preset: FormatPreset, slot: FormatSlot, f: F
 /**
  * The decimal string a raw JSON value formats from.
  *
- * A number goes through the float adapter (a MONEY carrier really is a
- * double); everything else is already a string on the wire. An object cannot
+ * A number goes through the float adapter (a NUMBER / PERCENTAGE / RATIO
+ * carrier really is a double; for an integer — a money amount a chart handed
+ * back as a number — the adapter yields its plain digits, no fraction);
+ * everything else, an int64 MONEY amount included, is already a string on
+ * the wire. An object cannot
  * be formatted at all, and renders as JSON rather than as "[object Object]",
  * which reads like a bug in the data rather than in the declared type.
  */

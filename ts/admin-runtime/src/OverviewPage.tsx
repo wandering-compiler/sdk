@@ -284,11 +284,16 @@ export function formatCount(total: unknown, ctx: FormatContext): string {
 // a 64-bit aggregate arrives as a decimal STRING, and an omitted
 // zero-valued field arrives not at all. Handing that raw to the
 // formatter is how a tile renders blank where it should read "0".
+//
+// `data` is the response the tile's value was read off: a money total whose
+// currency is per row (`currency_field`) reads the code from its sibling
+// field there.
 export function formatStatValue(
   raw: unknown,
   tmpl: FormatTemplate | undefined,
   ctx: FormatContext,
   translate?: (msgid: string) => string,
+  data?: Record<string, unknown> | null,
 ): string {
   if (!tmpl) return formatCount(raw, ctx);
   // Coerce only for a template whose slots are all numeric. A STAT value is
@@ -301,7 +306,7 @@ export function formatStatValue(
   // is exactly what the sibling paths do: axisLabeler and renderCell both
   // receive the value untouched (A2).
   const value = templateIsNumeric(tmpl) ? (wireNumberText(raw) ?? "0") : raw;
-  const formatted = formatCellValue(value, tmpl, ctx, translate);
+  const formatted = formatCellValue(value, tmpl, ctx, translate, data);
   return formatted !== undefined ? formatted : formatCount(raw, ctx);
 }
 
@@ -416,7 +421,13 @@ function StatWidget({ widget }: { widget: AdminWidgetSpec }) {
             {values.map((v) => (
               <Stack key={v.field} gap={2}>
                 <Text fz={28} fw={700} lh={1.1} style={{ letterSpacing: "-0.02em" }}>
-                  {formatStatValue(state.data[v.field], widget.value_formats?.[v.field], fmt, t)}
+                  {formatStatValue(
+                    state.data[v.field],
+                    widget.value_formats?.[v.field],
+                    fmt,
+                    t,
+                    state.data,
+                  )}
                 </Text>
                 <Text
                   fz="xs"

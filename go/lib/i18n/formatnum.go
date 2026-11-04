@@ -38,7 +38,8 @@ func FormatNumber(value string, f Formats) string {
 
 // FormatDecimal renders a value at exactly `places` decimal places, padding
 // with zeros and rounding half-up as needed. This is the `decimal:N` filter,
-// and the preset for MONEY (2) and DECIMAL (the field's declared scale).
+// and the preset for DECIMAL (the field's declared scale). MONEY has its own,
+// [FormatMoney].
 //
 // Negative `places` means natural precision, i.e. the same as [FormatNumber].
 func FormatDecimal(value string, places int, f Formats) string {
@@ -66,8 +67,9 @@ func FormatPercent(value string, places int, f Formats) string {
 
 // DecimalString renders a float64 as the plain decimal string the formatters
 // above take: shortest representation that round-trips, and NEVER exponent
-// notation (which the parser rejects). It is the adapter for a MONEY field,
-// which is a bare `double` carrier per proto/w17/field.proto.
+// notation (which the parser rejects). It is the adapter for a value that
+// really is a `double` — a NUMBER, PERCENTAGE or RATIO field. MONEY is never
+// one: it is an int64 of minor units, and arrives as a decimal string.
 //
 // The TS mirror (`decimalString`) has to expand JS's exponent notation to
 // reach the same digits; the shared golden vectors carry float inputs for

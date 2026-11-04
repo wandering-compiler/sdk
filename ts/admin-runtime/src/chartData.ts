@@ -15,7 +15,7 @@
 import { displayString } from "./api";
 import { resolveChoiceLabel, translateChoiceLabel } from "./choiceLabel";
 import { humanizeLabel } from "./format";
-import { formatTemplateValue } from "./slotFormat";
+import { formatTemplateValue, sharedRowCurrency } from "./slotFormat";
 import type { FormatContext, FormatTemplate } from "./slotFormat";
 import type { AdminChoicesSpec, AdminWidgetSpec, AdminWidgetValueSpec } from "./types";
 import { wireNumberText } from "./wireNumber";
@@ -164,12 +164,18 @@ export type ChartLabeler = (v: unknown) => string;
 // Everything else falls through to displayString — a category NAME is
 // already the text it should be, and nothing is gained by routing it
 // through a formatter that has nothing to say about it.
+//
+// `rows` are the plotted rows: a money axis whose currency is per row
+// takes the currency they all agree on (see sharedRowCurrency).
 export function axisLabeler(
   choices: AdminChoicesSpec | undefined,
   tmpl: FormatTemplate | undefined,
   ctx: FormatContext,
   translate?: (msgid: string) => string,
+  rows?: readonly ChartRow[],
 ): ChartLabeler {
+  const currency = sharedRowCurrency(tmpl, rows);
+  const axisCtx = currency === undefined ? ctx : { ...ctx, currency };
   return (v: unknown) => {
     if (choices) {
       const resolved = translate
@@ -177,7 +183,7 @@ export function axisLabeler(
         : resolveChoiceLabel(choices, v);
       return displayString(resolved);
     }
-    const formatted = formatTemplateValue(v, tmpl, ctx, translate);
+    const formatted = formatTemplateValue(v, tmpl, axisCtx, translate);
     return formatted !== undefined ? formatted : displayString(v);
   };
 }
@@ -195,10 +201,16 @@ export function axisLabeler(
 // carries the SAME template, which is the common case (a chart plots one
 // kind of quantity) and always true of a donut (one measure by
 // definition).
+//
+// The formatter sees a bare number, never its row, so a money series
+// whose currency is per row takes the one currency every plotted row
+// agrees on; rows in several currencies plot bare amounts rather than
+// one currency's symbol on another's numbers.
 export function measureFormatter(
   widget: AdminWidgetSpec,
   ctx: FormatContext,
   translate?: (msgid: string) => string,
+  rows?: readonly ChartRow[],
 ): ((value: number) => string) | undefined {
   const fields = cappedSeries(widget.series).map((s) => s.field);
   if (fields.length === 0) return undefined;
@@ -209,8 +221,10 @@ export function measureFormatter(
   for (const f of fields.slice(1)) {
     if (!formats[f] || JSON.stringify(formats[f]) !== key) return undefined;
   }
+  const currency = sharedRowCurrency(first, rows);
+  const valueCtx = currency === undefined ? ctx : { ...ctx, currency };
   return (value: number) => {
-    const formatted = formatTemplateValue(value, first, ctx, translate);
+    const formatted = formatTemplateValue(value, first, valueCtx, translate);
     return formatted !== undefined ? formatted : displayString(value);
   };
 }

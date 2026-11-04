@@ -579,9 +579,15 @@ const (
 	// failing on the first read.
 	Type_CRYPTED_SECRET Type = 68
 	// Numeric carriers (carrier: int32 / int64 / double)
-	Type_NUMBER     Type = 10
-	Type_ID         Type = 11
-	Type_COUNTER    Type = 12
+	Type_NUMBER  Type = 10
+	Type_ID      Type = 11
+	Type_COUNTER Type = 12
+	// MONEY is an exact amount: an int64 count of MINOR units (carrier: int64
+	// ONLY — double and string are refused at build time). `scale` (default
+	// 2) says how many minor units make one major unit; `currency` /
+	// `currency_field` say which currency, for display. Storage is BIGINT on
+	// every dialect, bounds (gte / lte / …) are in minor units, and the wire
+	// follows the int64 rule (a JSON string). Rendered by the `money` format.
 	Type_MONEY      Type = 13
 	Type_PERCENTAGE Type = 14
 	Type_RATIO      Type = 15
@@ -593,8 +599,9 @@ const (
 	Type_SMALL_INTEGER Type = 70
 	// Arbitrary-precision decimal (carrier: string — lossless wire format).
 	// Requires (w17.field).precision; (w17.field).scale is optional (default 0).
-	// MONEY / PERCENTAGE / RATIO stay as fixed-shape double-carried presets;
-	// reach for DECIMAL when you need precision/scale the presets don't cover.
+	// PERCENTAGE / RATIO stay as fixed-shape double-carried presets; reach for
+	// DECIMAL when you need precision/scale they don't cover. An amount of
+	// money is MONEY (int64 minor units), not DECIMAL: DECIMAL has no currency.
 	Type_DECIMAL Type = 16
 	// Temporal (carrier: google.protobuf.Timestamp)
 	Type_DATE     Type = 20
@@ -1263,6 +1270,8 @@ type Field struct {
 	// --- Numeric bounds ---
 	// gt / lt strict, gte / lte inclusive. Can coexist (e.g. gte + lt).
 	// `optional` so 0 vs unset is distinguishable.
+	// On MONEY the bounds are in MINOR units, like the stored value:
+	// `gte: 100` at scale 2 is "at least 1.00".
 	Gt  *float64 `protobuf:"fixed64,10,opt,name=gt,proto3,oneof" json:"gt,omitempty"`
 	Gte *float64 `protobuf:"fixed64,11,opt,name=gte,proto3,oneof" json:"gte,omitempty"`
 	Lt  *float64 `protobuf:"fixed64,12,opt,name=lt,proto3,oneof" json:"lt,omitempty"`
@@ -1328,12 +1337,20 @@ type Field struct {
 	// permitted — any enum the loader can see is fair game. Empty string =
 	// no restriction.
 	Choices string `protobuf:"bytes,16,opt,name=choices,proto3" json:"choices,omitempty"`
-	// --- DECIMAL precision / scale (type: DECIMAL only) ---
+	// --- DECIMAL precision / scale (type: DECIMAL), MONEY scale ---
 	// precision = total number of significant digits (required for DECIMAL).
 	// scale     = digits after the decimal point (default 0 — integer-like).
 	// IR builder requires 0 <= scale <= precision for DECIMAL (scale 0 is
 	// the integer-like default, not an error), and rejects both fields for
-	// non-DECIMAL types.
+	// types other than DECIMAL and MONEY.
+	//
+	// On MONEY, `scale` alone applies (precision is refused): how many minor
+	// units make one major unit, as a power of ten. The default is 2 — the
+	// int64 holds cents, so 12345 is 123.45. A unit price kept finer than the
+	// currency shows declares more (`scale: 4` holds 1.2345 as 12345); 0 holds
+	// whole units. 0 to 12. Changing it on an existing column re-means every
+	// stored value, so the migrator converts the data (×/÷ 10^Δ) rather than
+	// leaving it to read 100× off.
 	//
 	// ENFORCEMENT: the REQUEST side. The generated
 	// validation block refuses any value the column could not store exactly
@@ -1357,6 +1374,33 @@ type Field struct {
 	// and this one has no CHECK to reach it through.
 	Precision int32  `protobuf:"varint,17,opt,name=precision,proto3" json:"precision,omitempty"`
 	Scale     *int32 `protobuf:"varint,18,opt,name=scale,proto3,oneof" json:"scale,omitempty"`
+	// --- MONEY currency (type: MONEY only) ---
+	//
+	// Which currency a MONEY amount is in, for DISPLAY. Neither is required;
+	// a MONEY value with no currency renders as its scaled number without a
+	// symbol. The two are mutually exclusive.
+	//
+	// currency names one fixed ISO 4217 code (`"CZK"`, `"EUR"`) for every row.
+	// The code is validated at build time against the currencies table and
+	// stored uppercase.
+	//
+	// currency_field names a SIBLING field of the same message that holds the
+	// row's code — for a table whose rows are in different currencies. It is
+	// checked at build time to exist and to be a string field of type CHAR or
+	// TEXT. A read projection inherits the binding when it also projects the
+	// currency column; when it does not, the build warns and the value renders
+	// without a symbol.
+	//
+	// Neither changes storage: the column is BIGINT either way, and the code
+	// never travels inside the amount.
+	//
+	// Usage:
+	//
+	//	int64  price       = 5 [(w17.field) = { type: MONEY, currency: "CZK" }];
+	//	int64  unit_price  = 6 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
+	//	string currency    = 7 [(w17.field) = { type: CHAR, max_len: 3 }];
+	Currency      string `protobuf:"bytes,37,opt,name=currency,proto3" json:"currency,omitempty"`
+	CurrencyField string `protobuf:"bytes,38,opt,name=currency_field,json=currencyField,proto3" json:"currency_field,omitempty"`
 	// --- Default value at insert time ---
 	// Exactly one of the branches may be set. No default_bool: bool defaults
 	// go via AutoDefault.TRUE / FALSE for single-channel consistency.
@@ -1600,16 +1644,22 @@ type Field struct {
 	// slot to wherever their language puts it.
 	//
 	// Empty (default) = the preset implied by `type`: MONEY →
-	// decimal:2, DECIMAL → decimal:<scale>, PERCENTAGE → percent,
+	// money (scale + currency from the field), DECIMAL → decimal:<scale>,
+	// PERCENTAGE → percent,
 	// RATIO → number, DATE → date, TIME → time, DATETIME → datetime,
 	// NUMBER / COUNTER / SMALL_INTEGER → number. ID is deliberately
 	// unformatted — grouping the digits of a row id ("1,234") reads as
 	// a quantity it is not.
 	//
 	// The filter set is closed and its names are public contract; the
-	// parser rejects an unknown filter at codegen time. Currency is
-	// out of scope (no symbol, no per-currency decimals) — MONEY is a
-	// 2-decimal number.
+	// parser rejects an unknown filter at codegen time.
+	//
+	// `money` applies to a MONEY field only: `{value|money}` renders with
+	// the field's own currency, `{value|money:"EUR"}` fixes one. The minor
+	// units are shifted by the field's scale, rounded half-up to the
+	// currency's own decimals (JPY 0, KWD 3, most 2), and placed into the
+	// locale's currency shape — `1 234,50 Kč` in Czech, `US$1,234.50` in
+	// English. No float is involved at any step.
 	Format string `protobuf:"bytes,32,opt,name=format,proto3" json:"format,omitempty"`
 	// --- GEOMETRY / GEOGRAPHY parameters (db_type GEOMETRY / GEOGRAPHY only) ---
 	//
@@ -1813,6 +1863,20 @@ func (x *Field) GetScale() int32 {
 		return *x.Scale
 	}
 	return 0
+}
+
+func (x *Field) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *Field) GetCurrencyField() string {
+	if x != nil {
+		return x.CurrencyField
+	}
+	return ""
 }
 
 func (x *Field) GetDefault() isField_Default {
@@ -2414,7 +2478,7 @@ var (
 	// Usage:
 	//
 	//	string slug = 2 [(w17.field) = { type: SLUG, max_len: 120, unique: true }];
-	//	double price = 5 [(w17.field) = { type: MONEY, gte: 0 }];
+	//	int64 price = 5 [(w17.field) = { type: MONEY, currency: "CZK", gte: 0 }];
 	//	google.protobuf.Timestamp created_at = 10
 	//	  [(w17.field) = { type: DATETIME, default_auto: NOW }];
 	//
@@ -2520,7 +2584,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\x82\n" +
+	" \x01(\tR\amessage\"\xc5\n" +
 	"\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
@@ -2543,7 +2607,9 @@ const file_w17_field_proto_rawDesc = "" +
 	"\tsensitive\x18$ \x01(\bR\tsensitive\x12\x18\n" +
 	"\achoices\x18\x10 \x01(\tR\achoices\x12\x1c\n" +
 	"\tprecision\x18\x11 \x01(\x05R\tprecision\x12\x19\n" +
-	"\x05scale\x18\x12 \x01(\x05H\aR\x05scale\x88\x01\x01\x12'\n" +
+	"\x05scale\x18\x12 \x01(\x05H\aR\x05scale\x88\x01\x01\x12\x1a\n" +
+	"\bcurrency\x18% \x01(\tR\bcurrency\x12%\n" +
+	"\x0ecurrency_field\x18& \x01(\tR\rcurrencyField\x12'\n" +
 	"\x0edefault_string\x18\x14 \x01(\tH\x00R\rdefaultString\x12!\n" +
 	"\vdefault_int\x18\x15 \x01(\x03H\x00R\n" +
 	"defaultInt\x12'\n" +

@@ -15,7 +15,7 @@ import type { FormatContext, FormatSlot, FormatTemplate } from "./cellFormat";
 const en: FormatContext = { locale: "en" };
 const cs: FormatContext = { locale: "cs" };
 
-const money: FormatSlot = { name: "value", preset: "decimal", places: 2, has_places: true };
+const money: FormatSlot = { name: "value", preset: "decimal", places: 2, has_places: true }; // a 2-place decimal
 
 // navigator is ONE object per worker, so pinning a language and not putting it back
 // leaves every later test in the same worker formatting in that language — the note in
@@ -45,7 +45,7 @@ describe("formatSlotValue", () => {
     expect(formatSlotValue("1234.5", money, cs)).toBe("1 234,50");
   });
 
-  it("takes a MONEY double through the decimal-string adapter", () => {
+  it("takes a double through the decimal-string adapter", () => {
     expect(formatSlotValue(1234.5, money, en)).toBe("1,234.50");
   });
 

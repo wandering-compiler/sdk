@@ -16,7 +16,8 @@ import type { AdminColumnRefSpec, AdminPageSpec } from "./types";
 
 // columnText is the text of a plain (non-ref) column cell of `page`'s list:
 // an enum's choice label, a value through the column's locale-aware format,
-// anything else as displayString renders it.
+// anything else as displayString renders it. `row` is the record the value
+// belongs to: a money column whose currency is per row reads it from there.
 //
 // The formatter can decline (a template with no slots), and then the raw
 // rendering stands. A cell must never come back blank because its format
@@ -27,6 +28,7 @@ export function columnText(
   val: unknown,
   fmt: FormatContext,
   t: Translate,
+  row?: Record<string, unknown>,
 ): string {
   const choices = page.list?.column_choices?.[field];
   const v = choices ? translateChoiceLabel(resolveChoiceLabel(choices, val), t) : val;
@@ -35,6 +37,7 @@ export function columnText(
     choices ? undefined : page.list?.column_formats?.[field],
     fmt,
     t,
+    row,
   );
   return formatted !== undefined ? formatted : displayString(v);
 }

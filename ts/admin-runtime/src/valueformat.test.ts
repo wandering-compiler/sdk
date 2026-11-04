@@ -9,6 +9,7 @@ import {
   formatDateTime,
   formatDecimal,
   formatLocales,
+  formatMoney,
   formatNumber,
   formatPercent,
   formatShortDate,
@@ -31,6 +32,8 @@ interface Vector {
   locale: string;
   kind: string;
   places?: number;
+  scale?: number;
+  currency?: string;
   value?: string;
   float?: number;
   want: string;
@@ -52,6 +55,8 @@ function applyVector(v: Vector): string {
       return formatDecimal(raw, places, f);
     case "percent":
       return formatPercent(raw, places, f);
+    case "money":
+      return formatMoney(raw, v.scale ?? 0, v.currency, f);
     case "date":
       return formatDate(raw, f);
     case "short_date":

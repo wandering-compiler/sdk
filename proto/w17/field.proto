@@ -14,7 +14,7 @@ extend google.protobuf.FieldOptions {
 	//
 	// Usage:
 	//   string slug = 2 [(w17.field) = { type: SLUG, max_len: 120, unique: true }];
-	//   double price = 5 [(w17.field) = { type: MONEY, gte: 0 }];
+	//   int64 price = 5 [(w17.field) = { type: MONEY, currency: "CZK", gte: 0 }];
 	//   google.protobuf.Timestamp created_at = 10
 	//     [(w17.field) = { type: DATETIME, default_auto: NOW }];
   Field field = 51001;
@@ -280,6 +280,8 @@ message Field {
   // --- Numeric bounds ---
   // gt / lt strict, gte / lte inclusive. Can coexist (e.g. gte + lt).
   // `optional` so 0 vs unset is distinguishable.
+  // On MONEY the bounds are in MINOR units, like the stored value:
+  // `gte: 100` at scale 2 is "at least 1.00".
   optional double gt  = 10;
   optional double gte = 11;
   optional double lt  = 12;
@@ -351,12 +353,20 @@ message Field {
   // no restriction.
   string choices = 16;
 
-  // --- DECIMAL precision / scale (type: DECIMAL only) ---
+  // --- DECIMAL precision / scale (type: DECIMAL), MONEY scale ---
   // precision = total number of significant digits (required for DECIMAL).
   // scale     = digits after the decimal point (default 0 — integer-like).
   // IR builder requires 0 <= scale <= precision for DECIMAL (scale 0 is
   // the integer-like default, not an error), and rejects both fields for
-  // non-DECIMAL types.
+  // types other than DECIMAL and MONEY.
+  //
+  // On MONEY, `scale` alone applies (precision is refused): how many minor
+  // units make one major unit, as a power of ten. The default is 2 — the
+  // int64 holds cents, so 12345 is 123.45. A unit price kept finer than the
+  // currency shows declares more (`scale: 4` holds 1.2345 as 12345); 0 holds
+  // whole units. 0 to 12. Changing it on an existing column re-means every
+  // stored value, so the migrator converts the data (×/÷ 10^Δ) rather than
+  // leaving it to read 100× off.
   //
   // ENFORCEMENT: the REQUEST side. The generated
   // validation block refuses any value the column could not store exactly
@@ -380,6 +390,33 @@ message Field {
   // and this one has no CHECK to reach it through.
   int32          precision = 17;
   optional int32 scale     = 18;
+
+  // --- MONEY currency (type: MONEY only) ---
+  //
+  // Which currency a MONEY amount is in, for DISPLAY. Neither is required;
+  // a MONEY value with no currency renders as its scaled number without a
+  // symbol. The two are mutually exclusive.
+  //
+  // currency names one fixed ISO 4217 code (`"CZK"`, `"EUR"`) for every row.
+  // The code is validated at build time against the currencies table and
+  // stored uppercase.
+  //
+  // currency_field names a SIBLING field of the same message that holds the
+  // row's code — for a table whose rows are in different currencies. It is
+  // checked at build time to exist and to be a string field of type CHAR or
+  // TEXT. A read projection inherits the binding when it also projects the
+  // currency column; when it does not, the build warns and the value renders
+  // without a symbol.
+  //
+  // Neither changes storage: the column is BIGINT either way, and the code
+  // never travels inside the amount.
+  //
+  // Usage:
+  //   int64  price       = 5 [(w17.field) = { type: MONEY, currency: "CZK" }];
+  //   int64  unit_price  = 6 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
+  //   string currency    = 7 [(w17.field) = { type: CHAR, max_len: 3 }];
+  string currency       = 37;
+  string currency_field = 38;
 
   // --- Default value at insert time ---
   // Exactly one of the branches may be set. No default_bool: bool defaults
@@ -631,16 +668,22 @@ message Field {
   // slot to wherever their language puts it.
   //
   // Empty (default) = the preset implied by `type`: MONEY →
-  // decimal:2, DECIMAL → decimal:<scale>, PERCENTAGE → percent,
+  // money (scale + currency from the field), DECIMAL → decimal:<scale>,
+  // PERCENTAGE → percent,
   // RATIO → number, DATE → date, TIME → time, DATETIME → datetime,
   // NUMBER / COUNTER / SMALL_INTEGER → number. ID is deliberately
   // unformatted — grouping the digits of a row id ("1,234") reads as
   // a quantity it is not.
   //
   // The filter set is closed and its names are public contract; the
-  // parser rejects an unknown filter at codegen time. Currency is
-  // out of scope (no symbol, no per-currency decimals) — MONEY is a
-  // 2-decimal number.
+  // parser rejects an unknown filter at codegen time.
+  //
+  // `money` applies to a MONEY field only: `{value|money}` renders with
+  // the field's own currency, `{value|money:"EUR"}` fixes one. The minor
+  // units are shifted by the field's scale, rounded half-up to the
+  // currency's own decimals (JPY 0, KWD 3, most 2), and placed into the
+  // locale's currency shape — `1 234,50 Kč` in Czech, `US$1,234.50` in
+  // English. No float is involved at any step.
   string format = 32;
 
   // --- GEOMETRY / GEOGRAPHY parameters (db_type GEOMETRY / GEOGRAPHY only) ---
@@ -1189,6 +1232,12 @@ enum Type {
   NUMBER     = 10;
   ID         = 11;
   COUNTER    = 12;
+  // MONEY is an exact amount: an int64 count of MINOR units (carrier: int64
+  // ONLY — double and string are refused at build time). `scale` (default
+  // 2) says how many minor units make one major unit; `currency` /
+  // `currency_field` say which currency, for display. Storage is BIGINT on
+  // every dialect, bounds (gte / lte / …) are in minor units, and the wire
+  // follows the int64 rule (a JSON string). Rendered by the `money` format.
   MONEY      = 13;
   PERCENTAGE = 14;
   RATIO      = 15;
@@ -1201,8 +1250,9 @@ enum Type {
 
   // Arbitrary-precision decimal (carrier: string — lossless wire format).
   // Requires (w17.field).precision; (w17.field).scale is optional (default 0).
-  // MONEY / PERCENTAGE / RATIO stay as fixed-shape double-carried presets;
-  // reach for DECIMAL when you need precision/scale the presets don't cover.
+  // PERCENTAGE / RATIO stay as fixed-shape double-carried presets; reach for
+  // DECIMAL when you need precision/scale they don't cover. An amount of
+  // money is MONEY (int64 minor units), not DECIMAL: DECIMAL has no currency.
   DECIMAL = 16;
 
   // Temporal (carrier: google.protobuf.Timestamp)

@@ -16,7 +16,7 @@ import { createContext, useContext } from "react";
 
 import type { FormatOverrides } from "./valueFormat";
 import type { FormatContext, FormatTemplate } from "./slotFormat";
-import { formatTemplateValue } from "./slotFormat";
+import { formatTemplateValue, withRowCurrency } from "./slotFormat";
 
 export type {
   FormatContext,
@@ -25,7 +25,15 @@ export type {
   FormatSlot,
   FormatTemplate,
 } from "./slotFormat";
-export { formatSlotValue, formatTemplateValue, templateIsNumeric } from "./slotFormat";
+export {
+  formatSlotValue,
+  formatTemplateValue,
+  rowCurrency,
+  sharedRowCurrency,
+  templateCurrencyField,
+  templateIsNumeric,
+  withRowCurrency,
+} from "./slotFormat";
 
 /**
  * The locale the admin formats with.
@@ -79,12 +87,17 @@ export function formatContextFor(spec: {
  * different people for different audiences. Omitting it renders every msgid as
  * itself, which is the English source text and exactly what the admin did
  * before catalogs existed.
+ *
+ * `row` is the object the value was read from. A money template whose
+ * currency is per row (`currency_field`) reads the code off it; without it
+ * such a value renders as its bare scaled amount.
  */
 export function formatCellValue(
   raw: unknown,
   tmpl: FormatTemplate | undefined,
   ctx: FormatContext,
   translate?: (msgid: string) => string,
+  row?: Record<string, unknown> | null,
 ): string | undefined {
-  return formatTemplateValue(raw, tmpl, ctx, translate);
+  return formatTemplateValue(raw, tmpl, withRowCurrency(ctx, tmpl, row), translate);
 }

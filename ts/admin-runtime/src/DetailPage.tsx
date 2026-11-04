@@ -2,7 +2,7 @@
 // arbitrary record's fields per spec. Handles flat fields,
 // readonly_fields, fieldsets and per-field UI overrides.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Accordion,
   Button,
@@ -29,6 +29,12 @@ import { hasAllPermissions } from "./auth";
 import { detailFieldSlotKey } from "./types";
 import { formatCellValue, formatContextFor } from "./cellFormat";
 import { resolveChoiceLabel, translateChoiceLabel } from "./choiceLabel";
+import {
+  majorTextToMinor,
+  minorToMajorText,
+  moneyInputCurrency,
+  moneyInputScale,
+} from "./moneyInput";
 import { identityTranslate, useT } from "./i18n";
 import type { Translate } from "./i18n";
 import type { FormatContext, FormatTemplate } from "./cellFormat";
@@ -57,6 +63,8 @@ import type {
 export interface FieldDisplay {
   format?: FormatTemplate;
   ctx: FormatContext;
+  /** The record the value belongs to — where a per-row money currency is read. */
+  row?: Record<string, unknown> | null;
 }
 
 /**
@@ -66,7 +74,7 @@ export interface FieldDisplay {
  */
 function renderFieldValue(raw: unknown, display: FieldDisplay | undefined, t: Translate): string {
   if (!display) return displayString(raw);
-  const formatted = formatCellValue(raw, display.format, display.ctx, t);
+  const formatted = formatCellValue(raw, display.format, display.ctx, t, display.row);
   return formatted !== undefined ? formatted : displayString(raw);
 }
 
@@ -241,7 +249,7 @@ export function DetailPage({
   // endpoint, or no permission to use it).
   const canSubmit = Boolean(detail.update_endpoint) && canUpdate;
   const displayFor = (field: string, readonly: boolean): FieldDisplay | undefined =>
-    readonly || !canSubmit ? { format: fieldFormats[field], ctx: formatCtx } : undefined;
+    readonly || !canSubmit ? { format: fieldFormats[field], ctx: formatCtx, row } : undefined;
 
   // Detail-tab slots — consumer-registered components keyed by
   // `<pageName>:detail:tab:<id>`. When any exist, the page wraps
@@ -667,6 +675,32 @@ export function renderFieldInput({
       />
     );
   }
+  // A MONEY field is an int64 of MINOR units. Edited raw, the operator would
+  // see 12345 for 123.45 and store 1.23 by typing "123"; the money input
+  // shows and accepts major units and submits the minor units they mean.
+  const moneyFormat = page.detail?.field_formats?.[field];
+  const moneyScale = moneyInputScale(moneyFormat);
+  if (moneyScale !== undefined && control) {
+    return (
+      <Controller
+        key={field}
+        name={field}
+        control={control}
+        defaultValue={rawValue}
+        render={({ field: bound }) => (
+          <MoneyInput
+            label={humanizeLabel(field)}
+            disabled={disabled}
+            scale={moneyScale}
+            currency={moneyInputCurrency(moneyFormat)}
+            value={bound.value}
+            onChange={bound.onChange}
+            onBlur={bound.onBlur}
+          />
+        )}
+      />
+    );
+  }
   return (
     <TextInput
       key={field}
@@ -674,6 +708,58 @@ export function renderFieldInput({
       disabled={disabled}
       defaultValue={value}
       {...register(field)}
+    />
+  );
+}
+
+// MoneyInput edits an amount of minor units as major units (moneyInput.ts).
+// What it hands the form is the minor-unit decimal string the wire carries —
+// or, for text that is not an amount, that text unchanged, so the server
+// refuses it rather than the form storing a guess.
+function MoneyInput({
+  label,
+  disabled,
+  scale,
+  currency,
+  value,
+  onChange,
+  onBlur,
+}: {
+  label: string;
+  disabled: boolean;
+  scale: number;
+  currency?: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  onBlur: () => void;
+}) {
+  const [text, setText] = useState(() => minorToMajorText(value, scale));
+  // The value this input last handed the form. Anything else arriving is a
+  // reset (the row loaded, a save re-seeded the form) and replaces the text.
+  const emitted = useRef<unknown>(value);
+  useEffect(() => {
+    if (value !== emitted.current) {
+      emitted.current = value;
+      setText(minorToMajorText(value, scale));
+    }
+  }, [value, scale]);
+  const invalid = majorTextToMinor(text, scale) === null;
+  return (
+    <TextInput
+      label={label}
+      disabled={disabled}
+      inputMode="decimal"
+      value={text}
+      error={invalid}
+      rightSection={currency}
+      onBlur={onBlur}
+      onChange={(e) => {
+        const next = e.currentTarget.value;
+        setText(next);
+        const minor = majorTextToMinor(next, scale);
+        emitted.current = minor ?? next;
+        onChange(emitted.current);
+      }}
     />
   );
 }
