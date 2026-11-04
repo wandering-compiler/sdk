@@ -153,6 +153,57 @@ func ClientTLS(lookup LookupFunc, serverName string) (*tls.Config, error) {
 	}, nil
 }
 
+// SelfTLS is a bundle dialling its OWN private listener — the container's
+// health probe. Its leaf is presented, and the server is accepted when its
+// chain verifies against the private CA and its leaf carries this bundle's
+// own URI SAN: the listener answering is the container itself.
+//
+// No host name is checked. A production identity is a SPIFFE URI and need
+// carry no DNS SAN at all, so verifying the listener as "localhost" — which
+// only the dev PKI's leaves carry — failed every production health check of a
+// binary serving a private surface (found 2026-11-04: a private-only domain's
+// composed server never became healthy and the deploy rolled back).
+func SelfTLS(lookup LookupFunc) (*tls.Config, error) {
+	cert, pool, err := material(lookup)
+	if err != nil {
+		return nil, err
+	}
+	own, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("private surface: parsing %s: %w", EnvCert, err)
+	}
+	if len(own.URIs) == 0 {
+		return nil, fmt.Errorf("private surface: %s carries no URI SAN — a private identity is spiffe://w17/<domain>/<bundle>", EnvCert)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+		// The chain and the identity are verified below instead of a host
+		// name: the dial is to this container, by an address, and the
+		// identity that matters is the URI.
+		InsecureSkipVerify: true, //nolint:gosec // verified in VerifyConnection
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("private surface: the listener presented no certificate")
+			}
+			leaf := cs.PeerCertificates[0]
+			inter := x509.NewCertPool()
+			for _, c := range cs.PeerCertificates[1:] {
+				inter.AddCert(c)
+			}
+			if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, Intermediates: inter, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+				return fmt.Errorf("private surface: the listener's certificate: %w", err)
+			}
+			for _, u := range own.URIs {
+				if hasURI(leaf, u.String()) {
+					return nil
+				}
+			}
+			return fmt.Errorf("private surface: the listener is not this bundle (it does not carry %s)", own.URIs[0])
+		},
+	}, nil
+}
+
 // ProxyID is the identity the gateway accepts connections from.
 func ProxyID(lookup LookupFunc) string {
 	if v := strings.TrimSpace(lookup(EnvProxyID)); v != "" {
