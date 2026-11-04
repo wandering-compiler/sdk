@@ -15,17 +15,17 @@ import (
 // admin runtime runs too. Either `value` (the decimal-string / temporal path)
 // or `float` (the double adapter) is set, never both.
 type formatVector struct {
-	Name   string   `json:"name"`
-	Locale string   `json:"locale"`
-	Kind   string   `json:"kind"`
-	Places *int     `json:"places"`
+	Name   string `json:"name"`
+	Locale string `json:"locale"`
+	Kind   string `json:"kind"`
+	Places *int   `json:"places"`
 	// Scale / Currency are read by the `money` kind only: the value is a
 	// count of minor units at Scale, rendered in Currency (empty = none).
-	Scale    *int    `json:"scale"`
-	Currency string  `json:"currency"`
-	Value    *string `json:"value"`
-	Float  *float64 `json:"float"`
-	Want   string   `json:"want"`
+	Scale    *int     `json:"scale"`
+	Currency string   `json:"currency"`
+	Value    *string  `json:"value"`
+	Float    *float64 `json:"float"`
+	Want     string   `json:"want"`
 }
 
 func loadFormatVectors(t *testing.T) []formatVector {
