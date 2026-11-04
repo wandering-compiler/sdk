@@ -102,8 +102,11 @@ func PublicGRPC(name, listenAddr string) Probe {
 // PrivateGRPC probes a PRIVATE gRPC listener ((w17.private_api)), which is
 // mutual TLS whatever the mesh switch says: the probe presents this
 // container's own private identity (privatesurface.EnvCert / EnvKey) and
-// verifies the listener against the private CA, as "localhost" (every dev
-// leaf carries it). Health is the one method the listener answers without the
+// accepts the listener when it is that identity: its chain verifies against
+// the private CA and it carries this container's own URI SAN
+// (privatesurface.SelfTLS). No host name is checked — a production identity
+// is a SPIFFE URI and need carry no DNS SAN, let alone "localhost".
+// Health is the one method the listener answers without the
 // proxy's identity.
 func PrivateGRPC(name, listenAddr string) Probe {
 	return Probe{Name: name, Addr: listenAddr, kind: kindPrivateGRPC}
@@ -444,7 +447,7 @@ func leafServerName(leaf *x509.Certificate) (string, error) {
 }
 
 func checkPrivateGRPC(ctx context.Context, tgt string, getenv func(string) string) error {
-	cfg, err := privatesurface.ClientTLS(privatesurface.LookupFunc(getenv), "localhost")
+	cfg, err := privatesurface.SelfTLS(privatesurface.LookupFunc(getenv))
 	if err != nil {
 		return err
 	}
