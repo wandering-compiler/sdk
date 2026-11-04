@@ -338,7 +338,7 @@ export function ListPage({ spec, page, whoami, slots, onSelectRow, onAdd }: List
         const cellBody = SlotComp ? (
           <SlotComp row={record} field={c} value={val} page={page} />
         ) : (
-          columnText(page, c, val, formatCtx, t)
+          columnText(page, c, val, formatCtx, t, record)
         );
         if (c === linkCol) {
           const id = String(idAccessor(record));

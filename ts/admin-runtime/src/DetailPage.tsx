@@ -57,6 +57,8 @@ import type {
 export interface FieldDisplay {
   format?: FormatTemplate;
   ctx: FormatContext;
+  /** The record the value belongs to — where a per-row money currency is read. */
+  row?: Record<string, unknown> | null;
 }
 
 /**
@@ -66,7 +68,7 @@ export interface FieldDisplay {
  */
 function renderFieldValue(raw: unknown, display: FieldDisplay | undefined, t: Translate): string {
   if (!display) return displayString(raw);
-  const formatted = formatCellValue(raw, display.format, display.ctx, t);
+  const formatted = formatCellValue(raw, display.format, display.ctx, t, display.row);
   return formatted !== undefined ? formatted : displayString(raw);
 }
 
@@ -241,7 +243,7 @@ export function DetailPage({
   // endpoint, or no permission to use it).
   const canSubmit = Boolean(detail.update_endpoint) && canUpdate;
   const displayFor = (field: string, readonly: boolean): FieldDisplay | undefined =>
-    readonly || !canSubmit ? { format: fieldFormats[field], ctx: formatCtx } : undefined;
+    readonly || !canSubmit ? { format: fieldFormats[field], ctx: formatCtx, row } : undefined;
 
   // Detail-tab slots — consumer-registered components keyed by
   // `<pageName>:detail:tab:<id>`. When any exist, the page wraps

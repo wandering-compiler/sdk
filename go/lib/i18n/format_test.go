@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -18,7 +19,11 @@ type formatVector struct {
 	Locale string   `json:"locale"`
 	Kind   string   `json:"kind"`
 	Places *int     `json:"places"`
-	Value  *string  `json:"value"`
+	// Scale / Currency are read by the `money` kind only: the value is a
+	// count of minor units at Scale, rendered in Currency (empty = none).
+	Scale    *int    `json:"scale"`
+	Currency string  `json:"currency"`
+	Value    *string `json:"value"`
 	Float  *float64 `json:"float"`
 	Want   string   `json:"want"`
 }
@@ -64,6 +69,12 @@ func applyVector(v formatVector) string {
 		return FormatDecimal(raw, places, f)
 	case "percent":
 		return FormatPercent(raw, places, f)
+	case "money":
+		scale := 0
+		if v.Scale != nil {
+			scale = *v.Scale
+		}
+		return FormatMoney(raw, scale, v.Currency, f)
 	case "date":
 		return FormatDate(raw, f)
 	case "short_date":
@@ -94,7 +105,7 @@ func TestFormatGoldenVectors(t *testing.T) {
 // fail loudly here rather than silently assert the fallback string.
 func TestFormatVectorsUseKnownKinds(t *testing.T) {
 	known := map[string]bool{
-		"number": true, "decimal": true, "percent": true,
+		"number": true, "decimal": true, "percent": true, "money": true,
 		"date": true, "short_date": true, "time": true, "datetime": true,
 	}
 	for _, v := range loadFormatVectors(t) {
@@ -140,6 +151,14 @@ func TestFormatTableRowsAreComplete(t *testing.T) {
 		}
 		if f.PercentFormat == "" {
 			t.Errorf("%s: empty percent_format", l)
+		}
+		if !strings.Contains(f.CurrencyFormat, "{value}") || !strings.Contains(f.CurrencyFormat, "{symbol}") {
+			t.Errorf("%s: currency_format %q must carry both {value} and {symbol}", l, f.CurrencyFormat)
+		}
+		for code := range f.CurrencySymbols {
+			if _, ok := LookupCurrency(code); !ok || NormalizeCurrencyCode(code) != code {
+				t.Errorf("%s: currency_symbols names %q, which is not a canonical code in the currencies table", l, code)
+			}
 		}
 		if f.FirstDayOfWeek != 0 && f.FirstDayOfWeek != 1 {
 			t.Errorf("%s: first_day_of_week = %d, want 0 (Sunday) or 1 (Monday)", l, f.FirstDayOfWeek)
@@ -315,5 +334,53 @@ func TestGroupDigitsRespectsSize(t *testing.T) {
 	none := Formats{DecimalSeparator: ",", ThousandSeparator: "", Grouping: 3}
 	if got := FormatNumber("123456789", none); got != "123456789" {
 		t.Errorf("empty separator = %q, want the bare digits", got)
+	}
+}
+
+// INVARIANT: the currencies table carries the decimals the money formatter
+// rounds to, and they are CLDR's — the exceptions the spec names by code.
+func TestCurrencyTableDecimals(t *testing.T) {
+	want := map[string]int{
+		"CZK": 2, "EUR": 2, "USD": 2, "JPY": 0, "KRW": 0,
+		"KWD": 3, "BHD": 3, "OMR": 3, "JOD": 3, "TND": 3, "CLF": 4,
+	}
+	for code, decimals := range want {
+		c, ok := LookupCurrency(code)
+		if !ok {
+			t.Errorf("%s missing from the currencies table", code)
+			continue
+		}
+		if c.Decimals != decimals {
+			t.Errorf("%s decimals = %d, want %d", code, c.Decimals, decimals)
+		}
+		if c.Code != code {
+			t.Errorf("%s row carries code %q", code, c.Code)
+		}
+	}
+	if _, ok := LookupCurrency("czk"); !ok {
+		t.Error("a lowercase code must resolve")
+	}
+	if _, ok := LookupCurrency("ABC"); ok {
+		t.Error("ABC is not an ISO 4217 code")
+	}
+	codes := CurrencyCodes()
+	if len(codes) < 150 || !sort.StringsAreSorted(codes) {
+		t.Errorf("CurrencyCodes() = %d codes (sorted=%v), want the ISO 4217 set, sorted", len(codes), sort.StringsAreSorted(codes))
+	}
+}
+
+// INVARIANT: a negative scale is treated as zero rather than shifting the
+// point the wrong way, and a fractional input (not minor units, but not
+// garbage either) still shifts exactly.
+func TestFormatMoneyEdges(t *testing.T) {
+	en := ResolveFormats("en")
+	if got := FormatMoney("1234", -3, "", en); got != "1,234" {
+		t.Errorf("negative scale = %q, want 1,234", got)
+	}
+	if got := FormatMoney("12.5", 2, "", en); got != "0.13" {
+		t.Errorf("fractional minor units = %q, want 0.13 (0.125 half-up)", got)
+	}
+	if got := FormatMoney("000123", 2, "", en); got != "1.23" {
+		t.Errorf("leading zeros = %q, want 1.23", got)
 	}
 }

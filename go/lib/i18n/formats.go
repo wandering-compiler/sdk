@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-// formats.json is the FROZEN per-locale format table. It is reference data, not project
+// formats.json is the FROZEN per-locale format table, plus the currencies table
+// money formatting reads (ISO 4217 code → CLDR symbol and decimals). It is reference data, not project
 // configuration: a project cannot redefine what "Czech number formatting"
 // means, the same way it cannot redefine what MAX_LEN_VIOLATION means. What a
 // project can do is remap a (language, kind) pair onto another locale's row —
@@ -61,7 +62,17 @@ type Formats struct {
 	TimeFormat        string `json:"time_format"`
 	DateTimeFormat    string `json:"datetime_format"`
 	PercentFormat     string `json:"percent_format"`
-	FirstDayOfWeek    int    `json:"first_day_of_week"`
+	// CurrencyFormat is the shape a money value renders in, over two tokens:
+	// `{value}` (the grouped amount, always unsigned — the sign leads the
+	// whole shape) and `{symbol}`. `{value} {symbol}` in Czech, `{symbol}{value}`
+	// in English. See [FormatMoney].
+	CurrencyFormat string `json:"currency_format"`
+	// CurrencySymbols is the locale's own spelling of a currency, where it
+	// differs from the locale-independent symbol in the currencies table —
+	// in practice a locale's home currency: `Kč` for CZK in Czech, `$` for
+	// USD in en-US. Keyed by ISO 4217 code.
+	CurrencySymbols map[string]string `json:"currency_symbols,omitempty"`
+	FirstDayOfWeek  int               `json:"first_day_of_week"`
 }
 
 // FallbackFormatLocale is the last link of every resolution chain. A locale
@@ -78,12 +89,13 @@ type Overrides map[string]map[FormatKind]string
 // formatSpelling keeps the canonical BCP-47 spelling from the file (`en-US`,
 // not `en-us`) for anything a human reads, such as a parser's list of valid
 // values.
-var formatTable, formatSpelling = mustLoadFormatTable()
+var formatTable, formatSpelling, currencyTable = mustLoadFormatTable()
 
-func mustLoadFormatTable() (map[string]Formats, map[string]string) {
+func mustLoadFormatTable() (map[string]Formats, map[string]string, map[string]Currency) {
 	var doc struct {
-		Schema  int                `json:"schema"`
-		Locales map[string]Formats `json:"locales"`
+		Schema     int                 `json:"schema"`
+		Locales    map[string]Formats  `json:"locales"`
+		Currencies map[string]Currency `json:"currencies"`
 	}
 	body, err := formatsFS.ReadFile("formats.json")
 	if err != nil {
@@ -106,7 +118,15 @@ func mustLoadFormatTable() (map[string]Formats, map[string]string) {
 	if _, ok := rows[FallbackFormatLocale]; !ok {
 		panic("i18n: embedded formats.json has no " + FallbackFormatLocale + " row to fall back to")
 	}
-	return rows, spelling
+	currencies := make(map[string]Currency, len(doc.Currencies))
+	for code, c := range doc.Currencies {
+		if !isCurrencyCodeShape(code) {
+			panic("i18n: formats.json declares currency " + code + ", which is not three uppercase letters")
+		}
+		c.Code = code
+		currencies[code] = c
+	}
+	return rows, spelling, currencies
 }
 
 // FormatTableJSON returns the frozen table exactly as it is embedded —

@@ -137,8 +137,8 @@ function ChartBody({ widget, rows }: { widget: AdminWidgetSpec; rows: ChartRow[]
   // the spec, so nothing here knows anything about proto.
   const fmt = useFormatContext();
   const t = useT();
-  const labelX = axisLabeler(widget.x_choices, widget.x_format, fmt, t);
-  const valueFormatter = measureFormatter(widget, fmt, t);
+  const labelX = axisLabeler(widget.x_choices, widget.x_format, fmt, t, rows);
+  const valueFormatter = measureFormatter(widget, fmt, t, rows);
   if (rows.length === 0) return <NoData />;
   const xField = widget.x_field ?? "";
 

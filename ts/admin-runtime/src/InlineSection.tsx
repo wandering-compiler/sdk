@@ -154,7 +154,7 @@ export function InlineSection({ spec, inline, parentId, onSelectChild }: InlineS
           ),
           isRef: true,
         }
-      : { display: columnText(targetPage, col.name, row[col.name], formatCtx, t), isRef: false };
+      : { display: columnText(targetPage, col.name, row[col.name], formatCtx, t, row), isRef: false };
 
   // Editable field list for the create/update form. Prefer the
   // child page's `detail.fields` (those are the consumer's
