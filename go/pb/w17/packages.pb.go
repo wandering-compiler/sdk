@@ -22,9 +22,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Packages: what a tenant can be given. A project names, in its domain's
-// protos, the sets of methods (and audiences) it offers tenants — what it
-// sells; the backoffice switches whole packages on for a tenant, and nothing
+// Packages: what an organization can be given. A project names, in its domain's
+// protos, the sets of methods (and audiences) it offers organizations — what it
+// sells; the backoffice switches whole packages on for an organization, and nothing
 // else. The auth plugin's `org_packages` feature holds which packages each
 // organization has and enforces them on every request:
 //
@@ -66,7 +66,7 @@ const (
 //	    { name: "base", title: "Base", audiences: [ "staff", "client" ],
 //	      methods: [ "example.NoteQuery.ListNotes", "example.NoteMutation.CreateNote" ] },
 //	    { name: "pro", title: "Pro", includes: [ "base" ], audiences: [ "client_mcp" ],
-//	      methods: [ "example.NoteQuery.ListTenantNotes" ] }
+//	      methods: [ "example.NoteQuery.ListOrgNotes" ] }
 //	  ]
 //	};
 type Packages struct {
@@ -113,7 +113,7 @@ func (x *Packages) GetPackages() []*Package {
 	return nil
 }
 
-// Package is one thing a tenant can be given.
+// Package is one thing an organization can be given.
 type Package struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name identifies the package: snake_case, unique in the domain. It is what
@@ -126,9 +126,9 @@ type Package struct {
 	// this one carries too.
 	Includes []string `protobuf:"bytes,4,rep,name=includes,proto3" json:"includes,omitempty"`
 	// methods are `<module>.<Service>.<Method>` of the domain's services: the
-	// permissions the package grants a tenant.
+	// permissions the package grants an organization.
 	Methods []string `protobuf:"bytes,5,rep,name=methods,proto3" json:"methods,omitempty"`
-	// audiences are the audience surfaces the package opens to the tenant's
+	// audiences are the audience surfaces the package opens to the organization's
 	// members (w17/audience.proto). An audience no package of the domain names
 	// is open to every organization.
 	Audiences []string `protobuf:"bytes,6,rep,name=audiences,proto3" json:"audiences,omitempty"`
@@ -234,7 +234,7 @@ var file_w17_packages_proto_extTypes = []protoimpl.ExtensionInfo{
 
 // Extension fields to descriptorpb.FileOptions.
 var (
-	// packages — what a tenant of this domain can be given: named sets of its
+	// packages — what an organization of this domain can be given: named sets of its
 	// methods and audiences, which the backoffice switches on whole per
 	// organization and the auth plugin's org_packages enforces on every
 	// request (a method no package grants is held by nobody in an

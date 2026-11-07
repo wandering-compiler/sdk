@@ -146,9 +146,9 @@ describe("a picker in an inline form", () => {
   } as unknown as AdminSpec;
   const inline: AdminInlineSpec = {
     page: "Lenders",
-    endpoint: "/admin/api/inline/Tenants/{id}/Lenders",
+    endpoint: "/admin/api/inline/Orgs/{id}/Lenders",
     layout: "TABULAR",
-    create_endpoint: "/admin/api/inline/Tenants/{id}/Lenders",
+    create_endpoint: "/admin/api/inline/Orgs/{id}/Lenders",
     // The create request's own fields — org_id is not among the inline
     // page's detail fields' order, and note is.
     create_fields: ["org_id", "note"],

@@ -103,12 +103,12 @@ const hubClientBuffer = 64
 // reports it to the error reporter and drops the event; the SSE
 // connection stays open.
 //
-// labels are the event's tenant/scope labels (envelope.labels,
+// labels are the event's org/scope labels (envelope.labels,
 // stamped at emit time). The source delivers the frame to a
 // connected client only when every event label is satisfied by
 // the client's principal labels (see [PrincipalLabelsFunc] +
 // labelsSubset). Empty/nil event labels = broadcast to every
-// authenticated client (the single-tenant default).
+// authenticated client (the single-organization default).
 type TranscodeFunc func(envelopeTopic string, envelope []byte) (payloadJSON []byte, labels map[string]string, skip bool, err error)
 
 // PrincipalLabelsFunc derives a connected client's principal
@@ -132,7 +132,7 @@ type PrincipalLabelsFunc func(userData []byte) map[string]string
 // principal may be nil — every connected client is then
 // label-less and the broadcast degrades to topic-only filtering
 // (every authenticated client sees every public event, the
-// single-tenant posture).
+// single-organization posture).
 func NewEventbusEventSource(factory eventbus.SubscriberFactory, channels []string, transcode TranscodeFunc, principal PrincipalLabelsFunc) *EventbusEventSource {
 	return &EventbusEventSource{
 		factory:   factory,
@@ -369,7 +369,7 @@ func (e *EventbusEventSource) anyInterested(topic string) bool {
 func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string, ev Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// Label-based tenant isolation is active when a principal-labels
+	// Label-based organization isolation is active when a principal-labels
 	// deriver was configured.
 	isolation := e.principal != nil
 	for c := range e.clients {
@@ -389,19 +389,19 @@ func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string
 
 // entitled decides whether a connected principal receives an event.
 //
-// When tenant isolation is active (a principal-labels
+// When organization isolation is active (a principal-labels
 // deriver is configured — i.e. the surface declares the labels field it
 // partitions by), an UNLABELLED event is delivered to NOBODY. It cannot
-// be scoped to any tenant, so there is no principal it can be shown to
+// be scoped to any organization, so there is no principal it can be shown to
 // safely. A LABELLED event keeps the subset rule; with isolation off
-// (no deriver — the single-tenant default) an unlabelled event still
+// (no deriver — the single-organization default) an unlabelled event still
 // broadcasts to every connected client.
 //
 // The rule got here in two steps, and both halves matter:
 //
 //  1. `labelsSubset(empty, …)` was vacuously true, so any event emitted
 //     without labels — notably the reserved `w17.invalidate`, which
-//     carries entity IDs — leaked to every connected tenant.
+//     carries entity IDs — leaked to every connected organization.
 //  2. Withholding it from LABEL-BEARING principals only (delivering it
 //     to the label-less ones) inverted the fail-closed branch it shares
 //     with the row side: a scope decorator that cannot resolve an
@@ -413,7 +413,7 @@ func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string
 //     Failing to resolve must never widen delivery.
 //
 // Consequence: on an isolating surface every event has to carry the
-// label it is partitioned by — including cross-tenant cache
+// label it is partitioned by — including cross-organization cache
 // invalidation, which is why [eventbus.EmitInvalidate] labels
 // InvalidateEvent from the emitting request's context. An event emitted
 // outside any labelled request reaches nobody, by design: that is the

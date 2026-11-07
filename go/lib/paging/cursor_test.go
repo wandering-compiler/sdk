@@ -236,7 +236,7 @@ func TestEncode_PreservesDirection(t *testing.T) {
 // decode with the real key.
 func TestDecodeCursor_RejectsForgedCursor(t *testing.T) {
 	attackerKey := []byte("attacker-does-not-know-the-secret!")
-	forgedReq := paging.FromString("project_id=victim-tenant-B")
+	forgedReq := paging.FromString("project_id=victim-org-B")
 	token, err := paging.EncodeCursor(forgedReq, makeBoundaries(), 1, w17pb.Direction_DIRECTION_FORWARD, testSchemaVersion, 0, attackerKey)
 	if err != nil {
 		t.Fatalf("encode (attacker): %v", err)

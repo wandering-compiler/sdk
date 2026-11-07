@@ -37,7 +37,7 @@ func ClientAddrMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handle
 // request's outgoing metadata, so the backend reads it on calls that run no
 // auth method too — a registration, which takes the organization from the
 // host and the account type from the audience. stamps are the gateway's
-// constants (principal.AudienceKey, MembershipKindsKey, TenantFromKey);
+// constants (principal.AudienceKey, MembershipKindsKey, OrgFromKey);
 // withHost adds principal.HostKey, the host [ClientAddrMiddleware] recorded,
 // so it must run inside it. Every key is `x-w17-*`: the edge strips a
 // client's copy before this runs, and the auth headers carry the same

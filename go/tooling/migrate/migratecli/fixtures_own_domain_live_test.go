@@ -48,7 +48,7 @@ func liveDatabase(t *testing.T, admin string, name string) string {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close(context.Background()) }()
-	if _, err := c.Exec(ctx, `CREATE TABLE app_item (id TEXT PRIMARY KEY); CREATE TABLE basic_tenant (id TEXT PRIMARY KEY)`); err != nil {
+	if _, err := c.Exec(ctx, `CREATE TABLE app_item (id TEXT PRIMARY KEY); CREATE TABLE basic_org (id TEXT PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
 	return dsn
@@ -105,7 +105,7 @@ func TestFixturesApply_EachBinarySeedsOnlyItsOwnStore_Live(t *testing.T) {
 				migrate.FixtureSeed{Domain: "app", Name: "seed", Connection: appConn,
 					Statements: []*applyfetchpb.SeedStmt{liveSeed("app_item", "a1")}},
 				migrate.FixtureSeed{Domain: "basic", Name: "seed", Connection: basicConn,
-					Statements: []*applyfetchpb.SeedStmt{liveSeed("basic_tenant", "b1")}},
+					Statements: []*applyfetchpb.SeedStmt{liveSeed("basic_org", "b1")}},
 			)
 			lock := writeLock(t, migrate.LockConnection{Name: "app-postgres"}, migrate.LockConnection{Name: "basic-postgres"})
 			// Each binary sees only its own DSN, as a deployed container does.
@@ -129,8 +129,8 @@ func TestFixturesApply_EachBinarySeedsOnlyItsOwnStore_Live(t *testing.T) {
 				want       []string
 			}{
 				{appDSN, "app_item", []string{"a1"}},
-				{appDSN, "basic_tenant", nil},
-				{basicDSN, "basic_tenant", []string{"b1"}},
+				{appDSN, "basic_org", nil},
+				{basicDSN, "basic_org", []string{"b1"}},
 				{basicDSN, "app_item", nil},
 			} {
 				if got := liveRows(t, c.dsn, c.table); strings.Join(got, ",") != strings.Join(c.want, ",") {

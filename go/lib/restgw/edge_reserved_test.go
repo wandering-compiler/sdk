@@ -50,8 +50,8 @@ import (
 func forgedHeaders() http.Header {
 	h := http.Header{}
 	h.Set("X-W17-User", base64.StdEncoding.EncodeToString([]byte("forged-principal")))
-	h.Set("X-W17-Scope-Tenant_id", "forged-tenant")
-	h.Set("W17-Label-Tenant", "forged-label")
+	h.Set("X-W17-Scope-Team_id", "forged-org")
+	h.Set("W17-Label-Org", "forged-label")
 	h.Set("W17-Tx-Id", "forged-tx")
 	h.Set("W17-Conn-Id", "forged-conn")
 	h.Set("Grpcgateway-Authorization", "forged")
@@ -65,14 +65,14 @@ func forgedHeaders() http.Header {
 	// Decoys: an ordinary propagated header and an ordinary rename must
 	// still arrive, or "nothing reserved arrived" would hold for a chain
 	// that forwards nothing at all.
-	h.Set("X-Tenant-Hint", "hint")
+	h.Set("X-Org-Hint", "hint")
 	h.Set("Accept-Language", "cs")
 	return h
 }
 
 // reservedKeys are the metadata keys no client value may reach.
 var reservedKeys = []string{
-	"x-w17-user", "x-w17-scope-tenant_id", "x-w17-scope-org_id", "w17-label-tenant",
+	"x-w17-user", "x-w17-scope-team_id", "x-w17-scope-org_id", "w17-label-org",
 	"w17-tx-id", "w17-conn-id", "grpcgateway-authorization",
 	"grpc-metadata-x-w17-user", "x-w17-credential", "x-w17-device", "grpc-metadata-x-w17-device",
 }
@@ -92,8 +92,8 @@ func edgeChain(router http.Handler) http.Handler {
 		{HTTP: "X-Org", Metadata: "w17-tx-id"},
 	}, stamped)
 	propagated := restgw.MetadataPropagationMiddleware([]string{
-		"X-Request-Id", "X-Tenant-Hint",
-		"X-W17-User", "X-W17-Scope-Tenant_id", "W17-Label-Tenant",
+		"X-Request-Id", "X-Org-Hint",
+		"X-W17-User", "X-W17-Scope-Team_id", "W17-Label-Org",
 		"W17-Tx-Id", "W17-Conn-Id", "Grpcgateway-Authorization",
 		"Grpc-Metadata-X-W17-User", "X-W17-Credential", "X-W17-Device", "Grpc-Metadata-X-W17-Device",
 	}, renamed)
@@ -233,7 +233,7 @@ func edgeRouter(t *testing.T, b *recordingBackend, handlerHeaders chan<- http.He
 			return
 		}
 		ctx := restgw.SetUserMetadata(r.Context(), data)
-		ctx = metadata.AppendToOutgoingContext(ctx, restgw.ScopeKey("tenant_id"), "verified-tenant")
+		ctx = metadata.AppendToOutgoingContext(ctx, restgw.ScopeKey("org_id"), "verified-org")
 		if err := b.unary(ctx); err != nil {
 			fail(w, err)
 		}
@@ -350,8 +350,8 @@ func TestEdge_ClientCannotSetReservedMetadataOnAnySurface(t *testing.T) {
 			name: "unary with auth",
 			do:   func(t *testing.T) { send(t, http.MethodGet, "/authed", nil, "") },
 			gatewayStamped: map[string]string{
-				"x-w17-user":            base64.StdEncoding.EncodeToString(gatewayPrincipal),
-				"x-w17-scope-tenant_id": "verified-tenant",
+				"x-w17-user":         base64.StdEncoding.EncodeToString(gatewayPrincipal),
+				"x-w17-scope-org_id": "verified-org",
 			},
 		},
 		{name: "server-sent events", do: func(t *testing.T) { send(t, http.MethodGet, "/sse", nil, "") }},
@@ -400,8 +400,8 @@ func TestEdge_ClientCannotSetReservedMetadataOnAnySurface(t *testing.T) {
 					t.Errorf("backend %s = %q, want absent: a client header reached a gateway-reserved key", k, got)
 				}
 			}
-			if got := md.Get("x-tenant-hint"); len(got) != 1 || got[0] != "hint" {
-				t.Errorf("backend x-tenant-hint = %q, want [hint]: ordinary propagation must keep working", got)
+			if got := md.Get("x-org-hint"); len(got) != 1 || got[0] != "hint" {
+				t.Errorf("backend x-org-hint = %q, want [hint]: ordinary propagation must keep working", got)
 			}
 			if got := md.Get("w17-language"); len(got) != 1 || got[0] != "cs" {
 				t.Errorf("backend w17-language = %q, want [cs]: ordinary renames must keep working", got)
@@ -416,7 +416,7 @@ func TestEdge_ClientCannotSetReservedMetadataOnAnySurface(t *testing.T) {
 					t.Errorf("handler saw client header %s: the inbound scrub must remove it before any layer reads it", name)
 				}
 			}
-			if h.Get("X-Tenant-Hint") != "hint" {
+			if h.Get("X-Org-Hint") != "hint" {
 				t.Errorf("handler lost an ordinary header: %v", h)
 			}
 		})
@@ -432,19 +432,19 @@ func TestMetadataMiddlewares_RefuseReservedKeysWithoutTheScrub(t *testing.T) {
 	sink := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		got, _ = metadata.FromOutgoingContext(r.Context())
 	})
-	h := restgw.MetadataPropagationMiddleware([]string{"X-W17-User", "W17-Tx-Id", "X-Tenant-Hint"},
+	h := restgw.MetadataPropagationMiddleware([]string{"X-W17-User", "W17-Tx-Id", "X-Org-Hint"},
 		restgw.MetadataRenameMiddleware([]restgw.HeaderRenameRule{{HTTP: "X-Org", Metadata: "x-w17-scope-org_id"}},
-			restgw.MetadataDefaultStampMiddleware([]restgw.DefaultMetadataStamp{{Key: "w17-label-tenant", Value: "x"}}, sink)))
+			restgw.MetadataDefaultStampMiddleware([]restgw.DefaultMetadataStamp{{Key: "w17-label-org", Value: "x"}}, sink)))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header = forgedHeaders()
 	h.ServeHTTP(httptest.NewRecorder(), req)
-	for _, k := range []string{"x-w17-user", "w17-tx-id", "x-w17-scope-org_id", "w17-label-tenant"} {
+	for _, k := range []string{"x-w17-user", "w17-tx-id", "x-w17-scope-org_id", "w17-label-org"} {
 		if v := got.Get(k); len(v) != 0 {
 			t.Errorf("outgoing %s = %q, want absent", k, v)
 		}
 	}
-	if v := got.Get("x-tenant-hint"); len(v) != 1 {
-		t.Errorf("outgoing x-tenant-hint = %q, want one value (decoy)", v)
+	if v := got.Get("x-org-hint"); len(v) != 1 {
+		t.Errorf("outgoing x-org-hint = %q, want one value (decoy)", v)
 	}
 }
 

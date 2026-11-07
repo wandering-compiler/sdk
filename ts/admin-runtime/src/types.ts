@@ -601,7 +601,7 @@ export interface WhoAmIResp {
   id?: string;
   permission_ids?: number[];
   // Free-form extras the storage method may add (display name,
-  // tenant, …). Runtime passes them through to slot props.
+  // organization, …). Runtime passes them through to slot props.
   [key: string]: unknown;
 }
 

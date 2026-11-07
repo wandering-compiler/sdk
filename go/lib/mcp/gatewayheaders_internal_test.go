@@ -14,10 +14,10 @@ import (
 // stdio, HTTP, and the OAuth-protected resource — keyed as the backend reads
 // them, and a client's own copy never wins.
 func TestSetGatewayHeaders_ReachTheAuthMethod(t *testing.T) {
-	gw := map[string]string{"X-W17-Membership-Kinds": "client", principal.AudienceKey: "client", principal.TenantFromKey: "host,default", principal.ProductKey: "storefront"}
+	gw := map[string]string{"X-W17-Membership-Kinds": "client", principal.AudienceKey: "client", principal.OrgFromKey: "host,default", principal.ProductKey: "storefront"}
 	want := func(t *testing.T, path string, got map[string]string) {
 		t.Helper()
-		if got[principal.MembershipKindsKey] != "client" || got[principal.AudienceKey] != "client" || got[principal.TenantFromKey] != "host,default" || got[principal.ProductKey] != "storefront" {
+		if got[principal.MembershipKindsKey] != "client" || got[principal.AudienceKey] != "client" || got[principal.OrgFromKey] != "host,default" || got[principal.ProductKey] != "storefront" {
 			t.Errorf("%s: auth headers = %v", path, got)
 		}
 		if got[principal.SurfaceKey] != principal.SurfaceMCP {
@@ -37,11 +37,11 @@ func TestSetGatewayHeaders_ReachTheAuthMethod(t *testing.T) {
 		seen = CollectAuthHeaders(conn)
 		return []int32{1}, nil
 	})
-	ps.SetGatewayHeaders(map[string]string{principal.AudienceKey: "client", principal.MembershipKindsKey: "client", principal.TenantFromKey: "host,default", principal.ProductKey: "storefront"})
+	ps.SetGatewayHeaders(map[string]string{principal.AudienceKey: "client", principal.MembershipKindsKey: "client", principal.OrgFromKey: "host,default", principal.ProductKey: "storefront"})
 	r := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`))
 	r.Header.Set("Authorization", "Bearer t")
 	r.Header.Set("X-W17-Membership-Kinds", "staff")
-	r.Header.Set("X-W17-Tenant-From", "default")
+	r.Header.Set("X-W17-Org-From", "default")
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	want(t, "oauth resource", seen)
 }

@@ -61,7 +61,7 @@ func TestRunLockName_CarriesTheSchema(t *testing.T) {
 	}
 
 	// A long schema name must still be distinguishable from another long one
-	// that shares its prefix — the same truncation collision `TenantRole`
+	// that shares its prefix — the same truncation collision `DatabaseRole`
 	// hit one package over.
 	if long1 == long2 {
 		t.Errorf("two long schema names collapse to one lock name:\n  %s\n  %s", long1, long2)

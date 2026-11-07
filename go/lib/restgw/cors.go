@@ -51,7 +51,7 @@ type CORSConfig struct {
 	// preflight responses. Empty defaults to `Content-Type,
 	// Authorization` — the two headers every browser
 	// frontend sends. Operators add domain-specific entries
-	// (`X-Tenant-Id`, etc.) via the `<ENV>_CORS_HEADERS` env.
+	// (`X-Org-Id`, etc.) via the `<ENV>_CORS_HEADERS` env.
 	AllowedHeaders []string
 
 	// AllowCredentials enables the `Access-Control-Allow-

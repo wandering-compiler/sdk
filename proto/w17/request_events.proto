@@ -133,9 +133,8 @@ message RequestEventMeta {
 
   // The verified caller; empty on an anonymous request.
   string user_id = 11 [(w17.field) = { gdpr: true }];
-  // The caller's organization: its org_id scope, or its tenant_id scope on a
-  // project of the single-organization model (the auth plugin's
-  // tenant_scope). Empty when the caller has neither.
+  // The caller's org: its org_id scope. Empty when the caller has
+  // none.
   string org_id = 12;
 
   // Whether the caller agreed to receive marketing messages, from the

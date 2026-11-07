@@ -10,7 +10,7 @@ import (
 // The health service answers probes — a load balancer, an orchestrator's
 // liveness check, `w17 healthcheck` — and those carry no credentials. The
 // caller's interceptors are the service's request policy (authentication,
-// tenant scoping, transaction handling), and an authenticating one refuses
+// organization scoping, transaction handling), and an authenticating one refuses
 // every probe, so the orchestrator restarts a healthy process in a loop.
 //
 // So health calls are served from the recovery interceptors directly, ahead

@@ -17,9 +17,9 @@ import (
 // the client-facing reading (the REST envelope, and ClientError, which the
 // MCP proxy uses) names neither the constraint nor the table.
 func TestConstraintFailure_NamesNoConstraintOrTableToTheClient(t *testing.T) {
-	const constraint, table = "orders_tenant_sku_key", "billing_orders"
+	const constraint, table = "orders_org_sku_key", "billing_orders"
 	registry := &grpcerr.ConstraintRegistry{ByName: map[string]grpcerr.ConstraintInfo{
-		"orders_tenant_sku_key_mapped": {Field: "sku", Code: "UNIQUE_VIOLATION"},
+		"orders_org_sku_key_mapped": {Field: "sku", Code: "UNIQUE_VIOLATION"},
 	}}
 	for name, pgErr := range map[string]*pgconn.PgError{
 		"registry miss":    {Code: "23505", ConstraintName: constraint, TableName: table},

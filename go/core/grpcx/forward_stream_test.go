@@ -45,7 +45,7 @@ func TestDialOpts_StreamRelaysThePrincipalOnly(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-w17-scope-org_id", "org-7", "w17-label-tenant", "acme", "x-w17-paging-limit", "10"))
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-w17-scope-org_id", "org-7", "w17-label-org", "acme", "x-w17-paging-limit", "10"))
 	cs, err := conn.NewStream(ctx, &grpc.StreamDesc{StreamName: "Watch", ServerStreams: true}, "/test.Watch/Watch")
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestDialOpts_StreamRelaysThePrincipalOnly(t *testing.T) {
 		if got := md.Get("x-w17-scope-org_id"); len(got) != 1 || got[0] != "org-7" {
 			t.Errorf("principal not relayed on a stream: %v", got)
 		}
-		if got := md.Get("w17-label-tenant"); len(got) != 1 || got[0] != "acme" {
+		if got := md.Get("w17-label-org"); len(got) != 1 || got[0] != "acme" {
 			t.Errorf("event label not relayed on a stream: %v", got)
 		}
 		if got := md.Get("x-w17-paging-limit"); len(got) != 0 {

@@ -35,7 +35,7 @@ func TestMetadataFromContext_DropsCredentials(t *testing.T) {
 		"x-w17-user":                "envelope",
 		"x-w17-scope-org_id":        "org-1",
 		"x-w17-scope-session_token": "scope-value", // gateway-owned: a declared scope name, not a credential
-		"w17-label-tenant_id":       "t-1",
+		"w17-label-team_id":         "t-1",
 		"w17-language":              "cs",
 		"w17-format-locale":         "cs-CZ",
 		"w17-org":                   "org-1",
@@ -44,7 +44,7 @@ func TestMetadataFromContext_DropsCredentials(t *testing.T) {
 		"baggage":                   "a=b",
 		"x-request-id":              "req-1",
 		"x-author-id":               "author-1", // contains "auth" as letters only
-		"x-tenant-hint":             "custom",
+		"x-org-hint":                "custom",
 	}
 	var pairs []string
 	for _, k := range credentials {
@@ -99,10 +99,10 @@ func TestMetadataFromContext_DropsCredentials(t *testing.T) {
 // gateway-owned namespaces whose readers take the first value.
 func TestMetadataFromContext_RepeatedKeysMatchTheirReaders(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD{
-		"w17-language":        {"en", "cs"},
-		"w17-format-locale":   {"en-US", "cs-CZ"},
-		"x-w17-scope-org_id":  {"org-first", "org-second"},
-		"w17-label-tenant_id": {"t-first", "t-second"},
+		"w17-language":       {"en", "cs"},
+		"w17-format-locale":  {"en-US", "cs-CZ"},
+		"x-w17-scope-org_id": {"org-first", "org-second"},
+		"w17-label-team_id":  {"t-first", "t-second"},
 	})
 
 	md := eventbus.MetadataFromContext(ctx)
@@ -120,7 +120,7 @@ func TestMetadataFromContext_RepeatedKeysMatchTheirReaders(t *testing.T) {
 	if got := md["x-w17-scope-org_id"]; got != "org-first" {
 		t.Errorf("Event.Metadata[x-w17-scope-org_id] = %q, want the first value (principal.Scope reads the first)", got)
 	}
-	if got, want := md["w17-label-tenant_id"], eventbus.LabelsFromContext(ctx)["tenant_id"]; got != want {
+	if got, want := md["w17-label-team_id"], eventbus.LabelsFromContext(ctx)["team_id"]; got != want {
 		t.Errorf("Event.Metadata label = %q, Event.Labels label = %q; one envelope, two answers", got, want)
 	}
 }

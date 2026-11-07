@@ -31,17 +31,17 @@ const scopeKeyPrefix = "x-w17-scope-"
 // given scope name. Used by:
 //
 //   - Gateway router emit: per-request,
-//     `metadata.AppendToOutgoingContext(ctx, ScopeKey("tenant_id"), v)`
+//     `metadata.AppendToOutgoingContext(ctx, ScopeKey("org_id"), v)`
 //     for each entry in AuthResp.scopes.
 //   - Storage handler emit: per-request,
-//     `metadata.FromIncomingContext(ctx).Get(ScopeKey("tenant_id"))`
+//     `metadata.FromIncomingContext(ctx).Get(ScopeKey("org_id"))`
 //     to read the scope value before binding it into the
 //     generated WHERE / SET clause.
 //
 // Both sides use the same function so the wire-format
 // contract has exactly one source of truth.
 //
-// `name` is the scope's annotation name (e.g. `"tenant_id"`).
+// `name` is the scope's annotation name (e.g. `"org_id"`).
 // Caller is responsible for passing a snake_case identifier;
 // the parser validates the annotation upstream so this
 // function doesn't re-check.
@@ -64,7 +64,7 @@ func WriteMissingScope(w http.ResponseWriter, name string) {
 // WriteMissingScopeCtx is the two-audience form of the missing-scope refusal.
 //
 // The scope's name is configuration — which column this deployment isolates
-// tenants on — and a caller can do nothing with it, so it goes to the
+// organizations on — and a caller can do nothing with it, so it goes to the
 // operator only. The client gets PERMISSION_DENIED and the code's catalog
 // sentence, translated with the request's locale, exactly like any other
 // refusal of access.

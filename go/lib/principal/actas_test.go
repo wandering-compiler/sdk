@@ -38,9 +38,9 @@ func TestActAs_TheCalleeSeesTheUserAndScopes(t *testing.T) {
 // nobody else, and a later ForwardToOutgoing does not put the old one back.
 func TestActAs_ReplacesEveryOtherPrincipal(t *testing.T) {
 	base := envelopeCtx(t, &authpb.SignInResp{UserId: "u-gateway"},
-		"x-w17-scope-org_id", "org-gateway", "x-w17-scope-tenant_id", "t-gateway", "w17-label-team", "a")
+		"x-w17-scope-org_id", "org-gateway", "x-w17-scope-team_id", "t-gateway", "w17-label-team", "a")
 	base = metadata.NewOutgoingContext(base, metadata.Pairs(
-		"x-w17-scope-tenant_id", "t-stale", "x-request-id", "r-1"))
+		"x-w17-scope-team_id", "t-stale", "x-request-id", "r-1"))
 
 	ctx, err := principal.ActAs(base, &authpb.SignInResp{UserId: "u-ana"},
 		map[string]string{"org_id": "org-7"})
@@ -56,8 +56,8 @@ func TestActAs_ReplacesEveryOtherPrincipal(t *testing.T) {
 	if org, _ := principal.Scope(in, "org_id"); org != "org-7" {
 		t.Fatalf("Scope(org_id) = %q; want org-7", org)
 	}
-	if v, ok := principal.Scope(in, "tenant_id"); ok {
-		t.Fatalf("a scope ActAs was not given travelled: tenant_id = %q", v)
+	if v, ok := principal.Scope(in, "team_id"); ok {
+		t.Fatalf("a scope ActAs was not given travelled: team_id = %q", v)
 	}
 	if v, ok := principal.Label(in, "team"); ok {
 		t.Fatalf("the gateway's label travelled: team = %q", v)

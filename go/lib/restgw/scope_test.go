@@ -15,7 +15,7 @@ import (
 // duplication.
 func TestScopeKey(t *testing.T) {
 	cases := map[string]string{
-		"tenant_id":    "x-w17-scope-tenant_id",
+		"team_id":      "x-w17-scope-team_id",
 		"workspace_id": "x-w17-scope-workspace_id",
 		// Underscore preserved (no snake → kebab conversion).
 		"user_org_id": "x-w17-scope-user_org_id",
@@ -33,7 +33,7 @@ func TestScopeKey(t *testing.T) {
 // sentence. The scope's name is configuration and goes to the operator only.
 func TestWriteMissingScope(t *testing.T) {
 	rec := httptest.NewRecorder()
-	restgw.WriteMissingScope(rec, "tenant_id")
+	restgw.WriteMissingScope(rec, "team_id")
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
 	}
@@ -41,7 +41,7 @@ func TestWriteMissingScope(t *testing.T) {
 	if !strings.Contains(body, "PERMISSION_DENIED") {
 		t.Errorf("body = %q, want PERMISSION_DENIED", body)
 	}
-	if strings.Contains(body, "tenant_id") {
+	if strings.Contains(body, "team_id") {
 		t.Errorf("body = %q, the scope name must not reach the client", body)
 	}
 	if !strings.Contains(body, "You do not have access to this.") {

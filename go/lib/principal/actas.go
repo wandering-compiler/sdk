@@ -13,7 +13,7 @@ import (
 
 // ActAs returns a context that calls a tier of THIS domain as user: the
 // envelope (the project's generated AuthResp; its user id is required) and
-// the named data scopes (`org_id`, `tenant_id`, …) are stamped on the
+// the named data scopes (`org_id`, `team_id`, …) are stamped on the
 // OUTGOING side, in place of any principal ctx carries. The callee reads them
 // with [UserID], [Envelope] and [Scope] as it would a gateway's stamps.
 //

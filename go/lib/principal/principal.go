@@ -246,7 +246,7 @@ func ScopeKey(name string) string {
 // ([DeviceMetadataKey]) when the gateway checked a DPoP proof, and a token
 // mint's verified key ([MintKeyMetadataKey]), and an audience gateway's data
 // range ([DataScopeMetadataKey]) and its own context ([AudienceKey],
-// [MembershipKindsKey], [TenantFromKey], [HostKey]) — and nothing else. The
+// [MembershipKindsKey], [OrgFromKey], [HostKey]) — and nothing else. The
 // range is relayed so
 // a facade's storage calls see what the request may see; a facade serving an
 // audience request cannot widen it for its own calls, since the relayed
@@ -347,7 +347,7 @@ func isRelayedKey(key string) bool {
 		key == MintKeyMetadataKey ||
 		key == AudienceKey ||
 		key == MembershipKindsKey ||
-		key == TenantFromKey ||
+		key == OrgFromKey ||
 		key == HostKey ||
 		strings.HasPrefix(key, scopeKeyPrefix) ||
 		strings.HasPrefix(key, LabelKeyPrefix)

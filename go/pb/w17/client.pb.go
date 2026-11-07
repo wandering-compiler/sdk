@@ -56,10 +56,10 @@ type InvalidateEvent struct {
 	// no label channel at all, and the SSE hub withholds an
 	// unlabelled event from every principal on a surface that
 	// partitions by label: cache invalidation reached NOBODY in a
-	// multi-tenant project, while the emitted transcode's comment
+	// multi-organization project, while the emitted transcode's comment
 	// claimed it broadcast to everyone. `entitled`'s own contract
-	// names the requirement — "cross-tenant cache invalidation must
-	// label its events per tenant" — and this is the channel that
+	// names the requirement — "cross-organization cache invalidation must
+	// label its events per org" — and this is the channel that
 	// implements it.
 	//
 	// Consumed by the gateway hub, not by the browser: the SSE

@@ -92,7 +92,7 @@ var guardCases = []struct {
 	{note: "conn-id", metadata: map[string]string{"w17-conn-id": "c1"}, refused: true},
 	{note: "tx-id-upper", metadata: map[string]string{"W17-Tx-Id": "3f1c"}, refused: true},
 	{note: "both", metadata: map[string]string{"w17-tx-id": "a", "w17-conn-id": "b", "x-w17-user": "u"}, refused: true},
-	{note: "plain", metadata: map[string]string{"traceparent": "00-x", "x-w17-scope-tenant_id": "t1"}},
+	{note: "plain", metadata: map[string]string{"traceparent": "00-x", "x-w17-scope-org_id": "t1"}},
 	{note: "key-as-value", metadata: map[string]string{"x-note": "w17-tx-id"}},
 	{note: "key-in-labels", labels: map[string]string{"w17-tx-id": "a", "w17-conn-id": "b"}},
 	{note: "longer-name", metadata: map[string]string{"w17-tx-id-hint": "a", "x-w17-conn-id": "b"}},

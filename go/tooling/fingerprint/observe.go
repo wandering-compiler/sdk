@@ -129,7 +129,7 @@ type ObservedForeignKey struct {
 	// DeleteSetColumns are the columns the SET NULL / SET DEFAULT action is
 	// limited to (`confdelsetcols`, PostgreSQL 15+: `SET NULL (col)`); empty
 	// means every referencing column. The two forms report the same
-	// OnDelete, and on a scope-preserving key the bare one nulls the tenant
+	// OnDelete, and on a scope-preserving key the bare one nulls the organization
 	// column, so a parent with children cannot be deleted.
 	DeleteSetColumns []string
 	// DeleteSetColumnsRead says DeleteSetColumns was read. False from an

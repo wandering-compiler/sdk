@@ -375,7 +375,7 @@ func CachedAuthFunc(inner AuthFunc, ttl time.Duration) AuthFunc {
 // ones it trusts. If an auth method authenticates on a header
 // that is neither a default credential header nor listed here,
 // two distinct principals that share the default headers (e.g.
-// the same Bearer token but different `X-Tenant-Token`) would
+// the same Bearer token but different `X-Org-Token`) would
 // otherwise collide on one cache slot and be served each other's
 // identity. Two defenses keep that from happening silently:
 //

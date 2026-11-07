@@ -9478,7 +9478,7 @@ type ObservedForeignKey struct {
 	// Empty with delete_set_columns_read = true means the action names no
 	// list — it sets EVERY referencing column. Carried because the two forms
 	// share one `on_delete` rule, and a scope-preserving key's bare SET NULL
-	// nulls its tenant column: a parent with children could never be deleted.
+	// nulls its organization column: a parent with children could never be deleted.
 	DeleteSetColumns []string `protobuf:"bytes,8,rep,name=delete_set_columns,json=deleteSetColumns,proto3" json:"delete_set_columns,omitempty"`
 	// Whether delete_set_columns was read. False from an old client, or from
 	// a database before PostgreSQL 15 (which has no list): the server then
@@ -10269,7 +10269,7 @@ type GenerateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ServiceId identifies the calling project (matches
 	// `.w17/lock.yaml`'s `service_id`). Carried through audit
-	// trails + future multi-tenancy / quota hooks; doesn't
+	// trails + future multi-organization isolation / quota hooks; doesn't
 	// affect the generated output today.
 	ServiceId string `protobuf:"bytes,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
 	// Files is the project's full `.proto` set. The server

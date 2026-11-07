@@ -83,7 +83,7 @@ func TestForwardToOutgoing_VerifiedPrincipalWins(t *testing.T) {
 	ctx = metadata.AppendToOutgoingContext(ctx,
 		"x-w17-user", "stale-env",
 		"x-w17-scope-org_id", "org-stale",
-		"x-w17-scope-tenant_id", "tenant-stale",
+		"x-w17-scope-team_id", "org-stale",
 		"w17-label-region", "stale",
 		"x-w17-paging-limit", "50",
 		"w17-language", "cs",
@@ -104,7 +104,7 @@ func TestForwardToOutgoing_VerifiedPrincipalWins(t *testing.T) {
 			t.Errorf("outgoing[%q] = %v, want single [%q]", k, got, want)
 		}
 	}
-	for _, k := range []string{"x-w17-scope-tenant_id", "w17-label-region"} {
+	for _, k := range []string{"x-w17-scope-team_id", "w17-label-region"} {
 		if got := out.Get(k); len(got) != 0 {
 			t.Errorf("outgoing[%q] = %v, want dropped (not part of the verified principal)", k, got)
 		}
@@ -218,13 +218,13 @@ func TestForwardToOutgoing_NoIncomingIsNoop(t *testing.T) {
 // TestForwardToOutgoing_RelaysTheAudienceContext: the audience's context the
 // gateway stamps (restgw.AudienceContextMiddleware) reaches the next hop, so
 // a registration that project code wraps still sees the host and the
-// audience's kinds and tenant sources. Without it the organization's open
+// audience's kinds and organization sources. Without it the organization's open
 // sign-up policy never applied behind a facade.
 func TestForwardToOutgoing_RelaysTheAudienceContext(t *testing.T) {
 	want := map[string]string{
 		principal.AudienceKey:        "client",
 		principal.MembershipKindsKey: "client",
-		principal.TenantFromKey:      "host,default",
+		principal.OrgFromKey:         "host,default",
 		principal.HostKey:            "acme.example.com",
 	}
 	in := metadata.MD{}

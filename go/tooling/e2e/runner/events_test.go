@@ -230,7 +230,7 @@ func TestAwaitEvent_PayloadMismatch(t *testing.T) {
 // TestAwaitEvent_StepHeadersAuthenticateTheStream — a step's `headers:` ride
 // the SSE subscribe, not just the call.
 //
-// The server here is the shape a tenant-partitioned gateway actually has:
+// The server here is the shape an org-partitioned gateway actually has:
 // the events route reads `W17-Org` (which the real gateway forwards to the
 // auth method, whose AuthResp.labels the hub partitions by) and a subscriber
 // that named no org is entitled to NOTHING — the fail-closed rule

@@ -128,8 +128,8 @@ func TestEmitInvalidate_LabelsFromRequestContext(t *testing.T) {
 	// A storage handler's ctx: the gateway's stamps arrived as INCOMING
 	// metadata on the call it is serving.
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"w17-label-tenant_id", "alpha",
-		"x-w17-scope-tenant_id", "alpha",
+		"w17-label-org_id", "alpha",
+		"x-w17-scope-org_id", "alpha",
 	))
 	bus := &capturingDispatcher{}
 	if err := eventbus.EmitInvalidate(ctx, bus, "default", "accounts", "Account", nil); err != nil {
@@ -139,13 +139,13 @@ func TestEmitInvalidate_LabelsFromRequestContext(t *testing.T) {
 	if ev == nil {
 		t.Fatalf("envelope = %T, want *w17pb.InvalidateEvent", bus.envelope)
 	}
-	if got := ev.GetLabels()["tenant_id"]; got != "alpha" {
-		t.Errorf("InvalidateEvent.labels[tenant_id] = %q, want alpha — an unlabelled "+
+	if got := ev.GetLabels()["org_id"]; got != "alpha" {
+		t.Errorf("InvalidateEvent.labels[org_id] = %q, want alpha — an unlabelled "+
 			"invalidate is withheld from every principal of an isolating surface", got)
 	}
 	// Only the broadcast namespace travels: the scope tunnel is a ROW
 	// filter and has no business on the wire to a browser hub.
-	if _, leaked := ev.GetLabels()["x-w17-scope-tenant_id"]; leaked {
+	if _, leaked := ev.GetLabels()["x-w17-scope-org_id"]; leaked {
 		t.Errorf("only %q keys belong in the label map; got %#v",
 			eventbus.LabelKeyPrefix, ev.GetLabels())
 	}
@@ -156,18 +156,18 @@ func TestEmitInvalidate_LabelsFromRequestContext(t *testing.T) {
 // received) must label the event too. This is the tier the sibling
 // readers used to disagree about.
 func TestEmitInvalidate_GatewayTierContextLabels(t *testing.T) {
-	ctx := metadata.AppendToOutgoingContext(context.Background(), "w17-label-tenant_id", "beta")
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "w17-label-org_id", "beta")
 	bus := &capturingDispatcher{}
 	if err := eventbus.EmitInvalidate(ctx, bus, "default", "accounts", "Account", nil); err != nil {
 		t.Fatalf("EmitInvalidate: %v", err)
 	}
 	ev, _ := bus.envelope.(*w17pb.InvalidateEvent)
-	if got := ev.GetLabels()["tenant_id"]; got != "beta" {
-		t.Errorf("gateway-tier InvalidateEvent.labels[tenant_id] = %q, want beta", got)
+	if got := ev.GetLabels()["org_id"]; got != "beta" {
+		t.Errorf("gateway-tier InvalidateEvent.labels[org_id] = %q, want beta", got)
 	}
 }
 
-// TestEmitInvalidate_UnlabelledContextStaysUnlabelled — a single-tenant
+// TestEmitInvalidate_UnlabelledContextStaysUnlabelled — a single-organization
 // project (nothing stamps the prefix) keeps emitting an unlabelled
 // invalidate, which its non-isolating hub still broadcasts.
 func TestEmitInvalidate_UnlabelledContextStaysUnlabelled(t *testing.T) {

@@ -161,7 +161,7 @@ func TestCORSMiddleware_Preflight(t *testing.T) {
 	cfg := restgw.CORSConfig{
 		AllowedOrigins:   []string{"https://app.example.com"},
 		AllowedMethods:   []string{"GET", "POST"},
-		AllowedHeaders:   []string{"Content-Type", "X-Tenant-Id"},
+		AllowedHeaders:   []string{"Content-Type", "X-Org-Id"},
 		AllowCredentials: true,
 		MaxAgeSeconds:    600,
 	}
@@ -182,7 +182,7 @@ func TestCORSMiddleware_Preflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST" {
 		t.Errorf("Allow-Methods = %q", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, X-Tenant-Id" {
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, X-Org-Id" {
 		t.Errorf("Allow-Headers = %q", got)
 	}
 	if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
@@ -242,7 +242,7 @@ func TestCORSConfigFromEnv(t *testing.T) {
 	env := map[string]string{
 		"GW_CORS_ORIGINS":           " https://a.example.com , https://b.example.com ,",
 		"GW_CORS_METHODS":           "GET,POST",
-		"GW_CORS_HEADERS":           "Content-Type,X-Tenant-Id",
+		"GW_CORS_HEADERS":           "Content-Type,X-Org-Id",
 		"GW_CORS_ALLOW_CREDENTIALS": "true",
 		"GW_CORS_MAX_AGE":           "600",
 	}
@@ -258,7 +258,7 @@ func TestCORSConfigFromEnv(t *testing.T) {
 	if cfg.AllowedMethods[0] != "GET" || cfg.AllowedMethods[1] != "POST" {
 		t.Errorf("methods = %v", cfg.AllowedMethods)
 	}
-	if cfg.AllowedHeaders[0] != "Content-Type" || cfg.AllowedHeaders[1] != "X-Tenant-Id" {
+	if cfg.AllowedHeaders[0] != "Content-Type" || cfg.AllowedHeaders[1] != "X-Org-Id" {
 		t.Errorf("headers = %v", cfg.AllowedHeaders)
 	}
 	if !cfg.AllowCredentials {

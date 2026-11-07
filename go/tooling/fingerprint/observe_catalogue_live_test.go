@@ -141,7 +141,7 @@ func TestObservePostgresReportsUniques(t *testing.T) {
 	conn := liveConn(t)
 	ctx := context.Background()
 	for _, stmt := range []string{
-		`CREATE TABLE notes (id bigint PRIMARY KEY, tenant_id bigint, UNIQUE (tenant_id, id))`,
+		`CREATE TABLE notes (id bigint PRIMARY KEY, org_id bigint, UNIQUE (org_id, id))`,
 		`CREATE TABLE plain (id bigint PRIMARY KEY, code text)`,
 		`CREATE UNIQUE INDEX plain_code_idx ON plain (code)`,
 	} {
@@ -159,8 +159,8 @@ func TestObservePostgresReportsUniques(t *testing.T) {
 		}
 		switch tb.Name {
 		case "notes":
-			if len(tb.Uniques) != 1 || tb.Uniques[0].Name != "notes_tenant_id_id_key" ||
-				!reflect.DeepEqual(tb.Uniques[0].Columns, []string{"tenant_id", "id"}) {
+			if len(tb.Uniques) != 1 || tb.Uniques[0].Name != "notes_org_id_id_key" ||
+				!reflect.DeepEqual(tb.Uniques[0].Columns, []string{"org_id", "id"}) {
 				t.Errorf("notes uniques = %+v", tb.Uniques)
 			}
 		case "plain":

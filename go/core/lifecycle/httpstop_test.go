@@ -106,7 +106,7 @@ func TestBindHTTP_ComposesAnExistingBaseContext(t *testing.T) {
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got <- r.Context() }),
 		BaseContext: func(net.Listener) context.Context {
-			return context.WithValue(context.Background(), ctxKey{}, "tenant-pool")
+			return context.WithValue(context.Background(), ctxKey{}, "org-pool")
 		},
 	}
 	stopper := lifecycle.BindHTTP(srv)
@@ -115,7 +115,7 @@ func TestBindHTTP_ComposesAnExistingBaseContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := <-got
-	if v, _ := ctx.Value(ctxKey{}).(string); v != "tenant-pool" {
+	if v, _ := ctx.Value(ctxKey{}).(string); v != "org-pool" {
 		t.Errorf("request context value = %q, want the caller's BaseContext value", v)
 	}
 	if lifecycle.Draining(ctx) == nil {

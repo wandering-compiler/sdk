@@ -335,7 +335,7 @@ func initLocked(c Config) error {
 	// OTEL_SERVICE_NAME (semconv-
 	// canonical knob) overrides the codegen-baked Config
 	// value. Lets ops re-tag a deployed binary (canary,
-	// multi-tenant) without rebuilding. Empty env keeps
+	// multi-organization) without rebuilding. Empty env keeps
 	// the Config value.
 	if v := os.Getenv("OTEL_SERVICE_NAME"); v != "" {
 		c.ServiceName = v

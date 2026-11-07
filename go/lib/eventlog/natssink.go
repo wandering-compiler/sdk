@@ -14,7 +14,7 @@ import (
 
 // HeaderOrgs is the NATS header naming the organizations a batch's records
 // belong to ([Batch.Tags], comma-separated; "*" when there were more than
-// [MaxBatchTags]), so a tenant's consumer skips a batch without decoding it.
+// [MaxBatchTags]), so an organization's consumer skips a batch without decoding it.
 const HeaderOrgs = "W17-Orgs"
 
 // natsHeaderRoom is what a batch leaves of the server's max_payload for the

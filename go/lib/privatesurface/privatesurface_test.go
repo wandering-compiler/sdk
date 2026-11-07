@@ -151,7 +151,7 @@ func TestForwarded(t *testing.T) {
 		"x-w17-product", "alpha",
 		"x-w17-user", `{"user_id":"forged"}`,
 		"x-w17-scope-org_id", "o1",
-		"w17-label-tenant", "t",
+		"w17-label-org", "t",
 		"x-w17-caller-domain", "beta",
 		"authorization", "Bearer x",
 	))
@@ -162,7 +162,7 @@ func TestForwarded(t *testing.T) {
 	if md.Get("x-w17-dpop-jkt")[0] != "jkt1" || md.Get("x-w17-client-addr")[0] != "10.0.0.7" || md.Get("x-w17-product")[0] != "alpha" {
 		t.Errorf("forwarded %v", md)
 	}
-	for _, k := range []string{"x-w17-user", "x-w17-scope-org_id", "w17-label-tenant", "x-w17-caller-domain", "authorization"} {
+	for _, k := range []string{"x-w17-user", "x-w17-scope-org_id", "w17-label-org", "x-w17-caller-domain", "authorization"} {
 		if len(md.Get(k)) > 0 {
 			t.Errorf("forwarded %s", k)
 		}

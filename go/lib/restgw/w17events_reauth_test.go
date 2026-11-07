@@ -97,7 +97,7 @@ func endsWithin(done <-chan struct{}, d time.Duration) bool {
 
 // A credential revoked while the hub stream is open ends it. The hub is the
 // longest-lived stream a surface has; authenticating it only at connect let
-// a revoked credential keep receiving the tenant's events for days.
+// a revoked credential keep receiving the organization's events for days.
 func TestW17Events_RevokedCredentialEndsTheStream(t *testing.T) {
 	var calls atomic.Int32
 	authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
@@ -114,7 +114,7 @@ func TestW17Events_RevokedCredentialEndsTheStream(t *testing.T) {
 
 // A membership removed while the credential stays valid: auth still
 // succeeds, but the principal's labels are not the ones it connected with.
-// The stream must end — otherwise it keeps receiving the old tenant's
+// The stream must end — otherwise it keeps receiving the old organization's
 // events on labels frozen at connect.
 func TestW17Events_ChangedMembershipEndsTheStream(t *testing.T) {
 	var calls atomic.Int32

@@ -70,7 +70,7 @@ func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource,
 	// the NoAuth path / direct (non-RequireAuth) calls — the source
 	// then treats the principal as label-less. What that means depends
 	// on the surface, and the difference is the whole isolation
-	// contract: with no labels deriver (the single-tenant default) a
+	// contract: with no labels deriver (the single-organization default) a
 	// label-less principal sees every unlabelled event, which is every
 	// event; on a surface that DOES partition (its auth response
 	// declares `labels`), a label-less principal is entitled to

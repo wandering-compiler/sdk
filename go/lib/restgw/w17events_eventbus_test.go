@@ -182,7 +182,7 @@ func TestEventbusEventSource_SharedHubSingleSubscriber(t *testing.T) {
 // TestEventbusEventSource_TranscodeSkip — transcode
 // returning (skip=true) drops the delivery without erroring.
 // Used for runtime filtering beyond what the topic-name
-// filter does (e.g. per-tenant skipping).
+// filter does (e.g. per-organization skipping).
 func TestEventbusEventSource_TranscodeSkip(t *testing.T) {
 	bus := eventbus.NewMemoryBus()
 	skipping := func(topic string, envelope []byte) ([]byte, map[string]string, bool, error) {
@@ -299,13 +299,13 @@ func TestEventbusEventSource_LabelFiltering(t *testing.T) {
 	}
 }
 
-// TestEventbusEventSource_UnlabelledEventNoCrossTenant is the
-// Regression guard. With tenant isolation active (a
+// TestEventbusEventSource_UnlabelledEventNoCrossOrg is the
+// Regression guard. With organization isolation active (a
 // principal-labels deriver configured), an UNLABELLED event must NOT
-// reach a label-bearing (tenant) principal — it would otherwise leak
-// across tenants (e.g. the unlabelled w17.invalidate carrying entity
+// reach a label-bearing (organization) principal — it would otherwise leak
+// across organizations (e.g. the unlabelled w17.invalidate carrying entity
 // IDs). It still reaches a no-label principal.
-func TestEventbusEventSource_UnlabelledEventNoCrossTenant(t *testing.T) {
+func TestEventbusEventSource_UnlabelledEventNoCrossOrg(t *testing.T) {
 	bus := eventbus.NewMemoryBus()
 	// Events carry NO labels.
 	transcode := func(topic string, envelope []byte) ([]byte, map[string]string, bool, error) {
@@ -338,9 +338,9 @@ func TestEventbusEventSource_UnlabelledEventNoCrossTenant(t *testing.T) {
 		return rec.Body.String()
 	}
 
-	// Tenant principal must NOT receive the unlabelled event.
+	// Organization principal must NOT receive the unlabelled event.
 	if body := run("alpha"); strings.Contains(body, "event: p.evt\n") {
-		t.Errorf("tenant principal received an unlabelled event (cross-tenant leak); body:\n%s", body)
+		t.Errorf("org principal received an unlabelled event (cross-organization leak); body:\n%s", body)
 	}
 	// Neither does a LABEL-LESS principal — see
 	// TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal
@@ -353,8 +353,8 @@ func TestEventbusEventSource_UnlabelledEventNoCrossTenant(t *testing.T) {
 // TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal is the
 // other half of the unlabelled-event rule above.
 //
-// A label-less principal is not "the principal with no tenant"; under an
-// isolating surface it is most often the principal whose tenant could not be
+// A label-less principal is not "the principal with no org"; under an
+// isolating surface it is most often the principal whose organization could not be
 // RESOLVED. The scope decorators deliberately stamp nothing when a caller's
 // membership is ambiguous or absent (0 or ≥2 orgs), so a scoped model refuses
 // — fail-closed. Routing every unlabelled event to exactly that principal
@@ -370,7 +370,7 @@ func TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal(t *testi
 		return envelope, nil, false, nil // unlabelled event
 	}
 	// An isolating surface: the deriver is configured, and this principal's
-	// tenant did not resolve, so it carries NO labels (the fail-closed
+	// organization did not resolve, so it carries NO labels (the fail-closed
 	// branch stamps neither scope nor label).
 	principal := func(userData []byte) map[string]string { return nil }
 	source := restgw.NewEventbusEventSource(bus, []string{"default"}, transcode, principal)
@@ -399,7 +399,7 @@ func TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal(t *testi
 
 // TestEventbusEventSource_NoIsolationStillBroadcasts pins the other side of
 // the same rule: with NO principal-labels deriver (a surface that declares no
-// labels field at all — the single-tenant default), isolation is OFF and an
+// labels field at all — the single-organization default), isolation is OFF and an
 // unlabelled event still reaches every connected client. The deny above is
 // scoped to surfaces that actually partition by label; it must not silence
 // the projects that never did.

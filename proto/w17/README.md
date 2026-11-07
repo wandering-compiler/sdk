@@ -29,7 +29,7 @@ outside the compiler can resolve them** — which is what a plugin author needs.
 | `module.proto`, `domain.proto` | connection, dialect, domain |
 | `acl.proto` | permissions, roles, scope |
 | `audience.proto` | audience surfaces: who a surface serves, its default data range, the memberships it admits |
-| `packages.proto` | what a tenant can be given: a domain's packages of methods and audiences |
+| `packages.proto` | what an organization can be given: a domain's packages of methods and audiences |
 | `grant/hooks.proto` | the `GrantHooks` contract a product may implement (nothing calls it yet), in its own Go package |
 | `contrib.proto` | **plugin features** — the one a plugin author reaches for first |
 | `paging.proto`, `rpc.proto`, `mcp.proto`, `cli.proto`, `client.proto`, `error.proto`, `lock.proto` | the remaining surfaces |

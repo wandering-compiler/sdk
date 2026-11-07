@@ -26,10 +26,10 @@ const (
 type ScopeAxis int32
 
 const (
-	// Treated as TENANT.
+	// Treated as ORG.
 	ScopeAxis_SCOPE_AXIS_UNSPECIFIED ScopeAxis = 0
-	// The caller's tenant (`tenant_id`, `org_id`).
-	ScopeAxis_SCOPE_AXIS_TENANT ScopeAxis = 1
+	// The caller's organization (`org_id`).
+	ScopeAxis_SCOPE_AXIS_ORG ScopeAxis = 1
 	// The caller themselves (`owner_user_id`).
 	ScopeAxis_SCOPE_AXIS_OWNER ScopeAxis = 2
 )
@@ -38,12 +38,12 @@ const (
 var (
 	ScopeAxis_name = map[int32]string{
 		0: "SCOPE_AXIS_UNSPECIFIED",
-		1: "SCOPE_AXIS_TENANT",
+		1: "SCOPE_AXIS_ORG",
 		2: "SCOPE_AXIS_OWNER",
 	}
 	ScopeAxis_value = map[string]int32{
 		"SCOPE_AXIS_UNSPECIFIED": 0,
-		"SCOPE_AXIS_TENANT":      1,
+		"SCOPE_AXIS_ORG":         1,
 		"SCOPE_AXIS_OWNER":       2,
 	}
 )
@@ -965,8 +965,8 @@ type ScopeEntry struct {
 	// Snake_case identifier. Must match `[a-z][a-z0-9_]*`.
 	// Preserved verbatim into the gRPC metadata key.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// A DIRECT column on the scoped table — `tenant_id`, not
-	// `task.tenant_id`. Dotted alias paths parse but are refused at
+	// A DIRECT column on the scoped table — `org_id`, not
+	// `task.org_id`. Dotted alias paths parse but are refused at
 	// storage codegen ("only direct-column scope paths are supported
 	// in this slice"); resolving a scope through a relation is the
 	// parked B6.x slice. See the Scope doc above for the workaround.
@@ -976,8 +976,8 @@ type ScopeEntry struct {
 	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	// Which range this scope narrows to, for audience surfaces
 	// (`w17/audience.proto`): an OWNER audience applies every entry, a
-	// TENANT audience only the TENANT-axis ones, ALL (the admin surface)
-	// none. UNSPECIFIED is TENANT, so a model scoped by tenant alone needs
+	// ORG audience only the ORG-axis ones, ALL (the admin surface)
+	// none. UNSPECIFIED is ORG, so a model scoped by organization alone needs
 	// nothing; mark the entry that names the caller (`owner_user_id`) OWNER.
 	// Outside audience surfaces every entry applies, as before.
 	Axis          ScopeAxis `protobuf:"varint,3,opt,name=axis,proto3,enum=w17.db.ScopeAxis" json:"axis,omitempty"`
@@ -2878,19 +2878,19 @@ type Column struct {
 	//
 	// When a model and its `fk:` target are scoped by the SAME
 	// `(w17.db.scope)` axis, the compiler constrains the reference to stay
-	// inside that scope — `FOREIGN KEY (tenant_id, note_id) REFERENCES notes
-	// (tenant_id, id)` — so one tenant's row can never point at another's.
+	// inside that scope — `FOREIGN KEY (org_id, note_id) REFERENCES notes
+	// (org_id, id)` — so one organization's row can never point at another's.
 	// That is right for the overwhelming majority of references between two
 	// scoped models, which is why it is inferred rather than declared.
 	//
-	// It is not right for all of them. A tenant-scoped row may legitimately
+	// It is not right for all of them. An org-scoped row may legitimately
 	// reference a row belonging to a DIFFERENT scope — a template another
-	// tenant published, a shared catalogue entry that happens to live in the
-	// same scoped table, a row being migrated between tenants. Setting this
+	// organization published, a shared catalogue entry that happens to live in the
+	// same scoped table, a row being migrated between organizations. Setting this
 	// emits the ordinary single-column FK instead: the parent must still
 	// EXIST, it just need not be yours.
 	//
-	// ⚠️ It removes a tenancy guarantee, so it is refused when it would do
+	// ⚠️ It removes a organization isolation guarantee, so it is refused when it would do
 	// nothing: declaring it where the two ends share no scope axis is a hard
 	// error, not a no-op. An opt-out that silently opts out of nothing is the
 	// shape that hides a typo'd scope name — the author believes they have
@@ -3183,7 +3183,7 @@ var (
 	//
 	// Path syntax: `<column>` — a DIRECT column on the scoped table.
 	// That is the whole supported surface today. A dotted path
-	// (`task.tenant_id` — scoping a model by a column reached through
+	// (`task.org_id` — scoping a model by a column reached through
 	// a relation) is REFUSED at storage codegen with a pointer at this
 	// limitation; the alias-path resolution slice is parked (B6.x).
 	// So a model that needs isolating must carry its own scope column.
@@ -3200,26 +3200,26 @@ var (
 	//	message Task {
 	//	  option (w17.db.table) = { name: "tasks" };
 	//	  option (w17.db.scope) = {
-	//	    entries: [{ name: "tenant_id", path: "tenant_id" }]
+	//	    entries: [{ name: "org_id", path: "org_id" }]
 	//	  };
 	//
 	//	  int64  id        = 1 [(w17.field) = { pk: true }];
-	//	  string tenant_id = 2 [(w17.field) = { type: UUID }];
+	//	  string org_id = 2 [(w17.field) = { type: UUID }];
 	//	  ...
 	//	}
 	//
 	//	message Comment {
 	//	  option (w17.db.table) = { name: "comments" };
 	//	  option (w17.db.scope) = {
-	//	    entries: [{ name: "tenant_id", path: "tenant_id" }]
+	//	    entries: [{ name: "org_id", path: "org_id" }]
 	//	  };
 	//
-	//	  // Denormalised: a child of Task carries its own tenant_id
+	//	  // Denormalised: a child of Task carries its own org_id
 	//	  // rather than reaching the parent's. Until the dotted-path
 	//	  // slice lands this is the way to scope a child — the
 	//	  // alternative is `(w17.db.bypass_scope)` plus a hand-written
 	//	  // WHERE in the query's DQL.
-	//	  string tenant_id = 3 [(w17.field) = { type: UUID }];
+	//	  string org_id = 3 [(w17.field) = { type: UUID }];
 	//	}
 	//
 	// Auth backend returns the caller's scope values in
@@ -3362,7 +3362,7 @@ var (
 	//	["*"]                       — bypass every scope on every
 	//	                               scoped model the method/service
 	//	                               touches.
-	//	["tenant_id"]               — bypass listed scopes only;
+	//	["org_id"]               — bypass listed scopes only;
 	//	                               other scopes (multi-scope
 	//	                               models) still apply.
 	//
@@ -3391,8 +3391,8 @@ var (
 	//	}
 	//
 	//	service TaskMutation {
-	//	  rpc ReassignTenant(...) returns (...) {
-	//	    option (w17.db.bypass_scope) = "tenant_id";
+	//	  rpc ReassignOrg(...) returns (...) {
+	//	    option (w17.db.bypass_scope) = "org_id";
 	//	    option (w17.db.bypass_scope) = "org_id";  // repeat to add
 	//	  }
 	//	}
@@ -3463,8 +3463,8 @@ var (
 	//
 	// The misreading the old sentence invited: declare
 	// `bypass_scope_service = "*"` on the service, then
-	// `bypass_scope = "tenant_id"` on one method, and believe that
-	// method bypasses the tenant scope only. The service's
+	// `bypass_scope = "org_id"` on one method, and believe that
+	// method bypasses the organization scope only. The service's
 	// wildcard already bypassed every scope, and the method's
 	// narrower list adds nothing — so the author believes they
 	// have scoping they do not have.
@@ -3605,10 +3605,10 @@ const file_w17_db_proto_rawDesc = "" +
 	" \x01(\bR\n" +
 	"deferrable\",\n" +
 	"\x0fEnumValueColumn\x12\x19\n" +
-	"\bsort_sql\x18\x01 \x01(\tR\asortSql*T\n" +
+	"\bsort_sql\x18\x01 \x01(\tR\asortSql*Q\n" +
 	"\tScopeAxis\x12\x1a\n" +
-	"\x16SCOPE_AXIS_UNSPECIFIED\x10\x00\x12\x15\n" +
-	"\x11SCOPE_AXIS_TENANT\x10\x01\x12\x14\n" +
+	"\x16SCOPE_AXIS_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eSCOPE_AXIS_ORG\x10\x01\x12\x14\n" +
 	"\x10SCOPE_AXIS_OWNER\x10\x02*\x93\x01\n" +
 	"\bLockKind\x12\x19\n" +
 	"\x15LOCK_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
