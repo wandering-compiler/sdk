@@ -77,6 +77,12 @@ const (
 
 // fetchMigrations pulls every migration up to each target's pin.
 func fetchMigrations(ctx context.Context, projectID string, targets []migrate.ConnTarget, getenv func(string) string) ([]*applyfetchpb.Migration, error) {
+	return fetchMigrationsReporting(ctx, projectID, targets, nil, getenv)
+}
+
+// fetchMigrationsReporting is fetchMigrations that also tells the console what
+// the target databases have applied (see appliedHeads).
+func fetchMigrationsReporting(ctx context.Context, projectID string, targets []migrate.ConnTarget, heads []*applyfetchpb.AppliedHead, getenv func(string) string) ([]*applyfetchpb.Migration, error) {
 	var want []*applyfetchpb.Target
 	for _, t := range targets {
 		if t.TargetMigrationID == "" {
@@ -114,11 +120,45 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 		ProjectId:                projectID,
 		Targets:                  want,
 		UnderstandsCheckSeverity: true,
+		AppliedHeads:             heads,
 	})
 	if err != nil {
 		return nil, fetchRefusal("migrate", "fetch", addr, auth, err)
 	}
 	return requestedOnly(resp.GetMigrations(), want)
+}
+
+// appliedHeads reads each pinned connection's applied head from its database,
+// for the console to keep (FetchMigrationsRequest.applied_heads).
+//
+// The console uses it for ONE thing: refusing to replace a stored migration
+// that some database already applied (`w17ctl migrate replace`). That refusal
+// is only as good as the reports behind it, so every fetch that holds the
+// database reports — `apply --fetch` and `status --fetch` — and the runbook for
+// a failed migration has every environment run `status --fetch` before the
+// replace.
+//
+// Best effort, and silent about it: a database that cannot be read here is
+// read again by the plan a moment later, and THAT failure is the one worth
+// reporting. A fresh database (no head) reports nothing.
+func appliedHeads(ctx context.Context, targets []migrate.ConnTarget, applierFor func(string) (migrate.Applier, error)) []*applyfetchpb.AppliedHead {
+	var out []*applyfetchpb.AppliedHead
+	for _, t := range targets {
+		if t.TargetMigrationID == "" {
+			continue
+		}
+		a, err := applierFor(t.Connection)
+		if err != nil {
+			continue
+		}
+		head, err := a.AppliedHead(ctx)
+		_ = a.Close()
+		if err != nil || head == "" {
+			continue
+		}
+		out = append(out, &applyfetchpb.AppliedHead{Connection: t.Connection, MigrationId: head})
+	}
+	return out
 }
 
 // requestedOnly narrows a fetched set to the connections that were asked

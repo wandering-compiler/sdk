@@ -117,6 +117,13 @@ type ProjectRegistryClient interface {
 	//
 	// Flat scalars throughout — nothing here carries registrypb / irpb, so the
 	// public mirror is the private RPC's shape unchanged.
+	//
+	// REPLACE is the third policy and the one history rewrite meant for a
+	// project in production: it repairs a stored migration that cannot apply
+	// (`w17ctl migrate replace`). It rides on this RPC rather than a new one
+	// because it IS a history rewrite — whoever may rewrite a project's history
+	// may repair it, and nobody else — and it refuses on its own terms, see
+	// RESET_HISTORY_POLICY_REPLACE.
 	ResetHistory(ctx context.Context, in *ResetHistoryRequest, opts ...grpc.CallOption) (*ResetHistoryResponse, error)
 	// VerifyHistory answers whether a project's recorded migration history
 	// reproduces its stored schema — the clean-gate.
@@ -320,6 +327,13 @@ type ProjectRegistryServer interface {
 	//
 	// Flat scalars throughout — nothing here carries registrypb / irpb, so the
 	// public mirror is the private RPC's shape unchanged.
+	//
+	// REPLACE is the third policy and the one history rewrite meant for a
+	// project in production: it repairs a stored migration that cannot apply
+	// (`w17ctl migrate replace`). It rides on this RPC rather than a new one
+	// because it IS a history rewrite — whoever may rewrite a project's history
+	// may repair it, and nobody else — and it refuses on its own terms, see
+	// RESET_HISTORY_POLICY_REPLACE.
 	ResetHistory(context.Context, *ResetHistoryRequest) (*ResetHistoryResponse, error)
 	// VerifyHistory answers whether a project's recorded migration history
 	// reproduces its stored schema — the clean-gate.

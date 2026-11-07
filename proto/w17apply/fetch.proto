@@ -62,11 +62,31 @@ message FetchMigrationsRequest {
   // check, with an "update the SDK" message, instead of letting it fail the
   // digest as if the artifact were tampered with.
   bool understands_check_severity = 3;
+  // applied_heads reports what each target database had applied when this
+  // fetch was made: `migrate apply --fetch` and `migrate status --fetch` read
+  // the head of every connection's `w17_migrations` ledger before they ask for
+  // the set, and send it here. A fetch that cannot read a database (no DSN, a
+  // fresh database, `migrate fetch` on a workstation) sends nothing for it.
+  //
+  // It is EVIDENCE, kept as an audit record, and only ever read in one
+  // direction: the console refuses to replace a stored migration that some
+  // database reported as applied (`w17ctl migrate replace`). Absence proves
+  // nothing — apply is offline, and a database may never be asked — so a
+  // replace still requires its caller to state that no environment applied
+  // the migration. A report cannot make the console serve anything different.
+  repeated AppliedHead applied_heads = 4;
 }
 
 message Target {
   string connection = 1;
   string up_to_migration_id = 2;
+}
+
+// AppliedHead is one connection's last applied migration, as the target
+// database's own ledger records it.
+message AppliedHead {
+  string connection = 1;
+  string migration_id = 2;
 }
 
 message FetchMigrationsResponse {

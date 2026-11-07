@@ -629,7 +629,8 @@ func buildConfig(ctx context.Context, f applyFlags, opts Options, out io.Writer)
 	// --fetch: the artefacts arrive over the wire and never land anywhere.
 	// They still go through the loader, so the content-hash check that guards
 	// the on-disk path guards this one identically.
-	migs, err := fetchMigrations(ctx, lk.ProjectID, targets, consoleAddrOf(f.console, opts.getenv()))
+	heads := appliedHeads(ctx, targets, cfg.ApplierFor)
+	migs, err := fetchMigrationsReporting(ctx, lk.ProjectID, targets, heads, consoleAddrOf(f.console, opts.getenv()))
 	if err != nil {
 		return migrate.Config{}, err
 	}

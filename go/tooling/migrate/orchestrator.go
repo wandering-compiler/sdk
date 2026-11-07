@@ -324,6 +324,10 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			}
 		}
 
+		if err := refuseHeadOffChain(ct.Connection, chain, head); err != nil {
+			return nil, err
+		}
+
 		// Filter pending. chain is ordered oldest→newest and ends at the
 		// target, so the upper bound is structural now; head=="" →
 		// everything on the chain, otherwise strict-after head.
@@ -785,6 +789,49 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		p.Connection, p.Migration.GetId())
 	logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), nil)
 	return nil
+}
+
+// refuseHeadOffChain refuses a database whose applied head sits INSIDE the
+// chain being deployed without being on it — between two of its migrations,
+// at an id the chain does not contain — when that chain still has work for it.
+//
+// That is what a database looks like after it applied a migration the console
+// then REPLACED (`w17ctl migrate replace`): the replaced migration and its
+// successors left the history, and the replacement — a body planned from the
+// schema BEFORE the replaced one — carries a later id. The id filter alone
+// would run the replacement on top of the migration it replaces, which is
+// either a failure part-way through or, worse, a schema that silently holds
+// both. The console refuses a replace that any database reported applying,
+// but a database that never reported is only caught here.
+//
+// Narrow on purpose. A head BELOW the whole chain is left to the existing
+// rules (a squash baseline adopts a head it supersedes, and an unrelated head
+// gets the baseline for real), and a head ABOVE the target is a database ahead
+// of the lock, which applies nothing. Only a head with chain migrations on
+// both sides is refused, and only when the first one after it is not a
+// baseline that supersedes it.
+func refuseHeadOffChain(conn string, chain []*applyfetchpb.Migration, head string) error {
+	if head == "" {
+		return nil
+	}
+	var prev, next *applyfetchpb.Migration
+	for _, m := range chain {
+		switch {
+		case m.GetId() == head:
+			return nil
+		case m.GetId() < head:
+			prev = m
+		case next == nil:
+			next = m
+		}
+	}
+	if prev == nil || next == nil || supersedes(next, head) {
+		return nil
+	}
+	return fmt.Errorf("connection %s: refusing — this database's applied head %s is not in the history being deployed, which goes from %s to %s. "+
+		"The migration it applied was replaced in the console (`w17ctl migrate replace`) after it ran here, and the replacement would run on top of it; nothing was applied. "+
+		"Bring this database back onto the history first: roll it back to %s with the artefacts it was migrated from (`migrate rollback --to %s --migrations <that directory>`), then deploy again",
+		conn, head, prev.GetId(), next.GetId(), prev.GetId(), prev.GetId())
 }
 
 // lastSuperseded is the newest migration a baseline collapsed — the one state a
