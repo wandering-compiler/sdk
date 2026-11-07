@@ -74,6 +74,16 @@ type Config struct {
 	// Set exactly one of MigrationsDir / MigrationsFS.
 	MigrationsFS fs.FS
 
+	// Replaced is what the console says `w17ctl migrate replace` superseded
+	// on each connection: connection → replaced migration id → the id that
+	// replaced it (FetchMigrationsResponse.replaced; `--fetch` only). A
+	// replaced migration is never served, so without this a database whose
+	// applied head was replaced looks like one with an unknown past, and the
+	// replacement would run on top of the migration it replaces. With it,
+	// Plan refuses that database before anything runs. Nil = not known (an
+	// on-disk set, or a console from before replace).
+	Replaced map[string]map[string]string
+
 	// ApplierFor opens a per-connection driver. Production wires
 	// per-dialect Appliers via the factory package; tests inject
 	// stubs.
@@ -324,6 +334,9 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			}
 		}
 
+		if err := refuseReplacedHead(ct.Connection, chain, head, cfg.Replaced[ct.Connection]); err != nil {
+			return nil, err
+		}
 		if err := refuseHeadOffChain(ct.Connection, chain, head); err != nil {
 			return nil, err
 		}
@@ -832,6 +845,50 @@ func refuseHeadOffChain(conn string, chain []*applyfetchpb.Migration, head strin
 		"The migration it applied was replaced in the console (`w17ctl migrate replace`) after it ran here, and the replacement would run on top of it; nothing was applied. "+
 		"Bring this database back onto the history first: roll it back to %s with the artefacts it was migrated from (`migrate rollback --to %s --migrations <that directory>`), then deploy again",
 		conn, head, prev.GetId(), next.GetId(), prev.GetId(), prev.GetId())
+}
+
+// refuseReplacedHead refuses a database whose applied head is a migration the
+// console REPLACED (`w17ctl migrate replace`), when the chain being deployed
+// still has work for it.
+//
+// refuseHeadOffChain catches most of these from the ids alone — a replaced
+// head sits between two chain migrations — but not when the replaced
+// migration was the FIRST live one on its connection: its replacement then
+// roots the chain, the head sorts below all of it, and below the chain the
+// rule is that an unknown past gets the work for real (TestRun_Unrelated…).
+// The console's list of replaced ids is what tells "this head was replaced"
+// from "this head is unknown", and it covers both positions.
+func refuseReplacedHead(conn string, chain []*applyfetchpb.Migration, head string, replaced map[string]string) error {
+	if head == "" || len(replaced) == 0 {
+		return nil
+	}
+	by, ok := replaced[head]
+	if !ok {
+		return nil
+	}
+	back, pending := "", false
+	for _, m := range chain {
+		switch {
+		case m.GetId() == head:
+			return nil // on the chain after all: nothing replaced it here
+		case m.GetId() < head:
+			back = m.GetId()
+		default:
+			pending = true
+		}
+	}
+	if !pending {
+		return nil // nothing would run on top of it
+	}
+	to := back
+	where := "to " + back
+	if back == "" {
+		to = `""`
+		where = "all the way back (nothing before it on this connection stays live)"
+	}
+	return fmt.Errorf("connection %s: refusing — this database's applied head %s was replaced by %s in the console (`w17ctl migrate replace`) after it ran here, and the replacement would run on top of it; nothing was applied. "+
+		"Bring this database back onto the history first: roll it back %s with the artefacts it was migrated from (`migrate rollback --to %s --migrations <that directory>`), then deploy again",
+		conn, head, by, where, to)
 }
 
 // lastSuperseded is the newest migration a baseline collapsed — the one state a

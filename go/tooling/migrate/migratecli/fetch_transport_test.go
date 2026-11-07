@@ -33,6 +33,8 @@ import (
 type fakeFetch struct {
 	applyfetchpb.UnimplementedMigrationFetchServer
 	err error
+	// resp answers every call when set (nil = an empty set).
+	resp *applyfetchpb.FetchMigrationsResponse
 
 	mu      sync.Mutex
 	bearers []string
@@ -47,6 +49,9 @@ func (f *fakeFetch) FetchMigrations(ctx context.Context, req *applyfetchpb.Fetch
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.resp != nil {
+		return f.resp, nil
 	}
 	return &applyfetchpb.FetchMigrationsResponse{}, nil
 }

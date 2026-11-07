@@ -70,3 +70,68 @@ func TestPlan_HeadOffChainGuardLeavesOrdinaryHeadsAlone(t *testing.T) {
 		}
 	}
 }
+
+// The case the ids alone cannot see: the replaced migration was the FIRST on
+// its connection, so its replacement roots the chain and the database's head
+// sorts below all of it — where an unknown past gets the work for real. The
+// console's list of replaced ids tells the two apart: a replaced head is
+// refused before anything runs, with the way back.
+func TestPlan_RefusesAReplacedHeadBelowTheWholeChain(t *testing.T) {
+	repl := mkMig("ts-3", "main", "CREATE TABLE x (id BIGINT, name TEXT);")
+	dir := seedDir(t, repl) // the live history: the replacement alone
+	stubA := stub.New()
+	stubA.Head = "ts-1" // applied the replaced first migration
+
+	err := migrate.Run(context.Background(), migrate.Config{
+		Targets:       targets(lockTarget{"main", repl.GetId(), repl.GetContentSha256()}),
+		MigrationsDir: dir,
+		ApplierFor:    func(_ string) (migrate.Applier, error) { return stubA, nil },
+		Replaced:      map[string]map[string]string{"main": {"ts-1": "ts-3"}},
+	})
+	if err == nil {
+		t.Fatal("a database at a replaced first migration was migrated on — the replacement ran on top of it")
+	}
+	for _, want := range []string{"ts-1", "replaced by ts-3", `rollback --to ""`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not say %q:\n%v", want, err)
+		}
+	}
+	if n := len(stubA.Calls()); n != 0 {
+		t.Errorf("the applier ran %d migration(s) after the refusal", n)
+	}
+
+	// The same head NOT named as replaced is an unknown past, and keeps the
+	// rule it always had: the work runs.
+	stubB := stub.New()
+	stubB.Head = "ts-1"
+	if err := migrate.Run(context.Background(), migrate.Config{
+		Targets:       targets(lockTarget{"main", repl.GetId(), repl.GetContentSha256()}),
+		MigrationsDir: dir,
+		ApplierFor:    func(_ string) (migrate.Applier, error) { return stubB, nil },
+		Replaced:      map[string]map[string]string{"main": {"ts-0": "ts-3"}},
+	}); err != nil {
+		t.Fatalf("an unknown head was refused: %v", err)
+	}
+	if n := len(stubB.Calls()); n != 1 {
+		t.Errorf("an unknown head ran %d migration(s), want the 1 on the chain", n)
+	}
+}
+
+// Between two chain migrations the list names the replacement too, and points
+// the rollback at the migration before the replaced one.
+func TestPlan_RefusesAReplacedHeadInsideTheChainNamingItsReplacement(t *testing.T) {
+	m1 := mkMig("ts-1", "main", "CREATE TABLE x (id BIGINT);")
+	repl := mkMig("ts-3", "main", "ALTER TABLE x ADD COLUMN name TEXT;")
+	dir := seedDir(t, m1, repl)
+	stubA := stub.New()
+	stubA.Head = "ts-2"
+	_, err := migrate.Plan(context.Background(), migrate.Config{
+		Targets:       targets(lockTarget{"main", repl.GetId(), repl.GetContentSha256()}),
+		MigrationsDir: dir,
+		ApplierFor:    func(_ string) (migrate.Applier, error) { return stubA, nil },
+		Replaced:      map[string]map[string]string{"main": {"ts-2": "ts-3"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "replaced by ts-3") || !strings.Contains(err.Error(), "rollback --to ts-1") {
+		t.Fatalf("want a refusal naming ts-3 and rollback --to ts-1, got %v", err)
+	}
+}

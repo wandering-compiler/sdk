@@ -68,9 +68,12 @@ message FetchMigrationsRequest {
   // the set, and send it here. A fetch that cannot read a database (no DSN, a
   // fresh database, `migrate fetch` on a workstation) sends nothing for it.
   //
-  // It is EVIDENCE, kept as an audit record, and only ever read in one
-  // direction: the console refuses to replace a stored migration that some
-  // database reported as applied (`w17ctl migrate replace`). Absence proves
+  // It is EVIDENCE, kept as an audit record (every report that changes what
+  // a database said is a new row; none is ever rewritten), and only ever read
+  // in one direction: the console refuses to replace a stored migration that
+  // a database's LATEST report names as applied (`w17ctl migrate replace`).
+  // Whoever may fetch can therefore block a replace by reporting — the remedy
+  // for a block is the one for an applied migration, fixing forward. Absence proves
   // nothing — apply is offline, and a database may never be asked — so a
   // replace still requires its caller to state that no environment applied
   // the migration. A report cannot make the console serve anything different.
@@ -86,11 +89,41 @@ message Target {
 // database's own ledger records it.
 message AppliedHead {
   string connection = 1;
+  // migration_id is the database's applied head; EMPTY when the database has
+  // applied nothing on this connection (a fresh one, or one rolled all the
+  // way back) — sent when database_id is, so a database that rolled back
+  // stops counting as one that applied what it no longer holds.
   string migration_id = 2;
+  // database_id tells one reporting database from another, so the console
+  // can judge each by its LATEST report instead of every report ever made: a
+  // database that applied a migration and rolled it back no longer blocks
+  // replacing it. Derived from where the database IS — a SHA-256 of the
+  // connection URL's scheme, host and path, with the credentials and the
+  // query left out — so it is the same for every job and replica that
+  // deploys that database and survives a password rotation, and it needs no
+  // write to the database (`status --fetch` stays read-only). Empty when the
+  // URL cannot be parsed; the console then counts the report for good, as it
+  // counts one from an SDK that sent none.
+  string database_id = 3;
 }
 
 message FetchMigrationsResponse {
   repeated Migration migrations = 1;
+  // replaced lists, per requested connection, the stored migrations that
+  // `w17ctl migrate replace` superseded (never squash-collapsed ones: a
+  // squash baseline names those itself, in Migration.supersedes). They are
+  // never served, so without this the offline client cannot tell a database
+  // whose applied head was REPLACED — the replacement must not run on top of
+  // it — from one whose head the history simply does not know.
+  repeated ReplacedMigration replaced = 2;
+}
+
+// ReplacedMigration is one stored migration a replace superseded.
+message ReplacedMigration {
+  string connection = 1;
+  string migration_id = 2;
+  // replaced_by is the migration that took its place.
+  string replaced_by = 3;
 }
 
 // Migration is one connection's apply payload, flattened from the registry's

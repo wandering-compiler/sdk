@@ -144,17 +144,20 @@ const (
 	//     environment applied the migration (the console cannot know it: apply
 	//     is offline, and a database reports what it applied only when it
 	//     fetches);
-	//   - a database HAS reported applying the named migration or one after it
-	//     (FetchMigrationsRequest.applied_heads) — that migration is fixed
-	//     forward, never replaced;
+	//   - a database's LATEST report names the named migration or one after it
+	//     (FetchMigrationsRequest.applied_heads; each database is judged by its
+	//     most recent report, so one that rolled back no longer counts, and a
+	//     report that names no database counts for good) — that migration is
+	//     fixed forward, never replaced;
 	//   - the range holds a hand-authored data migration, a squash baseline, or
 	//     a migration already superseded — none of those can be re-derived;
 	//   - a squash range is frozen and waiting for its baseline;
 	//   - the plan still needs decisions (returned as findings, like a push).
 	//
 	// A deployed database that applied the replaced migration anyway is
-	// refused by `migrate apply`: its applied head is not on the chain the new
-	// lock pins, so the replacement is never run on top of it.
+	// refused by `migrate apply`: the fetch names the replaced ids
+	// (FetchMigrationsResponse.replaced), so the replacement is never run on
+	// top of it — wherever in the history the replaced migration sat.
 	ResetHistoryPolicy_RESET_HISTORY_POLICY_REPLACE ResetHistoryPolicy = 3
 )
 
