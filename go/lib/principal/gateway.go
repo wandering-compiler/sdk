@@ -78,9 +78,9 @@ func SanitizeGatewayMD(ctx context.Context) metadata.MD {
 // something downstream consults the other side — and something does: the
 // gateway-tier event emit snapshots the request's metadata onto
 // `Event.Metadata` and its `w17-label-*` entries onto `Event.Labels`.
-// A caller could therefore choose which tenant's live stream its events
+// A caller could therefore choose which organization's live stream its events
 // landed in, and ride a forged `x-w17-scope-*` through the subscriber's
-// reinjected context into a storage auto-WHERE — a cross-tenant read or
+// reinjected context into a storage auto-WHERE — a cross-organization read or
 // write performed by a trusted intermediary on forged input. The backend
 // forward call was never the exposed part; the event path was.
 //

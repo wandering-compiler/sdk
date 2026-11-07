@@ -22,7 +22,7 @@ import (
 // must therefore never be in the map at all.
 func TestServeStreamableHTTP_ClientCannotSetReservedMetadata(t *testing.T) {
 	forward := []string{
-		"X-W17-User", "X-W17-Scope-Tenant_id", "W17-Label-Tenant",
+		"X-W17-User", "X-W17-Scope-Org_id", "W17-Label-Org",
 		"W17-Tx-Id", "W17-Conn-Id", "Grpcgateway-Authorization", "Grpc-Metadata-X-W17-User",
 		"Session-Id",
 	}
@@ -47,8 +47,8 @@ func TestServeStreamableHTTP_ClientCannotSetReservedMetadata(t *testing.T) {
 
 	forged := http.Header{}
 	forged.Set("X-W17-User", "forged-principal")
-	forged.Set("X-W17-Scope-Tenant_id", "forged-tenant")
-	forged.Set("W17-Label-Tenant", "forged-label")
+	forged.Set("X-W17-Scope-Org_id", "forged-org")
+	forged.Set("W17-Label-Org", "forged-label")
 	forged.Set("W17-Tx-Id", "forged-tx")
 	forged.Set("W17-Conn-Id", "forged-conn")
 	forged.Set("Grpcgateway-Authorization", "forged")
@@ -64,7 +64,7 @@ func TestServeStreamableHTTP_ClientCannotSetReservedMetadata(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, k := range []string{
-		"x-w17-user", "x-w17-scope-tenant_id", "w17-label-tenant", "w17-tx-id", "w17-conn-id",
+		"x-w17-user", "x-w17-scope-org_id", "w17-label-org", "w17-tx-id", "w17-conn-id",
 		"grpcgateway-authorization", "grpc-metadata-x-w17-user", "x-w17-credential",
 	} {
 		if v := sent.Get(k); len(v) != 0 {
@@ -87,9 +87,9 @@ func TestServeStreamableHTTP_ClientCannotSetReservedMetadata(t *testing.T) {
 func TestCollectAuthHeaders_DropsReservedKeysFromEverySource(t *testing.T) {
 	stdio := CollectAuthHeaders(ConnectionInfo{
 		Env:              map[string]string{"X_W17_CREDENTIAL": "c", "W17_TX_ID": "t", "AUTHORIZATION": "Bearer e"},
-		InitializeParams: map[string]any{"x-w17-user": "u", "w17-label-tenant": "l", "session-id": "s"},
+		InitializeParams: map[string]any{"x-w17-user": "u", "w17-label-org": "l", "session-id": "s"},
 	})
-	for _, k := range []string{"x-w17-credential", "w17-tx-id", "x-w17-user", "w17-label-tenant"} {
+	for _, k := range []string{"x-w17-credential", "w17-tx-id", "x-w17-user", "w17-label-org"} {
 		if v, ok := stdio[k]; ok {
 			t.Errorf("%s = %q, want absent", k, v)
 		}

@@ -136,7 +136,7 @@ func TestEnvelope_FailsClosed(t *testing.T) {
 }
 
 // TestScope covers the generic scope read a project scoped by org_id
-// (or tenant_id) uses — the same key convention the generated storage
+// (or team_id) uses — the same key convention the generated storage
 // layer reads.
 func TestScope(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -144,8 +144,8 @@ func TestScope(t *testing.T) {
 	if got, ok := principal.Scope(ctx, "org_id"); !ok || got != "org-1" {
 		t.Errorf("Scope(org_id) = %q,%v want org-1,true", got, ok)
 	}
-	if got, ok := principal.Scope(ctx, "tenant_id"); ok || got != "" {
-		t.Errorf("Scope(tenant_id) = %q,%v want \"\",false", got, ok)
+	if got, ok := principal.Scope(ctx, "team_id"); ok || got != "" {
+		t.Errorf("Scope(team_id) = %q,%v want \"\",false", got, ok)
 	}
 	if _, ok := principal.Scope(context.Background(), "org_id"); ok {
 		t.Errorf("Scope with no metadata should be false")

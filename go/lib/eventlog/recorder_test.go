@@ -463,11 +463,9 @@ func TestRecord_SetCallerFromContext(t *testing.T) {
 	}
 }
 
-// A tenant_scope project's caller has a tenant_id scope and no org_id: the
-// tenant is its organization. A project picks one model, and when both scopes
-// are there anyway org_id wins, in either order. Any other scope names no
-// organization.
-func TestRecorder_TenantIsTheOrganization(t *testing.T) {
+// The caller's org_id scope is the record's organization, stamped or in the
+// auth response. Any other scope names no organization.
+func TestRecorder_TheOrgScopeIsTheOrganization(t *testing.T) {
 	stamped := func(pairs ...string) metadata.MD {
 		return metadata.Join(authMDScopes("u-1", false), metadata.Pairs(pairs...))
 	}
@@ -476,11 +474,8 @@ func TestRecorder_TenantIsTheOrganization(t *testing.T) {
 		md   metadata.MD
 		want string
 	}{
-		{"tenant in the auth response", authMDScopes("u-1", false, [2]string{"tenant_id", "t-1"}), "t-1"},
-		{"tenant stamped", stamped("x-w17-scope-tenant_id", "t-1"), "t-1"},
-		{"org before tenant in the auth response", authMDScopes("u-1", false, [2]string{"org_id", "o-1"}, [2]string{"tenant_id", "t-1"}), "o-1"},
-		{"tenant before org in the auth response", authMDScopes("u-1", false, [2]string{"tenant_id", "t-1"}, [2]string{"org_id", "o-1"}), "o-1"},
-		{"both stamped", stamped("x-w17-scope-tenant_id", "t-1", "x-w17-scope-org_id", "o-1"), "o-1"},
+		{"org in the auth response", authMDScopes("u-1", false, [2]string{"org_id", "o-1"}), "o-1"},
+		{"org stamped", stamped("x-w17-scope-org_id", "o-1"), "o-1"},
 		{"another scope", authMDScopes("u-1", false, [2]string{"user_id", "u-1"}), ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

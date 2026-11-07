@@ -28,13 +28,13 @@ const (
 	AudienceKey = "x-w17-audience"
 	// MembershipKindsKey is the comma-separated membership kinds that
 	// audience accepts. The auth method admits a caller only through a
-	// membership of one of them, and resolves the tenant among those.
+	// membership of one of them, and resolves the organization among those.
 	// Absent when the audience accepts any.
 	MembershipKindsKey = "x-w17-membership-kinds"
-	// TenantFromKey is the comma-separated, ordered places the audience
-	// takes a request's tenant from: the TenantFrom* values. Absent when the
+	// OrgFromKey is the comma-separated, ordered places the audience
+	// takes a request's organization from: the OrgFrom* values. Absent when the
 	// audience names none, which is the selector or the sole membership.
-	TenantFromKey = "x-w17-tenant-from"
+	OrgFromKey = "x-w17-org-from"
 	// HostKey is the host the request arrived on, lower-case and without a
 	// port: the Host header, or X-Forwarded-Host when the peer is a trusted
 	// proxy. Written on REST; absent where a transport has no host.
@@ -46,15 +46,15 @@ const (
 	ProductKey = "x-w17-product"
 )
 
-// The TenantFromKey values, one per w17.TenantSource.
+// The OrgFromKey values, one per w17.OrgSource.
 const (
-	// TenantFromInvitation is the invitation being accepted.
-	TenantFromInvitation = "invitation"
-	// TenantFromHost is the organization the request's host is bound to.
-	TenantFromHost = "host"
-	// TenantFromDefault is the caller's own choice (the W17-Org selector),
+	// OrgFromInvitation is the invitation being accepted.
+	OrgFromInvitation = "invitation"
+	// OrgFromHost is the organization the request's host is bound to.
+	OrgFromHost = "host"
+	// OrgFromDefault is the caller's own choice (the W17-Org selector),
 	// or their sole membership where the auth plugin infers it.
-	TenantFromDefault = "default"
+	OrgFromDefault = "default"
 )
 
 // The SurfaceKey values.

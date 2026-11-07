@@ -68,10 +68,10 @@ func TestApplyMySQLDSNParams_QuestionMarkInPasswordDoesNotStartTheQuery(t *testi
 // to it.
 func TestApplyPGDSNParams_SearchPathInOptionsIsKept(t *testing.T) {
 	for _, dsn := range []string{
-		"postgres://u:pw@db/app?options=-c%20search_path%3Dtenant",
-		"postgres://u:pw@db/app?options=-csearch_path%3Dtenant",
-		"postgres://u:pw@db/app?options=--search-path%3Dtenant",
-		"host=db dbname=app options='-c search_path=tenant'",
+		"postgres://u:pw@db/app?options=-c%20search_path%3Dorg",
+		"postgres://u:pw@db/app?options=-csearch_path%3Dorg",
+		"postgres://u:pw@db/app?options=--search-path%3Dorg",
+		"host=db dbname=app options='-c search_path=org'",
 	} {
 		got := ApplyPGDSNParams(dsn)
 		if strings.Contains(got, "search_path=public") {
@@ -85,14 +85,14 @@ func TestApplyPGDSNParams_SearchPathInOptionsIsKept(t *testing.T) {
 
 // PostgreSQL: an operator's parameter keeps its value in both forms.
 func TestApplyPGDSNParams_KeepsAnOperatorParameter(t *testing.T) {
-	got := ApplyPGDSNParams("postgres://u:pw@db/app?search_path=tenant#frag")
-	if strings.Count(got, "search_path=") != 1 || !strings.Contains(got, "search_path=tenant") {
+	got := ApplyPGDSNParams("postgres://u:pw@db/app?search_path=org#frag")
+	if strings.Count(got, "search_path=") != 1 || !strings.Contains(got, "search_path=org") {
 		t.Errorf("URL form: %q", got)
 	}
 	if !strings.HasSuffix(got, "#frag") {
 		t.Errorf("URL form: the fragment no longer ends the DSN: %q", got)
 	}
-	got = ApplyPGDSNParams("host=db search_path = 'tenant' dbname=app")
+	got = ApplyPGDSNParams("host=db search_path = 'org' dbname=app")
 	if strings.Count(got, "search_path") != 1 {
 		t.Errorf("keyword form: %q", got)
 	}

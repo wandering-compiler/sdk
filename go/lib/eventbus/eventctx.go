@@ -226,7 +226,7 @@ func ReservedMetadataKey(k string) bool {
 //
 // nil means the event is unlabelled. On a surface that partitions its
 // events by label that means the event reaches NOBODY (restgw.entitled):
-// an event that cannot be scoped to a tenant has no principal it can be
+// an event that cannot be scoped to an organization has no principal it can be
 // shown to safely.
 func LabelsFromContext(ctx context.Context) map[string]string {
 	md, ok := contextMD(ctx)

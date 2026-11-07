@@ -39,24 +39,24 @@ func TestNumMatcher(t *testing.T) {
 // arranged to own zero rows plus a second case establishing that zero.
 func TestDistinctMatcher(t *testing.T) {
 	rows := []any{
-		map[string]any{"id": 1.0, "tenant_id": "alpha"},
-		map[string]any{"id": 2.0, "tenant_id": "alpha"},
-		map[string]any{"id": 3.0, "tenant_id": "beta"},
+		map[string]any{"id": 1.0, "org_id": "alpha"},
+		map[string]any{"id": 2.0, "org_id": "alpha"},
+		map[string]any{"id": 3.0, "org_id": "beta"},
 	}
-	spec := map[string]any{"matcher": "distinct", "field": "tenant_id", "op": ">=", "value": 2}
+	spec := map[string]any{"matcher": "distinct", "field": "org_id", "op": ">=", "value": 2}
 	if err := match(t, spec, rows, true); err != nil {
-		t.Errorf("two tenants rejected: %v", err)
+		t.Errorf("two organizations rejected: %v", err)
 	}
 
-	oneTenant := []any{
-		map[string]any{"id": 1.0, "tenant_id": "alpha"},
-		map[string]any{"id": 2.0, "tenant_id": "alpha"},
+	oneOrg := []any{
+		map[string]any{"id": 1.0, "org_id": "alpha"},
+		map[string]any{"id": 2.0, "org_id": "alpha"},
 	}
-	err := match(t, spec, oneTenant, true)
+	err := match(t, spec, oneOrg, true)
 	if err == nil {
-		t.Fatal("a single-tenant result must fail >= 2 — that is a scope that held")
+		t.Fatal("a single-organization result must fail >= 2 — that is a scope that held")
 	}
-	if !strings.Contains(err.Error(), "tenant_id") {
+	if !strings.Contains(err.Error(), "org_id") {
 		t.Errorf("failure does not name the field: %v", err)
 	}
 }
@@ -64,8 +64,8 @@ func TestDistinctMatcher(t *testing.T) {
 func TestDistinctMatcher_TypoInFieldIsLoud(t *testing.T) {
 	// Reporting zero distinct values for a misspelled field would pass
 	// any `== 0` assertion and read as a real result.
-	rows := []any{map[string]any{"tenant_id": "alpha"}}
-	err := match(t, map[string]any{"matcher": "distinct", "field": "tenant", "op": "==", "value": 0}, rows, true)
+	rows := []any{map[string]any{"org_id": "alpha"}}
+	err := match(t, map[string]any{"matcher": "distinct", "field": "org", "op": "==", "value": 0}, rows, true)
 	if err == nil {
 		t.Fatal("a field no element carries must be an error, not a count of zero")
 	}
@@ -80,10 +80,10 @@ func TestDistinctMatcher_RequiresField(t *testing.T) {
 // An absent list is an empty one: no distinct values. `== 0` accepts it
 // and `>= 1` refuses it, as `count` does.
 func TestDistinctMatcher_AbsentListIsEmpty(t *testing.T) {
-	if err := match(t, map[string]any{"matcher": "distinct", "field": "tenant_id", "op": "==", "value": 0}, nil, false); err != nil {
+	if err := match(t, map[string]any{"matcher": "distinct", "field": "org_id", "op": "==", "value": 0}, nil, false); err != nil {
 		t.Errorf("absent list failed distinct == 0: %v", err)
 	}
-	if err := match(t, map[string]any{"matcher": "distinct", "field": "tenant_id", "op": ">=", "value": 1}, nil, false); err == nil {
+	if err := match(t, map[string]any{"matcher": "distinct", "field": "org_id", "op": ">=", "value": 1}, nil, false); err == nil {
 		t.Error("absent list passed distinct >= 1")
 	}
 }

@@ -55,14 +55,14 @@ type AwaitEvent struct {
 	// Absent turns the await into the opposite assertion: NO event on Topic
 	// matching Match is delivered within the window (TimeoutMs, else
 	// DefaultAwaitTimeoutMs). It is how a suite proves an event is not
-	// delivered — to another tenant, to a signed-out subscriber. The whole
+	// delivered — to another organization, to a signed-out subscriber. The whole
 	// window is waited out; a closed or failing stream fails the step,
 	// since it proves nothing about delivery. Match may not capture.
 	Absent bool
 
 	// TokenFrom names the capture whose value is the bearer this
 	// subscription presents, in place of the step's own principal — the
-	// OTHER tenant whose stream must stay silent, for example. Empty means
+	// OTHER organization whose stream must stay silent, for example. Empty means
 	// the step's principal.
 	TokenFrom string
 

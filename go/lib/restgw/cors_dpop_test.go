@@ -54,9 +54,9 @@ func TestWithDPoPCORS(t *testing.T) {
 
 	// Operator headers are kept, nothing is doubled, the input is not
 	// modified, and no origins stays CORS-off.
-	custom := restgw.CORSConfig{AllowedOrigins: base.AllowedOrigins, AllowedHeaders: []string{"X-Tenant", "dpop"}, ExposedHeaders: []string{"X-Total"}}
+	custom := restgw.CORSConfig{AllowedOrigins: base.AllowedOrigins, AllowedHeaders: []string{"X-Org", "dpop"}, ExposedHeaders: []string{"X-Total"}}
 	got := restgw.WithDPoPCORS(restgw.WithDPoPCORS(custom))
-	if strings.Join(got.AllowedHeaders, ",") != "X-Tenant,dpop" {
+	if strings.Join(got.AllowedHeaders, ",") != "X-Org,dpop" {
 		t.Errorf("AllowedHeaders = %v", got.AllowedHeaders)
 	}
 	if strings.Join(got.ExposedHeaders, ",") != "X-Total,DPoP-Nonce,WWW-Authenticate" {

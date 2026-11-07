@@ -191,7 +191,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Event fan-out with tenant scoping | E2E event awaits (T25) | A suite can assert that tenant B does not receive tenant A's event, and an await matches only this step's event. | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent` |
+| Event fan-out with organization scoping | E2E event awaits (T25) | A suite can assert that organization B does not receive organization A's event, and an await matches only this step's event. | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent` |
 
 ## Tooling × Tooling
 

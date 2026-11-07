@@ -7,7 +7,7 @@
 // in the host process. The codegen-time decision to do so rests on
 // a STATIC estimate (`estimated_row_count × selectivity` vs
 // `query_memory_budget_bytes`). That estimate can drift from reality
-// — an unselective filter, a stale hint, a tenant far larger than
+// — an unselective filter, a stale hint, an organization far larger than
 // the rest — and an unbounded materialization then peaks BE memory.
 //
 // [Guard] turns that unbounded risk into a bounded, typed, recoverable

@@ -64,7 +64,7 @@ func twoDomainTree(t *testing.T, withConnections bool) string {
 		migrate.FixtureSeed{Domain: "app", Name: "seed", Connection: appConn,
 			Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO app_item")}},
 		migrate.FixtureSeed{Domain: "basic", Name: "seed", Connection: basicConn,
-			Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO basic_tenant")}},
+			Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO basic_org")}},
 	)
 }
 
@@ -84,7 +84,7 @@ func TestFixturesApply_DefaultsToTheBinarysOwnDomain(t *testing.T) {
 		if err != nil {
 			t.Fatalf("named=%v: runFixtures: %v\n%s", named, err, out.String())
 		}
-		if got := o.sql(); len(got) != 1 || got[0] != "INSERT INTO basic_tenant" {
+		if got := o.sql(); len(got) != 1 || got[0] != "INSERT INTO basic_org" {
 			t.Errorf("named=%v: seeded %v, want only the basic domain's row", named, got)
 		}
 		if len(o.opened) != 1 || o.opened[0] != "basic-postgres" {
@@ -113,7 +113,7 @@ func TestFixturesApply_AForeignDomainIsRefused(t *testing.T) {
 	if err := runFixtures(context.Background(), []string{"apply", "--lock", lock, "--fixtures", dir, "--domain", "basic"}, opts, &out); err != nil {
 		t.Fatalf("own --domain: %v", err)
 	}
-	if got := o.sql(); len(got) != 1 || got[0] != "INSERT INTO basic_tenant" {
+	if got := o.sql(); len(got) != 1 || got[0] != "INSERT INTO basic_org" {
 		t.Errorf("own --domain seeded %v", got)
 	}
 }
@@ -129,7 +129,7 @@ func TestFixturesApply_UnknownIdentitySkipsOtherStoresByTheRenderedConnection(t 
 		migrate.FixtureSeed{Domain: "app", Name: "seed", Connection: "app-postgres",
 			Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO app_item")}},
 		migrate.FixtureSeed{Domain: "basic", Name: "seed", Connection: "basic-postgres",
-			Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO basic_tenant")}},
+			Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO basic_org")}},
 	)
 	lock := writeLock(t, migrate.LockConnection{Name: "basic-postgres"}, migrate.LockConnection{Name: "basic-replica"})
 	var out strings.Builder
@@ -139,7 +139,7 @@ func TestFixturesApply_UnknownIdentitySkipsOtherStoresByTheRenderedConnection(t 
 	if err != nil {
 		t.Fatalf("runFixtures: %v\n%s", err, out.String())
 	}
-	if got := o.sql(); len(got) != 1 || got[0] != "INSERT INTO basic_tenant" {
+	if got := o.sql(); len(got) != 1 || got[0] != "INSERT INTO basic_org" {
 		t.Errorf("seeded %v, want only the basic row", got)
 	}
 	if len(o.opened) != 1 || o.opened[0] != "basic-postgres" {
@@ -155,7 +155,7 @@ func TestFixturesApply_UnknownIdentitySkipsOtherStoresByTheRenderedConnection(t 
 func TestFixturesApply_AnOwnDomainSeedOnAForeignStoreIsRefused(t *testing.T) {
 	o := withOpenedSeeder(t)
 	dir := seedDir(t, migrate.FixtureSeed{Domain: "basic", Name: "seed", Connection: "app-postgres",
-		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO basic_tenant")}})
+		Statements: []*applyfetchpb.SeedStmt{seedStmt("INSERT INTO basic_org")}})
 	lock := writeLock(t, migrate.LockConnection{Name: "basic-postgres"})
 	var out strings.Builder
 	err := runFixtures(context.Background(), []string{"apply", "--lock", lock, "--fixtures", dir},

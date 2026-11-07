@@ -558,11 +558,8 @@ func (rec *Record) Done(ctx context.Context, resp proto.Message, httpStatus int,
 }
 
 // orgScopes are the data scopes that name the caller's organization, in
-// precedence. The auth plugin stamps org_id with `organizations` and
-// tenant_id with `tenant_scope`, the single-organization model it
-// generalizes; a project picks one, so a record of a tenant_scope project
-// carries its tenant as the organization rather than none.
-var orgScopes = [...]string{"org_id", "tenant_id"}
+// precedence: the auth plugin stamps org_id with `org_membership`.
+var orgScopes = [...]string{"org_id"}
 
 // readCaller decodes the caller from the stamped metadata: the auth
 // response's user_id (field 2), marketing_consent and membership_kind, and

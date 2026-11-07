@@ -30,8 +30,8 @@ import (
 func TestEventContextReaders_GatewayTierReadsOutgoing(t *testing.T) {
 	ctx := metadata.AppendToOutgoingContext(context.Background(),
 		"x-w17-user", "envelope-bytes",
-		"x-w17-scope-tenant_id", "alpha",
-		"w17-label-tenant_id", "alpha",
+		"x-w17-scope-team_id", "alpha",
+		"w17-label-team_id", "alpha",
 		"traceparent", "00-trace-span-01",
 	)
 
@@ -40,8 +40,8 @@ func TestEventContextReaders_GatewayTierReadsOutgoing(t *testing.T) {
 		t.Fatalf("gateway-tier emit published EMPTY Event.Metadata; the scope tunnel and the "+
 			"trace context are on the OUTGOING side of this ctx: %#v", md)
 	}
-	if got := md["x-w17-scope-tenant_id"]; got != "alpha" {
-		t.Errorf("Event.Metadata[x-w17-scope-tenant_id] = %q, want alpha — a subscriber "+
+	if got := md["x-w17-scope-team_id"]; got != "alpha" {
+		t.Errorf("Event.Metadata[x-w17-scope-team_id] = %q, want alpha — a subscriber "+
 			"rehydrates this map to reach a scope-guarded handler", got)
 	}
 	if got := md["traceparent"]; got != "00-trace-span-01" {
@@ -49,10 +49,10 @@ func TestEventContextReaders_GatewayTierReadsOutgoing(t *testing.T) {
 	}
 
 	labels := eventbus.LabelsFromContext(ctx)
-	if got := labels["tenant_id"]; got != "alpha" {
-		t.Errorf("Event.Labels[tenant_id] = %q, want alpha", got)
+	if got := labels["team_id"]; got != "alpha" {
+		t.Errorf("Event.Labels[team_id] = %q, want alpha", got)
 	}
-	if _, leaked := labels["x-w17-scope-tenant_id"]; leaked {
+	if _, leaked := labels["x-w17-scope-team_id"]; leaked {
 		t.Errorf("labels reader must only surface %q keys, prefix stripped; got %#v",
 			eventbus.LabelKeyPrefix, labels)
 	}
@@ -63,15 +63,15 @@ func TestEventContextReaders_GatewayTierReadsOutgoing(t *testing.T) {
 // are incoming. Both readers must land on that same side.
 func TestEventContextReaders_ServerTierReadsIncoming(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"x-w17-scope-tenant_id", "beta",
-		"w17-label-tenant_id", "beta",
+		"x-w17-scope-team_id", "beta",
+		"w17-label-team_id", "beta",
 	))
 
-	if got := eventbus.MetadataFromContext(ctx)["x-w17-scope-tenant_id"]; got != "beta" {
-		t.Errorf("server-tier Event.Metadata[x-w17-scope-tenant_id] = %q, want beta", got)
+	if got := eventbus.MetadataFromContext(ctx)["x-w17-scope-team_id"]; got != "beta" {
+		t.Errorf("server-tier Event.Metadata[x-w17-scope-team_id] = %q, want beta", got)
 	}
-	if got := eventbus.LabelsFromContext(ctx)["tenant_id"]; got != "beta" {
-		t.Errorf("server-tier Event.Labels[tenant_id] = %q, want beta", got)
+	if got := eventbus.LabelsFromContext(ctx)["team_id"]; got != "beta" {
+		t.Errorf("server-tier Event.Labels[team_id] = %q, want beta", got)
 	}
 }
 
@@ -83,16 +83,16 @@ func TestEventContextReaders_ServerTierReadsIncoming(t *testing.T) {
 // the other.
 func TestEventContextReaders_OneSideOnly(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"w17-label-tenant_id", "incoming",
+		"w17-label-team_id", "incoming",
 		"origin", "incoming",
 	))
 	ctx = metadata.AppendToOutgoingContext(ctx,
-		"w17-label-tenant_id", "outgoing",
+		"w17-label-team_id", "outgoing",
 		"origin", "outgoing",
 	)
 
 	mdOrigin := eventbus.MetadataFromContext(ctx)["origin"]
-	labelOrigin := eventbus.LabelsFromContext(ctx)["tenant_id"]
+	labelOrigin := eventbus.LabelsFromContext(ctx)["team_id"]
 	if mdOrigin != labelOrigin {
 		t.Errorf("Event.Metadata came from the %q side and Event.Labels from the %q side — "+
 			"one envelope must describe one request", mdOrigin, labelOrigin)
@@ -164,15 +164,15 @@ func TestMetadataFromContext_DropsTheTransactionHeader(t *testing.T) {
 
 // A subscriber runs as the caller: with the caller's scopes it gets the
 // caller's audience range too. Without it storage would read "no audience" and
-// apply every scope, narrowing a tenant-wide request's reaction to the
+// apply every scope, narrowing an org-wide request's reaction to the
 // caller's own rows.
 func TestMetadataFromContext_KeepsTheDataScope(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"x-w17-data-scope", "tenant",
+		"x-w17-data-scope", "org",
 		"x-w17-scope-org_id", "org-7",
 	))
 	md := eventbus.MetadataFromContext(ctx)
-	if md["x-w17-data-scope"] != "tenant" || md["x-w17-scope-org_id"] != "org-7" {
+	if md["x-w17-data-scope"] != "org" || md["x-w17-scope-org_id"] != "org-7" {
 		t.Errorf("the envelope lost the caller's range or scope: %v", md)
 	}
 }

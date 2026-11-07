@@ -6,7 +6,7 @@
 // has no session and a browser following a link cannot set a
 // header. The platform answer is NOT to exclude such an endpoint
 // from auth — that would throw away scopes, ACL, logging and
-// every future per-principal mechanic, and push tenant isolation
+// every future per-principal mechanic, and push organization isolation
 // onto a hand-written WHERE clause. It is to accept the
 // credential from the URL and run the ordinary auth path with it.
 //

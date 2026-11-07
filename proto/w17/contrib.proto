@@ -142,16 +142,15 @@ extend google.protobuf.MethodOptions {
   // silently.
   //
   // It existed for one shape: a baseline rpc a feature had to REPLACE
-  // rather than extend. The auth plugin's `CreateUser` forced it —
-  // `tenant_scope` adds a NOT NULL `User.tenant_id`, the fixed INSERT
-  // could not write it, so the feature gated the baseline OUT and a twin
-  // `CreateUserWithTenant` took over.
+  // rather than extend. The auth plugin's `CreateUser` forced it — a
+  // feature added a NOT NULL column to `User`, the fixed INSERT could not
+  // write it, so the feature gated the baseline OUT and a twin took over.
   //
-  // Feature-gated DQL fragments removed the need: `?feature(tenant_scope)`
+  // Feature-gated DQL fragments removed the need: `?feature(<name>)`
   // splices the column into the one INSERT, so a single rpc serves both
   // activations. That is not merely a tidier spelling — the twin cost an
   // EVENT. An event has exactly one emit site, the baseline owned it, and
-  // the baseline was the one being filtered away, so with `tenant_scope`
+  // the baseline was the one being filtered away, so with that feature
   // on, `UserCreated` had no emitter and every subscriber to
   // auth.user.created silently never fired.
   //

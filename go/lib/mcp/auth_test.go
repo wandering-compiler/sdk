@@ -122,11 +122,11 @@ func TestDefaultAuthFunc_ExplicitEnvHyphenKey(t *testing.T) {
 // The same key routed through a declared `metadata_propagation` is refused at
 // parse time; this is the one channel that reached none of those call sites.
 func TestDefaultAuthFunc_DropsGatewayOwnedNamespaces(t *testing.T) {
-	fn := mcp.DefaultAuthFunc("x-w17-scope-org_id", "X-W17-User", "w17-label-tenant_id", "w17-org", "Session-Id")
+	fn := mcp.DefaultAuthFunc("x-w17-scope-org_id", "X-W17-User", "w17-label-team_id", "w17-org", "Session-Id")
 	conn := mcp.ConnectionInfo{HTTPHeaders: http.Header{
-		"X-W17-Scope-Org_id":  []string{"forged-org"},
-		"X-W17-User":          []string{"forged-envelope"},
-		"W17-Label-Tenant_id": []string{"forged-tenant"},
+		"X-W17-Scope-Org_id": []string{"forged-org"},
+		"X-W17-User":         []string{"forged-envelope"},
+		"W17-Label-Team_id":  []string{"forged-org"},
 		// The legitimate client header the exact-prefix rule protects: the
 		// caller's ACTIVE organization, which the auth backend validates
 		// against membership before trusting. A wholesale `w17-` ban would
@@ -138,7 +138,7 @@ func TestDefaultAuthFunc_DropsGatewayOwnedNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth: %v", err)
 	}
-	for _, forged := range []string{"x-w17-scope-org_id", "x-w17-user", "w17-label-tenant_id"} {
+	for _, forged := range []string{"x-w17-scope-org_id", "x-w17-user", "w17-label-team_id"} {
 		if got := md.Get(forged); len(got) != 0 {
 			t.Errorf("md[%s] = %v, want none — a client-routed value in a gateway-owned namespace survives any stamp that omits that key", forged, got)
 		}

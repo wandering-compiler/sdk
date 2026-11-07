@@ -197,8 +197,8 @@ type Event struct {
 	// hub partitions delivery: a public event reaches only the
 	// principals holding its labels, and an UNLABELLED event on
 	// such a surface reaches nobody (fail-closed — it cannot be
-	// scoped to a tenant). A surface with no labels field is
-	// single-tenant, and there every public event reaches every
+	// scoped to an organization). A surface with no labels field is
+	// single-organization, and there every public event reaches every
 	// authenticated client.
 	//
 	// Orthogonal to channel transport: a PUBLIC event can ride

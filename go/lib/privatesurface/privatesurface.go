@@ -258,7 +258,7 @@ var ForwardedKeys = []string{
 	principal.HostKey,
 	principal.SurfaceKey,
 	"x-w17-mcp-resource",
-	principal.TenantFromKey,
+	principal.OrgFromKey,
 	principal.AudienceKey,
 	principal.MembershipKindsKey,
 	principal.ProductKey,

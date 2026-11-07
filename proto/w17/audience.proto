@@ -7,7 +7,7 @@ import "google/protobuf/descriptor.proto";
 option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 
 // Audience surfaces: one domain publishing several REST / MCP / gRPC
-// surfaces, one per audience (backoffice, tenant, client, …), each served
+// surfaces, one per audience (backoffice, organization, client, …), each served
 // by its own gateway.
 //
 // A surface names its audience in its registry option —
@@ -32,7 +32,7 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // registries) carries the same value; codegen refuses a disagreement.
 message Audience {
   // snake_case identifier, `[a-z][a-z0-9_]*`. Matches the registry file's
-  // suffix (`rest_tenant.proto` → "tenant"). Reserved: "admin" (the admin
+  // suffix (`rest_org.proto` → "org"). Reserved: "admin" (the admin
   // surface is its own, at most one per project), "rpc" and "mcp" (they
   // name transports in env and file names), and the leading words of the
   // gateway's process env (`public`, `storage`, `business`, `bus`, `dpop`,
@@ -61,24 +61,24 @@ enum DataScope {
   // owner axis included.
   DATA_SCOPE_OWNER = 1;
 
-  // The caller's tenant: the tenant-axis scopes apply, the owner axis
-  // does not.
-  DATA_SCOPE_TENANT = 2;
+  // The caller's organization (what other systems call a tenant): the
+  // organization-axis scopes apply, the owner axis does not.
+  DATA_SCOPE_ORG = 2;
 
-  // Every tenant. Only the admin surface may have it, as its default or by
+  // Every organization. Only the admin surface may have it, as its default or by
   // widening: anywhere else it is a build error.
   DATA_SCOPE_ALL = 3;
 }
 
 // MembershipPolicy — which memberships admit a caller to an audience, and
-// where the tenant of a request comes from.
+// where the organization of a request comes from.
 message MembershipPolicy {
   // Membership kinds this audience accepts (`staff`, `client`, …). The
   // project names the kinds; the auth plugin carries them. Empty = any
   // membership, or none at all: the audience does not filter by kind.
   repeated string kinds = 1;
 
-  // Where the tenant comes from, tried in order; the first that names an
+  // Where the organization comes from, tried in order; the first that names an
   // organization decides, and the caller must hold an admitted membership
   // there. Empty = an OAuth grant's organization, then the W17-Org
   // selector, then the caller's only organization of an admitted kind.
@@ -87,7 +87,7 @@ message MembershipPolicy {
   // DEFAULT is listed, and one naming another organization than the host
   // decided is refused, never overridden. Nothing named leaves the request
   // in no organization, which a scoped read refuses.
-  repeated TenantSource tenant_from = 2;
+  repeated OrgSource org_from = 2;
 
   // Membership kinds a caller this audience admits may invite. Empty = the
   // audience's own kinds. The auth plugin refuses an invitation of any other
@@ -97,29 +97,29 @@ message MembershipPolicy {
   repeated string invites = 3;
 }
 
-// TenantSource — one place the tenant of a request can come from.
-enum TenantSource {
-  TENANT_SOURCE_UNSPECIFIED = 0;
+// OrgSource — one place the organization of a request can come from.
+enum OrgSource {
+  ORG_SOURCE_UNSPECIFIED = 0;
 
   // The invitation the caller is accepting (sign-up, membership acceptance).
-  TENANT_SOURCE_INVITATION = 1;
+  ORG_SOURCE_INVITATION = 1;
 
   // The host the request arrived on (a white-label or co-brand host the
-  // backoffice bound to one tenant, the auth plugin's org_hosts). Read on
+  // backoffice bound to one organization, the auth plugin's org_hosts). Read on
   // REST; an unbound host names nothing and the next source is tried. On
-  // MCP the tenant is the grant's, chosen on the consent page.
-  TENANT_SOURCE_HOST = 2;
+  // MCP the organization is the grant's, chosen on the consent page.
+  ORG_SOURCE_HOST = 2;
 
   // The caller's own choice among their memberships of an accepted kind:
   // `W17-Org` (or the organization in the path) on REST, the consent page
   // on MCP; with exactly one such membership, that one — unless the auth
   // plugin's org_from_sole_membership is off.
-  TENANT_SOURCE_DEFAULT = 3;
+  ORG_SOURCE_DEFAULT = 3;
 }
 
 extend google.protobuf.MethodOptions {
   // (w17.widen_scope) — this method sees a wider range than its
-  // audience's default: TENANT on an OWNER surface. Written on the method
+  // audience's default: ORG on an OWNER surface. Written on the method
   // so the widening is visible in review. ALL is the admin surface's
   // range: widening to it on any other surface is a build error.
   DataScope widen_scope = 50195;

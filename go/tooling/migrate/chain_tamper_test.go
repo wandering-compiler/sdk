@@ -107,7 +107,7 @@ func TestRun_TamperedAdoptFieldsAreRefused(t *testing.T) {
 // notice: the deploy succeeds and the schema change is absent.
 func TestRun_TamperedSupersedesAloneIsRefused(t *testing.T) {
 	m1 := mkMig("ts-1", "main", "CREATE TABLE a();")
-	m2 := mkMig("ts-2", "main", "ALTER TABLE a ADD CONSTRAINT tenant_isolation CHECK (org_id IS NOT NULL);")
+	m2 := mkMig("ts-2", "main", "ALTER TABLE a ADD CONSTRAINT org_isolation CHECK (org_id IS NOT NULL);")
 	m3 := mkMig("ts-3", "main", "CREATE TABLE c();")
 	dir := seedDir(t, m1, m2, m3)
 
@@ -126,7 +126,7 @@ func TestRun_TamperedSupersedesAloneIsRefused(t *testing.T) {
 		t.Fatal("a tampered supersedes must be refused — it alone decides whether a migration's DDL runs")
 	}
 	for _, c := range stubA.Calls() {
-		if strings.Contains(c.GetUpSql(), "tenant_isolation") {
+		if strings.Contains(c.GetUpSql(), "org_isolation") {
 			return // the real DDL ran, which is the correct outcome if anything ran
 		}
 	}
@@ -178,7 +178,7 @@ func TestRun_TamperedAdoptSqlAloneIsRefused(t *testing.T) {
 // chain walk still reaches it — the id cutoff then silently discards it.
 func TestPlan_RelabelledIdIsRefused(t *testing.T) {
 	m1 := mkMig("ts-1", "main", "CREATE TABLE a();")
-	m2 := mkMig("ts-2", "main", "ALTER TABLE a ADD CONSTRAINT tenant_isolation CHECK (org_id IS NOT NULL);")
+	m2 := mkMig("ts-2", "main", "ALTER TABLE a ADD CONSTRAINT org_isolation CHECK (org_id IS NOT NULL);")
 	m3 := mkMig("ts-3", "main", "CREATE TABLE c();")
 	dir := seedDir(t, m1, m2, m3)
 	pin := lockTarget{"main", m3.GetId(), m3.GetContentSha256()}

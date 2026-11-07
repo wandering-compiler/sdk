@@ -38,7 +38,7 @@ const runLockPrefix = "w17_migrate_apply"
 // copying the shape without the namespace is what produced the gap.
 //
 // Hashed past the length limit rather than cut, so two long schema names
-// cannot collapse onto one lock — the trap `TenantRole` hit one package over.
+// cannot collapse onto one lock — the trap `DatabaseRole` hit one package over.
 //
 // ⚠️ MySQL REFUSES an over-long lock name; it does not truncate. Measured on
 // mysql84: 65 characters answers `ERROR 4163 … should not exceed 64

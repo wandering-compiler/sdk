@@ -31,10 +31,10 @@ const (
 	// The caller's own rows: every data scope of a model applies, the
 	// owner axis included.
 	DataScope_DATA_SCOPE_OWNER DataScope = 1
-	// The caller's tenant: the tenant-axis scopes apply, the owner axis
-	// does not.
-	DataScope_DATA_SCOPE_TENANT DataScope = 2
-	// Every tenant. Only the admin surface may have it, as its default or by
+	// The caller's organization (what other systems call a tenant): the
+	// organization-axis scopes apply, the owner axis does not.
+	DataScope_DATA_SCOPE_ORG DataScope = 2
+	// Every organization. Only the admin surface may have it, as its default or by
 	// widening: anywhere else it is a build error.
 	DataScope_DATA_SCOPE_ALL DataScope = 3
 )
@@ -44,13 +44,13 @@ var (
 	DataScope_name = map[int32]string{
 		0: "DATA_SCOPE_UNSPECIFIED",
 		1: "DATA_SCOPE_OWNER",
-		2: "DATA_SCOPE_TENANT",
+		2: "DATA_SCOPE_ORG",
 		3: "DATA_SCOPE_ALL",
 	}
 	DataScope_value = map[string]int32{
 		"DATA_SCOPE_UNSPECIFIED": 0,
 		"DATA_SCOPE_OWNER":       1,
-		"DATA_SCOPE_TENANT":      2,
+		"DATA_SCOPE_ORG":         2,
 		"DATA_SCOPE_ALL":         3,
 	}
 )
@@ -82,65 +82,65 @@ func (DataScope) EnumDescriptor() ([]byte, []int) {
 	return file_w17_audience_proto_rawDescGZIP(), []int{0}
 }
 
-// TenantSource — one place the tenant of a request can come from.
-type TenantSource int32
+// OrgSource — one place the organization of a request can come from.
+type OrgSource int32
 
 const (
-	TenantSource_TENANT_SOURCE_UNSPECIFIED TenantSource = 0
+	OrgSource_ORG_SOURCE_UNSPECIFIED OrgSource = 0
 	// The invitation the caller is accepting (sign-up, membership acceptance).
-	TenantSource_TENANT_SOURCE_INVITATION TenantSource = 1
+	OrgSource_ORG_SOURCE_INVITATION OrgSource = 1
 	// The host the request arrived on (a white-label or co-brand host the
-	// backoffice bound to one tenant, the auth plugin's org_hosts). Read on
+	// backoffice bound to one organization, the auth plugin's org_hosts). Read on
 	// REST; an unbound host names nothing and the next source is tried. On
-	// MCP the tenant is the grant's, chosen on the consent page.
-	TenantSource_TENANT_SOURCE_HOST TenantSource = 2
+	// MCP the organization is the grant's, chosen on the consent page.
+	OrgSource_ORG_SOURCE_HOST OrgSource = 2
 	// The caller's own choice among their memberships of an accepted kind:
 	// `W17-Org` (or the organization in the path) on REST, the consent page
 	// on MCP; with exactly one such membership, that one — unless the auth
 	// plugin's org_from_sole_membership is off.
-	TenantSource_TENANT_SOURCE_DEFAULT TenantSource = 3
+	OrgSource_ORG_SOURCE_DEFAULT OrgSource = 3
 )
 
-// Enum value maps for TenantSource.
+// Enum value maps for OrgSource.
 var (
-	TenantSource_name = map[int32]string{
-		0: "TENANT_SOURCE_UNSPECIFIED",
-		1: "TENANT_SOURCE_INVITATION",
-		2: "TENANT_SOURCE_HOST",
-		3: "TENANT_SOURCE_DEFAULT",
+	OrgSource_name = map[int32]string{
+		0: "ORG_SOURCE_UNSPECIFIED",
+		1: "ORG_SOURCE_INVITATION",
+		2: "ORG_SOURCE_HOST",
+		3: "ORG_SOURCE_DEFAULT",
 	}
-	TenantSource_value = map[string]int32{
-		"TENANT_SOURCE_UNSPECIFIED": 0,
-		"TENANT_SOURCE_INVITATION":  1,
-		"TENANT_SOURCE_HOST":        2,
-		"TENANT_SOURCE_DEFAULT":     3,
+	OrgSource_value = map[string]int32{
+		"ORG_SOURCE_UNSPECIFIED": 0,
+		"ORG_SOURCE_INVITATION":  1,
+		"ORG_SOURCE_HOST":        2,
+		"ORG_SOURCE_DEFAULT":     3,
 	}
 )
 
-func (x TenantSource) Enum() *TenantSource {
-	p := new(TenantSource)
+func (x OrgSource) Enum() *OrgSource {
+	p := new(OrgSource)
 	*p = x
 	return p
 }
 
-func (x TenantSource) String() string {
+func (x OrgSource) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (TenantSource) Descriptor() protoreflect.EnumDescriptor {
+func (OrgSource) Descriptor() protoreflect.EnumDescriptor {
 	return file_w17_audience_proto_enumTypes[1].Descriptor()
 }
 
-func (TenantSource) Type() protoreflect.EnumType {
+func (OrgSource) Type() protoreflect.EnumType {
 	return &file_w17_audience_proto_enumTypes[1]
 }
 
-func (x TenantSource) Number() protoreflect.EnumNumber {
+func (x OrgSource) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TenantSource.Descriptor instead.
-func (TenantSource) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use OrgSource.Descriptor instead.
+func (OrgSource) EnumDescriptor() ([]byte, []int) {
 	return file_w17_audience_proto_rawDescGZIP(), []int{1}
 }
 
@@ -150,7 +150,7 @@ func (TenantSource) EnumDescriptor() ([]byte, []int) {
 type Audience struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// snake_case identifier, `[a-z][a-z0-9_]*`. Matches the registry file's
-	// suffix (`rest_tenant.proto` → "tenant"). Reserved: "admin" (the admin
+	// suffix (`rest_org.proto` → "org"). Reserved: "admin" (the admin
 	// surface is its own, at most one per project), "rpc" and "mcp" (they
 	// name transports in env and file names), and the leading words of the
 	// gateway's process env (`public`, `storage`, `business`, `bus`, `dpop`,
@@ -222,14 +222,14 @@ func (x *Audience) GetMembership() *MembershipPolicy {
 }
 
 // MembershipPolicy — which memberships admit a caller to an audience, and
-// where the tenant of a request comes from.
+// where the organization of a request comes from.
 type MembershipPolicy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Membership kinds this audience accepts (`staff`, `client`, …). The
 	// project names the kinds; the auth plugin carries them. Empty = any
 	// membership, or none at all: the audience does not filter by kind.
 	Kinds []string `protobuf:"bytes,1,rep,name=kinds,proto3" json:"kinds,omitempty"`
-	// Where the tenant comes from, tried in order; the first that names an
+	// Where the organization comes from, tried in order; the first that names an
 	// organization decides, and the caller must hold an admitted membership
 	// there. Empty = an OAuth grant's organization, then the W17-Org
 	// selector, then the caller's only organization of an admitted kind.
@@ -238,7 +238,7 @@ type MembershipPolicy struct {
 	// DEFAULT is listed, and one naming another organization than the host
 	// decided is refused, never overridden. Nothing named leaves the request
 	// in no organization, which a scoped read refuses.
-	TenantFrom []TenantSource `protobuf:"varint,2,rep,packed,name=tenant_from,json=tenantFrom,proto3,enum=w17.TenantSource" json:"tenant_from,omitempty"`
+	OrgFrom []OrgSource `protobuf:"varint,2,rep,packed,name=org_from,json=orgFrom,proto3,enum=w17.OrgSource" json:"org_from,omitempty"`
 	// Membership kinds a caller this audience admits may invite. Empty = the
 	// audience's own kinds. The auth plugin refuses an invitation of any other
 	// kind from such a caller, so a client cannot hand out a staff membership;
@@ -286,9 +286,9 @@ func (x *MembershipPolicy) GetKinds() []string {
 	return nil
 }
 
-func (x *MembershipPolicy) GetTenantFrom() []TenantSource {
+func (x *MembershipPolicy) GetOrgFrom() []OrgSource {
 	if x != nil {
-		return x.TenantFrom
+		return x.OrgFrom
 	}
 	return nil
 }
@@ -314,7 +314,7 @@ var file_w17_audience_proto_extTypes = []protoimpl.ExtensionInfo{
 // Extension fields to descriptorpb.MethodOptions.
 var (
 	// (w17.widen_scope) — this method sees a wider range than its
-	// audience's default: TENANT on an OWNER surface. Written on the method
+	// audience's default: ORG on an OWNER surface. Written on the method
 	// so the widening is visible in review. ALL is the admin surface's
 	// range: widening to it on any other surface is a build error.
 	//
@@ -332,22 +332,21 @@ const file_w17_audience_proto_rawDesc = "" +
 	"\rdefault_scope\x18\x02 \x01(\x0e2\x0e.w17.DataScopeR\fdefaultScope\x125\n" +
 	"\n" +
 	"membership\x18\x03 \x01(\v2\x15.w17.MembershipPolicyR\n" +
-	"membership\"v\n" +
+	"membership\"m\n" +
 	"\x10MembershipPolicy\x12\x14\n" +
-	"\x05kinds\x18\x01 \x03(\tR\x05kinds\x122\n" +
-	"\vtenant_from\x18\x02 \x03(\x0e2\x11.w17.TenantSourceR\n" +
-	"tenantFrom\x12\x18\n" +
-	"\ainvites\x18\x03 \x03(\tR\ainvites*h\n" +
+	"\x05kinds\x18\x01 \x03(\tR\x05kinds\x12)\n" +
+	"\borg_from\x18\x02 \x03(\x0e2\x0e.w17.OrgSourceR\aorgFrom\x12\x18\n" +
+	"\ainvites\x18\x03 \x03(\tR\ainvites*e\n" +
 	"\tDataScope\x12\x1a\n" +
 	"\x16DATA_SCOPE_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10DATA_SCOPE_OWNER\x10\x01\x12\x15\n" +
-	"\x11DATA_SCOPE_TENANT\x10\x02\x12\x12\n" +
-	"\x0eDATA_SCOPE_ALL\x10\x03*~\n" +
-	"\fTenantSource\x12\x1d\n" +
-	"\x19TENANT_SOURCE_UNSPECIFIED\x10\x00\x12\x1c\n" +
-	"\x18TENANT_SOURCE_INVITATION\x10\x01\x12\x16\n" +
-	"\x12TENANT_SOURCE_HOST\x10\x02\x12\x19\n" +
-	"\x15TENANT_SOURCE_DEFAULT\x10\x03:Q\n" +
+	"\x10DATA_SCOPE_OWNER\x10\x01\x12\x12\n" +
+	"\x0eDATA_SCOPE_ORG\x10\x02\x12\x12\n" +
+	"\x0eDATA_SCOPE_ALL\x10\x03*o\n" +
+	"\tOrgSource\x12\x1a\n" +
+	"\x16ORG_SOURCE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15ORG_SOURCE_INVITATION\x10\x01\x12\x13\n" +
+	"\x0fORG_SOURCE_HOST\x10\x02\x12\x16\n" +
+	"\x12ORG_SOURCE_DEFAULT\x10\x03:Q\n" +
 	"\vwiden_scope\x12\x1e.google.protobuf.MethodOptions\x18\x93\x88\x03 \x01(\x0e2\x0e.w17.DataScopeR\n" +
 	"widenScopeB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
 
@@ -367,7 +366,7 @@ var file_w17_audience_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_w17_audience_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_w17_audience_proto_goTypes = []any{
 	(DataScope)(0),                     // 0: w17.DataScope
-	(TenantSource)(0),                  // 1: w17.TenantSource
+	(OrgSource)(0),                     // 1: w17.OrgSource
 	(*Audience)(nil),                   // 2: w17.Audience
 	(*MembershipPolicy)(nil),           // 3: w17.MembershipPolicy
 	(*descriptorpb.MethodOptions)(nil), // 4: google.protobuf.MethodOptions
@@ -375,7 +374,7 @@ var file_w17_audience_proto_goTypes = []any{
 var file_w17_audience_proto_depIdxs = []int32{
 	0, // 0: w17.Audience.default_scope:type_name -> w17.DataScope
 	3, // 1: w17.Audience.membership:type_name -> w17.MembershipPolicy
-	1, // 2: w17.MembershipPolicy.tenant_from:type_name -> w17.TenantSource
+	1, // 2: w17.MembershipPolicy.org_from:type_name -> w17.OrgSource
 	4, // 3: w17.widen_scope:extendee -> google.protobuf.MethodOptions
 	0, // 4: w17.widen_scope:type_name -> w17.DataScope
 	5, // [5:5] is the sub-list for method output_type

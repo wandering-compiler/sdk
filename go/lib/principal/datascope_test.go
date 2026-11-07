@@ -21,13 +21,13 @@ func TestDataScope(t *testing.T) {
 		{"no metadata: no audience", context.Background(), ""},
 		{"no key: no audience", in("x-w17-user", "u1"), ""},
 		{"owner", in(principal.DataScopeMetadataKey, "owner"), principal.DataScopeOwner},
-		{"tenant", in(principal.DataScopeMetadataKey, "tenant"), principal.DataScopeTenant},
+		{"org", in(principal.DataScopeMetadataKey, "org"), principal.DataScopeOrg},
 		{"all", in(principal.DataScopeMetadataKey, "all"), principal.DataScopeAll},
 		// A typo must not read as "no audience", which applies every scope
 		// too but is indistinguishable from intent.
 		{"unknown reads as the narrowest", in(principal.DataScopeMetadataKey, "everything"), principal.DataScopeOwner},
 		// Two values are not one range: a stamp that went wrong is not "no audience".
-		{"two values: the narrowest", in(principal.DataScopeMetadataKey, "all", principal.DataScopeMetadataKey, "tenant"), principal.DataScopeOwner},
+		{"two values: the narrowest", in(principal.DataScopeMetadataKey, "all", principal.DataScopeMetadataKey, "org"), principal.DataScopeOwner},
 	} {
 		if got := principal.DataScope(tc.ctx); got != tc.want {
 			t.Errorf("%s: DataScope = %q, want %q", tc.name, got, tc.want)

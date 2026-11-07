@@ -689,7 +689,7 @@ label isolation.
 | ID | Guarantee | Test |
 |---|---|---|
 | E18.1 | Only subscribed topics MUST be delivered | `TestHandleW17Events_FramesFilteredByTopic`, `TestEventbusEventSource_ForwardsMatchingTopic` |
-| E18.2 | With isolation on (a labels deriver set), an unlabelled event MUST reach nobody and a labelled event MUST reach only principals holding every label | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEventNoCrossTenant`, `TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal` |
+| E18.2 | With isolation on (a labels deriver set), an unlabelled event MUST reach nobody and a labelled event MUST reach only principals holding every label | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEventNoCrossOrg`, `TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal` |
 | E18.3 | There MUST be one bus subscription per channel regardless of client count | `TestEventbusEventSource_SharedHubSingleSubscriber` |
 | E18.4 | A failed lazy open MUST NOT wedge the hub and MUST drain what it opened | `w17events_ensureopen_test.go` (all four) |
 | E18.5 | A slow client MAY lose frames but MUST NOT block other clients | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |

@@ -803,7 +803,7 @@ topics and times out after 5 s by default.
 | T25.1 | Stream frames MUST match in order, and the close and error rules MUST hold. | `TestExpectStream_*` |
 | T25.2 | Event awaits MUST honour topic, timeout and error frames. | `TestAwaitEvent_*` |
 | T25.3 | An awaited event MUST be attributable to this step's call, not an earlier step's. | `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent`, `TestSSESubscription_IgnoresFramesBeforeTheMark` |
-| T25.4 | A suite MUST be able to assert that an event is not delivered (for example to another tenant). | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_AbsentCannotCapture` |
+| T25.4 | A suite MUST be able to assert that an event is not delivered (for example to another organization). | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_AbsentCannotCapture` |
 | T25.5 | A frame whose `data:` is not JSON MUST fail the step, not yield empty data. | `TestAwaitEvent_NonJSONDataFailsTheStep`, `TestExpectStream_NonJSONFrameFailsTheStep` |
 
 **Deliberate limits.**

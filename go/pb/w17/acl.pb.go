@@ -23,14 +23,14 @@ const (
 )
 
 // AclRoleScope says WHERE a role's grants apply once a project has more
-// than one tenant to apply them in.
+// than one organization to apply them in.
 //
 // It exists because a role assignment with no organization on it means
 // "in EVERY organization". That is the right reading for staff and
 // admin roles, and the wrong one for anything a customer's own people
 // hold — a declared `default: true` role would otherwise hand every
 // signup its permissions inside every company they ever join, a
-// cross-tenant grant introduced by the very feature that adds tenant
+// cross-organization grant introduced by the very feature that adds organization
 // isolation. Making the choice explicit is what turns that into a
 // question the author answers instead of a default they inherit.
 type AclRoleScope int32
@@ -203,7 +203,7 @@ type AclRole struct {
 	// activation — which plugin activation's RBAC tables this role is
 	// seeded into, by `registered_as` (e.g. "admin_auth"). A domain may
 	// activate the auth plugin more than once — an app-user realm plus a
-	// tenant-less admin realm is the ordinary shape — and each activation
+	// org-less admin realm is the ordinary shape — and each activation
 	// owns its OWN Role / RolePermission tables. The role catalogue is
 	// domain-level, so nothing in the declaration says which of them a
 	// role belongs to.

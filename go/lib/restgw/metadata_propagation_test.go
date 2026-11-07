@@ -86,7 +86,7 @@ func TestMetadataPropagationMiddleware_PreservesIncomingMetadata(t *testing.T) {
 // Host and User-Agent are the two headers the gRPC hop owns (:authority, and
 // its own client UA), so they travel under x-forwarded-* — and Host comes from
 // r.Host, because Go keeps it out of r.Header. Found live by
-// examples/auth-proof: tenant_scope never saw a Host, every device was
+// examples/auth-proof: a sign-up never saw its Host, every device was
 // labelled "grpc-go/…".
 func TestMetadataPropagationMiddleware_HostAndUserAgentTravelForwarded(t *testing.T) {
 	var got metadata.MD

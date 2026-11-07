@@ -184,7 +184,7 @@ extend google.protobuf.MessageOptions {
 	//
 	// Path syntax: `<column>` — a DIRECT column on the scoped table.
 	// That is the whole supported surface today. A dotted path
-	// (`task.tenant_id` — scoping a model by a column reached through
+	// (`task.org_id` — scoping a model by a column reached through
 	// a relation) is REFUSED at storage codegen with a pointer at this
 	// limitation; the alias-path resolution slice is parked (B6.x).
 	// So a model that needs isolating must carry its own scope column.
@@ -201,26 +201,26 @@ extend google.protobuf.MessageOptions {
 	//   message Task {
 	//     option (w17.db.table) = { name: "tasks" };
 	//     option (w17.db.scope) = {
-	//       entries: [{ name: "tenant_id", path: "tenant_id" }]
+	//       entries: [{ name: "org_id", path: "org_id" }]
 	//     };
 	//
 	//     int64  id        = 1 [(w17.field) = { pk: true }];
-	//     string tenant_id = 2 [(w17.field) = { type: UUID }];
+	//     string org_id = 2 [(w17.field) = { type: UUID }];
 	//     ...
 	//   }
 	//
 	//   message Comment {
 	//     option (w17.db.table) = { name: "comments" };
 	//     option (w17.db.scope) = {
-	//       entries: [{ name: "tenant_id", path: "tenant_id" }]
+	//       entries: [{ name: "org_id", path: "org_id" }]
 	//     };
 	//
-	//     // Denormalised: a child of Task carries its own tenant_id
+	//     // Denormalised: a child of Task carries its own org_id
 	//     // rather than reaching the parent's. Until the dotted-path
 	//     // slice lands this is the way to scope a child — the
 	//     // alternative is `(w17.db.bypass_scope)` plus a hand-written
 	//     // WHERE in the query's DQL.
-	//     string tenant_id = 3 [(w17.field) = { type: UUID }];
+	//     string org_id = 3 [(w17.field) = { type: UUID }];
 	//   }
 	//
 	// Auth backend returns the caller's scope values in
@@ -251,8 +251,8 @@ message ScopeEntry {
   // Preserved verbatim into the gRPC metadata key.
   string name = 1;
 
-  // A DIRECT column on the scoped table — `tenant_id`, not
-  // `task.tenant_id`. Dotted alias paths parse but are refused at
+  // A DIRECT column on the scoped table — `org_id`, not
+  // `task.org_id`. Dotted alias paths parse but are refused at
   // storage codegen ("only direct-column scope paths are supported
   // in this slice"); resolving a scope through a relation is the
   // parked B6.x slice. See the Scope doc above for the workaround.
@@ -263,8 +263,8 @@ message ScopeEntry {
 
   // Which range this scope narrows to, for audience surfaces
   // (`w17/audience.proto`): an OWNER audience applies every entry, a
-  // TENANT audience only the TENANT-axis ones, ALL (the admin surface)
-  // none. UNSPECIFIED is TENANT, so a model scoped by tenant alone needs
+  // ORG audience only the ORG-axis ones, ALL (the admin surface)
+  // none. UNSPECIFIED is ORG, so a model scoped by organization alone needs
   // nothing; mark the entry that names the caller (`owner_user_id`) OWNER.
   // Outside audience surfaces every entry applies, as before.
   ScopeAxis axis = 3;
@@ -272,10 +272,10 @@ message ScopeEntry {
 
 // ScopeAxis — the range one scope entry narrows to.
 enum ScopeAxis {
-  // Treated as TENANT.
+  // Treated as ORG.
   SCOPE_AXIS_UNSPECIFIED = 0;
-  // The caller's tenant (`tenant_id`, `org_id`).
-  SCOPE_AXIS_TENANT = 1;
+  // The caller's organization (`org_id`).
+  SCOPE_AXIS_ORG = 1;
   // The caller themselves (`owner_user_id`).
   SCOPE_AXIS_OWNER = 2;
 }
@@ -292,7 +292,7 @@ extend google.protobuf.MethodOptions {
 	//   ["*"]                       — bypass every scope on every
 	//                                  scoped model the method/service
 	//                                  touches.
-	//   ["tenant_id"]               — bypass listed scopes only;
+	//   ["org_id"]               — bypass listed scopes only;
 	//                                  other scopes (multi-scope
 	//                                  models) still apply.
 	//
@@ -321,8 +321,8 @@ extend google.protobuf.MethodOptions {
 	//   }
 	//
 	//   service TaskMutation {
-	//     rpc ReassignTenant(...) returns (...) {
-	//       option (w17.db.bypass_scope) = "tenant_id";
+	//     rpc ReassignOrg(...) returns (...) {
+	//       option (w17.db.bypass_scope) = "org_id";
 	//       option (w17.db.bypass_scope) = "org_id";  // repeat to add
 	//     }
 	//   }
@@ -346,8 +346,8 @@ extend google.protobuf.ServiceOptions {
   //
   // The misreading the old sentence invited: declare
   // `bypass_scope_service = "*"` on the service, then
-  // `bypass_scope = "tenant_id"` on one method, and believe that
-  // method bypasses the tenant scope only. The service's
+  // `bypass_scope = "org_id"` on one method, and believe that
+  // method bypasses the organization scope only. The service's
   // wildcard already bypassed every scope, and the method's
   // narrower list adds nothing — so the author believes they
   // have scoping they do not have.
@@ -1555,19 +1555,19 @@ message Column {
   //
   // When a model and its `fk:` target are scoped by the SAME
   // `(w17.db.scope)` axis, the compiler constrains the reference to stay
-  // inside that scope — `FOREIGN KEY (tenant_id, note_id) REFERENCES notes
-  // (tenant_id, id)` — so one tenant's row can never point at another's.
+  // inside that scope — `FOREIGN KEY (org_id, note_id) REFERENCES notes
+  // (org_id, id)` — so one organization's row can never point at another's.
   // That is right for the overwhelming majority of references between two
   // scoped models, which is why it is inferred rather than declared.
   //
-  // It is not right for all of them. A tenant-scoped row may legitimately
+  // It is not right for all of them. An org-scoped row may legitimately
   // reference a row belonging to a DIFFERENT scope — a template another
-  // tenant published, a shared catalogue entry that happens to live in the
-  // same scoped table, a row being migrated between tenants. Setting this
+  // organization published, a shared catalogue entry that happens to live in the
+  // same scoped table, a row being migrated between organizations. Setting this
   // emits the ordinary single-column FK instead: the parent must still
   // EXIST, it just need not be yours.
   //
-  // ⚠️ It removes a tenancy guarantee, so it is refused when it would do
+  // ⚠️ It removes a organization isolation guarantee, so it is refused when it would do
   // nothing: declaring it where the two ends share no scope axis is a hard
   // error, not a no-op. An opt-out that silently opts out of nothing is the
   // shape that hides a typo'd scope name — the author believes they have

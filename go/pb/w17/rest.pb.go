@@ -82,11 +82,11 @@ const (
 	// This is NOT `exclude_auth`. The endpoint stays fully
 	// authenticated: the auth method resolves the token into the
 	// same AuthResp everything else produces, so `scopes` still
-	// isolate tenants, ACL still gates, and the request still
+	// isolate organizations, ACL still gates, and the request still
 	// logs, traces and re-authenticates like any other. What the
-	// handler then writes by hand is row SELECTION, not tenant
+	// handler then writes by hand is row SELECTION, not organization
 	// ISOLATION — and getting selection wrong leaks a sibling row
-	// inside the same scope, never another tenant's.
+	// inside the same scope, never another organization's.
 	TokenType_TOKEN_TYPE_URL_TOKEN TokenType = 4
 )
 
@@ -1207,8 +1207,8 @@ type MetadataPropagation struct {
 	// surface declares `default_language`, so the FE talks
 	// standard HTTP while the backend reads a w17-namespaced
 	// metadata key. Authors can also declare custom mappings
-	// (e.g. `X-User-Locale → w17-language`, `X-Tenant-ID →
-	// w17-tenant`).
+	// (e.g. `X-User-Locale → w17-language`, `X-Org-ID →
+	// w17-org`).
 	//
 	// Multiple HTTP headers mapping to the same metadata key:
 	// last entry wins at runtime (the gateway processes
@@ -1588,7 +1588,7 @@ type RestEndpoint struct {
 	//   - Idempotency keys: `Idempotency-Key` header →
 	//     idempotency-key metadata where the storage tier reads
 	//     it for upsert dedup.
-	//   - Tenant override: `?tenant=X` query → w17-tenant
+	//   - Organization override: `?org=X` query → w17-org
 	//     metadata where data scopes auto-stamp it onto
 	//     mutations.
 	//

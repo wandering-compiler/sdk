@@ -1545,7 +1545,7 @@ func chainFromTarget(diskMigs []*applyfetchpb.Migration, target *applyfetchpb.Mi
 	// The attack it closes: relabel an intermediate's id to sort at or below
 	// the database's applied head. The body, digest and chain link all stay
 	// valid, so the walk still reaches the migration — and the pending filter,
-	// which cuts on id, then silently drops it. Measured: a tenant-isolation
+	// which cuts on id, then silently drops it. Measured: an org-isolation
 	// constraint vanished from the plan while the deploy reported success.
 	// Deleting the file instead would trip the missing-predecessor refusal;
 	// relabelling was the evasion that did not.

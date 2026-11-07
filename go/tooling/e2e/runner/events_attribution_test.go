@@ -14,11 +14,11 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/internal/runtime"
 )
 
-// tenantHub is an SSE hub that delivers each event only to subscribers that
+// orgHub is an SSE hub that delivers each event only to subscribers that
 // authenticated as the event's principal, and records what every subscribe
 // presented. POST /api/v1/tasks answers task_id t-<n> and, after `delay`,
 // emits task.created for t-<n> to the caller's principal.
-type tenantHub struct {
+type orgHub struct {
 	mu       sync.Mutex
 	subs     map[chan Event]string // subscriber → its Authorization
 	n        int
@@ -26,14 +26,14 @@ type tenantHub struct {
 	authSeen []string
 }
 
-func newTenantHub(delays ...time.Duration) *tenantHub {
+func newOrgHub(delays ...time.Duration) *orgHub {
 	if len(delays) == 0 {
 		delays = []time.Duration{20 * time.Millisecond}
 	}
-	return &tenantHub{subs: map[chan Event]string{}, delays: delays}
+	return &orgHub{subs: map[chan Event]string{}, delays: delays}
 }
 
-func (h *tenantHub) server(t *testing.T) *httptest.Server {
+func (h *orgHub) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/w17-events", func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +86,7 @@ func (h *tenantHub) server(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func (h *tenantHub) emit(auth string, ev Event) {
+func (h *orgHub) emit(auth string, ev Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch, a := range h.subs {
@@ -100,7 +100,7 @@ func (h *tenantHub) emit(auth string, ev Event) {
 	}
 }
 
-func (h *tenantHub) seen() []string {
+func (h *orgHub) seen() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.authSeen...)
@@ -126,7 +126,7 @@ func sessionScope() *runtime.Scope {
 // watched somebody else's stream: the await timed out on a surface that
 // delivered correctly, or passed on an event the credential is never shown.
 func TestAwaitEvent_CredentialStepSubscribesAsTheCredential(t *testing.T) {
-	hub := newTenantHub()
+	hub := newOrgHub()
 	srv := hub.server(t)
 	step := createTaskStep(&AwaitEvent{Topic: "task.created", Path: "/api/v1/w17-events", TimeoutMs: 2000,
 		Match: map[string]any{"task_id": "${task.id}"}})
@@ -148,7 +148,7 @@ type subscriberWithoutCredential struct{ EventSubscriber }
 // A subscriber that cannot present a credential is refused for a credential
 // step instead of quietly subscribing as the session.
 func TestAwaitEvent_CredentialStepNeedsACredentialSubscriber(t *testing.T) {
-	hub := newTenantHub()
+	hub := newOrgHub()
 	srv := hub.server(t)
 	step := createTaskStep(&AwaitEvent{Topic: "task.created", Path: "/api/v1/w17-events", TimeoutMs: 200})
 	step.Endpoint.AuthRequired = true
@@ -169,7 +169,7 @@ func TestAwaitEvent_CredentialStepNeedsACredentialSubscriber(t *testing.T) {
 // is skipped and the await goes on to this call's own event.
 func TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent(t *testing.T) {
 	// Step 1's event lands while step 2 is waiting; step 2's lands after it.
-	hub := newTenantHub(150*time.Millisecond, 400*time.Millisecond)
+	hub := newOrgHub(150*time.Millisecond, 400*time.Millisecond)
 	srv := hub.server(t)
 	first := createTaskStep(nil)
 	first.Expect = map[string]any{"task_id": map[string]any{"capture": "first.id"}}
@@ -214,11 +214,11 @@ func TestSSESubscription_IgnoresFramesBeforeTheMark(t *testing.T) {
 	}
 }
 
-// A suite can assert that an event is NOT delivered: here the other tenant
+// A suite can assert that an event is NOT delivered: here the other organization
 // subscribes (TokenFrom) and must see nothing of this step's event, while
 // the same assertion made as the emitting principal fails.
 func TestAwaitEvent_AbsentAssertsNonDelivery(t *testing.T) {
-	hub := newTenantHub()
+	hub := newOrgHub()
 	srv := hub.server(t)
 	scope := sessionScope()
 	scope.Capture("bob.token", "bob")
@@ -227,7 +227,7 @@ func TestAwaitEvent_AbsentAssertsNonDelivery(t *testing.T) {
 		Absent: true, TokenFrom: "bob.token"})
 	other.Endpoint.AuthRequired = true
 	if err := runWith(t, srv, scope, other); err != nil {
-		t.Fatalf("another tenant's silence was not accepted: %v", err)
+		t.Fatalf("another organization's silence was not accepted: %v", err)
 	}
 	if seen := hub.seen(); len(seen) != 1 || seen[0] != "Bearer bob" {
 		t.Fatalf("the absent await subscribed as %q, want the TokenFrom principal", seen)
@@ -244,7 +244,7 @@ func TestAwaitEvent_AbsentAssertsNonDelivery(t *testing.T) {
 // An absent await whose match tries to capture is refused: nothing will be
 // delivered to bind from.
 func TestAwaitEvent_AbsentCannotCapture(t *testing.T) {
-	hub := newTenantHub()
+	hub := newOrgHub()
 	srv := hub.server(t)
 	step := createTaskStep(&AwaitEvent{Topic: "task.created", Path: "/api/v1/w17-events", TimeoutMs: 100, Absent: true,
 		Match: map[string]any{"task_id": map[string]any{"capture": "x"}}})

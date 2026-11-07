@@ -66,19 +66,19 @@ func czech(t *testing.T) context.Context {
 func TestWriteMissingScopeCtx_NameReachesTheOperatorOnly(t *testing.T) {
 	ctx := czech(t)
 	rec := httptest.NewRecorder()
-	logged := captureLog(t, func() { restgw.WriteMissingScopeCtx(ctx, rec, "tenant_id") })
+	logged := captureLog(t, func() { restgw.WriteMissingScopeCtx(ctx, rec, "org_id") })
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
-	if strings.Contains(rec.Body.String(), "tenant_id") || strings.Contains(rec.Body.String(), "scope") {
+	if strings.Contains(rec.Body.String(), "org_id") || strings.Contains(rec.Body.String(), "scope") {
 		t.Errorf("the scope name reached the client: %s", rec.Body.String())
 	}
 	env := decodeEnvelope(t, rec)
 	if env.Error.Code != "PERMISSION_DENIED" || env.Error.Message != "K tomuto nemáte přístup." {
 		t.Errorf("envelope = %+v, want PERMISSION_DENIED with the translated catalog sentence", env.Error)
 	}
-	if !strings.Contains(logged, "missing required scope: tenant_id") || !strings.Contains(logged, "refused:") {
+	if !strings.Contains(logged, "missing required scope: org_id") || !strings.Contains(logged, "refused:") {
 		t.Errorf("the operator did not get the scope name on the refusal channel: %q", logged)
 	}
 }

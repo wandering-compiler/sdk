@@ -215,9 +215,9 @@ func (s *Server) connInfo(ctx context.Context) ConnectionInfo {
 
 // SetGatewayHeaders sets request context the gateway owns that every
 // connection hands the auth method — an audience gateway's audience and the
-// membership kinds it accepts and where it takes the tenant from, and a
+// membership kinds it accepts and where it takes the organization from, and a
 // product's name to its identity ([principal.AudienceKey],
-// [principal.MembershipKindsKey], [principal.TenantFromKey],
+// [principal.MembershipKindsKey], [principal.OrgFromKey],
 // [principal.ProductKey]). The keys must be gateway-owned (`x-w17-*`):
 // [CollectAuthHeaders] writes them after every client source, so no caller
 // can supply them.
@@ -233,7 +233,7 @@ func (s *Server) SetGatewayHeaders(h map[string]string) {
 		lk := strings.ToLower(k)
 		if !gatewayHeaderKeys[lk] {
 			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q is not a gateway auth-context key (want %s, %s, %s or %s)",
-				k, principal.AudienceKey, principal.MembershipKindsKey, principal.TenantFromKey, principal.ProductKey))
+				k, principal.AudienceKey, principal.MembershipKindsKey, principal.OrgFromKey, principal.ProductKey))
 		}
 		if _, dup := out[lk]; dup {
 			panic(fmt.Sprintf("mcp: SetGatewayHeaders: %q given twice", lk))
@@ -248,7 +248,7 @@ func (s *Server) SetGatewayHeaders(h map[string]string) {
 var gatewayHeaderKeys = map[string]bool{
 	principal.AudienceKey:        true,
 	principal.MembershipKindsKey: true,
-	principal.TenantFromKey:      true,
+	principal.OrgFromKey:         true,
 	principal.ProductKey:         true,
 }
 

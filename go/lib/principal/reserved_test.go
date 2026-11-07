@@ -11,11 +11,11 @@ import (
 
 func TestIsEdgeReservedKey(t *testing.T) {
 	reserved := []string{
-		"x-w17-user", "X-W17-User", " x-w17-scope-tenant_id ", "X-W17-Credential",
-		"w17-label-tenant", "W17-Label-Tenant",
+		"x-w17-user", "X-W17-User", " x-w17-scope-org_id ", "X-W17-Credential",
+		"w17-label-org", "W17-Label-Org",
 		"w17-tx-id", "W17-Tx-Id", "w17-conn-id", "W17-CONN-ID",
 		"grpcgateway-authorization", "Grpcgateway-Cookie",
-		"Grpc-Metadata-X-W17-User", "grpc-metadata-w17-tx-id", "Grpc-Metadata-W17-Label-Tenant",
+		"Grpc-Metadata-X-W17-User", "grpc-metadata-w17-tx-id", "Grpc-Metadata-W17-Label-Org",
 	}
 	for _, k := range reserved {
 		if !principal.IsEdgeReservedKey(k) {
@@ -27,7 +27,7 @@ func TestIsEdgeReservedKey(t *testing.T) {
 	// rename target, and a tx key only matches by its whole name.
 	ordinary := []string{
 		"w17-org", "w17-language", "w17-format-locale", "x-request-id", "authorization",
-		"x-w17", "w17-tx-id-hint", "w17-txid", "grpc-metadata-x-tenant", "grpcgateway", "",
+		"x-w17", "w17-tx-id-hint", "w17-txid", "grpc-metadata-x-org", "grpcgateway", "",
 	}
 	for _, k := range ordinary {
 		if principal.IsEdgeReservedKey(k) {

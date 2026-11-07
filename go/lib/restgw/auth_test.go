@@ -172,7 +172,7 @@ func TestAuth_MakeAuthFunc_HeadersForwarded(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", "Bearer abc.def.ghi")
 	r.Header.Set("Cookie", "session=xyz")
-	r.Header.Set("X-Tenant-Id", "acme")
+	r.Header.Set("X-Org-Id", "acme")
 
 	data, err := fn(context.Background(), r)
 	if err != nil {
@@ -196,8 +196,8 @@ func TestAuth_MakeAuthFunc_HeadersForwarded(t *testing.T) {
 	if caller.captured["Cookie"] != "session=xyz" {
 		t.Errorf("captured Cookie = %q", caller.captured["Cookie"])
 	}
-	if caller.captured["X-Tenant-Id"] != "acme" {
-		t.Errorf("captured X-Tenant-Id = %q", caller.captured["X-Tenant-Id"])
+	if caller.captured["X-Org-Id"] != "acme" {
+		t.Errorf("captured X-Org-Id = %q", caller.captured["X-Org-Id"])
 	}
 }
 
@@ -473,7 +473,7 @@ func TestAuth_AuthCacheTTLFromEnv(t *testing.T) {
 
 // The dangerous collision: two principals share the
 // default credential header (Authorization) but differ in an
-// UNACCOUNTED header the auth method actually trusts (X-Tenant-Token).
+// UNACCOUNTED header the auth method actually trusts (X-Org-Token).
 // Keying only on Authorization would serve them each other's identity.
 // The fix bypasses the cache whenever a request carries a header that is
 // neither a credential-key header nor a known non-credential one, so the
@@ -482,25 +482,25 @@ func TestAuth_CachedAuthFunc_UnknownHeaderBypassesCache(t *testing.T) {
 	var calls int32
 	inner := restgw.AuthFunc(func(_ context.Context, r *http.Request) ([]byte, error) {
 		atomic.AddInt32(&calls, 1)
-		return []byte(r.Header.Get("X-Tenant-Token")), nil
+		return []byte(r.Header.Get("X-Org-Token")), nil
 	})
 	cached := restgw.CachedAuthFunc(inner, time.Minute)
 
 	r1 := httptest.NewRequest(http.MethodGet, "/", nil)
 	r1.Header.Set("Authorization", "Bearer shared")
-	r1.Header.Set("X-Tenant-Token", "tenant-A")
+	r1.Header.Set("X-Org-Token", "org-A")
 	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	r2.Header.Set("Authorization", "Bearer shared")
-	r2.Header.Set("X-Tenant-Token", "tenant-B")
+	r2.Header.Set("X-Org-Token", "org-B")
 
 	d1, _ := cached(context.Background(), r1)
 	d2, _ := cached(context.Background(), r2)
-	if string(d1) != "tenant-A" || string(d2) != "tenant-B" {
+	if string(d1) != "org-A" || string(d2) != "org-B" {
 		t.Errorf("cross-principal leak: A=%q B=%q", d1, d2)
 	}
 	d1again, _ := cached(context.Background(), r1)
-	if string(d1again) != "tenant-A" {
-		t.Errorf("re-issued A got %q, want tenant-A", d1again)
+	if string(d1again) != "org-A" {
+		t.Errorf("re-issued A got %q, want org-A", d1again)
 	}
 	if got := atomic.LoadInt32(&calls); got != 3 {
 		t.Errorf("inner calls = %d, want 3 (unknown header bypasses cache)", got)
@@ -543,26 +543,26 @@ func TestAuth_CachedAuthFuncWithKeyHeaders_CustomCredHeader(t *testing.T) {
 	var calls int32
 	inner := restgw.AuthFunc(func(_ context.Context, r *http.Request) ([]byte, error) {
 		atomic.AddInt32(&calls, 1)
-		return []byte(r.Header.Get("X-Tenant-Token")), nil
+		return []byte(r.Header.Get("X-Org-Token")), nil
 	})
-	cached := restgw.CachedAuthFuncWithKeyHeaders(inner, time.Minute, []string{"X-Tenant-Token"})
+	cached := restgw.CachedAuthFuncWithKeyHeaders(inner, time.Minute, []string{"X-Org-Token"})
 
 	r1 := httptest.NewRequest(http.MethodGet, "/", nil)
 	r1.Header.Set("Authorization", "Bearer shared")
-	r1.Header.Set("X-Tenant-Token", "tenant-A")
+	r1.Header.Set("X-Org-Token", "org-A")
 	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	r2.Header.Set("Authorization", "Bearer shared")
-	r2.Header.Set("X-Tenant-Token", "tenant-B")
+	r2.Header.Set("X-Org-Token", "org-B")
 
 	d1, _ := cached(context.Background(), r1)
 	d2, _ := cached(context.Background(), r2)
-	if string(d1) != "tenant-A" || string(d2) != "tenant-B" {
+	if string(d1) != "org-A" || string(d2) != "org-B" {
 		t.Errorf("custom-cred collision: A=%q B=%q", d1, d2)
 	}
 	// Re-issue A: served from cache now (the header is in the key).
 	d1again, _ := cached(context.Background(), r1)
-	if string(d1again) != "tenant-A" {
-		t.Errorf("re-issued A got %q, want tenant-A", d1again)
+	if string(d1again) != "org-A" {
+		t.Errorf("re-issued A got %q, want org-A", d1again)
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Errorf("inner calls = %d, want 2 (distinct slots, each principal cached)", got)
@@ -574,11 +574,11 @@ func TestAuth_CachedAuthFuncWithKeyHeaders_CustomCredHeader(t *testing.T) {
 func TestAuth_AuthCacheCredHeadersFromEnv(t *testing.T) {
 	got := restgw.AuthCacheCredHeadersFromEnv("X", func(k string) string {
 		if k == "X_AUTH_CACHE_CRED_HEADERS" {
-			return "X-Tenant-Token, X-Session-Token ,,"
+			return "X-Org-Token, X-Session-Token ,,"
 		}
 		return ""
 	})
-	want := []string{"X-Tenant-Token", "X-Session-Token"}
+	want := []string{"X-Org-Token", "X-Session-Token"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

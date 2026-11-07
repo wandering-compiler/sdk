@@ -180,7 +180,7 @@ func TestAudienceContextMiddleware(t *testing.T) {
 	h := restgw.ClientAddrMiddleware(nil)(restgw.AudienceContextMiddleware(map[string]string{
 		principal.AudienceKey:        "client",
 		principal.MembershipKindsKey: "client",
-		principal.TenantFromKey:      "host,default",
+		principal.OrgFromKey:         "host,default",
 	}, true)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		got, _ = metadata.FromOutgoingContext(r.Context())
 	})))
@@ -189,7 +189,7 @@ func TestAudienceContextMiddleware(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	for k, want := range map[string]string{
 		principal.AudienceKey: "client", principal.MembershipKindsKey: "client",
-		principal.TenantFromKey: "host,default", principal.HostKey: "acme.example.com",
+		principal.OrgFromKey: "host,default", principal.HostKey: "acme.example.com",
 	} {
 		if v := got.Get(k); len(v) != 1 || v[0] != want {
 			t.Errorf("%s = %v, want %q", k, v, want)

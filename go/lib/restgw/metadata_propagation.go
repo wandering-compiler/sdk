@@ -52,7 +52,7 @@ import (
 // forwarded, whatever the list says, and is logged once here. Those
 // keys reach the backend only from the gateway's own stamping of the
 // verified auth response; forwarded from a client they would be a
-// principal or tenant scope the caller chose — on a route without
+// principal or organization scope the caller chose — on a route without
 // auth nothing overwrites them, and on one with auth a scope or label
 // the response omits keeps the client's value, which the backend reads
 // first. The generator refuses such a list too; this is the runtime
@@ -89,7 +89,7 @@ func MetadataPropagationMiddleware(headers []string, next http.Handler) http.Han
 // by the client's own ("grpc-go/…"), so forwarded under their own names the
 // browser's values never arrive. They travel as x-forwarded-host and
 // x-forwarded-user-agent instead (found live by examples/auth-proof: every
-// device was labelled grpc-go, and tenant_scope never saw a Host).
+// device was labelled grpc-go, and a sign-up never saw its Host).
 func metadataKeyFor(header string) string {
 	switch k := strings.ToLower(header); k {
 	case "host":

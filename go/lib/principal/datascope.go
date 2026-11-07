@@ -24,10 +24,10 @@ const (
 	// DataScopeOwner applies every data scope of a model, the owner axis
 	// included: the caller's own rows.
 	DataScopeOwner = "owner"
-	// DataScopeTenant applies the tenant-axis scopes only: the caller's
-	// tenant.
-	DataScopeTenant = "tenant"
-	// DataScopeAll applies none: every tenant. Only the admin surface's
+	// DataScopeOrg applies the org-axis scopes only: the caller's
+	// organization.
+	DataScopeOrg = "org"
+	// DataScopeAll applies none: every organization. Only the admin surface's
 	// gateway stamps it.
 	DataScopeAll = "all"
 )
@@ -45,7 +45,7 @@ func DataScope(ctx context.Context) string {
 	}
 	if len(v) == 1 {
 		switch v[0] {
-		case DataScopeOwner, DataScopeTenant, DataScopeAll:
+		case DataScopeOwner, DataScopeOrg, DataScopeAll:
 			return v[0]
 		}
 	}
