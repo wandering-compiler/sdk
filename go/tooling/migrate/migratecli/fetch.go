@@ -2,10 +2,13 @@ package migratecli
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -77,6 +80,15 @@ const (
 
 // fetchMigrations pulls every migration up to each target's pin.
 func fetchMigrations(ctx context.Context, projectID string, targets []migrate.ConnTarget, getenv func(string) string) ([]*applyfetchpb.Migration, error) {
+	migs, _, err := fetchMigrationsReporting(ctx, projectID, targets, nil, getenv)
+	return migs, err
+}
+
+// fetchMigrationsReporting is fetchMigrations that also tells the console what
+// the target databases have applied (see appliedHeads), and returns what the
+// console says was REPLACED on each connection (`w17ctl migrate replace`) —
+// connection → replaced id → its replacement — for migrate.Config.Replaced.
+func fetchMigrationsReporting(ctx context.Context, projectID string, targets []migrate.ConnTarget, heads []*applyfetchpb.AppliedHead, getenv func(string) string) ([]*applyfetchpb.Migration, map[string]map[string]string, error) {
 	var want []*applyfetchpb.Target
 	for _, t := range targets {
 		if t.TargetMigrationID == "" {
@@ -92,11 +104,11 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 	// connections are all unpinned warns and finishes instead of failing on
 	// a console it never had to call.
 	if len(want) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	addr := getenv(envConsoleAddr)
 	if addr == "" {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"migrate: --fetch needs a console address\n"+
 				"  fix: set %s to the console's gRPC endpoint (e.g. grpcs://api.w17.app:50051),\n"+
 				"       or drop --fetch and point --migrations at artefacts fetched elsewhere",
@@ -106,7 +118,7 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 
 	conn, auth, err := dialFetch(addr, getenv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -114,11 +126,114 @@ func fetchMigrations(ctx context.Context, projectID string, targets []migrate.Co
 		ProjectId:                projectID,
 		Targets:                  want,
 		UnderstandsCheckSeverity: true,
+		AppliedHeads:             heads,
 	})
 	if err != nil {
-		return nil, fetchRefusal("migrate", "fetch", addr, auth, err)
+		return nil, nil, fetchRefusal("migrate", "fetch", addr, auth, err)
 	}
-	return requestedOnly(resp.GetMigrations(), want)
+	migs, err := requestedOnly(resp.GetMigrations(), want)
+	if err != nil {
+		return nil, nil, err
+	}
+	var replaced map[string]map[string]string
+	for _, r := range resp.GetReplaced() {
+		if replaced == nil {
+			replaced = map[string]map[string]string{}
+		}
+		if replaced[r.GetConnection()] == nil {
+			replaced[r.GetConnection()] = map[string]string{}
+		}
+		replaced[r.GetConnection()][r.GetMigrationId()] = r.GetReplacedBy()
+	}
+	return migs, replaced, nil
+}
+
+// appliedHeads reads each pinned connection's applied head from its database,
+// for the console to keep (FetchMigrationsRequest.applied_heads).
+//
+// The console uses it for ONE thing: refusing to replace a stored migration
+// that some database already applied (`w17ctl migrate replace`). That refusal
+// is only as good as the reports behind it, so every fetch that holds the
+// database reports — `apply --fetch` and `status --fetch` — and the runbook for
+// a failed migration has every environment run `status --fetch` before the
+// replace.
+//
+// Best effort, and silent about it: a database that cannot be read here is
+// read again by the plan a moment later, and THAT failure is the one worth
+// reporting.
+//
+// Each report names its database (databaseID), because the console judges a
+// database by its LATEST report: one that rolled a migration back reports the
+// lower head and stops blocking a replace of it. So a database with nothing
+// applied reports too — an empty head — when it has an id; without one an
+// empty head says nothing and is not sent.
+func appliedHeads(ctx context.Context, targets []migrate.ConnTarget, applierFor func(string) (migrate.Applier, error), dsnOf func(string) string) []*applyfetchpb.AppliedHead {
+	var out []*applyfetchpb.AppliedHead
+	for _, t := range targets {
+		if t.TargetMigrationID == "" {
+			continue
+		}
+		a, err := applierFor(t.Connection)
+		if err != nil {
+			continue
+		}
+		head, err := a.AppliedHead(ctx)
+		_ = a.Close()
+		if err != nil {
+			continue
+		}
+		id := ""
+		if dsnOf != nil {
+			id = databaseID(dsnOf(t.Connection))
+		}
+		if head == "" && id == "" {
+			continue
+		}
+		out = append(out, &applyfetchpb.AppliedHead{Connection: t.Connection, MigrationId: head, DatabaseId: id})
+	}
+	return out
+}
+
+// databaseID is the identity a database's reports carry
+// (AppliedHead.database_id): a SHA-256 of WHERE the database is — the
+// connection URL's scheme, host and path — leaving out the credentials and
+// the query string.
+//
+// Why the location and not an id stored in the database: it needs no write
+// (`status --fetch` must stay read-only, and an id written into the database
+// would be copied by every dump restored elsewhere — a staging restored from
+// production would then speak for production), it is the same for every job
+// and replica deploying that database, and a password rotation does not
+// change it. What it cannot do: two databases reached by the same URL in
+// different networks share it, and a database moved to a new URL starts a
+// new one, leaving its old reports standing. The first can let a later
+// report from the twin lift a block; that is why the replace still needs
+// its caller's statement and why `migrate apply` refuses a database whose
+// head was replaced — the report is the first guard, never the only one. The
+// second only ever keeps a block, the safe direction.
+//
+// Empty when the URL does not parse or names no location.
+func databaseID(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return ""
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "postgresql" {
+		scheme = "postgres"
+	}
+	loc := strings.ToLower(u.Host) + u.Path
+	if u.Opaque != "" { // file:app.db
+		loc = u.Opaque
+	}
+	if scheme == "" || loc == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(scheme + "://" + loc))
+	return hex.EncodeToString(sum[:16])
 }
 
 // requestedOnly narrows a fetched set to the connections that were asked

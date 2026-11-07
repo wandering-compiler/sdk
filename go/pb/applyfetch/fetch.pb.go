@@ -102,7 +102,7 @@ func (x Check_Severity) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Check_Severity.Descriptor instead.
 func (Check_Severity) EnumDescriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{4, 0}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{6, 0}
 }
 
 type FetchMigrationsRequest struct {
@@ -119,8 +119,24 @@ type FetchMigrationsRequest struct {
 	// check, with an "update the SDK" message, instead of letting it fail the
 	// digest as if the artifact were tampered with.
 	UnderstandsCheckSeverity bool `protobuf:"varint,3,opt,name=understands_check_severity,json=understandsCheckSeverity,proto3" json:"understands_check_severity,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// applied_heads reports what each target database had applied when this
+	// fetch was made: `migrate apply --fetch` and `migrate status --fetch` read
+	// the head of every connection's `w17_migrations` ledger before they ask for
+	// the set, and send it here. A fetch that cannot read a database (no DSN, a
+	// fresh database, `migrate fetch` on a workstation) sends nothing for it.
+	//
+	// It is EVIDENCE, kept as an audit record (every report that changes what
+	// a database said is a new row; none is ever rewritten), and only ever read
+	// in one direction: the console refuses to replace a stored migration that
+	// a database's LATEST report names as applied (`w17ctl migrate replace`).
+	// Whoever may fetch can therefore block a replace by reporting — the remedy
+	// for a block is the one for an applied migration, fixing forward. Absence proves
+	// nothing — apply is offline, and a database may never be asked — so a
+	// replace still requires its caller to state that no environment applied
+	// the migration. A report cannot make the console serve anything different.
+	AppliedHeads  []*AppliedHead `protobuf:"bytes,4,rep,name=applied_heads,json=appliedHeads,proto3" json:"applied_heads,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FetchMigrationsRequest) Reset() {
@@ -172,6 +188,13 @@ func (x *FetchMigrationsRequest) GetUnderstandsCheckSeverity() bool {
 		return x.UnderstandsCheckSeverity
 	}
 	return false
+}
+
+func (x *FetchMigrationsRequest) GetAppliedHeads() []*AppliedHead {
+	if x != nil {
+		return x.AppliedHeads
+	}
+	return nil
 }
 
 type Target struct {
@@ -226,16 +249,99 @@ func (x *Target) GetUpToMigrationId() string {
 	return ""
 }
 
+// AppliedHead is one connection's last applied migration, as the target
+// database's own ledger records it.
+type AppliedHead struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Connection string                 `protobuf:"bytes,1,opt,name=connection,proto3" json:"connection,omitempty"`
+	// migration_id is the database's applied head; EMPTY when the database has
+	// applied nothing on this connection (a fresh one, or one rolled all the
+	// way back) — sent when database_id is, so a database that rolled back
+	// stops counting as one that applied what it no longer holds.
+	MigrationId string `protobuf:"bytes,2,opt,name=migration_id,json=migrationId,proto3" json:"migration_id,omitempty"`
+	// database_id tells one reporting database from another, so the console
+	// can judge each by its LATEST report instead of every report ever made: a
+	// database that applied a migration and rolled it back no longer blocks
+	// replacing it. Derived from where the database IS — a SHA-256 of the
+	// connection URL's scheme, host and path, with the credentials and the
+	// query left out — so it is the same for every job and replica that
+	// deploys that database and survives a password rotation, and it needs no
+	// write to the database (`status --fetch` stays read-only). Empty when the
+	// URL cannot be parsed; the console then counts the report for good, as it
+	// counts one from an SDK that sent none.
+	DatabaseId    string `protobuf:"bytes,3,opt,name=database_id,json=databaseId,proto3" json:"database_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppliedHead) Reset() {
+	*x = AppliedHead{}
+	mi := &file_w17apply_fetch_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppliedHead) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppliedHead) ProtoMessage() {}
+
+func (x *AppliedHead) ProtoReflect() protoreflect.Message {
+	mi := &file_w17apply_fetch_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppliedHead.ProtoReflect.Descriptor instead.
+func (*AppliedHead) Descriptor() ([]byte, []int) {
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *AppliedHead) GetConnection() string {
+	if x != nil {
+		return x.Connection
+	}
+	return ""
+}
+
+func (x *AppliedHead) GetMigrationId() string {
+	if x != nil {
+		return x.MigrationId
+	}
+	return ""
+}
+
+func (x *AppliedHead) GetDatabaseId() string {
+	if x != nil {
+		return x.DatabaseId
+	}
+	return ""
+}
+
 type FetchMigrationsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Migrations    []*Migration           `protobuf:"bytes,1,rep,name=migrations,proto3" json:"migrations,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Migrations []*Migration           `protobuf:"bytes,1,rep,name=migrations,proto3" json:"migrations,omitempty"`
+	// replaced lists, per requested connection, the stored migrations that
+	// `w17ctl migrate replace` superseded (never squash-collapsed ones: a
+	// squash baseline names those itself, in Migration.supersedes). They are
+	// never served, so without this the offline client cannot tell a database
+	// whose applied head was REPLACED — the replacement must not run on top of
+	// it — from one whose head the history simply does not know.
+	Replaced      []*ReplacedMigration `protobuf:"bytes,2,rep,name=replaced,proto3" json:"replaced,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FetchMigrationsResponse) Reset() {
 	*x = FetchMigrationsResponse{}
-	mi := &file_w17apply_fetch_proto_msgTypes[2]
+	mi := &file_w17apply_fetch_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -247,7 +353,7 @@ func (x *FetchMigrationsResponse) String() string {
 func (*FetchMigrationsResponse) ProtoMessage() {}
 
 func (x *FetchMigrationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[2]
+	mi := &file_w17apply_fetch_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -260,7 +366,7 @@ func (x *FetchMigrationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchMigrationsResponse.ProtoReflect.Descriptor instead.
 func (*FetchMigrationsResponse) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{2}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FetchMigrationsResponse) GetMigrations() []*Migration {
@@ -268,6 +374,75 @@ func (x *FetchMigrationsResponse) GetMigrations() []*Migration {
 		return x.Migrations
 	}
 	return nil
+}
+
+func (x *FetchMigrationsResponse) GetReplaced() []*ReplacedMigration {
+	if x != nil {
+		return x.Replaced
+	}
+	return nil
+}
+
+// ReplacedMigration is one stored migration a replace superseded.
+type ReplacedMigration struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Connection  string                 `protobuf:"bytes,1,opt,name=connection,proto3" json:"connection,omitempty"`
+	MigrationId string                 `protobuf:"bytes,2,opt,name=migration_id,json=migrationId,proto3" json:"migration_id,omitempty"`
+	// replaced_by is the migration that took its place.
+	ReplacedBy    string `protobuf:"bytes,3,opt,name=replaced_by,json=replacedBy,proto3" json:"replaced_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplacedMigration) Reset() {
+	*x = ReplacedMigration{}
+	mi := &file_w17apply_fetch_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplacedMigration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplacedMigration) ProtoMessage() {}
+
+func (x *ReplacedMigration) ProtoReflect() protoreflect.Message {
+	mi := &file_w17apply_fetch_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplacedMigration.ProtoReflect.Descriptor instead.
+func (*ReplacedMigration) Descriptor() ([]byte, []int) {
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ReplacedMigration) GetConnection() string {
+	if x != nil {
+		return x.Connection
+	}
+	return ""
+}
+
+func (x *ReplacedMigration) GetMigrationId() string {
+	if x != nil {
+		return x.MigrationId
+	}
+	return ""
+}
+
+func (x *ReplacedMigration) GetReplacedBy() string {
+	if x != nil {
+		return x.ReplacedBy
+	}
+	return ""
 }
 
 // Migration is one connection's apply payload, flattened from the registry's
@@ -382,7 +557,7 @@ type Migration struct {
 
 func (x *Migration) Reset() {
 	*x = Migration{}
-	mi := &file_w17apply_fetch_proto_msgTypes[3]
+	mi := &file_w17apply_fetch_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -394,7 +569,7 @@ func (x *Migration) String() string {
 func (*Migration) ProtoMessage() {}
 
 func (x *Migration) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[3]
+	mi := &file_w17apply_fetch_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -407,7 +582,7 @@ func (x *Migration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Migration.ProtoReflect.Descriptor instead.
 func (*Migration) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{3}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Migration) GetId() string {
@@ -523,7 +698,7 @@ type Check struct {
 
 func (x *Check) Reset() {
 	*x = Check{}
-	mi := &file_w17apply_fetch_proto_msgTypes[4]
+	mi := &file_w17apply_fetch_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +710,7 @@ func (x *Check) String() string {
 func (*Check) ProtoMessage() {}
 
 func (x *Check) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[4]
+	mi := &file_w17apply_fetch_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +723,7 @@ func (x *Check) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Check.ProtoReflect.Descriptor instead.
 func (*Check) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{4}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Check) GetName() string {
@@ -600,7 +775,7 @@ type RenderFixtureSeedRequest struct {
 
 func (x *RenderFixtureSeedRequest) Reset() {
 	*x = RenderFixtureSeedRequest{}
-	mi := &file_w17apply_fetch_proto_msgTypes[5]
+	mi := &file_w17apply_fetch_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -612,7 +787,7 @@ func (x *RenderFixtureSeedRequest) String() string {
 func (*RenderFixtureSeedRequest) ProtoMessage() {}
 
 func (x *RenderFixtureSeedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[5]
+	mi := &file_w17apply_fetch_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -625,7 +800,7 @@ func (x *RenderFixtureSeedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderFixtureSeedRequest.ProtoReflect.Descriptor instead.
 func (*RenderFixtureSeedRequest) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{5}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RenderFixtureSeedRequest) GetIr() []byte {
@@ -661,7 +836,7 @@ type FetchFixtureSeedRequest struct {
 
 func (x *FetchFixtureSeedRequest) Reset() {
 	*x = FetchFixtureSeedRequest{}
-	mi := &file_w17apply_fetch_proto_msgTypes[6]
+	mi := &file_w17apply_fetch_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -673,7 +848,7 @@ func (x *FetchFixtureSeedRequest) String() string {
 func (*FetchFixtureSeedRequest) ProtoMessage() {}
 
 func (x *FetchFixtureSeedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[6]
+	mi := &file_w17apply_fetch_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -686,7 +861,7 @@ func (x *FetchFixtureSeedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchFixtureSeedRequest.ProtoReflect.Descriptor instead.
 func (*FetchFixtureSeedRequest) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{6}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *FetchFixtureSeedRequest) GetProjectId() string {
@@ -755,7 +930,7 @@ type FetchFixtureSeedResponse struct {
 
 func (x *FetchFixtureSeedResponse) Reset() {
 	*x = FetchFixtureSeedResponse{}
-	mi := &file_w17apply_fetch_proto_msgTypes[7]
+	mi := &file_w17apply_fetch_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -767,7 +942,7 @@ func (x *FetchFixtureSeedResponse) String() string {
 func (*FetchFixtureSeedResponse) ProtoMessage() {}
 
 func (x *FetchFixtureSeedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[7]
+	mi := &file_w17apply_fetch_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -780,7 +955,7 @@ func (x *FetchFixtureSeedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchFixtureSeedResponse.ProtoReflect.Descriptor instead.
 func (*FetchFixtureSeedResponse) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{7}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *FetchFixtureSeedResponse) GetStatements() []*SeedStmt {
@@ -821,7 +996,7 @@ type SeedSchema struct {
 
 func (x *SeedSchema) Reset() {
 	*x = SeedSchema{}
-	mi := &file_w17apply_fetch_proto_msgTypes[8]
+	mi := &file_w17apply_fetch_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -833,7 +1008,7 @@ func (x *SeedSchema) String() string {
 func (*SeedSchema) ProtoMessage() {}
 
 func (x *SeedSchema) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[8]
+	mi := &file_w17apply_fetch_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -846,7 +1021,7 @@ func (x *SeedSchema) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SeedSchema.ProtoReflect.Descriptor instead.
 func (*SeedSchema) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{8}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SeedSchema) GetRenderer() string {
@@ -885,7 +1060,7 @@ type SeedTableDigest struct {
 
 func (x *SeedTableDigest) Reset() {
 	*x = SeedTableDigest{}
-	mi := &file_w17apply_fetch_proto_msgTypes[9]
+	mi := &file_w17apply_fetch_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -897,7 +1072,7 @@ func (x *SeedTableDigest) String() string {
 func (*SeedTableDigest) ProtoMessage() {}
 
 func (x *SeedTableDigest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[9]
+	mi := &file_w17apply_fetch_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -910,7 +1085,7 @@ func (x *SeedTableDigest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SeedTableDigest.ProtoReflect.Descriptor instead.
 func (*SeedTableDigest) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{9}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SeedTableDigest) GetModel() string {
@@ -948,7 +1123,7 @@ type SeedStmt struct {
 
 func (x *SeedStmt) Reset() {
 	*x = SeedStmt{}
-	mi := &file_w17apply_fetch_proto_msgTypes[10]
+	mi := &file_w17apply_fetch_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -960,7 +1135,7 @@ func (x *SeedStmt) String() string {
 func (*SeedStmt) ProtoMessage() {}
 
 func (x *SeedStmt) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[10]
+	mi := &file_w17apply_fetch_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -973,7 +1148,7 @@ func (x *SeedStmt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SeedStmt.ProtoReflect.Descriptor instead.
 func (*SeedStmt) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{10}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SeedStmt) GetSql() string {
@@ -1001,7 +1176,7 @@ type FetchFixtureFilesRequest struct {
 
 func (x *FetchFixtureFilesRequest) Reset() {
 	*x = FetchFixtureFilesRequest{}
-	mi := &file_w17apply_fetch_proto_msgTypes[11]
+	mi := &file_w17apply_fetch_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1013,7 +1188,7 @@ func (x *FetchFixtureFilesRequest) String() string {
 func (*FetchFixtureFilesRequest) ProtoMessage() {}
 
 func (x *FetchFixtureFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[11]
+	mi := &file_w17apply_fetch_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1026,7 +1201,7 @@ func (x *FetchFixtureFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchFixtureFilesRequest.ProtoReflect.Descriptor instead.
 func (*FetchFixtureFilesRequest) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{11}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *FetchFixtureFilesRequest) GetProjectId() string {
@@ -1052,7 +1227,7 @@ type FetchFixtureFilesResponse struct {
 
 func (x *FetchFixtureFilesResponse) Reset() {
 	*x = FetchFixtureFilesResponse{}
-	mi := &file_w17apply_fetch_proto_msgTypes[12]
+	mi := &file_w17apply_fetch_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1064,7 +1239,7 @@ func (x *FetchFixtureFilesResponse) String() string {
 func (*FetchFixtureFilesResponse) ProtoMessage() {}
 
 func (x *FetchFixtureFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[12]
+	mi := &file_w17apply_fetch_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1077,7 +1252,7 @@ func (x *FetchFixtureFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchFixtureFilesResponse.ProtoReflect.Descriptor instead.
 func (*FetchFixtureFilesResponse) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{12}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *FetchFixtureFilesResponse) GetFiles() []*FixtureFile {
@@ -1101,7 +1276,7 @@ type FixtureFile struct {
 
 func (x *FixtureFile) Reset() {
 	*x = FixtureFile{}
-	mi := &file_w17apply_fetch_proto_msgTypes[13]
+	mi := &file_w17apply_fetch_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1113,7 +1288,7 @@ func (x *FixtureFile) String() string {
 func (*FixtureFile) ProtoMessage() {}
 
 func (x *FixtureFile) ProtoReflect() protoreflect.Message {
-	mi := &file_w17apply_fetch_proto_msgTypes[13]
+	mi := &file_w17apply_fetch_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1126,7 +1301,7 @@ func (x *FixtureFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FixtureFile.ProtoReflect.Descriptor instead.
 func (*FixtureFile) Descriptor() ([]byte, []int) {
-	return file_w17apply_fetch_proto_rawDescGZIP(), []int{13}
+	return file_w17apply_fetch_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *FixtureFile) GetDomain() string {
@@ -1161,21 +1336,37 @@ var File_w17apply_fetch_proto protoreflect.FileDescriptor
 
 const file_w17apply_fetch_proto_rawDesc = "" +
 	"\n" +
-	"\x14w17apply/fetch.proto\x12\tw17.apply\x1a\x1cgoogle/protobuf/struct.proto\"\xa2\x01\n" +
+	"\x14w17apply/fetch.proto\x12\tw17.apply\x1a\x1cgoogle/protobuf/struct.proto\"\xdf\x01\n" +
 	"\x16FetchMigrationsRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12+\n" +
 	"\atargets\x18\x02 \x03(\v2\x11.w17.apply.TargetR\atargets\x12<\n" +
-	"\x1aunderstands_check_severity\x18\x03 \x01(\bR\x18understandsCheckSeverity\"U\n" +
+	"\x1aunderstands_check_severity\x18\x03 \x01(\bR\x18understandsCheckSeverity\x12;\n" +
+	"\rapplied_heads\x18\x04 \x03(\v2\x16.w17.apply.AppliedHeadR\fappliedHeads\"U\n" +
 	"\x06Target\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\tR\n" +
 	"connection\x12+\n" +
-	"\x12up_to_migration_id\x18\x02 \x01(\tR\x0fupToMigrationId\"O\n" +
+	"\x12up_to_migration_id\x18\x02 \x01(\tR\x0fupToMigrationId\"q\n" +
+	"\vAppliedHead\x12\x1e\n" +
+	"\n" +
+	"connection\x18\x01 \x01(\tR\n" +
+	"connection\x12!\n" +
+	"\fmigration_id\x18\x02 \x01(\tR\vmigrationId\x12\x1f\n" +
+	"\vdatabase_id\x18\x03 \x01(\tR\n" +
+	"databaseId\"\x89\x01\n" +
 	"\x17FetchMigrationsResponse\x124\n" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x14.w17.apply.MigrationR\n" +
-	"migrations\"\xbe\x03\n" +
+	"migrations\x128\n" +
+	"\breplaced\x18\x02 \x03(\v2\x1c.w17.apply.ReplacedMigrationR\breplaced\"w\n" +
+	"\x11ReplacedMigration\x12\x1e\n" +
+	"\n" +
+	"connection\x18\x01 \x01(\tR\n" +
+	"connection\x12!\n" +
+	"\fmigration_id\x18\x02 \x01(\tR\vmigrationId\x12\x1f\n" +
+	"\vreplaced_by\x18\x03 \x01(\tR\n" +
+	"replacedBy\"\xbe\x03\n" +
 	"\tMigration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n" +
 	"\n" +
@@ -1264,48 +1455,52 @@ func file_w17apply_fetch_proto_rawDescGZIP() []byte {
 }
 
 var file_w17apply_fetch_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_w17apply_fetch_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_w17apply_fetch_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_w17apply_fetch_proto_goTypes = []any{
 	(Check_Severity)(0),               // 0: w17.apply.Check.Severity
 	(*FetchMigrationsRequest)(nil),    // 1: w17.apply.FetchMigrationsRequest
 	(*Target)(nil),                    // 2: w17.apply.Target
-	(*FetchMigrationsResponse)(nil),   // 3: w17.apply.FetchMigrationsResponse
-	(*Migration)(nil),                 // 4: w17.apply.Migration
-	(*Check)(nil),                     // 5: w17.apply.Check
-	(*RenderFixtureSeedRequest)(nil),  // 6: w17.apply.RenderFixtureSeedRequest
-	(*FetchFixtureSeedRequest)(nil),   // 7: w17.apply.FetchFixtureSeedRequest
-	(*FetchFixtureSeedResponse)(nil),  // 8: w17.apply.FetchFixtureSeedResponse
-	(*SeedSchema)(nil),                // 9: w17.apply.SeedSchema
-	(*SeedTableDigest)(nil),           // 10: w17.apply.SeedTableDigest
-	(*SeedStmt)(nil),                  // 11: w17.apply.SeedStmt
-	(*FetchFixtureFilesRequest)(nil),  // 12: w17.apply.FetchFixtureFilesRequest
-	(*FetchFixtureFilesResponse)(nil), // 13: w17.apply.FetchFixtureFilesResponse
-	(*FixtureFile)(nil),               // 14: w17.apply.FixtureFile
-	(*structpb.Value)(nil),            // 15: google.protobuf.Value
+	(*AppliedHead)(nil),               // 3: w17.apply.AppliedHead
+	(*FetchMigrationsResponse)(nil),   // 4: w17.apply.FetchMigrationsResponse
+	(*ReplacedMigration)(nil),         // 5: w17.apply.ReplacedMigration
+	(*Migration)(nil),                 // 6: w17.apply.Migration
+	(*Check)(nil),                     // 7: w17.apply.Check
+	(*RenderFixtureSeedRequest)(nil),  // 8: w17.apply.RenderFixtureSeedRequest
+	(*FetchFixtureSeedRequest)(nil),   // 9: w17.apply.FetchFixtureSeedRequest
+	(*FetchFixtureSeedResponse)(nil),  // 10: w17.apply.FetchFixtureSeedResponse
+	(*SeedSchema)(nil),                // 11: w17.apply.SeedSchema
+	(*SeedTableDigest)(nil),           // 12: w17.apply.SeedTableDigest
+	(*SeedStmt)(nil),                  // 13: w17.apply.SeedStmt
+	(*FetchFixtureFilesRequest)(nil),  // 14: w17.apply.FetchFixtureFilesRequest
+	(*FetchFixtureFilesResponse)(nil), // 15: w17.apply.FetchFixtureFilesResponse
+	(*FixtureFile)(nil),               // 16: w17.apply.FixtureFile
+	(*structpb.Value)(nil),            // 17: google.protobuf.Value
 }
 var file_w17apply_fetch_proto_depIdxs = []int32{
 	2,  // 0: w17.apply.FetchMigrationsRequest.targets:type_name -> w17.apply.Target
-	4,  // 1: w17.apply.FetchMigrationsResponse.migrations:type_name -> w17.apply.Migration
-	5,  // 2: w17.apply.Migration.checks:type_name -> w17.apply.Check
-	0,  // 3: w17.apply.Check.severity:type_name -> w17.apply.Check.Severity
-	11, // 4: w17.apply.FetchFixtureSeedResponse.statements:type_name -> w17.apply.SeedStmt
-	9,  // 5: w17.apply.FetchFixtureSeedResponse.schema:type_name -> w17.apply.SeedSchema
-	10, // 6: w17.apply.SeedSchema.tables:type_name -> w17.apply.SeedTableDigest
-	15, // 7: w17.apply.SeedStmt.args:type_name -> google.protobuf.Value
-	14, // 8: w17.apply.FetchFixtureFilesResponse.files:type_name -> w17.apply.FixtureFile
-	1,  // 9: w17.apply.MigrationFetch.FetchMigrations:input_type -> w17.apply.FetchMigrationsRequest
-	7,  // 10: w17.apply.FixtureFetch.FetchFixtureSeed:input_type -> w17.apply.FetchFixtureSeedRequest
-	12, // 11: w17.apply.FixtureFetch.FetchFixtureFiles:input_type -> w17.apply.FetchFixtureFilesRequest
-	6,  // 12: w17.apply.FixtureFetch.RenderFixtureSeed:input_type -> w17.apply.RenderFixtureSeedRequest
-	3,  // 13: w17.apply.MigrationFetch.FetchMigrations:output_type -> w17.apply.FetchMigrationsResponse
-	8,  // 14: w17.apply.FixtureFetch.FetchFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
-	13, // 15: w17.apply.FixtureFetch.FetchFixtureFiles:output_type -> w17.apply.FetchFixtureFilesResponse
-	8,  // 16: w17.apply.FixtureFetch.RenderFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
-	13, // [13:17] is the sub-list for method output_type
-	9,  // [9:13] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	3,  // 1: w17.apply.FetchMigrationsRequest.applied_heads:type_name -> w17.apply.AppliedHead
+	6,  // 2: w17.apply.FetchMigrationsResponse.migrations:type_name -> w17.apply.Migration
+	5,  // 3: w17.apply.FetchMigrationsResponse.replaced:type_name -> w17.apply.ReplacedMigration
+	7,  // 4: w17.apply.Migration.checks:type_name -> w17.apply.Check
+	0,  // 5: w17.apply.Check.severity:type_name -> w17.apply.Check.Severity
+	13, // 6: w17.apply.FetchFixtureSeedResponse.statements:type_name -> w17.apply.SeedStmt
+	11, // 7: w17.apply.FetchFixtureSeedResponse.schema:type_name -> w17.apply.SeedSchema
+	12, // 8: w17.apply.SeedSchema.tables:type_name -> w17.apply.SeedTableDigest
+	17, // 9: w17.apply.SeedStmt.args:type_name -> google.protobuf.Value
+	16, // 10: w17.apply.FetchFixtureFilesResponse.files:type_name -> w17.apply.FixtureFile
+	1,  // 11: w17.apply.MigrationFetch.FetchMigrations:input_type -> w17.apply.FetchMigrationsRequest
+	9,  // 12: w17.apply.FixtureFetch.FetchFixtureSeed:input_type -> w17.apply.FetchFixtureSeedRequest
+	14, // 13: w17.apply.FixtureFetch.FetchFixtureFiles:input_type -> w17.apply.FetchFixtureFilesRequest
+	8,  // 14: w17.apply.FixtureFetch.RenderFixtureSeed:input_type -> w17.apply.RenderFixtureSeedRequest
+	4,  // 15: w17.apply.MigrationFetch.FetchMigrations:output_type -> w17.apply.FetchMigrationsResponse
+	10, // 16: w17.apply.FixtureFetch.FetchFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
+	15, // 17: w17.apply.FixtureFetch.FetchFixtureFiles:output_type -> w17.apply.FetchFixtureFilesResponse
+	10, // 18: w17.apply.FixtureFetch.RenderFixtureSeed:output_type -> w17.apply.FetchFixtureSeedResponse
+	15, // [15:19] is the sub-list for method output_type
+	11, // [11:15] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_w17apply_fetch_proto_init() }
@@ -1319,7 +1514,7 @@ func file_w17apply_fetch_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17apply_fetch_proto_rawDesc), len(file_w17apply_fetch_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

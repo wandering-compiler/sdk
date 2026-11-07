@@ -132,6 +132,33 @@ const (
 	// push derives names them so a live deployment can record it without
 	// running its DDL.
 	ResetHistoryPolicy_RESET_HISTORY_POLICY_SUPERSEDE ResetHistoryPolicy = 2
+	// REPLACE — repair a stored migration that cannot apply. The named
+	// migration and every live migration after it on its connection are
+	// SUPERSEDED (kept, listed, never served again) and one replacement is
+	// planned in their place: from the schema the project was at before the
+	// named migration to the schema it is at now, by the console's current
+	// planner, with the decisions the request carries. Nothing is deleted.
+	//
+	// It refuses, and stores nothing, when:
+	//   - acknowledge_not_applied is unset — the caller states that no
+	//     environment applied the migration (the console cannot know it: apply
+	//     is offline, and a database reports what it applied only when it
+	//     fetches);
+	//   - a database's LATEST report names the named migration or one after it
+	//     (FetchMigrationsRequest.applied_heads; each database is judged by its
+	//     most recent report, so one that rolled back no longer counts, and a
+	//     report that names no database counts for good) — that migration is
+	//     fixed forward, never replaced;
+	//   - the range holds a hand-authored data migration, a squash baseline, or
+	//     a migration already superseded — none of those can be re-derived;
+	//   - a squash range is frozen and waiting for its baseline;
+	//   - the plan still needs decisions (returned as findings, like a push).
+	//
+	// A deployed database that applied the replaced migration anyway is
+	// refused by `migrate apply`: the fetch names the replaced ids
+	// (FetchMigrationsResponse.replaced), so the replacement is never run on
+	// top of it — wherever in the history the replaced migration sat.
+	ResetHistoryPolicy_RESET_HISTORY_POLICY_REPLACE ResetHistoryPolicy = 3
 )
 
 // Enum value maps for ResetHistoryPolicy.
@@ -140,11 +167,13 @@ var (
 		0: "RESET_HISTORY_POLICY_UNSPECIFIED",
 		1: "RESET_HISTORY_POLICY_DISCARD",
 		2: "RESET_HISTORY_POLICY_SUPERSEDE",
+		3: "RESET_HISTORY_POLICY_REPLACE",
 	}
 	ResetHistoryPolicy_value = map[string]int32{
 		"RESET_HISTORY_POLICY_UNSPECIFIED": 0,
 		"RESET_HISTORY_POLICY_DISCARD":     1,
 		"RESET_HISTORY_POLICY_SUPERSEDE":   2,
+		"RESET_HISTORY_POLICY_REPLACE":     3,
 	}
 )
 
@@ -241,6 +270,11 @@ type Migration struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Connection    string                 `protobuf:"bytes,2,opt,name=connection,proto3" json:"connection,omitempty"`
 	ContentSha256 string                 `protobuf:"bytes,3,opt,name=content_sha256,json=contentSha256,proto3" json:"content_sha256,omitempty"`
+	// superseded_by names the migration that took this one's place — a squash
+	// baseline, or the replacement `migrate replace` stored — and is empty
+	// while the migration is live. A superseded migration stays listed (nothing
+	// is deleted from a history) and is never served to apply again.
+	SupersededBy  string `protobuf:"bytes,4,opt,name=superseded_by,json=supersededBy,proto3" json:"superseded_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -292,6 +326,13 @@ func (x *Migration) GetConnection() string {
 func (x *Migration) GetContentSha256() string {
 	if x != nil {
 		return x.ContentSha256
+	}
+	return ""
+}
+
+func (x *Migration) GetSupersededBy() string {
+	if x != nil {
+		return x.SupersededBy
 	}
 	return ""
 }
@@ -1370,9 +1411,29 @@ type ResetHistoryRequest struct {
 	// too, and without this nothing says so.
 	//
 	// Empty keeps the unconditional whole-history collapse.
-	InitiativeId  string `protobuf:"bytes,4,opt,name=initiative_id,json=initiativeId,proto3" json:"initiative_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	//
+	// On REPLACE it stamps the revision the replacement records, like a push.
+	InitiativeId string `protobuf:"bytes,4,opt,name=initiative_id,json=initiativeId,proto3" json:"initiative_id,omitempty"`
+	// REPLACE only — refused on the other policies rather than ignored.
+	//
+	// connection + migration_id name the migration to replace (the id
+	// `w17ctl migrate list` prints). connection may be empty when the id is on
+	// exactly one connection.
+	Connection  string `protobuf:"bytes,5,opt,name=connection,proto3" json:"connection,omitempty"`
+	MigrationId string `protobuf:"bytes,6,opt,name=migration_id,json=migrationId,proto3" json:"migration_id,omitempty"`
+	// decide / decide_custom_sql resolve the replacement plan's NEEDS_CONFIRM
+	// findings exactly as PushSchemaRequest's fields of the same names do —
+	// the usual way to repair a migration whose body failed on production data
+	// is to pick a different strategy for the change it made.
+	Decide          []string          `protobuf:"bytes,7,rep,name=decide,proto3" json:"decide,omitempty"`
+	DecideCustomSql map[string]string `protobuf:"bytes,8,rep,name=decide_custom_sql,json=decideCustomSql,proto3" json:"decide_custom_sql,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// acknowledge_not_applied is the caller's statement that no environment
+	// applied the migration being replaced, checked in every one of them
+	// (`<binary> migrate status --fetch` lists it as pending). Required: the
+	// server refuses without it.
+	AcknowledgeNotApplied bool `protobuf:"varint,9,opt,name=acknowledge_not_applied,json=acknowledgeNotApplied,proto3" json:"acknowledge_not_applied,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ResetHistoryRequest) Reset() {
@@ -1431,6 +1492,41 @@ func (x *ResetHistoryRequest) GetInitiativeId() string {
 		return x.InitiativeId
 	}
 	return ""
+}
+
+func (x *ResetHistoryRequest) GetConnection() string {
+	if x != nil {
+		return x.Connection
+	}
+	return ""
+}
+
+func (x *ResetHistoryRequest) GetMigrationId() string {
+	if x != nil {
+		return x.MigrationId
+	}
+	return ""
+}
+
+func (x *ResetHistoryRequest) GetDecide() []string {
+	if x != nil {
+		return x.Decide
+	}
+	return nil
+}
+
+func (x *ResetHistoryRequest) GetDecideCustomSql() map[string]string {
+	if x != nil {
+		return x.DecideCustomSql
+	}
+	return nil
+}
+
+func (x *ResetHistoryRequest) GetAcknowledgeNotApplied() bool {
+	if x != nil {
+		return x.AcknowledgeNotApplied
+	}
+	return false
 }
 
 type ImportProjectRequest struct {
@@ -1677,8 +1773,17 @@ type ResetHistoryResponse struct {
 	// raw_migration_ids names those bodies, so the message can list them
 	// instead of only counting them.
 	RawMigrationIds []string `protobuf:"bytes,3,rep,name=raw_migration_ids,json=rawMigrationIds,proto3" json:"raw_migration_ids,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// REPLACE only. superseded_ids are the migrations that left the apply plan
+	// (the named one and every live one after it on its connection), oldest
+	// first; replacement is what took their place. Both empty when findings is
+	// non-empty — nothing was stored.
+	SupersededIds []string   `protobuf:"bytes,4,rep,name=superseded_ids,json=supersededIds,proto3" json:"superseded_ids,omitempty"`
+	Replacement   *Migration `protobuf:"bytes,5,opt,name=replacement,proto3" json:"replacement,omitempty"`
+	// findings the replacement plan still needs decisions for, as a push
+	// reports them. Non-empty = nothing stored.
+	Findings      []*Finding `protobuf:"bytes,6,rep,name=findings,proto3" json:"findings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResetHistoryResponse) Reset() {
@@ -1732,17 +1837,39 @@ func (x *ResetHistoryResponse) GetRawMigrationIds() []string {
 	return nil
 }
 
+func (x *ResetHistoryResponse) GetSupersededIds() []string {
+	if x != nil {
+		return x.SupersededIds
+	}
+	return nil
+}
+
+func (x *ResetHistoryResponse) GetReplacement() *Migration {
+	if x != nil {
+		return x.Replacement
+	}
+	return nil
+}
+
+func (x *ResetHistoryResponse) GetFindings() []*Finding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
 var File_w17registry_registry_proto protoreflect.FileDescriptor
 
 const file_w17registry_registry_proto_rawDesc = "" +
 	"\n" +
-	"\x1aw17registry/registry.proto\x12\fw17.registry\"b\n" +
+	"\x1aw17registry/registry.proto\x12\fw17.registry\"\x87\x01\n" +
 	"\tMigration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x02 \x01(\tR\n" +
 	"connection\x12%\n" +
-	"\x0econtent_sha256\x18\x03 \x01(\tR\rcontentSha256\",\n" +
+	"\x0econtent_sha256\x18\x03 \x01(\tR\rcontentSha256\x12#\n" +
+	"\rsuperseded_by\x18\x04 \x01(\tR\fsupersededBy\",\n" +
 	"\x16RegisterProjectRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"8\n" +
 	"\x17RegisterProjectResponse\x12\x1d\n" +
@@ -1830,13 +1957,23 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12(\n" +
 	"\x10new_project_name\x18\x02 \x01(\tR\x0enewProjectName\"9\n" +
 	"\x14ClaimProjectResponse\x12!\n" +
-	"\fproject_name\x18\x01 \x01(\tR\vprojectName\"\xc7\x01\n" +
+	"\fproject_name\x18\x01 \x01(\tR\vprojectName\"\x82\x04\n" +
 	"\x13ResetHistoryRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x128\n" +
 	"\x06policy\x18\x02 \x01(\x0e2 .w17.registry.ResetHistoryPolicyR\x06policy\x122\n" +
 	"\x15acknowledge_data_loss\x18\x03 \x01(\bR\x13acknowledgeDataLoss\x12#\n" +
-	"\rinitiative_id\x18\x04 \x01(\tR\finitiativeId\"\x93\x01\n" +
+	"\rinitiative_id\x18\x04 \x01(\tR\finitiativeId\x12\x1e\n" +
+	"\n" +
+	"connection\x18\x05 \x01(\tR\n" +
+	"connection\x12!\n" +
+	"\fmigration_id\x18\x06 \x01(\tR\vmigrationId\x12\x16\n" +
+	"\x06decide\x18\a \x03(\tR\x06decide\x12b\n" +
+	"\x11decide_custom_sql\x18\b \x03(\v26.w17.registry.ResetHistoryRequest.DecideCustomSqlEntryR\x0fdecideCustomSql\x126\n" +
+	"\x17acknowledge_not_applied\x18\t \x01(\bR\x15acknowledgeNotApplied\x1aB\n" +
+	"\x14DecideCustomSqlEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x93\x01\n" +
 	"\x14ImportProjectRequest\x12*\n" +
 	"\x11source_project_id\x18\x01 \x01(\tR\x0fsourceProjectId\x12*\n" +
 	"\x11target_project_id\x18\x02 \x01(\tR\x0ftargetProjectId\x12#\n" +
@@ -1851,20 +1988,24 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\x15VerifyHistoryResponse\x126\n" +
 	"\averdict\x18\x01 \x01(\x0e2\x1c.w17.registry.HistoryVerdictR\averdict\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\x12-\n" +
-	"\x12recorded_revisions\x18\x03 \x01(\x05R\x11recordedRevisions\"\xa7\x01\n" +
+	"\x12recorded_revisions\x18\x03 \x01(\x05R\x11recordedRevisions\"\xbc\x02\n" +
 	"\x14ResetHistoryResponse\x12-\n" +
 	"\x12migrations_dropped\x18\x01 \x01(\x05R\x11migrationsDropped\x124\n" +
 	"\x16raw_migrations_dropped\x18\x02 \x01(\x05R\x14rawMigrationsDropped\x12*\n" +
-	"\x11raw_migration_ids\x18\x03 \x03(\tR\x0frawMigrationIds*a\n" +
+	"\x11raw_migration_ids\x18\x03 \x03(\tR\x0frawMigrationIds\x12%\n" +
+	"\x0esuperseded_ids\x18\x04 \x03(\tR\rsupersededIds\x129\n" +
+	"\vreplacement\x18\x05 \x01(\v2\x17.w17.registry.MigrationR\vreplacement\x121\n" +
+	"\bfindings\x18\x06 \x03(\v2\x15.w17.registry.FindingR\bfindings*a\n" +
 	"\bPushMode\x12\x12\n" +
 	"\x0ePUSH_MODE_AUTO\x10\x00\x12\x14\n" +
 	"\x10PUSH_MODE_CREATE\x10\x01\x12\x14\n" +
 	"\x10PUSH_MODE_UPDATE\x10\x02\x12\x15\n" +
-	"\x11PUSH_MODE_DRY_RUN\x10\x03*\x80\x01\n" +
+	"\x11PUSH_MODE_DRY_RUN\x10\x03*\xa2\x01\n" +
 	"\x12ResetHistoryPolicy\x12$\n" +
 	" RESET_HISTORY_POLICY_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cRESET_HISTORY_POLICY_DISCARD\x10\x01\x12\"\n" +
-	"\x1eRESET_HISTORY_POLICY_SUPERSEDE\x10\x02*j\n" +
+	"\x1eRESET_HISTORY_POLICY_SUPERSEDE\x10\x02\x12 \n" +
+	"\x1cRESET_HISTORY_POLICY_REPLACE\x10\x03*j\n" +
 	"\x0eHistoryVerdict\x12\x1b\n" +
 	"\x17HISTORY_VERDICT_UNKNOWN\x10\x00\x12\x1e\n" +
 	"\x1aHISTORY_VERDICT_CONSISTENT\x10\x01\x12\x1b\n" +
@@ -1895,7 +2036,7 @@ func file_w17registry_registry_proto_rawDescGZIP() []byte {
 }
 
 var file_w17registry_registry_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_w17registry_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_w17registry_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_w17registry_registry_proto_goTypes = []any{
 	(PushMode)(0),                       // 0: w17.registry.PushMode
 	(ResetHistoryPolicy)(0),             // 1: w17.registry.ResetHistoryPolicy
@@ -1923,6 +2064,7 @@ var file_w17registry_registry_proto_goTypes = []any{
 	(*VerifyHistoryResponse)(nil),       // 23: w17.registry.VerifyHistoryResponse
 	(*ResetHistoryResponse)(nil),        // 24: w17.registry.ResetHistoryResponse
 	nil,                                 // 25: w17.registry.PushSchemaRequest.DecideCustomSqlEntry
+	nil,                                 // 26: w17.registry.ResetHistoryRequest.DecideCustomSqlEntry
 }
 var file_w17registry_registry_proto_depIdxs = []int32{
 	3,  // 0: w17.registry.ListMigrationsResponse.migrations:type_name -> w17.registry.Migration
@@ -1933,32 +2075,35 @@ var file_w17registry_registry_proto_depIdxs = []int32{
 	0,  // 5: w17.registry.PushSchemaResponse.resolved_mode:type_name -> w17.registry.PushMode
 	3,  // 6: w17.registry.PushRawMigrationResponse.migration:type_name -> w17.registry.Migration
 	1,  // 7: w17.registry.ResetHistoryRequest.policy:type_name -> w17.registry.ResetHistoryPolicy
-	2,  // 8: w17.registry.VerifyHistoryResponse.verdict:type_name -> w17.registry.HistoryVerdict
-	4,  // 9: w17.registry.ProjectRegistry.RegisterProject:input_type -> w17.registry.RegisterProjectRequest
-	6,  // 10: w17.registry.ProjectRegistry.ListMigrations:input_type -> w17.registry.ListMigrationsRequest
-	8,  // 11: w17.registry.ProjectRegistry.PushSchema:input_type -> w17.registry.PushSchemaRequest
-	11, // 12: w17.registry.ProjectRegistry.PushRawMigration:input_type -> w17.registry.PushRawMigrationRequest
-	13, // 13: w17.registry.ProjectRegistry.PushFixture:input_type -> w17.registry.PushFixtureRequest
-	15, // 14: w17.registry.ProjectRegistry.ReleaseProjectToOrg:input_type -> w17.registry.ReleaseProjectToOrgRequest
-	17, // 15: w17.registry.ProjectRegistry.ClaimProject:input_type -> w17.registry.ClaimProjectRequest
-	19, // 16: w17.registry.ProjectRegistry.ResetHistory:input_type -> w17.registry.ResetHistoryRequest
-	22, // 17: w17.registry.ProjectRegistry.VerifyHistory:input_type -> w17.registry.VerifyHistoryRequest
-	20, // 18: w17.registry.ProjectRegistry.ImportProject:input_type -> w17.registry.ImportProjectRequest
-	5,  // 19: w17.registry.ProjectRegistry.RegisterProject:output_type -> w17.registry.RegisterProjectResponse
-	7,  // 20: w17.registry.ProjectRegistry.ListMigrations:output_type -> w17.registry.ListMigrationsResponse
-	9,  // 21: w17.registry.ProjectRegistry.PushSchema:output_type -> w17.registry.PushSchemaResponse
-	12, // 22: w17.registry.ProjectRegistry.PushRawMigration:output_type -> w17.registry.PushRawMigrationResponse
-	14, // 23: w17.registry.ProjectRegistry.PushFixture:output_type -> w17.registry.PushFixtureResponse
-	16, // 24: w17.registry.ProjectRegistry.ReleaseProjectToOrg:output_type -> w17.registry.ReleaseProjectToOrgResponse
-	18, // 25: w17.registry.ProjectRegistry.ClaimProject:output_type -> w17.registry.ClaimProjectResponse
-	24, // 26: w17.registry.ProjectRegistry.ResetHistory:output_type -> w17.registry.ResetHistoryResponse
-	23, // 27: w17.registry.ProjectRegistry.VerifyHistory:output_type -> w17.registry.VerifyHistoryResponse
-	21, // 28: w17.registry.ProjectRegistry.ImportProject:output_type -> w17.registry.ImportProjectResponse
-	19, // [19:29] is the sub-list for method output_type
-	9,  // [9:19] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	26, // 8: w17.registry.ResetHistoryRequest.decide_custom_sql:type_name -> w17.registry.ResetHistoryRequest.DecideCustomSqlEntry
+	2,  // 9: w17.registry.VerifyHistoryResponse.verdict:type_name -> w17.registry.HistoryVerdict
+	3,  // 10: w17.registry.ResetHistoryResponse.replacement:type_name -> w17.registry.Migration
+	10, // 11: w17.registry.ResetHistoryResponse.findings:type_name -> w17.registry.Finding
+	4,  // 12: w17.registry.ProjectRegistry.RegisterProject:input_type -> w17.registry.RegisterProjectRequest
+	6,  // 13: w17.registry.ProjectRegistry.ListMigrations:input_type -> w17.registry.ListMigrationsRequest
+	8,  // 14: w17.registry.ProjectRegistry.PushSchema:input_type -> w17.registry.PushSchemaRequest
+	11, // 15: w17.registry.ProjectRegistry.PushRawMigration:input_type -> w17.registry.PushRawMigrationRequest
+	13, // 16: w17.registry.ProjectRegistry.PushFixture:input_type -> w17.registry.PushFixtureRequest
+	15, // 17: w17.registry.ProjectRegistry.ReleaseProjectToOrg:input_type -> w17.registry.ReleaseProjectToOrgRequest
+	17, // 18: w17.registry.ProjectRegistry.ClaimProject:input_type -> w17.registry.ClaimProjectRequest
+	19, // 19: w17.registry.ProjectRegistry.ResetHistory:input_type -> w17.registry.ResetHistoryRequest
+	22, // 20: w17.registry.ProjectRegistry.VerifyHistory:input_type -> w17.registry.VerifyHistoryRequest
+	20, // 21: w17.registry.ProjectRegistry.ImportProject:input_type -> w17.registry.ImportProjectRequest
+	5,  // 22: w17.registry.ProjectRegistry.RegisterProject:output_type -> w17.registry.RegisterProjectResponse
+	7,  // 23: w17.registry.ProjectRegistry.ListMigrations:output_type -> w17.registry.ListMigrationsResponse
+	9,  // 24: w17.registry.ProjectRegistry.PushSchema:output_type -> w17.registry.PushSchemaResponse
+	12, // 25: w17.registry.ProjectRegistry.PushRawMigration:output_type -> w17.registry.PushRawMigrationResponse
+	14, // 26: w17.registry.ProjectRegistry.PushFixture:output_type -> w17.registry.PushFixtureResponse
+	16, // 27: w17.registry.ProjectRegistry.ReleaseProjectToOrg:output_type -> w17.registry.ReleaseProjectToOrgResponse
+	18, // 28: w17.registry.ProjectRegistry.ClaimProject:output_type -> w17.registry.ClaimProjectResponse
+	24, // 29: w17.registry.ProjectRegistry.ResetHistory:output_type -> w17.registry.ResetHistoryResponse
+	23, // 30: w17.registry.ProjectRegistry.VerifyHistory:output_type -> w17.registry.VerifyHistoryResponse
+	21, // 31: w17.registry.ProjectRegistry.ImportProject:output_type -> w17.registry.ImportProjectResponse
+	22, // [22:32] is the sub-list for method output_type
+	12, // [12:22] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_w17registry_registry_proto_init() }
@@ -1972,7 +2117,7 @@ func file_w17registry_registry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17registry_registry_proto_rawDesc), len(file_w17registry_registry_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   23,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

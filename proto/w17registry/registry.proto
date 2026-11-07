@@ -91,6 +91,13 @@ service ProjectRegistry {
   //
   // Flat scalars throughout — nothing here carries registrypb / irpb, so the
   // public mirror is the private RPC's shape unchanged.
+  //
+  // REPLACE is the third policy and the one history rewrite meant for a
+  // project in production: it repairs a stored migration that cannot apply
+  // (`w17ctl migrate replace`). It rides on this RPC rather than a new one
+  // because it IS a history rewrite — whoever may rewrite a project's history
+  // may repair it, and nobody else — and it refuses on its own terms, see
+  // RESET_HISTORY_POLICY_REPLACE.
   rpc ResetHistory(ResetHistoryRequest) returns (ResetHistoryResponse);
 
   // VerifyHistory answers whether a project's recorded migration history
@@ -131,6 +138,11 @@ message Migration {
   string id = 1;
   string connection = 2;
   string content_sha256 = 3;
+  // superseded_by names the migration that took this one's place — a squash
+  // baseline, or the replacement `migrate replace` stored — and is empty
+  // while the migration is live. A superseded migration stays listed (nothing
+  // is deleted from a history) and is never served to apply again.
+  string superseded_by = 4;
 }
 
 message RegisterProjectRequest {
@@ -389,6 +401,34 @@ enum ResetHistoryPolicy {
   // push derives names them so a live deployment can record it without
   // running its DDL.
   RESET_HISTORY_POLICY_SUPERSEDE = 2;
+
+  // REPLACE — repair a stored migration that cannot apply. The named
+  // migration and every live migration after it on its connection are
+  // SUPERSEDED (kept, listed, never served again) and one replacement is
+  // planned in their place: from the schema the project was at before the
+  // named migration to the schema it is at now, by the console's current
+  // planner, with the decisions the request carries. Nothing is deleted.
+  //
+  // It refuses, and stores nothing, when:
+  //   - acknowledge_not_applied is unset — the caller states that no
+  //     environment applied the migration (the console cannot know it: apply
+  //     is offline, and a database reports what it applied only when it
+  //     fetches);
+  //   - a database's LATEST report names the named migration or one after it
+  //     (FetchMigrationsRequest.applied_heads; each database is judged by its
+  //     most recent report, so one that rolled back no longer counts, and a
+  //     report that names no database counts for good) — that migration is
+  //     fixed forward, never replaced;
+  //   - the range holds a hand-authored data migration, a squash baseline, or
+  //     a migration already superseded — none of those can be re-derived;
+  //   - a squash range is frozen and waiting for its baseline;
+  //   - the plan still needs decisions (returned as findings, like a push).
+  //
+  // A deployed database that applied the replaced migration anyway is
+  // refused by `migrate apply`: the fetch names the replaced ids
+  // (FetchMigrationsResponse.replaced), so the replacement is never run on
+  // top of it — wherever in the history the replaced migration sat.
+  RESET_HISTORY_POLICY_REPLACE = 3;
 }
 
 message ResetHistoryRequest {
@@ -408,7 +448,28 @@ message ResetHistoryRequest {
   // too, and without this nothing says so.
   //
   // Empty keeps the unconditional whole-history collapse.
+  //
+  // On REPLACE it stamps the revision the replacement records, like a push.
   string initiative_id = 4;
+
+  // REPLACE only — refused on the other policies rather than ignored.
+  //
+  // connection + migration_id name the migration to replace (the id
+  // `w17ctl migrate list` prints). connection may be empty when the id is on
+  // exactly one connection.
+  string connection = 5;
+  string migration_id = 6;
+  // decide / decide_custom_sql resolve the replacement plan's NEEDS_CONFIRM
+  // findings exactly as PushSchemaRequest's fields of the same names do —
+  // the usual way to repair a migration whose body failed on production data
+  // is to pick a different strategy for the change it made.
+  repeated string decide = 7;
+  map<string, string> decide_custom_sql = 8;
+  // acknowledge_not_applied is the caller's statement that no environment
+  // applied the migration being replaced, checked in every one of them
+  // (`<binary> migrate status --fetch` lists it as pending). Required: the
+  // server refuses without it.
+  bool acknowledge_not_applied = 9;
 }
 
 message ImportProjectRequest {
@@ -466,4 +527,14 @@ message ResetHistoryResponse {
   // raw_migration_ids names those bodies, so the message can list them
   // instead of only counting them.
   repeated string raw_migration_ids = 3;
+
+  // REPLACE only. superseded_ids are the migrations that left the apply plan
+  // (the named one and every live one after it on its connection), oldest
+  // first; replacement is what took their place. Both empty when findings is
+  // non-empty — nothing was stored.
+  repeated string superseded_ids = 4;
+  Migration replacement = 5;
+  // findings the replacement plan still needs decisions for, as a push
+  // reports them. Non-empty = nothing stored.
+  repeated Finding findings = 6;
 }
