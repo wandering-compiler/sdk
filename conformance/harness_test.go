@@ -276,9 +276,9 @@ func get(m protoreflect.Message, name string) protoreflect.Value {
 }
 
 // call invokes a business method; resp is a fresh dynamic message.
-func (h *harness) call(ctx context.Context, method string, req proto.Message, respType string) (*dynamicpb.Message, error) {
+func (h *harness) call(ctx context.Context, method string, req proto.Message, respType string, opts ...grpc.CallOption) (*dynamicpb.Message, error) {
 	resp := h.msg(respType)
-	err := h.business.Invoke(ctx, "/conformance.v1.NoteService/"+method, req, resp)
+	err := h.business.Invoke(ctx, "/conformance.v1.NoteService/"+method, req, resp, opts...)
 	return resp, err
 }
 
@@ -335,8 +335,12 @@ func (h *harness) insertNote(ctx context.Context, req *dynamicpb.Message) (proto
 	return set(h.msg("Note"), map[string]any{"id": id, "text": text}), nil
 }
 
-// listNotes is a keyset-paged query over the id, reading the page from the
-// incoming paging metadata as generated storage does.
+// listNotes is a keyset-paged query over the id, as generated storage runs
+// it: the page from the incoming paging metadata (a backward resume flips the
+// ORDER BY, so its rows come back reversed), and the page's POSITION on the
+// response headers (paging.SetPosition) — the client-order last and first
+// row's id, and the total. Storage mints no cursor; the gateway does, from the
+// position the business method relays.
 func (h *harness) listNotes(ctx context.Context, _ *dynamicpb.Message) (proto.Message, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	h.mu.Lock()
@@ -346,51 +350,63 @@ func (h *harness) listNotes(ctx context.Context, _ *dynamicpb.Message) (proto.Me
 	if !ok {
 		limit = 50
 	}
-	var after int64
+	q := `SELECT id, text FROM notes ORDER BY id LIMIT ?`
+	args := []any{limit}
+	backward := false
 	if b, ok := paging.BoundariesFromIncomingMD(ctx); ok {
-		after = b.Values[0].GetIntV()
+		backward = b.Direction == w17pb.Direction_DIRECTION_BACKWARD
+		if backward {
+			q = `SELECT id, text FROM notes WHERE id < ? ORDER BY id DESC LIMIT ?`
+		} else {
+			q = `SELECT id, text FROM notes WHERE id > ? ORDER BY id LIMIT ?`
+		}
+		args = []any{b.Values[0].GetIntV(), limit}
 	}
-	rows, err := h.db.QueryContext(ctx, `SELECT id, text FROM notes WHERE id > ? ORDER BY id LIMIT ?`, after, limit+1)
+	rows, err := h.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	resp := h.msg("ListNotesResponse")
 	list := resp.Mutable(resp.Descriptor().Fields().ByName("notes")).List()
-	var last int64
-	n := uint32(0)
-	more := false
+	var ids []int64
 	for rows.Next() {
 		var id int64
 		var text string
 		if err := rows.Scan(&id, &text); err != nil {
 			return nil, err
 		}
-		if n == limit {
-			more = true
-			break
-		}
-		n++
-		last = id
+		ids = append(ids, id)
 		list.Append(protoreflect.ValueOfMessage(set(h.msg("Note"), map[string]any{"id": id, "text": text})))
 	}
-	pg := &w17pb.Paging{Limit: limit}
-	if more {
-		cur, err := paging.EncodeBoundariesMD([]*w17pb.KeysetValue{{Value: &w17pb.KeysetValue_IntV{IntV: last}}}, w17pb.Direction_DIRECTION_FORWARD)
-		if err != nil {
-			return nil, err
-		}
-		pg.NextCursor = cur
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	pgRaw, _ := proto.Marshal(pg)
+	var total uint64
+	if err := h.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes`).Scan(&total); err != nil {
+		return nil, err
+	}
+	if len(ids) > 0 {
+		first, last := ids[0], ids[len(ids)-1]
+		if backward {
+			first, last = last, first
+		}
+		paging.SetPosition(ctx, []*w17pb.KeysetValue{paging.FromInt64(last)}, []*w17pb.KeysetValue{paging.FromInt64(first)}, total)
+	} else {
+		paging.SetPosition(ctx, nil, nil, total)
+	}
+	pgRaw, _ := proto.Marshal(&w17pb.Paging{Limit: limit, Total: total})
 	pgMsg := resp.Mutable(resp.Descriptor().Fields().ByName("paging")).Message()
 	if err := proto.Unmarshal(pgRaw, pgMsg.Interface()); err != nil {
 		return nil, err
 	}
-	return resp, rows.Err()
+	return resp, nil
 }
 
 func (h *harness) inspect(ctx context.Context, _ *dynamicpb.Message) (proto.Message, error) {
+	// A sibling call reporting a position of its own: a business tier that
+	// relays it instead of the forwarded call's would move the page.
+	paging.SetPosition(ctx, []*w17pb.KeysetValue{paging.FromInt64(999)}, nil, 999)
 	md, _ := metadata.FromIncomingContext(ctx)
 	h.mu.Lock()
 	h.inspected = append(h.inspected, md.Copy())

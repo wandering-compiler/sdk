@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -432,8 +433,12 @@ func TestCommitOutcomeUnknown(t *testing.T) {
 	}
 }
 
-// A paged list through a business method: page 1 and page 2, each reaching
-// the one storage call paging.forward was given, and not its sibling.
+// A paged list through a business method: page 1, page 2 and back to page 1,
+// as the gateway drives it. The business method forwards the page to storage
+// with paging.forward and knows nothing of its sort; storage reports where the
+// page ends on its response headers, the business tier relays them (and only
+// the forwarded call's, not its sibling's), and the next / previous boundary
+// the gateway would put in its cursor comes from there.
 func TestPagingThroughABusinessMethod(t *testing.T) {
 	if _, err := env.db.Exec(`DELETE FROM notes`); err != nil {
 		t.Fatal(err)
@@ -443,31 +448,52 @@ func TestPagingThroughABusinessMethod(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	page := func(cursor string) protoreflect.Message {
+	// page calls ListNotes as the gateway does: the limit and the boundary
+	// (a cursor's, decoded) as metadata, the response headers collected.
+	page := func(boundary string) (protoreflect.Message, paging.Position) {
 		t.Helper()
 		pairs := []string{paging.LimitMDKey, "2"}
-		if cursor != "" {
-			pairs = append(pairs, paging.BoundariesMDKey, cursor)
+		if boundary != "" {
+			pairs = append(pairs, paging.BoundariesMDKey, boundary)
 		}
 		ctx, cancel := timeout(gatewayCtx(t, pairs...), 5*time.Second)
 		defer cancel()
-		resp, err := env.call(ctx, "ListNotes", env.msg("ListNotesRequest"), "ListNotesResponse")
+		var hdr metadata.MD
+		resp, err := env.call(ctx, "ListNotes", env.msg("ListNotesRequest"), "ListNotesResponse", grpc.Header(&hdr))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return resp
+		pos, ok := paging.PositionFromHeader(hdr)
+		if !ok {
+			t.Fatalf("the business method answered no page position (headers %v): the forwarded call's was not relayed", hdr)
+		}
+		return resp, pos
 	}
-	p1 := page("")
+	boundary := func(vals []*w17pb.KeysetValue, dir w17pb.Direction) string {
+		t.Helper()
+		v, err := paging.EncodeBoundariesMD(vals, dir)
+		if err != nil || v == "" {
+			t.Fatalf("encode boundary %v: %v", vals, err)
+		}
+		return v
+	}
+	p1, pos1 := page("")
 	if got := notes(p1); !slices.Equal(got, []string{"p1", "p2"}) {
 		t.Fatalf("page 1 = %v", got)
 	}
-	cursor := get(get(p1, "paging").Message(), "next_cursor").String()
-	if cursor == "" {
-		t.Fatal("page 1 has no next cursor")
+	if pos1.Total != 5 || len(pos1.Next) != 1 || pos1.Next[0].GetIntV() == 999 {
+		t.Fatalf("page 1 position = %+v: want the forwarded call's (total 5), not the sibling's (999)", pos1)
 	}
-	p2 := page(cursor)
+	p2, pos2 := page(boundary(pos1.Next, w17pb.Direction_DIRECTION_FORWARD))
 	if got := notes(p2); !slices.Equal(got, []string{"p3", "p4"}) {
-		t.Errorf("page 2 = %v, want p3 p4 — the cursor did not reach storage", got)
+		t.Errorf("page 2 = %v, want p3 p4 — the position did not reach storage", got)
+	}
+	// Back: storage runs the page reversed, the gateway turns it round.
+	p0, _ := page(boundary(pos2.Prev, w17pb.Direction_DIRECTION_BACKWARD))
+	back := notes(p0)
+	slices.Reverse(back)
+	if !slices.Equal(back, []string{"p1", "p2"}) {
+		t.Errorf("previous page = %v, want p1 p2", back)
 	}
 	env.mu.Lock()
 	sibling := env.inspected[len(env.inspected)-1]

@@ -64,10 +64,20 @@ class FakeStorage:
         for i, t in enumerate(self.rows[:limit]):
             resp.notes.add(id=i + 1, text=t)
         resp.paging.limit = limit
+        # The page position, as a generated storage handler reports it.
+        sink = paging.response_headers(ctx)
+        if sink is not None:
+            sink[paging.NEXT_MD_KEY] = ("next-of-page",)
+            sink[paging.PREV_MD_KEY] = ("prev-of-page",)
+            sink[paging.TOTAL_MD_KEY] = (str(len(self.rows)),)
         return resp
 
     async def Inspect(self, ctx, req):
         self.seen.append(("Inspect", ctx))
+        sink = paging.response_headers(ctx)
+        if sink is not None:
+            # A sibling call's position, which must not reach the caller.
+            sink[paging.NEXT_MD_KEY] = ("sibling",)
         resp = self.M("InspectResponse")()
         for k, v in ctx.incoming.items():
             resp.headers.add(key=k, values=list(v))
@@ -172,6 +182,7 @@ async def stack(pool):
 
     s = S()
     s.storage, s.coord, s.pub, s.client, s.registry, s.conn = storage, coord, pub, client, breg, conn
+    s.bconn = bconn
     yield s
     bconn.close()
     conn.close()
@@ -266,6 +277,21 @@ async def test_paging_forward_reaches_the_one_call(stack, msg):
     assert [n.text for n in resp.notes] == ["a", "b"]
     inspect_ctx = [c for name, c in stack.storage.seen if name == "Inspect"][-1]
     assert paging.LIMIT_MD_KEY not in inspect_ctx.incoming, "the sibling call got the page"
+
+
+async def test_paging_forward_relays_the_page_position(stack, msg):
+    # The business method answers with the position the FORWARDED storage call
+    # reported (so the gateway can build the next cursor without knowing the
+    # sort), not the one its sibling Inspect call reported, and nothing else.
+    stack.storage.rows = ["a", "b", "c"]
+    m = stack.client.method_info("ListNotes")
+    _, header = await stack.bconn.unary(Context(outgoing={paging.LIMIT_MD_KEY: "2"}), m, msg("ListNotesRequest")())
+    assert header.get_all(paging.NEXT_MD_KEY) == ("next-of-page",)
+    assert header.get_all(paging.PREV_MD_KEY) == ("prev-of-page",)
+    assert header.get_all(paging.TOTAL_MD_KEY) == ("3",)
+    # A method that forwards nothing answers no position.
+    _, header = await stack.bconn.unary(Context(), stack.client.method_info("Inspect"), msg("InspectRequest")())
+    assert not header.get_all(paging.NEXT_MD_KEY)
 
 
 async def test_client_retries_unavailable_three_times(stack, msg):

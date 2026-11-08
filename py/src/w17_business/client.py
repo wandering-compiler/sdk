@@ -34,7 +34,7 @@ from grpclib.const import Cardinality, Status
 from grpclib.exceptions import GRPCError, StreamTerminatedError
 from grpclib.metadata import Deadline
 
-from . import observability, principal, tlsconfig
+from . import observability, paging, principal, tlsconfig
 from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool, default_pool
 from .errors import StatusDetailsCodec
@@ -146,6 +146,14 @@ class Conn:
         """One unary call with the retry policy; returns (reply, response headers)."""
         if timeout is not None:
             ctx = ctx.with_timeout(timeout)
+        reply, header = await self._unary(ctx, m, req)
+        # A call made with paging.forward relays the page position storage
+        # reported onto the business method's response (Go's
+        # paging.RelayPositionUnaryInterceptor).
+        paging.relay_position(ctx, header)
+        return reply, header
+
+    async def _unary(self, ctx: Context, m: MethodInfo, req: Any) -> tuple[Any, Metadata]:
         attempt = 0
         while True:
             attempt += 1

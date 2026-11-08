@@ -54,6 +54,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/paging"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/service/tx/txscope"
 )
@@ -281,7 +282,22 @@ func (c *Conn) RegisterService(sd *grpc.ServiceDesc, impl any) {
 // and there is no wire here. They are accepted and ignored rather than
 // rejected, because a caller that passes one is not wrong — the composed
 // deployment simply has nothing for it to configure.
-func (c *Conn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) (err error) {
+func (c *Conn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	// A call made with paging.Forward relays the page position its handler
+	// reports onto the caller's own response, as the dialled connection's
+	// paging.RelayPositionUnaryInterceptor does over the wire.
+	if !paging.Forwarded(ctx) {
+		return c.invoke(ctx, method, args, reply, opts...)
+	}
+	var hdr metadata.MD
+	err := c.invoke(ctx, method, args, reply, append(opts, grpc.Header(&hdr))...)
+	if err == nil {
+		paging.RelayPosition(ctx, hdr)
+	}
+	return err
+}
+
+func (c *Conn) invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) (err error) {
 	if err := refuseDoneContext(ctx); err != nil {
 		return err
 	}
@@ -503,6 +519,9 @@ func serverContext(ctx context.Context) context.Context {
 	// in-process scope, which would make it JOIN here and open its own in a
 	// split deployment. See txscope.Detach.
 	ctx = txscope.Detach(ctx)
+	// The caller's paging.Forward mark is the caller's: the handler's own
+	// calls relay nothing unless it forwards the page itself.
+	ctx = paging.WithoutForward(ctx)
 	ctx = principal.ForwardToOutgoing(ctx)
 	md, _ := metadata.FromOutgoingContext(ctx)
 	ctx = metadata.NewIncomingContext(ctx, md)

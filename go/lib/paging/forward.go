@@ -31,6 +31,14 @@ var mdKeys = [...]string{BoundariesMDKey, LimitMDKey, TotalMDKey}
 // left on a reused context. Every other outgoing key is kept. With none
 // incoming, ctx is returned unchanged.
 //
+// The returned context is also MARKED: the business tier's storage
+// connection ([RelayPositionUnaryInterceptor], and inprocgrpc in a composed
+// binary) copies the page position the call answers with (NextMDKey,
+// PrevMDKey, TotalMDKey response headers) onto this method's own response
+// headers, so the gateway builds the next and previous cursor from where
+// storage says the page ends without the business tier knowing how it is
+// sorted. A call made without Forward relays nothing.
+//
 // The Python, TypeScript and Rust business SDKs carry the same function
 // (`paging.forward(ctx)`), checked by the sdk's conformance suite.
 func Forward(ctx context.Context) context.Context {
@@ -58,5 +66,24 @@ func Forward(ctx context.Context) context.Context {
 	for k, v := range paged {
 		next[k] = v
 	}
-	return metadata.NewOutgoingContext(ctx, next)
+	return context.WithValue(metadata.NewOutgoingContext(ctx, next), forwardedKey{}, true)
+}
+
+type forwardedKey struct{}
+
+// Forwarded reports whether ctx came from [Forward]: its call serves the
+// page, so its response's page position is relayed.
+func Forwarded(ctx context.Context) bool {
+	v, _ := ctx.Value(forwardedKey{}).(bool)
+	return v
+}
+
+// WithoutForward drops the [Forward] mark: a server context built from a
+// forwarded call (inprocgrpc) must not relay its own calls' positions onto
+// the caller's response.
+func WithoutForward(ctx context.Context) context.Context {
+	if !Forwarded(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, forwardedKey{}, false)
 }

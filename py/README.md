@@ -61,7 +61,7 @@ def register_business(cfg, registry, clients):
 | `Context`, `Metadata`, `background()` | the immutable request context |
 | `principal.user_id / envelope / scope / label / device_id / data_scope` | the verified caller, fail-closed (`NoPrincipalError`) |
 | `principal.forward_to_outgoing(ctx)`, `principal.act_as(ctx, user, scopes)` | the relay (every storage call applies it) and acting as someone |
-| `paging.forward(ctx)` | the incoming page, onto the calls you pass it to only |
+| `paging.forward(ctx)` | the incoming page, onto the calls you pass it to only; the page position the call answers with (`x-w17-paging-next` / `-prev` / `-total`) comes back as your method's response headers, so the gateway builds the next and previous cursor without your code knowing the sort |
 | `distx.run(ctx, client, req, fn)`, `distx.begin(ctx, client, req)` → `TxHandle.commit/rollback` | transactions; nested ones join |
 | `distx.RollbackOnlyError`, `NestedMismatchError`, `HandleFinishedError`, `CommitOutcomeUnknownError` | Go's four transaction errors |
 | `on_commit(ctx, fn)` | run after the root commit, never on rollback, at once outside a transaction |

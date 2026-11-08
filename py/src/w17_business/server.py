@@ -47,7 +47,7 @@ import grpclib.const
 from grpclib.const import Cardinality, Status
 from grpclib.exceptions import GRPCError
 
-from . import events, observability, txscope
+from . import events, observability, paging, txscope
 from .config import ConfigError
 from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool
@@ -345,7 +345,12 @@ def _handler(m: _Method, served: Served) -> grpclib.const.Handler:
         async def unary(stream) -> None:
             async def body(ctx: Context) -> None:
                 req = await stream.recv_message()
+                ctx, headers = paging.with_response_headers(ctx)
                 resp = await m.invoke_unary(ctx, req)
+                if headers:
+                    # The page position a forwarded storage call reported
+                    # (paging.relay_position) answers as this method's own.
+                    await stream.send_initial_metadata(metadata=[(k, v) for k, vs in headers.items() for v in vs])
                 await stream.send_message(resp)
 
             await guarded(stream, body)

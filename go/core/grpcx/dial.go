@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/wandering-compiler/sdk/go/lib/grpcclient"
+	"github.com/wandering-compiler/sdk/go/lib/paging"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
@@ -80,7 +81,7 @@ var defaultClientKeepalive = keepalive.ClientParameters{
 func DialOpts(enabled bool) []grpc.DialOption {
 	opts := []grpc.DialOption{
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-		grpc.WithChainUnaryInterceptor(forwardPrincipalUnaryInterceptor),
+		grpc.WithChainUnaryInterceptor(forwardPrincipalUnaryInterceptor, paging.RelayPositionUnaryInterceptor),
 		grpc.WithChainStreamInterceptor(forwardPrincipalStreamInterceptor),
 		grpc.WithDefaultServiceConfig(defaultServiceConfig),
 		grpc.WithKeepaliveParams(defaultClientKeepalive),
