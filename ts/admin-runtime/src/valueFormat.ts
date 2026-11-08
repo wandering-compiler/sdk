@@ -249,7 +249,9 @@ export function formatMoney(
   const neg = d.neg && !isZeroDigits(d.ipart, d.fpart);
   const amount = renderDecimal({ ...d, neg: false }, f);
   const shape = spaceWordSymbol(f.currency_format || "{value} {symbol}", symbol);
-  const out = shape.replace(/\{value\}|\{symbol\}/g, (tok) => (tok === "{value}" ? amount : symbol));
+  const out = shape.replace(/\{value\}|\{symbol\}/g, (tok) =>
+    tok === "{value}" ? amount : symbol,
+  );
   return neg ? "-" + out : out;
 }
 

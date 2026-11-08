@@ -13,7 +13,13 @@ import {
 } from "./slotFormat";
 import type { FormatContext, FormatTemplate } from "./slotFormat";
 import type { AdminPageSpec, AdminWidgetSpec } from "./types";
-import { currencyCodes, formatMoney, lookupCurrency, normalizeCurrencyCode, resolveFormats } from "./valueFormat";
+import {
+  currencyCodes,
+  formatMoney,
+  lookupCurrency,
+  normalizeCurrencyCode,
+  resolveFormats,
+} from "./valueFormat";
 
 // MONEY end to end on the admin side: an int64 of minor units, a scale, and a
 // currency that is either fixed on the slot or read off the row being shown.
@@ -127,9 +133,9 @@ describe("money on admin surfaces", () => {
   });
 
   it("a STAT tile reads the currency off the response it came from", () => {
-    expect(formatStatValue("500000", perRow, en, undefined, { total: "500000", currency: "EUR" })).toBe(
-      "€5,000.00",
-    );
+    expect(
+      formatStatValue("500000", perRow, en, undefined, { total: "500000", currency: "EUR" }),
+    ).toBe("€5,000.00");
     expect(formatStatValue("500000", fixedCZK, cs)).toBe("5 000,00 Kč");
     // An omitted zero-valued total still reads as money.
     expect(formatStatValue(undefined, fixedCZK, cs)).toBe("0,00 Kč");
