@@ -36,7 +36,7 @@ class CheckoutService:
             order = await self.orders.CreateOrder(tx_ctx, self.M("shop.core.CreateOrderReq")(user_id=uid))
             await on_commit(tx_ctx, lambda: send_mail(order))   # never for a rollback
             return self.M("shop.core.PlaceOrderResp")(order_id=order.id)
-        return await distx.run(ctx, self.tx, distx.begin_request(), work)
+        return await distx.run(ctx, self.tx, distx.begin_request("shop-postgres"), work)  # the connection, by its lock name
 
 def register_business(cfg, registry, clients):
     registry.register("shop.core.CheckoutService", CheckoutService(cfg, registry, clients))

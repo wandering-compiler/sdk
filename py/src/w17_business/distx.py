@@ -98,6 +98,10 @@ class Isolation:
 
 
 def begin_request(connection_name: str = "", tx_timeout_ms: int = 0, isolation: int = Isolation.UNSPECIFIED):
+    """The ``BeginRequest`` for ``begin`` / ``run``. ``connection_name`` is the
+    connection's name in the lock (``notes-postgres``): the storage tier's
+    coordinator opens the transaction on it and refuses a name it does not
+    serve, the empty one included (``InvalidArgument``, "unknown connection")."""
     return BeginRequest(connection_name=connection_name, tx_timeout_ms=tx_timeout_ms, isolation=isolation)
 
 
