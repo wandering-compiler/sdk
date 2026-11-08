@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "w17-business"
+# Released on sdk/go's version line (one major across client, SDK and console);
+# the tag is py/v<version>, installed with
+#   pip install "git+https://github.com/wandering-compiler/sdk@py/v<version>#subdirectory=py"
+version = "0.0.0"
+description = "w17 business SDK for Python: serve a domain's business tier from its descriptor set and manifest"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+dependencies = [
+    "grpclib>=0.4.8,<0.5",
+    "protobuf>=5.29,<8",
+    # google.rpc.Status: grpclib encodes status details (w17.ErrorDetail) with it.
+    "googleapis-common-protos>=1.66",
+    "sentry-sdk>=2.20,<3",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2",
+    "nats-py>=2.9,<3",
+    "redis>=5.2,<9",
+    # .secrets.age: the same age format filippo.io/age decrypts on the Go side.
+    "pyrage>=1.2,<2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+w17-business = "w17_business.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+w17_business = ["sdk_descriptors.binpb", "py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

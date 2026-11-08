@@ -1,0 +1,6 @@
+# The Python SDK's unit-test image: its dependencies and pytest. The tests run
+# against the mounted checkout (`make test-py`), not an installed copy.
+FROM python:3.13-slim
+COPY py/pyproject.toml py/README.md /src/py/
+COPY py/src /src/py/src
+RUN pip install --no-cache-dir "/src/py[test]" && pip uninstall -y w17-business

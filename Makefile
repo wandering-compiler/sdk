@@ -62,3 +62,51 @@ check-refs:
 	@hits="$$(git grep -nE 'docs/(todos|decisions|specs|runbooks|audit|archive)/|\bsrcgo/(domains|tests)/' -- ':!Makefile' ':!**/go.sum' ':!**/package-lock.json')"; rc=$$?; \
 	[ $$rc -le 1 ] || { echo "!! git grep failed ($$rc)"; exit 1; }; \
 	if [ -n "$$hits" ]; then echo "!! these cite the platform's private repository:"; echo "$$hits"; exit 1; fi
+
+# The Python business SDK (py/) and the cross-language conformance suite
+# (conformance/), all in Docker with no published port.
+#
+#   make test-py             the SDK's unit tests (pytest)
+#   make py-descriptors      regenerate py/src/w17_business/sdk_descriptors.binpb
+#   make check-py-descriptors  fail when the committed set is not what that writes
+#   make conformance-py      the Go harness against the Python tier
+#   make check-conformance-descriptors  same check for conformance/testdata
+#
+# GO_DOCKER_FLAGS lets a caller mount its Go caches into the build container
+# (e.g. `-v $$HOME/go:/go -v $$HOME/.cache:/root/.cache`).
+PY_TEST_IMAGE ?= w17-sdk-py-test:3.13
+PY_CONF_IMAGE ?= w17-sdk-py-conformance:dev
+CONF_PREFIX ?= w17-sdk-conformance
+GO_IMAGE ?= golang:1.26
+GO_DOCKER_FLAGS ?=
+PROTOC_DESC = docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR):/src" -w /src $(PROTOC_IMAGE) --include_imports
+
+.PHONY: test-py py-descriptors check-py-descriptors conformance-descriptors check-conformance-descriptors conformance-py
+test-py:
+	docker build -q -t $(PY_TEST_IMAGE) -f py/Dockerfile.test . >/dev/null
+	docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$(CURDIR):/src:ro" -w /src/py \
+		-e PYTHONPATH=/src/py/src -e PYTHONDONTWRITEBYTECODE=1 $(PY_TEST_IMAGE) \
+		python -m pytest -q -p no:cacheprovider tests
+
+# The w17 messages the Python runtime speaks itself (ErrorDetail, Paging,
+# InvalidateEvent, the transaction coordinator), as one descriptor set.
+py-descriptors: protoc-image
+	$(PROTOC_DESC) --proto_path=proto --descriptor_set_out=py/src/w17_business/sdk_descriptors.binpb \
+		w17/error.proto w17/paging.proto w17/client.proto common/distx/distributed_tx.proto
+
+check-py-descriptors: py-descriptors
+	@if [ -n "$$(git status --porcelain -- py/src/w17_business/sdk_descriptors.binpb)" ]; then \
+		echo "check-py-descriptors: run make py-descriptors and commit"; exit 1; fi
+
+conformance-descriptors: protoc-image
+	$(PROTOC_DESC) --proto_path=proto --proto_path=conformance/proto \
+		--descriptor_set_out=conformance/testdata/descriptors.binpb \
+		conformance/v1/conformance.proto conformance/events/lock.proto
+
+check-conformance-descriptors: conformance-descriptors
+	@if [ -n "$$(git status --porcelain -- conformance/testdata/descriptors.binpb)" ]; then \
+		echo "check-conformance-descriptors: run make conformance-descriptors and commit"; exit 1; fi
+
+conformance-py:
+	docker build -q -t $(PY_CONF_IMAGE) -f conformance/python/Dockerfile . >/dev/null
+	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh conformance/run-python.sh $(PY_CONF_IMAGE) $(CONF_PREFIX)
