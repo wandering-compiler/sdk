@@ -37,14 +37,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # OpenTelemetry: metrics (always on when an OTLP endpoint is set) +
 # opt-in/sampled per-RPC spans + W3C trace-context propagation. OTLP
-# export over gRPC (tonic). Pinned to the 0.27 line (mutually compatible).
-opentelemetry = { version = "0.27", features = ["trace", "metrics"] }
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "trace", "metrics"] }
-opentelemetry-otlp = { version = "0.27", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
+# export over gRPC (tonic). Pinned to the 0.32 line (mutually compatible).
+opentelemetry = { version = "0.32", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
 
 [dev-dependencies]
 # Mint a self-signed leaf in-process for the TLS round-trip integration test.
 rcgen = "0.13"
+# An in-process OTLP/gRPC receiver for tests/otel_export.rs, which proves an
+# export actually arrives (every other test runs with telemetry off).
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "trace", "metrics"] }
+tonic = "0.14"
+tokio-stream = { version = "0.1", features = ["net"] }
 
 [profile.release]
 opt-level = 3

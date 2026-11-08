@@ -24,7 +24,7 @@ use opentelemetry::trace::{SpanKind, Tracer, TracerProvider as _};
 use opentelemetry::{global, Context, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_sdk::trace::{Sampler, TracerProvider};
+use opentelemetry_sdk::trace::{Sampler, SdkTracer, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
 
 use crate::config::Config;
@@ -37,7 +37,7 @@ const SERVICE_NAME: &str = "storage-proxy";
 /// per-RPC tracing is enabled) a sampling [`ProxyTracer`].
 pub struct Telemetry {
     meter_provider: Option<SdkMeterProvider>,
-    tracer_provider: Option<TracerProvider>,
+    tracer_provider: Option<SdkTracerProvider>,
     metrics: Option<Metrics>,
     tracer: Option<ProxyTracer>,
 }
@@ -48,6 +48,11 @@ impl Telemetry {
     /// the OTLP exporter machinery (zero overhead). On exporter-build
     /// failure it logs and degrades to disabled rather than aborting the
     /// proxy (telemetry must never take routing down).
+    ///
+    /// Must be called inside the (multi-thread) tokio runtime: the SDK's
+    /// PeriodicReader and BatchSpanProcessor export from their own threads,
+    /// and the tonic exporters they call are bound to the runtime they were
+    /// built in. `tests/otel_export.rs` proves an export arrives.
     pub fn from_config(cfg: &Config, affinity_len: AffinityLen) -> Telemetry {
         let Some(endpoint) = cfg.otel_endpoint.clone() else {
             tracing::info!(
@@ -56,7 +61,9 @@ impl Telemetry {
             return Telemetry::disabled();
         };
 
-        let resource = Resource::new(vec![KeyValue::new("service.name", SERVICE_NAME)]);
+        let resource = Resource::builder_empty()
+            .with_service_name(SERVICE_NAME)
+            .build();
 
         // --- metrics (always on when endpoint set) ----------------------
         let (meter_provider, metrics) = match build_meter_provider(
@@ -144,16 +151,13 @@ impl Telemetry {
             }
         }
         if let Some(tp) = self.tracer_provider {
-            for r in tp.force_flush() {
-                if let Err(e) = r {
-                    tracing::warn!(error = %e, "otel: tracer flush failed");
-                }
+            if let Err(e) = tp.force_flush() {
+                tracing::warn!(error = %e, "otel: tracer flush failed");
             }
             if let Err(e) = tp.shutdown() {
                 tracing::warn!(error = %e, "otel: tracer shutdown failed");
             }
         }
-        global::shutdown_tracer_provider();
     }
 }
 
@@ -174,12 +178,11 @@ fn build_meter_provider(
         .with_timeout(Duration::from_secs(5))
         .build()?;
 
-    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(
-        exporter,
-        opentelemetry_sdk::runtime::Tokio,
-    )
-    .with_interval(Duration::from_secs(15))
-    .build();
+    // The reader exports from its own background thread; the tonic exporter
+    // was built above inside the tokio runtime, which drives its channel.
+    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
+        .with_interval(Duration::from_secs(15))
+        .build();
 
     let provider = SdkMeterProvider::builder()
         .with_reader(reader)
@@ -210,7 +213,7 @@ fn build_tracer_provider(
     endpoint: &str,
     resource: Resource,
     ratio: f64,
-) -> Result<TracerProvider, Box<dyn std::error::Error>> {
+) -> Result<SdkTracerProvider, Box<dyn std::error::Error>> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
@@ -222,8 +225,8 @@ fn build_tracer_provider(
     // the proxy is the root, sample at the configured ratio.
     let sampler = Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(ratio)));
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_sampler(sampler)
         .with_resource(resource)
         .build();
@@ -324,7 +327,7 @@ impl MetricsExt for Option<Metrics> {
 /// whether the span is recorded/exported.
 #[derive(Clone)]
 pub struct ProxyTracer {
-    tracer: Arc<opentelemetry_sdk::trace::Tracer>,
+    tracer: Arc<SdkTracer>,
 }
 
 impl ProxyTracer {

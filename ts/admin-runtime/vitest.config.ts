@@ -98,8 +98,13 @@ export default defineConfig({
     // object per worker — so those tiles formatted 399 400 (narrow no-break space,
     // comma decimal) while the tests assert 399,400. Per-file workers had been
     // hiding it. Both files clear the override now.
+    //
+    // Vitest 4 removed `poolOptions.threads.singleThread`; `maxWorkers: 1` is
+    // the one-worker setting now. Isolation stays ON (the default): the test
+    // files mock modules per file, and `isolate: false` leaks those mocks
+    // across files (measured: 81 failures).
     pool: "threads",
-    poolOptions: { threads: { singleThread: true } },
+    maxWorkers: 1,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     coverage: {
       provider: "v8",

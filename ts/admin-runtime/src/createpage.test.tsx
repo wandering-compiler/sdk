@@ -30,6 +30,10 @@ describe("extractCreatedId", () => {
 
   it("reads a nested { <model>: { id } }", () => {
     expect(extractCreatedId({ user: { id: "nested" } })).toBe("nested");
+    expect(extractCreatedId({ note: { id: 9 } })).toBe("9");
+    // An empty nested string id is not usable; nor is a nested object without one.
+    expect(extractCreatedId({ user: { id: "" } })).toBeUndefined();
+    expect(extractCreatedId({ user: { name: "x" } })).toBeUndefined();
   });
 
   it("prefers the top-level id over a nested one", () => {
