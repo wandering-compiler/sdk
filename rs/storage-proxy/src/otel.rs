@@ -48,6 +48,11 @@ impl Telemetry {
     /// the OTLP exporter machinery (zero overhead). On exporter-build
     /// failure it logs and degrades to disabled rather than aborting the
     /// proxy (telemetry must never take routing down).
+    ///
+    /// Must be called inside the (multi-thread) tokio runtime: the SDK's
+    /// PeriodicReader and BatchSpanProcessor export from their own threads,
+    /// and the tonic exporters they call are bound to the runtime they were
+    /// built in. `tests/otel_export.rs` proves an export arrives.
     pub fn from_config(cfg: &Config, affinity_len: AffinityLen) -> Telemetry {
         let Some(endpoint) = cfg.otel_endpoint.clone() else {
             tracing::info!(

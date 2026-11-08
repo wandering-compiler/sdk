@@ -45,6 +45,11 @@ opentelemetry-otlp = { version = "0.32", default-features = false, features = ["
 [dev-dependencies]
 # Mint a self-signed leaf in-process for the TLS round-trip integration test.
 rcgen = "0.13"
+# An in-process OTLP/gRPC receiver for tests/otel_export.rs, which proves an
+# export actually arrives (every other test runs with telemetry off).
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "trace", "metrics"] }
+tonic = "0.14"
+tokio-stream = { version = "0.1", features = ["net"] }
 
 [profile.release]
 opt-level = 3
