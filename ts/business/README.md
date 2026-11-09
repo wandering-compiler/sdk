@@ -145,9 +145,11 @@ Environment read by the runtime itself, as the Go runtime reads it:
 
 Where JavaScript differs from Go and Python: a running promise cannot be
 cancelled. A cancelled context cancels the calls made with it and reads as
-done, but your handler runs on until it returns; when the drain's timeout
-passes, the work still running after a commit is abandoned (and reported), not
-interrupted. `cfg.int(name)` is a `number` and refuses a value beyond 2^53;
+done, but your handler runs on until it returns. The drain waits for it — the
+server's close cancels what is still running after the shutdown timeout, then
+gives those handlers one more timeout to finish (a rollback, a commit) before
+the storage channels and the buses close; when that passes, they and the work
+still running after a commit are abandoned (and reported), not interrupted. `cfg.int(name)` is a `number` and refuses a value beyond 2^53;
 `cfg.bigint(name)` reads any 64-bit value.
 
 ## Tests

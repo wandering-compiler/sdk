@@ -20,7 +20,8 @@
  *    when `<PREFIX>_GRPC_REFLECTION` is `1`/`true`;
  * 8. on SIGTERM/SIGINT: report NOT_SERVING, refuse new calls, give the
  *    in-flight ones `shutdown_timeout_seconds` (10, Go's ShutdownTimeout),
- *    cancel the rest, wait for the work committed transactions still owe
+ *    cancel the rest and give them one more timeout to return (a rollback,
+ *    a commit in progress), wait for the work committed transactions still owe
  *    (events, onCommit hooks), then run the shutdown hooks under one 30s
  *    drain deadline (Go's shutdownDrainTimeout), close the buses and the
  *    channels, flush telemetry.
@@ -332,6 +333,13 @@ export class App {
         observability.reportError(undefined, `runtime: gRPC handler(s) still running after ${timeout}ms; cancelling them`);
         srv.forceShutdown();
       }
+    }
+    // The server's close does not wait for the handlers: one it cancelled is
+    // still running (a detached rollback, a commit) and needs the storage
+    // channel and the bus it would close under it. Go's hard stop gets one
+    // more timeout; past that the handlers are abandoned, loudly.
+    if (reg !== undefined && !(await reg.waitIdle(timeout))) {
+      observability.reportError(undefined, `runtime: ${reg.inflight} gRPC handler(s) still running ${timeout}ms after the server closed; continuing without them`);
     }
     // The work a committed transaction (or an emit) owes outlives its
     // request. Waited for only now, after the server's close: a handler it

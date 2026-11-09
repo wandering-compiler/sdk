@@ -7,7 +7,9 @@ import { Client, Metadata as GrpcMetadata, credentials } from "@grpc/grpc-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { main, parseDuration, probe, probeTarget } from "../src/cli.ts";
 import { Conn, ServiceClient } from "../src/client.ts";
-import { Context } from "../src/context.ts";
+import { Context, Metadata } from "../src/context.ts";
+import { getDefaultPool } from "../src/descriptors.ts";
+import * as distx from "../src/distx.ts";
 import { Status } from "../src/errors.ts";
 import * as health from "../src/health.ts";
 import { type Manifest, load } from "../src/manifest.ts";
@@ -164,6 +166,43 @@ describe("serving", () => {
       await app.shutdown();
       expect((await call).text).toBe("slept"); // an in-flight call finishes during the drain
       conn.close();
+    }));
+
+  it("a handler the drain cancelled finishes its rollback before the channels and the bus close", () =>
+    inTmpDir(async () => {
+      quiet();
+      const app = new App({ ...load(MANIFEST), shutdownTimeoutMs: 100 }, { projectRoot: PROJECT, environ: env() });
+      await app.boot();
+      await app.start();
+      const order: string[] = [];
+      const getM = (n: string) => getDefaultPool().message("w17.common.distx." + n);
+      const tx: distx.TxClient = {
+        begin: async () => ({ reply: getM("BeginResponse")({ txId: "tx-1" }), header: new Metadata() }),
+        commit: async () => getM("CommitResponse")(),
+        rollback: async (ctx) => {
+          if (ctx.done()) throw new Error("rollback on a done context");
+          await sleep(60); // a storage round trip, after the server closed
+          order.push("rolled back");
+          return getM("RollbackResponse")();
+        },
+      };
+      // Sleep, made to hold a transaction until the drain cancels it.
+      const impl = app.registry!.served[0]!.methodImpls().find((m) => m.info.name === "Sleep")!;
+      (impl as { fn: unknown }).fn = (ctx: Context) =>
+        distx.run(ctx, tx, distx.beginRequest("main"), (txCtx) => new Promise((_, rej) => txCtx.onDone(() => rej(new Error(txCtx.err())))));
+      app.dispatcher = { dispatch: async () => {}, close: async () => void order.push("bus closed") };
+      const closeClients = app.clients!.close.bind(app.clients);
+      app.clients!.close = () => {
+        order.push("clients closed");
+        closeClients();
+      };
+      const conn = new Conn(`127.0.0.1:${app.port}`, { tls: false });
+      const call = new ServiceClient(conn, "conformance.v1.NoteService", app.pool).Sleep(new Context(), msg("SleepRequest")({ ms: 1 })).catch((e: unknown) => e);
+      await sleep(100);
+      await app.shutdown();
+      await call;
+      conn.close();
+      expect(order).toEqual(["rolled back", "bus closed", "clients closed"]);
     }));
 
   it("the drain waits for work the server's close started, before the bus closes", () =>
