@@ -56,7 +56,7 @@ import {
 } from "@grpc/grpc-js";
 import { deserializer, fromGrpcMetadata, serializer, toGrpcMetadata } from "./client.js";
 import { ConfigError } from "./config.js";
-import { Context } from "./context.js";
+import { Context, cancelCall } from "./context.js";
 import type { AnyMessage, MethodInfo, Pool } from "./descriptors.js";
 import { DistxError } from "./distx.js";
 import { STATUS_DETAILS_KEY, Status, StatusError, UserError, encodeRpcStatus, pack } from "./errors.js";
@@ -467,7 +467,9 @@ async function guarded(
     return;
   }
   const root = contextFor(call, path);
-  call.on("cancelled", () => root.cancel());
+  // grpc-js cancels a call whose deadline passed too: that reads as the
+  // deadline, as in Go, not as a client's cancel.
+  call.on("cancelled", () => cancelCall(root));
   reg.enter();
   const [ctx, span] = startSpan(root, path);
   try {

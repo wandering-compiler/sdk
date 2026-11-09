@@ -181,9 +181,15 @@ export class Metadata implements Iterable<[string, readonly string[]]> {
   }
 }
 
+const CANCELED = "context canceled";
+const DEADLINE = "context deadline exceeded";
+
 /** A cancellation flag shared by a context and the contexts derived from it. */
 class CancelNode {
   cancelled = false;
+  /** When it was cancelled (`performance.now()`), and why. */
+  at = 0;
+  reason = CANCELED;
   readonly listeners = new Set<() => void>();
   readonly parent: CancelNode | undefined;
   constructor(parent?: CancelNode) {
@@ -194,21 +200,30 @@ class CancelNode {
     return this.cancelled || (this.parent?.isSet() ?? false);
   }
 
-  cancel(): void {
+  /** The node of the chain cancelled first, if any. */
+  first(): CancelNode | undefined {
+    let out: CancelNode | undefined;
+    for (let c: CancelNode | undefined = this; c; c = c.parent) if (c.cancelled && (out === undefined || c.at <= out.at)) out = c;
+    return out;
+  }
+
+  cancel(reason = CANCELED): void {
     if (this.cancelled) return;
     this.cancelled = true;
+    this.at = performance.now();
+    this.reason = reason;
     for (const fn of [...this.listeners]) fn();
   }
 }
+
+/** Cancel ctx because its deadline passed (the server's 'cancelled' on DEADLINE_EXCEEDED). */
+let cancelForDeadline: (ctx: Context) => void;
 
 const INTERNAL = Symbol("w17.context.internal");
 interface Internal {
   cancel: CancelNode;
   values: ReadonlyMap<unknown, unknown>;
 }
-
-const CANCELED = "context canceled";
-const DEADLINE = "context deadline exceeded";
 
 /** What {@link Context} is constructed from. */
 export interface ContextInit {
@@ -318,11 +333,26 @@ export class Context {
     return this.err() !== undefined;
   }
 
-  /** Why the context is done — Go's spellings — or undefined. */
+  /**
+   * Why the context is done — Go's spellings — or undefined.
+   *
+   * Whichever came first, as Go's `ctx.Err()` keeps the first: a deadline
+   * that had passed when the context was cancelled is the reason (a server
+   * cancels a call whose deadline passed), and a cancel before the deadline
+   * stays "canceled" after it passes.
+   */
   err(): string | undefined {
-    if (this.#cancel.isSet()) return CANCELED;
+    const c = this.#cancel.first();
+    if (c !== undefined) {
+      if (c.reason === DEADLINE || (this.deadline !== undefined && this.deadline <= c.at)) return DEADLINE;
+      return CANCELED;
+    }
     if (this.deadline !== undefined && performance.now() >= this.deadline) return DEADLINE;
     return undefined;
+  }
+
+  static {
+    cancelForDeadline = (ctx) => ctx.#cancel.cancel(DEADLINE);
   }
 
   /**
@@ -389,6 +419,17 @@ export class Context {
   toString(): string {
     return `Context(method=${JSON.stringify(this.method)}, incoming=[${[...this.incoming.keys()].join(",")}], outgoing=[${[...this.outgoing.keys()].join(",")}], deadline=${this.deadline})`;
   }
+}
+
+/**
+ * @internal The server's cancel for a call grpc-js cancelled: within
+ * `slackMs` of its deadline (grpc-js's timer and this context's deadline are
+ * read off different clocks) it is the deadline, not a cancel.
+ */
+export function cancelCall(ctx: Context, slackMs = 5): void {
+  const rem = ctx.timeRemaining();
+  if (rem !== undefined && rem <= slackMs) cancelForDeadline(ctx);
+  else ctx.cancel();
 }
 
 /** An empty context: no metadata, no deadline (Go's `context.Background()`). */

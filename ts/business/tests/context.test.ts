@@ -36,3 +36,28 @@ describe("onDone", () => {
     expect(logged.filter((l) => l.includes("onDone callback threw")).length).toBe(2);
   });
 });
+
+describe("err", () => {
+  it("a deadline that had passed when the context was cancelled is the reason", async () => {
+    const ctx = new Context().withTimeout(5);
+    await sleep(20);
+    ctx.cancel(); // as the server's 'cancelled' after DEADLINE_EXCEEDED
+    expect(ctx.err()).toBe("context deadline exceeded");
+    expect(ctx.withValue("k", 1).err()).toBe("context deadline exceeded");
+  });
+
+  it("a cancel before the deadline stays a cancel after it passes, as Go keeps the first", async () => {
+    const ctx = new Context().withTimeout(10);
+    ctx.cancel();
+    await sleep(25);
+    expect(ctx.err()).toBe("context canceled");
+  });
+
+  it("a parent's deadline reaches a child cancelled with it", async () => {
+    const parent = new Context().withTimeout(5);
+    const child = parent.withCancel();
+    await sleep(20);
+    parent.cancel();
+    expect(child.err()).toBe("context deadline exceeded");
+  });
+});

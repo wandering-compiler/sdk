@@ -258,6 +258,45 @@ describe("over the wire", () => {
     expect(st.code).toBe(Status.DEADLINE_EXCEEDED);
   });
 
+  it("a passed deadline reads as the deadline in the handler, not as a cancel", async () => {
+    const seen: unknown[] = [];
+    class Late extends NoteService {
+      override async Sleep(ctx: Context, _req: AnyMessage): Promise<AnyMessage> {
+        await new Promise<void>((r) => ctx.onDone(r));
+        await sleep(50); // grpc-js's 'cancelled' for the DEADLINE_EXCEEDED has come by now
+        seen.push(ctx.err());
+        try {
+          await this.storage!.Inspect(ctx, this.M("InspectRequest")());
+        } catch (e) {
+          seen.push((e as StatusError).code);
+        }
+        try {
+          await distx.run(ctx, { begin: async () => ({ reply: DM("BeginResponse", { txId: "t" }), header: new Metadata() }), commit: async () => DM("CommitResponse"), rollback: async () => DM("RollbackResponse") }, null, () => 1);
+        } catch (e) {
+          seen.push((e as Error).message);
+        }
+        return this.M("Note")();
+      }
+    }
+    const reg = new Registry(pool());
+    reg.register("NoteService", new Late(reg, new ServiceClient(stack.conn, "conformance.v1.NoteStorage", pool()), undefined));
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      const st = await statusOf(new ServiceClient(conn, "conformance.v1.NoteService", pool()).Sleep(new Context().withTimeout(100), msg("SleepRequest")()));
+      expect(st.code).toBe(Status.DEADLINE_EXCEEDED);
+      expect(await settled(() => seen.length === 3)).toBe(true);
+      expect(seen).toEqual([
+        "context deadline exceeded",
+        Status.DEADLINE_EXCEEDED,
+        "distx.run: not committing, the caller's context is done: context deadline exceeded",
+      ]);
+    } finally {
+      conn.close();
+      await stop(srv);
+    }
+  });
+
   it("an error detail and the operator's prefix", async () => {
     const st = await statusOf(stack.client.Refuse(new Context(), msg("RefuseRequest")()));
     expect(st.code).toBe(Status.FAILED_PRECONDITION);
