@@ -50,8 +50,12 @@ Commit `Cargo.lock`: the image builds `--locked`, and refuses a lock whose
 `tag`, `cargo update -p w17-business -p w17-business-build`, commit).
 
 When a project is generated against a checkout (co-development), or pins a
-pseudo-version, the image substitutes this directory for the git source
-(`cargo build --config 'patch.…'`, the named build context `w17-sdk-rs`).
+pseudo-version, the image substitutes this directory for the git source: it
+turns the named build context `w17-sdk-rs` into a local git repository tagged
+with the tag your `Cargo.lock` names, points the SDK's URL at it
+(`url.insteadOf`), and builds without `--locked`. Cargo's `[patch]` cannot do
+this — it still fetches the original source, and an unreleased tag is not
+there yet.
 
 ## What you write
 
