@@ -125,11 +125,23 @@ fn register_twice(
 
 #[tonic::async_trait]
 impl W17Files for Biz {
+    // A client stream through the middleware: the context is there, the
+    // chunks arrive in order, and the answer counts them.
     async fn put(
         &self,
-        _req: Request<tonic::Streaming<PutRequest>>,
+        req: Request<tonic::Streaming<PutRequest>>,
     ) -> Result<Response<PutResponse>, Status> {
-        Err(Status::unimplemented("put"))
+        let ctx = crate::ctx(&req)?;
+        let mut s = req.into_inner();
+        let mut size = 0;
+        while let Some(part) = s.message().await? {
+            if let Some(crate::pb::w17::common::files::put_request::Part::Chunk(c)) = part.part {
+                size += c.len();
+            }
+        }
+        Ok(Response::new(PutResponse {
+            handle: format!("{size} {}", ctx.incoming().has("x-custom")),
+        }))
     }
 
     type OpenStream = futures::stream::BoxStream<'static, Result<OpenResponse, Status>>;
@@ -444,6 +456,28 @@ async fn the_tier_over_the_wire() {
         }
     }
     assert_eq!(c.stat(stat("ctx")).await.unwrap().into_inner().size, 11);
+
+    // A client stream: served with its context, and ended by its deadline
+    // when the stream never finishes.
+    let chunk = |b: &[u8]| PutRequest {
+        part: Some(crate::pb::w17::common::files::put_request::Part::Chunk(
+            b.to_vec(),
+        )),
+    };
+    let mut put = Request::new(futures::stream::iter(vec![chunk(b"ab"), chunk(b"cde")]));
+    put.metadata_mut().insert("x-custom", "c".parse().unwrap());
+    assert_eq!(c.put(put).await.unwrap().into_inner().handle, "5 true");
+    let mut stalled = Request::new(
+        futures::stream::iter(vec![chunk(b"ab")]).chain(futures::stream::pending()),
+    );
+    stalled.set_timeout(Duration::from_millis(200));
+    let start = Instant::now();
+    let code = c.put(stalled).await.unwrap_err().code();
+    assert!(
+        matches!(code, Code::DeadlineExceeded | Code::Cancelled),
+        "{code:?}"
+    );
+    assert!(start.elapsed() < Duration::from_secs(2));
 
     // The caller's deadline ends the call.
     let mut short = stat("sleep");
