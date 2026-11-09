@@ -462,3 +462,91 @@ async def test_cancel_mid_commit_with_unknown_outcome_uses_the_handle_up():
     with pytest.raises(distx.HandleFinishedError, match="outcome unknown"):
         await h.commit(Context())
     assert tx.seq() == "begin,commit,rollback"
+
+
+async def test_drain_waits_for_work_that_starts_while_it_waits():
+    # Work started while the drain already waits (a hook of the first piece
+    # starting the next, a handler cancelled late) must be awaited too: one
+    # snapshot taken at the start would miss it.
+    done = []
+
+    async def second():
+        await asyncio.sleep(0.1)
+        done.append("second")
+
+    async def first():
+        await asyncio.sleep(0.05)
+        asyncio.ensure_future(txscope.shielded(second()))
+        done.append("first")
+
+    asyncio.ensure_future(txscope.shielded(first()))
+    await asyncio.sleep(0)
+    assert await txscope.drain(2.0)
+    assert done == ["first", "second"], "the drain returned before the work started while it waited"
+
+
+def test_a_cancelled_task_stops_running_hooks_so_asyncio_run_returns():
+    # asyncio.run cancels the leftover tasks at teardown and waits for them: a
+    # run_committed that swallowed its OWN cancellation would move on to the
+    # next stuck hook and hang the exit forever.
+    import threading
+
+    async def stuck():
+        await asyncio.Event().wait()
+
+    async def main():
+        _, scope = txscope.new(Context())
+        scope._park(stuck)
+        scope._park(stuck)
+        asyncio.ensure_future(scope.run_committed())
+        await asyncio.sleep(0.01)
+
+    t = threading.Thread(target=asyncio.run, args=(main(),), daemon=True)
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "asyncio.run never returned: a cancelled task kept running stuck hooks"
+
+
+async def test_a_hooks_own_cancellation_is_still_caught_per_hook():
+    _, scope = txscope.new(Context())
+    ran = []
+
+    async def own_cancel():
+        raise asyncio.CancelledError()
+
+    scope._park(own_cancel)
+    scope._park(lambda: ran.append(1))
+    failures = await scope.run_committed()
+    assert ran == [1] and len(failures) == 1
+
+
+async def test_a_second_cancel_during_the_settle_still_uses_the_handle_up():
+    # Cancelled mid-commit, then cancelled AGAIN while the settling rollback is
+    # in flight: the handle must already refuse another commit.
+    tx = ScriptedTx()
+    h, ctx = await distx.begin(Context(), tx)
+    commit_gate, rollback_gate = asyncio.Event(), asyncio.Event()
+    commit, rollback = tx.commit, tx.rollback
+
+    async def hanging_commit(c, req):
+        await commit(c, req)
+        await commit_gate.wait()
+
+    async def hanging_rollback(c, req):
+        await rollback_gate.wait()
+        return await rollback(c, req)
+
+    tx.commit, tx.rollback = hanging_commit, hanging_rollback
+    task = asyncio.create_task(h.commit(Context()))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0.01)  # now inside the settle
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    tx.commit = commit
+    with pytest.raises(distx.HandleFinishedError):
+        await h.commit(Context())
+    rollback_gate.set()
+    assert await txscope.drain(1.0)
+    assert tx.seq() == "begin,commit,rollback"

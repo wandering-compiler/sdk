@@ -350,3 +350,35 @@ async def test_a_grpclib_without_the_private_listener_stops_the_boot(chdir_tmp, 
     app.server._server = app.server._listener
     app.server.close()
     await app.server.wait_closed()
+
+
+async def test_shutdown_drains_work_started_by_closing_the_server_before_closing_the_bus(chdir_tmp):
+    # grpclib's close cancels the handlers still running; one cancelled after
+    # its commit starts its events then. The drain must come after that, and
+    # the bus must close only once they are done.
+    from w17_business import txscope
+
+    app = App(load(MANIFEST), project_root=PROJECT, environ=env())
+    await app.boot()
+    await app.start()
+    done, at_close = [], {}
+
+    async def emit():
+        await asyncio.sleep(0.1)
+        done.append(1)
+
+    real_close = app.server.close
+
+    def close():
+        asyncio.ensure_future(txscope.shielded(emit()))
+        real_close()
+
+    app.server.close = close
+
+    class Bus:
+        async def close(self):
+            at_close["done"] = list(done)
+
+    app.dispatcher = Bus()
+    await app.shutdown()
+    assert at_close == {"done": [1]}, "the bus closed before the work the server's close started"

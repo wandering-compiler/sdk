@@ -21,7 +21,7 @@ from typing import Any, TypeVar
 
 from .context import Context
 
-__all__ = ["Scope", "Outcome", "new", "scope_from", "active", "after_commit", "detach", "shielded", "drain"]
+__all__ = ["Scope", "Outcome", "new", "scope_from", "active", "after_commit", "detach", "shielded", "drain", "cancel_pending"]
 
 T = TypeVar("T")
 
@@ -72,12 +72,25 @@ class Scope:
         self.ended = self.committed = True
         hooks, self._hooks = self._hooks, []
         failures: list[BaseException] = []
-        for fn in hooks:
+        for i, fn in enumerate(hooks):
             try:
                 r = fn()
                 if inspect.isawaitable(r):
                     await r
-            except BaseException as e:  # noqa: BLE001 — one hook (a cancellation included) never stops the rest
+            except BaseException as e:  # noqa: BLE001 — one hook (its own cancellation included) never stops the rest
+                task = asyncio.current_task()
+                if isinstance(e, asyncio.CancelledError) and task is not None and task.cancelling() > 0:
+                    # The task running the hooks is itself being cancelled
+                    # (the drain's deadline, asyncio.run's teardown): stop,
+                    # say what did not run, and let the cancellation through —
+                    # swallowing it would run the next hook, which may hang
+                    # the exit forever.
+                    from .observability import report_error
+
+                    report_error(None, RuntimeError(
+                        f"txscope: cancelled while running the work parked on a committed transaction; "
+                        f"{len(hooks) - i} piece(s) of it did not run to the end"))
+                    raise
                 failures.append(e)
         return failures
 
@@ -159,11 +172,36 @@ async def shielded(aw: Awaitable[T]) -> T:
     return await asyncio.shield(t)
 
 
+def _running() -> list[asyncio.Task]:
+    loop = asyncio.get_running_loop()
+    return [t for t in _detached if not t.done() and t.get_loop() is loop]
+
+
 async def drain(timeout: float) -> bool:
-    """Wait up to timeout for the work ``shielded`` started; True when none is
-    left running."""
-    pending = [t for t in _detached if not t.done()]
-    if not pending:
-        return True
-    _, still = await asyncio.wait(pending, timeout=max(timeout, 0))
-    return not still
+    """Wait until no work ``shielded`` started is left running — including
+    work started while waiting (a handler cancelled late, then committing) —
+    or until one overall deadline of timeout seconds passes. True when none
+    is left."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(timeout, 0)
+    while True:
+        # Let work that is about to start (a shielded() not yet scheduled) do so.
+        await asyncio.sleep(0)
+        pending = _running()
+        if not pending:
+            return True
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        await asyncio.wait(pending, timeout=remaining)
+
+
+async def cancel_pending(timeout: float) -> int:
+    """Cancel the work still running after the drain and wait for it, bounded
+    by timeout. Returns how many pieces were cancelled."""
+    pending = _running()
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=max(timeout, 0.001))
+    return len(pending)

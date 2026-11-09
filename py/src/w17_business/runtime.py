@@ -55,6 +55,7 @@ log = logging.getLogger("w17_business")
 
 SHUTDOWN_TIMEOUT = 10.0  # lifecycle.DefaultShutdownTimeout; the manifest's shutdown_timeout_seconds wins
 DRAIN_TIMEOUT = 30.0  # runtime.shutdownDrainTimeout: the shutdown hooks
+CANCEL_TIMEOUT = 5.0  # bounds the wait for post-commit work cancelled after the drain
 ENV_MANIFEST = "W17_BUSINESS_MANIFEST"
 ENV_PROJECT_ROOT = "W17_BUSINESS_PROJECT_ROOT"
 
@@ -308,11 +309,6 @@ class App:
                 aserver.close()
             if reg is not None and not await reg.wait_idle(timeout):
                 observability.report_error(None, f"runtime: gRPC handler(s) still running after {timeout}s; cancelling them")
-            # The work a committed transaction (or an emit) owes outlives its
-            # request — wait for it too, or the exit loses those events.
-            if not await txscope.drain(timeout):
-                observability.report_error(
-                    None, f"runtime: work after a commit (events, on_commit hooks) still running after {timeout}s")
             srv.close()
             # Since Python 3.12 asyncio's wait_closed waits for every client
             # connection to close, and a peer tier keeps its connection open
@@ -324,6 +320,16 @@ class App:
             except TimeoutError:
                 if aserver is not None and hasattr(aserver, "abort_clients"):
                     aserver.abort_clients()
+        # The work a committed transaction (or an emit) owes outlives its
+        # request. Waited for only now, after the server's close: a handler
+        # it cancelled may have committed and started that work just then.
+        # One deadline for all of it; what is left is cancelled (bounded) and
+        # reported, and only then does the bus close under it.
+        if not await txscope.drain(timeout):
+            n = await txscope.cancel_pending(CANCEL_TIMEOUT)
+            observability.report_error(
+                None, f"runtime: {n} piece(s) of work after a commit (events, on_commit hooks) still running "
+                      f"after {timeout}s; cancelled")
         drain = Context().with_timeout(DRAIN_TIMEOUT)
         for i, fn in enumerate(reg.shutdowns if reg else []):
             try:

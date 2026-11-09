@@ -247,12 +247,15 @@ class TxHandle:
                 # on a detached context, then let the cancellation through.
                 # Whichever way it settles, nothing parked may run: either
                 # the transaction rolled back, or its outcome is unknown.
-                if await asyncio.shield(self._settle(ctx, None)) is not None:
-                    # The commit may have landed: this handle must never
-                    # commit (or roll back) again.
-                    self._ended = "left with its outcome unknown"
-                if self._scope is not None:
-                    self._scope.discarded()
+                # Used up BEFORE the settle is awaited: a second cancellation
+                # during it must not leave a handle that commits again. A
+                # settle whose rollback succeeds turns this into "rolled back".
+                self._ended = "left with its outcome unknown"
+                try:
+                    await txscope.shielded(self._settle(ctx, None))
+                finally:
+                    if self._scope is not None:
+                        self._scope.discarded()
                 raise
             except Exception as e:
                 err = e
