@@ -28,6 +28,7 @@ from .secrets import Resolver, Secret, new_resolver
 __all__ = ["Config", "ConfigError"]
 
 _INT = re.compile(r"[+-]?[0-9]+")
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
 
 class ConfigError(Exception):
@@ -46,7 +47,13 @@ def _parse(k: ConfigKey, raw: str) -> object:
     if k.type == "int":
         if not _INT.fullmatch(raw):
             raise ConfigError(f"env {k.env}: invalid int {raw!r}")
-        return int(raw)
+        # Go's strconv.Atoi on a 64-bit platform: a value past int64 is refused.
+        # (The length check first: int() itself refuses a few thousand digits.)
+        digits = raw.lstrip("+-").lstrip("0")
+        n = 0 if len(digits) > 19 else int(digits or "0") * (-1 if raw.startswith("-") else 1)
+        if len(digits) > 19 or not _INT64_MIN <= n <= _INT64_MAX:
+            raise ConfigError(f"env {k.env}: invalid int {raw!r}: value out of range (64-bit)")
+        return n
     raise ConfigError(f"config key {k.name!r}: unknown type {k.type!r} (string, bool, int)")
 
 

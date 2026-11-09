@@ -215,3 +215,11 @@ def test_manifest_required_fields(tmp_path):
     with pytest.raises(ManifestError, match="envelope is required"):
         from_dict(_min(events={"envelope": "", "emits": [
             {"method": "/a.S/M", "event": "a.E", "envelope_field": "e", "channel": "c", "topic": "t"}]}))
+
+
+@pytest.mark.parametrize("raw", ["9223372036854775808", "-9223372036854775809", "1" + "0" * 30, "9" * 5000])
+def test_int_out_of_int64_range_is_refused_like_go_atoi(chdir_tmp, raw):
+    with pytest.raises(ConfigError, match="N_LIMIT.*out of range"):
+        Config.load(KEYS, {"N_LIMIT": raw})
+    assert Config.load(KEYS, {"N_LIMIT": "9223372036854775807"}).int("limit") == 2**63 - 1
+    assert Config.load(KEYS, {"N_LIMIT": "-9223372036854775808"}).int("limit") == -(2**63)
