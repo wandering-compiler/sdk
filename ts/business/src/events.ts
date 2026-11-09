@@ -27,7 +27,7 @@ import type { Context, Metadata } from "./context.js";
 import { isCredentialKey, reservedMetadataKey } from "./credentials.js";
 import type { AnyMessage, Pool } from "./descriptors.js";
 import type { Emit, Invalidate } from "./manifest.js";
-import { reportError } from "./observability.js";
+import { errorText, reportError } from "./observability.js";
 import { LABEL_KEY_PREFIX, isGatewayOwnedKey } from "./principal.js";
 
 export { isCredentialKey, reservedMetadataKey, LABEL_KEY_PREFIX };
@@ -673,6 +673,6 @@ export async function fire(
   try {
     await withTimeout(dispatcher.dispatch(ctx.withoutCancel(), channel, topic, payload), timeout, `${channel}/${topic}`);
   } catch (e) {
-    reportError(ctx, new Error(`eventbus: emit ${channel}/${topic}${what ? ` for ${what}` : ""} failed: ${String(e)}`));
+    reportError(ctx, new Error(`eventbus: emit ${channel}/${topic}${what ? ` for ${what}` : ""} failed: ${errorText(e)}`));
   }
 }

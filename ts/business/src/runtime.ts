@@ -64,7 +64,7 @@ export class BootError extends Error {
   override name = "BootError";
 }
 
-const msgOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const msgOf = (e: unknown) => observability.errorText(e, "message");
 
 /**
  * The tier's clients, built from the manifest's `storage` section.

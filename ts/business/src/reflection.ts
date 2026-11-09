@@ -15,6 +15,7 @@ import { BinaryReader, BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
 import { FileDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
 import type { Pool } from "./descriptors.js";
 import { Status } from "./errors.js";
+import { errorText } from "./observability.js";
 
 export const SERVICES = ["grpc.reflection.v1.ServerReflection", "grpc.reflection.v1alpha.ServerReflection"];
 
@@ -173,7 +174,7 @@ export function addTo(server: Server, pool: Pool, services: () => string[]): voi
               out = answer(pool, services, b);
             } catch (e) {
               call.removeAllListeners("data");
-              call.emit("error", { code: Status.INVALID_ARGUMENT, details: `grpc: error unmarshalling request: ${e instanceof Error ? e.message : String(e)}` });
+              call.emit("error", { code: Status.INVALID_ARGUMENT, details: `grpc: error unmarshalling request: ${errorText(e, "message")}` });
               return;
             }
             call.write(out);

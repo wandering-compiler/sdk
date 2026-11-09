@@ -13,7 +13,7 @@
  */
 
 import type { Context } from "./context.js";
-import { reportError } from "./observability.js";
+import { errorText, reportError } from "./observability.js";
 
 const KEY = Symbol("w17.txscope");
 
@@ -145,7 +145,7 @@ export function shielded<T>(work: Promise<T>): Promise<T> {
   detached.add(tracked);
   // A failure nobody awaits any more is reported, never an unhandled rejection.
   tracked.catch((e: unknown) => {
-    reportError(undefined, new Error(`txscope: work run after its request failed: ${String(e)}`));
+    reportError(undefined, new Error(`txscope: work run after its request failed: ${errorText(e)}`));
   });
   return tracked;
 }

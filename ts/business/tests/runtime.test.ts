@@ -423,6 +423,30 @@ describe("telemetry", () => {
     expect(out.exception.values[0]!.value).toBe("dial failed: NOTES_API_TOKEN=[scrubbed], retry");
   });
 
+  it("the error paths print anything thrown and never throw themselves", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const bare = Object.create(null) as object; // String() throws on it
+    const loud = new Error("x");
+    Object.defineProperty(loud, "message", {
+      get() {
+        throw new Error("no");
+      },
+    });
+    expect(() => `${bare as unknown as string}`).toThrow();
+    expect(observability.errorText(bare)).toBe(observability.UNPRINTABLE);
+    expect(observability.errorText(bare, "stack")).toBe(observability.UNPRINTABLE);
+    expect(observability.errorText({ n: 1n }, "json")).toBe("[object Object]");
+    expect(observability.errorText({ n: 1 }, "json")).toBe('{"n":1}');
+    expect(observability.errorText(loud, "message")).toBe(observability.UNPRINTABLE);
+    expect(observability.errorText(new RangeError("r"))).toBe("RangeError: r");
+    expect(() => observability.reportError(undefined, bare)).not.toThrow();
+    expect(() => observability.reportError(undefined, loud)).not.toThrow();
+    // An event the scrub cannot walk (a cycle) is dropped, never sent raw.
+    const cyclic: Record<string, unknown> = { request: { data: {} } };
+    (cyclic.request as { data: Record<string, unknown> }).data.self = cyclic.request;
+    expect(observability.scrubbedOrDropped(cyclic, [])).toBeNull();
+  });
+
   it("OTel init refuses a bad TLS value", async () => {
     await expect(observability.init("svc", { environ: { W17_OTEL_ENDPOINT: "otel:4317", W17_OTEL_TLS: "maybe" } })).rejects.toThrow(/W17_OTEL_TLS/);
   });

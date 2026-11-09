@@ -13,6 +13,7 @@ import * as distx from "../src/distx.ts";
 import { Status, StatusError, errorDetail, forUser } from "../src/errors.ts";
 import * as events from "../src/events.ts";
 import type { Emit } from "../src/manifest.ts";
+import * as observability from "../src/observability.ts";
 import * as paging from "../src/paging.ts";
 import * as principal from "../src/principal.ts";
 import { RegistrationError, Registry, requests, toServiceError } from "../src/server.ts";
@@ -631,6 +632,41 @@ describe("streams", () => {
     } finally {
       conn.close();
       await stop(srv);
+    }
+  });
+
+  it("a handler that throws something unprintable still answers INTERNAL, traced or not", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    class Throws extends Streamer {
+      override async Echo(_ctx: Context, req: AnyMessage): Promise<AnyMessage> {
+        // String() of the first throws; JSON of the second (the span status) does.
+        throw req.n === 1 ? Object.create(null) : { n: 1n };
+      }
+    }
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new Throws());
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => void unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    const obs = await observability.init("svc", { environ: { W17_OTEL_ENDPOINT: "127.0.0.1:1" } });
+    try {
+      const c = new ServiceClient(conn, "test.stream.Streamer", p);
+      for (const n of [1, 2]) {
+        const st = await statusOf(c.Echo(new Context().withTimeout(2000), Ping({ n })));
+        expect([n, st.code]).toEqual([n, Status.INTERNAL]);
+      }
+      await sleep(20);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await obs.shutdown(100);
+      conn.close();
+      srv.forceShutdown();
     }
   });
 

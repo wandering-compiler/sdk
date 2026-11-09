@@ -368,7 +368,7 @@ export class Context {
       try {
         fn0();
       } catch (e) {
-        observability.reportError(this, new Error(`context: an onDone callback threw: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`, { cause: e }));
+        observability.reportError(this, new Error(`context: an onDone callback threw: ${observability.errorText(e, "stack")}`, { cause: e }));
       }
     };
     if (this.done()) {

@@ -49,19 +49,56 @@ export const logger = {
   info: (t: string) => log("info", t),
 };
 
+/** What {@link errorText} prints for a value that cannot be printed. */
+export const UNPRINTABLE = "<unprintable>";
+
+/**
+ * @internal A thrown value as text, for the paths that must not throw
+ * themselves (a catch that reports, a log line, a span status): anything can
+ * be thrown, and String() of an `Object.create(null)`, JSON of a bigint, or
+ * an Error whose `message` getter throws all throw. `how`:
+ * "string" is String(e); "message" is an Error's message, else String(e);
+ * "stack" is an Error's stack (else its message), else String(e); "json" is
+ * an Error's message, else its JSON (else String(e)). What fails falls back
+ * to String(e), and what fails that too is {@link UNPRINTABLE}.
+ */
+export function errorText(e: unknown, how: "string" | "message" | "stack" | "json" = "string"): string {
+  try {
+    if (e instanceof Error && how !== "string") return how === "stack" ? (e.stack ?? e.message) : e.message;
+    if (how === "json") return JSON.stringify(e) ?? String(e);
+    return String(e);
+  } catch {
+    try {
+      return String(e);
+    } catch {
+      return UNPRINTABLE;
+    }
+  }
+}
+
 /**
  * Report an error an operator must see, without failing anything.
  *
  * Mirrors observx.ReportError: to Sentry when it is on, and to the log
- * always (Go falls through to log.Printf without Sentry).
+ * always (Go falls through to log.Printf without Sentry). It never throws,
+ * whatever it is given.
  */
 export function reportError(_ctx: Context | undefined, err: unknown): void {
-  const text = typeof err === "string" ? err : err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  let text: string;
+  try {
+    text = typeof err === "string" ? err : err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  } catch {
+    text = UNPRINTABLE;
+  }
   logger.error(`error: ${text}`);
   const s = state.sentry;
   if (s !== undefined) {
-    if (typeof err === "string") s.captureMessage(err, "error");
-    else s.captureException(err);
+    try {
+      if (typeof err === "string") s.captureMessage(err, "error");
+      else s.captureException(err);
+    } catch (e) {
+      logger.warn(`sentry capture: ${errorText(e)}`);
+    }
   }
 }
 
@@ -83,7 +120,7 @@ export class Observability {
       try {
         await s.flush(timeoutMs);
       } catch (e) {
-        logger.warn(`sentry flush: ${String(e)}`);
+        logger.warn(`sentry flush: ${errorText(e)}`);
       }
     }
     const p = state.provider;
@@ -91,7 +128,7 @@ export class Observability {
       try {
         await p.shutdown();
       } catch (e) {
-        logger.warn(`otel shutdown: ${String(e)}`);
+        logger.warn(`otel shutdown: ${errorText(e)}`);
       }
     }
     state.sentry = state.otel = state.tracer = state.provider = undefined;
@@ -113,6 +150,20 @@ function escapeRe(s: string): string {
  * as `name=value` inside a string (an error message, a log line).
  */
  
+/**
+ * @internal Sentry's beforeSend: the scrubbed event, or none when the scrub
+ * fails — an event that could not be scrubbed is dropped, never sent as it
+ * was, and the failure is logged, never thrown into the reporting path.
+ */
+export function scrubbedOrDropped<T extends Record<string, any>>(event: T, scrubFields: Iterable<string>): T | null {
+  try {
+    return scrubEvent(event, scrubFields);
+  } catch (e) {
+    logger.warn(`sentry: an event that could not be scrubbed was dropped: ${errorText(e)}`);
+    return null;
+  }
+}
+
 export function scrubEvent<T extends Record<string, any>>(event: T, scrubFields: Iterable<string> = []): T {
   const fields = new Set(scrubFields);
   const patterns = [...fields].map(
@@ -212,7 +263,7 @@ export async function init(
       // The SDK runs its own OpenTelemetry pipeline (below); Sentry must not
       // register a competing global provider.
       enableOpenTelemetrySetup: false,
-      beforeSend: (event) => scrubEvent(event, fields),
+      beforeSend: (event) => scrubbedOrDropped(event, fields),
     });
     state.sentry = Sentry;
     sentryOn = true;

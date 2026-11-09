@@ -128,7 +128,7 @@ class MethodImpl {
           payload = builder.marshal(builder.build(c, req, resp));
         } catch (e) {
           // an emit never fails the RPC
-          observability.reportError(c, new Error(`eventbus: build the ${path} event: ${String(e)}`));
+          observability.reportError(c, new Error(`eventbus: build the ${path} event: ${observability.errorText(e)}`));
         }
         if (payload !== undefined) await events.fire(reg.dispatcher, c, emit.channel, emit.topic, payload, path);
       }
@@ -427,7 +427,7 @@ export function toServiceError(e: unknown, path: string, ctx: Context | undefine
   }
   if (e instanceof StatusError) return withDetails(e.code, e.message, e.statusDetails);
   if (isReturned(e)) return { code: Status.UNKNOWN, details: e.message };
-  observability.reportError(ctx, new Error(`PANIC ${path}: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`, { cause: e }));
+  observability.reportError(ctx, new Error(`PANIC ${path}: ${observability.errorText(e, "stack")}`, { cause: e }));
   return { code: Status.INTERNAL, details: `${path}: internal error` };
 }
 
@@ -446,7 +446,7 @@ function startSpan(ctx: Context, path: string): [Context, { end(err?: unknown): 
     observability.withTrace(ctx, api.trace.setSpan(parent, span)),
     {
       end(err?: unknown) {
-        if (err !== undefined) span.setStatus({ code: api.SpanStatusCode.ERROR, message: err instanceof Error ? err.message : JSON.stringify(err) });
+        if (err !== undefined) span.setStatus({ code: api.SpanStatusCode.ERROR, message: observability.errorText(err, "json") });
         span.end();
       },
     },

@@ -35,7 +35,7 @@ import { create, type Message } from "@bufbuild/protobuf";
 import type { Context, Metadata } from "./context.js";
 import { type AnyMessage, getDefaultPool } from "./descriptors.js";
 import { Status, StatusError } from "./errors.js";
-import { reportError } from "./observability.js";
+import { errorText, reportError } from "./observability.js";
 import * as txscope from "./txscope.js";
 
 /** txregistry.HeaderName / distx.ConnIDHeader. */
@@ -248,7 +248,7 @@ export class TxHandle {
         try {
           await this.client.rollback(this.attach(ctx.withoutCancel()), msg("RollbackRequest", { txId: this.txId }));
         } catch (rerr) {
-          throw new RollbackOnlyError(`the rollback also failed: ${String(rerr)}`, { cause: rerr });
+          throw new RollbackOnlyError(`the rollback also failed: ${errorText(rerr)}`, { cause: rerr });
         }
         this.#ended = "rolled back";
         throw new RollbackOnlyError();
@@ -283,7 +283,7 @@ export class TxHandle {
     await txscope.shielded(
       (async () => {
         for (const failure of await scope.runCommitted()) {
-          reportError(detachedCtx, new Error(`distx: work parked on committed transaction ${txId} failed: ${String(failure)}`));
+          reportError(detachedCtx, new Error(`distx: work parked on committed transaction ${txId} failed: ${errorText(failure)}`));
         }
       })(),
     );
@@ -304,13 +304,13 @@ export class TxHandle {
         ctx.withoutCancel(),
         new Error(
           `distx: the outcome of committing transaction ${this.txId} is unknown — the commit call failed ` +
-            `(${String(commitErr)}) and the transaction could no longer be rolled back (${String(rerr)}); its writes may have ` +
+            `(${errorText(commitErr)}) and the transaction could no longer be rolled back (${errorText(rerr)}); its writes may have ` +
             `landed, and ${pending} piece(s) of work waiting for the commit were not run`,
         ),
       );
       this.scope?.discarded();
       return new CommitOutcomeUnknownError(
-        `distx: the commit's outcome is unknown: transaction ${this.txId}: ${String(commitErr)}`,
+        `distx: the commit's outcome is unknown: transaction ${this.txId}: ${errorText(commitErr)}`,
         { cause: commitErr },
       );
     }
@@ -422,7 +422,7 @@ export async function run<T>(
     try {
       await handle.rollback(detachedCtx);
     } catch (rerr) {
-      addNote(ferr, `distx.run: rollback also failed: ${String(rerr)}`);
+      addNote(ferr, `distx.run: rollback also failed: ${errorText(rerr)}`);
     }
     throw ferr;
   }
