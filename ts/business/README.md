@@ -113,7 +113,14 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
   of requests; bidi both. A caller that hangs up, or whose deadline passes,
   mid-stream makes that iterable throw a `StatusError` (`CANCELLED`,
   `DEADLINE_EXCEEDED`) as Go's `Recv` returns one; rethrown, it answers as it
-  is, never as an internal error.
+  is, never as an internal error. A handler may stop reading early (`break`
+  out of its `for await`, or answer a client stream after the first request):
+  that only stops reading, as in Go, and the replies and the status are still
+  sent; what the caller sends after that is dropped.
+- **Calling a stream:** a client-streaming or bidi call takes your iterable of
+  requests and stops pulling from it once the call ends — the server answered
+  or failed first — and closes it (`return()`, so a generator's `finally`
+  runs).
 - The boot refuses a handler that lacks a method of its service (or whose
   method is not `async`, or not `async *` for a server-streaming one), a
   service the manifest does not list, and a plugin hook bound to a method with
