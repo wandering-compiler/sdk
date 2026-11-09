@@ -67,6 +67,11 @@ pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 pub const ENV_MANIFEST: &str = "W17_BUSINESS_MANIFEST";
 pub const DEFAULT_MANIFEST: &str = "/app/w17-business.json";
 pub const DEFAULT_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
+/// grpc-go's ConnectionTimeout: a connection that has not finished its TLS
+/// handshake by then is closed.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
+/// The pause after a failed accept.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// The author's register function, as [`crate::main!`] takes it.
 pub type RegisterFn = fn(&Config, &mut Registry, &Clients) -> Result<(), BootError>;
@@ -533,7 +538,17 @@ impl App {
             tokio::select! {
                 _ = &mut stop => break,
                 accepted = listener.accept() => {
-                    let Ok((stream, _)) = accepted else { continue };
+                    let stream = match accepted {
+                        Ok((stream, _)) => stream,
+                        Err(e) => {
+                            // Out of descriptors, mostly: accept fails at once
+                            // again until one is closed, so pause rather than
+                            // spin (what Go's grpc server does).
+                            observability::warn(&format!("accept: {e}"));
+                            tokio::time::sleep(ACCEPT_BACKOFF).await;
+                            continue;
+                        }
+                    };
                     let _ = stream.set_nodelay(true);
                     let served = served.clone();
                     let acceptor = acceptor.clone();
@@ -550,9 +565,9 @@ impl App {
                             .keep_alive_timeout(KEEPALIVE_TIMEOUT);
                         let result = match acceptor {
                             None => watcher.watch(builder.serve_connection(TokioIo::new(stream), svc)).await,
-                            Some(a) => match a.accept(stream).await {
-                                Ok(tls) => watcher.watch(builder.serve_connection(TokioIo::new(tls), svc)).await,
-                                Err(_) => return,
+                            Some(a) => match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, a.accept(stream)).await {
+                                Ok(Ok(tls)) => watcher.watch(builder.serve_connection(TokioIo::new(tls), svc)).await,
+                                _ => return,
                             },
                         };
                         drop(result);
@@ -586,8 +601,11 @@ impl App {
             return;
         };
         served.shared.draining.store(true, Ordering::SeqCst);
-        // Go's GracefulStop bounded by the timeout, then Stop: no new calls,
-        // the in-flight ones finish, then whatever is left is cancelled.
+        // Go's GracefulStop bounded by the timeout, then Stop: GOAWAY on
+        // every connection at once, so a client takes its next call to
+        // another replica instead of being answered UNAVAILABLE here; the
+        // in-flight calls finish, then whatever is left is cancelled.
+        let closing = tokio::spawn(async move { graceful.shutdown().await });
         let stop = timeout.min(left());
         if tokio::time::timeout(stop, served.shared.wait_idle(stop))
             .await
@@ -600,7 +618,6 @@ impl App {
             ));
         }
         served.shared.kill.cancel();
-        let closing = tokio::spawn(async move { graceful.shutdown().await });
         // After the server's stop, one more timeout (within the budget),
         // shared by the two waits: the handlers it cancelled (a detached
         // rollback, a commit) and the work a committed transaction owes.

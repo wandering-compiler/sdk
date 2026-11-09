@@ -514,6 +514,31 @@ async fn the_boot_refuses() {
     assert!(e.0.contains("has no handler"), "{e}");
 }
 
+// Go's GracefulStop: the drain sends GOAWAY first, so the client's next call
+// goes elsewhere instead of being answered UNAVAILABLE on this connection,
+// while the call in flight finishes. (Only stat cases, which touch none of
+// the statics the other wire test counts.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_drain_sends_goaway_and_lets_the_call_in_flight_finish() {
+    let mut t = tier().await;
+    let c = t.client().await;
+    let mut slow = c.clone();
+    let mut req = stat("sleep");
+    req.set_timeout(Duration::from_secs(20));
+    let in_flight = tokio::spawn(async move { slow.stat(req).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = t.stop.take().unwrap().send(());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let e = c.clone().stat(stat("ctx")).await.unwrap_err();
+    assert!(
+        !e.message().contains("server is shutting down"),
+        "a call sent after the drain began still reached this connection: {e:?}"
+    );
+    let r = in_flight.await.unwrap().unwrap();
+    assert_eq!(r.into_inner().size, 0, "the call in flight finished");
+    t.done.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn a_service_the_manifest_does_not_list_is_refused() {
     let pool =
