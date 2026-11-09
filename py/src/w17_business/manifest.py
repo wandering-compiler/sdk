@@ -1,11 +1,14 @@
-"""The business tier's manifest (``w17-business.json``), format 1.
+"""The business tier's manifest (``w17-business.json``), formats 1 and 2.
 
 Codegen writes it beside ``descriptors.binpb`` in
 ``w17/services/<domain>-business/``; the SDK reads it at boot. The platform's
 spec ``bundles/business-manifest`` is the contract; this module is its reader:
 
 - ``format`` is checked first, and a format this SDK does not know is refused
-  naming the one it reads;
+  naming the ones it reads;
+- format 2 is format 1 plus the ``companion`` section (egress clients and file
+  storage served by the business companion); a manifest whose ``companion`` is
+  null stays format 1, and a format-1 manifest carrying one is refused;
 - a field is never repurposed, so unknown keys are ignored (kept in ``extra``);
 - ``null`` (or an empty list) means "this domain has none".
 
@@ -23,6 +26,7 @@ from typing import Any
 
 __all__ = [
     "SUPPORTED_FORMAT",
+    "SUPPORTED_FORMATS",
     "ManifestError",
     "Register",
     "MethodSpec",
@@ -34,12 +38,18 @@ __all__ = [
     "Invalidate",
     "Events",
     "PluginHook",
+    "EgressClient",
+    "FileConnection",
+    "FilePlacement",
+    "FileStorage",
+    "Companion",
     "Manifest",
     "load",
     "from_dict",
 ]
 
-SUPPORTED_FORMAT = 1
+SUPPORTED_FORMATS = (1, 2)
+SUPPORTED_FORMAT = SUPPORTED_FORMATS[-1]  # the highest format this SDK reads
 
 
 class ManifestError(Exception):
@@ -150,6 +160,56 @@ class PluginHook:
 
 
 @dataclass(frozen=True)
+class EgressClient:
+    """One egress client the companion serves (``proto/clients/<client>/``)."""
+
+    client: str  # "quotes"
+    service: str  # "clients.quotes.QuotesApi", in the descriptor set
+    dsn_env: str  # "W17_CLIENT_QUOTES_DSN" (read by the companion, not here)
+
+
+@dataclass(frozen=True)
+class FileConnection:
+    """One upload connection an ``UPLOADED_*`` field of the domain names."""
+
+    name: str
+    root_env: str  # read by the companion, not here
+    default_root: str = ""
+    writable: bool = False  # the business tier writes it (upload.writer: BUSINESS)
+
+
+@dataclass(frozen=True)
+class FilePlacement:
+    """One ``writer: BUSINESS`` table field: where its files go."""
+
+    field: str  # full proto name, "app.example.NoteExport.file"
+    name: str  # "NoteExportFile", the Go identifier stem
+    connection: str
+    bucket_path: str = ""
+    expected_objects: int = 0
+    max_per_bucket: int = 0
+    max_size_bytes: int = 0  # 0 = no cap
+
+
+@dataclass(frozen=True)
+class FileStorage:
+    service: str
+    connections: tuple[FileConnection, ...] = ()
+    placements: tuple[FilePlacement, ...] = ()
+
+
+@dataclass(frozen=True)
+class Companion:
+    """The business companion: the Go process that serves this tier the
+    project's egress clients and the domain's file stores over gRPC."""
+
+    address_env: str
+    default_address: str
+    egress: tuple[EgressClient, ...] = ()
+    files: FileStorage | None = None
+
+
+@dataclass(frozen=True)
 class Manifest:
     format: int
     domain: str
@@ -168,6 +228,7 @@ class Manifest:
     storage: StorageTier | None = None
     events: Events | None = None
     plugin_hooks: tuple[PluginHook, ...] = ()
+    companion: Companion | None = None
     base_dir: str = "."
     extra: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
@@ -186,7 +247,7 @@ class Manifest:
 _TOP = (
     "format", "domain", "bundle", "language", "sdk_version", "env_prefix", "listen", "reflection_env",
     "shutdown_timeout_seconds", "descriptor_set", "register", "services", "config", "storage", "events",
-    "plugin_hooks",
+    "plugin_hooks", "companion",
 )
 
 
@@ -216,13 +277,70 @@ def _default_text(typ: str, v: Any) -> str:
     return str(v)
 
 
+def _formats() -> str:
+    return " and ".join(str(f) for f in SUPPORTED_FORMATS)
+
+
+def _companion(d: dict) -> Companion | None:
+    c = _obj(d, "companion", "")
+    if c is None:
+        return None
+    egress = tuple(
+        EgressClient(
+            client=_req(e, "client", "companion.egress[]."),
+            service=_req(e, "service", "companion.egress[]."),
+            dsn_env=_req(e, "dsn_env", "companion.egress[]."),
+        )
+        for e in c.get("egress") or ()
+    )
+    f = _obj(c, "files", "companion.")
+    files = None
+    if f is not None:
+        conns = tuple(
+            FileConnection(
+                name=_req(x, "name", "companion.files.connections[]."),
+                root_env=_req(x, "root_env", "companion.files.connections[]."),
+                default_root=x.get("default_root", ""),
+                writable=bool(x.get("writable", False)),
+            )
+            for x in f.get("connections") or ()
+        )
+        names = [x.name for x in conns]
+        if len(set(names)) != len(names):
+            raise ManifestError(f"manifest: companion.files.connections names a connection twice ({names})")
+        placements = tuple(
+            FilePlacement(
+                field=_req(p, "field", "companion.files.placements[]."),
+                name=p.get("name", ""),
+                connection=_req(p, "connection", "companion.files.placements[]."),
+                bucket_path=p.get("bucket_path", ""),
+                expected_objects=int(p.get("expected_objects") or 0),
+                max_per_bucket=int(p.get("max_per_bucket") or 0),
+                max_size_bytes=int(p.get("max_size_bytes") or 0),
+            )
+            for p in f.get("placements") or ()
+        )
+        for p in placements:
+            if p.connection not in names:
+                raise ManifestError(
+                    f"manifest: companion.files.placements: {p.field} is on connection {p.connection!r}, "
+                    "which is not in companion.files.connections")
+        files = FileStorage(service=_req(f, "service", "companion.files."), connections=conns, placements=placements)
+    return Companion(
+        address_env=_req(c, "address_env", "companion."),
+        default_address=c.get("default_address", ""),
+        egress=egress,
+        files=files,
+    )
+
+
 def from_dict(d: dict, base_dir: str = ".") -> Manifest:
     fmt = d.get("format")
     if not isinstance(fmt, int) or isinstance(fmt, bool) or fmt < 1:
-        raise ManifestError(f"manifest: format {fmt!r} is not a manifest format version (this SDK reads {SUPPORTED_FORMAT})")
-    if fmt != SUPPORTED_FORMAT:
+        raise ManifestError(f"manifest: format {fmt!r} is not a manifest format version (this SDK reads {_formats()})")
+    if fmt not in SUPPORTED_FORMATS:
         raise ManifestError(
-            f"manifest: format {fmt} is not one this SDK reads (it reads format {SUPPORTED_FORMAT}) — "
+            f"manifest: format {fmt} is not one this SDK reads (it reads formats {_formats()}) — "
             "install the w17-business release of the project's sdk_version")
     language = d.get("language", "python")
     if language != "python":
@@ -329,6 +447,9 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
             emits=emits,
             invalidates=invalidates,
         )
+    companion = _companion(d)
+    if companion is not None and fmt < 2:
+        raise ManifestError(f"manifest: format {fmt} has no companion section; a manifest with one is format 2")
     hooks = tuple(
         PluginHook(
             plugin=h.get("plugin", ""),
@@ -356,6 +477,7 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
         storage=storage,
         events=events,
         plugin_hooks=hooks,
+        companion=companion,
         base_dir=base_dir,
         extra={k: v for k, v in d.items() if k not in _TOP},
     )
