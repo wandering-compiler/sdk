@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package w17.common.files;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/common/files;filespb";
+
+import "google/protobuf/timestamp.proto";
+
+// W17Files is a business tier's file storage served over gRPC: the
+// stores of the domain's UPLOADED_FILE / UPLOADED_IMAGE connections, as
+// sdk/go/lib/kvfs serves them to a Go business tier in-process. A handle
+// is the value the field's column holds, byte for byte what kvfs.Put
+// returns and what the gateway's download endpoints read.
+//
+// The business companion (go/service/bizcompanion) serves it to a business
+// tier written in another language; go/lib/kvfs/kvfsgrpc is the server.
+//
+// Every refusal is a status carrying a google.rpc.ErrorInfo with domain
+// "w17.files" and one of the reasons FILE_NOT_FOUND, FILE_TOO_LARGE,
+// UNKNOWN_FIELD, UNKNOWN_CONNECTION, READ_ONLY_CONNECTION, BAD_REQUEST,
+// STORE_ERROR. A message never contains a store root, a bucket URL or a
+// credential.
+service W17Files {
+  // Put stores a new object for a `writer: BUSINESS` table field and
+  // returns its handle: kvfs.Put with the field's generated placement.
+  // The first message is the header, every later one a chunk.
+  rpc Put(stream PutRequest) returns (PutResponse);
+  // Open streams a stored object's bytes, in chunks of at most 64 KiB.
+  rpc Open(OpenRequest) returns (stream OpenResponse);
+  // Stat reports a stored object's size and modification time.
+  rpc Stat(StatRequest) returns (StatResponse);
+  // Delete removes a stored object of a connection this tier writes.
+  // Idempotent: a missing object is not an error.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+// PutRequest is one message of a Put stream: exactly one header, first,
+// then any number of chunks (each at most 1 MiB); the client's half-close
+// ends the body. A header alone stores an empty object.
+message PutRequest {
+  oneof part {
+    PutHeader header = 1;
+    bytes chunk = 2;
+  }
+}
+
+message PutHeader {
+  // The table field the file is for, by full proto name
+  // ("app.example.NoteExport.file"). It names the placement and, through
+  // it, the connection.
+  string field = 1;
+}
+
+message PutResponse {
+  // The stored object's handle, verbatim what kvfs.Put returned: the value
+  // the field's column holds.
+  string handle = 1;
+}
+
+message OpenRequest {
+  string connection = 1; // the schema's connection name ("app-exports")
+  string handle = 2;
+}
+
+message OpenResponse {
+  bytes chunk = 1;
+}
+
+message StatRequest {
+  string connection = 1;
+  string handle = 2;
+}
+
+message StatResponse {
+  int64 size = 1;
+  google.protobuf.Timestamp mod_time = 2;
+}
+
+message DeleteRequest {
+  string connection = 1;
+  string handle = 2;
+}
+
+message DeleteResponse {}
