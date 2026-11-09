@@ -129,6 +129,63 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
   service the manifest does not list, and a plugin hook bound to a method with
   no handler.
 
+## Egress clients and files: the business companion
+
+A Go business tier calls the project's egress clients (`proto/clients/<name>/`)
+and the domain's upload file stores in-process. A TypeScript tier reaches the
+same Go code through the **business companion**, a Go process codegen generates
+beside it (its own container, or folded into the domain's composed binary);
+the manifest's `companion` section (format 2) says where it is
+(`companion.address_env`, default `companion.default_address`) and what it
+serves:
+
+```ts
+import { egress } from "@w17/business";
+
+export class ExportService {
+  constructor(cfg, registry, clients) {
+    this.quotes = clients.egress("quotes");        // the client's own gRPC service
+    this.exports = clients.store("shop-exports");  // a FileStore
+    this.M = (n) => registry.pool.message(n);
+  }
+
+  async Export(ctx, req) {
+    let quote;
+    try {
+      quote = await this.quotes.GetQuote(ctx, this.M("clients.quotes.GetQuoteRequest")({ id: req.id }));
+    } catch (e) {
+      const info = egress.errorInfo(e); // { domain: "quotes", reason: "UPSTREAM_HTTP_404", metadata: {…} }
+      throw e;                          // unchanged, as a Go handler returning err
+    }
+    const handle = await this.exports.put(ctx, "shop.core.OrderExport.file", render(quote));
+    …
+  }
+}
+```
+
+- **Egress** is `sdk/go/lib/egress` verbatim: the companion holds the
+  `W17_CLIENT_<NAME>_DSN`, retries what is safe (429/502/503/504 and transport
+  errors, idempotent methods only), caps a call at 30 s and answers a status
+  whose code describes your situation (404 → `NOT_FOUND`, 409 → `ABORTED`,
+  429/5xx → `UNAVAILABLE`, …) with a `google.rpc.ErrorInfo`. Egress hooks
+  (`BeforeRequest` / `AfterResponse`) are Go functions: a client that needs one
+  stays on a Go tier.
+- **Files** are `sdk/go/lib/kvfs`: `put(ctx, field, body)` stores a new object
+  of a `writer: BUSINESS` field (full proto name, or `Message.field` when
+  unambiguous; `body` a `Uint8Array` or an (async) iterable of them, a Node
+  `Readable` included, sent in 64 KiB chunks, capped by the field's
+  `max_size_bytes`) and returns the handle — the
+  column's value, byte for byte what Go's `kvfs.Put` returns; `open` streams an
+  object, `read` returns it whole, `stat` gives `{ size: bigint, modTime: Date }`,
+  `delete` removes one (only on a connection this tier writes; one the gateway
+  writes is read-only). `files.isNotFound(err)` is Go's
+  `errors.Is(err, kvfs.ErrNotFound)`. A file is not part of a storage
+  transaction, as in Go: delete what you stored when the unit of work fails.
+- The companion has a connection of its own: one attempt per call (no retries —
+  the egress runtime already retried, and a `put` stream cannot be replayed),
+  the principal, trace context, labels and deadline relayed as on a storage
+  call, and never `w17-tx-id`, `w17-conn-id` or `x-w17-paging-*`.
+
 ## API
 
 | | |
@@ -143,6 +200,8 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
 | `forUser(code, detailCode, message, field = "", dev?)` | a status with a `w17.ErrorDetail` (`Status.FAILED_PRECONDITION`, …) |
 | `Config.str / int / bigint / bool / secret` | the manifest's keys; `Secret` prints `***` |
 | `Clients.service(name)`, `Clients.distributedTransaction()` | storage clients (retry on UNAVAILABLE, keepalive, internal TLS) |
+| `Clients.egress(name)`, `Clients.store(connection)` → `FileStore.put / open / read / stat / delete` | the companion's egress clients and file stores (above) |
+| `egress.errorInfo(err)` → `{ domain, reason, metadata }` or `undefined`, `files.isNotFound(err)` | reading a companion error |
 | `Registry.register / self / registerShutdown`, `Registry.pool.message(name)` | serving, composing, drain hooks, message types |
 
 Errors a handler throws: a `StatusError` (`forUser`'s, or one a storage call
@@ -177,7 +236,8 @@ Give the container a termination grace longer than that.
   under an author's `tsconfig`), lint, and the unit tests (vitest), in Docker.
 - `make conformance-ts` — the Go harness in `tests/conformance/` (real storage
   with the transaction coordinator over SQLite, embedded NATS, sdk/go's
-  subscriber) against the suite's fixed service implemented with this SDK,
-  installed as the platform's image installs it.
+  subscriber, the business companion in front of a fake third-party API and
+  temp-dir file stores) against the suite's fixed service implemented with
+  this SDK, installed as the platform's image installs it.
 - `make check-ts-descriptors` / `make check-conformance-ts-descriptors` — the
   committed descriptor sets are what `protoc` writes.
