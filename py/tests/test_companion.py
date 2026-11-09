@@ -20,7 +20,7 @@ from w17_business import egress, files
 from w17_business.client import CompanionConn, companion_pairs
 from w17_business.context import Context
 from w17_business.errors import ErrorInfo, StatusDetailsCodec, error_info
-from w17_business.manifest import ManifestError, from_dict, load
+from w17_business.manifest import FilePlacement, ManifestError, from_dict, load
 from w17_business.runtime import BootError, Clients
 from w17_business.server import Registry
 
@@ -106,6 +106,102 @@ def test_companion_refusals_match_the_go_companion():
     d["companion"]["files"]["connections"][0]["writable"] = None
     d["companion"]["files"]["connections"][1].pop("writable", None)
     assert [c.writable for c in from_dict(d).companion.files.connections] == [False, False]
+
+    refused(lambda c: c["files"].update(service="w17.common.files.W17Files "),
+            "the companion serves w17.common.files.W17Files")
+    refused(lambda c: c.update(ADDRESS_ENV=c["address_env"]), "key 'ADDRESS_ENV' is not 'address_env'")
+    # Go's encoding/json folds U+017F (long s) to s and U+212A (Kelvin) to k.
+    refused(lambda c: c["egress"][0].update({"ſervice": "x"}), "key 'ſervice' is not 'service'")
+    refused(lambda c: c["files"]["placements"][0].update({"bucKet_path": "/x"}),
+            "key 'bucKet_path' is not 'bucket_path'")
+
+
+# Every field refuses a value of another JSON type, and an integer one anything
+# but an integer in its Go type's range — the set the Go companion's
+# TestLoadRefusals carries (bizcompanion decodes into typed structs).
+_STRINGS = {
+    (): ("address_env", "default_address"),
+    ("egress", 0): ("client", "service", "dsn_env"),
+    ("files",): ("service",),
+    ("files", "connections", 0): ("name", "root_env", "default_root"),
+    ("files", "placements", 0): ("field", "name", "connection", "bucket_path"),
+}
+_BAD = [
+    (where, f, bad, "must be a string")
+    for where, fs in _STRINGS.items() for f in fs for bad in (5, True, [], {})
+] + [
+    (("files", "connections", 0), "writable", bad, "must be true or false") for bad in ("false", 0, [])
+] + [
+    (("files", "placements", 0), f, bad, "must be an integer from 0 to 18446744073709551615")
+    for f in ("expected_objects", "max_size_bytes") for bad in (-1, "100", 1.5, 1.0, True, 2**64)
+] + [
+    (("files", "placements", 0), "max_per_bucket", bad, "must be an integer from 0 to 4294967295")
+    for bad in (-1, 2**32, 2**33, "1", 1.0)
+] + [
+    ((), "egress", {}, "companion.egress must be a list"),
+    ((), "egress", ["echo"], "companion.egress\\[\\] must be an object"),
+    ((), "egress", [None], "companion.egress\\[\\].client is required"),
+    ((), "files", [], "companion.files must be an object"),
+    (("files",), "connections", {}, "companion.files.connections must be a list"),
+    (("files",), "connections", [None], "companion.files.connections\\[\\].name is required"),
+    (("files",), "placements", "x", "companion.files.placements must be a list"),
+    (("files",), "placements", [None], "companion.files.placements\\[\\].field is required"),
+]
+
+
+@pytest.mark.parametrize(("where", "key", "bad", "match"), _BAD)
+def test_companion_types_match_the_go_companion(where, key, bad, match):
+    d = _conformance()
+    at = d["companion"]
+    for step in where:
+        at = at[step]
+    at[key] = bad
+    with pytest.raises(ManifestError, match=match):
+        from_dict(d)
+
+
+def test_the_companion_section_must_be_an_object():
+    d = _conformance()
+    d["companion"] = "egress"
+    with pytest.raises(ManifestError, match="companion must be an object"):
+        from_dict(d)
+
+
+@pytest.mark.parametrize("literal", ["-0", "1.0", "1e2", "100.00", "18446744073709551616", "-1"])
+def test_an_integer_field_reads_only_an_integer_literal(tmp_path, literal):
+    # As Go's encoding/json: -0, 1.0 and 1e2 are not unsigned integers.
+    src = MANIFEST.read_text().replace('"max_size_bytes": 262144', f'"max_size_bytes": {literal}')
+    assert literal in src
+    path = tmp_path / "w17-business.json"
+    path.write_text(src)
+    with pytest.raises(ManifestError, match="max_size_bytes must be an integer"):
+        load(path)
+
+
+def test_the_companion_section_reads_as_the_go_companion(tmp_path):
+    # A key's last occurrence wins (the Go companion reads it so too), null is
+    # a field's zero value, an unknown key is ignored.
+    src = MANIFEST.read_text()
+    head, sep, tail = src.partition('"companion": {')
+    assert sep
+    path = tmp_path / "w17-business.json"
+    path.write_text(head + sep + '"address_env": 5, "egress": {}, "files": {"service": 1},' + tail)
+    c = load(path).companion
+    assert c.address_env == "NOTES_COMPANION_ADDR" and len(c.egress) == 1 and c.files.service == files.SERVICE
+    d = _conformance()
+    d["companion"]["default_address"] = None
+    d["companion"]["Unknown"] = 5
+    conn = d["companion"]["files"]["connections"][0]
+    conn["default_root"] = conn["writable"] = None
+    p = d["companion"]["files"]["placements"][0]
+    for k in ("name", "bucket_path", "expected_objects", "max_per_bucket", "max_size_bytes"):
+        p[k] = None
+    c = from_dict(d).companion
+    assert c.default_address == "" and c.files.connections[0].default_root == ""
+    assert c.files.placements[0] == FilePlacement(field="conformance.v1.NoteFile.file", name="", connection="notes-files")
+    d["companion"]["egress"] = d["companion"]["files"] = None
+    c = from_dict(d).companion
+    assert c.egress == () and c.files is None
 
 
 # --- ErrorInfo ------------------------------------------------------------------

@@ -172,6 +172,48 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoadReadsAsTheSDKs pins what the SDKs' JSON readers accept and
+// encoding/json alone would not (or would read differently): a key's last
+// occurrence wins, null is a field's zero value, an unknown key is ignored.
+func TestLoadReadsAsTheSDKs(t *testing.T) {
+	section, err := json.Marshal(companionSection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An earlier occurrence of a key, of the wrong type, is overridden.
+	dup := json.RawMessage(`{"address_env": 5, "egress": {}, "files": {"service": 1, "connections": 2},` + string(section[1:]))
+	cfg, err := Load(writeManifest(t, 2, dup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Companion; c.AddressEnv != "NOTES_BUSINESS_COMPANION_BACKEND_ADDR" || len(c.Egress) != 1 || c.FileStorage.Service != FilesService {
+		t.Fatalf("duplicate keys: %+v", c)
+	}
+	nulls := companionSection()
+	nulls["default_address"] = nil
+	nulls["Unknown"] = 5
+	fs := nulls["files"].(map[string]any)
+	fs["connections"].([]any)[0].(map[string]any)["writable"] = nil
+	fs["connections"].([]any)[0].(map[string]any)["default_root"] = nil
+	p := fs["placements"].([]any)[0].(map[string]any)
+	for _, k := range []string{"name", "bucket_path", "expected_objects", "max_per_bucket", "max_size_bytes"} {
+		p[k] = nil
+	}
+	cfg, err = Load(writeManifest(t, 2, nulls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Companion; c.DefaultAddress != "" || c.FileStorage.Connections[0].Writable || c.FileStorage.Placements[0] != (FilePlacement{Field: "app.notes.NoteExport.file", Connection: "notes-exports"}) {
+		t.Fatalf("nulls: %+v", c)
+	}
+	none := companionSection()
+	none["egress"] = nil
+	none["files"] = nil
+	if cfg, err = Load(writeManifest(t, 2, none)); err != nil || len(cfg.Companion.Egress) != 0 || cfg.Companion.FileStorage != nil {
+		t.Fatalf("null lists: %+v, %v", cfg, err)
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	edit := func(f func(c map[string]any)) map[string]any {
 		c := companionSection()
@@ -225,10 +267,85 @@ func TestLoadRefusals(t *testing.T) {
 		"writable as a string": {2, edit(func(c map[string]any) {
 			files(c)["connections"].([]any)[1].(map[string]any)["writable"] = "false"
 		}), "writable"},
+		"section not an object": {2, "egress", "cannot unmarshal string"},
+		"files not an object":   {2, edit(func(c map[string]any) { c["files"] = []any{} }), "cannot unmarshal array"},
+		"files service not exact": {2, edit(func(c map[string]any) { files(c)["service"] = "w17.common.files.W17Files " }),
+			"the companion serves w17.common.files.W17Files"},
+		"egress element null":     {2, edit(func(c map[string]any) { c["egress"] = []any{nil} }), "dsn_env are required"},
+		"egress element a string": {2, edit(func(c map[string]any) { c["egress"] = []any{"echo"} }), "cannot unmarshal string"},
+		"connection element null": {2, edit(func(c map[string]any) { files(c)["connections"] = []any{nil} }), "root_env are required"},
+		"placement element null":  {2, edit(func(c map[string]any) { files(c)["placements"] = []any{nil} }), "field and connection are required"},
+		"case-folded key": {2, edit(func(c map[string]any) {
+			c["ADDRESS_ENV"] = c["address_env"]
+		}), `key "ADDRESS_ENV" is not "address_env"`},
+		// encoding/json folds keys with Unicode simple folding: U+017F (ſ)
+		// is an s and U+212A (Kelvin) a k.
+		"case-folded key, long s": {2, edit(func(c map[string]any) {
+			c["egress"].([]any)[0].(map[string]any)["ſervice"] = "x"
+		}), "key \"ſervice\" is not \"service\""},
+		"case-folded key, kelvin": {2, edit(func(c map[string]any) {
+			files(c)["placements"].([]any)[0].(map[string]any)["bucKet_path"] = "/x"
+		}), "key \"bucKet_path\" is not \"bucket_path\""},
 	} {
 		_, err := Load(writeManifest(t, tc.format, tc.companion))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", name, err, tc.want)
+		}
+	}
+	// Every field refuses a value of another JSON type, and an integer one
+	// anything but an integer literal in its Go type's range. The SDKs'
+	// parity tests (py test_companion.py, ts companion.test.ts) carry the
+	// same set.
+	strs := map[string][]string{
+		"":                     {"address_env", "default_address"},
+		"egress":               {"client", "service", "dsn_env"},
+		"files":                {"service"},
+		"files.connections":    {"name", "root_env", "default_root"},
+		"files.placements":     {"field", "name", "connection", "bucket_path"},
+		"files.connections/b":  {"writable"},
+		"files.placements/u64": {"expected_objects", "max_size_bytes"},
+		"files.placements/u32": {"max_per_bucket"},
+	}
+	bad := map[string][]any{
+		"str": {5, true, []any{}, map[string]any{}},
+		"b":   {"false", 0, []any{}},
+		"u64": {-1, json.Number("-0"), "100", 1.5, json.Number("1.0"), json.Number("1e2"), json.Number("18446744073709551616"), true},
+		"u32": {-1, json.Number("4294967296"), json.Number("8589934592"), "1", json.Number("1.0")},
+	}
+	at := func(c map[string]any, where string) map[string]any {
+		switch where {
+		case "":
+			return c
+		case "egress":
+			return c["egress"].([]any)[0].(map[string]any)
+		case "files":
+			return files(c)
+		case "files.connections":
+			return files(c)["connections"].([]any)[0].(map[string]any)
+		}
+		return files(c)["placements"].([]any)[0].(map[string]any)
+	}
+	for key, fields := range strs {
+		where, kind, ok := strings.Cut(key, "/")
+		if !ok {
+			kind = "str"
+		}
+		for _, f := range fields {
+			for _, v := range bad[kind] {
+				_, err := Load(writeManifest(t, 2, edit(func(c map[string]any) { at(c, where)[f] = v })))
+				if err == nil {
+					t.Errorf("%s.%s = %v loaded", where, f, v)
+				}
+			}
+		}
+	}
+	for name, c := range map[string]map[string]any{
+		"egress an object":      edit(func(c map[string]any) { c["egress"] = map[string]any{} }),
+		"connections an object": edit(func(c map[string]any) { files(c)["connections"] = map[string]any{} }),
+		"placements a string":   edit(func(c map[string]any) { files(c)["placements"] = "x" }),
+	} {
+		if _, err := Load(writeManifest(t, 2, c)); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 	if _, err := Load(filepath.Join(t.TempDir(), "missing.json")); err == nil {

@@ -28,6 +28,7 @@ from typing import Any
 __all__ = [
     "SUPPORTED_FORMAT",
     "SUPPORTED_FORMATS",
+    "FILES_SERVICE",
     "ManifestError",
     "Register",
     "MethodSpec",
@@ -51,6 +52,9 @@ __all__ = [
 
 SUPPORTED_FORMATS = (1, 2)
 SUPPORTED_FORMAT = SUPPORTED_FORMATS[-1]  # the highest format this SDK reads
+
+# The only file service a manifest may name (bizcompanion.FilesService).
+FILES_SERVICE = "w17.common.files.W17Files"
 
 
 class ManifestError(Exception):
@@ -282,16 +286,6 @@ def _formats() -> str:
     return " and ".join(str(f) for f in SUPPORTED_FORMATS)
 
 
-def _bool(d: dict, key: str, where: str) -> bool:
-    """A JSON bool; absent (or null) is false. "false" is not a bool."""
-    v = d.get(key)
-    if v is None:
-        return False
-    if not isinstance(v, bool):
-        raise ManifestError(f"manifest: {where}{key} must be true or false, not {json.dumps(v)}")
-    return v
-
-
 def _unique(values: Iterable[str], what: str) -> None:
     seen: set[str] = set()
     for v in values:
@@ -300,62 +294,172 @@ def _unique(values: Iterable[str], what: str) -> None:
         seen.add(v)
 
 
-# What the Go companion refuses in this section (bizcompanion.Companion.check)
-# is refused here too: the companion and the tier must agree on which
-# manifests boot.
+# --- the companion section ------------------------------------------------------
+#
+# The Go companion (bizcompanion.Load) decodes this section into typed structs
+# and refuses what does not fit them; these readers refuse the same, so the
+# companion and the tier agree on which manifests boot: a string field takes a
+# string, an integer one an integer in its Go type's range (uint32, uint64), a
+# bool true or false, a list a list, an object an object; null is the field's
+# zero value (a null list element an empty object). A key is matched exactly,
+# and one Go's encoding/json would match case-insensitively is refused (the Go
+# companion refuses it too); any other unknown key is ignored.
+
+_U32 = (1 << 32) - 1
+_U64 = (1 << 64) - 1
+
+# Unicode simple case folding onto the ASCII lowercase field names: A-Z, and
+# U+017F (long s) and U+212A (Kelvin), the two non-ASCII runes that fold to an
+# ASCII letter.
+_FOLD = {**{c: c + 32 for c in range(ord("A"), ord("Z") + 1)}, 0x017F: ord("s"), 0x212A: ord("k")}
+
+_COMPANION_KEYS = frozenset(("address_env", "default_address", "egress", "files"))
+_EGRESS_KEYS = frozenset(("client", "service", "dsn_env"))
+_FILES_KEYS = frozenset(("service", "connections", "placements"))
+_CONNECTION_KEYS = frozenset(("name", "root_env", "default_root", "writable"))
+_PLACEMENT_KEYS = frozenset((
+    "field", "name", "connection", "bucket_path", "expected_objects", "max_per_bucket", "max_size_bytes"))
+
+
+class _MinusZero(int):
+    """The JSON literal ``-0``: the integer 0 everywhere but an unsigned
+    companion field, which refuses it as Go's encoding/json does."""
+
+
+def _parse_int(s: str) -> int:
+    return _MinusZero(0) if s == "-0" else int(s)
+
+
+def _show(v: Any) -> str:
+    return "-0" if type(v) is _MinusZero else json.dumps(v, default=repr)
+
+
+def _keys(d: dict, names: frozenset[str], where: str) -> None:
+    for k in d:
+        if not isinstance(k, str) or k in names:
+            continue
+        folded = k.translate(_FOLD)
+        if folded in names:
+            raise ManifestError(f"manifest: {where}: key {k!r} is not {folded!r} — keys are matched exactly")
+
+
+def _str(d: dict, key: str, where: str) -> str:
+    """A JSON string; absent (or null) is ""."""
+    v = d.get(key)
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        raise ManifestError(f"manifest: {where}{key} must be a string, not {_show(v)}")
+    return v
+
+
+def _req_str(d: dict, key: str, where: str) -> str:
+    v = _str(d, key, where)
+    if not v:
+        raise ManifestError(f"manifest: {where}{key} is required")
+    return v
+
+
+def _bool(d: dict, key: str, where: str) -> bool:
+    """A JSON bool; absent (or null) is false. "false" is not a bool."""
+    v = d.get(key)
+    if v is None:
+        return False
+    if not isinstance(v, bool):
+        raise ManifestError(f"manifest: {where}{key} must be true or false, not {_show(v)}")
+    return v
+
+
+def _uint(d: dict, key: str, where: str, top: int) -> int:
+    """A JSON integer from 0 to top; absent (or null) is 0. 1.0, "1" and -0 are not."""
+    v = d.get(key)
+    if v is None:
+        return 0
+    if type(v) is not int or not 0 <= v <= top:
+        raise ManifestError(f"manifest: {where}{key} must be an integer from 0 to {top}, not {_show(v)}")
+    return v
+
+
+def _objects(d: dict, key: str, where: str) -> list[dict]:
+    """A JSON list of objects; absent (or null) is empty, a null element is {}."""
+    v = d.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ManifestError(f"manifest: {where}{key} must be a list or null, not {_show(v)}")
+    out = []
+    for x in v:
+        if x is None:
+            x = {}
+        elif not isinstance(x, dict):
+            raise ManifestError(f"manifest: {where}{key}[] must be an object, not {_show(x)}")
+        out.append(x)
+    return out
+
+
+# Then what bizcompanion.Companion.check refuses: the required fields, a name
+# listed twice, a placement on an unknown connection, a file service other
+# than FILES_SERVICE.
 def _companion(d: dict) -> Companion | None:
     c = _obj(d, "companion", "")
     if c is None:
         return None
-    address_env = _req(c, "address_env", "companion.")
-    egress = tuple(
-        EgressClient(
-            client=_req(e, "client", "companion.egress[]."),
-            service=_req(e, "service", "companion.egress[]."),
-            dsn_env=_req(e, "dsn_env", "companion.egress[]."),
-        )
-        for e in c.get("egress") or ()
-    )
+    _keys(c, _COMPANION_KEYS, "companion")
+    address_env = _req_str(c, "address_env", "companion.")
+    default_address = _str(c, "default_address", "companion.")
+    egress = []
+    for e in _objects(c, "egress", "companion."):
+        _keys(e, _EGRESS_KEYS, "companion.egress[]")
+        egress.append(EgressClient(
+            client=_req_str(e, "client", "companion.egress[]."),
+            service=_req_str(e, "service", "companion.egress[]."),
+            dsn_env=_req_str(e, "dsn_env", "companion.egress[]."),
+        ))
     _unique((e.client for e in egress), "companion.egress: client")
     _unique((e.service for e in egress), "companion.egress: service")
     f = _obj(c, "files", "companion.")
     files = None
     if f is not None:
-        conns = tuple(
-            FileConnection(
-                name=_req(x, "name", "companion.files.connections[]."),
-                root_env=_req(x, "root_env", "companion.files.connections[]."),
-                default_root=x.get("default_root", ""),
+        _keys(f, _FILES_KEYS, "companion.files")
+        service = _str(f, "service", "companion.files.")
+        if service != FILES_SERVICE:
+            raise ManifestError(
+                f"manifest: companion.files.service is {service!r}; the companion serves {FILES_SERVICE}")
+        conns = []
+        for x in _objects(f, "connections", "companion.files."):
+            _keys(x, _CONNECTION_KEYS, "companion.files.connections[]")
+            conns.append(FileConnection(
+                name=_req_str(x, "name", "companion.files.connections[]."),
+                root_env=_req_str(x, "root_env", "companion.files.connections[]."),
+                default_root=_str(x, "default_root", "companion.files.connections[]."),
                 writable=_bool(x, "writable", "companion.files.connections[]."),
-            )
-            for x in f.get("connections") or ()
-        )
+            ))
         names = [x.name for x in conns]
-        if len(set(names)) != len(names):
-            raise ManifestError(f"manifest: companion.files.connections names a connection twice ({names})")
-        placements = tuple(
-            FilePlacement(
-                field=_req(p, "field", "companion.files.placements[]."),
-                name=p.get("name", ""),
-                connection=_req(p, "connection", "companion.files.placements[]."),
-                bucket_path=p.get("bucket_path", ""),
-                expected_objects=int(p.get("expected_objects") or 0),
-                max_per_bucket=int(p.get("max_per_bucket") or 0),
-                max_size_bytes=int(p.get("max_size_bytes") or 0),
-            )
-            for p in f.get("placements") or ()
-        )
+        _unique(names, "companion.files.connections:")
+        placements = []
+        for p in _objects(f, "placements", "companion.files."):
+            _keys(p, _PLACEMENT_KEYS, "companion.files.placements[]")
+            w = "companion.files.placements[]."
+            placements.append(FilePlacement(
+                field=_req_str(p, "field", w),
+                name=_str(p, "name", w),
+                connection=_req_str(p, "connection", w),
+                bucket_path=_str(p, "bucket_path", w),
+                expected_objects=_uint(p, "expected_objects", w, _U64),
+                max_per_bucket=_uint(p, "max_per_bucket", w, _U32),
+                max_size_bytes=_uint(p, "max_size_bytes", w, _U64),
+            ))
         _unique((p.field for p in placements), "companion.files.placements:")
         for p in placements:
             if p.connection not in names:
                 raise ManifestError(
                     f"manifest: companion.files.placements: {p.field} is on connection {p.connection!r}, "
                     "which is not in companion.files.connections")
-        files = FileStorage(service=_req(f, "service", "companion.files."), connections=conns, placements=placements)
+        files = FileStorage(service=service, connections=tuple(conns), placements=tuple(placements))
     return Companion(
         address_env=address_env,
-        default_address=c.get("default_address", ""),
-        egress=egress,
+        default_address=default_address,
+        egress=tuple(egress),
         files=files,
     )
 
@@ -512,10 +616,10 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
 def load(path: str | Path) -> Manifest:
     p = Path(path)
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
+        d = json.loads(p.read_text(encoding="utf-8"), parse_int=_parse_int)
     except OSError as e:
         raise ManifestError(f"manifest: read {p}: {e}") from e
-    except json.JSONDecodeError as e:
+    except ValueError as e:  # JSONDecodeError, or an integer past int's digit limit
         raise ManifestError(f"manifest: {p} is not JSON: {e}") from e
     if not isinstance(d, dict):
         raise ManifestError(f"manifest: {p} is not a JSON object")

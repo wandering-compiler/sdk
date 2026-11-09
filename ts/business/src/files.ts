@@ -27,9 +27,9 @@ import type { CompanionConn } from "./client.js";
 import type { Context } from "./context.js";
 import { type AnyMessage, type MethodInfo, type Pool, getDefaultPool } from "./descriptors.js";
 import { errorInfo } from "./errors.js";
-import type { FileConnection, FilePlacement } from "./manifest.js";
+import { FILES_SERVICE, type FileConnection, type FilePlacement } from "./manifest.js";
 
-export const SERVICE = "w17.common.files.W17Files";
+export const SERVICE = FILES_SERVICE;
 /** The ErrorInfo domain of the companion's file errors. */
 export const DOMAIN = "w17.files";
 /** The size of the chunks `put` sends. */

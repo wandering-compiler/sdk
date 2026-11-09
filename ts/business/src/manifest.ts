@@ -232,7 +232,7 @@ const TOP = new Set([
 type Obj = Record<string, unknown>;
 
 function isObj(v: unknown): v is Obj {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Number);
 }
 
 /** JSON.stringify, writing a bigint (an integer {@link parseJSON} kept exact) as the number it was. */
@@ -250,10 +250,19 @@ function text(v: unknown): string {
  * JSON.parse keeping an integer beyond 2^53 exact, as a bigint: a number
  * would round `9007199254740993` to `...992`, and Python's json (and Go's
  * config loader) read it exactly.
+ *
+ * An integral value written with a fraction or an exponent (`1.0`, `1e2`) is
+ * returned as a Number object: Go's encoding/json and Python's json read it
+ * as a float, not an integer, and JSON.parse alone would make it
+ * indistinguishable from `1` or `100`. It is a number to arithmetic and to
+ * text, but no integer field takes it.
  */
 export function parseJSON(src: string): unknown {
-  const reviver = (_k: string, v: unknown, c?: { source?: string }) =>
-    typeof v === "number" && !Number.isSafeInteger(v) && c?.source !== undefined && /^-?\d+$/.test(c.source) ? BigInt(c.source) : v;
+  const reviver = (_k: string, v: unknown, c?: { source?: string }) => {
+    if (typeof v !== "number" || c?.source === undefined) return v;
+    if (/^-?\d+$/.test(c.source)) return Number.isSafeInteger(v) ? v : BigInt(c.source);
+    return Number.isInteger(v) ? Object(v) : v;
+  };
   return JSON.parse(src, reviver);
 }
 
@@ -292,19 +301,11 @@ function defaultText(v: unknown): string {
   return text(v);
 }
 
-/** A JSON integer (a number or a bigint parseJSON kept exact) as a bigint. */
-function int(v: unknown): bigint {
-  if (typeof v === "bigint") return v;
-  if (typeof v === "number" && Number.isInteger(v)) return BigInt(v);
-  if (v === undefined || v === null) return 0n;
-  throw new ManifestError(`manifest: ${json(v)} is not an integer`);
-}
-
 /** A JSON bool; absent (or null) is false. "false" is not a bool. */
 function bool(d: Obj, key: string, where: string): boolean {
   const v = d[key];
   if (v === undefined || v === null) return false;
-  if (typeof v !== "boolean") throw new ManifestError(`manifest: ${where}${key} must be true or false, not ${json(v)}`);
+  if (typeof v !== "boolean") throw new ManifestError(`manifest: ${where}${key} must be true or false, not ${show(v)}`);
   return v;
 }
 
@@ -317,42 +318,153 @@ function unique(values: readonly string[], what: string): void {
   }
 }
 
-// What the Go companion refuses in this section (bizcompanion.Companion.check)
-// is refused here too: the companion and the tier must agree on which
-// manifests boot.
+// --- the companion section ---------------------------------------------------
+//
+// The Go companion (bizcompanion.Load) decodes this section into typed structs
+// and refuses what does not fit them; these readers refuse the same, so the
+// companion and the tier agree on which manifests boot: a string field takes a
+// string, an integer one an integer in its Go type's range (uint32, uint64), a
+// bool true or false, a list a list, an object an object; null is the field's
+// zero value (a null list element an empty object). A key is matched exactly,
+// and one Go's encoding/json would match case-insensitively is refused (the Go
+// companion refuses it too); any other unknown key is ignored.
+
+/** The only file service a manifest may name (bizcompanion.FilesService). */
+export const FILES_SERVICE = "w17.common.files.W17Files";
+
+const U32 = 4294967295n;
+const U64 = 18446744073709551615n;
+
+const COMPANION_KEYS: ReadonlySet<string> = new Set(["address_env", "default_address", "egress", "files"]);
+const EGRESS_KEYS: ReadonlySet<string> = new Set(["client", "service", "dsn_env"]);
+const FILES_KEYS: ReadonlySet<string> = new Set(["service", "connections", "placements"]);
+const CONNECTION_KEYS: ReadonlySet<string> = new Set(["name", "root_env", "default_root", "writable"]);
+const PLACEMENT_KEYS: ReadonlySet<string> = new Set([
+  "field", "name", "connection", "bucket_path", "expected_objects", "max_per_bucket", "max_size_bytes",
+]);
+
+/** A value for a message: -0 and a {@link parseJSON} float kept apart from the integer they equal. */
+function show(v: unknown): string {
+  if (Object.is(v, -0)) return "-0";
+  if (v instanceof Number) return `${v.valueOf()} written with a fraction or an exponent`;
+  return json(v);
+}
+
+/**
+ * Unicode simple case folding onto the ASCII lowercase field names: A-Z, and
+ * U+017F (long s) and U+212A (Kelvin), the two non-ASCII runes that fold to an
+ * ASCII letter.
+ */
+function fold(k: string): string {
+  return k.replace(/[A-ZſK]/g, (ch) => (ch === "ſ" ? "s" : ch === "K" ? "k" : ch.toLowerCase()));
+}
+
+function exactKeys(d: Obj, names: ReadonlySet<string>, where: string): void {
+  for (const k of Object.keys(d)) {
+    if (names.has(k)) continue;
+    const f = fold(k);
+    if (names.has(f)) {
+      throw new ManifestError(`manifest: ${where}: key ${JSON.stringify(k)} is not ${JSON.stringify(f)} — keys are matched exactly`);
+    }
+  }
+}
+
+/** A JSON string; absent (or null) is "". */
+function cstr(d: Obj, key: string, where: string): string {
+  const v = d[key];
+  if (v === undefined || v === null) return "";
+  if (typeof v !== "string") throw new ManifestError(`manifest: ${where}${key} must be a string, not ${show(v)}`);
+  return v;
+}
+
+function creq(d: Obj, key: string, where: string): string {
+  const v = cstr(d, key, where);
+  if (v === "") throw new ManifestError(`manifest: ${where}${key} is required`);
+  return v;
+}
+
+/**
+ * A JSON integer from 0 to max (a number, or a bigint parseJSON kept exact);
+ * absent (or null) is 0. 1.0, "1" and -0 are not.
+ */
+function uint(d: Obj, key: string, where: string, max: bigint): bigint {
+  const v = d[key];
+  if (v === undefined || v === null) return 0n;
+  let n: bigint | undefined;
+  if (typeof v === "bigint") n = v;
+  else if (typeof v === "number" && Number.isInteger(v) && !Object.is(v, -0)) n = BigInt(v);
+  if (n === undefined || n < 0n || n > max) {
+    throw new ManifestError(`manifest: ${where}${key} must be an integer from 0 to ${max}, not ${show(v)}`);
+  }
+  return n;
+}
+
+/** A JSON list of objects; absent (or null) is empty, a null element is {}. */
+function objects(d: Obj, key: string, where: string): Obj[] {
+  const v = d[key];
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) throw new ManifestError(`manifest: ${where}${key} must be a list or null, not ${show(v)}`);
+  return v.map((x: unknown) => {
+    if (x === null) return {};
+    if (!isObj(x)) throw new ManifestError(`manifest: ${where}${key}[] must be an object, not ${show(x)}`);
+    return x;
+  });
+}
+
+// Then what bizcompanion.Companion.check refuses: the required fields, a name
+// listed twice, a placement on an unknown connection, a file service other
+// than FILES_SERVICE.
 function companionOf(d: Obj): Companion | null {
   const c = obj(d, "companion", "");
   if (c === null) return null;
-  const addressEnv = req(c, "address_env", "companion.");
-  const egress: EgressClient[] = list(c.egress).map((e) => ({
-    client: req(e, "client", "companion.egress[]."),
-    service: req(e, "service", "companion.egress[]."),
-    dsnEnv: req(e, "dsn_env", "companion.egress[]."),
-  }));
+  exactKeys(c, COMPANION_KEYS, "companion");
+  const addressEnv = creq(c, "address_env", "companion.");
+  const defaultAddress = cstr(c, "default_address", "companion.");
+  const egress: EgressClient[] = objects(c, "egress", "companion.").map((e) => {
+    exactKeys(e, EGRESS_KEYS, "companion.egress[]");
+    return {
+      client: creq(e, "client", "companion.egress[]."),
+      service: creq(e, "service", "companion.egress[]."),
+      dsnEnv: creq(e, "dsn_env", "companion.egress[]."),
+    };
+  });
   unique(egress.map((e) => e.client), "companion.egress: client");
   unique(egress.map((e) => e.service), "companion.egress: service");
   const f = obj(c, "files", "companion.");
   let files: FileStorage | null = null;
   if (f !== null) {
-    const connections: FileConnection[] = list(f.connections).map((x) => ({
-      name: req(x, "name", "companion.files.connections[]."),
-      rootEnv: req(x, "root_env", "companion.files.connections[]."),
-      defaultRoot: str(x.default_root),
-      writable: bool(x, "writable", "companion.files.connections[]."),
-    }));
-    const names = connections.map((x) => x.name);
-    if (new Set(names).size !== names.length) {
-      throw new ManifestError(`manifest: companion.files.connections names a connection twice (${names.join(", ")})`);
+    exactKeys(f, FILES_KEYS, "companion.files");
+    const service = cstr(f, "service", "companion.files.");
+    if (service !== FILES_SERVICE) {
+      throw new ManifestError(
+        `manifest: companion.files.service is ${JSON.stringify(service)}; the companion serves ${FILES_SERVICE}`,
+      );
     }
-    const placements: FilePlacement[] = list(f.placements).map((x) => ({
-      field: req(x, "field", "companion.files.placements[]."),
-      name: str(x.name),
-      connection: req(x, "connection", "companion.files.placements[]."),
-      bucketPath: str(x.bucket_path),
-      expectedObjects: int(x.expected_objects),
-      maxPerBucket: Number(int(x.max_per_bucket)),
-      maxSizeBytes: int(x.max_size_bytes),
-    }));
+    const connections: FileConnection[] = objects(f, "connections", "companion.files.").map((x) => {
+      const w = "companion.files.connections[].";
+      exactKeys(x, CONNECTION_KEYS, "companion.files.connections[]");
+      return {
+        name: creq(x, "name", w),
+        rootEnv: creq(x, "root_env", w),
+        defaultRoot: cstr(x, "default_root", w),
+        writable: bool(x, "writable", w),
+      };
+    });
+    const names = connections.map((x) => x.name);
+    unique(names, "companion.files.connections:");
+    const placements: FilePlacement[] = objects(f, "placements", "companion.files.").map((x) => {
+      const w = "companion.files.placements[].";
+      exactKeys(x, PLACEMENT_KEYS, "companion.files.placements[]");
+      return {
+        field: creq(x, "field", w),
+        name: cstr(x, "name", w),
+        connection: creq(x, "connection", w),
+        bucketPath: cstr(x, "bucket_path", w),
+        expectedObjects: uint(x, "expected_objects", w, U64),
+        maxPerBucket: Number(uint(x, "max_per_bucket", w, U32)),
+        maxSizeBytes: uint(x, "max_size_bytes", w, U64),
+      };
+    });
     unique(placements.map((x) => x.field), "companion.files.placements:");
     for (const x of placements) {
       if (!names.includes(x.connection)) {
@@ -362,9 +474,9 @@ function companionOf(d: Obj): Companion | null {
         );
       }
     }
-    files = { service: req(f, "service", "companion.files."), connections, placements };
+    files = { service, connections, placements };
   }
-  return { addressEnv, defaultAddress: str(c.default_address), egress, files };
+  return { addressEnv, defaultAddress, egress, files };
 }
 
 export function fromObject(d: Obj, baseDir = "."): Manifest {

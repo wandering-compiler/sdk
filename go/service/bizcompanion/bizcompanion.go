@@ -26,12 +26,17 @@
 package bizcompanion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -183,11 +188,11 @@ func Load(path string) (*Config, error) {
 		if cfg.Format < 2 {
 			return nil, fmt.Errorf("companion manifest: format %d has no companion section; a manifest with one is format 2", cfg.Format)
 		}
-		var c Companion
-		if err := json.Unmarshal(m.Companion, &c); err != nil {
+		c, err := decodeCompanion(m.Companion)
+		if err != nil {
 			return nil, fmt.Errorf("companion manifest: companion: %w", err)
 		}
-		cfg.Companion = &c
+		cfg.Companion = c
 	}
 	if cfg.Files, err = loadDescriptors(cfg.DescriptorSet); err != nil {
 		return nil, err
@@ -198,6 +203,76 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// decodeCompanion decodes the `companion` section into the typed structs —
+// a string field takes a JSON string, an integer one an integer literal in
+// its type's range, a bool true or false, a list an array, an object an
+// object, and null is a field's zero value — read as the SDKs' JSON readers
+// read it (py manifest.py, ts manifest.ts): a key's last occurrence wins
+// (encoding/json would keep the type error of an earlier one) and a key is
+// matched exactly (encoding/json would also take "ADDRESS_ENV", or one
+// spelled with U+017F for an s, as address_env — refused here, so no
+// reader takes it).
+func decodeCompanion(raw json.RawMessage) (*Companion, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber() // re-encoded as written: -0 and 1.0 stay what they were
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, err
+	}
+	if err := exactKeys(tree, reflect.TypeFor[Companion](), "companion"); err != nil {
+		return nil, err
+	}
+	last, err := json.Marshal(tree)
+	if err != nil {
+		return nil, err
+	}
+	var c Companion
+	if err := json.Unmarshal(last, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// exactKeys refuses a key of v that is not one of t's JSON names but that
+// encoding/json would match to one case-insensitively. A value of the wrong
+// JSON type is left to the typed decode that follows.
+func exactKeys(v any, t reflect.Type, where string) error {
+	switch t.Kind() {
+	case reflect.Pointer:
+		return exactKeys(v, t.Elem(), where)
+	case reflect.Slice:
+		list, _ := v.([]any)
+		for i, x := range list {
+			if err := exactKeys(x, t.Elem(), fmt.Sprintf("%s[%d]", where, i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		obj, _ := v.(map[string]any)
+		fields := make(map[string]reflect.Type, t.NumField())
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if name, _, _ := strings.Cut(f.Tag.Get("json"), ","); f.IsExported() && name != "" && name != "-" {
+				fields[name] = f.Type
+			}
+		}
+		for _, k := range slices.Sorted(maps.Keys(obj)) {
+			if ft, ok := fields[k]; ok {
+				if err := exactKeys(obj[k], ft, where+"."+k); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, name := range slices.Sorted(maps.Keys(fields)) {
+				if strings.EqualFold(k, name) {
+					return fmt.Errorf("%s: key %q is not %q — keys are matched exactly", where, k, name)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // loadDescriptors reads a FileDescriptorSet (with its imports). The

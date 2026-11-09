@@ -32,11 +32,11 @@ from .client import CompanionConn
 from .context import Context
 from .descriptors import Pool, default_pool
 from .errors import error_info
-from .manifest import FileConnection, FilePlacement
+from .manifest import FILES_SERVICE, FileConnection, FilePlacement
 
 __all__ = ["SERVICE", "DOMAIN", "CHUNK_SIZE", "FileInfo", "FileStore", "is_not_found", "resolve_field"]
 
-SERVICE = "w17.common.files.W17Files"
+SERVICE = FILES_SERVICE
 DOMAIN = "w17.files"  # the ErrorInfo domain of the companion's file errors
 CHUNK_SIZE = 64 << 10  # the size of the chunks put sends
 

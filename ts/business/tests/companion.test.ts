@@ -121,6 +121,121 @@ describe("manifest format 2", () => {
     d.companion.files.connections[0].writable = null;
     delete d.companion.files.connections[1].writable;
     expect(fromObject(d).companion!.files!.connections.map((c) => c.writable)).toEqual([false, false]);
+
+    refused((c) => {
+      c.files.service = "w17.common.files.W17Files ";
+    }, /the companion serves w17\.common\.files\.W17Files/);
+    refused((c) => {
+      c.ADDRESS_ENV = c.address_env;
+    }, /key "ADDRESS_ENV" is not "address_env"/);
+    // Go's encoding/json folds U+017F (long s) to s and U+212A (Kelvin) to k.
+    refused((c) => {
+      c.egress[0]["ſervice"] = "x";
+    }, /key "ſervice" is not "service"/);
+    refused((c) => {
+      c.files.placements[0]["bucKet_path"] = "/x";
+    }, /key "bucKet_path" is not "bucket_path"/);
+  });
+
+  // Every field refuses a value of another JSON type, and an integer one
+  // anything but an integer in its Go type's range — the set the Go
+  // companion's TestLoadRefusals carries (bizcompanion decodes into typed
+  // structs).
+  const STRINGS: [string[], string[]][] = [
+    [[], ["address_env", "default_address"]],
+    [["egress", "0"], ["client", "service", "dsn_env"]],
+    [["files"], ["service"]],
+    [["files", "connections", "0"], ["name", "root_env", "default_root"]],
+    [["files", "placements", "0"], ["field", "name", "connection", "bucket_path"]],
+  ];
+  const P = ["files", "placements", "0"];
+  const BAD: [string[], string, unknown, RegExp][] = [
+    ...STRINGS.flatMap(([where, fs]) =>
+      fs.flatMap((f) => [5, true, [], {}].map((bad): [string[], string, unknown, RegExp] => [where, f, bad, /must be a string/])),
+    ),
+    ...["false", 0, []].map((bad): [string[], string, unknown, RegExp] => [
+      ["files", "connections", "0"],
+      "writable",
+      bad,
+      /must be true or false/,
+    ]),
+    ...["expected_objects", "max_size_bytes"].flatMap((f) =>
+      [-1, -0, "100", 1.5, true, 18446744073709551616n, 2 ** 64].map((bad): [string[], string, unknown, RegExp] => [
+        P,
+        f,
+        bad,
+        /must be an integer from 0 to 18446744073709551615/,
+      ]),
+    ),
+    ...[-1, -0, 2 ** 32, 2 ** 33, "1"].map((bad): [string[], string, unknown, RegExp] => [
+      P,
+      "max_per_bucket",
+      bad,
+      /must be an integer from 0 to 4294967295/,
+    ]),
+    [[], "egress", {}, /companion\.egress must be a list/],
+    [[], "egress", ["echo"], /companion\.egress\[\] must be an object/],
+    [[], "egress", [null], /companion\.egress\[\]\.client is required/],
+    [[], "files", [], /companion\.files must be an object/],
+    [["files"], "connections", {}, /companion\.files\.connections must be a list/],
+    [["files"], "connections", [null], /companion\.files\.connections\[\]\.name is required/],
+    [["files"], "placements", "x", /companion\.files\.placements must be a list/],
+    [["files"], "placements", [null], /companion\.files\.placements\[\]\.field is required/],
+  ];
+  it.each(BAD)("refuses %s.%s = %s as the Go companion does", (where, key, bad, want) => {
+    const d = conformance();
+    let at: Obj = d.companion;
+    for (const step of where) at = at[step];
+    at[key] = bad;
+    expect(() => fromObject(d)).toThrow(want);
+  });
+
+  it("refuses a companion section that is not an object", () => {
+    const d = conformance();
+    d.companion = "egress";
+    expect(() => fromObject(d)).toThrow(/companion must be an object/);
+  });
+
+  it.each(["-0", "1.0", "1e2", "100.00", "18446744073709551616", "-1"])(
+    "reads only an integer literal into an integer field (%s)",
+    (literal) => {
+      // As Go's encoding/json: -0, 1.0 and 1e2 are not unsigned integers.
+      const src = readFileSync(MANIFEST, "utf8").replace('"max_size_bytes": 262144', `"max_size_bytes": ${literal}`);
+      expect(src).toContain(literal);
+      expect(() => fromObject(parseJSON(src) as Obj)).toThrow(/max_size_bytes must be an integer/);
+    },
+  );
+
+  it("reads the section as the Go companion does", () => {
+    // A key's last occurrence wins (the Go companion reads it so too), null
+    // is a field's zero value, an unknown key is ignored.
+    const src = readFileSync(MANIFEST, "utf8").replace(
+      '"companion": {',
+      '"companion": {"address_env": 5, "egress": {}, "files": {"service": 1},',
+    );
+    let c = fromObject(parseJSON(src) as Obj).companion!;
+    expect([c.addressEnv, c.egress.length, c.files!.service]).toEqual(["NOTES_COMPANION_ADDR", 1, files.SERVICE]);
+    const d = conformance();
+    d.companion.default_address = null;
+    d.companion.Unknown = 5;
+    Object.assign(d.companion.files.connections[0], { default_root: null, writable: null });
+    const p = d.companion.files.placements[0];
+    for (const k of ["name", "bucket_path", "expected_objects", "max_per_bucket", "max_size_bytes"]) p[k] = null;
+    c = fromObject(d).companion!;
+    expect([c.defaultAddress, c.files!.connections[0]!.defaultRoot]).toEqual(["", ""]);
+    expect(c.files!.placements[0]).toEqual({
+      field: "conformance.v1.NoteFile.file",
+      name: "",
+      connection: "notes-files",
+      bucketPath: "",
+      expectedObjects: 0n,
+      maxPerBucket: 0,
+      maxSizeBytes: 0n,
+    });
+    d.companion.egress = null;
+    d.companion.files = null;
+    c = fromObject(d).companion!;
+    expect([c.egress, c.files]).toEqual([[], null]);
   });
 });
 
