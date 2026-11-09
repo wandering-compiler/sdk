@@ -1,0 +1,19 @@
+[package]
+name = "conformance-notes"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "The conformance suite's NoteService, written against the Rust business SDK."
+license = "MIT"
+publish = false
+
+[dependencies]
+w17-business = { path = "../../.." }
+tonic = "0.14"
+prost = "0.14"
+tokio = { version = "1", features = ["time"] }
+futures = "0.3"
+bytes = "1"
+
+[build-dependencies]
+w17-business-build = { path = "../../../build" }

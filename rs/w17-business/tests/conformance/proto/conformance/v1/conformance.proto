@@ -1,0 +1,220 @@
+// The fixed service every business SDK implements for the conformance suite.
+//
+// NoteStorage is served by the Go harness (a real distributed-transaction
+// coordinator over SQLite); NoteService is the business tier under test, one
+// implementation per language, all answering the same way. The harness also
+// runs the business companion (sdk/go/service/bizcompanion) for the tier: the
+// egress client clients.echo.EchoApi and the file store of NoteFile.file.
+// Change a message here and every implementation changes with it.
+syntax = "proto3";
+
+package conformance.v1;
+
+import "w17/field.proto";
+import "w17/paging.proto";
+
+// The project's AuthResp: the gateway's x-w17-user envelope decodes into it.
+message AuthResp {
+  string user_id = 1;
+  map<string, string> scopes = 2;
+  map<string, string> labels = 3;
+}
+
+message Note {
+  int64 id = 1;
+  string text = 2;
+}
+
+// A table whose file the business tier writes: the manifest's one
+// companion.files.placements entry (connection notes-files).
+message NoteFile {
+  int64 id = 1;
+  string file = 2 [(w17.field) = {
+    type: UPLOADED_FILE
+    upload: {
+      connection: "notes-files"
+      bucket_path: "/note-files"
+      expected_objects: 100000
+      max_per_bucket: 100
+      max_size_bytes: 262144
+      writer: BUSINESS
+    }
+  }];
+}
+
+// ---------------------------------------------------------------------------
+// Storage — served by the harness.
+
+service NoteStorage {
+  rpc InsertNote(InsertNoteRequest) returns (Note);
+  rpc ListNotes(ListNotesRequest) returns (ListNotesResponse);
+  // Inspect answers what the call carried: its metadata and its deadline.
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+}
+
+message InsertNoteRequest {
+  string text = 1;
+}
+
+message ListNotesRequest {}
+
+message ListNotesResponse {
+  repeated Note notes = 1;
+  w17.Paging paging = 2;
+}
+
+message InspectRequest {
+  // Business only: before relaying, put STALE copies of relayed principal
+  // keys on the outgoing side (x-w17-user, x-w17-scope-org_id,
+  // x-w17-audience, w17-label-tenant set to "stale-*", and
+  // x-w17-scope-stale_only, which the request does not carry). The relay
+  // replaces the whole set: storage must see the verified incoming values
+  // only, and no x-w17-scope-stale_only. Storage ignores it.
+  bool stale_outgoing = 1;
+}
+
+message Header {
+  string key = 1;
+  repeated string values = 2;
+}
+
+message InspectResponse {
+  repeated Header headers = 1;
+  bool has_deadline = 2;
+  int64 deadline_ms = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Business — served by the SDK under test.
+
+service NoteService {
+  // One write; emits NoteCreated (w17-business.json). Runs in its own
+  // distx.run, so a caller's transaction is joined.
+  rpc CreateNote(CreateNoteRequest) returns (Note);
+  // Several writes in one transaction, each through the served CreateNote.
+  rpc CreateNotes(CreateNotesRequest) returns (CreateNotesResponse);
+  // A paged list: paging.forward onto the one storage call that serves it,
+  // and a sibling Inspect call WITHOUT it both before and after that call (a
+  // relay that ignored the forward mark would let either one move the page).
+  rpc ListNotes(ListNotesRequest) returns (ListNotesResponse);
+  // Relays storage's Inspect: what header forwarding and the deadline did.
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+  // Refuses with for_user.
+  rpc Refuse(RefuseRequest) returns (Note);
+  // Sleeps; the caller's deadline ends it.
+  rpc Sleep(SleepRequest) returns (Note);
+  // The transaction errors that do not fail the method: what each raised.
+  rpc TxErrors(TxErrorsRequest) returns (TxErrorsResponse);
+  // The config and the principal, as the tier read them.
+  rpc Whoami(WhoamiRequest) returns (WhoamiResponse);
+  // One egress call, clients.egress("echo").GetEcho(id), inside a
+  // distx.run: the upstream's message, or its error re-raised unchanged.
+  rpc Echo(EchoRequest) returns (EchoResponse);
+  // A file round trip on clients.store("notes-files"), see AttachFileRequest.
+  rpc AttachFile(AttachFileRequest) returns (AttachFileResponse);
+}
+
+message CreateNoteRequest {
+  string text = 1;
+}
+
+message CreateNotesRequest {
+  repeated string texts = 1;
+  // Raise after the writes: the transaction rolls back.
+  bool fail = 2;
+  // Inside the transaction, call CreateNotes(texts=[nested_fail_text],
+  // fail=true) through the served method and SWALLOW its error: the root must
+  // then refuse to commit (rollback-only).
+  string nested_fail_text = 3;
+  // Register on_commit: insert this text (outside the transaction) once the
+  // transaction commits.
+  string on_commit_text = 4;
+  // Hold the transaction open this long after the writes, before committing.
+  int32 pause_ms = 5;
+  // Begin the nested CreateNote's transaction on this connection instead
+  // (a mismatch: the call fails).
+  string nested_connection = 6;
+}
+
+message CreateNotesResponse {
+  repeated Note notes = 1;
+}
+
+message RefuseRequest {}
+
+message SleepRequest {
+  int32 ms = 1;
+}
+
+message TxErrorsRequest {
+  // "finished": commit a handle twice. "unknown": commit while the harness
+  // drops the commit's reply, with work parked on the transaction: a
+  // CreateNote of "outcome-unknown-composed" through the served method (its
+  // write lands with the commit, its event waits for the commit)
+  // and an on_commit insert of "after-outcome-unknown" — neither may run.
+  string case = 1;
+}
+
+message TxErrorsResponse {
+  // The SDK's error name for what was raised ("HandleFinished",
+  // "CommitOutcomeUnknown", …), "" for none.
+  string error = 1;
+  string message = 2;
+}
+
+message WhoamiRequest {}
+
+message WhoamiResponse {
+  string user_id = 1;
+  string org_id = 2;
+  string label_tenant = 3;
+  string device_id = 4;
+  string data_scope = 5;
+  string greeting = 6;
+  int64 limit = 7;
+  bool verbose = 8;
+  string token_repr = 9;
+}
+
+message EchoRequest {
+  string id = 1;
+}
+
+message EchoResponse {
+  string message = 1;
+}
+
+message AttachFileRequest {
+  // "" : inside a distx.run, put `size` bytes (byte i is i % 251) for
+  // NoteFile.file, in parts of `part` bytes (0 = one bytes value), stat
+  // it, read it back, delete it, then open it again. A refusal of the
+  // companion is re-raised unchanged.
+  // "read_only_delete": delete "any" on the read-only connection
+  // notes-media; the SDK's refusal is reported in `refused`.
+  // "body_fails": put a body that yields 200 KiB (25 parts of 8 KiB, 10 ms
+  // apart) and then raises the error "conformance: the body failed"; the error the put re-raises is
+  // reported in `refused` (a put that succeeds reports its `handle`).
+  // "body_stalls": put a body that yields 192 KiB and then stalls for 10 s
+  // before its last byte; the call's deadline or cancellation ends it.
+  string case = 1;
+  int64 size = 2;
+  int64 part = 3;
+}
+
+message AttachFileResponse {
+  string handle = 1;
+  int64 stat_size = 2;
+  // The stat's modification time, Unix milliseconds.
+  int64 mod_time_ms = 3;
+  bool read_back_equal = 4;
+  // Opening the deleted handle raised what files.is_not_found recognises.
+  bool not_found_after_delete = 5;
+  string refused = 6;
+}
+
+// The event CreateNote emits.
+message NoteCreated {
+  int64 id = 1;
+  string text = 2;
+  string by = 3;
+}
