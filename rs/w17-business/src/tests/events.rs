@@ -298,11 +298,21 @@ mod shapes {
             let mut fields = vec![
                 f("inner", 1, Type::Message, "Inner"),
                 repeated(f("tags", 2, Type::String, "")),
-                repeated(f("counts", 3, Type::Message, &format!("{name}.CountsEntry"))),
+                repeated(f(
+                    "counts",
+                    3,
+                    Type::Message,
+                    &format!("{name}.CountsEntry"),
+                )),
                 f("color", 4, Type::Enum, "Color"),
             ];
             fields.extend(extra);
-            message(name, fields, oneofs, vec![map_entry("CountsEntry", Type::Int64)])
+            message(
+                name,
+                fields,
+                oneofs,
+                vec![map_entry("CountsEntry", Type::Int64)],
+            )
         };
         let file = FileDescriptorProto {
             name: Some("s.proto".into()),
@@ -341,7 +351,12 @@ mod shapes {
                     ],
                     &["pick", "_opt"],
                 ),
-                message("Resp", vec![f("inner", 1, Type::Message, "Inner")], &[], vec![]),
+                message(
+                    "Resp",
+                    vec![f("inner", 1, Type::Message, "Inner")],
+                    &[],
+                    vec![],
+                ),
                 both(
                     "Ev",
                     vec![
@@ -412,7 +427,11 @@ fn a_binding_reads_nested_oneof_repeated_map_optional_and_enum_fields() {
     let builder = EnvelopeBuilder::new(&pool, &emit, input.clone(), output.clone()).unwrap();
     let ev_of = |req: &DynamicMessage, resp: &DynamicMessage| {
         let raw = builder
-            .build(&Ctx::background(), &req.encode_to_vec(), &resp.encode_to_vec())
+            .build(
+                &Ctx::background(),
+                &req.encode_to_vec(),
+                &resp.encode_to_vec(),
+            )
             .unwrap();
         let env =
             DynamicMessage::decode(pool.get_message_by_name("s.Env").unwrap(), raw.as_slice())
@@ -461,7 +480,10 @@ fn a_binding_reads_nested_oneof_repeated_map_optional_and_enum_fields() {
     assert_eq!(get(&ev, "name"), Value::String("nm".into()));
     assert_eq!(get(&ev, "deep_n"), Value::I64(9));
     assert_eq!(get(&ev, "a"), Value::String("pick-a".into()));
-    assert!(!ev.has_field_by_name("b"), "the oneof's other case is unset");
+    assert!(
+        !ev.has_field_by_name("b"),
+        "the oneof's other case is unset"
+    );
     assert!(
         ev.has_field_by_name("opt"),
         "a proto3 optional target has presence for a zero value"

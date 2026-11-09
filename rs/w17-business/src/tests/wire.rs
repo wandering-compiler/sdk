@@ -441,7 +441,10 @@ async fn the_tier_over_the_wire() {
                 "/w17.common.files.W17Files/Open: internal error",
             ),
         ),
-        ("user", (Code::FailedPrecondition, "W17Files.Open: dev text")),
+        (
+            "user",
+            (Code::FailedPrecondition, "W17Files.Open: dev text"),
+        ),
     ] {
         let mut s = c.open(mid(handle)).await.unwrap().into_inner();
         assert_eq!(s.next().await.unwrap().unwrap().chunk, vec![1]);
@@ -467,9 +470,8 @@ async fn the_tier_over_the_wire() {
     let mut put = Request::new(futures::stream::iter(vec![chunk(b"ab"), chunk(b"cde")]));
     put.metadata_mut().insert("x-custom", "c".parse().unwrap());
     assert_eq!(c.put(put).await.unwrap().into_inner().handle, "5 true");
-    let mut stalled = Request::new(
-        futures::stream::iter(vec![chunk(b"ab")]).chain(futures::stream::pending()),
-    );
+    let mut stalled =
+        Request::new(futures::stream::iter(vec![chunk(b"ab")]).chain(futures::stream::pending()));
     stalled.set_timeout(Duration::from_millis(200));
     let start = Instant::now();
     let code = c.put(stalled).await.unwrap_err().code();
@@ -694,7 +696,12 @@ async fn an_emitting_methods_request_body_is_bound_by_the_deadline() {
         group: "g".into(),
         entities: vec!["e".into()],
     };
-    let mut r = Registry::new(pool, &["w17.common.files.W17Files".to_string()], &[], &[inv]);
+    let mut r = Registry::new(
+        pool,
+        &["w17.common.files.W17Files".to_string()],
+        &[],
+        &[inv],
+    );
     r.register(W17FilesServer::new(Idle)).unwrap();
     let served = r.finish(None, |routes| routes);
     // A request whose body never arrives.
