@@ -21,6 +21,11 @@
  * Every failure is thrown as a `StatusError` (a transport failure that
  * survives the retries as `UNAVAILABLE`, a deadline as `DEADLINE_EXCEEDED`),
  * so a caller handles one error type, as with grpc-go.
+ *
+ * The business companion is dialled with a `CompanionConn` of its own (never
+ * the storage `Conn`, even at the same address): the same principal relay,
+ * trace context, deadline, keepalive and TLS, but ONE attempt per call and
+ * none of the storage-transaction or paging headers (see the class).
  */
 
 import {
@@ -145,7 +150,12 @@ export class Conn {
     this.client.close();
   }
 
-  #prepare(ctx: Context, timeoutMs?: number): { ctx: Context; md: GrpcMetadata; options: GrpcCallOptions } {
+  /** Whether a unary call relays the page position storage reported (paging.relayPosition). */
+  protected relaysPosition(): boolean {
+    return true;
+  }
+
+  protected prepare(ctx: Context, timeoutMs?: number): { ctx: Context; md: GrpcMetadata; options: GrpcCallOptions } {
     if (timeoutMs !== undefined) ctx = ctx.withTimeout(timeoutMs);
     const err = ctx.err();
     if (err !== undefined) {
@@ -160,7 +170,7 @@ export class Conn {
 
   /** One unary call; resolves to the reply and the response headers. */
   unary(ctx0: Context, m: MethodInfo, req: Message, opts: CallOptions = {}): Promise<{ reply: AnyMessage; header: Metadata }> {
-    const { ctx, md, options } = this.#prepare(ctx0, opts.timeoutMs);
+    const { ctx, md, options } = this.prepare(ctx0, opts.timeoutMs);
     return new Promise((resolve, reject) => {
       let header: Metadata | undefined;
       const call = this.client.makeUnaryRequest(
@@ -183,7 +193,7 @@ export class Conn {
           // A call made with paging.forward relays the page position storage
           // reported onto the business method's response (Go's
           // paging.RelayPositionUnaryInterceptor).
-          paging.relayPosition(ctx, header);
+          if (this.relaysPosition()) paging.relayPosition(ctx, header);
           resolve({ reply, header: header ?? new Metadata() });
         },
       );
@@ -195,7 +205,7 @@ export class Conn {
   }
 
   async *serverStream(ctx0: Context, m: MethodInfo, req: Message): AsyncGenerator<AnyMessage> {
-    const { ctx, md, options } = this.#prepare(ctx0);
+    const { ctx, md, options } = this.prepare(ctx0);
     const call = this.client.makeServerStreamRequest(m.path, serializer(m.input), deserializer(m.output), req, md, options);
     const off = cancelOnDone(ctx, () => call.cancel());
     try {
@@ -209,7 +219,7 @@ export class Conn {
   }
 
   clientStream(ctx0: Context, m: MethodInfo, reqs: Iterable<Message> | AsyncIterable<Message>): Promise<AnyMessage> {
-    const { ctx, md, options } = this.#prepare(ctx0);
+    const { ctx, md, options } = this.prepare(ctx0);
     return new Promise((resolve, reject) => {
       const call = this.client.makeClientStreamRequest(
         m.path,
@@ -233,7 +243,7 @@ export class Conn {
   }
 
   async *bidiStream(ctx0: Context, m: MethodInfo, reqs: Iterable<Message> | AsyncIterable<Message>): AsyncGenerator<AnyMessage> {
-    const { ctx, md, options } = this.#prepare(ctx0);
+    const { ctx, md, options } = this.prepare(ctx0);
     const call = this.client.makeBidiStreamRequest(m.path, serializer(m.input), deserializer(m.output), md, options);
     const off = cancelOnDone(ctx, () => call.cancel());
     let sendErr: unknown;
@@ -251,6 +261,57 @@ export class Conn {
       off();
       call.cancel();
     }
+  }
+}
+
+/** Never sent to the companion (see {@link CompanionConn}). */
+const COMPANION_STRIPPED = new Set(["w17-tx-id", "w17-conn-id"]);
+const COMPANION_STRIPPED_PREFIX = "x-w17-paging-";
+
+/** `md` without `w17-tx-id`, `w17-conn-id` and `x-w17-paging-*` (in place). */
+export function stripCompanionMetadata(md: GrpcMetadata): GrpcMetadata {
+  for (const k of Object.keys(md.getMap())) {
+    if (COMPANION_STRIPPED.has(k) || k.startsWith(COMPANION_STRIPPED_PREFIX)) md.remove(k);
+  }
+  return md;
+}
+
+/** The storage service config without its retry policy: one attempt. */
+const NO_RETRY_OPTIONS: ChannelOptions = {
+  "grpc.service_config": JSON.stringify({ methodConfig: [{ name: [{}] }] }),
+  "grpc.enable_retries": 0,
+};
+
+/**
+ * The connection to the business companion (egress clients, file storage).
+ *
+ * A `Conn` with two differences:
+ *
+ * - **no retries**: one attempt, `UNAVAILABLE` is thrown to the author. The
+ *   egress runtime already retried what is safe to retry, and its
+ *   `UNAVAILABLE` (an upstream 503) arrives trailers-only, which the storage
+ *   policy would replay — a second POST; a `Put` stream cannot be replayed at
+ *   all;
+ * - **no transaction or paging headers**: `w17-tx-id`, `w17-conn-id` and
+ *   `x-w17-paging-*` are stripped from every call, and no page position is
+ *   relayed back.
+ *
+ * The principal, trace context, `w17-language` / `w17-format-locale` /
+ * `w17-label-*` and the deadline go out as on a storage call.
+ */
+export class CompanionConn extends Conn {
+  constructor(addr: string, opts: { tls?: boolean; environ?: Env; options?: ChannelOptions } = {}) {
+    super(addr, { ...opts, options: { ...opts.options, ...NO_RETRY_OPTIONS } });
+  }
+
+  protected override relaysPosition(): boolean {
+    return false;
+  }
+
+  protected override prepare(ctx: Context, timeoutMs?: number): { ctx: Context; md: GrpcMetadata; options: GrpcCallOptions } {
+    const p = super.prepare(ctx, timeoutMs);
+    stripCompanionMetadata(p.md);
+    return p;
   }
 }
 

@@ -11,7 +11,9 @@
  * 4. the buses: NATS and/or Redis Streams, each DSN resolved through the
  *    secrets chain; a bus whose DSN is empty is off and its events are
  *    dropped, as Go leaves the dispatcher nil;
- * 5. the storage clients (one connection, dialled lazily);
+ * 5. the storage clients (one connection, dialled lazily) and, when the
+ *    manifest has a `companion` section, the companion's: its egress clients
+ *    and file stores (a second connection, also lazy);
  * 6. import `<project-root>/<register.path>/<register.module>` (`w17.ts`, run
  *    by Node's type stripping) and call `registerBusiness(cfg, registry,
  *    clients)` (sync or async); every method a plugin hook is bound to must
@@ -30,11 +32,12 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Server, type ServerOptions } from "@grpc/grpc-js";
-import { Conn, ServiceClient, TxCoordinator, parseAddr } from "./client.js";
+import { CompanionConn, Conn, ServiceClient, TxCoordinator, parseAddr } from "./client.js";
 import { Config, ConfigError } from "./config.js";
 import { Context } from "./context.js";
 import { type Pool, getDefaultPool } from "./descriptors.js";
 import * as events from "./events.js";
+import { FileStore } from "./files.js";
 import { HealthService } from "./health.js";
 import { type Manifest, emitsOf, invalidatesOf, load, manifestPath } from "./manifest.js";
 import * as observability from "./observability.js";
@@ -71,18 +74,32 @@ export class BootError extends Error {
 const msgOf = (e: unknown) => observability.errorText(e, "message");
 
 /**
- * The tier's clients, built from the manifest's `storage` section.
+ * The tier's clients, built from the manifest's `storage` and `companion`
+ * sections.
  *
  * `clients.service("shop.core.OrderQuery")` (or the short name when
  * unambiguous) returns a `ServiceClient`; `clients.distributedTransaction()`
  * returns the coordinator `distx` drives. One connection serves them all.
+ *
+ * `clients.egress("quotes")` (the client name, or its service's full name) is
+ * an egress client and `clients.store("app-exports")` a connection's
+ * `FileStore`: both are served by the business companion, over a second
+ * connection of their own (see `CompanionConn`).
  */
 export class Clients {
-  readonly #conn: Conn | undefined;
+  #conn: Conn | undefined;
+  #companion: CompanionConn | undefined;
   readonly #byService = new Map<string, ServiceClient>();
-  readonly #tx: TxCoordinator | undefined;
+  readonly #egress = new Map<string, ServiceClient>();
+  readonly #stores = new Map<string, FileStore>();
+  #tx: TxCoordinator | undefined;
 
   constructor(pool: Pool, manifest: Manifest, environ: Env = process.env) {
+    this.#storage(pool, manifest, environ);
+    this.#companionClients(pool, manifest, environ);
+  }
+
+  #storage(pool: Pool, manifest: Manifest, environ: Env): void {
     const tier = manifest.storage;
     if (tier === null) return;
     const addr = environ[tier.addressEnv] || tier.defaultAddress;
@@ -111,6 +128,60 @@ export class Clients {
     if (tier.distributedTransactions) this.#tx = new TxCoordinator(conn);
   }
 
+  #companionClients(pool: Pool, manifest: Manifest, environ: Env): void {
+    const comp = manifest.companion;
+    if (comp === null) return;
+    const addr = environ[comp.addressEnv] || comp.defaultAddress;
+    if (!addr) throw new BootError(`companion: ${comp.addressEnv} is not set and the manifest gives no default address`);
+    try {
+      parseAddr(addr);
+    } catch (e) {
+      throw new BootError(`companion: ${comp.addressEnv}=${JSON.stringify(addr)}: ${msgOf(e)}`);
+    }
+    let conn: CompanionConn;
+    try {
+      conn = new CompanionConn(addr, { environ });
+    } catch (e) {
+      throw new BootError(`companion tls: ${msgOf(e)}`);
+    }
+    this.#companion = conn;
+    for (const e of comp.egress) {
+      let full: string;
+      try {
+        full = pool.service(e.service).typeName;
+      } catch {
+        throw new BootError(`companion: egress client ${e.client}: service ${JSON.stringify(e.service)} is not in the descriptor set`);
+      }
+      this.#egress.set(e.client, new ServiceClient(conn, full, pool));
+    }
+    const files = comp.files;
+    if (files === null) return;
+    try {
+      pool.service(files.service);
+    } catch {
+      throw new BootError(`companion: files: service ${JSON.stringify(files.service)} is not in the descriptor set`);
+    }
+    for (const c of files.connections) this.#stores.set(c.name, new FileStore(conn, c, files.placements, pool));
+  }
+
+  /** The egress client `name` (`"quotes"`) or the one serving the service `name` (`"clients.quotes.QuotesApi"`). */
+  egress(name: string): ServiceClient {
+    const n = name.replace(/^\./, "");
+    const byName = this.#egress.get(n);
+    if (byName !== undefined) return byName;
+    for (const c of this.#egress.values()) if (c.service === n) return c;
+    throw new RangeError(`clients: no egress client ${JSON.stringify(name)} (have: ${[...this.#egress.keys()].sort().join(", ")})`);
+  }
+
+  /** The file store of the upload connection `connection`. */
+  store(connection: string): FileStore {
+    const s = this.#stores.get(connection);
+    if (s === undefined) {
+      throw new RangeError(`clients: no upload connection ${JSON.stringify(connection)} (have: ${[...this.#stores.keys()].sort().join(", ")})`);
+    }
+    return s;
+  }
+
   service(name: string): ServiceClient {
     const n = name.replace(/^\./, "");
     const exact = this.#byService.get(n);
@@ -135,6 +206,7 @@ export class Clients {
 
   close(): void {
     this.#conn?.close();
+    this.#companion?.close();
   }
 }
 

@@ -16,7 +16,9 @@
  */
 
 export * as distx from "./distx.js";
+export * as egress from "./egress.js";
 export * as events from "./events.js";
+export * as files from "./files.js";
 export * as paging from "./paging.js";
 export * as principal from "./principal.js";
 export * as txscope from "./txscope.js";
@@ -24,12 +26,13 @@ export * as observability from "./observability.js";
 export * as tlsconfig from "./tlsconfig.js";
 
 export { Clients, App, BootError } from "./runtime.js";
-export { Conn, ServiceClient, TxCoordinator, type CallOptions } from "./client.js";
+export { CompanionConn, Conn, ServiceClient, TxCoordinator, type CallOptions } from "./client.js";
 export { Config, ConfigError } from "./config.js";
 export { Context, Metadata, background, type ContextInit, type MetadataInit } from "./context.js";
 export { Pool, getDefaultPool, type AnyMessage, type MessageType, type MethodInfo } from "./descriptors.js";
 export { onCommit } from "./distx.js";
-export { Status, StatusError, UserError, errorDetail, forUser, ErrorDetail } from "./errors.js";
+export { Status, StatusError, UserError, errorDetail, forUser, ErrorDetail, errorInfo, type ErrorInfo } from "./errors.js";
+export { FileStore, type FileInfo } from "./files.js";
 export { Secret } from "./secrets.js";
 export { Registry, RegistrationError, Served, type ShutdownHook } from "./server.js";
 export { load as loadManifest, type Manifest, ManifestError } from "./manifest.js";
