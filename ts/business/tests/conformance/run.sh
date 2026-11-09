@@ -1,8 +1,8 @@
 #!/bin/sh
 # Runs the conformance suite against the TypeScript business SDK, all in docker
 # and with no published port: the Go harness (storage + distx coordinator +
-# NATS + sdk/go's subscriber) and the TypeScript tier talk over a network this
-# script creates and removes.
+# NATS + sdk/go's subscriber + the business companion and its fake upstream)
+# and the TypeScript tier talk over a network this script creates and removes.
 #
 #   ts/business/tests/conformance/run.sh <typescript-image> <name-prefix>
 #
@@ -43,12 +43,13 @@ if [ "$rc" -eq 0 ] || ! printf '%s' "$out" | grep -q "'api_token'.*NOTES_API_TOK
 fi
 echo "ok   missing required config key stops the boot naming NOTES_API_TOKEN"
 
-# 2. The harness first: storage, NATS and the Go subscriber are up once it
-#    prints its ready line; only then the tier, which dials them.
+# 2. The harness first: storage, NATS, the Go subscriber and the companion are
+#    up once it prints its ready line; only then the tier, which dials them.
 # shellcheck disable=SC2086 # GO_DOCKER_FLAGS is a list of flags
 docker run -d --name "$HARNESS" --network "$NET" $GO_DOCKER_FLAGS \
 	-v "$ROOT:$ROOT:ro" -w "$ROOT/ts/business/tests/conformance" \
 	-e CONFORMANCE_BUSINESS_ADDR="$BIZ:50061" \
+	-e W17_CLIENT_ECHO_DSN="http://127.0.0.1:50072?auth=bearer&token=conformance" \
 	"$GO_IMAGE" go test -count=1 -v . >/dev/null
 i=0
 until docker logs "$HARNESS" 2>&1 | grep -q "conformance: harness ready"; do
@@ -67,6 +68,7 @@ done
 docker run -d --name "$BIZ" --network "$NET" \
 	-e NOTES_STORAGE_BACKEND_ADDR="$HARNESS:50051" \
 	-e NOTES_EVENTBUS_NATS_DSN="nats://$HARNESS:4222" \
+	-e NOTES_COMPANION_ADDR="$HARNESS:50071" \
 	-e NOTES_API_TOKEN=conformance \
 	"$IMAGE" >/dev/null
 

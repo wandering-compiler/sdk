@@ -159,6 +159,14 @@ class NoteService {
   async Whoami(ctx: Context): Promise<AnyMessage> {
     return this.M("WhoamiResponse")({ userId: principal.userId(ctx) });
   }
+  // The companion's methods: the suite's NoteService has them; this file
+  // tests the SDK without a companion (companion.test.ts has one).
+  async Echo(): Promise<AnyMessage> {
+    throw new StatusError(Status.UNIMPLEMENTED, "no companion here");
+  }
+  async AttachFile(): Promise<AnyMessage> {
+    throw new StatusError(Status.UNIMPLEMENTED, "no companion here");
+  }
 }
 
 async function listen(reg: Registry): Promise<[Server, number]> {
