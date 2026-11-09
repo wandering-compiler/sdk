@@ -110,3 +110,51 @@ check-conformance-descriptors: conformance-descriptors
 conformance-py:
 	docker build -q -t $(PY_CONF_IMAGE) -f py/tests/conformance/service/Dockerfile . >/dev/null
 	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh py/tests/conformance/run.sh $(PY_CONF_IMAGE) $(CONF_PREFIX)
+
+# The TypeScript business SDK (ts/business/, `@w17/business`) and its own copy
+# of the conformance suite (ts/business/tests/conformance/), all in Docker
+# (node:24, golang) with no published port.
+#
+#   make test-ts-business      typecheck, lint and the unit tests (vitest)
+#   make ts-descriptors        regenerate ts/business/src/sdk_descriptors.binpb
+#   make check-ts-descriptors  fail when the committed set is not what that writes
+#   make conformance-ts        the Go harness against the TypeScript tier
+#   make conformance-ts-descriptors / check-conformance-ts-descriptors
+#                              the same for ts/business/tests/conformance/testdata
+NODE_IMAGE ?= node:24
+TS_CONF_IMAGE ?= w17-sdk-ts-conformance:dev
+TS_CONF_PREFIX ?= w17-sdk-ts-conformance
+NODE_RUN = docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
+	-v "$(CURDIR)/ts/business:/w" -w /w $(NODE_IMAGE)
+
+.PHONY: test-ts-business ts-descriptors check-ts-descriptors conformance-ts-descriptors check-conformance-ts-descriptors conformance-ts
+test-ts-business:
+	$(NODE_RUN) npm ci --no-audit --no-fund
+	$(NODE_RUN) npm run typecheck
+	$(NODE_RUN) npx tsc --noEmit -p tests/conformance/service/tsconfig.json
+	$(NODE_RUN) npm run lint
+	$(NODE_RUN) npm test
+
+# The w17 messages the TypeScript runtime speaks itself (ErrorDetail, Paging,
+# InvalidateEvent, the transaction coordinator), as one descriptor set — the
+# same inputs as py-descriptors.
+ts-descriptors: protoc-image
+	$(PROTOC_DESC) --proto_path=proto --descriptor_set_out=ts/business/src/sdk_descriptors.binpb \
+		w17/error.proto w17/paging.proto w17/client.proto common/distx/distributed_tx.proto
+
+check-ts-descriptors: ts-descriptors
+	@if [ -n "$$(git status --porcelain -- ts/business/src/sdk_descriptors.binpb)" ]; then \
+		echo "check-ts-descriptors: run make ts-descriptors and commit"; exit 1; fi
+
+conformance-ts-descriptors: protoc-image
+	$(PROTOC_DESC) --proto_path=proto --proto_path=ts/business/tests/conformance/proto \
+		--descriptor_set_out=ts/business/tests/conformance/testdata/descriptors.binpb \
+		conformance/v1/conformance.proto conformance/events/lock.proto
+
+check-conformance-ts-descriptors: conformance-ts-descriptors
+	@if [ -n "$$(git status --porcelain -- ts/business/tests/conformance/testdata/descriptors.binpb)" ]; then \
+		echo "check-conformance-ts-descriptors: run make conformance-ts-descriptors and commit"; exit 1; fi
+
+conformance-ts:
+	docker build -q -t $(TS_CONF_IMAGE) -f ts/business/tests/conformance/service/Dockerfile . >/dev/null
+	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh ts/business/tests/conformance/run.sh $(TS_CONF_IMAGE) $(TS_CONF_PREFIX)
