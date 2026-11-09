@@ -135,7 +135,8 @@ export class Conn {
     this.addr = addr;
     let c: tlsconfig.ClientTLS = opts.tls === false ? { tls: false } : tlsconfig.clientTLS(opts.environ ?? process.env);
     if (opts.tls === true && !c.tls) {
-      c = tlsconfig.clientTLS({ ...(opts.environ ?? {}), [tlsconfig.ENV_INTERNAL_TLS]: "on" });
+      // Forced on: the rest of the configuration (CA, client pair) is still the environment's.
+      c = tlsconfig.clientTLS({ ...(opts.environ ?? process.env), [tlsconfig.ENV_INTERNAL_TLS]: "on" });
     }
     this.client = new Client(target(addr), tlsconfig.channelCredentials(c), { ...CLIENT_OPTIONS, ...opts.options });
   }

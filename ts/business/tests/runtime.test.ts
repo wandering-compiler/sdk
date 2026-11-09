@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Client, Metadata as GrpcMetadata, credentials } from "@grpc/grpc-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { main, parseDuration, probe, probeTarget } from "../src/cli.ts";
-import { Conn, ServiceClient } from "../src/client.ts";
+import { Conn, ServiceClient, dial } from "../src/client.ts";
 import { Context, Metadata } from "../src/context.ts";
 import { getDefaultPool } from "../src/descriptors.ts";
 import * as distx from "../src/distx.ts";
@@ -325,6 +325,21 @@ describe("internal TLS", () => {
     [{ [tlsconfig.ENV_INTERNAL_TLS_CERT]: CA, [tlsconfig.ENV_INTERNAL_TLS_KEY]: KEY }, /W17_INTERNAL_TLS_CERT/],
   ])("a client refuses a broken config (%#)", (extra, match) => {
     expect(() => tlsconfig.clientTLS({ ...ON, ...extra })).toThrow(match);
+  });
+
+  it("forcing TLS on a dial keeps the CA and the pair of the process environment", () => {
+    vi.stubEnv(tlsconfig.ENV_INTERNAL_TLS, "");
+    vi.stubEnv(tlsconfig.ENV_INTERNAL_TLS_CA, "/nonexistent/ca.pem");
+    try {
+      // The broken CA is refused: it was read, not dropped for the system roots.
+      expect(() => dial("127.0.0.1:1", { tls: true })).toThrow(/W17_INTERNAL_TLS_CA/);
+      expect(() => new Conn("127.0.0.1:1", { tls: true })).toThrow(/W17_INTERNAL_TLS_CA/);
+      vi.stubEnv(tlsconfig.ENV_INTERNAL_TLS_CA, "");
+      vi.stubEnv(tlsconfig.ENV_INTERNAL_TLS_CERT, LEAF);
+      expect(() => dial("127.0.0.1:1", { tls: true })).toThrow(/not both set/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("a server refuses an unreadable client CA", () => {
