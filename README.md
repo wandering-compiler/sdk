@@ -24,12 +24,9 @@ own package manager and versioning:
 | **Go** | `go/` (`github.com/wandering-compiler/sdk/go`) | [`go/README.md`](go/README.md) |
 | **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`), `ts/dpop/` (`@w17/dpop`) | — |
 | **Python** | `py/` (`w17_business`, the business-tier SDK) | [`py/README.md`](py/README.md) |
+| **TypeScript business** | `ts/business/` (`@w17/business`, the business-tier SDK) | [`ts/business/README.md`](ts/business/README.md) |
 
-`conformance/` holds the suite every non-Go business SDK must pass: a Go
-harness with real storage, a real transaction coordinator and a real bus,
-driving one fixed service per language (`make conformance-py`).
-
-The TypeScript side holds two packages:
+The TypeScript side holds three packages:
 
 - `@w17/admin-runtime`, the React (Mantine) runtime behind a generated admin SPA.
   The scaffold the compiler emits imports `bootstrap` from it and hands it the
@@ -45,7 +42,15 @@ The TypeScript side holds two packages:
   the Go verifier from a committed fixture (`go/lib/dpop/testdata/ts_proofs.json`,
   regenerated with `npm run fixture` inside `ts/dpop/`).
 
-Each package's tests run with `npm test` (vitest) inside its directory.
+- `@w17/business`, the business-tier SDK: it serves a domain's business tier
+  written in TypeScript from the descriptor set and manifest codegen writes,
+  with sdk/go's semantics, as `py/` does for Python. It ships as a tarball
+  built from this directory (no registry), and carries its own copy of the
+  conformance suite (`ts/business/tests/conformance/`, `make conformance-ts`).
+
+Each package's tests run with `npm test` (vitest) inside its directory;
+`make test-ts-business` runs the business SDK's typecheck, lint and tests in
+Docker.
 
 The generated front-end clients are emitted per project, not shipped here. A
 further language gets its own top-level directory and README when it lands.

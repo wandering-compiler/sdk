@@ -10,10 +10,10 @@
 //
 // The tier under test is the fixed NoteService of
 // proto/conformance/v1/conformance.proto, implemented once per language
-// (python/ for the Python SDK) and run in its own container. The harness
+// (service/ here for the TypeScript SDK) and run in its own container. The harness
 // serves storage on :50051 and NATS on :4222 and reaches the tier at
 // $CONFORMANCE_BUSINESS_ADDR; without that variable every test skips, so
-// `go test ./...` here is harmless. `make conformance-py` runs the whole
+// `go test ./...` here is harmless. `make conformance-ts` runs the whole
 // thing in docker.
 //
 // The messages are built from testdata/descriptors.binpb with dynamicpb: the
@@ -93,7 +93,7 @@ type event struct {
 func TestMain(m *testing.M) {
 	addr := os.Getenv(envBusinessAddr)
 	if addr == "" {
-		fmt.Fprintf(os.Stderr, "conformance: %s is not set; skipping (run `make conformance-py`)\n", envBusinessAddr)
+		fmt.Fprintf(os.Stderr, "conformance: %s is not set; skipping (run `make conformance-ts`)\n", envBusinessAddr)
 		os.Exit(0)
 	}
 	h, cleanup, err := start(addr)

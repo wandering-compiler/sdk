@@ -1,0 +1,153 @@
+{
+  "format": 1,
+  "domain": "shop",
+  "bundle": "shop-business",
+  "language": "python",
+  "sdk_version": "v0.9.0",
+  "env_prefix": "SHOP",
+  "listen": {
+    "env": "SHOP_LISTEN_ADDR",
+    "default": ":50051"
+  },
+  "reflection_env": "SHOP_GRPC_REFLECTION",
+  "shutdown_timeout_seconds": 10,
+  "descriptor_set": "descriptors.binpb",
+  "register": {
+    "path": "business/shop",
+    "package": "shop",
+    "module": "shop.w17",
+    "function": "register_business"
+  },
+  "services": [
+    {
+      "name": "shop.core.CheckoutService",
+      "methods": [
+        {
+          "name": "PlaceOrder",
+          "path": "/shop.core.CheckoutService/PlaceOrder",
+          "input": "shop.core.PlaceOrderReq",
+          "output": "shop.core.PlaceOrderResp",
+          "client_streaming": false,
+          "server_streaming": false
+        },
+        {
+          "name": "Watch",
+          "path": "/shop.core.CheckoutService/Watch",
+          "input": "shop.core.WatchReq",
+          "output": "shop.core.WatchResp",
+          "client_streaming": false,
+          "server_streaming": true
+        },
+        {
+          "name": "Cancel",
+          "path": "/shop.core.CheckoutService/Cancel",
+          "input": "shop.core.CancelReq",
+          "output": "shop.core.CancelResp",
+          "client_streaming": false,
+          "server_streaming": false
+        }
+      ]
+    }
+  ],
+  "config": [
+    {
+      "name": "base_url",
+      "env": "SHOP_BASE_URL",
+      "type": "string",
+      "default": "https://shop.example",
+      "required": false,
+      "secret": false,
+      "description": "public base URL"
+    },
+    {
+      "name": "max_items",
+      "env": "SHOP_MAX_ITEMS",
+      "type": "int",
+      "default": 25,
+      "required": false,
+      "secret": false,
+      "description": "items per cart"
+    },
+    {
+      "name": "dry_run",
+      "env": "SHOP_DRY_RUN",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "secret": false,
+      "description": ""
+    },
+    {
+      "name": "api_key",
+      "env": "SHOP_API_KEY",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "secret": true,
+      "description": "payment provider key"
+    }
+  ],
+  "storage": {
+    "address_env": "SHOP_STORAGE_BACKEND_ADDR",
+    "default_address": "shop-storage:50051",
+    "services": [
+      "shop.core.OrderMutation",
+      "shop.core.OrderQuery"
+    ],
+    "distributed_transactions": {
+      "service": "w17.common.distx.W17DistributedTransaction"
+    }
+  },
+  "events": {
+    "nats": {
+      "dsn_env": "SHOP_EVENTBUS_NATS_DSN"
+    },
+    "redis_streams": null,
+    "durable_prefix_env": "SHOP_EVENTBUS_DURABLE_PREFIX",
+    "durable_prefix_default": "shop-business-emit",
+    "envelope": "w17lock.shop.events.Event",
+    "emits": [
+      {
+        "method": "/shop.core.CheckoutService/PlaceOrder",
+        "event": "shop.OrderPlaced",
+        "envelope_field": "shop_order_placed",
+        "channel": "default",
+        "topic": "order.placed",
+        "fields": [
+          {
+            "field": "order_id",
+            "source": "response",
+            "path": [
+              "order_id"
+            ]
+          },
+          {
+            "field": "source",
+            "source": "literal",
+            "value": "checkout"
+          },
+          {
+            "field": "total",
+            "source": "request",
+            "path": [
+              "cart",
+              "total"
+            ]
+          }
+        ]
+      }
+    ],
+    "invalidates": [
+      {
+        "method": "/shop.core.CheckoutService/Cancel",
+        "channel": "default",
+        "topic": "w17.invalidate",
+        "group": "shop.core",
+        "entities": [
+          "Order"
+        ]
+      }
+    ]
+  },
+  "plugin_hooks": []
+}

@@ -1,14 +1,14 @@
 #!/bin/sh
-# Runs the conformance suite against the Python business SDK, all in docker
+# Runs the conformance suite against the TypeScript business SDK, all in docker
 # and with no published port: the Go harness (storage + distx coordinator +
-# NATS + sdk/go's subscriber) and the Python tier talk over a network this
+# NATS + sdk/go's subscriber) and the TypeScript tier talk over a network this
 # script creates and removes.
 #
-#   conformance/run-python.sh <python-image> <name-prefix>
+#   ts/business/tests/conformance/run.sh <typescript-image> <name-prefix>
 #
 # GO_IMAGE (default golang:1.26) runs the harness with `go test`, the
 # checkout mounted read-only; GO_DOCKER_FLAGS adds flags to that container
-# (cache mounts). `make conformance-py` builds the image and calls this. Every
+# (cache mounts). `make conformance-ts` builds the image and calls this. Every
 # container and the network are named <name-prefix>-*, and removed on exit
 # whatever happens.
 set -eu
@@ -20,7 +20,7 @@ HARNESS="$PREFIX-harness"
 BIZ="$PREFIX-biz"
 GO_IMAGE=${GO_IMAGE:-golang:1.26}
 GO_DOCKER_FLAGS=${GO_DOCKER_FLAGS:-}
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 
 cleanup() {
 	docker rm -f "$HARNESS" "$BIZ" >/dev/null 2>&1 || true
@@ -47,19 +47,19 @@ echo "ok   missing required config key stops the boot naming NOTES_API_TOKEN"
 #    prints its ready line; only then the tier, which dials them.
 # shellcheck disable=SC2086 # GO_DOCKER_FLAGS is a list of flags
 docker run -d --name "$HARNESS" --network "$NET" $GO_DOCKER_FLAGS \
-	-v "$ROOT:$ROOT:ro" -w "$ROOT/conformance" \
+	-v "$ROOT:$ROOT:ro" -w "$ROOT/ts/business/tests/conformance" \
 	-e CONFORMANCE_BUSINESS_ADDR="$BIZ:50061" \
 	"$GO_IMAGE" go test -count=1 -v . >/dev/null
 i=0
 until docker logs "$HARNESS" 2>&1 | grep -q "conformance: harness ready"; do
 	if [ "$(docker inspect -f '{{.State.Running}}' "$HARNESS")" != "true" ]; then
 		docker logs "$HARNESS" 2>&1 | tail -n 100
-		echo "FAIL conformance (python): the harness exited before it was ready"
+		echo "FAIL conformance (typescript): the harness exited before it was ready"
 		exit 1
 	fi
 	i=$((i + 1))
 	if [ "$i" -gt 600 ]; then
-		echo "FAIL conformance (python): the harness was not ready after 10 minutes"
+		echo "FAIL conformance (typescript): the harness was not ready after 10 minutes"
 		exit 1
 	fi
 	sleep 1
@@ -75,7 +75,7 @@ docker logs "$HARNESS" 2>&1
 if [ "$rc" -ne 0 ]; then
 	echo "--- $BIZ log"
 	docker logs "$BIZ" 2>&1 | tail -n 200
-	echo "FAIL conformance (python): harness exit $rc"
+	echo "FAIL conformance (typescript): harness exit $rc"
 	exit 1
 fi
-echo "ok   conformance (python)"
+echo "ok   conformance (typescript)"

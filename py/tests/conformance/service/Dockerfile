@@ -4,7 +4,7 @@
 FROM python:3.13-slim
 COPY py /src/py
 RUN pip install --no-cache-dir /src/py
-COPY conformance/testdata /app/testdata
-COPY conformance/python /app/python
-WORKDIR /app/python
-ENTRYPOINT ["python", "-m", "w17_business", "serve", "--manifest", "/app/python/w17-business.json", "--project-root", "/app/python"]
+COPY py/tests/conformance/testdata /app/testdata
+COPY py/tests/conformance/service /app/service
+WORKDIR /app/service
+ENTRYPOINT ["python", "-m", "w17_business", "serve", "--manifest", "/app/service/w17-business.json", "--project-root", "/app/service"]

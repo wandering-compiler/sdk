@@ -1,0 +1,21 @@
+{
+  "//": "The settings an author's package uses: erasable syntax only (Node strips the types, nothing compiles), .ts extensions in relative imports. Here @w17/business resolves to this checkout's sources, for `tsc --noEmit` in make test-ts-business.",
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "typeRoots": ["../../../node_modules/@types"],
+    "paths": {
+      "@w17/business": ["../../../src/index.ts"]
+    }
+  },
+  "include": ["conformance_notes/**/*.ts"]
+}

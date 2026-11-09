@@ -46,7 +46,7 @@ import (
 // that is over is a bug in the caller).
 //
 // The Python, TypeScript and Rust business SDKs offer the same hook
-// (`on_commit(ctx, fn)`), checked by the sdk's conformance suite.
+// (`on_commit(ctx, fn)`), checked by the Python SDK's conformance suite (py/tests/conformance).
 func OnCommit(ctx context.Context, fn func()) txscope.Outcome {
 	if fn == nil {
 		return txscope.NoScope
