@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -281,10 +282,32 @@ def _formats() -> str:
     return " and ".join(str(f) for f in SUPPORTED_FORMATS)
 
 
+def _bool(d: dict, key: str, where: str) -> bool:
+    """A JSON bool; absent (or null) is false. "false" is not a bool."""
+    v = d.get(key)
+    if v is None:
+        return False
+    if not isinstance(v, bool):
+        raise ManifestError(f"manifest: {where}{key} must be true or false, not {json.dumps(v)}")
+    return v
+
+
+def _unique(values: Iterable[str], what: str) -> None:
+    seen: set[str] = set()
+    for v in values:
+        if v in seen:
+            raise ManifestError(f"manifest: {what} {v} is listed twice")
+        seen.add(v)
+
+
+# What the Go companion refuses in this section (bizcompanion.Companion.check)
+# is refused here too: the companion and the tier must agree on which
+# manifests boot.
 def _companion(d: dict) -> Companion | None:
     c = _obj(d, "companion", "")
     if c is None:
         return None
+    address_env = _req(c, "address_env", "companion.")
     egress = tuple(
         EgressClient(
             client=_req(e, "client", "companion.egress[]."),
@@ -293,6 +316,8 @@ def _companion(d: dict) -> Companion | None:
         )
         for e in c.get("egress") or ()
     )
+    _unique((e.client for e in egress), "companion.egress: client")
+    _unique((e.service for e in egress), "companion.egress: service")
     f = _obj(c, "files", "companion.")
     files = None
     if f is not None:
@@ -301,7 +326,7 @@ def _companion(d: dict) -> Companion | None:
                 name=_req(x, "name", "companion.files.connections[]."),
                 root_env=_req(x, "root_env", "companion.files.connections[]."),
                 default_root=x.get("default_root", ""),
-                writable=bool(x.get("writable", False)),
+                writable=_bool(x, "writable", "companion.files.connections[]."),
             )
             for x in f.get("connections") or ()
         )
@@ -320,6 +345,7 @@ def _companion(d: dict) -> Companion | None:
             )
             for p in f.get("placements") or ()
         )
+        _unique((p.field for p in placements), "companion.files.placements:")
         for p in placements:
             if p.connection not in names:
                 raise ManifestError(
@@ -327,7 +353,7 @@ def _companion(d: dict) -> Companion | None:
                     "which is not in companion.files.connections")
         files = FileStorage(service=_req(f, "service", "companion.files."), connections=conns, placements=placements)
     return Companion(
-        address_env=_req(c, "address_env", "companion."),
+        address_env=address_env,
         default_address=c.get("default_address", ""),
         egress=egress,
         files=files,

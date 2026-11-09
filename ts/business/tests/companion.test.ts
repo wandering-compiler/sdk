@@ -89,6 +89,39 @@ describe("manifest format 2", () => {
     delete d.companion.egress[0].dsn_env;
     expect(() => fromObject(d)).toThrow(ManifestError);
   });
+
+  it("refuses what the Go companion refuses", () => {
+    const refused = (edit: (c: Obj) => void, want: RegExp) => {
+      const d = conformance();
+      edit(d.companion);
+      expect(() => fromObject(d)).toThrow(want);
+    };
+    refused((c) => {
+      for (const k of Object.keys(c)) delete c[k];
+    }, /companion\.address_env is required/);
+    refused((c) => {
+      c.address_env = "";
+    }, /companion\.address_env is required/);
+    refused((c) => {
+      c.files.placements.push({ ...c.files.placements[0] });
+    }, /companion\.files\.placements: conformance\.v1\.NoteFile\.file is listed twice/);
+    refused((c) => {
+      c.egress.push({ ...c.egress[0] });
+    }, /companion\.egress: client echo is listed twice/);
+    refused((c) => {
+      c.egress.push({ ...c.egress[0], client: "echo2", dsn_env: "W17_CLIENT_ECHO2_DSN" });
+    }, /companion\.egress: service clients\.echo\.EchoApi is listed twice/);
+    for (const bad of ["false", "true", 0, 1, []]) {
+      refused((c) => {
+        c.files.connections[0].writable = bad;
+      }, /companion\.files\.connections\[\]\.writable must be true or false/);
+    }
+    // Absent or null is false; a JSON bool is read as it is.
+    const d = conformance();
+    d.companion.files.connections[0].writable = null;
+    delete d.companion.files.connections[1].writable;
+    expect(fromObject(d).companion!.files!.connections.map((c) => c.writable)).toEqual([false, false]);
+  });
 });
 
 describe("ErrorInfo", () => {

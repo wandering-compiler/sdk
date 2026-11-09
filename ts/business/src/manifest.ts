@@ -300,14 +300,37 @@ function int(v: unknown): bigint {
   throw new ManifestError(`manifest: ${json(v)} is not an integer`);
 }
 
+/** A JSON bool; absent (or null) is false. "false" is not a bool. */
+function bool(d: Obj, key: string, where: string): boolean {
+  const v = d[key];
+  if (v === undefined || v === null) return false;
+  if (typeof v !== "boolean") throw new ManifestError(`manifest: ${where}${key} must be true or false, not ${json(v)}`);
+  return v;
+}
+
+/** Refuses a value listed twice. */
+function unique(values: readonly string[], what: string): void {
+  const seen = new Set<string>();
+  for (const v of values) {
+    if (seen.has(v)) throw new ManifestError(`manifest: ${what} ${v} is listed twice`);
+    seen.add(v);
+  }
+}
+
+// What the Go companion refuses in this section (bizcompanion.Companion.check)
+// is refused here too: the companion and the tier must agree on which
+// manifests boot.
 function companionOf(d: Obj): Companion | null {
   const c = obj(d, "companion", "");
   if (c === null) return null;
+  const addressEnv = req(c, "address_env", "companion.");
   const egress: EgressClient[] = list(c.egress).map((e) => ({
     client: req(e, "client", "companion.egress[]."),
     service: req(e, "service", "companion.egress[]."),
     dsnEnv: req(e, "dsn_env", "companion.egress[]."),
   }));
+  unique(egress.map((e) => e.client), "companion.egress: client");
+  unique(egress.map((e) => e.service), "companion.egress: service");
   const f = obj(c, "files", "companion.");
   let files: FileStorage | null = null;
   if (f !== null) {
@@ -315,7 +338,7 @@ function companionOf(d: Obj): Companion | null {
       name: req(x, "name", "companion.files.connections[]."),
       rootEnv: req(x, "root_env", "companion.files.connections[]."),
       defaultRoot: str(x.default_root),
-      writable: Boolean(x.writable),
+      writable: bool(x, "writable", "companion.files.connections[]."),
     }));
     const names = connections.map((x) => x.name);
     if (new Set(names).size !== names.length) {
@@ -330,6 +353,7 @@ function companionOf(d: Obj): Companion | null {
       maxPerBucket: Number(int(x.max_per_bucket)),
       maxSizeBytes: int(x.max_size_bytes),
     }));
+    unique(placements.map((x) => x.field), "companion.files.placements:");
     for (const x of placements) {
       if (!names.includes(x.connection)) {
         throw new ManifestError(
@@ -340,7 +364,7 @@ function companionOf(d: Obj): Companion | null {
     }
     files = { service: req(f, "service", "companion.files."), connections, placements };
   }
-  return { addressEnv: req(c, "address_env", "companion."), defaultAddress: str(c.default_address), egress, files };
+  return { addressEnv, defaultAddress: str(c.default_address), egress, files };
 }
 
 export function fromObject(d: Obj, baseDir = "."): Manifest {

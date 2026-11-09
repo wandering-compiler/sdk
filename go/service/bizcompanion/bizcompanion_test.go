@@ -208,6 +208,23 @@ func TestLoadRefusals(t *testing.T) {
 		"connection without root_env": {2, edit(func(c map[string]any) {
 			files(c)["connections"].([]any)[0].(map[string]any)["root_env"] = ""
 		}), "root_env are required"},
+		"empty section":     {2, map[string]any{}, "address_env is required"},
+		"empty address_env": {2, edit(func(c map[string]any) { c["address_env"] = "" }), "address_env is required"},
+		"placement twice": {2, edit(func(c map[string]any) {
+			ps := files(c)["placements"].([]any)
+			files(c)["placements"] = append(ps, ps[0])
+		}), "app.notes.NoteExport.file is listed twice"},
+		"egress client twice": {2, edit(func(c map[string]any) {
+			es := c["egress"].([]any)
+			c["egress"] = append(es, es[0])
+		}), "client echo is listed twice"},
+		"egress service twice": {2, edit(func(c map[string]any) {
+			es := c["egress"].([]any)
+			c["egress"] = append(es, map[string]any{"client": "echo2", "service": "clients.echo.EchoApi", "dsn_env": "W17_CLIENT_ECHO2_DSN"})
+		}), "service clients.echo.EchoApi is listed twice"},
+		"writable as a string": {2, edit(func(c map[string]any) {
+			files(c)["connections"].([]any)[1].(map[string]any)["writable"] = "false"
+		}), "writable"},
 	} {
 		_, err := Load(writeManifest(t, tc.format, tc.companion))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

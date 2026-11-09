@@ -220,12 +220,29 @@ func loadDescriptors(path string) (*protoregistry.Files, error) {
 	return files, nil
 }
 
+// check refuses what the SDKs refuse in the same section (py manifest.py,
+// ts manifest.ts): the three must agree on which manifests boot.
 func (c *Companion) check(files *protoregistry.Files) error {
+	if c.AddressEnv == "" {
+		return errors.New("address_env is required")
+	}
+	clients := make(map[string]bool, len(c.Egress))
+	services := make(map[string]bool, len(c.Egress))
 	for i := range c.Egress {
 		e := &c.Egress[i]
 		if e.Client == "" || e.Service == "" || e.DSNEnv == "" {
 			return fmt.Errorf("egress[%d]: client, service and dsn_env are required", i)
 		}
+		if clients[e.Client] {
+			return fmt.Errorf("egress: client %s is listed twice", e.Client)
+		}
+		clients[e.Client] = true
+		// One gRPC server registers a service once (a second registration
+		// is a fatal error there), and a tier could not tell them apart.
+		if services[e.Service] {
+			return fmt.Errorf("egress: service %s is listed twice", e.Service)
+		}
+		services[e.Service] = true
 		d, err := files.FindDescriptorByName(protoreflect.FullName(e.Service))
 		if err != nil {
 			return fmt.Errorf("egress client %s: service %s is not in the descriptor set", e.Client, e.Service)

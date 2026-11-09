@@ -83,6 +83,31 @@ def test_format_refusals():
         from_dict(d)
 
 
+def test_companion_refusals_match_the_go_companion():
+    # The set bizcompanion.Companion.check refuses, refused here too.
+    def refused(edit, match):
+        d = _conformance()
+        edit(d["companion"])
+        with pytest.raises(ManifestError, match=match):
+            from_dict(d)
+
+    refused(lambda c: c.clear(), "companion.address_env is required")
+    refused(lambda c: c.update(address_env=""), "companion.address_env is required")
+    refused(lambda c: c["files"]["placements"].append(dict(c["files"]["placements"][0])),
+            "companion.files.placements: conformance.v1.NoteFile.file is listed twice")
+    refused(lambda c: c["egress"].append(dict(c["egress"][0])), "companion.egress: client echo is listed twice")
+    refused(lambda c: c["egress"].append({**c["egress"][0], "client": "echo2", "dsn_env": "W17_CLIENT_ECHO2_DSN"}),
+            "companion.egress: service clients.echo.EchoApi is listed twice")
+    for bad in ("false", "true", 0, 1, []):
+        refused(lambda c, bad=bad: c["files"]["connections"][0].update(writable=bad),
+                "companion.files.connections\\[\\].writable must be true or false")
+    # Absent or null is false; a JSON bool is read as it is.
+    d = _conformance()
+    d["companion"]["files"]["connections"][0]["writable"] = None
+    d["companion"]["files"]["connections"][1].pop("writable", None)
+    assert [c.writable for c in from_dict(d).companion.files.connections] == [False, False]
+
+
 # --- ErrorInfo ------------------------------------------------------------------
 
 
