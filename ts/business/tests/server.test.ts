@@ -15,7 +15,7 @@ import * as events from "../src/events.ts";
 import type { Emit } from "../src/manifest.ts";
 import * as paging from "../src/paging.ts";
 import * as principal from "../src/principal.ts";
-import { RegistrationError, Registry } from "../src/server.ts";
+import { RegistrationError, Registry, requests, toServiceError } from "../src/server.ts";
 import * as txscope from "../src/txscope.ts";
 import { msg, pool, settled, sleep } from "./helpers.ts";
 
@@ -558,6 +558,80 @@ describe("streams", () => {
       }
     }
     expect(() => new Registry(p).register("test.stream.Streamer", new NotAGenerator())).toThrow(/Count.*async generator/);
+  });
+
+  it("a request stream that fails once the caller is gone reads as the cancel, not a panic", async () => {
+    const logged: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
+    const read = async (ctx: Context, fail: () => void) => {
+      // What grpc-js's request stream does when the client resets it mid-read.
+      const call = {
+        async *[Symbol.asyncIterator]() {
+          yield 1;
+          fail();
+          throw new Error("premature close");
+        },
+      };
+      const got: unknown[] = [];
+      try {
+        for await (const r of requests(call as never, ctx)) got.push(r);
+      } catch (e) {
+        return [got, e] as const;
+      }
+      throw new Error("the stream did not fail");
+    };
+    const ctx = new Context().withCancel();
+    const [got, err] = await read(ctx, () => ctx.cancel());
+    expect(got).toEqual([1]);
+    expect(err).toBeInstanceOf(StatusError);
+    expect([(err as StatusError).code, (err as StatusError).message]).toEqual([Status.CANCELLED, "context canceled"]);
+    // The handler rethrows it: answered as it is, no panic reported.
+    expect(toServiceError(err, "/test.stream.Streamer/Sum", ctx).code).toBe(Status.CANCELLED);
+    expect(logged.filter((l) => l.includes("PANIC"))).toEqual([]);
+    // A failure while the caller is still there stays what it is.
+    const [, other] = await read(new Context(), () => undefined);
+    expect((other as Error).message).toBe("premature close");
+  });
+
+  it("a deadline that passes mid-stream ends the request stream as the deadline, not as its end", async () => {
+    const logged: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    const seen: unknown[] = [];
+    let got = 0;
+    class Reading extends Streamer {
+      override async Sum(_ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        try {
+          for await (const _r of reqs) got++;
+          seen.push("ended"); // a truncated upload taken as complete
+        } catch (e) {
+          seen.push(e);
+          throw e;
+        }
+        return Ping({ n: got });
+      }
+    }
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new Reading());
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      async function* sends() {
+        yield Ping({ n: 1 });
+        await sleep(2000); // the stream stays open past the deadline
+      }
+      const st = await statusOf(new ServiceClient(conn, "test.stream.Streamer", p).Sum(new Context().withTimeout(200), sends()));
+      expect(st.code).toBe(Status.DEADLINE_EXCEEDED);
+      expect(await settled(() => seen.length === 1 && reg.inflight === 0)).toBe(true);
+      expect(seen[0]).toBeInstanceOf(StatusError);
+      expect((seen[0] as StatusError).code).toBe(Status.DEADLINE_EXCEEDED);
+      expect(logged.filter((l) => l.includes("PANIC"))).toEqual([]);
+    } finally {
+      conn.close();
+      await stop(srv);
+    }
   });
 });
 

@@ -110,7 +110,10 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
   drain waits for them.
 - **Streams:** a server-streaming handler is an async generator
   (`async *Watch(ctx, req)`); a client-streaming one takes an async iterable
-  of requests; bidi both.
+  of requests; bidi both. A caller that hangs up, or whose deadline passes,
+  mid-stream makes that iterable throw a `StatusError` (`CANCELLED`,
+  `DEADLINE_EXCEEDED`) as Go's `Recv` returns one; rethrown, it answers as it
+  is, never as an internal error.
 - The boot refuses a handler that lacks a method of its service (or whose
   method is not `async`, or not `async *` for a server-streaming one), a
   service the manifest does not list, and a plugin hook bound to a method with

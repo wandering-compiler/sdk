@@ -502,8 +502,57 @@ async function writeAll(
   }
 }
 
-async function* requests(call: ServerReadableStream<unknown, unknown> | ServerDuplexStream<unknown, unknown>): AsyncGenerator<unknown> {
-  for await (const r of call) yield r;
+/** The status a request stream cut short by the caller reads as (Go's Recv error). */
+function cutShort(ctx: Context, cause?: unknown): StatusError {
+  const err = ctx.err() ?? "context canceled";
+  const code = err === "context deadline exceeded" ? Status.DEADLINE_EXCEEDED : Status.CANCELLED;
+  const se = new StatusError(code, err);
+  if (cause !== undefined) se.cause = cause;
+  return se;
+}
+
+const nextMacrotask = () => new Promise<void>((r) => setImmediate(r));
+
+/**
+ * @internal The request stream of a client-streaming or bidi call, as Go's
+ * Recv reads it: a caller that hangs up (or whose deadline passes)
+ * mid-stream is a CANCELLED (DEADLINE_EXCEEDED) StatusError, never the
+ * stream's own error — which the server would report as a panic — and never
+ * a clean end. Node's http2 ENDS the request stream when the stream is
+ * reset, and grpc-js reports the cancel only after that, on the same turn:
+ * so an end, or a throw, is read once that turn is over, when the context
+ * says which it was. (A grpc-js CLIENT that cancels half-closes first and
+ * resets after, in two writes: that end can arrive as a clean one, as it
+ * would to a Go server.)
+ */
+export async function* requests(
+  call: ServerReadableStream<unknown, unknown> | ServerDuplexStream<unknown, unknown>,
+  ctx: Context,
+): AsyncGenerator<unknown> {
+  const it = (call as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+  let finished = false;
+  try {
+    for (;;) {
+      let n: IteratorResult<unknown>;
+      try {
+        n = await it.next();
+      } catch (e) {
+        finished = true;
+        await nextMacrotask();
+        throw ctx.done() ? cutShort(ctx, e) : e;
+      }
+      if (n.done) {
+        finished = true;
+        await nextMacrotask();
+        if (ctx.done()) throw cutShort(ctx);
+        return;
+      }
+      yield n.value;
+    }
+  } finally {
+    // The handler stopped reading early: release the stream as for-await would.
+    if (!finished) await it.return?.();
+  }
 }
 
 function handler(m: MethodImpl, reg: Registry): UntypedHandleCall {
@@ -555,7 +604,7 @@ function handler(m: MethodImpl, reg: Registry): UntypedHandleCall {
         reg,
         path,
         async (ctx) => {
-          const resp = (await m.fn(ctx, requests(call))) as unknown;
+          const resp = (await m.fn(ctx, requests(call, ctx))) as unknown;
           if (resp === undefined || resp === null) throw new StatusError(Status.INTERNAL, `${path}: handler returned no response`);
           callback(null, resp);
         },
@@ -570,7 +619,7 @@ function handler(m: MethodImpl, reg: Registry): UntypedHandleCall {
       reg,
       path,
       async (ctx) => {
-        await writeAll(call, ctx, m.fn(ctx, requests(call)) as AsyncIterable<unknown>);
+        await writeAll(call, ctx, m.fn(ctx, requests(call, ctx)) as AsyncIterable<unknown>);
         call.end();
       },
       (e) => call.emit("error", e),
