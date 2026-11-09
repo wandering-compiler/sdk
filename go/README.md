@@ -95,6 +95,10 @@ sdk/go/
 │   │                gRPC lifecycle it composes lives in service/internal/server.
 │   ├── bootstrap/   the Component supervisor for composed `-server` binaries.
 │   │                RunGraceful drains the transport, THEN closes resources.
+│   ├── bizcompanion/ the business companion: egress clients + file storage
+│   │                served over gRPC to a Python / TypeScript business tier.
+│   │                Main is the split bundle's whole main; Load + Register
+│   │                fold it into a composed binary.
 │   ├── healthcheck/ the `health` subcommand a generated server binary mounts.
 │   ├── inprocgrpc/  in-process ClientConn so one `-server` folds its tiers
 │   │                (gateway → business → storage) without a network hop.
@@ -117,7 +121,8 @@ sdk/go/
 │   ├── restgw/      the REST↔gRPC gateway runtime (JSON transcode, SSE/WS).
 │   ├── i18n/        translation runtime (gettext catalogs → localized strings).
 │   ├── acllock/     ACL enforcement (the permission Lock + allocator).
-│   ├── kvfs/        KV storage runtime (+ memory / local_fs drivers).
+│   ├── kvfs/        KV storage runtime (+ memory / local_fs / s3 drivers);
+│   │                kvfsgrpc/ serves the stores as w17.common.files.W17Files.
 │   ├── kvhash/      KV value hashing.
 │   ├── dqlbind/     DQL parameter binding (query params → SQL).
 │   ├── paging/      keyset / cursor pagination helpers.

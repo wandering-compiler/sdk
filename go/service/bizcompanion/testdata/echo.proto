@@ -1,0 +1,34 @@
+// A hand-written egress client for the companion's tests: the shape
+// `w17ctl client generate` writes (the runtime needs no signature).
+
+syntax = "proto3";
+
+package clients.echo;
+
+import "w17/egress.proto";
+
+option (w17.egress_client) = {
+  name: "echo"
+  title: "Echo"
+  server_url: "http://echo.invalid"
+};
+
+service EchoApi {
+  // GET /echo/{id}
+  rpc GetEcho(GetEchoRequest) returns (Echo) {
+    option (w17.egress_call) = {
+      method: "GET"
+      path: "/echo/{id}"
+      success_status: 200
+    };
+  }
+}
+
+message GetEchoRequest {
+  string id = 1 [(w17.egress_field) = { name: "id" in: EGRESS_IN_PATH required: true }];
+}
+
+message Echo {
+  string id = 1 [(w17.egress_field) = { name: "id" }];
+  string message = 2 [(w17.egress_field) = { name: "message" }];
+}
