@@ -4,7 +4,7 @@
 # NATS + sdk/go's subscriber) and the Python tier talk over a network this
 # script creates and removes.
 #
-#   conformance/run-python.sh <python-image> <name-prefix>
+#   py/tests/conformance/run.sh <python-image> <name-prefix>
 #
 # GO_IMAGE (default golang:1.26) runs the harness with `go test`, the
 # checkout mounted read-only; GO_DOCKER_FLAGS adds flags to that container
@@ -20,7 +20,7 @@ HARNESS="$PREFIX-harness"
 BIZ="$PREFIX-biz"
 GO_IMAGE=${GO_IMAGE:-golang:1.26}
 GO_DOCKER_FLAGS=${GO_DOCKER_FLAGS:-}
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 
 cleanup() {
 	docker rm -f "$HARNESS" "$BIZ" >/dev/null 2>&1 || true
@@ -47,7 +47,7 @@ echo "ok   missing required config key stops the boot naming NOTES_API_TOKEN"
 #    prints its ready line; only then the tier, which dials them.
 # shellcheck disable=SC2086 # GO_DOCKER_FLAGS is a list of flags
 docker run -d --name "$HARNESS" --network "$NET" $GO_DOCKER_FLAGS \
-	-v "$ROOT:$ROOT:ro" -w "$ROOT/conformance" \
+	-v "$ROOT:$ROOT:ro" -w "$ROOT/py/tests/conformance" \
 	-e CONFORMANCE_BUSINESS_ADDR="$BIZ:50061" \
 	"$GO_IMAGE" go test -count=1 -v . >/dev/null
 i=0

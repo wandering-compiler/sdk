@@ -5,10 +5,10 @@ import pytest
 
 from w17_business.descriptors import default_pool
 
-ROOT = Path(__file__).resolve().parents[2]
-CONFORMANCE = ROOT / "conformance"
+HERE = Path(__file__).resolve().parent
+CONFORMANCE = HERE / "conformance"
 DESCRIPTORS = CONFORMANCE / "testdata" / "descriptors.binpb"
-MANIFEST = CONFORMANCE / "python" / "w17-business.json"
+MANIFEST = CONFORMANCE / "service" / "w17-business.json"
 
 
 @pytest.fixture(scope="session")

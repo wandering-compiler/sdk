@@ -86,6 +86,6 @@ Environment read by the runtime itself, as the Go runtime reads it:
 ## Tests
 
 - `make test-py` — unit tests (pytest, in Docker).
-- `make conformance-py` — the Go harness in `conformance/` (real storage with
+- `make conformance-py` — the Go harness in `tests/conformance/` (real storage with
   the transaction coordinator over SQLite, embedded NATS, sdk/go's
   subscriber) against the suite's fixed service implemented with this SDK.

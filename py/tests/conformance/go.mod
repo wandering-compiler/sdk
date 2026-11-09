@@ -1,4 +1,4 @@
-module github.com/wandering-compiler/sdk/conformance
+module github.com/wandering-compiler/sdk/py/tests/conformance
 
 go 1.26.0
 
@@ -73,4 +73,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/wandering-compiler/sdk/go => ../go
+replace github.com/wandering-compiler/sdk/go => ../../../go

@@ -44,7 +44,7 @@ var mdKeys = [...]string{BoundariesMDKey, LimitMDKey, TotalMDKey}
 // sorted. A call made without Forward relays nothing.
 //
 // The Python, TypeScript and Rust business SDKs carry the same function
-// (`paging.forward(ctx)`), checked by the sdk's conformance suite.
+// (`paging.forward(ctx)`), checked by the Python SDK's conformance suite (py/tests/conformance).
 func Forward(ctx context.Context) context.Context {
 	in, ok := metadata.FromIncomingContext(ctx)
 	if !ok {

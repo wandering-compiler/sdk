@@ -1,7 +1,0 @@
-*
-!py/pyproject.toml
-!py/README.md
-!py/src
-!conformance/testdata
-!conformance/python
-**/__pycache__

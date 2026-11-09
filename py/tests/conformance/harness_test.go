@@ -10,7 +10,7 @@
 //
 // The tier under test is the fixed NoteService of
 // proto/conformance/v1/conformance.proto, implemented once per language
-// (python/ for the Python SDK) and run in its own container. The harness
+// (service/ for the Python SDK) and run in its own container. The harness
 // serves storage on :50051 and NATS on :4222 and reaches the tier at
 // $CONFORMANCE_BUSINESS_ADDR; without that variable every test skips, so
 // `go test ./...` here is harmless. `make conformance-py` runs the whole

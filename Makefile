@@ -63,14 +63,14 @@ check-refs:
 	[ $$rc -le 1 ] || { echo "!! git grep failed ($$rc)"; exit 1; }; \
 	if [ -n "$$hits" ]; then echo "!! these cite the platform's private repository:"; echo "$$hits"; exit 1; fi
 
-# The Python business SDK (py/) and the cross-language conformance suite
-# (conformance/), all in Docker with no published port.
+# The Python business SDK (py/) and its conformance suite
+# (py/tests/conformance/), all in Docker with no published port.
 #
 #   make test-py             the SDK's unit tests (pytest)
 #   make py-descriptors      regenerate py/src/w17_business/sdk_descriptors.binpb
 #   make check-py-descriptors  fail when the committed set is not what that writes
 #   make conformance-py      the Go harness against the Python tier
-#   make check-conformance-descriptors  same check for conformance/testdata
+#   make check-conformance-descriptors  same check for py/tests/conformance/testdata
 #
 # GO_DOCKER_FLAGS lets a caller mount its Go caches into the build container
 # (e.g. `-v $$HOME/go:/go -v $$HOME/.cache:/root/.cache`).
@@ -99,14 +99,14 @@ check-py-descriptors: py-descriptors
 		echo "check-py-descriptors: run make py-descriptors and commit"; exit 1; fi
 
 conformance-descriptors: protoc-image
-	$(PROTOC_DESC) --proto_path=proto --proto_path=conformance/proto \
-		--descriptor_set_out=conformance/testdata/descriptors.binpb \
+	$(PROTOC_DESC) --proto_path=proto --proto_path=py/tests/conformance/proto \
+		--descriptor_set_out=py/tests/conformance/testdata/descriptors.binpb \
 		conformance/v1/conformance.proto conformance/events/lock.proto
 
 check-conformance-descriptors: conformance-descriptors
-	@if [ -n "$$(git status --porcelain -- conformance/testdata/descriptors.binpb)" ]; then \
+	@if [ -n "$$(git status --porcelain -- py/tests/conformance/testdata/descriptors.binpb)" ]; then \
 		echo "check-conformance-descriptors: run make conformance-descriptors and commit"; exit 1; fi
 
 conformance-py:
-	docker build -q -t $(PY_CONF_IMAGE) -f conformance/python/Dockerfile . >/dev/null
-	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh conformance/run-python.sh $(PY_CONF_IMAGE) $(CONF_PREFIX)
+	docker build -q -t $(PY_CONF_IMAGE) -f py/tests/conformance/service/Dockerfile . >/dev/null
+	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh py/tests/conformance/run.sh $(PY_CONF_IMAGE) $(CONF_PREFIX)
