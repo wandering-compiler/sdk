@@ -82,12 +82,15 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
   `"erasableSyntaxOnly": true`, `"verbatimModuleSyntax": true`,
   `"allowImportingTsExtensions": true`, `"module": "NodeNext"`, `"noEmit": true`.
 - **Your `package.json`**: `"type": "module"` (or Node warns and reparses
-  every file). List `@w17/business` under `devDependencies` (for the editor's
-  types) or not at all — **never under `dependencies`**: the image installs
-  your dependencies with `npm ci --omit=dev`, which would try to fetch
-  `@w17/business` from the npm registry and fail. At run time
-  `import ... from "@w17/business"` resolves to the copy the image installed,
-  the same instance as the runner.
+  every file). Leave `@w17/business` out of it: at run time
+  `import ... from "@w17/business"` resolves to the copy the image installed
+  in `/app/node_modules`, the same instance as the runner. For the editor's
+  types, list it only as a `file:` link to a local checkout,
+  `"devDependencies": { "@w17/business": "file:../path/to/sdk/ts/business" }`.
+  **A registry version spec (`"@w17/business": "0.1.0"`, `"^0.1.0"`) breaks
+  the image build — under `devDependencies` too:** there is no package in the
+  npm registry, and npm resolves a dev dependency's metadata even when it
+  installs with `--omit=dev` (without a lockfile it fails with E404).
 - **Messages are protobuf-es v2 messages** built from the descriptor set:
   `registry.pool.message("pkg.Name")({ ... })` creates one; fields are the
   camelCase `localName` (`user_id` → `userId`), 64-bit integers are `bigint`,
