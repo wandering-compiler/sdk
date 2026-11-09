@@ -25,6 +25,7 @@ own package manager and versioning:
 | **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`), `ts/dpop/` (`@w17/dpop`) | — |
 | **Python** | `py/` (`w17_business`, the business-tier SDK) | [`py/README.md`](py/README.md) |
 | **TypeScript business** | `ts/business/` (`@w17/business`, the business-tier SDK) | [`ts/business/README.md`](ts/business/README.md) |
+| **Rust business** | `rs/w17-business/` (`w17-business` and its build helper `w17-business-build`, the business-tier SDK) | [`rs/w17-business/README.md`](rs/w17-business/README.md) |
 
 The TypeScript side holds three packages:
 
@@ -48,7 +49,15 @@ The TypeScript side holds three packages:
   built from this directory (no registry), and carries its own copy of the
   conformance suite (`ts/business/tests/conformance/`, `make conformance-ts`).
 
-Both business SDKs reach the project's egress clients and the domain's upload
+The Rust business SDK (`rs/w17-business/`) serves a domain's business tier
+written in Rust: the author's crate compiles the same descriptor set with
+`w17-business-build` in its `build.rs` and implements the tonic traits; the
+runtime applies the same middleware. Authors depend on it by git tag
+(`rs/vX`); it carries its own copy of the conformance suite
+(`rs/w17-business/tests/conformance/`, `make conformance-rs`), and
+`make test-rs-business` runs rustfmt, clippy, the tests and cargo audit.
+
+Every business SDK reaches the project's egress clients and the domain's upload
 file stores through the **business companion**, the Go half of a non-Go
 business tier: `go/service/bizcompanion` serves the same `go/lib/egress` and
 `go/lib/kvfs` code a Go tier runs in-process, over gRPC (the clients' own

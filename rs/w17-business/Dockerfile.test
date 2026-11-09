@@ -1,0 +1,6 @@
+# The toolchain `make test-rs-business` runs in: the Rust image the tier's
+# own images build on, with rustfmt, clippy and cargo-audit.
+FROM rust:1-bookworm
+RUN rustup component add rustfmt clippy \
+ && cargo install cargo-audit --locked --version 0.22.2 \
+ && rm -rf /usr/local/cargo/registry
