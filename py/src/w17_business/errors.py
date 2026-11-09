@@ -23,6 +23,8 @@ How the runtime answers an exception a handler raises:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from grpclib.const import Status
 from grpclib.encoding.base import StatusDetailsCodecBase
 from grpclib.exceptions import GRPCError
@@ -30,7 +32,7 @@ from google.protobuf import any_pb2
 
 from .descriptors import default_pool
 
-__all__ = ["UserError", "for_user", "error_detail", "Status"]
+__all__ = ["UserError", "for_user", "error_detail", "Status", "ErrorInfo", "error_info", "ERROR_INFO_TYPE"]
 
 
 def _status(code: Status | int | str) -> Status:
@@ -127,3 +129,104 @@ class StatusDetailsCodec(StatusDetailsCodecBase):
             any_.Unpack(d)
             out.append(d)
         return out
+
+
+# --- google.rpc.ErrorInfo, decoded by hand -----------------------------------
+#
+# The companion's errors (egress, file storage) carry a google.rpc.ErrorInfo.
+# The SDK's descriptor set does not import google/rpc, so StatusDetailsCodec
+# keeps such a detail packed as an Any (or, when the project's own set carries
+# google/rpc/error_details.proto, decodes it): both are read here. The fields
+# are reason = 1, domain = 2, metadata = 3 (map<string, string>).
+
+ERROR_INFO_TYPE = "google.rpc.ErrorInfo"
+
+
+@dataclass(frozen=True)
+class ErrorInfo:
+    """A ``google.rpc.ErrorInfo``: why a call failed, machine-readable."""
+
+    domain: str
+    reason: str
+    metadata: dict[str, str] = field(default_factory=dict)
+
+
+def error_info(err: BaseException | None) -> ErrorInfo | None:
+    """The ``google.rpc.ErrorInfo`` a ``GRPCError`` carries, or None (also for
+    anything that is not a ``GRPCError``)."""
+    if not isinstance(err, GRPCError):
+        return None
+    for d in err.details or ():
+        if isinstance(d, any_pb2.Any):
+            if d.type_url.rsplit("/", 1)[-1] != ERROR_INFO_TYPE:
+                continue
+            try:
+                return _decode_error_info(d.value)
+            except ValueError:
+                return None
+        if getattr(getattr(d, "DESCRIPTOR", None), "full_name", "") == ERROR_INFO_TYPE:
+            return ErrorInfo(domain=d.domain, reason=d.reason, metadata=dict(d.metadata))
+    return None
+
+
+def _varint(b: bytes, i: int) -> tuple[int, int]:
+    v = shift = 0
+    while True:
+        if i >= len(b) or shift > 63:
+            raise ValueError("truncated varint")
+        c = b[i]
+        i += 1
+        v |= (c & 0x7F) << shift
+        if not c & 0x80:
+            return v, i
+        shift += 7
+
+
+def _fields(b: bytes):
+    """(number, wire type, value) of every field; a length-delimited value is
+    its bytes, any other is skipped."""
+    i = 0
+    while i < len(b):
+        key, i = _varint(b, i)
+        num, wt = key >> 3, key & 7
+        if wt == 0:
+            _, i = _varint(b, i)
+            continue
+        if wt == 1:
+            i += 8
+        elif wt == 5:
+            i += 4
+        elif wt == 2:
+            n, i = _varint(b, i)
+            if i + n > len(b):
+                raise ValueError("truncated field")
+            yield num, wt, b[i : i + n]
+            i += n
+            continue
+        else:
+            raise ValueError(f"wire type {wt}")
+        if i > len(b):
+            raise ValueError("truncated field")
+
+
+def _text(b: bytes) -> str:
+    return b.decode("utf-8", "replace")
+
+
+def _decode_error_info(b: bytes) -> ErrorInfo:
+    reason = domain = ""
+    meta: dict[str, str] = {}
+    for num, _, v in _fields(b):
+        if num == 1:
+            reason = _text(v)
+        elif num == 2:
+            domain = _text(v)
+        elif num == 3:
+            k = val = ""
+            for n2, _, v2 in _fields(v):
+                if n2 == 1:
+                    k = _text(v2)
+                elif n2 == 2:
+                    val = _text(v2)
+            meta[k] = val
+    return ErrorInfo(domain=domain, reason=reason, metadata=meta)

@@ -10,7 +10,9 @@ does what Go's generated business ``main`` does:
 4. the buses: NATS and/or Redis Streams, each DSN resolved through the
    secrets chain; a bus whose DSN is empty is off and its events are dropped,
    as Go leaves the dispatcher nil;
-5. the storage clients (one connection, dialled lazily);
+5. the storage clients (one connection, dialled lazily) and, when the
+   manifest has a ``companion`` section, the companion's: its egress clients
+   and file stores (a second connection, also lazy);
 6. import ``register.module`` from ``--project-root`` and call
    ``register_business(cfg, registry, clients)`` (sync or async); every method
    a plugin hook is bound to must then have a handler;
@@ -40,11 +42,12 @@ from grpclib.health.service import OVERALL, Health
 from grpclib.server import Server
 
 from . import _grpclib, events, observability, principal, tlsconfig, txscope
-from .client import Conn, ServiceClient, TxCoordinator, parse_addr
+from .client import CompanionConn, Conn, ServiceClient, TxCoordinator, parse_addr
 from .config import Config, ConfigError
 from .context import Context
 from .descriptors import Pool, default_pool
 from .errors import StatusDetailsCodec
+from .files import FileStore
 from .manifest import Manifest, load
 from .secrets import new_resolver
 from .server import Registry, RegistrationError
@@ -65,19 +68,32 @@ class BootError(Exception):
 
 
 class Clients:
-    """The tier's clients, built from the manifest's ``storage`` section.
+    """The tier's clients, built from the manifest's ``storage`` and
+    ``companion`` sections.
 
     ``clients.service("shop.core.OrderQuery")`` (or the short name when
     unambiguous, also as an attribute: ``clients.OrderQuery``) returns a
     ``ServiceClient``; ``clients.distributed_transaction()`` returns the
-    coordinator ``distx`` drives. One connection serves them all."""
+    coordinator ``distx`` drives. One connection serves them all.
+
+    ``clients.egress("quotes")`` (the client name, or its service's full name)
+    is an egress client and ``clients.store("app-exports")`` a connection's
+    ``FileStore``: both are served by the business companion, over a second
+    connection of their own (see ``client.CompanionConn``)."""
 
     def __init__(self, pool: Pool, manifest: Manifest, environ: Mapping[str, str] | None = None) -> None:
         env = os.environ if environ is None else environ
         self._pool = pool
         self._conn: Conn | None = None
+        self._companion: CompanionConn | None = None
         self._by_service: dict[str, ServiceClient] = {}
+        self._egress: dict[str, ServiceClient] = {}  # by client name
+        self._stores: dict[str, FileStore] = {}
         self._tx: TxCoordinator | None = None
+        self._storage(pool, manifest, env)
+        self._companion_clients(pool, manifest, env)
+
+    def _storage(self, pool: Pool, manifest: Manifest, env: Mapping[str, str]) -> None:
         tier = manifest.storage
         if tier is None:
             return
@@ -101,6 +117,56 @@ class Clients:
             self._by_service[full] = ServiceClient(conn, full, pool)
         if tier.distributed_transactions:
             self._tx = TxCoordinator(conn)
+
+    def _companion_clients(self, pool: Pool, manifest: Manifest, env: Mapping[str, str]) -> None:
+        comp = manifest.companion
+        if comp is None:
+            return
+        addr = env.get(comp.address_env) or comp.default_address
+        if not addr:
+            raise BootError(f"companion: {comp.address_env} is not set and the manifest gives no default address")
+        try:
+            parse_addr(addr)
+        except ValueError as e:
+            raise BootError(f"companion: {comp.address_env}={addr!r}: {e}") from e
+        try:
+            conn = CompanionConn(addr, environ=dict(env))
+        except ValueError as e:
+            raise BootError(f"companion tls: {e}") from e
+        self._companion = conn
+        for e in comp.egress:
+            try:
+                full = pool.service(e.service).full_name
+            except KeyError as err:
+                raise BootError(f"companion: egress client {e.client}: service {e.service!r} is not in the descriptor set") from err
+            self._egress[e.client] = ServiceClient(conn, full, pool)
+        files = comp.files
+        if files is None:
+            return
+        try:
+            pool.service(files.service)
+        except KeyError as err:
+            raise BootError(f"companion: files: service {files.service!r} is not in the descriptor set") from err
+        for c in files.connections:
+            self._stores[c.name] = FileStore(conn, c, files.placements, pool)
+
+    def egress(self, name: str) -> ServiceClient:
+        """The egress client ``name`` (``"quotes"``) or the one serving the
+        service ``name`` (``"clients.quotes.QuotesApi"``)."""
+        n = name.lstrip(".")
+        if n in self._egress:
+            return self._egress[n]
+        for c in self._egress.values():
+            if c.service == n:
+                return c
+        raise KeyError(f"clients: no egress client {name!r} (have: {sorted(self._egress)})")
+
+    def store(self, connection: str) -> FileStore:
+        """The file store of the upload connection ``connection``."""
+        s = self._stores.get(connection)
+        if s is None:
+            raise KeyError(f"clients: no upload connection {connection!r} (have: {sorted(self._stores)})")
+        return s
 
     def service(self, name: str) -> ServiceClient:
         name = name.lstrip(".")
@@ -131,6 +197,8 @@ class Clients:
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()
+        if self._companion is not None:
+            self._companion.close()
 
 
 class App:
