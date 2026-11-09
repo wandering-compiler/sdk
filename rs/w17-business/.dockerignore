@@ -1,0 +1,4 @@
+# A co-development build sends this directory as the named context w17-sdk-rs:
+# never the build output.
+target
+**/target
