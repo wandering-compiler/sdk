@@ -154,6 +154,14 @@ class NoteService:
     async def Whoami(self, ctx, req):
         return self.M("WhoamiResponse")(user_id=principal.user_id(ctx))
 
+    # The companion's methods: the suite's NoteService has them; this file
+    # tests the SDK without a companion (test_companion.py has one).
+    async def Echo(self, ctx, req):
+        raise GRPCError(Status.UNIMPLEMENTED, "no companion here")
+
+    async def AttachFile(self, ctx, req):
+        raise GRPCError(Status.UNIMPLEMENTED, "no companion here")
+
 
 @pytest.fixture
 async def stack(pool):

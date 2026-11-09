@@ -2,12 +2,15 @@
 //
 // NoteStorage is served by the Go harness (a real distributed-transaction
 // coordinator over SQLite); NoteService is the business tier under test, one
-// implementation per language, all answering the same way. Change a message
-// here and every implementation changes with it.
+// implementation per language, all answering the same way. The harness also
+// runs the business companion (sdk/go/service/bizcompanion) for the tier: the
+// egress client clients.echo.EchoApi and the file store of NoteFile.file.
+// Change a message here and every implementation changes with it.
 syntax = "proto3";
 
 package conformance.v1;
 
+import "w17/field.proto";
 import "w17/paging.proto";
 
 // The project's AuthResp: the gateway's x-w17-user envelope decodes into it.
@@ -20,6 +23,23 @@ message AuthResp {
 message Note {
   int64 id = 1;
   string text = 2;
+}
+
+// A table whose file the business tier writes: the manifest's one
+// companion.files.placements entry (connection notes-files).
+message NoteFile {
+  int64 id = 1;
+  string file = 2 [(w17.field) = {
+    type: UPLOADED_FILE
+    upload: {
+      connection: "notes-files"
+      bucket_path: "/note-files"
+      expected_objects: 100000
+      max_per_bucket: 100
+      max_size_bytes: 262144
+      writer: BUSINESS
+    }
+  }];
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +107,11 @@ service NoteService {
   rpc TxErrors(TxErrorsRequest) returns (TxErrorsResponse);
   // The config and the principal, as the tier read them.
   rpc Whoami(WhoamiRequest) returns (WhoamiResponse);
+  // One egress call, clients.egress("echo").GetEcho(id), inside a
+  // distx.run: the upstream's message, or its error re-raised unchanged.
+  rpc Echo(EchoRequest) returns (EchoResponse);
+  // A file round trip on clients.store("notes-files"), see AttachFileRequest.
+  rpc AttachFile(AttachFileRequest) returns (AttachFileResponse);
 }
 
 message CreateNoteRequest {
@@ -149,6 +174,37 @@ message WhoamiResponse {
   int64 limit = 7;
   bool verbose = 8;
   string token_repr = 9;
+}
+
+message EchoRequest {
+  string id = 1;
+}
+
+message EchoResponse {
+  string message = 1;
+}
+
+message AttachFileRequest {
+  // "" : inside a distx.run, put `size` bytes (byte i is i % 251) for
+  // NoteFile.file, in parts of `part` bytes (0 = one bytes value), stat
+  // it, read it back, delete it, then open it again. A refusal of the
+  // companion is re-raised unchanged.
+  // "read_only_delete": delete "any" on the read-only connection
+  // notes-media; the SDK's refusal is reported in `refused`.
+  string case = 1;
+  int64 size = 2;
+  int64 part = 3;
+}
+
+message AttachFileResponse {
+  string handle = 1;
+  int64 stat_size = 2;
+  // The stat's modification time, Unix milliseconds.
+  int64 mod_time_ms = 3;
+  bool read_back_equal = 4;
+  // Opening the deleted handle raised what files.is_not_found recognises.
+  bool not_found_after_delete = 5;
+  string refused = 6;
 }
 
 // The event CreateNote emits.

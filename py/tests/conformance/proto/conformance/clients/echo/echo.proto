@@ -1,0 +1,36 @@
+// The conformance suite's egress client: a hand-written stand-in for what
+// `w17ctl client generate` writes (the runtime needs no signature). The
+// business companion serves it, inside the Go harness, against the harness's
+// fake upstream: GET /echo/{id} answers JSON, /echo/missing 404, /echo/slow
+// after 2 s.
+syntax = "proto3";
+
+package clients.echo;
+
+import "w17/egress.proto";
+
+option (w17.egress_client) = {
+  name: "echo"
+  title: "Echo"
+  server_url: "http://echo.invalid"
+};
+
+service EchoApi {
+  // GET /echo/{id}
+  rpc GetEcho(GetEchoRequest) returns (Echo) {
+    option (w17.egress_call) = {
+      method: "GET"
+      path: "/echo/{id}"
+      success_status: 200
+    };
+  }
+}
+
+message GetEchoRequest {
+  string id = 1 [(w17.egress_field) = { name: "id" in: EGRESS_IN_PATH required: true }];
+}
+
+message Echo {
+  string id = 1 [(w17.egress_field) = { name: "id" }];
+  string message = 2 [(w17.egress_field) = { name: "message" }];
+}

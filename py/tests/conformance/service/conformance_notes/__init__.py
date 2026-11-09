@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
-from w17_business import distx, for_user, on_commit, paging, principal
+from grpclib.exceptions import GRPCError
+
+from w17_business import distx, files, for_user, on_commit, paging, principal
 from w17_business.errors import Status
 
 MSG = "conformance.v1."
@@ -32,6 +34,13 @@ class NoteService:
         self.InspectRequest = pool.message(MSG + "InspectRequest")
         self.TxErrorsResponse = pool.message(MSG + "TxErrorsResponse")
         self.WhoamiResponse = pool.message(MSG + "WhoamiResponse")
+        self.EchoResponse = pool.message(MSG + "EchoResponse")
+        self.AttachFileResponse = pool.message(MSG + "AttachFileResponse")
+        self.GetEchoRequest = pool.message("clients.echo.GetEchoRequest")
+        # The companion's clients: an egress client and two file stores.
+        self.echo = clients.egress("echo")
+        self.files = clients.store("notes-files")
+        self.media = clients.store("notes-media")
 
     @property
     def me(self):
@@ -146,3 +155,46 @@ class NoteService:
             token_repr=repr(self.cfg.secret("api_token")) + ":" + str(len(self.cfg.secret("api_token").reveal())),
         )
 
+
+    async def Echo(self, ctx, req):
+        # Inside a transaction: the companion call must not carry it.
+        async def call(tx_ctx):
+            return await self.echo.GetEcho(tx_ctx, self.GetEchoRequest(id=req.id))
+
+        reply = await distx.run(ctx, self.tx, distx.begin_request(CONN), call)
+        return self.EchoResponse(message=reply.message)
+
+    async def AttachFile(self, ctx, req):
+        if req.case == "read_only_delete":
+            try:
+                await self.media.delete(ctx, "any")
+            except PermissionError as e:
+                return self.AttachFileResponse(refused=str(e))
+            return self.AttachFileResponse()
+        body = bytes(i % 251 for i in range(req.size))
+        if req.part:
+            data = body
+
+            def parts():
+                for i in range(0, len(data), req.part):
+                    yield data[i:i + req.part]
+
+            body_arg = parts()
+        else:
+            body_arg = body
+
+        async def work(tx_ctx):
+            handle = await self.files.put(tx_ctx, "conformance.v1.NoteFile.file", body_arg)
+            info = await self.files.stat(tx_ctx, handle)
+            equal = await self.files.read(tx_ctx, handle) == body
+            await self.files.delete(tx_ctx, handle)
+            try:
+                await self.files.read(tx_ctx, handle)
+                gone = False
+            except GRPCError as e:
+                gone = files.is_not_found(e)
+            return self.AttachFileResponse(
+                handle=handle, stat_size=info.size, mod_time_ms=int(info.mod_time.timestamp() * 1000),
+                read_back_equal=equal, not_found_after_delete=gone)
+
+        return await distx.run(ctx, self.tx, distx.begin_request(CONN), work)
