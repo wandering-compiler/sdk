@@ -24,6 +24,7 @@
  */
 
 import { performance } from "node:perf_hooks";
+import * as observability from "./observability.js";
 
 /** What a {@link Metadata} can be built from. */
 export type MetadataInit =
@@ -328,7 +329,17 @@ export class Context {
    * Call fn once, when the context becomes done (at once, on a microtask, if
    * it already is). Returns the function that unregisters it.
    */
-  onDone(fn: () => void): () => void {
+  onDone(fn0: () => void): () => void {
+    // fn runs from a timer, a microtask, or whoever cancels — in a server,
+    // a grpc-js 'cancelled' listener. A throw there would be an uncaught
+    // exception that ends the process: it is reported instead.
+    const fn = () => {
+      try {
+        fn0();
+      } catch (e) {
+        observability.reportError(this, new Error(`context: an onDone callback threw: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`, { cause: e }));
+      }
+    };
     if (this.done()) {
       let live = true;
       queueMicrotask(() => live && fn());
