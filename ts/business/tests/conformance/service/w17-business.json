@@ -1,0 +1,79 @@
+{
+  "format": 1,
+  "domain": "notes",
+  "bundle": "notes-business",
+  "language": "typescript",
+  "sdk_version": "v0.0.0",
+  "env_prefix": "NOTES",
+  "listen": {
+    "env": "NOTES_LISTEN_ADDR",
+    "default": ":50061"
+  },
+  "reflection_env": "NOTES_GRPC_REFLECTION",
+  "shutdown_timeout_seconds": 10,
+  "descriptor_set": "../testdata/descriptors.binpb",
+  "register": {
+    "path": "conformance_notes",
+    "package": "conformance_notes",
+    "module": "w17.ts",
+    "function": "registerBusiness"
+  },
+  "services": [
+    {
+      "name": "conformance.v1.NoteService",
+      "methods": [
+        {"name": "CreateNote", "path": "/conformance.v1.NoteService/CreateNote", "input": "conformance.v1.CreateNoteRequest", "output": "conformance.v1.Note", "client_streaming": false, "server_streaming": false},
+        {"name": "CreateNotes", "path": "/conformance.v1.NoteService/CreateNotes", "input": "conformance.v1.CreateNotesRequest", "output": "conformance.v1.CreateNotesResponse", "client_streaming": false, "server_streaming": false},
+        {"name": "ListNotes", "path": "/conformance.v1.NoteService/ListNotes", "input": "conformance.v1.ListNotesRequest", "output": "conformance.v1.ListNotesResponse", "client_streaming": false, "server_streaming": false},
+        {"name": "Inspect", "path": "/conformance.v1.NoteService/Inspect", "input": "conformance.v1.InspectRequest", "output": "conformance.v1.InspectResponse", "client_streaming": false, "server_streaming": false},
+        {"name": "Refuse", "path": "/conformance.v1.NoteService/Refuse", "input": "conformance.v1.RefuseRequest", "output": "conformance.v1.Note", "client_streaming": false, "server_streaming": false},
+        {"name": "Sleep", "path": "/conformance.v1.NoteService/Sleep", "input": "conformance.v1.SleepRequest", "output": "conformance.v1.Note", "client_streaming": false, "server_streaming": false},
+        {"name": "TxErrors", "path": "/conformance.v1.NoteService/TxErrors", "input": "conformance.v1.TxErrorsRequest", "output": "conformance.v1.TxErrorsResponse", "client_streaming": false, "server_streaming": false},
+        {"name": "Whoami", "path": "/conformance.v1.NoteService/Whoami", "input": "conformance.v1.WhoamiRequest", "output": "conformance.v1.WhoamiResponse", "client_streaming": false, "server_streaming": false}
+      ]
+    }
+  ],
+  "config": [
+    {"name": "api_token", "env": "NOTES_API_TOKEN", "type": "string", "default": "", "required": true, "secret": true, "description": "a secret the suite requires"},
+    {"name": "greeting", "env": "NOTES_GREETING", "type": "string", "default": "hello", "required": false, "secret": false, "description": ""},
+    {"name": "limit", "env": "NOTES_LIMIT", "type": "int", "default": 10, "required": false, "secret": false, "description": ""},
+    {"name": "verbose", "env": "NOTES_VERBOSE", "type": "bool", "default": false, "required": false, "secret": false, "description": ""}
+  ],
+  "storage": {
+    "address_env": "NOTES_STORAGE_BACKEND_ADDR",
+    "default_address": "notes-storage:50051",
+    "services": ["conformance.v1.NoteStorage"],
+    "distributed_transactions": {"service": "w17.common.distx.W17DistributedTransaction"}
+  },
+  "events": {
+    "nats": {"dsn_env": "NOTES_EVENTBUS_NATS_DSN"},
+    "redis_streams": null,
+    "durable_prefix_env": "NOTES_EVENTBUS_DURABLE_PREFIX",
+    "durable_prefix_default": "notes-business-emit",
+    "envelope": "conformance.events.Event",
+    "emits": [
+      {
+        "method": "/conformance.v1.NoteService/CreateNote",
+        "event": "conformance.v1.NoteCreated",
+        "envelope_field": "v1_note_created",
+        "channel": "notes",
+        "topic": "note.created",
+        "fields": [
+          {"field": "id", "source": "response", "path": ["id"]},
+          {"field": "text", "source": "request", "path": ["text"]},
+          {"field": "by", "source": "literal", "value": "conformance"}
+        ]
+      }
+    ],
+    "invalidates": [
+      {
+        "method": "/conformance.v1.NoteService/CreateNote",
+        "channel": "notes",
+        "topic": "w17.invalidate",
+        "group": "conformance.v1",
+        "entities": ["Note"]
+      }
+    ]
+  },
+  "plugin_hooks": []
+}
