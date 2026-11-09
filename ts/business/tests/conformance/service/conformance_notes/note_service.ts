@@ -194,6 +194,31 @@ export class NoteService {
       }
       return this.M("AttachFileResponse")();
     }
+    if (req.case === "body_fails") {
+      async function* failing(): AsyncGenerator<Uint8Array> {
+        // Paced, so the chunks before the failure reach the companion.
+        for (let i = 0; i < 25; i++) {
+          yield new Uint8Array(8 << 10);
+          await sleep(10);
+        }
+        throw new Error("conformance: the body failed");
+      }
+      try {
+        const handle = await this.files.put(ctx, "conformance.v1.NoteFile.file", failing());
+        return this.M("AttachFileResponse")({ handle });
+      } catch (e) {
+        return this.M("AttachFileResponse")({ refused: (e as Error).message });
+      }
+    }
+    if (req.case === "body_stalls") {
+      async function* stalling(): AsyncGenerator<Uint8Array> {
+        yield new Uint8Array(192 << 10);
+        await sleep(10_000);
+        yield new Uint8Array(1);
+      }
+      const handle = await this.files.put(ctx, "conformance.v1.NoteFile.file", stalling());
+      return this.M("AttachFileResponse")({ handle });
+    }
     const size = Number(req.size);
     const part = Number(req.part);
     const body = new Uint8Array(size);

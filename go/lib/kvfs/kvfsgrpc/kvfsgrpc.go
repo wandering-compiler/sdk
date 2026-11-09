@@ -97,6 +97,16 @@ type server struct {
 // Put stores the body that follows the header as a new object of the
 // header's field: kvfs.Put with the field's placement, streaming the chunks
 // straight into its staging file.
+//
+// Only the end marker completes the body. A stream that closes without it
+// is not a body that happens to be shorter: a client whose body failed, or
+// one cancelling the call (grpc-js half-closes before it resets the
+// stream), reaches the server as exactly that close. kvfs.Put is then
+// handed a read error, removes its staging file and stores nothing.
+//
+// A stalled body holds the call, and its staging file, until the client's
+// deadline or cancellation — as kvfs.Put on a stalled reader does in a Go
+// tier; the server sets no idle timeout of its own.
 func (s *server) Put(stream filespb.W17Files_PutServer) error {
 	ctx := stream.Context()
 	first, err := stream.Recv()
@@ -132,6 +142,11 @@ func (s *server) Put(stream filespb.W17Files_PutServer) error {
 	}
 	var bad badRequestError
 	switch {
+	case ctx.Err() != nil:
+		// The call ended (cancelled, out of time) while the body arrived
+		// or before the commit: that, not what it left behind, is the
+		// answer.
+		return status.FromContextError(ctx.Err()).Err()
 	case errors.As(err, &bad):
 		return badRequest(bad.msg)
 	case body.recvErr != nil:
@@ -149,9 +164,15 @@ func (s *server) Put(stream filespb.W17Files_PutServer) error {
 // from the stream when the last one is used up, so the body flows from the
 // caller into kvfs.Put's staging file without a goroutine or a buffer of
 // its own, and kvfs.Put stops pulling the moment a body is too large.
+//
+// It reports io.EOF only for a stream that sent its end marker, with the
+// size of the chunks before it, and then closed; any other close is a read
+// error, so kvfs.Put commits nothing.
 type putBody struct {
 	stream  filespb.W17Files_PutServer
 	buf     []byte
+	size    int64 // the bytes of the chunks received so far
+	ended   bool  // the end marker arrived
 	err     error // the error every later Read returns
 	recvErr error // a transport error from Recv (cancellation, a broken stream)
 }
@@ -163,22 +184,33 @@ func (b *putBody) Read(p []byte) (int, error) {
 		}
 		msg, err := b.stream.Recv()
 		switch {
-		case errors.Is(err, io.EOF):
+		case errors.Is(err, io.EOF) && b.ended:
 			b.err = io.EOF
+		case errors.Is(err, io.EOF):
+			b.err = badRequestError{"the Put stream closed before its end marker: the body is incomplete, and nothing is stored"}
 		case err != nil:
 			b.recvErr, b.err = err, err
+		case b.ended:
+			b.err = badRequestError{"a Put's end marker is its last message; another one followed it"}
 		case msg.GetHeader() != nil:
 			b.err = badRequestError{"a Put carries one header, first; this one repeats it"}
+		case msg.GetEnd() != nil:
+			if got := msg.GetEnd().GetSize(); got != b.size {
+				b.err = badRequestError{fmt.Sprintf("the Put's end marker says %d bytes; its chunks carried %d", got, b.size)}
+				break
+			}
+			b.ended = true
 		default:
 			c, ok := msg.GetPart().(*filespb.PutRequest_Chunk)
 			if !ok {
-				b.err = badRequestError{"a Put message after the header must be a chunk"}
+				b.err = badRequestError{"a Put message after the header must be a chunk or the end marker"}
 				break
 			}
 			if len(c.Chunk) > MaxChunkBytes {
 				b.err = badRequestError{fmt.Sprintf("a Put chunk is at most %d bytes; this one has %d", MaxChunkBytes, len(c.Chunk))}
 				break
 			}
+			b.size += int64(len(c.Chunk))
 			b.buf = c.Chunk
 		}
 	}

@@ -95,7 +95,7 @@ func ctx(t *testing.T) context.Context {
 	return c
 }
 
-// put sends the header and then body in chunks of chunk bytes.
+// put sends the header, then body in chunks of chunk bytes, then the end.
 func put(t *testing.T, c filespb.W17FilesClient, field string, body []byte, chunk int) (string, error) {
 	t.Helper()
 	st, err := c.Put(ctx(t))
@@ -105,12 +105,18 @@ func put(t *testing.T, c filespb.W17FilesClient, field string, body []byte, chun
 	if err := st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_Header{Header: &filespb.PutHeader{Field: field}}}); err != nil {
 		t.Fatal(err)
 	}
+	size := int64(len(body))
+	sent := true
 	for len(body) > 0 {
 		n := min(chunk, len(body))
 		if err := st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_Chunk{Chunk: body[:n]}}); err != nil {
-			break // the server answered early; CloseAndRecv says why
+			sent = false // the server answered early; CloseAndRecv says why
+			break
 		}
 		body = body[n:]
+	}
+	if sent {
+		_ = st.Send(end(size))
 	}
 	resp, err := st.CloseAndRecv()
 	if err != nil {
@@ -357,6 +363,123 @@ func TestCancelledPutStoresNothing(t *testing.T) {
 	case <-handled:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the Put handler did not return")
+	}
+	if keys := mem.Keys(); len(keys) != 0 {
+		t.Fatalf("a cancelled Put stored %v", keys)
+	}
+}
+
+func end(size int64) *filespb.PutRequest {
+	return &filespb.PutRequest{Part: &filespb.PutRequest_End{End: &filespb.PutEnd{Size: size}}}
+}
+
+// Only the end marker commits: a stream that half-closes without it (a
+// client whose body failed, or one cancelling — grpc-js half-closes before
+// it resets the stream) stores nothing, and so does an end that does not
+// match the body or is not last.
+func TestPutStoresOnlyAfterTheEnd(t *testing.T) {
+	mem := memory.New()
+	client, handled := serve(t, map[string]kvfsgrpc.Conn{"c": {Driver: mem, Writable: true}},
+		map[string]kvfsgrpc.Placement{"a.B.f": {Connection: "c", Placement: kvfs.Placement{BucketPath: "b"}}})
+	header := &filespb.PutRequest{Part: &filespb.PutRequest_Header{Header: &filespb.PutHeader{Field: "a.B.f"}}}
+	chunk := func(n int) *filespb.PutRequest {
+		return &filespb.PutRequest{Part: &filespb.PutRequest_Chunk{Chunk: make([]byte, n)}}
+	}
+	for _, tc := range []struct {
+		name string
+		msgs []*filespb.PutRequest
+	}{
+		{"half-close after chunks", []*filespb.PutRequest{header, chunk(kvfsgrpc.ChunkBytes), chunk(kvfsgrpc.ChunkBytes), chunk(kvfsgrpc.ChunkBytes)}},
+		{"header alone", []*filespb.PutRequest{header}},
+		{"end below the body", []*filespb.PutRequest{header, chunk(10), end(9)}},
+		{"end above the body", []*filespb.PutRequest{header, chunk(10), end(11)}},
+		{"chunk after the end", []*filespb.PutRequest{header, chunk(10), end(10), chunk(1)}},
+		{"two ends", []*filespb.PutRequest{header, end(0), end(0)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := client.Put(ctx(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range tc.msgs {
+				if err := st.Send(m); err != nil {
+					break
+				}
+			}
+			_, err = st.CloseAndRecv()
+			wantRefusal(t, err, codes.InvalidArgument, kvfsgrpc.ReasonBadRequest, nil)
+			<-handled
+			if keys := mem.Keys(); len(keys) != 0 {
+				t.Fatalf("stored %v", keys)
+			}
+		})
+	}
+	// The same body with its end is stored.
+	st, err := client.Put(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []*filespb.PutRequest{header, chunk(10), end(10)} {
+		if err := st.Send(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if resp, err := st.CloseAndRecv(); err != nil || !mem.Has(resp.GetHandle()) {
+		t.Fatalf("with its end: %v, %v (stored %v)", resp, err, mem.Keys())
+	}
+}
+
+// committingDriver stands for a driver whose commit does not watch the
+// context (local_fs renames, S3 completes an upload): it reports that the
+// commit started, waits for the call's context to end, then stores anyway.
+type committingDriver struct {
+	*memory.Driver
+	reached chan struct{}
+}
+
+func (d committingDriver) PutFromTempFile(ctx context.Context, key, tmpPath string) (string, error) {
+	close(d.reached)
+	<-ctx.Done()
+	return d.Driver.PutFromTempFile(context.Background(), key, tmpPath)
+}
+
+// The grpc-js cancellation as the server sees it: three chunks, the
+// half-close, then the reset. The half-close is not the end of the body,
+// so nothing reaches the driver and nothing is stored.
+func TestCancelAfterHalfCloseStoresNothing(t *testing.T) {
+	mem := memory.New()
+	d := committingDriver{Driver: mem, reached: make(chan struct{})}
+	client, handled := serve(t, map[string]kvfsgrpc.Conn{"c": {Driver: d, Writable: true}},
+		map[string]kvfsgrpc.Placement{"a.B.f": {Connection: "c", Placement: kvfs.Placement{BucketPath: "b"}}})
+	c, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, err := client.Put(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_Header{Header: &filespb.PutHeader{Field: "a.B.f"}}})
+	for range 3 {
+		_ = st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_Chunk{Chunk: make([]byte, kvfsgrpc.ChunkBytes)}})
+	}
+	_ = st.CloseSend()
+	// Reset the stream once the server has acted on the half-close: either
+	// it went on to commit (the driver was reached) or it refused.
+	done := false
+	select {
+	case <-d.reached:
+	case <-handled:
+		done = true
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server neither committed nor refused the half-closed Put")
+	}
+	cancel()
+	_ = st.RecvMsg(&filespb.PutResponse{})
+	if !done {
+		select {
+		case <-handled:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the Put handler did not return")
+		}
 	}
 	if keys := mem.Keys(); len(keys) != 0 {
 		t.Fatalf("a cancelled Put stored %v", keys)

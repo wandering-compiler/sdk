@@ -171,6 +171,27 @@ class NoteService:
             except PermissionError as e:
                 return self.AttachFileResponse(refused=str(e))
             return self.AttachFileResponse()
+        if req.case == "body_fails":
+            async def failing():
+                # Paced, so the chunks before the failure reach the companion.
+                for _ in range(25):
+                    yield bytes(8 << 10)
+                    await asyncio.sleep(0.01)
+                raise RuntimeError("conformance: the body failed")
+
+            try:
+                handle = await self.files.put(ctx, "conformance.v1.NoteFile.file", failing())
+            except RuntimeError as e:
+                return self.AttachFileResponse(refused=str(e))
+            return self.AttachFileResponse(handle=handle)
+        if req.case == "body_stalls":
+            async def stalling():
+                yield bytes(192 << 10)
+                await asyncio.sleep(10)
+                yield b"x"
+
+            handle = await self.files.put(ctx, "conformance.v1.NoteFile.file", stalling())
+            return self.AttachFileResponse(handle=handle)
         body = bytes(i % 251 for i in range(req.size))
         if req.part:
             data = body

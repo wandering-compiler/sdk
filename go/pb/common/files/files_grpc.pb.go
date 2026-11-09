@@ -46,7 +46,7 @@ const (
 type W17FilesClient interface {
 	// Put stores a new object for a `writer: BUSINESS` table field and
 	// returns its handle: kvfs.Put with the field's generated placement.
-	// The first message is the header, every later one a chunk.
+	// The first message is the header, then the chunks, then the end marker.
 	Put(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutRequest, PutResponse], error)
 	// Open streams a stored object's bytes, in chunks of at most 64 KiB.
 	Open(ctx context.Context, in *OpenRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OpenResponse], error)
@@ -138,7 +138,7 @@ func (c *w17FilesClient) Delete(ctx context.Context, in *DeleteRequest, opts ...
 type W17FilesServer interface {
 	// Put stores a new object for a `writer: BUSINESS` table field and
 	// returns its handle: kvfs.Put with the field's generated placement.
-	// The first message is the header, every later one a chunk.
+	// The first message is the header, then the chunks, then the end marker.
 	Put(grpc.ClientStreamingServer[PutRequest, PutResponse]) error
 	// Open streams a stored object's bytes, in chunks of at most 64 KiB.
 	Open(*OpenRequest, grpc.ServerStreamingServer[OpenResponse]) error

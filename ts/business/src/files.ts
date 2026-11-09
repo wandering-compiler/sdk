@@ -107,7 +107,9 @@ export class FileStore {
   /**
    * Store `body` as a new object of `field` (full proto name, or
    * `Message.field` when unambiguous) and return its handle. The body is sent
-   * in 64 KiB chunks.
+   * in 64 KiB chunks. Nothing is stored unless the body is read to its end: a
+   * body that throws (its error is rethrown as it is), a cancelled `ctx` or
+   * one past its deadline leaves no object behind.
    */
   async put(ctx: Context, field: string, body: Body): Promise<string> {
     const p = resolveField(field, this.#placements);
@@ -116,7 +118,16 @@ export class FileStore {
     const input = this.#put.input;
     async function* requests(): AsyncGenerator<Message> {
       yield create(input, { part: { case: "header", value: { field: p.field } } });
-      for await (const chunk of chunks(body)) yield create(input, { part: { case: "chunk", value: chunk } });
+      let size = 0n;
+      for await (const chunk of chunks(body)) {
+        size += BigInt(chunk.length);
+        yield create(input, { part: { case: "chunk", value: chunk } });
+      }
+      // Only the end marker commits: a body that failed, or a call that was
+      // cancelled or ran out of time, never sends it, and the companion then
+      // stores nothing (grpc-js half-closes a cancelled call before it resets
+      // it, so the close alone cannot mean "complete").
+      yield create(input, { part: { case: "end", value: { size } } });
     }
     const reply = await this.#conn.clientStream(ctx, this.#put, requests());
     return String(reply.handle);

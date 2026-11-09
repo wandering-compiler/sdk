@@ -128,6 +128,8 @@ class FakeCompanion {
   calls: [string, Context][] = [];
   objects = new Map<string, Uint8Array>();
   putChunks: number[] = [];
+  /** The size of every end marker a Put sent. */
+  putEnds: bigint[] = [];
   unavailable = 0;
   n = 0;
   M = (name: string, init: Record<string, unknown> = {}) => pool().message(name)(init);
@@ -149,10 +151,14 @@ class FakeCompanion {
   async Put(ctx: Context, reqs: AsyncIterable<AnyMessage>): Promise<AnyMessage> {
     this.calls.push(["Put", ctx]);
     let field = "";
+    let ended = false;
     const parts: Uint8Array[] = [];
     for await (const r of reqs) {
       if (r.part.case === "header") field = r.part.value.field;
-      else {
+      else if (r.part.case === "end") {
+        this.putEnds.push(r.part.value.size);
+        ended = r.part.value.size === BigInt(Buffer.concat(parts).length);
+      } else {
         this.putChunks.push(r.part.value.length);
         parts.push(r.part.value);
       }
@@ -161,6 +167,8 @@ class FakeCompanion {
     if (body.length > 262144) {
       throw withInfo(Status.INVALID_ARGUMENT, "w17.files: too large", files.DOMAIN, "FILE_TOO_LARGE", { field, limit_bytes: "262144" });
     }
+    // As kvfsgrpc: only the end marker commits.
+    if (!ended) throw withInfo(Status.INVALID_ARGUMENT, "w17.files: no end marker", files.DOMAIN, "BAD_REQUEST");
     this.n++;
     const handle = `note-files/${createHash("sha256").update(body).digest("hex")}-${this.n.toString(16).padStart(32, "0")}`;
     this.objects.set(handle, body);
@@ -269,8 +277,10 @@ describe("over the wire", () => {
     expect([store.name, store.writable]).toEqual(["notes-files", true]);
     const body = new Uint8Array(200 << 10).map((_, i) => i % 251);
     const ctx = new Context({ outgoing: { "w17-tx-id": "tx-1" } });
+    fake.putEnds = [];
     const handle = await store.put(ctx, "conformance.v1.NoteFile.file", body);
     expect(fake.putChunks).toEqual([64 << 10, 64 << 10, 64 << 10, 8 << 10]);
+    expect(fake.putEnds).toEqual([BigInt(200 << 10)]); // the end marker, last, with the body's size
     expect(handle.startsWith("note-files/" + createHash("sha256").update(body).digest("hex"))).toBe(true);
     const info = await store.stat(ctx, handle);
     expect(info.size).toBe(BigInt(body.length));
@@ -301,8 +311,10 @@ describe("over the wire", () => {
       expect(Buffer.compare(await store.read(new Context(), handle), want)).toBe(0);
     }
     fake.putChunks = [];
+    fake.putEnds = [];
     const handle = await store.put(new Context(), "NoteFile.file", new Uint8Array());
     expect(fake.putChunks).toEqual([]);
+    expect(fake.putEnds).toEqual([0n]);
     expect((await store.read(new Context(), handle)).length).toBe(0);
   });
 
@@ -323,7 +335,13 @@ describe("over the wire", () => {
       yield new Uint8Array(1);
       throw new Error("the author's file is gone");
     }
+    const stored = fake.objects.size;
+    fake.putEnds = [];
     await expect(store.put(new Context(), "NoteFile.file", broken())).rejects.toThrow(/the author's file is gone/);
+    await new Promise((r) => setTimeout(r, 100));
+    // A failed body never sends the end marker, so the companion stores nothing.
+    expect(fake.putEnds).toEqual([]);
+    expect(fake.objects.size).toBe(stored);
   });
 });
 

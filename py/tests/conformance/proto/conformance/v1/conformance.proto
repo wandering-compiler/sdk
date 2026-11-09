@@ -191,6 +191,11 @@ message AttachFileRequest {
   // companion is re-raised unchanged.
   // "read_only_delete": delete "any" on the read-only connection
   // notes-media; the SDK's refusal is reported in `refused`.
+  // "body_fails": put a body that yields 200 KiB (25 parts of 8 KiB, 10 ms
+  // apart) and then raises the error "conformance: the body failed"; the error the put re-raises is
+  // reported in `refused` (a put that succeeds reports its `handle`).
+  // "body_stalls": put a body that yields 192 KiB and then stalls for 10 s
+  // before its last byte; the call's deadline or cancellation ends it.
   string case = 1;
   int64 size = 2;
   int64 part = 3;

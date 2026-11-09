@@ -23,14 +23,25 @@ const (
 )
 
 // PutRequest is one message of a Put stream: exactly one header, first,
-// then any number of chunks (each at most 1 MiB); the client's half-close
-// ends the body. A header alone stores an empty object.
+// then any number of chunks (each at most 1 MiB), then exactly one end,
+// last, followed by the client's half-close. A header and an end alone
+// store an empty object.
+//
+// Only the end commits the object. A stream that closes without it — the
+// client's body failed, the call was cancelled or ran out of time — stores
+// nothing and is refused (BAD_REQUEST, or CANCELLED / DEADLINE_EXCEEDED
+// when the call's own context ended): a cancelling client can half-close
+// before it resets the stream, and the server must not read that
+// half-close as a complete body. The server sets no idle timeout between
+// messages: a stalled body holds the call until the client's deadline or
+// cancellation, as kvfs.Put on a stalled reader does in a Go tier.
 type PutRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Part:
 	//
 	//	*PutRequest_Header
 	//	*PutRequest_Chunk
+	//	*PutRequest_End
 	Part          isPutRequest_Part `protobuf_oneof:"part"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -91,6 +102,15 @@ func (x *PutRequest) GetChunk() []byte {
 	return nil
 }
 
+func (x *PutRequest) GetEnd() *PutEnd {
+	if x != nil {
+		if x, ok := x.Part.(*PutRequest_End); ok {
+			return x.End
+		}
+	}
+	return nil
+}
+
 type isPutRequest_Part interface {
 	isPutRequest_Part()
 }
@@ -103,9 +123,63 @@ type PutRequest_Chunk struct {
 	Chunk []byte `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
 }
 
+type PutRequest_End struct {
+	End *PutEnd `protobuf:"bytes,3,opt,name=end,proto3,oneof"`
+}
+
 func (*PutRequest_Header) isPutRequest_Part() {}
 
 func (*PutRequest_Chunk) isPutRequest_Part() {}
+
+func (*PutRequest_End) isPutRequest_Part() {}
+
+// PutEnd ends a Put's body. A client sends it only once its body was read
+// to the end without an error.
+type PutEnd struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The body's length in bytes: the sum of the chunks sent. A mismatch is
+	// BAD_REQUEST, and nothing is stored.
+	Size          int64 `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutEnd) Reset() {
+	*x = PutEnd{}
+	mi := &file_common_files_files_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutEnd) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutEnd) ProtoMessage() {}
+
+func (x *PutEnd) ProtoReflect() protoreflect.Message {
+	mi := &file_common_files_files_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutEnd.ProtoReflect.Descriptor instead.
+func (*PutEnd) Descriptor() ([]byte, []int) {
+	return file_common_files_files_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PutEnd) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
 
 type PutHeader struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -119,7 +193,7 @@ type PutHeader struct {
 
 func (x *PutHeader) Reset() {
 	*x = PutHeader{}
-	mi := &file_common_files_files_proto_msgTypes[1]
+	mi := &file_common_files_files_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -131,7 +205,7 @@ func (x *PutHeader) String() string {
 func (*PutHeader) ProtoMessage() {}
 
 func (x *PutHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[1]
+	mi := &file_common_files_files_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -144,7 +218,7 @@ func (x *PutHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutHeader.ProtoReflect.Descriptor instead.
 func (*PutHeader) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{1}
+	return file_common_files_files_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PutHeader) GetField() string {
@@ -165,7 +239,7 @@ type PutResponse struct {
 
 func (x *PutResponse) Reset() {
 	*x = PutResponse{}
-	mi := &file_common_files_files_proto_msgTypes[2]
+	mi := &file_common_files_files_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -177,7 +251,7 @@ func (x *PutResponse) String() string {
 func (*PutResponse) ProtoMessage() {}
 
 func (x *PutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[2]
+	mi := &file_common_files_files_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -190,7 +264,7 @@ func (x *PutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutResponse.ProtoReflect.Descriptor instead.
 func (*PutResponse) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{2}
+	return file_common_files_files_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PutResponse) GetHandle() string {
@@ -210,7 +284,7 @@ type OpenRequest struct {
 
 func (x *OpenRequest) Reset() {
 	*x = OpenRequest{}
-	mi := &file_common_files_files_proto_msgTypes[3]
+	mi := &file_common_files_files_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -222,7 +296,7 @@ func (x *OpenRequest) String() string {
 func (*OpenRequest) ProtoMessage() {}
 
 func (x *OpenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[3]
+	mi := &file_common_files_files_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,7 +309,7 @@ func (x *OpenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenRequest.ProtoReflect.Descriptor instead.
 func (*OpenRequest) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{3}
+	return file_common_files_files_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *OpenRequest) GetConnection() string {
@@ -261,7 +335,7 @@ type OpenResponse struct {
 
 func (x *OpenResponse) Reset() {
 	*x = OpenResponse{}
-	mi := &file_common_files_files_proto_msgTypes[4]
+	mi := &file_common_files_files_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -273,7 +347,7 @@ func (x *OpenResponse) String() string {
 func (*OpenResponse) ProtoMessage() {}
 
 func (x *OpenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[4]
+	mi := &file_common_files_files_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -286,7 +360,7 @@ func (x *OpenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenResponse.ProtoReflect.Descriptor instead.
 func (*OpenResponse) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{4}
+	return file_common_files_files_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *OpenResponse) GetChunk() []byte {
@@ -306,7 +380,7 @@ type StatRequest struct {
 
 func (x *StatRequest) Reset() {
 	*x = StatRequest{}
-	mi := &file_common_files_files_proto_msgTypes[5]
+	mi := &file_common_files_files_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -318,7 +392,7 @@ func (x *StatRequest) String() string {
 func (*StatRequest) ProtoMessage() {}
 
 func (x *StatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[5]
+	mi := &file_common_files_files_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -331,7 +405,7 @@ func (x *StatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatRequest.ProtoReflect.Descriptor instead.
 func (*StatRequest) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{5}
+	return file_common_files_files_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *StatRequest) GetConnection() string {
@@ -358,7 +432,7 @@ type StatResponse struct {
 
 func (x *StatResponse) Reset() {
 	*x = StatResponse{}
-	mi := &file_common_files_files_proto_msgTypes[6]
+	mi := &file_common_files_files_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -370,7 +444,7 @@ func (x *StatResponse) String() string {
 func (*StatResponse) ProtoMessage() {}
 
 func (x *StatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[6]
+	mi := &file_common_files_files_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -383,7 +457,7 @@ func (x *StatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatResponse.ProtoReflect.Descriptor instead.
 func (*StatResponse) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{6}
+	return file_common_files_files_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *StatResponse) GetSize() int64 {
@@ -410,7 +484,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_common_files_files_proto_msgTypes[7]
+	mi := &file_common_files_files_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -422,7 +496,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[7]
+	mi := &file_common_files_files_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -435,7 +509,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{7}
+	return file_common_files_files_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DeleteRequest) GetConnection() string {
@@ -460,7 +534,7 @@ type DeleteResponse struct {
 
 func (x *DeleteResponse) Reset() {
 	*x = DeleteResponse{}
-	mi := &file_common_files_files_proto_msgTypes[8]
+	mi := &file_common_files_files_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -472,7 +546,7 @@ func (x *DeleteResponse) String() string {
 func (*DeleteResponse) ProtoMessage() {}
 
 func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_files_files_proto_msgTypes[8]
+	mi := &file_common_files_files_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -485,19 +559,22 @@ func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_common_files_files_proto_rawDescGZIP(), []int{8}
+	return file_common_files_files_proto_rawDescGZIP(), []int{9}
 }
 
 var File_common_files_files_proto protoreflect.FileDescriptor
 
 const file_common_files_files_proto_rawDesc = "" +
 	"\n" +
-	"\x18common/files/files.proto\x12\x10w17.common.files\x1a\x1fgoogle/protobuf/timestamp.proto\"c\n" +
+	"\x18common/files/files.proto\x12\x10w17.common.files\x1a\x1fgoogle/protobuf/timestamp.proto\"\x91\x01\n" +
 	"\n" +
 	"PutRequest\x125\n" +
 	"\x06header\x18\x01 \x01(\v2\x1b.w17.common.files.PutHeaderH\x00R\x06header\x12\x16\n" +
-	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\x06\n" +
-	"\x04part\"!\n" +
+	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunk\x12,\n" +
+	"\x03end\x18\x03 \x01(\v2\x18.w17.common.files.PutEndH\x00R\x03endB\x06\n" +
+	"\x04part\"\x1c\n" +
+	"\x06PutEnd\x12\x12\n" +
+	"\x04size\x18\x01 \x01(\x03R\x04size\"!\n" +
 	"\tPutHeader\x12\x14\n" +
 	"\x05field\x18\x01 \x01(\tR\x05field\"%\n" +
 	"\vPutResponse\x12\x16\n" +
@@ -541,35 +618,37 @@ func file_common_files_files_proto_rawDescGZIP() []byte {
 	return file_common_files_files_proto_rawDescData
 }
 
-var file_common_files_files_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_common_files_files_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_common_files_files_proto_goTypes = []any{
 	(*PutRequest)(nil),            // 0: w17.common.files.PutRequest
-	(*PutHeader)(nil),             // 1: w17.common.files.PutHeader
-	(*PutResponse)(nil),           // 2: w17.common.files.PutResponse
-	(*OpenRequest)(nil),           // 3: w17.common.files.OpenRequest
-	(*OpenResponse)(nil),          // 4: w17.common.files.OpenResponse
-	(*StatRequest)(nil),           // 5: w17.common.files.StatRequest
-	(*StatResponse)(nil),          // 6: w17.common.files.StatResponse
-	(*DeleteRequest)(nil),         // 7: w17.common.files.DeleteRequest
-	(*DeleteResponse)(nil),        // 8: w17.common.files.DeleteResponse
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(*PutEnd)(nil),                // 1: w17.common.files.PutEnd
+	(*PutHeader)(nil),             // 2: w17.common.files.PutHeader
+	(*PutResponse)(nil),           // 3: w17.common.files.PutResponse
+	(*OpenRequest)(nil),           // 4: w17.common.files.OpenRequest
+	(*OpenResponse)(nil),          // 5: w17.common.files.OpenResponse
+	(*StatRequest)(nil),           // 6: w17.common.files.StatRequest
+	(*StatResponse)(nil),          // 7: w17.common.files.StatResponse
+	(*DeleteRequest)(nil),         // 8: w17.common.files.DeleteRequest
+	(*DeleteResponse)(nil),        // 9: w17.common.files.DeleteResponse
+	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
 }
 var file_common_files_files_proto_depIdxs = []int32{
-	1, // 0: w17.common.files.PutRequest.header:type_name -> w17.common.files.PutHeader
-	9, // 1: w17.common.files.StatResponse.mod_time:type_name -> google.protobuf.Timestamp
-	0, // 2: w17.common.files.W17Files.Put:input_type -> w17.common.files.PutRequest
-	3, // 3: w17.common.files.W17Files.Open:input_type -> w17.common.files.OpenRequest
-	5, // 4: w17.common.files.W17Files.Stat:input_type -> w17.common.files.StatRequest
-	7, // 5: w17.common.files.W17Files.Delete:input_type -> w17.common.files.DeleteRequest
-	2, // 6: w17.common.files.W17Files.Put:output_type -> w17.common.files.PutResponse
-	4, // 7: w17.common.files.W17Files.Open:output_type -> w17.common.files.OpenResponse
-	6, // 8: w17.common.files.W17Files.Stat:output_type -> w17.common.files.StatResponse
-	8, // 9: w17.common.files.W17Files.Delete:output_type -> w17.common.files.DeleteResponse
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2,  // 0: w17.common.files.PutRequest.header:type_name -> w17.common.files.PutHeader
+	1,  // 1: w17.common.files.PutRequest.end:type_name -> w17.common.files.PutEnd
+	10, // 2: w17.common.files.StatResponse.mod_time:type_name -> google.protobuf.Timestamp
+	0,  // 3: w17.common.files.W17Files.Put:input_type -> w17.common.files.PutRequest
+	4,  // 4: w17.common.files.W17Files.Open:input_type -> w17.common.files.OpenRequest
+	6,  // 5: w17.common.files.W17Files.Stat:input_type -> w17.common.files.StatRequest
+	8,  // 6: w17.common.files.W17Files.Delete:input_type -> w17.common.files.DeleteRequest
+	3,  // 7: w17.common.files.W17Files.Put:output_type -> w17.common.files.PutResponse
+	5,  // 8: w17.common.files.W17Files.Open:output_type -> w17.common.files.OpenResponse
+	7,  // 9: w17.common.files.W17Files.Stat:output_type -> w17.common.files.StatResponse
+	9,  // 10: w17.common.files.W17Files.Delete:output_type -> w17.common.files.DeleteResponse
+	7,  // [7:11] is the sub-list for method output_type
+	3,  // [3:7] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_common_files_files_proto_init() }
@@ -580,6 +659,7 @@ func file_common_files_files_proto_init() {
 	file_common_files_files_proto_msgTypes[0].OneofWrappers = []any{
 		(*PutRequest_Header)(nil),
 		(*PutRequest_Chunk)(nil),
+		(*PutRequest_End)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -587,7 +667,7 @@ func file_common_files_files_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_files_files_proto_rawDesc), len(file_common_files_files_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

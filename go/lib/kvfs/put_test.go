@@ -119,3 +119,38 @@ func TestPut_DriverErrorCleansUp(t *testing.T) {
 		t.Errorf("staging files left behind: %v", left)
 	}
 }
+
+// cancelAtEOF is a body whose caller gives up exactly when it is read to
+// the end: the context ends between staging and the driver's commit.
+type cancelAtEOF struct {
+	r      io.Reader
+	cancel context.CancelFunc
+}
+
+func (b cancelAtEOF) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		b.cancel()
+	}
+	return n, err
+}
+
+// A context that ended while the body was staged commits nothing, even on
+// a driver that never looks at the context itself.
+func TestPut_CancelledBeforeCommitStoresNothing(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	d := memory.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := kvfs.Put(ctx, d, kvfs.Placement{BucketPath: "/x"}, cancelAtEOF{strings.NewReader("body"), cancel})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if keys := d.Keys(); len(keys) != 0 {
+		t.Errorf("stored %v", keys)
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Errorf("staging files left behind: %v", left)
+	}
+}

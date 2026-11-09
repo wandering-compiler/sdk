@@ -23,7 +23,7 @@ import "google/protobuf/timestamp.proto";
 service W17Files {
   // Put stores a new object for a `writer: BUSINESS` table field and
   // returns its handle: kvfs.Put with the field's generated placement.
-  // The first message is the header, every later one a chunk.
+  // The first message is the header, then the chunks, then the end marker.
   rpc Put(stream PutRequest) returns (PutResponse);
   // Open streams a stored object's bytes, in chunks of at most 64 KiB.
   rpc Open(OpenRequest) returns (stream OpenResponse);
@@ -35,13 +35,32 @@ service W17Files {
 }
 
 // PutRequest is one message of a Put stream: exactly one header, first,
-// then any number of chunks (each at most 1 MiB); the client's half-close
-// ends the body. A header alone stores an empty object.
+// then any number of chunks (each at most 1 MiB), then exactly one end,
+// last, followed by the client's half-close. A header and an end alone
+// store an empty object.
+//
+// Only the end commits the object. A stream that closes without it — the
+// client's body failed, the call was cancelled or ran out of time — stores
+// nothing and is refused (BAD_REQUEST, or CANCELLED / DEADLINE_EXCEEDED
+// when the call's own context ended): a cancelling client can half-close
+// before it resets the stream, and the server must not read that
+// half-close as a complete body. The server sets no idle timeout between
+// messages: a stalled body holds the call until the client's deadline or
+// cancellation, as kvfs.Put on a stalled reader does in a Go tier.
 message PutRequest {
   oneof part {
     PutHeader header = 1;
     bytes chunk = 2;
+    PutEnd end = 3;
   }
+}
+
+// PutEnd ends a Put's body. A client sends it only once its body was read
+// to the end without an error.
+message PutEnd {
+  // The body's length in bytes: the sum of the chunks sent. A mismatch is
+  // BAD_REQUEST, and nothing is stored.
+  int64 size = 1;
 }
 
 message PutHeader {

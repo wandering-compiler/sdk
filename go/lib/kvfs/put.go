@@ -44,7 +44,8 @@ var ErrTooLarge = errors.New("kvfs: object exceeds the field's max_size_bytes")
 // os.TempDir otherwise) while its sha256 is computed, then lands under
 // [BuildKey](p.BucketPath, [ObjectKey](hash), …) in one PutFromTempFile.
 // Every call stores its OWN object, even for a body identical to one
-// already stored (see [ObjectKey]).
+// already stored (see [ObjectKey]). A body that fails to read, or a ctx
+// that ends before the commit, stores nothing.
 func Put(ctx context.Context, d Driver, p Placement, body io.Reader) (handle string, err error) {
 	stageDir := ""
 	if sp, ok := d.(StagingDirProvider); ok {
@@ -65,6 +66,11 @@ func Put(ctx context.Context, d Driver, p Placement, body io.Reader) (handle str
 		return "", err
 	}
 	key := BuildKey(p.BucketPath, objectKey, p.ExpectedObjects, p.MaxPerBucket)
+	// A caller that gave up while the body was staged gets nothing stored:
+	// not every driver's commit (a local rename) looks at the context.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	handle, err = d.PutFromTempFile(ctx, key, tmpPath)
 	if err != nil {
 		return "", fmt.Errorf("kvfs: driver put: %w", err)

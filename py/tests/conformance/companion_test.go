@@ -1,8 +1,10 @@
 package conformance
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -152,8 +154,8 @@ func TestCompanionFileRoundTrip(t *testing.T) {
 		for _, c := range calls {
 			methods = append(methods, c.method[strings.LastIndex(c.method, "/")+1:])
 			switch {
-			case strings.HasSuffix(c.method, "/Put") && c.messages != 5:
-				t.Errorf("part %d: Put sent %d messages, want the header and four 64 KiB chunks", part, c.messages)
+			case strings.HasSuffix(c.method, "/Put") && c.messages != 6:
+				t.Errorf("part %d: Put sent %d messages, want the header, four 64 KiB chunks and the end", part, c.messages)
 			case strings.HasSuffix(c.method, "/Delete") && !c.existed:
 				t.Errorf("part %d: the file was not at its handle under the store root before the delete", part)
 			}
@@ -187,5 +189,104 @@ func TestCompanionFileRefusals(t *testing.T) {
 	}
 	if calls := env.companionSince(mark); len(calls) != 0 {
 		t.Fatalf("the SDK sent the refused delete: %v", calls)
+	}
+}
+
+// storedFiles is every regular file under the writable store's root,
+// staging files included.
+func storedFiles(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	err := filepath.WalkDir(env.filesRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.Type().IsRegular() {
+			out[path] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// awaitPut waits for the companion to finish the Put that started after
+// mark, and returns it.
+func awaitPut(t *testing.T, mark int, within time.Duration) companionCall {
+	t.Helper()
+	for end := time.Now().Add(within); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		for _, c := range env.companionSince(mark) {
+			if strings.HasSuffix(c.method, "/Put") {
+				return c
+			}
+		}
+	}
+	t.Fatalf("the companion did not finish a Put within %s", within)
+	return companionCall{}
+}
+
+// assertNothingStored: the Put after mark was refused and left no object,
+// and no staging file, under the store root.
+func assertNothingStored(t *testing.T, mark int, before map[string]bool, within time.Duration) {
+	t.Helper()
+	put := awaitPut(t, mark, within)
+	if put.err == nil {
+		t.Errorf("the companion answered the Put with a handle")
+	}
+	if put.messages < 1 {
+		t.Errorf("the Put carried %d messages", put.messages)
+	}
+	for path := range storedFiles(t) {
+		if !before[path] {
+			t.Errorf("an incomplete Put left %s under the store root", path)
+		}
+	}
+}
+
+func TestCompanionFailedBodyStoresNothing(t *testing.T) {
+	before := storedFiles(t)
+	mark := env.companionCount()
+	resp, err := env.call(gatewayCtx(t), "AttachFile",
+		set(env.msg("AttachFileRequest"), map[string]any{"case": "body_fails"}), "AttachFileResponse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := get(resp, "handle").String(); h != "" {
+		t.Fatalf("the put of a failing body returned the handle %q", h)
+	}
+	// The author's own error, re-raised unchanged.
+	if refused := get(resp, "refused").String(); refused != "conformance: the body failed" {
+		t.Fatalf("the put raised %q, want the body's error", refused)
+	}
+	assertNothingStored(t, mark, before, 5*time.Second)
+}
+
+func TestCompanionStalledBodyStoresNothing(t *testing.T) {
+	for _, end := range []string{"deadline", "cancel"} {
+		t.Run(end, func(t *testing.T) {
+			before := storedFiles(t)
+			mark := env.companionCount()
+			ctx, cancel := timeout(gatewayCtx(t), time.Second)
+			defer cancel()
+			if end == "cancel" {
+				ctx, cancel = context.WithCancel(gatewayCtx(t))
+				defer cancel()
+				time.AfterFunc(time.Second, cancel)
+			}
+			_, err := env.call(ctx, "AttachFile",
+				set(env.msg("AttachFileRequest"), map[string]any{"case": "body_stalls"}), "AttachFileResponse")
+			want := map[string]codes.Code{"deadline": codes.DeadlineExceeded, "cancel": codes.Canceled}[end]
+			if code := statusOf(t, err).Code(); code != want {
+				t.Fatalf("got %v, want %s", err, want)
+			}
+			// The stalled body would finish after 10 s: a companion that
+			// is still waiting for it then would store it.
+			assertNothingStored(t, mark, before, 15*time.Second)
+		})
 	}
 }

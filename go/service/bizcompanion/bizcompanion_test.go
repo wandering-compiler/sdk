@@ -359,6 +359,7 @@ func TestRegisterServesEgressAndFiles(t *testing.T) {
 	}
 	_ = st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_Header{Header: &filespb.PutHeader{Field: "app.notes.NoteExport.file"}}})
 	_ = st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_Chunk{Chunk: []byte("hello")}})
+	_ = st.Send(&filespb.PutRequest{Part: &filespb.PutRequest_End{End: &filespb.PutEnd{Size: 5}}})
 	resp, err := st.CloseAndRecv()
 	if err != nil {
 		t.Fatal(err)

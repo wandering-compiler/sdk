@@ -3,6 +3,7 @@
 egress clients and the file stores — over a real grpclib server standing in
 for the Go companion (the conformance suite runs the real one)."""
 
+import asyncio
 import base64
 import copy
 import hashlib
@@ -129,6 +130,7 @@ class FakeCompanion:
         self.calls = []  # (method, incoming metadata, time remaining)
         self.objects: dict[str, bytes] = {}
         self.put_chunks: list[int] = []
+        self.put_ends: list[int] = []  # the size of every end marker a Put sent
         self.unavailable = 0
         self.n = 0
 
@@ -156,10 +158,13 @@ class FakeCompanion:
 
     async def Put(self, ctx, reqs):
         self._seen("Put", ctx)
-        field, body = None, bytearray()
+        field, body, ended = None, bytearray(), False
         async for r in reqs:
             if r.WhichOneof("part") == "header":
                 field = r.header.field
+            elif r.WhichOneof("part") == "end":
+                self.put_ends.append(r.end.size)
+                ended = r.end.size == len(body)
             else:
                 self.put_chunks.append(len(r.chunk))
                 body += r.chunk
@@ -167,6 +172,9 @@ class FakeCompanion:
             raise GRPCError(Status.INVALID_ARGUMENT, "w17.files: too large",
                             [error_details_pb2.ErrorInfo(domain=files.DOMAIN, reason="FILE_TOO_LARGE",
                                                          metadata={"field": field, "limit_bytes": "262144"})])
+        if not ended:  # as kvfsgrpc: only the end marker commits
+            raise GRPCError(Status.INVALID_ARGUMENT, "w17.files: no end marker",
+                            [error_details_pb2.ErrorInfo(domain=files.DOMAIN, reason="BAD_REQUEST")])
         self.n += 1
         handle = f"note-files/{hashlib.sha256(body).hexdigest()}-{self.n:032x}"
         self.objects[handle] = bytes(body)
@@ -273,8 +281,10 @@ async def test_file_round_trip(companion):
     assert store.name == "notes-files" and store.writable
     body = bytes(i % 251 for i in range(200 << 10))
     ctx = Context(outgoing={"w17-tx-id": "tx-1"})
+    companion.put_ends.clear()
     handle = await store.put(ctx, "conformance.v1.NoteFile.file", body)
     assert companion.put_chunks == [64 << 10, 64 << 10, 64 << 10, 8 << 10]
+    assert companion.put_ends == [200 << 10], "the end marker, last, with the body's size"
     assert handle.startswith("note-files/" + hashlib.sha256(body).hexdigest())
     info = await store.stat(ctx, handle)
     assert info.size == len(body)
@@ -310,8 +320,10 @@ async def test_put_bodies_are_rechunked(companion):
         assert companion.put_chunks == [64 << 10, 130_010 - (64 << 10)]
         assert await store.read(Context(), handle) == b"a" * 100_000 + b"b" * 30_000 + b"c" * 10
     companion.put_chunks.clear()
+    companion.put_ends.clear()
     handle = await store.put(Context(), "NoteFile.file", b"")
     assert companion.put_chunks == [] and await store.read(Context(), handle) == b""
+    assert companion.put_ends == [0]
 
 
 async def test_put_refusals(companion):
@@ -337,8 +349,13 @@ async def test_put_refusals(companion):
         yield b"x"
         raise OSError("the author's file is gone")
 
+    stored = len(companion.objects)
+    companion.put_ends.clear()
     with pytest.raises(OSError, match="the author's file is gone"):
         await store.put(Context(), "NoteFile.file", broken())
+    await asyncio.sleep(0.1)
+    # A failed body never sends the end marker, so the companion stores nothing.
+    assert companion.put_ends == [] and len(companion.objects) == stored
 
 
 def test_resolve_field_short_form_must_be_unambiguous():

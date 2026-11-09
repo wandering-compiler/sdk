@@ -179,8 +179,12 @@ export class ExportService {
   object, `read` returns it whole, `stat` gives `{ size: bigint, modTime: Date }`,
   `delete` removes one (only on a connection this tier writes; one the gateway
   writes is read-only). `files.isNotFound(err)` is Go's
-  `errors.Is(err, kvfs.ErrNotFound)`. A file is not part of a storage
-  transaction, as in Go: delete what you stored when the unit of work fails.
+  `errors.Is(err, kvfs.ErrNotFound)`. A `put` stores nothing unless its body
+  is read to the end: a body that throws (its error comes back unchanged), a
+  cancelled call or one past its deadline leaves no object behind. A body
+  that stalls holds the call until its deadline, as in Go — give a `put` of a
+  slow source one. A file is not part of a storage transaction, as in Go:
+  delete what you stored when the unit of work fails.
 - The companion has a connection of its own: one attempt per call (no retries —
   the egress runtime already retried, and a `put` stream cannot be replayed),
   the principal, trace context, labels and deadline relayed as on a storage

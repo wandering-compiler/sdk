@@ -96,6 +96,7 @@ class FileStore:
         self._put, self._open, self._stat, self._delete = ms["Put"], ms["Open"], ms["Stat"], ms["Delete"]
         self._put_req = self._put.request
         self._header = pool.message("w17.common.files.PutHeader")
+        self._end = pool.message("w17.common.files.PutEnd")
 
     @property
     def name(self) -> str:
@@ -116,7 +117,9 @@ class FileStore:
         """Store ``body`` as a new object of ``field`` (full proto name, or
         ``Message.field`` when unambiguous) and return its handle. ``body`` is
         bytes-like, or an iterable / async iterable of bytes; it is sent in
-        64 KiB chunks."""
+        64 KiB chunks. Nothing is stored unless the body is read to its end:
+        a body that raises (its error is re-raised as it is), a cancelled
+        ``ctx`` or one past its deadline leaves no object behind."""
         p = resolve_field(field, self._placements)
         if p.connection != self.name:
             raise KeyError(f"files: {p.field} is stored on {p.connection}, not on {self.name}")
@@ -129,11 +132,17 @@ class FileStore:
 
     async def _requests(self, field: str, body: Body) -> AsyncIterator[Any]:
         yield self._put_req(header=self._header(field=field))
+        size = 0
         try:
             async for chunk in _chunks(body):
+                size += len(chunk)
                 yield self._put_req(chunk=chunk)
         except Exception as e:  # noqa: BLE001 — the author's, re-raised by put
             raise _BodyError(e) from e
+        # Only the end marker commits: a body that failed, or a call that was
+        # cancelled or ran out of time, never sends it, and the companion
+        # then stores nothing.
+        yield self._put_req(end=self._end(size=size))
 
     async def open(self, ctx: Context, handle: str) -> AsyncIterator[bytes]:
         """The stored object's bytes, as chunks of at most 64 KiB."""

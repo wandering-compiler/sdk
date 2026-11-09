@@ -114,6 +114,8 @@ type companionCall struct {
 	// existed reports, for a Delete, whether the object was on disk under
 	// the store root when the call arrived.
 	existed bool
+	// err is what a client stream's handler returned (Put).
+	err error
 }
 
 type event struct {
@@ -328,7 +330,7 @@ func (h *harness) companionStream(srv any, ss grpc.ServerStream, info *grpc.Stre
 	md, _ := metadata.FromIncomingContext(ss.Context())
 	counted := &countingStream{ServerStream: ss}
 	err := handler(srv, counted)
-	h.recordCompanion(companionCall{method: info.FullMethod, md: md.Copy(), messages: counted.n})
+	h.recordCompanion(companionCall{method: info.FullMethod, md: md.Copy(), messages: counted.n, err: err})
 	return err
 }
 
