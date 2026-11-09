@@ -264,14 +264,61 @@ function cancelOnDone(ctx: Context, cancel: () => void): () => void {
 interface Writable {
   write(m: Message): boolean;
   end(): void;
-  once(ev: "drain", fn: () => void): unknown;
+  once(ev: "drain" | "status" | "close" | "error", fn: () => void): unknown;
+  removeListener(ev: "drain" | "status" | "close" | "error", fn: () => void): unknown;
 }
 
+const ENDED = Symbol("ended");
+
+/**
+ * Write the caller's requests, then half-close. It settles also when the
+ * call ends first — the server answered, or failed, before the requests ran
+ * out (Go's Send returns io.EOF then): it stops pulling from the iterable
+ * and closes it, so a generator's `finally` runs, rather than wait on a
+ * 'drain' that never comes or a next request nobody will read.
+ */
 async function sendAll(call: Writable, reqs: Iterable<Message> | AsyncIterable<Message>): Promise<void> {
-  for await (const r of reqs) {
-    if (!call.write(r)) await new Promise<void>((res) => call.once("drain", res));
+  let onEnd!: () => void;
+  const ended = new Promise<typeof ENDED>((res) => {
+    onEnd = () => res(ENDED);
+  });
+  const evs = ["status", "close", "error"] as const;
+  for (const ev of evs) call.once(ev, onEnd);
+  const it: Iterator<Message> | AsyncIterator<Message> =
+    Symbol.asyncIterator in reqs ? reqs[Symbol.asyncIterator]() : reqs[Symbol.iterator]();
+  let done = false;
+  try {
+    for (;;) {
+      let n: IteratorResult<Message> | typeof ENDED;
+      try {
+        n = await Promise.race([it.next(), ended]);
+      } catch (e) {
+        done = true; // the iterable threw: it is finished already
+        throw e;
+      }
+      if (n === ENDED) return;
+      if (n.done) {
+        done = true;
+        break;
+      }
+      if (!call.write(n.value)) {
+        let onDrain!: () => void;
+        const drained = new Promise<void>((res) => {
+          onDrain = res;
+          call.once("drain", onDrain);
+        });
+        const r = await Promise.race([drained, ended]);
+        call.removeListener("drain", onDrain);
+        if (r === ENDED) return;
+      }
+    }
+    call.end();
+  } finally {
+    for (const ev of evs) call.removeListener(ev, onEnd);
+    // Not awaited: a generator suspended in its own await finishes that
+    // first, and the call is over already.
+    if (!done) void Promise.resolve(it.return?.()).catch(() => undefined);
   }
-  call.end();
 }
 
 const serializers = new WeakMap<DescMessage, (m: Message) => Buffer>();

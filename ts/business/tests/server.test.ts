@@ -566,7 +566,7 @@ describe("streams", () => {
     const read = async (ctx: Context, fail: () => void) => {
       // What grpc-js's request stream does when the client resets it mid-read.
       const call = {
-        async *[Symbol.asyncIterator]() {
+        async *iterator() {
           yield 1;
           fail();
           throw new Error("premature close");
@@ -631,6 +631,119 @@ describe("streams", () => {
     } finally {
       conn.close();
       await stop(srv);
+    }
+  });
+
+  it("a handler that stops reading the requests still answers, as Go's that stops calling Recv", async () => {
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    class StopsReading extends Streamer {
+      override async Sum(_ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        for await (const r of reqs) return Ping({ n: (r.n as number) + 100 });
+        return Ping({ n: -1 });
+      }
+      override async *Chat(_ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        let first = 0;
+        for await (const r of reqs) {
+          first = r.n as number;
+          break;
+        }
+        for (let i = 1; i <= 3; i++) yield Ping({ n: first * 10 + i });
+      }
+    }
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new StopsReading());
+    const [srv, port] = await listen(reg);
+    // A plain grpc-js client: every request written and the stream
+    // half-closed up front, so only the server decides how the call ends.
+    const client = new Client(`127.0.0.1:${port}`, credentials.createInsecure());
+    const ser = (m: AnyMessage) => Buffer.from(Ping.toBinary(m));
+    const de = (b: Buffer) => Ping.fromBinary(b);
+    const N = 2000;
+    try {
+      const deadline = new Date(Date.now() + 3000);
+      const chat = client.makeBidiStreamRequest("/test.stream.Streamer/Chat", ser, de, new GrpcMetadata(), { deadline });
+      const replies: number[] = [];
+      const status = new Promise<number>((res) => chat.on("status", (s: { code: number }) => res(s.code)));
+      chat.on("data", (r: AnyMessage) => replies.push(r.n as number));
+      chat.on("error", () => undefined);
+      for (let i = 1; i <= N; i++) chat.write(Ping({ n: i }));
+      chat.end();
+      const t0 = Date.now();
+      expect(await status).toBe(Status.OK);
+      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(replies).toEqual([11, 12, 13]);
+
+      const sum = await new Promise<number>((res, rej) => {
+        const call = client.makeClientStreamRequest("/test.stream.Streamer/Sum", ser, de, new GrpcMetadata(), { deadline }, (e, r) =>
+          e ? rej(e) : res((r as AnyMessage).n as number),
+        );
+        for (let i = 1; i <= N; i++) call.write(Ping({ n: i }));
+        call.end();
+      });
+      expect(sum).toBe(101);
+      expect(await settled(() => reg.inflight === 0)).toBe(true);
+    } finally {
+      client.close();
+      srv.forceShutdown(); // a hung call must not hang the suite too
+    }
+  });
+
+  it("a server that answers before the caller's requests run out ends the call; the request iterable is closed", async () => {
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    class AnswersEarly extends Streamer {
+      override async Sum(_ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        for await (const r of reqs) return Ping({ n: r.n });
+        return Ping({ n: -1 });
+      }
+      override async *Chat(_ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        for await (const r of reqs) {
+          yield Ping({ n: r.n });
+          return;
+        }
+      }
+    }
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new AnswersEarly());
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      const c = new ServiceClient(conn, "test.stream.Streamer", p);
+      // An endless request stream, as a caller that streams until told to stop.
+      const endless = (closed: string[], name: string) =>
+        (async function* () {
+          try {
+            for (let i = 1; ; i++) {
+              yield Ping({ n: i });
+              await sleep(5);
+            }
+          } finally {
+            closed.push(name);
+          }
+        })();
+      const closed: string[] = [];
+      const within = <T>(pr: Promise<T>, what: string) =>
+        Promise.race([pr, sleep(3000).then(() => Promise.reject(new Error(`${what}: still waiting after 3s`)))]);
+
+      const got: number[] = [];
+      await within(
+        (async () => {
+          for await (const r of c.Chat(new Context(), endless(closed, "chat"))) got.push(r.n);
+        })(),
+        "bidi",
+      );
+      expect(got).toEqual([1]);
+      expect(await settled(() => closed.includes("chat"))).toBe(true);
+
+      expect((await within<AnyMessage>(c.Sum(new Context(), endless(closed, "sum")), "client stream")).n).toBe(1);
+      expect(await settled(() => closed.includes("sum"))).toBe(true);
+      expect(await settled(() => reg.inflight === 0)).toBe(true);
+    } finally {
+      conn.close();
+      srv.forceShutdown();
     }
   });
 });

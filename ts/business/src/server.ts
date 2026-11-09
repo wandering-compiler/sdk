@@ -529,7 +529,11 @@ export async function* requests(
   call: ServerReadableStream<unknown, unknown> | ServerDuplexStream<unknown, unknown>,
   ctx: Context,
 ): AsyncGenerator<unknown> {
-  const it = (call as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+  // destroyOnReturn: false — a handler that stops reading (a `break` out of
+  // its for-await) only stops reading, as Go's that stops calling Recv. The
+  // default return() destroys the whole duplex, the write side with it: the
+  // replies and the status would never be sent.
+  const it = call.iterator({ destroyOnReturn: false });
   let finished = false;
   try {
     for (;;) {
@@ -550,7 +554,9 @@ export async function* requests(
       yield n.value;
     }
   } finally {
-    // The handler stopped reading early: release the stream as for-await would.
+    // The handler stopped reading early: release the iterator, never the
+    // stream (see destroyOnReturn above). What the caller still sends is
+    // dropped when the call ends.
     if (!finished) await it.return?.();
   }
 }
