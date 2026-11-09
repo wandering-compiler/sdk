@@ -16,9 +16,11 @@
 //! compile error, never an `Unimplemented` at run time.
 //!
 //! What the SDK owns maps onto the SDK's own types, so a message that
-//! crosses into the SDK is one type, not two: `.w17` (the vocabulary, the
-//! transaction coordinator, the companion's file service) onto
-//! `::w17_business::pb::w17`, `.google.protobuf` onto
+//! crosses into the SDK is one type, not two: every message and enum of the
+//! SDK's descriptor set (the vocabulary, the transaction coordinator, the
+//! companion's file service) onto `::w17_business::pb::w17`, type by type —
+//! a plugin's package under `w17` (`w17.contrib.auth`) is generated into the
+//! crate like any other — `.google.protobuf` onto
 //! `::w17_business::pb::google::protobuf`, and the codec onto
 //! `::w17_business::codec`. The crate needs `tonic` and `prost` of its own,
 //! because the generated code names them; nothing else.
@@ -186,17 +188,80 @@ pub fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// The SDK's own descriptor set: what `w17_business::pb` was compiled from.
+const SDK_DESCRIPTORS: &[u8] = include_bytes!("../../src/sdk_descriptors.binpb");
+
+/// Where the SDK's generated types live.
+const SDK_PB: &str = "::w17_business::pb";
+
+/// prost-build's identifier rules (its `ident.rs`), so a path named here is
+/// the one prost generated in the SDK.
+fn sanitize(ident: String) -> String {
+    match ident.as_str() {
+        "as" | "break" | "const" | "continue" | "else" | "enum" | "false" | "fn" | "for" | "if"
+        | "impl" | "in" | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref"
+        | "return" | "static" | "struct" | "trait" | "true" | "type" | "unsafe" | "use"
+        | "where" | "while" | "dyn" | "abstract" | "become" | "box" | "do" | "final" | "macro"
+        | "override" | "priv" | "typeof" | "unsized" | "virtual" | "yield" | "async" | "await"
+        | "try" | "gen" => format!("r#{ident}"),
+        "_" | "super" | "self" | "Self" | "extern" | "crate" => format!("{ident}_"),
+        s if s.starts_with(|c: char| c.is_numeric()) => format!("_{ident}"),
+        _ => ident,
+    }
+}
+
+/// Every top-level message and enum of the SDK's descriptor set, as the
+/// `(proto path, Rust path)` pairs [`builder`] maps onto the SDK's types.
+///
+/// Type by type, never by package: a package mapping also takes every package
+/// under it, and `.w17` would take the plugins' (`w17.contrib.auth`), which
+/// the SDK does not compile — the crate would name `AuthResp` at a path that
+/// does not exist. A nested type follows its parent's mapping (prost resolves
+/// it under the parent's module).
+pub fn sdk_extern_paths() -> Result<Vec<(String, String)>, Error> {
+    use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
+    let fds = prost_types::FileDescriptorSet::decode(SDK_DESCRIPTORS)
+        .map_err(|e| Error(format!("the SDK's descriptor set: {e}")))?;
+    let mut out = Vec::new();
+    for f in &fds.file {
+        let pkg = f.package();
+        let module: String = pkg
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("::{}", sanitize(s.to_snake_case())))
+            .collect();
+        let names = f
+            .message_type
+            .iter()
+            .map(|m| m.name())
+            .chain(f.enum_type.iter().map(|e| e.name()));
+        for name in names {
+            let proto = if pkg.is_empty() {
+                format!(".{name}")
+            } else {
+                format!(".{pkg}.{name}")
+            };
+            let rust = format!("{SDK_PB}{module}::{}", sanitize(name.to_upper_camel_case()));
+            out.push((proto, rust));
+        }
+    }
+    Ok(out)
+}
+
 /// The builder [`compile_manifest`] uses: every mapping onto the SDK's
 /// types, client and server code, no default stubs, no transport helpers.
-pub fn builder() -> tonic_prost_build::Builder {
-    tonic_prost_build::configure()
+pub fn builder() -> Result<tonic_prost_build::Builder, Error> {
+    let mut b = tonic_prost_build::configure()
         .build_client(true)
         .build_server(true)
         .build_transport(false)
         .generate_default_stubs(false)
-        .extern_path(".w17", "::w17_business::pb::w17")
         .codec_path("::w17_business::codec::ProstCodec")
-        .include_file(INCLUDE_FILE)
+        .include_file(INCLUDE_FILE);
+    for (proto, rust) in sdk_extern_paths()? {
+        b = b.extern_path(proto, rust);
+    }
+    Ok(b)
 }
 
 /// The prost configuration: the well-known types are the SDK's re-export.
@@ -224,7 +289,7 @@ pub fn compile_manifest(
     })?;
     let fds = prost_types::FileDescriptorSet::decode(raw.as_slice())
         .map_err(|e| Error(format!("{} is not a descriptor set: {e}", set.display())))?;
-    let mut b = builder();
+    let mut b = builder()?;
     if let Some(dir) = out_dir {
         b = b.out_dir(dir);
     }
@@ -339,5 +404,115 @@ mod tests {
         let bad = root.path().join("bad.json");
         fs::write(&bad, r#"{"descriptor_set": 5}"#).unwrap();
         assert!(compile_manifest(&bad, Some(out.path()), false).is_err());
+    }
+
+    fn message(name: &str, fields: &[(&str, &str)]) -> prost_types::DescriptorProto {
+        use prost_types::field_descriptor_proto::{Label, Type};
+        prost_types::DescriptorProto {
+            name: Some(name.into()),
+            field: fields
+                .iter()
+                .enumerate()
+                .map(|(i, (f, ty))| prost_types::FieldDescriptorProto {
+                    name: Some((*f).into()),
+                    number: Some(i as i32 + 1),
+                    label: Some(Label::Optional as i32),
+                    r#type: Some(if ty.is_empty() {
+                        Type::String
+                    } else {
+                        Type::Message
+                    } as i32),
+                    type_name: (!ty.is_empty()).then(|| (*ty).into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_plugin_package_under_w17_is_the_crates_own() {
+        // A domain with the auth plugin: its descriptor set carries
+        // w17.contrib.auth, which the SDK does not compile, beside the SDK's
+        // own w17.common.distx.
+        let mut fds = prost_types::FileDescriptorSet::decode(SDK_DESCRIPTORS).unwrap();
+        let distx = fds
+            .file
+            .iter()
+            .find(|f| f.package() == "w17.common.distx")
+            .unwrap()
+            .name()
+            .to_string();
+        fds.file.push(prost_types::FileDescriptorProto {
+            name: Some("w17/contrib/auth/types.proto".into()),
+            package: Some("w17.contrib.auth".into()),
+            message_type: vec![message("AuthResp", &[("user_id", "")])],
+            syntax: Some("proto3".into()),
+            ..Default::default()
+        });
+        fds.file.push(prost_types::FileDescriptorProto {
+            name: Some("shop/v1/svc.proto".into()),
+            package: Some("shop.v1".into()),
+            dependency: vec!["w17/contrib/auth/types.proto".into(), distx],
+            message_type: vec![message(
+                "Who",
+                &[
+                    ("user", ".w17.contrib.auth.AuthResp"),
+                    ("begin", ".w17.common.distx.BeginRequest"),
+                ],
+            )],
+            syntax: Some("proto3".into()),
+            ..Default::default()
+        });
+        let out = tempfile::tempdir().unwrap();
+        builder()
+            .unwrap()
+            .out_dir(out.path())
+            .compile_fds_with_config(fds, prost_config())
+            .unwrap();
+        let auth = fs::read_to_string(out.path().join("w17.contrib.auth.rs")).unwrap_or_default();
+        assert!(
+            auth.contains("pub struct AuthResp"),
+            "the plugin's types are generated into the crate: {auth}"
+        );
+        let shop = fs::read_to_string(out.path().join("shop.v1.rs")).unwrap();
+        assert!(
+            shop.contains("::w17_business::pb::w17::common::distx::BeginRequest"),
+            "{shop}"
+        );
+        assert!(
+            !shop.contains("::w17_business::pb::w17::contrib::auth"),
+            "{shop}"
+        );
+        assert!(
+            !out.path().join("w17.common.distx.rs").exists() || {
+                let d = fs::read_to_string(out.path().join("w17.common.distx.rs")).unwrap();
+                !d.contains("pub struct BeginRequest")
+            }
+        );
+    }
+
+    #[test]
+    fn every_sdk_type_maps_where_the_sdk_generated_it() {
+        let paths = sdk_extern_paths().unwrap();
+        let get = |p: &str| {
+            paths
+                .iter()
+                .find(|(proto, _)| proto == p)
+                .map(|(_, r)| r.as_str())
+        };
+        assert_eq!(
+            get(".w17.common.distx.BeginRequest"),
+            Some("::w17_business::pb::w17::common::distx::BeginRequest")
+        );
+        assert_eq!(
+            get(".w17.common.files.PutEnd"),
+            Some("::w17_business::pb::w17::common::files::PutEnd")
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|(p, _)| !p.starts_with(".w17.contrib.auth"))
+        );
     }
 }

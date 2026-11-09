@@ -3766,6 +3766,7 @@ dependencies = [
 name = "w17-business-build"
 version = "0.1.0"
 dependencies = [
+ "heck",
  "hex",
  "prost",
  "prost-types",
