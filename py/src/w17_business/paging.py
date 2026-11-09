@@ -19,7 +19,7 @@ from .context import Context
 
 __all__ = [
     "BOUNDARIES_MD_KEY", "LIMIT_MD_KEY", "TOTAL_MD_KEY", "NEXT_MD_KEY", "PREV_MD_KEY", "MD_KEYS",
-    "POSITION_KEYS", "forward", "forwarded", "relay_position", "response_headers", "with_response_headers",
+    "POSITION_KEYS", "forward", "forwarded", "without_forward", "relay_position", "response_headers", "with_response_headers",
 ]
 
 BOUNDARIES_MD_KEY = "x-w17-paging-boundaries"
@@ -60,6 +60,13 @@ def forward(ctx: Context) -> Context:
 def forwarded(ctx: Context) -> bool:
     """Whether ctx came from forward(): its call serves the page."""
     return bool(ctx.value(_FORWARDED, False))
+
+
+def without_forward(ctx: Context) -> Context:
+    """ctx without the forward() mark (Go's ``paging.WithoutForward``): a
+    server context built from a forwarded call must not relay its own calls'
+    positions onto the caller's response."""
+    return ctx.with_value(_FORWARDED, False) if forwarded(ctx) else ctx
 
 
 def with_response_headers(ctx: Context) -> tuple[Context, dict[str, tuple[str, ...]]]:

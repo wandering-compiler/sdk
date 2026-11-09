@@ -47,7 +47,13 @@ def register_business(cfg, registry, clients):
   transaction. Helpers return a new context (`paging.forward`,
   `principal.act_as`, `distx.begin`); none changes the one it was given.
 - **Compose through `registry.self(Service)`.** A direct call on your class
-  skips the method's event, and nothing fails — the Go rule.
+  skips the method's event, and nothing fails — the Go rule. The callee gets
+  the context a hop would deliver: your outgoing side (with the principal,
+  or the one `act_as` set) as its incoming, an empty outgoing side except the
+  open transaction's routing, and no `paging.forward` mark.
+- **Work after a commit outlives the request.** Events and `on_commit` hooks
+  of a committed transaction run to their end even when the client hangs up;
+  the drain waits for them.
 - **Streams:** a server-streaming handler is an async generator; a
   client-streaming one takes an async iterator of requests.
 - The boot refuses a handler that lacks a method of its service, a service

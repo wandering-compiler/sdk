@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -47,7 +48,7 @@ import grpclib.const
 from grpclib.const import Cardinality, Status
 from grpclib.exceptions import GRPCError
 
-from . import events, observability, paging, txscope
+from . import distx as _distx, events, observability, paging, principal, txscope
 from .config import ConfigError
 from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool
@@ -85,6 +86,11 @@ class _Method:
         self.registry = registry
         self.builder = events.EnvelopeBuilder(registry.pool, emit) if emit is not None else None
 
+    async def invoke_self(self, ctx: Context, req: Any) -> Any:
+        """A composed call (``registry.self``): the callee gets the context a
+        hop would deliver, then the same chain as over the wire."""
+        return await self.invoke_unary(_self_context(ctx, self.info.path), req)
+
     async def invoke_unary(self, ctx: Context, req: Any) -> Any:
         resp = await self.fn(ctx, req)
         if resp is None:
@@ -116,7 +122,9 @@ class _Method:
 
         out = txscope.after_commit(ctx, lambda: publish(deferred))
         if out in (txscope.Outcome.NO_SCOPE, txscope.Outcome.ALREADY_COMMITTED):
-            await publish(ctx)
+            # The write behind it has landed: a caller cancelled now (a client
+            # hang-up, a deadline) must not take the event with it.
+            await txscope.shielded(publish(deferred))
         elif out is txscope.Outcome.DISCARDED:
             observability.report_error(
                 ctx, "txregistry: dropped an announcement made after its in-process transaction rolled back")
@@ -139,7 +147,7 @@ class Served:
         if m is None:
             raise AttributeError(f"{self.__dict__.get('service')} has no rpc {name!r}")
         if not m.info.client_streaming and not m.info.server_streaming:
-            return m.invoke_unary
+            return m.invoke_self
         return m.fn
 
     def __mapping__(self) -> dict[str, grpclib.const.Handler]:
@@ -275,9 +283,35 @@ class Registry:
             return False
 
 
+def _self_context(ctx: Context, path: str) -> Context:
+    """The callee's context for a composed call, built as sdk/go's inprocgrpc
+    serverContext builds a server context from a caller's:
+
+    - INCOMING is what the hop would deliver: the caller's outgoing side with
+      the verified principal relayed onto it (``forward_to_outgoing``) — so a
+      principal the caller set with ``act_as`` is the one the callee reads;
+    - OUTGOING starts empty, as on a real server, so nothing the caller meant
+      for its own calls (``paging.forward``'s keys, a custom header) bleeds
+      into the callee's calls — except the transaction's routing: the
+      in-process scope is kept (the callee's ``distx.run`` JOINS, its events
+      wait for the root commit, Go's composition rule), so its calls must keep
+      going to that transaction too, re-set from the root handle;
+    - the forward mark is cleared and the response-header sink is fresh: the
+      callee's own calls never move the caller's page."""
+    relayed = principal.forward_to_outgoing(ctx)
+    callee = ctx.with_incoming(relayed.outgoing).with_outgoing(None)
+    callee = paging.without_forward(callee)
+    root = _distx._root_from(ctx)  # noqa: SLF001 — same package
+    if root is not None and txscope.active(ctx):
+        callee = root.attach(callee)
+    callee, _ = paging.with_response_headers(callee)
+    return callee._replace(method=path)  # noqa: SLF001
+
+
 def _context_for(stream, path: str) -> Context:
     md = Metadata(list(stream.metadata.items()) if stream.metadata else None)
-    deadline = stream.deadline._timestamp if stream.deadline is not None else None  # noqa: SLF001
+    # grpclib's public Deadline API; both sides count on time.monotonic().
+    deadline = time.monotonic() + stream.deadline.time_remaining() if stream.deadline is not None else None
     return Context(incoming=md, deadline=deadline, method=path)
 
 

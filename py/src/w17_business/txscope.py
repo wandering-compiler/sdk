@@ -13,14 +13,17 @@ two awaits, so it is atomic with respect to other tasks.
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import inspect
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from .context import Context
 
-__all__ = ["Scope", "Outcome", "new", "scope_from", "active", "after_commit", "detach"]
+__all__ = ["Scope", "Outcome", "new", "scope_from", "active", "after_commit", "detach", "shielded", "drain"]
+
+T = TypeVar("T")
 
 _KEY = object()
 
@@ -74,7 +77,7 @@ class Scope:
                 r = fn()
                 if inspect.isawaitable(r):
                     await r
-            except Exception as e:  # noqa: BLE001 — reported, never re-raised
+            except BaseException as e:  # noqa: BLE001 — one hook (a cancellation included) never stops the rest
                 failures.append(e)
         return failures
 
@@ -119,3 +122,48 @@ def after_commit(ctx: Context, fn: Callable[[], Any]) -> Outcome:
     if s is None or fn is None:
         return Outcome.NO_SCOPE
     return s._park(fn)
+
+
+# --- work that must outlive the request ----------------------------------------
+#
+# Go runs the parked work on the goroutine that commits, and a goroutine is not
+# interrupted when its client hangs up. An asyncio request task IS: grpclib
+# cancels it, and a CancelledError raised into a hook after storage committed
+# would skip that hook and every one after it — events of a write that landed,
+# lost without a word. So that work runs in a task of its own, which the
+# caller awaits through asyncio.shield (a cancelled caller stops waiting, the
+# work does not stop), and which the drain waits for before the process exits.
+
+_detached: set[asyncio.Task] = set()
+
+
+def _reap(t: asyncio.Task) -> None:
+    _detached.discard(t)
+    if t.cancelled():
+        return
+    e = t.exception()
+    if e is not None:
+        from .observability import report_error
+
+        report_error(None, RuntimeError(f"txscope: work run after its request failed: {e!r}"))
+
+
+async def shielded(aw: Awaitable[T]) -> T:
+    """Run aw to completion even when the awaiting task is cancelled.
+
+    The caller sees its own cancellation as usual; aw keeps running, tracked,
+    until it ends (``drain`` waits for it)."""
+    t = asyncio.ensure_future(aw)
+    _detached.add(t)
+    t.add_done_callback(_reap)
+    return await asyncio.shield(t)
+
+
+async def drain(timeout: float) -> bool:
+    """Wait up to timeout for the work ``shielded`` started; True when none is
+    left running."""
+    pending = [t for t in _detached if not t.done()]
+    if not pending:
+        return True
+    _, still = await asyncio.wait(pending, timeout=max(timeout, 0))
+    return not still

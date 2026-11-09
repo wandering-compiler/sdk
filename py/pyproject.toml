@@ -13,7 +13,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 dependencies = [
-    "grpclib>=0.4.8,<0.5",
+    # Exact: the runtime reads one private attribute of grpclib's Server (the
+    # listener, for the bound port and the drain), checked at boot by
+    # w17_business._grpclib. Move the pin only together with that check.
+    "grpclib==0.4.9",
     "protobuf>=5.29,<8",
     # google.rpc.Status: grpclib encodes status details (w17.ErrorDetail) with it.
     "googleapis-common-protos>=1.66",

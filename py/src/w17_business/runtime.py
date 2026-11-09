@@ -39,7 +39,7 @@ from grpclib.health.check import ServiceStatus
 from grpclib.health.service import OVERALL, Health
 from grpclib.server import Server
 
-from . import events, observability, principal, tlsconfig
+from . import _grpclib, events, observability, principal, tlsconfig, txscope
 from .client import Conn, ServiceClient, TxCoordinator, parse_addr
 from .config import Config, ConfigError
 from .context import Context
@@ -87,7 +87,10 @@ class Clients:
             parse_addr(addr)
         except ValueError as e:
             raise BootError(f"storage: {tier.address_env}={addr!r}: {e}") from e
-        conn = Conn(addr, environ=dict(env))
+        try:
+            conn = Conn(addr, environ=dict(env))
+        except ValueError as e:
+            raise BootError(f"storage tls: {e}") from e
         self._conn = conn
         for svc in tier.services:
             try:
@@ -279,8 +282,13 @@ class App:
         if listen.startswith(":"):
             host = None  # ":50051" listens on every interface, as in Go
         await self.server.start(host, port, ssl=ssl_ctx)
-        aserver = self.server._server  # noqa: SLF001
-        sock = aserver.sockets[0] if aserver is not None and aserver.sockets else None
+        try:
+            aserver = _grpclib.listener(self.server)
+        except _grpclib.GrpclibAPIError as e:
+            raise BootError(str(e)) from e
+        if aserver is None:
+            raise BootError("grpclib: the server started but keeps no listener (Server._server is None)")
+        sock = aserver.sockets[0] if aserver.sockets else None
         self.port = sock.getsockname()[1] if sock else port
         self.addr = f"{host or '0.0.0.0'}:{self.port}"
         log.info("%s listening on %s%s", self.manifest.bundle, self.addr, " (TLS)" if ssl_ctx else "")
@@ -295,11 +303,16 @@ class App:
         if srv is not None:
             # grpclib has no graceful stop: stop accepting connections, give
             # the in-flight calls the timeout, then let grpclib cancel the rest.
-            aserver = srv._server  # noqa: SLF001
+            aserver = _grpclib.listener(srv)
             if aserver is not None:
                 aserver.close()
             if reg is not None and not await reg.wait_idle(timeout):
                 observability.report_error(None, f"runtime: gRPC handler(s) still running after {timeout}s; cancelling them")
+            # The work a committed transaction (or an emit) owes outlives its
+            # request — wait for it too, or the exit loses those events.
+            if not await txscope.drain(timeout):
+                observability.report_error(
+                    None, f"runtime: work after a commit (events, on_commit hooks) still running after {timeout}s")
             srv.close()
             # Since Python 3.12 asyncio's wait_closed waits for every client
             # connection to close, and a peer tier keeps its connection open

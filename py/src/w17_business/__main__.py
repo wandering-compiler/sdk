@@ -45,17 +45,60 @@ def _probe_target(listen: str) -> tuple[str, int]:
     return host, int(port)
 
 
+def _der(buf: bytes, i: int) -> tuple[int, int, int]:
+    """One DER TLV at i: (tag, start of the value, end of the value)."""
+    tag, n = buf[i], buf[i + 1]
+    i += 2
+    if n & 0x80:
+        size = n & 0x7F
+        n = int.from_bytes(buf[i:i + size], "big")
+        i += size
+    if i + n > len(buf):
+        raise ValueError("truncated DER")
+    return tag, i, i + n
+
+
+def _children(buf: bytes, start: int, end: int):
+    while start < end:
+        tag, vs, ve = _der(buf, start)
+        yield tag, vs, ve
+        start = ve
+
+
+_SAN_OID = bytes([0x06, 0x03, 0x55, 0x1D, 0x11])  # 2.5.29.17 subjectAltName
+
+
+def _first_dns_name(der: bytes) -> str | None:
+    """The first dNSName of a certificate's subjectAltName, read with nothing
+    beyond the DER the stdlib hands out (ssl.PEM_cert_to_DER_cert)."""
+    _, cs, ce = _der(der, 0)                     # Certificate
+    _, ts, te = next(_children(der, cs, ce))     # tbsCertificate
+    for tag, vs, ve in _children(der, ts, te):
+        if tag != 0xA3:                          # [3] extensions
+            continue
+        _, es, ee = _der(der, vs)                # SEQUENCE OF Extension
+        for _, xs, xe in _children(der, es, ee):
+            parts = list(_children(der, xs, xe))
+            if der[parts[0][1] - 2:parts[0][2]] != _SAN_OID:
+                continue
+            _, os_, _ = parts[-1]                # extnValue OCTET STRING
+            _, gs, ge = _der(der, os_)           # GeneralNames
+            for gtag, nvs, nve in _children(der, gs, ge):
+                if gtag == 0x82:                 # [2] dNSName
+                    return der[nvs:nve].decode("ascii")
+    return None
+
+
 def _leaf_server_name(cert_path: str) -> str | None:
     # The listener's certificate names this service, not 127.0.0.1: verify the
     # probe against the container's own leaf's first DNS name, as Go does.
     try:
-        info = ssl._ssl._test_decode_cert(cert_path)  # noqa: SLF001 — stdlib, no x509 parser otherwise
-    except Exception:  # noqa: BLE001
+        with open(cert_path, encoding="ascii") as f:
+            pem = f.read()
+        end = pem.index(ssl.PEM_FOOTER) + len(ssl.PEM_FOOTER)
+        return _first_dns_name(ssl.PEM_cert_to_DER_cert(pem[pem.index(ssl.PEM_HEADER):end]))
+    except Exception:  # noqa: BLE001 — no name: the probe verifies against the host it dials
         return None
-    for kind, value in info.get("subjectAltName", ()):
-        if kind == "DNS":
-            return value
-    return None
 
 
 async def probe(listen: str, env: dict[str, str], timeout: float) -> None:

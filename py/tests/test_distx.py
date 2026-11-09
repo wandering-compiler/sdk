@@ -359,3 +359,106 @@ async def test_run_refuses_nil_arguments():
 async def test_sync_fn_is_accepted():
     tx = ScriptedTx()
     assert await distx.run(Context(), tx, None, lambda c: "sync") == "sync"
+
+
+# --- after the commit: the request may be gone ------------------------------
+
+
+async def _settled(cond, timeout=2.0):
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not cond() and loop.time() < end:
+        await asyncio.sleep(0.01)
+    return cond()
+
+
+async def test_a_cancelled_caller_does_not_cut_off_the_parked_work():
+    # The client hangs up while the first hook runs: storage has committed, so
+    # every hook (and the events among them) must still run to its end.
+    tx = ScriptedTx()
+    gate, started, ran = asyncio.Event(), asyncio.Event(), []
+
+    async def slow():
+        started.set()
+        await gate.wait()
+        ran.append("slow")
+
+    async def fn(ctx):
+        await distx.on_commit(ctx, slow)
+        await distx.on_commit(ctx, lambda: ran.append("next"))
+
+    task = asyncio.create_task(distx.run(Context(), tx, None, fn))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    gate.set()
+    assert await _settled(lambda: ran == ["slow", "next"]), ran
+    assert await txscope.drain(1.0)
+
+
+async def test_one_hook_cannot_stop_the_rest(monkeypatch):
+    reported = []
+    monkeypatch.setattr(distx, "report_error", lambda ctx, e: reported.append(str(e)))
+
+    class Stop(BaseException):
+        pass
+
+    tx = ScriptedTx()
+    ran = []
+
+    async def cancelled():
+        raise asyncio.CancelledError()
+
+    def stop():
+        raise Stop("a BaseException")
+
+    async def fn(ctx):
+        await distx.on_commit(ctx, cancelled)
+        await distx.on_commit(ctx, stop)
+        await distx.on_commit(ctx, lambda: ran.append("last"))
+
+    await distx.run(Context(), tx, None, fn)
+    assert ran == ["last"]
+    assert len(reported) == 2 and all("parked on committed transaction tx-1" in r for r in reported), reported
+
+
+async def test_drain_waits_for_work_that_outlived_its_request():
+    gate, done = asyncio.Event(), []
+
+    async def work():
+        await gate.wait()
+        done.append(1)
+
+    caller = asyncio.create_task(txscope.shielded(work()))
+    await asyncio.sleep(0)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert not await txscope.drain(0.05), "the work is still running"
+    gate.set()
+    assert await txscope.drain(1.0) and done == [1]
+
+
+async def test_cancel_mid_commit_with_unknown_outcome_uses_the_handle_up():
+    # Cancelled while the commit is in flight, and the settling rollback fails
+    # too: the commit may have landed, so the handle must refuse another one.
+    tx = ScriptedTx(rollback_err=GRPCError(Status.NOT_FOUND, "no such tx"))
+    h, ctx = await distx.begin(Context(), tx)
+    gate = asyncio.Event()
+    commit = tx.commit
+
+    async def hanging_commit(c, req):
+        await commit(c, req)
+        await gate.wait()
+
+    tx.commit = hanging_commit
+    task = asyncio.create_task(h.commit(Context()))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    tx.commit = commit
+    with pytest.raises(distx.HandleFinishedError, match="outcome unknown"):
+        await h.commit(Context())
+    assert tx.seq() == "begin,commit,rollback"

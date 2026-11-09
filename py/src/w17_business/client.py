@@ -139,7 +139,9 @@ class Conn:
             raise GRPCError(st, ctx.err())
         ctx = principal.forward_to_outgoing(ctx)
         pairs = observability.inject_trace(ctx.outgoing.pairs())
-        deadline = Deadline(_timestamp=ctx.deadline) if ctx.deadline is not None else None
+        # Public API only: grpclib measures a Deadline on time.monotonic(), as ctx does.
+        rem = ctx.time_remaining()
+        deadline = Deadline.from_timeout(max(rem, 0.0)) if rem is not None else None
         return pairs, deadline
 
     async def unary(self, ctx: Context, m: MethodInfo, req: Any, *, timeout: float | None = None) -> tuple[Any, Metadata]:

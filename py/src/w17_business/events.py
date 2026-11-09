@@ -308,7 +308,7 @@ class NatsPublisher:
     def __init__(self, nc, js, *, publish_timeout: float = DEFAULT_PUBLISH_TIMEOUT,
                  max_age: float = DEFAULT_STREAM_MAX_AGE, max_msgs: int = -1) -> None:
         self._nc, self._js = nc, js
-        self._timeout = publish_timeout
+        self._timeout = self.publish_timeout = publish_timeout
         self._max_age, self._max_msgs = max_age, max_msgs
         self._streams: set[str] = set()
 
@@ -389,7 +389,7 @@ class RedisPublisher:
                  max_age: float = DEFAULT_STREAM_MAX_AGE, max_msgs: int = 0,
                  clock: Callable[[], float] = time.time) -> None:
         self._client = client
-        self._timeout = publish_timeout
+        self._timeout = self.publish_timeout = publish_timeout
         self._max_age, self._max_msgs = max_age, max_msgs
         self._clock = clock
 
@@ -499,7 +499,11 @@ async def fire(dispatcher: Dispatcher | None, ctx: Context, channel: str, topic:
     already succeeded). Runs detached from the request's cancellation."""
     if dispatcher is None:
         return
+    # Go bounds each Dispatch by the adapter's PublishTimeout: the emit runs on
+    # the committing path, and a broker that stopped answering must not hold
+    # it (nor, here, the drain) indefinitely. Any dispatcher gets the bound.
+    timeout = getattr(dispatcher, "publish_timeout", None) or DEFAULT_PUBLISH_TIMEOUT
     try:
-        await dispatcher.dispatch(ctx.without_cancel(), channel, topic, envelope)
+        await asyncio.wait_for(dispatcher.dispatch(ctx.without_cancel(), channel, topic, envelope), timeout)
     except Exception as e:  # noqa: BLE001
         report_error(ctx, RuntimeError(f"eventbus: emit {channel}/{topic}{' for ' + what if what else ''} failed: {e!r}"))

@@ -129,10 +129,25 @@ def scrub_event(event: dict, scrub_fields: Iterable[str] = ()) -> dict:
     for container in ("exception", "threads"):
         values = (event.get(container) or {}).get("values") or []
         for value in values:
-            frames = ((value or {}).get("stacktrace") or {}).get("frames") or []
+            if not isinstance(value, dict):
+                continue
+            # The error's own text: a repr of a request or a config dump
+            # carries `name=value` as readily as the frames do.
+            if isinstance(value.get("value"), str):
+                value["value"] = scrub(value["value"])
+            frames = (value.get("stacktrace") or {}).get("frames") or []
             for fr in frames:
                 if isinstance(fr.get("vars"), dict):
                     fr["vars"] = scrub(fr["vars"])
+    if isinstance(event.get("message"), str):
+        event["message"] = scrub(event["message"])
+    entry = event.get("logentry")
+    if isinstance(entry, dict):
+        for key in ("message", "formatted"):
+            if isinstance(entry.get(key), str):
+                entry[key] = scrub(entry[key])
+        if isinstance(entry.get("params"), list):
+            entry["params"] = scrub(entry["params"])
     return event
 
 
@@ -162,6 +177,9 @@ def init(service_name: str, *, scrub_fields: Iterable[str] = (), environ: dict[s
             # Go's Sentry client sends no request bodies or IPs by default;
             # keep the Python one equally quiet.
             send_default_pii=False,
+            # Go's events carry no stack-frame variables; a Python frame's
+            # locals hold requests, configs and secrets — send none.
+            include_local_variables=False,
             before_send=lambda event, hint: scrub_event(event, fields),
         )
         sentry_on = True

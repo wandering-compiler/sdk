@@ -177,3 +177,176 @@ async def test_a_missing_register_module_names_it(chdir_tmp, tmp_path):
     m = dataclasses.replace(load(MANIFEST), register=Register("nowhere/pkg_x", "pkg_x", "pkg_x.w17"))
     with pytest.raises(BootError, match="import pkg_x.w17"):
         await App(m, project_root=str(tmp_path), environ=env()).boot()
+
+
+# --- internal TLS: only the configured trust, and no silent half-config -------
+
+from pathlib import Path  # noqa: E402
+import ssl  # noqa: E402
+
+TLS = Path(__file__).parent / "testdata" / "tls"
+CA, LEAF, KEY = str(TLS / "ca.pem"), str(TLS / "leaf.pem"), str(TLS / "leaf.key")
+ON = {tlsconfig.ENV_INTERNAL_TLS: "on"}
+
+
+@pytest.fixture
+def default_trust(monkeypatch):
+    """Records every time a context reaches for the system's trust store."""
+    calls = []
+    real_load, real_paths = ssl.SSLContext.load_default_certs, ssl.SSLContext.set_default_verify_paths
+
+    def load(self, *a, **kw):
+        calls.append("load_default_certs")
+        return real_load(self, *a, **kw)
+
+    def paths(self, *a, **kw):
+        calls.append("set_default_verify_paths")
+        return real_paths(self, *a, **kw)
+
+    monkeypatch.setattr(ssl.SSLContext, "load_default_certs", load)
+    monkeypatch.setattr(ssl.SSLContext, "set_default_verify_paths", paths)
+    return calls
+
+
+def test_client_trusts_only_the_configured_ca(default_trust):
+    ctx = tlsconfig.client_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CA: CA})
+    assert default_trust == [], "the system roots were trusted beside W17_INTERNAL_TLS_CA"
+    assert [c["subject"] for c in ctx.get_ca_certs()] == [((("commonName", "w17 test CA"),),)]
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+
+
+def test_client_without_a_ca_uses_the_system_roots_like_go(default_trust):
+    # Go leaves RootCAs nil (the system pool) when no CA is configured, and
+    # "terminated" always verifies the platform's certificate against it.
+    assert tlsconfig.client_context(ON) is not None and default_trust
+    default_trust.clear()
+    assert tlsconfig.client_context({tlsconfig.ENV_INTERNAL_TLS: "terminated", tlsconfig.ENV_INTERNAL_TLS_CA: CA})
+    assert default_trust
+
+
+def test_server_verifies_clients_against_the_client_ca_only(default_trust):
+    ctx = tlsconfig.server_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF, tlsconfig.ENV_INTERNAL_TLS_KEY: KEY,
+                                    tlsconfig.ENV_INTERNAL_TLS_CLIENT_CA: CA})
+    assert default_trust == [], "client certificates were accepted from the system roots too"
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and len(ctx.get_ca_certs()) == 1
+    plain = tlsconfig.server_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF, tlsconfig.ENV_INTERNAL_TLS_KEY: KEY})
+    assert plain.verify_mode == ssl.CERT_NONE and plain.get_ca_certs() == []
+
+
+@pytest.mark.parametrize("extra,match", [
+    ({tlsconfig.ENV_INTERNAL_TLS_CA: "/nonexistent/ca.pem"}, "W17_INTERNAL_TLS_CA"),
+    ({tlsconfig.ENV_INTERNAL_TLS_CA: KEY}, "W17_INTERNAL_TLS_CA"),
+    ({tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF}, "not both set"),
+    ({tlsconfig.ENV_INTERNAL_TLS_KEY: KEY}, "not both set"),
+    ({tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF, tlsconfig.ENV_INTERNAL_TLS_KEY: "/nonexistent/key"}, "W17_INTERNAL_TLS_CERT"),
+    ({tlsconfig.ENV_INTERNAL_TLS_CERT: CA, tlsconfig.ENV_INTERNAL_TLS_KEY: KEY}, "W17_INTERNAL_TLS_CERT"),
+])
+def test_client_refuses_a_broken_tls_config(extra, match):
+    with pytest.raises(ValueError, match=match):
+        tlsconfig.client_context({**ON, **extra})
+
+
+def test_server_refuses_an_unreadable_client_ca():
+    for bad in ("/nonexistent/ca.pem", KEY):
+        with pytest.raises(ValueError, match="W17_INTERNAL_TLS_CLIENT_CA"):
+            tlsconfig.server_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF, tlsconfig.ENV_INTERNAL_TLS_KEY: KEY,
+                                      tlsconfig.ENV_INTERNAL_TLS_CLIENT_CA: bad})
+
+
+async def test_a_broken_client_tls_config_stops_the_boot(chdir_tmp):
+    app = App(load(MANIFEST), project_root=PROJECT, environ=env(W17_INTERNAL_TLS="on", W17_INTERNAL_TLS_CA="/nonexistent"))
+    with pytest.raises(BootError, match="W17_INTERNAL_TLS_CA"):
+        await app.boot()
+
+
+async def test_mutual_tls_round_trip():
+    # The server presents the leaf and requires a client cert from the CA; the
+    # client verifies the leaf against that CA alone and presents the same leaf.
+    srv_ctx = tlsconfig.server_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF, tlsconfig.ENV_INTERNAL_TLS_KEY: KEY,
+                                        tlsconfig.ENV_INTERNAL_TLS_CLIENT_CA: CA})
+
+    async def handle(reader, writer):
+        writer.write(b"ok")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0, ssl=srv_ctx)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        cli = tlsconfig.client_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CA: CA, tlsconfig.ENV_INTERNAL_TLS_CERT: LEAF,
+                                        tlsconfig.ENV_INTERNAL_TLS_KEY: KEY})
+        r, w = await asyncio.open_connection("127.0.0.1", port, ssl=cli, server_hostname="biz.test")
+        assert await r.read() == b"ok"
+        w.close()
+        # Without the client pair the server refuses the handshake.
+        bare = tlsconfig.client_context({**ON, tlsconfig.ENV_INTERNAL_TLS_CA: CA})
+        try:
+            r, w = await asyncio.open_connection("127.0.0.1", port, ssl=bare, server_hostname="biz.test")
+            got = await r.read()  # TLS 1.3: the refusal arrives after the client's handshake
+        except (ssl.SSLError, ConnectionError):
+            got = None
+        assert got != b"ok"
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+def test_health_probe_names_the_leaf_with_public_api():
+    from w17_business.__main__ import _leaf_server_name
+
+    assert _leaf_server_name(LEAF) == "biz.test"
+    assert _leaf_server_name(CA) is None
+    assert _leaf_server_name("/nonexistent") is None
+
+
+# --- Sentry: no frame locals, and the error text itself is scrubbed -----------
+
+
+def test_sentry_sends_no_local_variables(monkeypatch):
+    import sentry_sdk
+
+    got = {}
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kw: got.update(kw))
+    observability.init("svc", environ={"W17_SENTRY_DSN": "https://k@sentry.invalid/1"})
+    observability._state["sentry"] = False
+    assert got.get("include_local_variables") is False
+
+
+def test_sentry_scrub_reaches_exception_values_and_messages():
+    event = {
+        "exception": {"values": [{"type": "RuntimeError", "value": "dial failed: NOTES_API_TOKEN=t0ken, retry"}]},
+        "message": "boot: NOTES_API_TOKEN: 't0ken'",
+        "logentry": {"message": "with NOTES_API_TOKEN=%s", "formatted": "with NOTES_API_TOKEN=t0ken",
+                     "params": ["NOTES_API_TOKEN=t0ken"]},
+    }
+    out = observability.scrub_event(event, ["NOTES_API_TOKEN"])
+    assert "t0ken" not in str(out), out
+    assert out["exception"]["values"][0]["value"] == "dial failed: NOTES_API_TOKEN=[scrubbed], retry"
+
+
+# --- grpclib's private API: pinned, and checked at boot -----------------------
+
+
+def test_grpclib_is_pinned_exactly():
+    import re as _re
+
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert _re.search(r'"grpclib==\d+\.\d+\.\d+"', pyproject), "grpclib must be pinned to one version"
+
+
+async def test_a_grpclib_without_the_private_listener_stops_the_boot(chdir_tmp, monkeypatch):
+    from w17_business import runtime
+
+    class Renamed(runtime.Server):
+        async def start(self, *a, **kw):
+            await super().start(*a, **kw)
+            self._listener = self.__dict__.pop("_server")
+
+    monkeypatch.setattr(runtime, "Server", Renamed)
+    app = App(load(MANIFEST), project_root=PROJECT, environ=env())
+    await app.boot()
+    with pytest.raises(BootError, match="grpclib"):
+        await app.start()
+    app.server._server = app.server._listener
+    app.server.close()
+    await app.server.wait_closed()

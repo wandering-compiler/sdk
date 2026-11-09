@@ -456,3 +456,135 @@ async def test_channel_without_sdk_codec_still_reads_the_status(stack, msg):
         assert ei.value.status == Status.FAILED_PRECONDITION
     finally:
         ch.close()
+
+
+# --- the callee context registry.self hands a composed method ------------------
+
+
+def _envelope(msg, user_id):
+    return base64.b64encode(msg("AuthResp")(user_id=user_id).SerializeToString()).decode()
+
+
+async def test_act_as_through_self_reaches_the_callee(pool, msg):
+    # act_as moves the principal to the OUTGOING side (and strips the incoming
+    # one); the composed callee reads it INCOMING, as a wire hop would deliver.
+    principal.set_auth_resp_type(msg("AuthResp"))
+    try:
+        seen = {}
+
+        class Local(NoteService):
+            async def Whoami(self, ctx, req):
+                seen["user"] = principal.user_id(ctx)
+                seen["org"] = principal.scope(ctx, "org_id")
+                return msg("WhoamiResponse")(user_id=seen["user"])
+
+        reg = Registry(pool)
+        reg.register("conformance.v1.NoteService", Local(reg, None, None))
+        caller = Context(incoming={"x-w17-user": _envelope(msg, "person"), "x-w17-scope-org_id": "o-person"})
+        acted = principal.act_as(caller, msg("AuthResp")(user_id="robot"), {"org_id": "o-robot"})
+        await reg.self("NoteService").Whoami(acted, msg("WhoamiRequest")())
+        assert seen == {"user": "robot", "org": "o-robot"}
+
+        # Without act_as the caller's own verified principal is what arrives.
+        await reg.self("NoteService").Whoami(caller, msg("WhoamiRequest")())
+        assert seen == {"user": "person", "org": "o-person"}
+    finally:
+        principal.set_auth_resp_type(None)
+
+
+async def test_paging_forward_through_self_does_not_reach_the_callees_sibling_calls(pool, msg):
+    # The caller forwards the page to a composed method; that method's own
+    # (unforwarded) storage call must neither relay its position onto the
+    # caller's response nor carry the forward mark.
+    seen = {}
+
+    class Local(NoteService):
+        async def Inspect(self, ctx, req):
+            seen["forwarded"] = paging.forwarded(ctx)
+            seen["incoming_limit"] = ctx.incoming.get_all(paging.LIMIT_MD_KEY)
+            seen["outgoing"] = dict(ctx.outgoing)
+            # What a storage client call does with the answer's headers.
+            paging.relay_position(ctx, {paging.NEXT_MD_KEY: ("sibling",)})
+            return msg("InspectResponse")()
+
+    reg = Registry(pool)
+    reg.register("conformance.v1.NoteService", Local(reg, None, None))
+    ctx, sink = paging.with_response_headers(Context(incoming={paging.LIMIT_MD_KEY: "2"}))
+    await reg.self("NoteService").Inspect(paging.forward(ctx), msg("InspectRequest")())
+    assert sink == {}, "the callee's sibling call moved the caller's page"
+    assert seen["forwarded"] is False
+    assert seen["incoming_limit"] == ("2",), "the forwarded page is the callee's incoming request"
+    assert seen["outgoing"] == {}, "a callee's outgoing side starts empty, as a server context does"
+
+
+async def test_self_inside_a_transaction_keeps_its_routing(pool, msg):
+    seen = {}
+
+    class Local(NoteService):
+        async def Inspect(self, ctx, req):
+            seen["out"] = dict(ctx.outgoing)
+            return msg("InspectResponse")()
+
+    class Tx:
+        async def begin(self, ctx, req):
+            from w17_business.context import Metadata
+            return distx._msg("BeginResponse")(tx_id="tx-9"), Metadata({distx.CONN_ID_HEADER: "c-9"})
+
+    reg = Registry(pool)
+    reg.register("conformance.v1.NoteService", Local(reg, None, None))
+    _, tx_ctx = await distx.begin(Context(), Tx())
+    stale = tx_ctx.with_outgoing(tx_ctx.outgoing.with_set("x-custom", "c"))
+    await reg.self("NoteService").Inspect(stale, msg("InspectRequest")())
+    assert seen["out"] == {distx.TX_ID_HEADER: ("tx-9",), distx.CONN_ID_HEADER: ("c-9",)}
+
+
+# --- an emit outlives the request that caused it ------------------------------
+
+
+async def test_an_emit_outside_a_transaction_outlives_a_cancelled_caller(pool, msg):
+    gate, started = asyncio.Event(), asyncio.Event()
+
+    class SlowPub(events.MemoryPublisher):
+        async def dispatch(self, ctx, channel, topic, envelope):
+            started.set()
+            await gate.wait()
+            await super().dispatch(ctx, channel, topic, envelope)
+
+    class Local(NoteService):
+        async def CreateNote(self, ctx, req):
+            return msg("Note")(id=1, text=req.text)
+
+    pub = SlowPub()
+    reg = Registry(pool, (EMIT,), pub)
+    reg.register("conformance.v1.NoteService", Local(reg, None, None))
+    task = asyncio.create_task(reg.self("NoteService").CreateNote(Context(), msg("CreateNoteRequest")(text="x")))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    gate.set()
+    for _ in range(100):
+        if pub.published:
+            break
+        await asyncio.sleep(0.01)
+    assert len(pub.published) == 1, "the committed write's event was lost with the request"
+
+
+async def test_a_hanging_broker_is_bounded_by_the_publish_timeout(pool, msg, monkeypatch):
+    monkeypatch.setattr(events, "DEFAULT_PUBLISH_TIMEOUT", 0.05)
+    reported = []
+    monkeypatch.setattr(events, "report_error", lambda ctx, e: reported.append(str(e)))
+
+    class Hanging(events.MemoryPublisher):
+        async def dispatch(self, ctx, channel, topic, envelope):
+            await asyncio.Event().wait()
+
+    class Local(NoteService):
+        async def CreateNote(self, ctx, req):
+            return msg("Note")(id=1, text=req.text)
+
+    reg = Registry(pool, (EMIT,), Hanging())
+    reg.register("conformance.v1.NoteService", Local(reg, None, None))
+    note = await asyncio.wait_for(reg.self("NoteService").CreateNote(Context(), msg("CreateNoteRequest")(text="x")), 2)
+    assert note.text == "x"
+    assert reported and "note.created" in reported[0], reported

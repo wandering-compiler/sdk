@@ -247,7 +247,10 @@ class TxHandle:
                 # on a detached context, then let the cancellation through.
                 # Whichever way it settles, nothing parked may run: either
                 # the transaction rolled back, or its outcome is unknown.
-                await asyncio.shield(self._settle(ctx, None))
+                if await asyncio.shield(self._settle(ctx, None)) is not None:
+                    # The commit may have landed: this handle must never
+                    # commit (or roll back) again.
+                    self._ended = "left with its outcome unknown"
                 if self._scope is not None:
                     self._scope.discarded()
                 raise
@@ -264,9 +267,18 @@ class TxHandle:
         if err is not None:
             self._scope.discarded()
             raise err
-        for failure in await self._scope.run_committed():
-            report_error(ctx.without_cancel(), RuntimeError(
-                f"distx: work parked on committed transaction {self._tx_id} failed: {failure!r}"))
+        # The transaction IS committed from here on. The parked work (the
+        # events of the writes among it) runs to its end even when the caller
+        # is cancelled now — a client hang-up must not lose them — and every
+        # failure is reported, never raised into a commit that landed.
+        scope, detached, tx_id = self._scope, ctx.without_cancel(), self._tx_id
+
+        async def run_parked() -> None:
+            for failure in await scope.run_committed():
+                report_error(detached, RuntimeError(
+                    f"distx: work parked on committed transaction {tx_id} failed: {failure!r}"))
+
+        await txscope.shielded(run_parked())
 
     async def _settle(self, ctx: Context, commit_err: BaseException | None) -> BaseException | None:
         """After a commit with an unknown outcome: roll back, detached. Success
@@ -276,15 +288,16 @@ class TxHandle:
         try:
             await self._client.rollback(self.attach(probe), _msg("RollbackRequest")(tx_id=self._tx_id))
         except Exception as rerr:
+            why = repr(commit_err) if commit_err is not None else "the caller was cancelled mid-commit"
             pending = self._scope.pending() if self._scope is not None else 0
             report_error(ctx.without_cancel(), RuntimeError(
                 f"distx: the outcome of committing transaction {self._tx_id} is unknown — the commit call failed "
-                f"({commit_err!r}) and the transaction could no longer be rolled back ({rerr!r}); its writes may have "
+                f"({why}) and the transaction could no longer be rolled back ({rerr!r}); its writes may have "
                 f"landed, and {pending} piece(s) of work waiting for the commit were not run"))
             if self._scope is not None:
                 self._scope.discarded()
             e = CommitOutcomeUnknownError(
-                f"distx: the commit's outcome is unknown: transaction {self._tx_id}: {commit_err!r}")
+                f"distx: the commit's outcome is unknown: transaction {self._tx_id}: {why}")
             e.__cause__ = commit_err
             return e
         self._ended = "rolled back"
