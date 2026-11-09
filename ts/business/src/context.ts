@@ -202,8 +202,8 @@ class CancelNode {
 
   /** The node of the chain cancelled first, if any. */
   first(): CancelNode | undefined {
-    let out: CancelNode | undefined;
-    for (let c: CancelNode | undefined = this; c; c = c.parent) if (c.cancelled && (out === undefined || c.at <= out.at)) out = c;
+    let out: CancelNode | undefined = this.cancelled ? this : undefined;
+    for (let c = this.parent; c; c = c.parent) if (c.cancelled && (out === undefined || c.at <= out.at)) out = c;
     return out;
   }
 

@@ -180,8 +180,8 @@ function isObj(v: unknown): v is Obj {
 
 /** JSON.stringify, writing a bigint (an integer {@link parseJSON} kept exact) as the number it was. */
 function json(v: unknown): string {
-  const raw = (JSON as unknown as { rawJSON(s: string): unknown }).rawJSON;
-  return JSON.stringify(v, (_k, x: unknown) => (typeof x === "bigint" ? raw(x.toString()) : x));
+  const j = JSON as unknown as { rawJSON(s: string): unknown };
+  return JSON.stringify(v, (_k, x: unknown) => (typeof x === "bigint" ? j.rawJSON(x.toString()) : x));
 }
 
 /** A JSON scalar as text; anything else as its JSON. */
@@ -197,7 +197,7 @@ function text(v: unknown): string {
 export function parseJSON(src: string): unknown {
   const reviver = (_k: string, v: unknown, c?: { source?: string }) =>
     typeof v === "number" && !Number.isSafeInteger(v) && c?.source !== undefined && /^-?\d+$/.test(c.source) ? BigInt(c.source) : v;
-  return JSON.parse(src, reviver as (k: string, v: unknown) => unknown);
+  return JSON.parse(src, reviver);
 }
 
 function req(d: Obj, key: string, where: string): string {
