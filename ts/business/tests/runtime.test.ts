@@ -205,6 +205,43 @@ describe("serving", () => {
       expect(order).toEqual(["rolled back", "bus closed", "clients closed"]);
     }));
 
+  it("the whole drain stays within one budget, however much of it hangs", () =>
+    inTmpDir(async () => {
+      // A handler that ignores its cancel, work after a commit that never
+      // ends, a hook and a bus that hang: each step may take only what is
+      // left of one budget, and the handlers and the work after a commit
+      // share one timeout after the server's close.
+      quiet();
+      const timeout = 100;
+      const budget = 400;
+      const app = new App({ ...load(MANIFEST), shutdownTimeoutMs: timeout }, { projectRoot: PROJECT, environ: env(), drainTimeoutMs: budget });
+      await app.boot();
+      await app.start();
+      const impl = app.registry!.served[0]!.methodImpls().find((m) => m.info.name === "Sleep")!;
+      (impl as { fn: unknown }).fn = () => new Promise(() => undefined);
+      void txscope.shielded(new Promise(() => undefined));
+      let hookAt = -1;
+      const t0 = performance.now();
+      app.registry!.registerShutdown(() => {
+        hookAt = performance.now() - t0;
+        return new Promise(() => undefined);
+      });
+      app.dispatcher = { dispatch: async () => {}, close: () => new Promise(() => undefined) };
+      const conn = new Conn(`127.0.0.1:${app.port}`, { tls: false });
+      const call = new ServiceClient(conn, "conformance.v1.NoteService", app.pool).Sleep(new Context(), msg("SleepRequest")({ ms: 1 })).catch((e: unknown) => e);
+      await sleep(50);
+      const s0 = performance.now();
+      await Promise.race([app.shutdown(), sleep(3000).then(() => Promise.reject(new Error("shutdown outran its budget by seconds")))]);
+      const took = performance.now() - s0;
+      await call;
+      conn.close();
+      // Server stop (one timeout), then ONE shared timeout for the handlers
+      // and the work after a commit — not one each.
+      expect(hookAt - (s0 - t0)).toBeLessThan(2 * timeout + 60);
+      expect(took).toBeGreaterThanOrEqual(budget - 20);
+      expect(took).toBeLessThan(budget + 150);
+    }));
+
   it("the drain waits for work the server's close started, before the bus closes", () =>
     inTmpDir(async () => {
       // A handler that commits as the server closes starts its events then.

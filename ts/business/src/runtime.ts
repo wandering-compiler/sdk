@@ -47,7 +47,11 @@ import * as txscope from "./txscope.js";
 
 /** lifecycle.DefaultShutdownTimeout; the manifest's shutdown_timeout_seconds wins. */
 export const SHUTDOWN_TIMEOUT_MS = 10_000;
-/** runtime.shutdownDrainTimeout: the shutdown hooks. */
+/**
+ * runtime.shutdownDrainTimeout: the budget of the whole drain — the server's
+ * stop, the handlers and the work after a commit, the shutdown hooks and the
+ * bus close — unless the shutdown timeout is longer.
+ */
 export const DRAIN_TIMEOUT_MS = 30_000;
 export const ENV_MANIFEST = "W17_BUSINESS_MANIFEST";
 export const ENV_PROJECT_ROOT = "W17_BUSINESS_PROJECT_ROOT";
@@ -149,9 +153,12 @@ export class App {
   readonly health = new HealthService();
   addr = "";
   port = 0;
+  /** @internal The drain's budget ({@link DRAIN_TIMEOUT_MS}); tests shorten it. */
+  readonly drainTimeoutMs: number;
 
-  constructor(manifest: Manifest, opts: { environ?: Env; projectRoot?: string } = {}) {
+  constructor(manifest: Manifest, opts: { environ?: Env; projectRoot?: string; drainTimeoutMs?: number } = {}) {
     this.manifest = manifest;
+    this.drainTimeoutMs = opts.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
     this.env = { ...(opts.environ ?? process.env) };
     this.projectRoot = opts.projectRoot || this.env[ENV_PROJECT_ROOT] || process.cwd();
     this.pool = getDefaultPool();
@@ -316,45 +323,55 @@ export class App {
     const srv = this.server;
     const timeout = this.manifest.shutdownTimeoutMs || SHUTDOWN_TIMEOUT_MS;
     observability.logger.info(`${this.manifest.bundle}: shutting down`);
+    // One budget for the whole drain, set once, now: Go's shutdown drain
+    // timeout, or the operator's shutdown timeout when that is longer. Every
+    // step below draws from what is left of it, so a deployment's
+    // termination grace bounds the drain as a whole, not each step alone.
+    const drain = new Context().withTimeout(Math.max(this.drainTimeoutMs, timeout));
+    const left = () => Math.max(drain.timeRemaining() ?? 0, 0);
     this.health.set(false);
     if (reg !== undefined) reg.draining = true;
     if (srv !== undefined) {
       // Go's GracefulStop bounded by the timeout, then Stop: no new calls,
       // the in-flight ones finish, then whatever is left is cancelled.
+      const stopMs = Math.min(timeout, left());
       let timer: NodeJS.Timeout | undefined;
       const graceful = await Promise.race([
         new Promise<boolean>((res) => srv.tryShutdown(() => res(true))),
         new Promise<boolean>((res) => {
-          timer = setTimeout(() => res(false), timeout);
+          timer = setTimeout(() => res(false), stopMs);
         }),
       ]);
       clearTimeout(timer);
       if (!graceful) {
-        observability.reportError(undefined, `runtime: gRPC handler(s) still running after ${timeout}ms; cancelling them`);
+        observability.reportError(undefined, `runtime: gRPC handler(s) still running after ${stopMs}ms; cancelling them`);
         srv.forceShutdown();
       }
     }
-    // The server's close does not wait for the handlers: one it cancelled is
-    // still running (a detached rollback, a commit) and needs the storage
-    // channel and the bus it would close under it. Go's hard stop gets one
-    // more timeout; past that the handlers are abandoned, loudly.
-    if (reg !== undefined && !(await reg.waitIdle(timeout))) {
-      observability.reportError(undefined, `runtime: ${reg.inflight} gRPC handler(s) still running ${timeout}ms after the server closed; continuing without them`);
-    }
-    // The work a committed transaction (or an emit) owes outlives its
-    // request. Waited for only now, after the server's close: a handler it
-    // cancelled may have committed and started that work just then. One
-    // deadline for all of it; what is left is abandoned and reported, and
+    // After the server's close, one more timeout (within the budget),
+    // computed once and SHARED by the two waits below:
+    //  - the handlers it cancelled: the server's close does not wait for
+    //    them, and one still running (a detached rollback, a commit) needs
+    //    the storage channel and the bus it would close under it;
+    //  - the work a committed transaction (or an emit) owes, which outlives
+    //    its request. Waited for only after the handlers: one cancelled may
+    //    have committed and started that work just then.
+    // What is still running at the deadline is abandoned and reported, and
     // only then does the bus close under it.
-    if (!(await txscope.drain(timeout))) {
+    const afterStop = performance.now() + Math.min(timeout, left());
+    const untilAfterStop = () => Math.max(afterStop - performance.now(), 0);
+    if (reg !== undefined && !(await reg.waitIdle(untilAfterStop()))) {
+      observability.reportError(undefined, `runtime: ${reg.inflight} gRPC handler(s) still running after the server closed; continuing without them`);
+    }
+    if (!(await txscope.drain(untilAfterStop()))) {
       const n = txscope.abandonPending();
       observability.reportError(
         undefined,
-        `runtime: ${n} piece(s) of work after a commit (events, onCommit hooks) still running after ${timeout}ms; abandoned`,
+        `runtime: ${n} piece(s) of work after a commit (events, onCommit hooks) still running at the shutdown deadline; abandoned`,
       );
     }
-    const drain = new Context().withTimeout(DRAIN_TIMEOUT_MS);
-    const remaining = () => Math.max(drain.timeRemaining() ?? 0, 1);
+    // The shutdown hooks and the bus close get the rest of the budget.
+    const remaining = () => Math.max(left(), 1);
     for (const [i, fn] of (reg?.shutdowns ?? []).entries()) {
       try {
         await bounded(Promise.resolve().then(() => fn(drain)), remaining(), `shutdown hook ${i}`);

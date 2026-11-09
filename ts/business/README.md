@@ -150,9 +150,15 @@ Where JavaScript differs from Go and Python: a running promise cannot be
 cancelled. A cancelled context cancels the calls made with it and reads as
 done, but your handler runs on until it returns. The drain waits for it — the
 server's close cancels what is still running after the shutdown timeout, then
-gives those handlers one more timeout to finish (a rollback, a commit) before
-the storage channels and the buses close; when that passes, they and the work
-still running after a commit are abandoned (and reported), not interrupted. `cfg.int(name)` is a `number` and refuses a value beyond 2^53;
+gives those handlers, and the work still owed after a commit, one more
+timeout together (not one each) to finish (a rollback, a commit, its events)
+before the storage channels and the buses close; when that passes, they are
+abandoned (and reported), not interrupted. The whole drain — the server's
+stop, those waits, the shutdown hooks and the bus close — draws from one
+budget set when it starts: 30 s (Go's drain timeout), or the shutdown timeout
+if that is longer; the telemetry flush (Sentry, at most 5 s) comes after it.
+Give the container a termination grace longer than that.
+`cfg.int(name)` is a `number` and refuses a value beyond 2^53;
 `cfg.bigint(name)` reads any 64-bit value.
 
 ## Tests
