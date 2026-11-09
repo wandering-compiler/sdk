@@ -134,7 +134,37 @@ impl W17Files for Biz {
 
     type OpenStream = futures::stream::BoxStream<'static, Result<OpenResponse, Status>>;
 
-    async fn open(&self, _req: Request<OpenRequest>) -> Result<Response<Self::OpenStream>, Status> {
+    async fn open(&self, req: Request<OpenRequest>) -> Result<Response<Self::OpenStream>, Status> {
+        // A stream that fails after its first message: a panic, or a
+        // for_user status, raised while the body is already being written.
+        let fail = req.into_inner().handle;
+        if !fail.is_empty() {
+            let s = futures::stream::unfold(0, move |i| {
+                let fail = fail.clone();
+                async move {
+                    if i == 1 {
+                        // Let the first message leave on its own frame.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    match i {
+                        0 => Some((Ok(OpenResponse { chunk: vec![1] }), 1)),
+                        1 if fail == "panic" => panic!("a stream panicked"),
+                        1 => Some((
+                            Err(for_user_dev(
+                                Code::FailedPrecondition,
+                                "GONE",
+                                "Gone.",
+                                "",
+                                "dev text",
+                            )),
+                            2,
+                        )),
+                        _ => None,
+                    }
+                }
+            });
+            return Ok(Response::new(s.boxed()));
+        }
         let s = futures::stream::unfold(0, |i| async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
             (i < 50).then(|| (Ok(OpenResponse { chunk: vec![1] }), i + 1))
@@ -379,6 +409,41 @@ async fn the_tier_over_the_wire() {
     );
     assert_eq!(crate::error_detail(&e).unwrap().code, "LOCKED");
     assert!(e.metadata().get(crate::errors::FOR_USER_MARKER).is_none());
+
+    // The same two once a server stream has started writing: the panic is
+    // INTERNAL in the trailers (and the connection survives it), the
+    // for_user status prefixed, its marker kept off the wire.
+    let mid = |handle: &str| {
+        let mut r = Request::new(OpenRequest {
+            connection: String::new(),
+            handle: handle.into(),
+        });
+        r.set_timeout(Duration::from_secs(5));
+        r
+    };
+    for (handle, want) in [
+        (
+            "panic",
+            (
+                Code::Internal,
+                "/w17.common.files.W17Files/Open: internal error",
+            ),
+        ),
+        ("user", (Code::FailedPrecondition, "W17Files.Open: dev text")),
+    ] {
+        let mut s = c.open(mid(handle)).await.unwrap().into_inner();
+        assert_eq!(s.next().await.unwrap().unwrap().chunk, vec![1]);
+        let e = s.next().await.unwrap().unwrap_err();
+        assert_eq!((e.code(), e.message()), want, "{handle}: {e:?}");
+        assert!(
+            e.metadata().get(crate::errors::FOR_USER_MARKER).is_none(),
+            "{handle}: {e:?}"
+        );
+        if handle == "user" {
+            assert_eq!(crate::error_detail(&e).unwrap().code, "GONE");
+        }
+    }
+    assert_eq!(c.stat(stat("ctx")).await.unwrap().into_inner().size, 11);
 
     // The caller's deadline ends the call.
     let mut short = stat("sleep");

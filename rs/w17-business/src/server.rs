@@ -390,12 +390,21 @@ impl Drop for CallGuards {
 /// call's deadline passes (`DEADLINE_EXCEEDED`) or the drain cancels it
 /// (`UNAVAILABLE`) while the body is still being written — a
 /// server-streaming method's stream.
+///
+/// A server stream's messages are produced while the body is polled, after
+/// the handler's future returned, so the handler's rules apply here too: a
+/// panic in the author's stream is reported and ends the call `INTERNAL`
+/// `"<method>: internal error"` (left alone, it would reset the HTTP/2
+/// stream, which a client reads as CANCELLED), and a [`crate::for_user`]
+/// status the stream ends with leaves prefixed with the method, its marker
+/// dropped.
 struct ServerBody {
     inner: Body,
+    path: String,
     deadline: Option<Pin<Box<tokio::time::Sleep>>>,
     kill: Option<Pin<Box<tokio_util::sync::WaitForCancellationFutureOwned>>>,
     ended: bool,
-    _guards: CallGuards,
+    guards: CallGuards,
 }
 
 fn status_trailers(st: Status) -> HeaderMap {
@@ -430,11 +439,50 @@ impl HttpBody for ServerBody {
                 Status::unavailable("server is shutting down"),
             )))));
         }
-        let f = Pin::new(&mut this.inner).poll_frame(cx);
-        if let Poll::Ready(None) = f {
-            this.ended = true;
+        let polled = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            Pin::new(&mut this.inner).poll_frame(cx)
+        }));
+        let f = match polled {
+            Ok(f) => f,
+            Err(p) => {
+                observability::report_error(&format!(
+                    "PANIC {}: {}",
+                    this.path,
+                    panic_text(p.as_ref())
+                ));
+                if let Some(s) = this.guards.span.take() {
+                    s.end(Some("panic"));
+                }
+                this.ended = true;
+                return Poll::Ready(Some(Ok(Frame::trailers(status_trailers(
+                    Status::internal(format!("{}: internal error", this.path)),
+                )))));
+            }
+        };
+        match f {
+            Poll::Ready(None) => {
+                this.ended = true;
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(Ok(frame))) if frame.is_trailers() => {
+                let trailers = frame.into_trailers().unwrap_or_default();
+                let Some(st) = Status::from_header_map(&trailers) else {
+                    return Poll::Ready(Some(Ok(Frame::trailers(trailers))));
+                };
+                if st.code() != tonic::Code::Ok
+                    && let Some(s) = this.guards.span.take()
+                {
+                    s.end(Some(st.message()));
+                }
+                Poll::Ready(Some(Ok(Frame::trailers(
+                    match finish_for_user(&st, &this.path) {
+                        Some(user) => status_trailers(user),
+                        None => trailers,
+                    },
+                ))))
+            }
+            f => f,
         }
-        f
     }
 
     fn is_end_stream(&self) -> bool {
@@ -601,10 +649,11 @@ impl Served {
         resp.map(|inner| {
             Body::new(ServerBody {
                 inner,
+                path,
                 deadline: deadline.map(|d| Box::pin(tokio::time::sleep_until(d.into()))),
                 kill: Some(Box::pin(shared.kill.clone().cancelled_owned())),
                 ended: false,
-                _guards: guards,
+                guards,
             })
         })
     }
