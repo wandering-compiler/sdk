@@ -11,6 +11,7 @@ fails when the committed code differs from what `make pb` writes.
 | `w17apply/` | the deploy plan and fetch services |
 | `w17registry/` | the project registry service |
 | `common/distx/` | the distributed-transaction envelope |
+| `common/files/` | `W17Files`, the file storage the business companion serves to a non-Go business tier |
 | `domains/console/` | the console API messages the CLI uses |
 
 `go/pb/consoleapi/rpc` has no source here: it is the gRPC client for the

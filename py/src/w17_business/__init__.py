@@ -13,12 +13,13 @@ and the handler methods, named exactly as the RPCs, each taking the context
 first: ``async def CreateNote(self, ctx, req)``. Pass ``ctx`` on to every call.
 """
 
-from . import distx, events, paging, principal, txscope
+from . import distx, egress, events, files, paging, principal, txscope
 from .client import ServiceClient
 from .config import Config, ConfigError
 from .context import Context, Metadata, background
 from .distx import on_commit
-from .errors import Status, UserError, error_detail, for_user
+from .errors import ErrorInfo, Status, UserError, error_detail, for_user
+from .files import FileInfo, FileStore
 from .runtime import App, Clients
 from .secrets import Secret
 from .server import Registry, RegistrationError, Served
@@ -29,6 +30,9 @@ __all__ = [
     "Config",
     "ConfigError",
     "Context",
+    "ErrorInfo",
+    "FileInfo",
+    "FileStore",
     "Metadata",
     "Registry",
     "RegistrationError",
@@ -39,8 +43,10 @@ __all__ = [
     "UserError",
     "background",
     "distx",
+    "egress",
     "error_detail",
     "events",
+    "files",
     "for_user",
     "on_commit",
     "paging",

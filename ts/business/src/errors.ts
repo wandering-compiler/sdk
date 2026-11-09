@@ -190,3 +190,57 @@ export function errorDetail(err: unknown): AnyMessage | undefined {
   }
   return undefined;
 }
+
+// --- google.rpc.ErrorInfo, decoded by hand -----------------------------------
+//
+// The companion's errors (egress, file storage) carry a google.rpc.ErrorInfo.
+// The SDK's descriptor set does not import google/rpc, so it is read here
+// from the packed detail: reason = 1, domain = 2, metadata = 3
+// (map<string, string>).
+
+export const ERROR_INFO_TYPE = "google.rpc.ErrorInfo";
+
+/** A `google.rpc.ErrorInfo`: why a call failed, machine-readable. */
+export interface ErrorInfo {
+  readonly domain: string;
+  readonly reason: string;
+  readonly metadata: Readonly<Record<string, string>>;
+}
+
+/** The `google.rpc.ErrorInfo` a `StatusError` carries, or undefined (also for anything that is not one). */
+export function errorInfo(err: unknown): ErrorInfo | undefined {
+  if (!(err instanceof StatusError)) return undefined;
+  try {
+    for (const d of err.details) {
+      if (d.typeUrl.slice(d.typeUrl.lastIndexOf("/") + 1) === ERROR_INFO_TYPE) return decodeErrorInfo(d.value);
+    }
+  } catch {
+    return undefined; // details that do not decode carry no ErrorInfo
+  }
+  return undefined;
+}
+
+function decodeErrorInfo(bytes: Uint8Array): ErrorInfo {
+  const r = new BinaryReader(bytes);
+  let reason = "";
+  let domain = "";
+  const meta: [string, string][] = [];
+  while (r.pos < r.len) {
+    const [no, wt] = r.tag();
+    if (no === 1 && wt === WireType.LengthDelimited) reason = r.string();
+    else if (no === 2 && wt === WireType.LengthDelimited) domain = r.string();
+    else if (no === 3 && wt === WireType.LengthDelimited) {
+      const e = new BinaryReader(r.bytes());
+      let k = "";
+      let v = "";
+      while (e.pos < e.len) {
+        const [n2, w2] = e.tag();
+        if (n2 === 1 && w2 === WireType.LengthDelimited) k = e.string();
+        else if (n2 === 2 && w2 === WireType.LengthDelimited) v = e.string();
+        else e.skip(w2);
+      }
+      meta.push([k, v]);
+    } else r.skip(wt);
+  }
+  return { domain, reason, metadata: Object.fromEntries(meta) };
+}

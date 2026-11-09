@@ -10,16 +10,22 @@ does what Go's generated business ``main`` does:
 4. the buses: NATS and/or Redis Streams, each DSN resolved through the
    secrets chain; a bus whose DSN is empty is off and its events are dropped,
    as Go leaves the dispatcher nil;
-5. the storage clients (one connection, dialled lazily);
+5. the storage clients (one connection, dialled lazily) and, when the
+   manifest has a ``companion`` section, the companion's: its egress clients
+   and file stores (a second connection, also lazy);
 6. import ``register.module`` from ``--project-root`` and call
    ``register_business(cfg, registry, clients)`` (sync or async); every method
    a plugin hook is bound to must then have a handler;
 7. serve h2c, or TLS with ``W17_INTERNAL_TLS``; ``grpc.health.v1``; reflection
    when ``<PREFIX>_GRPC_REFLECTION`` is ``1``/``true``;
-8. on SIGTERM/SIGINT: report NOT_SERVING, refuse new calls, give the in-flight
-   ones ``shutdown_timeout_seconds`` (10, Go's ShutdownTimeout), cancel the
-   rest, then run the shutdown hooks under one 30s drain deadline (Go's
-   shutdownDrainTimeout), close the buses and the channels, flush telemetry.
+8. on SIGTERM/SIGINT: report NOT_SERVING, refuse new calls, give the
+   in-flight ones ``shutdown_timeout_seconds`` (10, Go's ShutdownTimeout),
+   cancel the rest and give them one more timeout to return (a rollback, a
+   commit in progress), wait for the work committed transactions still owe
+   (events, on_commit hooks), then run the shutdown hooks under one 30s
+   drain deadline (Go's shutdownDrainTimeout), close the buses and the
+   channels, flush telemetry. The whole drain is ONE budget, set when it
+   starts: every step draws from what is left of it.
 """
 
 from __future__ import annotations
@@ -40,11 +46,12 @@ from grpclib.health.service import OVERALL, Health
 from grpclib.server import Server
 
 from . import _grpclib, events, observability, principal, tlsconfig, txscope
-from .client import Conn, ServiceClient, TxCoordinator, parse_addr
+from .client import CompanionConn, Conn, ServiceClient, TxCoordinator, parse_addr
 from .config import Config, ConfigError
 from .context import Context
 from .descriptors import Pool, default_pool
 from .errors import StatusDetailsCodec
+from .files import FileStore
 from .manifest import Manifest, load
 from .secrets import new_resolver
 from .server import Registry, RegistrationError
@@ -54,8 +61,10 @@ __all__ = ["Clients", "App", "BootError", "SHUTDOWN_TIMEOUT", "DRAIN_TIMEOUT", "
 log = logging.getLogger("w17_business")
 
 SHUTDOWN_TIMEOUT = 10.0  # lifecycle.DefaultShutdownTimeout; the manifest's shutdown_timeout_seconds wins
-DRAIN_TIMEOUT = 30.0  # runtime.shutdownDrainTimeout: the shutdown hooks
-CANCEL_TIMEOUT = 5.0  # bounds the wait for post-commit work cancelled after the drain
+# runtime.shutdownDrainTimeout: the budget of the whole drain — the server's
+# stop, the handlers and the work after a commit, the shutdown hooks and the
+# bus close — unless the shutdown timeout is longer.
+DRAIN_TIMEOUT = 30.0
 ENV_MANIFEST = "W17_BUSINESS_MANIFEST"
 ENV_PROJECT_ROOT = "W17_BUSINESS_PROJECT_ROOT"
 
@@ -65,19 +74,32 @@ class BootError(Exception):
 
 
 class Clients:
-    """The tier's clients, built from the manifest's ``storage`` section.
+    """The tier's clients, built from the manifest's ``storage`` and
+    ``companion`` sections.
 
     ``clients.service("shop.core.OrderQuery")`` (or the short name when
     unambiguous, also as an attribute: ``clients.OrderQuery``) returns a
     ``ServiceClient``; ``clients.distributed_transaction()`` returns the
-    coordinator ``distx`` drives. One connection serves them all."""
+    coordinator ``distx`` drives. One connection serves them all.
+
+    ``clients.egress("quotes")`` (the client name, or its service's full name)
+    is an egress client and ``clients.store("app-exports")`` a connection's
+    ``FileStore``: both are served by the business companion, over a second
+    connection of their own (see ``client.CompanionConn``)."""
 
     def __init__(self, pool: Pool, manifest: Manifest, environ: Mapping[str, str] | None = None) -> None:
         env = os.environ if environ is None else environ
         self._pool = pool
         self._conn: Conn | None = None
+        self._companion: CompanionConn | None = None
         self._by_service: dict[str, ServiceClient] = {}
+        self._egress: dict[str, ServiceClient] = {}  # by client name
+        self._stores: dict[str, FileStore] = {}
         self._tx: TxCoordinator | None = None
+        self._storage(pool, manifest, env)
+        self._companion_clients(pool, manifest, env)
+
+    def _storage(self, pool: Pool, manifest: Manifest, env: Mapping[str, str]) -> None:
         tier = manifest.storage
         if tier is None:
             return
@@ -101,6 +123,56 @@ class Clients:
             self._by_service[full] = ServiceClient(conn, full, pool)
         if tier.distributed_transactions:
             self._tx = TxCoordinator(conn)
+
+    def _companion_clients(self, pool: Pool, manifest: Manifest, env: Mapping[str, str]) -> None:
+        comp = manifest.companion
+        if comp is None:
+            return
+        addr = env.get(comp.address_env) or comp.default_address
+        if not addr:
+            raise BootError(f"companion: {comp.address_env} is not set and the manifest gives no default address")
+        try:
+            parse_addr(addr)
+        except ValueError as e:
+            raise BootError(f"companion: {comp.address_env}={addr!r}: {e}") from e
+        try:
+            conn = CompanionConn(addr, environ=dict(env))
+        except ValueError as e:
+            raise BootError(f"companion tls: {e}") from e
+        self._companion = conn
+        for e in comp.egress:
+            try:
+                full = pool.service(e.service).full_name
+            except KeyError as err:
+                raise BootError(f"companion: egress client {e.client}: service {e.service!r} is not in the descriptor set") from err
+            self._egress[e.client] = ServiceClient(conn, full, pool)
+        files = comp.files
+        if files is None:
+            return
+        try:
+            pool.service(files.service)
+        except KeyError as err:
+            raise BootError(f"companion: files: service {files.service!r} is not in the descriptor set") from err
+        for c in files.connections:
+            self._stores[c.name] = FileStore(conn, c, files.placements, pool)
+
+    def egress(self, name: str) -> ServiceClient:
+        """The egress client ``name`` (``"quotes"``) or the one serving the
+        service ``name`` (``"clients.quotes.QuotesApi"``)."""
+        n = name.lstrip(".")
+        if n in self._egress:
+            return self._egress[n]
+        for c in self._egress.values():
+            if c.service == n:
+                return c
+        raise KeyError(f"clients: no egress client {name!r} (have: {sorted(self._egress)})")
+
+    def store(self, connection: str) -> FileStore:
+        """The file store of the upload connection ``connection``."""
+        s = self._stores.get(connection)
+        if s is None:
+            raise KeyError(f"clients: no upload connection {connection!r} (have: {sorted(self._stores)})")
+        return s
 
     def service(self, name: str) -> ServiceClient:
         name = name.lstrip(".")
@@ -131,14 +203,18 @@ class Clients:
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()
+        if self._companion is not None:
+            self._companion.close()
 
 
 class App:
     """One business tier, booted from a manifest. ``run`` serves it."""
 
     def __init__(self, manifest: Manifest, environ: Mapping[str, str] | None = None,
-                 project_root: str | None = None) -> None:
+                 project_root: str | None = None, drain_timeout: float = DRAIN_TIMEOUT) -> None:
         self.manifest = manifest
+        # The drain's budget (DRAIN_TIMEOUT); tests shorten it.
+        self.drain_timeout = drain_timeout
         self.env = dict(os.environ if environ is None else environ)
         self.project_root = project_root or self.env.get(ENV_PROJECT_ROOT) or os.getcwd()
         self.pool = default_pool()
@@ -298,49 +374,73 @@ class App:
         reg, srv = self.registry, self.server
         timeout = self.manifest.shutdown_timeout or SHUTDOWN_TIMEOUT
         log.info("%s: shutting down", self.manifest.bundle)
+        # One budget for the whole drain, set once, now: Go's shutdown drain
+        # timeout, or the operator's shutdown timeout when that is longer.
+        # Every step below draws from what is left of it, so a deployment's
+        # termination grace bounds the drain as a whole, not each step alone.
+        drain = Context().with_timeout(max(self.drain_timeout, timeout))
+
+        def left() -> float:
+            return max(drain.time_remaining() or 0.0, 0.0)
+
         self.health_status.set(False)
         if reg is not None:
             reg.draining = True
+        aserver = None
         if srv is not None:
-            # grpclib has no graceful stop: stop accepting connections, give
-            # the in-flight calls the timeout, then let grpclib cancel the rest.
+            # Go's GracefulStop bounded by the timeout, then Stop. grpclib has
+            # no graceful stop: stop accepting connections, give the in-flight
+            # calls the timeout, then let grpclib cancel the rest.
             aserver = _grpclib.listener(srv)
             if aserver is not None:
                 aserver.close()
-            if reg is not None and not await reg.wait_idle(timeout):
-                observability.report_error(None, f"runtime: gRPC handler(s) still running after {timeout}s; cancelling them")
+            stop = min(timeout, left())
+            if reg is not None and not await reg.wait_idle(stop):
+                observability.report_error(None, f"runtime: gRPC handler(s) still running after {stop:g}s; cancelling them")
             srv.close()
             # Since Python 3.12 asyncio's wait_closed waits for every client
             # connection to close, and a peer tier keeps its connection open
             # (keepalive) indefinitely: close them, or the drain never ends.
             if aserver is not None and hasattr(aserver, "close_clients"):
                 aserver.close_clients()
+        # After the server's close, one more timeout (within the budget),
+        # computed once and SHARED by the two waits below:
+        #  - the handlers it cancelled: the server's close does not wait for
+        #    them, and one still running (a rollback, a commit) needs the
+        #    storage channel and the bus it would close under it;
+        #  - the work a committed transaction (or an emit) owes, which
+        #    outlives its request. Waited for only after the handlers: one
+        #    cancelled may have committed and started that work just then.
+        # What is still running at the deadline is cancelled (bounded by the
+        # rest of the budget) and reported, and only then does the bus close.
+        loop = asyncio.get_running_loop()
+        after_stop = loop.time() + min(timeout, left())
+
+        def until_after_stop() -> float:
+            return max(after_stop - loop.time(), 0.0)
+
+        if srv is not None:
             try:
-                await asyncio.wait_for(srv.wait_closed(), timeout)
+                await asyncio.wait_for(srv.wait_closed(), max(until_after_stop(), 0.001))
             except TimeoutError:
                 if aserver is not None and hasattr(aserver, "abort_clients"):
                     aserver.abort_clients()
-        # The work a committed transaction (or an emit) owes outlives its
-        # request. Waited for only now, after the server's close: a handler
-        # it cancelled may have committed and started that work just then.
-        # One deadline for all of it; what is left is cancelled (bounded) and
-        # reported, and only then does the bus close under it.
-        if not await txscope.drain(timeout):
-            n = await txscope.cancel_pending(CANCEL_TIMEOUT)
+        if not await txscope.drain(until_after_stop()):
+            n = await txscope.cancel_pending(max(left(), 0.001))
             observability.report_error(
                 None, f"runtime: {n} piece(s) of work after a commit (events, on_commit hooks) still running "
-                      f"after {timeout}s; cancelled")
-        drain = Context().with_timeout(DRAIN_TIMEOUT)
+                      "at the shutdown deadline; cancelled")
+        # The shutdown hooks and the bus close get the rest of the budget.
         for i, fn in enumerate(reg.shutdowns if reg else []):
             try:
                 r = fn(drain)
                 if inspect.isawaitable(r):
-                    await asyncio.wait_for(r, max(drain.time_remaining() or 0, 0.001))
+                    await asyncio.wait_for(r, max(left(), 0.001))
             except Exception as e:  # noqa: BLE001
                 observability.report_error(drain, RuntimeError(f"runtime: shutdown hook {i}: {e!r}"))
         if self.dispatcher is not None:
             try:
-                await asyncio.wait_for(self.dispatcher.close(), max(drain.time_remaining() or 0, 0.001))
+                await asyncio.wait_for(self.dispatcher.close(), max(left(), 0.001))
             except Exception as e:  # noqa: BLE001
                 log.warning("eventbus close: %s", e)
         if self.clients is not None:

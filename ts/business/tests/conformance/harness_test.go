@@ -6,12 +6,16 @@
 // adopting transactions as generated storage handlers do; an embedded NATS
 // JetStream broker consumed through sdk/go's own eventbus subscriber; and a
 // client that calls the business tier under test like a gateway would,
-// stamping the principal metadata a gateway stamps.
+// stamping the principal metadata a gateway stamps; and the tier's business
+// companion — sdk/go/service/bizcompanion from this checkout, over the
+// suite's manifest — in front of a fake third-party API (the echo egress
+// client's upstream) and two temp-dir file stores.
 //
 // The tier under test is the fixed NoteService of
 // proto/conformance/v1/conformance.proto, implemented once per language
 // (service/ here for the TypeScript SDK) and run in its own container. The harness
-// serves storage on :50051 and NATS on :4222 and reaches the tier at
+// serves storage on :50051, NATS on :4222 and the companion on :50071 (its
+// upstream on 127.0.0.1:50072, $W17_CLIENT_ECHO_DSN), and reaches the tier at
 // $CONFORMANCE_BUSINESS_ADDR; without that variable every test skips, so
 // `go test ./...` here is harmless. `make conformance-ts` runs the whole
 // thing in docker.
@@ -24,8 +28,10 @@ package conformance
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +58,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/paging"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+	"github.com/wandering-compiler/sdk/go/service/bizcompanion"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
@@ -61,6 +68,14 @@ const (
 	storageListen   = "0.0.0.0:50051"
 	natsPort        = 4222
 	pkg             = "conformance.v1."
+	// The companion the tier dials (NOTES_COMPANION_ADDR), and the fake
+	// upstream of the echo egress client (W17_CLIENT_ECHO_DSN names it).
+	companionListen = "0.0.0.0:50071"
+	upstreamListen  = "127.0.0.1:50072"
+	// The suite's upload connections' root variables (the manifest's
+	// companion.files.connections).
+	envFilesRoot = "NOTES_GATEWAY_UPLOAD_NOTES_FILES_ROOT"
+	envMediaRoot = "NOTES_GATEWAY_UPLOAD_NOTES_MEDIA_ROOT"
 )
 
 // env is the one harness every test shares: the tier under test boots once
@@ -83,6 +98,24 @@ type harness struct {
 	// Unavailable, as a reply lost in transport.
 	dropCommitReply bool
 	events          []event
+
+	// filesRoot is the writable store's directory.
+	filesRoot string
+	// companionCalls is every call the companion served, oldest first.
+	companionCalls []companionCall
+}
+
+// companionCall is what one companion call carried.
+type companionCall struct {
+	method string
+	md     metadata.MD
+	// messages is the number of messages a client stream sent (Put).
+	messages int
+	// existed reports, for a Delete, whether the object was on disk under
+	// the store root when the call arrived.
+	existed bool
+	// err is what a client stream's handler returned (Put).
+	err error
 }
 
 type event struct {
@@ -188,6 +221,10 @@ func start(businessAddr string) (*harness, func(), error) {
 	go func() { _ = gs.Serve(lis) }()
 	closers = append(closers, gs.Stop)
 
+	if err := h.startCompanion(dir, &closers); err != nil {
+		return nil, cleanup, fmt.Errorf("companion: %w", err)
+	}
+
 	if h.business, err = grpc.NewClient(businessAddr, grpc.WithTransportCredentials(insecure.NewCredentials())); err != nil {
 		return nil, cleanup, err
 	}
@@ -199,6 +236,128 @@ func start(businessAddr string) (*harness, func(), error) {
 		return nil, cleanup, fmt.Errorf("business tier at %s: %w", businessAddr, err)
 	}
 	return h, cleanup, nil
+}
+
+// startCompanion runs the tier's business companion as the split bundle's
+// main would, from the suite's manifest: its egress client against a fake
+// upstream, its file stores in temp dirs. An interceptor records what each
+// call carried.
+func (h *harness) startCompanion(dir string, closers *[]func()) error {
+	up, err := net.Listen("tcp", upstreamListen)
+	if err != nil {
+		return err
+	}
+	upstream := &http.Server{Handler: http.HandlerFunc(echoUpstream), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = upstream.Serve(up) }()
+	*closers = append(*closers, func() { _ = upstream.Close() })
+	if os.Getenv("W17_CLIENT_ECHO_DSN") == "" {
+		return fmt.Errorf("W17_CLIENT_ECHO_DSN is not set (run.sh sets it to http://%s?…)", upstreamListen)
+	}
+
+	// The writable root is created by the companion; the read-only one must
+	// exist, as the gateway (its writer) would have made it.
+	h.filesRoot = filepath.Join(dir, "notes-files")
+	media := filepath.Join(dir, "notes-media")
+	if err := os.MkdirAll(media, 0o750); err != nil {
+		return err
+	}
+	if err := os.Setenv(envFilesRoot, h.filesRoot); err != nil {
+		return err
+	}
+	if err := os.Setenv(envMediaRoot, media); err != nil {
+		return err
+	}
+	cfg, err := bizcompanion.Load(filepath.Join("service", "w17-business.json"))
+	if err != nil {
+		return err
+	}
+	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(h.companionUnary), grpc.ChainStreamInterceptor(h.companionStream))
+	closer, err := bizcompanion.Register(context.Background(), srv, cfg, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	lis, err := net.Listen("tcp", companionListen)
+	if err != nil {
+		return err
+	}
+	go func() { _ = srv.Serve(lis) }()
+	*closers = append(*closers, func() {
+		srv.Stop()
+		_ = closer(context.Background())
+	})
+	return nil
+}
+
+// echoUpstream is the echo client's third-party API: GET /echo/{id} answers
+// {"id", "message"} (the message naming the credential the call carried),
+// /echo/missing 404, /echo/slow after 2 s.
+func echoUpstream(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/echo/")
+	switch id {
+	case "missing":
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no such echo"}`))
+		return
+	case "slow":
+		select {
+		case <-time.After(2 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "message": "echo " + id + " auth=" + r.Header.Get("Authorization")})
+}
+
+func (h *harness) recordCompanion(c companionCall) {
+	h.mu.Lock()
+	h.companionCalls = append(h.companionCalls, c)
+	h.mu.Unlock()
+}
+
+func (h *harness) companionUnary(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	c := companionCall{method: info.FullMethod, md: md.Copy()}
+	if del, ok := req.(interface{ GetHandle() string }); ok && strings.HasSuffix(info.FullMethod, "/Delete") {
+		_, err := os.Stat(filepath.Join(h.filesRoot, filepath.FromSlash(del.GetHandle())))
+		c.existed = err == nil
+	}
+	h.recordCompanion(c)
+	return handler(ctx, req)
+}
+
+func (h *harness) companionStream(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	md, _ := metadata.FromIncomingContext(ss.Context())
+	counted := &countingStream{ServerStream: ss}
+	err := handler(srv, counted)
+	h.recordCompanion(companionCall{method: info.FullMethod, md: md.Copy(), messages: counted.n, err: err})
+	return err
+}
+
+type countingStream struct {
+	grpc.ServerStream
+	n int
+}
+
+func (s *countingStream) RecvMsg(m any) error {
+	err := s.ServerStream.RecvMsg(m)
+	if err == nil {
+		s.n++
+	}
+	return err
+}
+
+// companionSince is the companion calls after the first mark ones.
+func (h *harness) companionSince(mark int) []companionCall {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]companionCall(nil), h.companionCalls[mark:]...)
+}
+
+func (h *harness) companionCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.companionCalls)
 }
 
 func waitServing(cc *grpc.ClientConn, d time.Duration) error {

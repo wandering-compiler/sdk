@@ -1,12 +1,15 @@
 /**
- * The business tier's manifest (`w17-business.json`), format 1.
+ * The business tier's manifest (`w17-business.json`), formats 1 and 2.
  *
  * Codegen writes it beside `descriptors.binpb` in
  * `w17/services/<domain>-business/`; the SDK reads it at boot. The platform's
  * spec `bundles/business-manifest` is the contract; this module is its reader:
  *
  * - `format` is checked first, and a format this SDK does not know is refused
- *   naming the one it reads;
+ *   naming the ones it reads;
+ * - format 2 is format 1 plus the `companion` section (egress clients and file
+ *   storage served by the business companion); a manifest whose `companion`
+ *   is null stays format 1, and a format-1 manifest carrying one is refused;
  * - a field is never repurposed, so unknown keys are ignored (kept in `extra`);
  * - `null` (or an empty list) means "this domain has none".
  *
@@ -17,7 +20,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, basename } from "node:path";
 
-export const SUPPORTED_FORMAT = 1;
+export const SUPPORTED_FORMATS: readonly number[] = [1, 2];
+/** The highest format this SDK reads. */
+export const SUPPORTED_FORMAT = 2;
 export const LANGUAGE = "typescript";
 
 export class ManifestError extends Error {
@@ -129,6 +134,57 @@ export interface PluginHook {
   readonly methods: readonly string[];
 }
 
+/** One egress client the companion serves (`proto/clients/<client>/`). */
+export interface EgressClient {
+  /** "quotes" */
+  readonly client: string;
+  /** "clients.quotes.QuotesApi", in the descriptor set. */
+  readonly service: string;
+  /** "W17_CLIENT_QUOTES_DSN" (read by the companion, not here). */
+  readonly dsnEnv: string;
+}
+
+/** One upload connection an `UPLOADED_*` field of the domain names. */
+export interface FileConnection {
+  readonly name: string;
+  /** Read by the companion, not here. */
+  readonly rootEnv: string;
+  readonly defaultRoot: string;
+  /** The business tier writes it (`upload.writer: BUSINESS`). */
+  readonly writable: boolean;
+}
+
+/** One `writer: BUSINESS` table field: where its files go. */
+export interface FilePlacement {
+  /** Full proto name, "app.example.NoteExport.file". */
+  readonly field: string;
+  /** "NoteExportFile", the Go identifier stem. */
+  readonly name: string;
+  readonly connection: string;
+  readonly bucketPath: string;
+  readonly expectedObjects: bigint;
+  readonly maxPerBucket: number;
+  /** 0n = no cap. */
+  readonly maxSizeBytes: bigint;
+}
+
+export interface FileStorage {
+  readonly service: string;
+  readonly connections: readonly FileConnection[];
+  readonly placements: readonly FilePlacement[];
+}
+
+/**
+ * The business companion: the Go process that serves this tier the project's
+ * egress clients and the domain's file stores over gRPC.
+ */
+export interface Companion {
+  readonly addressEnv: string;
+  readonly defaultAddress: string;
+  readonly egress: readonly EgressClient[];
+  readonly files: FileStorage | null;
+}
+
 export interface Manifest {
   readonly format: number;
   readonly domain: string;
@@ -149,6 +205,7 @@ export interface Manifest {
   readonly storage: StorageTier | null;
   readonly events: Events | null;
   readonly pluginHooks: readonly PluginHook[];
+  readonly companion: Companion | null;
   readonly baseDir: string;
   readonly extra: Readonly<Record<string, unknown>>;
 }
@@ -169,13 +226,13 @@ export function invalidatesOf(m: Manifest): readonly Invalidate[] {
 const TOP = new Set([
   "format", "domain", "bundle", "language", "sdk_version", "env_prefix", "listen", "reflection_env",
   "shutdown_timeout_seconds", "descriptor_set", "register", "services", "config", "storage", "events",
-  "plugin_hooks",
+  "plugin_hooks", "companion",
 ]);
 
 type Obj = Record<string, unknown>;
 
 function isObj(v: unknown): v is Obj {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Number);
 }
 
 /** JSON.stringify, writing a bigint (an integer {@link parseJSON} kept exact) as the number it was. */
@@ -193,10 +250,19 @@ function text(v: unknown): string {
  * JSON.parse keeping an integer beyond 2^53 exact, as a bigint: a number
  * would round `9007199254740993` to `...992`, and Python's json (and Go's
  * config loader) read it exactly.
+ *
+ * An integral value written with a fraction or an exponent (`1.0`, `1e2`) is
+ * returned as a Number object: Go's encoding/json and Python's json read it
+ * as a float, not an integer, and JSON.parse alone would make it
+ * indistinguishable from `1` or `100`. It is a number to arithmetic and to
+ * text, but no integer field takes it.
  */
 export function parseJSON(src: string): unknown {
-  const reviver = (_k: string, v: unknown, c?: { source?: string }) =>
-    typeof v === "number" && !Number.isSafeInteger(v) && c?.source !== undefined && /^-?\d+$/.test(c.source) ? BigInt(c.source) : v;
+  const reviver = (_k: string, v: unknown, c?: { source?: string }) => {
+    if (typeof v !== "number" || c?.source === undefined) return v;
+    if (/^-?\d+$/.test(c.source)) return Number.isSafeInteger(v) ? v : BigInt(c.source);
+    return Number.isInteger(v) ? Object(v) : v;
+  };
   return JSON.parse(src, reviver);
 }
 
@@ -235,16 +301,195 @@ function defaultText(v: unknown): string {
   return text(v);
 }
 
+/** A JSON bool; absent (or null) is false. "false" is not a bool. */
+function bool(d: Obj, key: string, where: string): boolean {
+  const v = d[key];
+  if (v === undefined || v === null) return false;
+  if (typeof v !== "boolean") throw new ManifestError(`manifest: ${where}${key} must be true or false, not ${show(v)}`);
+  return v;
+}
+
+/** Refuses a value listed twice. */
+function unique(values: readonly string[], what: string): void {
+  const seen = new Set<string>();
+  for (const v of values) {
+    if (seen.has(v)) throw new ManifestError(`manifest: ${what} ${v} is listed twice`);
+    seen.add(v);
+  }
+}
+
+// --- the companion section ---------------------------------------------------
+//
+// The Go companion (bizcompanion.Load) decodes this section into typed structs
+// and refuses what does not fit them; these readers refuse the same, so the
+// companion and the tier agree on which manifests boot: a string field takes a
+// string, an integer one an integer in its Go type's range (uint32, uint64), a
+// bool true or false, a list a list, an object an object; null is the field's
+// zero value (a null list element an empty object). A key is matched exactly,
+// and one Go's encoding/json would match case-insensitively is refused (the Go
+// companion refuses it too); any other unknown key is ignored.
+
+/** The only file service a manifest may name (bizcompanion.FilesService). */
+export const FILES_SERVICE = "w17.common.files.W17Files";
+
+const U32 = 4294967295n;
+const U64 = 18446744073709551615n;
+
+const COMPANION_KEYS: ReadonlySet<string> = new Set(["address_env", "default_address", "egress", "files"]);
+const EGRESS_KEYS: ReadonlySet<string> = new Set(["client", "service", "dsn_env"]);
+const FILES_KEYS: ReadonlySet<string> = new Set(["service", "connections", "placements"]);
+const CONNECTION_KEYS: ReadonlySet<string> = new Set(["name", "root_env", "default_root", "writable"]);
+const PLACEMENT_KEYS: ReadonlySet<string> = new Set([
+  "field", "name", "connection", "bucket_path", "expected_objects", "max_per_bucket", "max_size_bytes",
+]);
+
+/** A value for a message: -0 and a {@link parseJSON} float kept apart from the integer they equal. */
+function show(v: unknown): string {
+  if (Object.is(v, -0)) return "-0";
+  if (v instanceof Number) return `${v.valueOf()} written with a fraction or an exponent`;
+  return json(v);
+}
+
+/**
+ * Unicode simple case folding onto the ASCII lowercase field names: A-Z, and
+ * U+017F (long s) and U+212A (Kelvin), the two non-ASCII runes that fold to an
+ * ASCII letter.
+ */
+function fold(k: string): string {
+  return k.replace(/[A-ZſK]/g, (ch) => (ch === "ſ" ? "s" : ch === "K" ? "k" : ch.toLowerCase()));
+}
+
+function exactKeys(d: Obj, names: ReadonlySet<string>, where: string): void {
+  for (const k of Object.keys(d)) {
+    if (names.has(k)) continue;
+    const f = fold(k);
+    if (names.has(f)) {
+      throw new ManifestError(`manifest: ${where}: key ${JSON.stringify(k)} is not ${JSON.stringify(f)} — keys are matched exactly`);
+    }
+  }
+}
+
+/** A JSON string; absent (or null) is "". */
+function cstr(d: Obj, key: string, where: string): string {
+  const v = d[key];
+  if (v === undefined || v === null) return "";
+  if (typeof v !== "string") throw new ManifestError(`manifest: ${where}${key} must be a string, not ${show(v)}`);
+  return v;
+}
+
+function creq(d: Obj, key: string, where: string): string {
+  const v = cstr(d, key, where);
+  if (v === "") throw new ManifestError(`manifest: ${where}${key} is required`);
+  return v;
+}
+
+/**
+ * A JSON integer from 0 to max (a number, or a bigint parseJSON kept exact);
+ * absent (or null) is 0. 1.0, "1" and -0 are not.
+ */
+function uint(d: Obj, key: string, where: string, max: bigint): bigint {
+  const v = d[key];
+  if (v === undefined || v === null) return 0n;
+  let n: bigint | undefined;
+  if (typeof v === "bigint") n = v;
+  else if (typeof v === "number" && Number.isInteger(v) && !Object.is(v, -0)) n = BigInt(v);
+  if (n === undefined || n < 0n || n > max) {
+    throw new ManifestError(`manifest: ${where}${key} must be an integer from 0 to ${max}, not ${show(v)}`);
+  }
+  return n;
+}
+
+/** A JSON list of objects; absent (or null) is empty, a null element is {}. */
+function objects(d: Obj, key: string, where: string): Obj[] {
+  const v = d[key];
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) throw new ManifestError(`manifest: ${where}${key} must be a list or null, not ${show(v)}`);
+  return v.map((x: unknown) => {
+    if (x === null) return {};
+    if (!isObj(x)) throw new ManifestError(`manifest: ${where}${key}[] must be an object, not ${show(x)}`);
+    return x;
+  });
+}
+
+// Then what bizcompanion.Companion.check refuses: the required fields, a name
+// listed twice, a placement on an unknown connection, a file service other
+// than FILES_SERVICE.
+function companionOf(d: Obj): Companion | null {
+  const c = obj(d, "companion", "");
+  if (c === null) return null;
+  exactKeys(c, COMPANION_KEYS, "companion");
+  const addressEnv = creq(c, "address_env", "companion.");
+  const defaultAddress = cstr(c, "default_address", "companion.");
+  const egress: EgressClient[] = objects(c, "egress", "companion.").map((e) => {
+    exactKeys(e, EGRESS_KEYS, "companion.egress[]");
+    return {
+      client: creq(e, "client", "companion.egress[]."),
+      service: creq(e, "service", "companion.egress[]."),
+      dsnEnv: creq(e, "dsn_env", "companion.egress[]."),
+    };
+  });
+  unique(egress.map((e) => e.client), "companion.egress: client");
+  unique(egress.map((e) => e.service), "companion.egress: service");
+  const f = obj(c, "files", "companion.");
+  let files: FileStorage | null = null;
+  if (f !== null) {
+    exactKeys(f, FILES_KEYS, "companion.files");
+    const service = cstr(f, "service", "companion.files.");
+    if (service !== FILES_SERVICE) {
+      throw new ManifestError(
+        `manifest: companion.files.service is ${JSON.stringify(service)}; the companion serves ${FILES_SERVICE}`,
+      );
+    }
+    const connections: FileConnection[] = objects(f, "connections", "companion.files.").map((x) => {
+      const w = "companion.files.connections[].";
+      exactKeys(x, CONNECTION_KEYS, "companion.files.connections[]");
+      return {
+        name: creq(x, "name", w),
+        rootEnv: creq(x, "root_env", w),
+        defaultRoot: cstr(x, "default_root", w),
+        writable: bool(x, "writable", w),
+      };
+    });
+    const names = connections.map((x) => x.name);
+    unique(names, "companion.files.connections:");
+    const placements: FilePlacement[] = objects(f, "placements", "companion.files.").map((x) => {
+      const w = "companion.files.placements[].";
+      exactKeys(x, PLACEMENT_KEYS, "companion.files.placements[]");
+      return {
+        field: creq(x, "field", w),
+        name: cstr(x, "name", w),
+        connection: creq(x, "connection", w),
+        bucketPath: cstr(x, "bucket_path", w),
+        expectedObjects: uint(x, "expected_objects", w, U64),
+        maxPerBucket: Number(uint(x, "max_per_bucket", w, U32)),
+        maxSizeBytes: uint(x, "max_size_bytes", w, U64),
+      };
+    });
+    unique(placements.map((x) => x.field), "companion.files.placements:");
+    for (const x of placements) {
+      if (!names.includes(x.connection)) {
+        throw new ManifestError(
+          `manifest: companion.files.placements: ${x.field} is on connection ${JSON.stringify(x.connection)}, ` +
+            "which is not in companion.files.connections",
+        );
+      }
+    }
+    files = { service, connections, placements };
+  }
+  return { addressEnv, defaultAddress, egress, files };
+}
+
 export function fromObject(d: Obj, baseDir = "."): Manifest {
   const fmt = d.format;
+  const formats = SUPPORTED_FORMATS.join(" and ");
   if (typeof fmt !== "number" || !Number.isInteger(fmt) || fmt < 1) {
     throw new ManifestError(
-      `manifest: format ${json(fmt ?? null)} is not a manifest format version (this SDK reads ${SUPPORTED_FORMAT})`,
+      `manifest: format ${json(fmt ?? null)} is not a manifest format version (this SDK reads ${formats})`,
     );
   }
-  if (fmt !== SUPPORTED_FORMAT) {
+  if (!SUPPORTED_FORMATS.includes(fmt)) {
     throw new ManifestError(
-      `manifest: format ${fmt} is not one this SDK reads (it reads format ${SUPPORTED_FORMAT}) — ` +
+      `manifest: format ${fmt} is not one this SDK reads (it reads formats ${formats}) — ` +
         "install the @w17/business release of the project's sdk_version",
     );
   }
@@ -349,6 +594,10 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
       invalidates,
     };
   }
+  const companion = companionOf(d);
+  if (companion !== null && fmt < 2) {
+    throw new ManifestError(`manifest: format ${fmt} has no companion section; a manifest with one is format 2`);
+  }
   const pluginHooks: PluginHook[] = list(d.plugin_hooks).map((h) => ({
     plugin: str(h.plugin),
     registeredAs: str(h.registered_as),
@@ -376,6 +625,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
     storage,
     events,
     pluginHooks,
+    companion,
     baseDir,
     extra,
   };

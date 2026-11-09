@@ -48,6 +48,13 @@ The TypeScript side holds three packages:
   built from this directory (no registry), and carries its own copy of the
   conformance suite (`ts/business/tests/conformance/`, `make conformance-ts`).
 
+Both business SDKs reach the project's egress clients and the domain's upload
+file stores through the **business companion**, the Go half of a non-Go
+business tier: `go/service/bizcompanion` serves the same `go/lib/egress` and
+`go/lib/kvfs` code a Go tier runs in-process, over gRPC (the clients' own
+services, and `w17.common.files.W17Files` from `proto/common/files/`), so the
+DSNs, retries, errors, handles and on-disk layout are Go's.
+
 Each package's tests run with `npm test` (vitest) inside its directory;
 `make test-ts-business` runs the business SDK's typecheck, lint and tests in
 Docker.

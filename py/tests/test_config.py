@@ -187,8 +187,9 @@ def _min(**kw):
 
 
 def test_manifest_format_and_language_are_checked():
-    with pytest.raises(ManifestError, match="reads format 1"):
-        from_dict(_min(format=2))
+    with pytest.raises(ManifestError, match="reads formats 1 and 2"):
+        from_dict(_min(format=3))
+    assert from_dict(_min(format=2)).companion is None
     with pytest.raises(ManifestError, match="format"):
         from_dict({k: v for k, v in _min().items() if k != "format"})
     with pytest.raises(ManifestError, match="not python"):

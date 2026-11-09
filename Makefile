@@ -32,6 +32,7 @@ pb: protoc-image
 	$(PROTOC_GRPC) w17compiler/codegen.proto
 	$(PROTOC_GRPC) w17registry/registry.proto
 	$(PROTOC_GRPC) common/distx/distributed_tx.proto
+	$(PROTOC_GRPC) common/files/files.proto
 	$(PROTOC) domains/console/secrets/secrets.proto
 	$(PROTOC_GRPC) \
 		domains/console/initiatives/initiatives.proto \
@@ -89,10 +90,12 @@ test-py:
 		python -m pytest -q -p no:cacheprovider tests
 
 # The w17 messages the Python runtime speaks itself (ErrorDetail, Paging,
-# InvalidateEvent, the transaction coordinator), as one descriptor set.
+# InvalidateEvent, the transaction coordinator, the companion's W17Files), as
+# one descriptor set.
 py-descriptors: protoc-image
 	$(PROTOC_DESC) --proto_path=proto --descriptor_set_out=py/src/w17_business/sdk_descriptors.binpb \
-		w17/error.proto w17/paging.proto w17/client.proto common/distx/distributed_tx.proto
+		w17/error.proto w17/paging.proto w17/client.proto common/distx/distributed_tx.proto \
+		common/files/files.proto
 
 check-py-descriptors: py-descriptors
 	@if [ -n "$$(git status --porcelain -- py/src/w17_business/sdk_descriptors.binpb)" ]; then \
@@ -101,7 +104,7 @@ check-py-descriptors: py-descriptors
 conformance-descriptors: protoc-image
 	$(PROTOC_DESC) --proto_path=proto --proto_path=py/tests/conformance/proto \
 		--descriptor_set_out=py/tests/conformance/testdata/descriptors.binpb \
-		conformance/v1/conformance.proto conformance/events/lock.proto
+		conformance/v1/conformance.proto conformance/events/lock.proto conformance/clients/echo/echo.proto
 
 check-conformance-descriptors: conformance-descriptors
 	@if [ -n "$$(git status --porcelain -- py/tests/conformance/testdata/descriptors.binpb)" ]; then \
@@ -136,11 +139,12 @@ test-ts-business:
 	$(NODE_RUN) npm test
 
 # The w17 messages the TypeScript runtime speaks itself (ErrorDetail, Paging,
-# InvalidateEvent, the transaction coordinator), as one descriptor set — the
-# same inputs as py-descriptors.
+# InvalidateEvent, the transaction coordinator, the companion's W17Files), as
+# one descriptor set — the same inputs as py-descriptors.
 ts-descriptors: protoc-image
 	$(PROTOC_DESC) --proto_path=proto --descriptor_set_out=ts/business/src/sdk_descriptors.binpb \
-		w17/error.proto w17/paging.proto w17/client.proto common/distx/distributed_tx.proto
+		w17/error.proto w17/paging.proto w17/client.proto common/distx/distributed_tx.proto \
+		common/files/files.proto
 
 check-ts-descriptors: ts-descriptors
 	@if [ -n "$$(git status --porcelain -- ts/business/src/sdk_descriptors.binpb)" ]; then \
@@ -149,7 +153,7 @@ check-ts-descriptors: ts-descriptors
 conformance-ts-descriptors: protoc-image
 	$(PROTOC_DESC) --proto_path=proto --proto_path=ts/business/tests/conformance/proto \
 		--descriptor_set_out=ts/business/tests/conformance/testdata/descriptors.binpb \
-		conformance/v1/conformance.proto conformance/events/lock.proto
+		conformance/v1/conformance.proto conformance/events/lock.proto conformance/clients/echo/echo.proto
 
 check-conformance-ts-descriptors: conformance-ts-descriptors
 	@if [ -n "$$(git status --porcelain -- ts/business/tests/conformance/testdata/descriptors.binpb)" ]; then \

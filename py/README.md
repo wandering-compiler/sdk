@@ -62,6 +62,62 @@ def register_business(cfg, registry, clients):
   the manifest does not list, and a plugin hook bound to a method with no
   handler.
 
+## Egress clients and files: the business companion
+
+A Go business tier calls the project's egress clients (`proto/clients/<name>/`)
+and the domain's upload file stores in-process. A Python tier reaches the same
+Go code through the **business companion**, a Go process codegen generates
+beside it (its own container, or folded into the domain's composed binary);
+the manifest's `companion` section (format 2) says where it is
+(`companion.address_env`, default `companion.default_address`) and what it
+serves:
+
+```python
+from grpclib.exceptions import GRPCError
+from w17_business import egress
+
+class ExportService:
+    def __init__(self, cfg, registry, clients):
+        self.quotes = clients.egress("quotes")          # the client's own gRPC service
+        self.exports = clients.store("shop-exports")     # a FileStore
+        self.M = registry.pool.message
+
+    async def Export(self, ctx, req):
+        try:
+            quote = await self.quotes.GetQuote(ctx, self.M("clients.quotes.GetQuoteRequest")(id=req.id))
+        except GRPCError as e:
+            info = egress.error_info(e)  # ErrorInfo(domain="quotes", reason="UPSTREAM_HTTP_404", metadata={...})
+            raise                        # unchanged, as a Go handler returning err
+        handle = await self.exports.put(ctx, "shop.core.OrderExport.file", render(quote))
+        ...
+```
+
+- **Egress** is `sdk/go/lib/egress` verbatim: the companion holds the
+  `W17_CLIENT_<NAME>_DSN`, retries what is safe (429/502/503/504 and transport
+  errors, idempotent methods only), caps a call at 30 s and answers a status
+  whose code describes your situation (404 → `NOT_FOUND`, 409 → `ABORTED`,
+  429/5xx → `UNAVAILABLE`, …) with a `google.rpc.ErrorInfo`. Egress hooks
+  (`BeforeRequest` / `AfterResponse`) are Go functions: a client that needs one
+  stays on a Go tier.
+- **Files** are `sdk/go/lib/kvfs`: `put(ctx, field, body)` stores a new object
+  of a `writer: BUSINESS` field (full proto name, or `Message.field` when
+  unambiguous; `body` bytes-like or an (async) iterable of bytes, sent in 64 KiB
+  chunks, capped by the field's `max_size_bytes`) and returns the handle — the
+  column's value, byte for byte what Go's `kvfs.Put` returns; `open` streams an
+  object, `read` returns it whole, `stat` gives `FileInfo(size, mod_time)`,
+  `delete` removes one (only on a connection this tier writes; one the gateway
+  writes is read-only). `files.is_not_found(err)` is Go's
+  `errors.Is(err, kvfs.ErrNotFound)`. A `put` stores nothing unless its body
+  is read to the end: a body that raises (its error comes back unchanged), a
+  cancelled call or one past its deadline leaves no object behind. A body
+  that stalls holds the call until its deadline, as in Go — give a `put` of a
+  slow source one. A file is not part of a storage transaction, as in Go:
+  delete what you stored when the unit of work fails.
+- The companion has a connection of its own: one attempt per call (no retries —
+  the egress runtime already retried, and a `put` stream cannot be replayed),
+  the principal, trace context, labels and deadline relayed as on a storage
+  call, and never `w17-tx-id`, `w17-conn-id` or `x-w17-paging-*`.
+
 ## API
 
 | | |
@@ -76,6 +132,8 @@ def register_business(cfg, registry, clients):
 | `for_user(code, detail_code, message, field="", dev=None)` | a status with a `w17.ErrorDetail` |
 | `Config.str / int / bool / secret` | the manifest's keys; `Secret` prints `***` |
 | `Clients.service(name)`, `Clients.distributed_transaction()` | storage clients (retry on UNAVAILABLE, keepalive, internal TLS) |
+| `Clients.egress(name)`, `Clients.store(connection)` → `FileStore.put / open / read / stat / delete` | the companion's egress clients and file stores (above) |
+| `egress.error_info(err)` → `ErrorInfo(domain, reason, metadata)` or `None`, `files.is_not_found(err)` | reading a companion error |
 | `Registry.register / self / register_shutdown`, `Registry.pool.message(name)` | serving, composing, drain hooks, message classes |
 
 Environment read by the runtime itself, as the Go runtime reads it:
@@ -88,4 +146,6 @@ Environment read by the runtime itself, as the Go runtime reads it:
 - `make test-py` — unit tests (pytest, in Docker).
 - `make conformance-py` — the Go harness in `tests/conformance/` (real storage with
   the transaction coordinator over SQLite, embedded NATS, sdk/go's
-  subscriber) against the suite's fixed service implemented with this SDK.
+  subscriber, the business companion in front of a fake third-party API and
+  temp-dir file stores) against the suite's fixed service implemented with
+  this SDK.

@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 2,
   "domain": "notes",
   "bundle": "notes-business",
   "language": "python",
@@ -29,7 +29,9 @@
         {"name": "Refuse", "path": "/conformance.v1.NoteService/Refuse", "input": "conformance.v1.RefuseRequest", "output": "conformance.v1.Note", "client_streaming": false, "server_streaming": false},
         {"name": "Sleep", "path": "/conformance.v1.NoteService/Sleep", "input": "conformance.v1.SleepRequest", "output": "conformance.v1.Note", "client_streaming": false, "server_streaming": false},
         {"name": "TxErrors", "path": "/conformance.v1.NoteService/TxErrors", "input": "conformance.v1.TxErrorsRequest", "output": "conformance.v1.TxErrorsResponse", "client_streaming": false, "server_streaming": false},
-        {"name": "Whoami", "path": "/conformance.v1.NoteService/Whoami", "input": "conformance.v1.WhoamiRequest", "output": "conformance.v1.WhoamiResponse", "client_streaming": false, "server_streaming": false}
+        {"name": "Whoami", "path": "/conformance.v1.NoteService/Whoami", "input": "conformance.v1.WhoamiRequest", "output": "conformance.v1.WhoamiResponse", "client_streaming": false, "server_streaming": false},
+        {"name": "Echo", "path": "/conformance.v1.NoteService/Echo", "input": "conformance.v1.EchoRequest", "output": "conformance.v1.EchoResponse", "client_streaming": false, "server_streaming": false},
+        {"name": "AttachFile", "path": "/conformance.v1.NoteService/AttachFile", "input": "conformance.v1.AttachFileRequest", "output": "conformance.v1.AttachFileResponse", "client_streaming": false, "server_streaming": false}
       ]
     }
   ],
@@ -75,5 +77,44 @@
       }
     ]
   },
-  "plugin_hooks": []
+  "plugin_hooks": [],
+  "companion": {
+    "address_env": "NOTES_COMPANION_ADDR",
+    "default_address": "notes-business-companion:50051",
+    "egress": [
+      {
+        "client": "echo",
+        "service": "clients.echo.EchoApi",
+        "dsn_env": "W17_CLIENT_ECHO_DSN"
+      }
+    ],
+    "files": {
+      "service": "w17.common.files.W17Files",
+      "connections": [
+        {
+          "name": "notes-files",
+          "root_env": "NOTES_GATEWAY_UPLOAD_NOTES_FILES_ROOT",
+          "default_root": "/var/lib/w17/uploads/notes-files",
+          "writable": true
+        },
+        {
+          "name": "notes-media",
+          "root_env": "NOTES_GATEWAY_UPLOAD_NOTES_MEDIA_ROOT",
+          "default_root": "/var/lib/w17/uploads/notes-media",
+          "writable": false
+        }
+      ],
+      "placements": [
+        {
+          "field": "conformance.v1.NoteFile.file",
+          "name": "NoteFileFile",
+          "connection": "notes-files",
+          "bucket_path": "/note-files",
+          "expected_objects": 100000,
+          "max_per_bucket": 100,
+          "max_size_bytes": 262144
+        }
+      ]
+    }
+  }
 }

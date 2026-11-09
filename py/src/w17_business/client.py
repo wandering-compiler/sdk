@@ -19,6 +19,11 @@ Every call does what Go's generated inter-tier client does (sdk/go/core/grpcx
 A transport failure that survives the retries is raised as
 ``GRPCError(UNAVAILABLE)`` and a deadline as ``GRPCError(DEADLINE_EXCEEDED)``,
 so a caller handles one exception type, as with grpc-go.
+
+The business companion is dialled with a ``CompanionConn`` of its own (never
+the storage ``Conn``, even at the same address): the same principal relay,
+trace context, deadline, keepalive and TLS, but ONE attempt per call and none
+of the storage-transaction or paging headers (see the class).
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool, default_pool
 from .errors import StatusDetailsCodec
 
-__all__ = ["RetryPolicy", "Conn", "ServiceClient", "TxCoordinator", "dial", "parse_addr"]
+__all__ = ["RetryPolicy", "Conn", "CompanionConn", "ServiceClient", "TxCoordinator", "dial", "parse_addr"]
 
 
 class RetryPolicy:
@@ -229,6 +234,85 @@ class Conn:
                     if not sender.done():
                         sender.cancel()
         except (TimeoutError, ConnectionError, StreamTerminatedError, OSError) as e:
+            raise _as_status(e) from e
+
+
+# Never sent to the companion: a file or an HTTP call is not part of a storage
+# transaction, and a host that adopts transactions from metadata must not see
+# one; the page position is a storage call's.
+_COMPANION_STRIPPED = ("w17-tx-id", "w17-conn-id")
+_COMPANION_STRIPPED_PREFIX = "x-w17-paging-"
+
+
+def companion_pairs(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """``pairs`` without ``w17-tx-id``, ``w17-conn-id`` and ``x-w17-paging-*``."""
+    out = []
+    for k, v in pairs:
+        lk = k.lower()
+        if lk in _COMPANION_STRIPPED or lk.startswith(_COMPANION_STRIPPED_PREFIX):
+            continue
+        out.append((k, v))
+    return out
+
+
+class CompanionConn(Conn):
+    """The connection to the business companion (egress clients, file storage).
+
+    A ``Conn`` with two differences:
+
+    - **no retries**: one attempt, ``UNAVAILABLE`` is raised to the author. The
+      egress runtime already retried what is safe to retry, and its
+      ``UNAVAILABLE`` (an upstream 503) arrives trailers-only, which the
+      storage policy would replay — a second POST; a ``Put`` stream cannot be
+      replayed at all;
+    - **no transaction or paging headers**: ``w17-tx-id``, ``w17-conn-id`` and
+      ``x-w17-paging-*`` are stripped from every call, and no page position is
+      relayed back.
+
+    The principal, trace context, ``w17-language`` / ``w17-format-locale`` /
+    ``w17-label-*`` and the deadline go out as on a storage call."""
+
+    def _prepare(self, ctx: Context) -> tuple[list[tuple[str, str]], Deadline | None]:
+        pairs, deadline = super()._prepare(ctx)
+        return companion_pairs(pairs), deadline
+
+    async def unary(self, ctx: Context, m: MethodInfo, req: Any, *, timeout: float | None = None) -> tuple[Any, Metadata]:
+        if timeout is not None:
+            ctx = ctx.with_timeout(timeout)
+        pairs, deadline = self._prepare(ctx)
+        try:
+            async with self.channel.request(
+                m.path, Cardinality.UNARY_UNARY, m.request, m.response, deadline=deadline, metadata=pairs
+            ) as stream:
+                await stream.send_message(req, end=True)
+                reply = await stream.recv_message()
+                header = Metadata(list(stream.initial_metadata.items()) if stream.initial_metadata else None)
+                await stream.recv_trailing_metadata()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            raise _as_status(e) from e
+        if reply is None:
+            raise GRPCError(Status.UNKNOWN, f"{m.path}: no response message")
+        return reply, header
+
+    async def client_stream(self, ctx: Context, m: MethodInfo, reqs: Iterable[Any] | AsyncIterable[Any]) -> Any:
+        pairs, deadline = self._prepare(ctx)
+        try:
+            async with self.channel.request(
+                m.path, Cardinality.STREAM_UNARY, m.request, m.response, deadline=deadline, metadata=pairs
+            ) as stream:
+                try:
+                    await _send_all(stream, reqs)
+                except (ConnectionError, StreamTerminatedError, OSError):
+                    # The server answered before the requests ran out (a body
+                    # too large, an unknown field): its status follows, and is
+                    # the error to raise — Go's Send returns io.EOF then.
+                    pass
+                return await stream.recv_message()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
             raise _as_status(e) from e
 
 

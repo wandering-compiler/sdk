@@ -382,3 +382,78 @@ async def test_shutdown_drains_work_started_by_closing_the_server_before_closing
     app.dispatcher = Bus()
     await app.shutdown()
     assert at_close == {"done": [1]}, "the bus closed before the work the server's close started"
+
+
+async def test_the_whole_drain_stays_within_one_budget(chdir_tmp, msg):
+    # A handler still running at the stop, work after a commit that never
+    # ends, a hook and a bus that hang: each step may take only what is left
+    # of one budget, and the cancelled handlers and the work after a commit
+    # share one timeout after the server's close.
+    import dataclasses
+    import time
+
+    from w17_business import txscope
+    from w17_business.client import Conn, ServiceClient
+    from w17_business.context import Context
+
+    timeout, budget = 0.1, 0.4
+    m = dataclasses.replace(load(MANIFEST), shutdown_timeout=timeout)
+    app = App(m, project_root=PROJECT, environ=env(), drain_timeout=budget)
+    await app.boot()
+    await app.start()
+    t0 = time.monotonic()
+    hook_at = []
+
+    async def hang_hook(ctx):
+        hook_at.append(time.monotonic() - t0)
+        await asyncio.Event().wait()
+
+    app.registry.register_shutdown(hang_hook)
+
+    class Bus:
+        async def close(self):
+            await asyncio.Event().wait()
+
+    app.dispatcher = Bus()
+    forever = asyncio.ensure_future(txscope.shielded(asyncio.Event().wait()))
+    conn = Conn(f"127.0.0.1:{app.port}", tls=False)
+    call = asyncio.ensure_future(ServiceClient(conn, "conformance.v1.NoteService", app.pool).Sleep(
+        Context(), msg("SleepRequest")(ms=10_000)))
+    await asyncio.sleep(0.05)
+    s0 = time.monotonic()
+    await asyncio.wait_for(app.shutdown(), 3)
+    took = time.monotonic() - s0
+    try:
+        await call
+    except Exception:  # noqa: BLE001 — cancelled by the stop
+        pass
+    conn.close()
+    assert forever.done(), "the work after a commit was cancelled"
+    # Server stop (one timeout), then ONE shared timeout for the handlers
+    # and the work after a commit — not one each.
+    assert hook_at and hook_at[0] - (s0 - t0) < 2 * timeout + 0.08
+    assert budget - 0.02 <= took < budget + 0.2
+
+
+async def test_a_slow_handler_leaves_the_hooks_only_the_rest(chdir_tmp, msg):
+    import dataclasses
+
+    from w17_business.client import Conn, ServiceClient
+    from w17_business.context import Context
+
+    budget = 0.6
+    m = dataclasses.replace(load(MANIFEST), shutdown_timeout=1.0)
+    app = App(m, project_root=PROJECT, environ=env(), drain_timeout=budget)
+    await app.boot()
+    await app.start()
+    left = []
+    app.registry.register_shutdown(lambda ctx: left.append(ctx.time_remaining()))
+    conn = Conn(f"127.0.0.1:{app.port}", tls=False)
+    call = asyncio.ensure_future(ServiceClient(conn, "conformance.v1.NoteService", app.pool).Sleep(
+        Context(), msg("SleepRequest")(ms=350)))
+    await asyncio.sleep(0.05)
+    await app.shutdown()
+    assert (await call).text == "slept"
+    conn.close()
+    # The budget is max(drain, shutdown timeout) = 1.0; the handler took ~0.3.
+    assert left and 0 < left[0] <= 1.0 - 0.25

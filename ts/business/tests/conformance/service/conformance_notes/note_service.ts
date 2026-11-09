@@ -4,12 +4,13 @@
 // behaviour the Go harness asserts on the wire (see conformance.proto). It is
 // author code: erasable TypeScript run by Node's type stripping, no build.
 
-import { distx, forUser, onCommit, paging, principal, Status } from "@w17/business";
+import { distx, files, forUser, onCommit, paging, principal, Status } from "@w17/business";
 import type {
   AnyMessage,
   Clients,
   Config,
   Context,
+  FileStore,
   MessageType,
   Registry,
   Served,
@@ -29,6 +30,10 @@ export class NoteService {
   storage: ServiceClient;
   tx: TxCoordinator;
   M: (name: string) => MessageType;
+  // The companion's clients: an egress client and two file stores.
+  echo: ServiceClient;
+  files: FileStore;
+  media: FileStore;
 
   constructor(cfg: Config, registry: Registry, clients: Clients) {
     this.cfg = cfg;
@@ -36,6 +41,9 @@ export class NoteService {
     this.storage = clients.service("conformance.v1.NoteStorage");
     this.tx = clients.distributedTransaction();
     this.M = (name) => registry.pool.message(MSG + name);
+    this.echo = clients.egress("echo");
+    this.files = clients.store("notes-files");
+    this.media = clients.store("notes-media");
   }
 
   // Composition goes through the served service, so the emit fires.
@@ -166,6 +174,76 @@ export class NoteService {
       limit: BigInt(this.cfg.int("limit")),
       verbose: this.cfg.bool("verbose"),
       tokenRepr: `${String(token)}:${token.reveal().length}`,
+    });
+  }
+
+  async Echo(ctx: Context, req: AnyMessage): Promise<AnyMessage> {
+    // Inside a transaction: the companion call must not carry it.
+    const reply = await distx.run(ctx, this.tx, distx.beginRequest(CONN), (txCtx) =>
+      this.echo.GetEcho(txCtx, this.registry.pool.message("clients.echo.GetEchoRequest")({ id: req.id })),
+    );
+    return this.M("EchoResponse")({ message: reply.message });
+  }
+
+  async AttachFile(ctx: Context, req: AnyMessage): Promise<AnyMessage> {
+    if (req.case === "read_only_delete") {
+      try {
+        await this.media.delete(ctx, "any");
+      } catch (e) {
+        return this.M("AttachFileResponse")({ refused: (e as Error).message });
+      }
+      return this.M("AttachFileResponse")();
+    }
+    if (req.case === "body_fails") {
+      async function* failing(): AsyncGenerator<Uint8Array> {
+        // Paced, so the chunks before the failure reach the companion.
+        for (let i = 0; i < 25; i++) {
+          yield new Uint8Array(8 << 10);
+          await sleep(10);
+        }
+        throw new Error("conformance: the body failed");
+      }
+      try {
+        const handle = await this.files.put(ctx, "conformance.v1.NoteFile.file", failing());
+        return this.M("AttachFileResponse")({ handle });
+      } catch (e) {
+        return this.M("AttachFileResponse")({ refused: (e as Error).message });
+      }
+    }
+    if (req.case === "body_stalls") {
+      async function* stalling(): AsyncGenerator<Uint8Array> {
+        yield new Uint8Array(192 << 10);
+        await sleep(10_000);
+        yield new Uint8Array(1);
+      }
+      const handle = await this.files.put(ctx, "conformance.v1.NoteFile.file", stalling());
+      return this.M("AttachFileResponse")({ handle });
+    }
+    const size = Number(req.size);
+    const part = Number(req.part);
+    const body = new Uint8Array(size);
+    for (let i = 0; i < size; i++) body[i] = i % 251;
+    function* parts(): Generator<Uint8Array> {
+      for (let i = 0; i < size; i += part) yield body.subarray(i, i + part);
+    }
+    return distx.run(ctx, this.tx, distx.beginRequest(CONN), async (txCtx) => {
+      const handle = await this.files.put(txCtx, "conformance.v1.NoteFile.file", part ? parts() : body);
+      const info = await this.files.stat(txCtx, handle);
+      const back = await this.files.read(txCtx, handle);
+      await this.files.delete(txCtx, handle);
+      let gone = false;
+      try {
+        await this.files.read(txCtx, handle);
+      } catch (e) {
+        gone = files.isNotFound(e);
+      }
+      return this.M("AttachFileResponse")({
+        handle,
+        statSize: info.size,
+        modTimeMs: BigInt(info.modTime.getTime()),
+        readBackEqual: Buffer.compare(back, body) === 0,
+        notFoundAfterDelete: gone,
+      });
     });
   }
 }
