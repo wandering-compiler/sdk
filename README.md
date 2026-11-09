@@ -23,6 +23,11 @@ own package manager and versioning:
 |---|---|---|
 | **Go** | `go/` (`github.com/wandering-compiler/sdk/go`) | [`go/README.md`](go/README.md) |
 | **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`), `ts/dpop/` (`@w17/dpop`) | — |
+| **Python** | `py/` (`w17_business`, the business-tier SDK) | [`py/README.md`](py/README.md) |
+
+`conformance/` holds the suite every non-Go business SDK must pass: a Go
+harness with real storage, a real transaction coordinator and a real bus,
+driving one fixed service per language (`make conformance-py`).
 
 The TypeScript side holds two packages:
 

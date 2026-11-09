@@ -3466,10 +3466,14 @@ func (x *DecomposeBinaryIntent) GetDomain() string {
 // specs; the server parses + validates them (type ∈ string|bool|int|secret;
 // a secret bakes no default) and rejects a duplicate domain, before re-signing.
 type AddBusinessBundleIntent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Domain        string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
-	Register      string                 `protobuf:"bytes,2,opt,name=register,proto3" json:"register,omitempty"`
-	Env           []string               `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Domain   string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
+	Register string                 `protobuf:"bytes,2,opt,name=register,proto3" json:"register,omitempty"`
+	Env      []string               `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"`
+	// language is the business tier's language: "" or "go" (Go, the
+	// default), "python". "typescript" and "rust" are reserved and refused
+	// for now.
+	Language      string `protobuf:"bytes,4,opt,name=language,proto3" json:"language,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3523,6 +3527,13 @@ func (x *AddBusinessBundleIntent) GetEnv() []string {
 		return x.Env
 	}
 	return nil
+}
+
+func (x *AddBusinessBundleIntent) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
 }
 
 // AddCiConfigIntent opts a CI provider into generated e2e CI
@@ -4116,7 +4127,11 @@ type SetBusinessBundleIntent struct {
 	// replace_env distinguishes "leave the env list alone" from "set it to
 	// empty": both arrive as a zero-length repeated field, and a list that
 	// cannot be cleared is the same one-way door this intent exists to fix.
-	ReplaceEnv    bool `protobuf:"varint,4,opt,name=replace_env,json=replaceEnv,proto3" json:"replace_env,omitempty"`
+	ReplaceEnv bool `protobuf:"varint,4,opt,name=replace_env,json=replaceEnv,proto3" json:"replace_env,omitempty"`
+	// language is the business tier's language: "" or "go" (Go, the
+	// default), "python". "typescript" and "rust" are reserved and refused
+	// for now.
+	Language      string `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4177,6 +4192,13 @@ func (x *SetBusinessBundleIntent) GetReplaceEnv() bool {
 		return x.ReplaceEnv
 	}
 	return false
+}
+
+func (x *SetBusinessBundleIntent) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
 }
 
 type BootstrapLockIntent struct {
@@ -5920,10 +5942,14 @@ func (x *LockComposedBinary) GetName() string {
 // LockBusinessBundle projects one generated_code.business_bundles[] entry for
 // `target business list` (domain, RegisterBusiness import, declared env count).
 type LockBusinessBundle struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Domain        string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
-	Register      string                 `protobuf:"bytes,2,opt,name=register,proto3" json:"register,omitempty"`
-	EnvCount      int32                  `protobuf:"varint,3,opt,name=env_count,json=envCount,proto3" json:"env_count,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Domain   string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
+	Register string                 `protobuf:"bytes,2,opt,name=register,proto3" json:"register,omitempty"`
+	EnvCount int32                  `protobuf:"varint,3,opt,name=env_count,json=envCount,proto3" json:"env_count,omitempty"`
+	// language is the business tier's language: "" or "go" (Go, the
+	// default), "python". "typescript" and "rust" are reserved and refused
+	// for now.
+	Language      string `protobuf:"bytes,4,opt,name=language,proto3" json:"language,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5977,6 +6003,13 @@ func (x *LockBusinessBundle) GetEnvCount() int32 {
 		return x.EnvCount
 	}
 	return 0
+}
+
+func (x *LockBusinessBundle) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
 }
 
 // LockClientStub projects one generated_code.clients[] entry for
@@ -7257,8 +7290,12 @@ type BusinessBundle struct {
 	Domain string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
 	// Register is the go-module-relative import path of the domain's
 	// RegisterBusiness package.
-	Register      string         `protobuf:"bytes,2,opt,name=register,proto3" json:"register,omitempty"`
-	Env           []*BusinessEnv `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"`
+	Register string         `protobuf:"bytes,2,opt,name=register,proto3" json:"register,omitempty"`
+	Env      []*BusinessEnv `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"`
+	// language is the business tier's language: "" or "go" (Go, the
+	// default), "python". "typescript" and "rust" are reserved and refused
+	// for now.
+	Language      string `protobuf:"bytes,4,opt,name=language,proto3" json:"language,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7312,6 +7349,13 @@ func (x *BusinessBundle) GetEnv() []*BusinessEnv {
 		return x.Env
 	}
 	return nil
+}
+
+func (x *BusinessBundle) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
 }
 
 type BusinessEnv struct {
@@ -12564,11 +12608,12 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x05files\x18\x03 \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\x05files\x12%\n" +
 	"\x0eproto_attached\x18\x04 \x01(\bR\rprotoAttached\"/\n" +
 	"\x15DecomposeBinaryIntent\x12\x16\n" +
-	"\x06domain\x18\x01 \x01(\tR\x06domain\"_\n" +
+	"\x06domain\x18\x01 \x01(\tR\x06domain\"{\n" +
 	"\x17AddBusinessBundleIntent\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1a\n" +
 	"\bregister\x18\x02 \x01(\tR\bregister\x12\x10\n" +
-	"\x03env\x18\x03 \x03(\tR\x03env\"/\n" +
+	"\x03env\x18\x03 \x03(\tR\x03env\x12\x1a\n" +
+	"\blanguage\x18\x04 \x01(\tR\blanguage\"/\n" +
 	"\x11AddCiConfigIntent\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\"2\n" +
 	"\x14RemoveCiConfigIntent\x12\x1a\n" +
@@ -12607,13 +12652,14 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x12SetDirLayoutIntent\x12\x1b\n" +
 	"\tproto_dir\x18\x01 \x01(\tR\bprotoDir\x12\x14\n" +
 	"\x05stubs\x18\x02 \x01(\tR\x05stubs\x12#\n" +
-	"\rlanguages_dir\x18\x03 \x01(\tR\flanguagesDir\"\x80\x01\n" +
+	"\rlanguages_dir\x18\x03 \x01(\tR\flanguagesDir\"\x9c\x01\n" +
 	"\x17SetBusinessBundleIntent\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1a\n" +
 	"\bregister\x18\x02 \x01(\tR\bregister\x12\x10\n" +
 	"\x03env\x18\x03 \x03(\tR\x03env\x12\x1f\n" +
 	"\vreplace_env\x18\x04 \x01(\bR\n" +
-	"replaceEnv\"\xe7\x02\n" +
+	"replaceEnv\x12\x1a\n" +
+	"\blanguage\x18\x05 \x01(\tR\blanguage\"\xe7\x02\n" +
 	"\x13BootstrapLockIntent\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x18\n" +
@@ -12753,11 +12799,12 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\n" +
 	"components\x18\x02 \x03(\tR\n" +
 	"components\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"e\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\x81\x01\n" +
 	"\x12LockBusinessBundle\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1a\n" +
 	"\bregister\x18\x02 \x01(\tR\bregister\x12\x1b\n" +
-	"\tenv_count\x18\x03 \x01(\x05R\benvCount\"\xa2\x01\n" +
+	"\tenv_count\x18\x03 \x01(\x05R\benvCount\x12\x1a\n" +
+	"\blanguage\x18\x04 \x01(\tR\blanguage\"\xa2\x01\n" +
 	"\x0eLockClientStub\x12\x1c\n" +
 	"\tframework\x18\x01 \x01(\tR\tframework\x12\x1a\n" +
 	"\blanguage\x18\x02 \x01(\tR\blanguage\x12\x1f\n" +
@@ -12847,11 +12894,12 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\bw17_path\x18\b \x01(\tR\aw17Path\x12$\n" +
 	"\x0esdk_go_version\x18\t \x01(\tR\fsdkGoVersion\x12#\n" +
 	"\rlanguages_dir\x18\n" +
-	" \x01(\tR\flanguagesDir\"x\n" +
+	" \x01(\tR\flanguagesDir\"\x94\x01\n" +
 	"\x0eBusinessBundle\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1a\n" +
 	"\bregister\x18\x02 \x01(\tR\bregister\x122\n" +
-	"\x03env\x18\x03 \x03(\v2 .w17.storage.codegen.BusinessEnvR\x03env\"\x89\x01\n" +
+	"\x03env\x18\x03 \x03(\v2 .w17.storage.codegen.BusinessEnvR\x03env\x12\x1a\n" +
+	"\blanguage\x18\x04 \x01(\tR\blanguage\"\x89\x01\n" +
 	"\vBusinessEnv\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x18\n" +
