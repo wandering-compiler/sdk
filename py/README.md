@@ -47,10 +47,12 @@ def register_business(cfg, registry, clients):
   transaction. Helpers return a new context (`paging.forward`,
   `principal.act_as`, `distx.begin`); none changes the one it was given.
 - **Compose through `registry.self(Service)`.** A direct call on your class
-  skips the method's event, and nothing fails — the Go rule. The callee gets
-  the context a hop would deliver: your outgoing side (with the principal,
-  or the one `act_as` set) as its incoming, an empty outgoing side except the
-  open transaction's routing, and no `paging.forward` mark.
+  skips the method's event, and nothing fails — the Go rule. As in Go it is a
+  direct call: the callee gets your ctx unchanged (incoming metadata, the
+  open transaction it joins, whatever you put on it). Pass a
+  `paging.forward(ctx)` only to the storage call that returns the page, never
+  to `self`; and `act_as` on a ctx passed to `self` is not seen by the
+  callee's principal readers (it sets the outgoing side), as in Go.
 - **Work after a commit outlives the request.** Events and `on_commit` hooks
   of a committed transaction run to their end even when the client hangs up;
   the drain waits for them.

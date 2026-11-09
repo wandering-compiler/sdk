@@ -458,84 +458,82 @@ async def test_channel_without_sdk_codec_still_reads_the_status(stack, msg):
         ch.close()
 
 
-# --- the callee context registry.self hands a composed method ------------------
+# --- registry.self is Go's direct call: the callee gets the caller's ctx -------
 
 
 def _envelope(msg, user_id):
     return base64.b64encode(msg("AuthResp")(user_id=user_id).SerializeToString()).decode()
 
 
-async def test_act_as_through_self_reaches_the_callee(pool, msg):
-    # act_as moves the principal to the OUTGOING side (and strips the incoming
-    # one); the composed callee reads it INCOMING, as a wire hop would deliver.
+async def test_self_hands_the_callee_the_callers_context_unchanged(pool, msg):
+    # Go parity: s.self.Method(ctx, req) is a direct call. The callee sees the
+    # caller's incoming metadata (w17-language and custom headers included),
+    # whatever the caller put on its outgoing side, and the open transaction,
+    # which its own distx.run JOINS.
+    principal.set_auth_resp_type(msg("AuthResp"))
+    try:
+        seen = {}
+
+        from w17_business.context import Metadata
+
+        class Tx:
+            def __init__(self):
+                self.calls = []
+
+            async def begin(self, ctx, req):
+                self.calls.append("begin")
+                return distx._msg("BeginResponse")(tx_id="tx-9"), Metadata()
+
+        tx = Tx()
+
+        class Local(NoteService):
+            async def Inspect(self, ctx, req):
+                seen["incoming"] = dict(ctx.incoming)
+                seen["outgoing"] = dict(ctx.outgoing)
+                seen["user"] = principal.user_id(ctx)
+                h, joined = await distx.begin(ctx, tx)
+                seen["joined"] = h.joined
+                seen["tx"] = joined.outgoing.get_all(distx.TX_ID_HEADER)
+                return msg("InspectResponse")()
+
+        reg = Registry(pool)
+        reg.register("conformance.v1.NoteService", Local(reg, None, None))
+        incoming = {"x-w17-user": _envelope(msg, "person"), "w17-language": "cs", "x-custom": "c"}
+        _, tx_ctx = await distx.begin(Context(incoming=incoming), tx)
+        caller = tx_ctx.with_outgoing(tx_ctx.outgoing.with_set("x-mine", "m"))
+        await reg.self("NoteService").Inspect(caller, msg("InspectRequest")())
+        assert seen["incoming"] == dict(Metadata(incoming))
+        assert seen["outgoing"] == {distx.TX_ID_HEADER: ("tx-9",), "x-mine": ("m",)}
+        assert seen["user"] == "person"
+        assert seen["joined"] is True and seen["tx"] == ("tx-9",)
+        assert tx.calls == ["begin"], "the callee joined; it began nothing"
+    finally:
+        principal.set_auth_resp_type(None)
+
+
+async def test_act_as_on_a_ctx_given_to_self_is_not_the_callees_principal(pool, msg):
+    # As in Go: act_as sets the OUTGOING side (and strips the incoming one), and
+    # the callee's readers read INCOMING — so a direct call does not see it.
     principal.set_auth_resp_type(msg("AuthResp"))
     try:
         seen = {}
 
         class Local(NoteService):
             async def Whoami(self, ctx, req):
-                seen["user"] = principal.user_id(ctx)
-                seen["org"] = principal.scope(ctx, "org_id")
-                return msg("WhoamiResponse")(user_id=seen["user"])
+                try:
+                    seen["user"] = principal.user_id(ctx)
+                except principal.NoPrincipalError:
+                    seen["user"] = None
+                return msg("WhoamiResponse")()
 
         reg = Registry(pool)
         reg.register("conformance.v1.NoteService", Local(reg, None, None))
-        caller = Context(incoming={"x-w17-user": _envelope(msg, "person"), "x-w17-scope-org_id": "o-person"})
-        acted = principal.act_as(caller, msg("AuthResp")(user_id="robot"), {"org_id": "o-robot"})
+        caller = Context(incoming={"x-w17-user": _envelope(msg, "person")})
+        acted = principal.act_as(caller, msg("AuthResp")(user_id="robot"))
         await reg.self("NoteService").Whoami(acted, msg("WhoamiRequest")())
-        assert seen == {"user": "robot", "org": "o-robot"}
-
-        # Without act_as the caller's own verified principal is what arrives.
-        await reg.self("NoteService").Whoami(caller, msg("WhoamiRequest")())
-        assert seen == {"user": "person", "org": "o-person"}
+        assert seen["user"] is None
     finally:
         principal.set_auth_resp_type(None)
-
-
-async def test_paging_forward_through_self_does_not_reach_the_callees_sibling_calls(pool, msg):
-    # The caller forwards the page to a composed method; that method's own
-    # (unforwarded) storage call must neither relay its position onto the
-    # caller's response nor carry the forward mark.
-    seen = {}
-
-    class Local(NoteService):
-        async def Inspect(self, ctx, req):
-            seen["forwarded"] = paging.forwarded(ctx)
-            seen["incoming_limit"] = ctx.incoming.get_all(paging.LIMIT_MD_KEY)
-            seen["outgoing"] = dict(ctx.outgoing)
-            # What a storage client call does with the answer's headers.
-            paging.relay_position(ctx, {paging.NEXT_MD_KEY: ("sibling",)})
-            return msg("InspectResponse")()
-
-    reg = Registry(pool)
-    reg.register("conformance.v1.NoteService", Local(reg, None, None))
-    ctx, sink = paging.with_response_headers(Context(incoming={paging.LIMIT_MD_KEY: "2"}))
-    await reg.self("NoteService").Inspect(paging.forward(ctx), msg("InspectRequest")())
-    assert sink == {}, "the callee's sibling call moved the caller's page"
-    assert seen["forwarded"] is False
-    assert seen["incoming_limit"] == ("2",), "the forwarded page is the callee's incoming request"
-    assert seen["outgoing"] == {}, "a callee's outgoing side starts empty, as a server context does"
-
-
-async def test_self_inside_a_transaction_keeps_its_routing(pool, msg):
-    seen = {}
-
-    class Local(NoteService):
-        async def Inspect(self, ctx, req):
-            seen["out"] = dict(ctx.outgoing)
-            return msg("InspectResponse")()
-
-    class Tx:
-        async def begin(self, ctx, req):
-            from w17_business.context import Metadata
-            return distx._msg("BeginResponse")(tx_id="tx-9"), Metadata({distx.CONN_ID_HEADER: "c-9"})
-
-    reg = Registry(pool)
-    reg.register("conformance.v1.NoteService", Local(reg, None, None))
-    _, tx_ctx = await distx.begin(Context(), Tx())
-    stale = tx_ctx.with_outgoing(tx_ctx.outgoing.with_set("x-custom", "c"))
-    await reg.self("NoteService").Inspect(stale, msg("InspectRequest")())
-    assert seen["out"] == {distx.TX_ID_HEADER: ("tx-9",), distx.CONN_ID_HEADER: ("c-9",)}
 
 
 # --- an emit outlives the request that caused it ------------------------------

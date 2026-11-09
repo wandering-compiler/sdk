@@ -25,6 +25,10 @@ var mdKeys = [...]string{BoundariesMDKey, LimitMDKey, TotalMDKey}
 //
 //	res, err := s.clients.NoteQuery().ListNotes(paging.Forward(ctx), req)
 //
+// Never pass it to your own served methods (s.self): that is a direct call,
+// and the callee gets this context as it is, mark included, so its own
+// storage calls would relay their position onto your response.
+//
 // The three keys are replaced as a set: when the incoming side carries any of
 // them, the outgoing side's copies of all three are dropped first, so a
 // first-page request (a limit, no boundaries) does not go out with boundaries
