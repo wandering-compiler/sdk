@@ -234,7 +234,8 @@ describe("manifest", () => {
   });
 
   it("format and language are checked", () => {
-    expect(() => fromObject(min({ format: 2 }))).toThrow(/reads format 1/);
+    expect(() => fromObject(min({ format: 3 }))).toThrow(/reads formats 1 and 2/);
+    expect(fromObject(min({ format: 2 })).companion).toBeNull();
     const { format: _f, ...noFormat } = min();
     expect(() => fromObject(noFormat)).toThrow(/format/);
     expect(() => fromObject(min({ language: "python" }))).toThrow(/not typescript/);

@@ -1,12 +1,15 @@
 /**
- * The business tier's manifest (`w17-business.json`), format 1.
+ * The business tier's manifest (`w17-business.json`), formats 1 and 2.
  *
  * Codegen writes it beside `descriptors.binpb` in
  * `w17/services/<domain>-business/`; the SDK reads it at boot. The platform's
  * spec `bundles/business-manifest` is the contract; this module is its reader:
  *
  * - `format` is checked first, and a format this SDK does not know is refused
- *   naming the one it reads;
+ *   naming the ones it reads;
+ * - format 2 is format 1 plus the `companion` section (egress clients and file
+ *   storage served by the business companion); a manifest whose `companion`
+ *   is null stays format 1, and a format-1 manifest carrying one is refused;
  * - a field is never repurposed, so unknown keys are ignored (kept in `extra`);
  * - `null` (or an empty list) means "this domain has none".
  *
@@ -17,7 +20,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, basename } from "node:path";
 
-export const SUPPORTED_FORMAT = 1;
+export const SUPPORTED_FORMATS: readonly number[] = [1, 2];
+/** The highest format this SDK reads. */
+export const SUPPORTED_FORMAT = 2;
 export const LANGUAGE = "typescript";
 
 export class ManifestError extends Error {
@@ -129,6 +134,57 @@ export interface PluginHook {
   readonly methods: readonly string[];
 }
 
+/** One egress client the companion serves (`proto/clients/<client>/`). */
+export interface EgressClient {
+  /** "quotes" */
+  readonly client: string;
+  /** "clients.quotes.QuotesApi", in the descriptor set. */
+  readonly service: string;
+  /** "W17_CLIENT_QUOTES_DSN" (read by the companion, not here). */
+  readonly dsnEnv: string;
+}
+
+/** One upload connection an `UPLOADED_*` field of the domain names. */
+export interface FileConnection {
+  readonly name: string;
+  /** Read by the companion, not here. */
+  readonly rootEnv: string;
+  readonly defaultRoot: string;
+  /** The business tier writes it (`upload.writer: BUSINESS`). */
+  readonly writable: boolean;
+}
+
+/** One `writer: BUSINESS` table field: where its files go. */
+export interface FilePlacement {
+  /** Full proto name, "app.example.NoteExport.file". */
+  readonly field: string;
+  /** "NoteExportFile", the Go identifier stem. */
+  readonly name: string;
+  readonly connection: string;
+  readonly bucketPath: string;
+  readonly expectedObjects: bigint;
+  readonly maxPerBucket: number;
+  /** 0n = no cap. */
+  readonly maxSizeBytes: bigint;
+}
+
+export interface FileStorage {
+  readonly service: string;
+  readonly connections: readonly FileConnection[];
+  readonly placements: readonly FilePlacement[];
+}
+
+/**
+ * The business companion: the Go process that serves this tier the project's
+ * egress clients and the domain's file stores over gRPC.
+ */
+export interface Companion {
+  readonly addressEnv: string;
+  readonly defaultAddress: string;
+  readonly egress: readonly EgressClient[];
+  readonly files: FileStorage | null;
+}
+
 export interface Manifest {
   readonly format: number;
   readonly domain: string;
@@ -149,6 +205,7 @@ export interface Manifest {
   readonly storage: StorageTier | null;
   readonly events: Events | null;
   readonly pluginHooks: readonly PluginHook[];
+  readonly companion: Companion | null;
   readonly baseDir: string;
   readonly extra: Readonly<Record<string, unknown>>;
 }
@@ -169,7 +226,7 @@ export function invalidatesOf(m: Manifest): readonly Invalidate[] {
 const TOP = new Set([
   "format", "domain", "bundle", "language", "sdk_version", "env_prefix", "listen", "reflection_env",
   "shutdown_timeout_seconds", "descriptor_set", "register", "services", "config", "storage", "events",
-  "plugin_hooks",
+  "plugin_hooks", "companion",
 ]);
 
 type Obj = Record<string, unknown>;
@@ -235,16 +292,68 @@ function defaultText(v: unknown): string {
   return text(v);
 }
 
+/** A JSON integer (a number or a bigint parseJSON kept exact) as a bigint. */
+function int(v: unknown): bigint {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number" && Number.isInteger(v)) return BigInt(v);
+  if (v === undefined || v === null) return 0n;
+  throw new ManifestError(`manifest: ${json(v)} is not an integer`);
+}
+
+function companionOf(d: Obj): Companion | null {
+  const c = obj(d, "companion", "");
+  if (c === null) return null;
+  const egress: EgressClient[] = list(c.egress).map((e) => ({
+    client: req(e, "client", "companion.egress[]."),
+    service: req(e, "service", "companion.egress[]."),
+    dsnEnv: req(e, "dsn_env", "companion.egress[]."),
+  }));
+  const f = obj(c, "files", "companion.");
+  let files: FileStorage | null = null;
+  if (f !== null) {
+    const connections: FileConnection[] = list(f.connections).map((x) => ({
+      name: req(x, "name", "companion.files.connections[]."),
+      rootEnv: req(x, "root_env", "companion.files.connections[]."),
+      defaultRoot: str(x.default_root),
+      writable: Boolean(x.writable),
+    }));
+    const names = connections.map((x) => x.name);
+    if (new Set(names).size !== names.length) {
+      throw new ManifestError(`manifest: companion.files.connections names a connection twice (${names.join(", ")})`);
+    }
+    const placements: FilePlacement[] = list(f.placements).map((x) => ({
+      field: req(x, "field", "companion.files.placements[]."),
+      name: str(x.name),
+      connection: req(x, "connection", "companion.files.placements[]."),
+      bucketPath: str(x.bucket_path),
+      expectedObjects: int(x.expected_objects),
+      maxPerBucket: Number(int(x.max_per_bucket)),
+      maxSizeBytes: int(x.max_size_bytes),
+    }));
+    for (const x of placements) {
+      if (!names.includes(x.connection)) {
+        throw new ManifestError(
+          `manifest: companion.files.placements: ${x.field} is on connection ${JSON.stringify(x.connection)}, ` +
+            "which is not in companion.files.connections",
+        );
+      }
+    }
+    files = { service: req(f, "service", "companion.files."), connections, placements };
+  }
+  return { addressEnv: req(c, "address_env", "companion."), defaultAddress: str(c.default_address), egress, files };
+}
+
 export function fromObject(d: Obj, baseDir = "."): Manifest {
   const fmt = d.format;
+  const formats = SUPPORTED_FORMATS.join(" and ");
   if (typeof fmt !== "number" || !Number.isInteger(fmt) || fmt < 1) {
     throw new ManifestError(
-      `manifest: format ${json(fmt ?? null)} is not a manifest format version (this SDK reads ${SUPPORTED_FORMAT})`,
+      `manifest: format ${json(fmt ?? null)} is not a manifest format version (this SDK reads ${formats})`,
     );
   }
-  if (fmt !== SUPPORTED_FORMAT) {
+  if (!SUPPORTED_FORMATS.includes(fmt)) {
     throw new ManifestError(
-      `manifest: format ${fmt} is not one this SDK reads (it reads format ${SUPPORTED_FORMAT}) — ` +
+      `manifest: format ${fmt} is not one this SDK reads (it reads formats ${formats}) — ` +
         "install the @w17/business release of the project's sdk_version",
     );
   }
@@ -349,6 +458,10 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
       invalidates,
     };
   }
+  const companion = companionOf(d);
+  if (companion !== null && fmt < 2) {
+    throw new ManifestError(`manifest: format ${fmt} has no companion section; a manifest with one is format 2`);
+  }
   const pluginHooks: PluginHook[] = list(d.plugin_hooks).map((h) => ({
     plugin: str(h.plugin),
     registeredAs: str(h.registered_as),
@@ -376,6 +489,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
     storage,
     events,
     pluginHooks,
+    companion,
     baseDir,
     extra,
   };
