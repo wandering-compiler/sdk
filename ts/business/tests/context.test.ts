@@ -61,3 +61,23 @@ describe("err", () => {
     expect(child.err()).toBe("context deadline exceeded");
   });
 });
+
+describe("signal", () => {
+  it("is one signal per context, however often it is read", async () => {
+    const ctx = new Context().withCancel();
+    const first = ctx.signal;
+    for (let i = 0; i < 100; i++) expect(ctx.signal).toBe(first);
+    expect(first.aborted).toBe(false);
+    ctx.cancel();
+    await sleep(0);
+    expect(first.aborted).toBe(true);
+    expect((first.reason as Error).message).toBe("context canceled");
+
+    const timed = new Context().withTimeout(5);
+    const s = timed.signal;
+    expect(timed.signal).toBe(s);
+    await sleep(30);
+    expect(s.aborted).toBe(true);
+    expect((s.reason as Error).message).toBe("context deadline exceeded");
+  });
+});

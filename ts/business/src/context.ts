@@ -245,6 +245,7 @@ export class Context {
   readonly method: string;
   readonly #cancel: CancelNode;
   readonly #values: ReadonlyMap<unknown, unknown>;
+  #signal: AbortSignal | undefined;
 
   constructor(init: ContextInit = {}) {
     this.incoming = new Metadata(init.incoming);
@@ -409,11 +410,19 @@ export class Context {
     };
   }
 
-  /** An AbortSignal that aborts when this context is done (for fetch & co). */
+  /**
+   * An AbortSignal that aborts when this context is done (for fetch & co).
+   * One per context: every read returns the same signal, so a handler that
+   * reads it per call registers one listener (and one deadline timer), not
+   * one per read.
+   */
   get signal(): AbortSignal {
-    const ac = new AbortController();
-    this.onDone(() => ac.abort(new Error(this.err() ?? CANCELED)));
-    return ac.signal;
+    if (this.#signal === undefined) {
+      const ac = new AbortController();
+      this.onDone(() => ac.abort(new Error(this.err() ?? CANCELED)));
+      this.#signal = ac.signal;
+    }
+    return this.#signal;
   }
 
   toString(): string {
