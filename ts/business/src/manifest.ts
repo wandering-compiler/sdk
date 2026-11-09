@@ -178,9 +178,26 @@ function isObj(v: unknown): v is Obj {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** JSON.stringify, writing a bigint (an integer {@link parseJSON} kept exact) as the number it was. */
+function json(v: unknown): string {
+  const raw = (JSON as unknown as { rawJSON(s: string): unknown }).rawJSON;
+  return JSON.stringify(v, (_k, x: unknown) => (typeof x === "bigint" ? raw(x.toString()) : x));
+}
+
 /** A JSON scalar as text; anything else as its JSON. */
 function text(v: unknown): string {
-  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : JSON.stringify(v);
+  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" ? String(v) : json(v);
+}
+
+/**
+ * JSON.parse keeping an integer beyond 2^53 exact, as a bigint: a number
+ * would round `9007199254740993` to `...992`, and Python's json (and Go's
+ * config loader) read it exactly.
+ */
+export function parseJSON(src: string): unknown {
+  const reviver = (_k: string, v: unknown, c?: { source?: string }) =>
+    typeof v === "number" && !Number.isSafeInteger(v) && c?.source !== undefined && /^-?\d+$/.test(c.source) ? BigInt(c.source) : v;
+  return JSON.parse(src, reviver as (k: string, v: unknown) => unknown);
 }
 
 function req(d: Obj, key: string, where: string): string {
@@ -222,7 +239,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
   const fmt = d.format;
   if (typeof fmt !== "number" || !Number.isInteger(fmt) || fmt < 1) {
     throw new ManifestError(
-      `manifest: format ${JSON.stringify(fmt ?? null)} is not a manifest format version (this SDK reads ${SUPPORTED_FORMAT})`,
+      `manifest: format ${json(fmt ?? null)} is not a manifest format version (this SDK reads ${SUPPORTED_FORMAT})`,
     );
   }
   if (fmt !== SUPPORTED_FORMAT) {
@@ -373,7 +390,7 @@ export function load(path: string): Manifest {
   }
   let d: unknown;
   try {
-    d = JSON.parse(text);
+    d = parseJSON(text);
   } catch (e) {
     throw new ManifestError(`manifest: ${path} is not JSON: ${(e as Error).message}`);
   }

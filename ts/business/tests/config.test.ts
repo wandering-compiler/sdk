@@ -252,6 +252,22 @@ describe("manifest", () => {
     expect(m.extra).toEqual({ future: 1 });
   });
 
+  it("an int default beyond 2^53 stays exact", () =>
+    inTmpDir(async (dir) => {
+      const p = join(dir, "m.json");
+      const base = JSON.stringify(min()).slice(0, -1);
+      writeFileSync(
+        p,
+        `${base},"config":[{"name":"big","type":"int","default":9007199254740993},` +
+          `{"name":"neg","type":"int","default":-9223372036854775808},{"name":"obj","default":{"n":9007199254740993,"f":1.5}}]}`,
+      );
+      const m = load(p);
+      expect(m.config.map((k) => k.default)).toEqual(["9007199254740993", "-9223372036854775808", '{"n":9007199254740993,"f":1.5}']);
+      const cfg = await Config.load(m.config, {});
+      expect(cfg.bigint("big")).toBe(9007199254740993n);
+      expect(cfg.bigint("neg")).toBe(-9223372036854775808n);
+    }));
+
   it("required fields", () =>
     inTmpDir((dir) => {
       const p = join(dir, "m.json");
