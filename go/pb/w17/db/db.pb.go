@@ -1987,7 +1987,27 @@ type Table struct {
 	// namespace is checked across the whole schema, not just per
 	// table: the generated constraint→error-code registry is keyed by
 	// name and flat, so two tables claiming one name is refused.
-	Checks        []*TableCheck `protobuf:"bytes,12,rep,name=checks,proto3" json:"checks,omitempty"`
+	Checks []*TableCheck `protobuf:"bytes,12,rep,name=checks,proto3" json:"checks,omitempty"`
+	// The full name of the message this one used to be, when the message
+	// was renamed. A table belongs to its message's full name, so without
+	// this a renamed message is a table dropped and another created: the
+	// rows are lost, and a migration asks for that decision. With it the
+	// table is the same one, renamed when its name changes, and its columns
+	// are compared field number by field number as usual.
+	//
+	//	message OrgBankRate {
+	//	  option (w17.db.table) = { renamed_from: "identity.v1.TenantBankRate" };
+	//	  ...
+	//	}
+	//
+	// It matters while a database still holds the old message's table. Once
+	// the rename is applied everywhere it says nothing, and it can stay or
+	// go. Refused: a name that is not a message's full name, this message
+	// itself, a message that still has its table in this build, or the
+	// message another one already names. A table that
+	// moves to another connection at the same time is a move, with the
+	// move's decision.
+	RenamedFrom   string `protobuf:"bytes,13,opt,name=renamed_from,json=renamedFrom,proto3" json:"renamed_from,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2104,6 +2124,13 @@ func (x *Table) GetChecks() []*TableCheck {
 		return x.Checks
 	}
 	return nil
+}
+
+func (x *Table) GetRenamedFrom() string {
+	if x != nil {
+		return x.RenamedFrom
+	}
+	return ""
 }
 
 // TableValidationMessage — table-level validation override.
@@ -3529,7 +3556,7 @@ const file_w17_db_proto_rawDesc = "" +
 	"\n" +
 	"error_code\x18\x02 \x01(\tR\terrorCode\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
-	"\x05field\x18\x04 \x01(\tR\x05field\"\x97\x04\n" +
+	"\x05field\x18\x04 \x01(\tR\x05field\"\xba\x04\n" +
 	"\x05Table\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\aindexes\x18\x02 \x03(\v2\r.w17.db.IndexR\aindexes\x12/\n" +
@@ -3547,7 +3574,8 @@ const file_w17_db_proto_rawDesc = "" +
 	"\x13estimated_row_count\x18\n" +
 	" \x01(\x04R\x11estimatedRowCount\x12&\n" +
 	"\x0fredis_bucket_by\x18\v \x01(\tR\rredisBucketBy\x12*\n" +
-	"\x06checks\x18\f \x03(\v2\x12.w17.db.TableCheckR\x06checksB\t\n" +
+	"\x06checks\x18\f \x03(\v2\x12.w17.db.TableCheckR\x06checks\x12!\n" +
+	"\frenamed_from\x18\r \x01(\tR\vrenamedFromB\t\n" +
 	"\a_prefix\"R\n" +
 	"\x16TableValidationMessage\x12\x1e\n" +
 	"\n" +

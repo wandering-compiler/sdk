@@ -1065,6 +1065,27 @@ message Table {
   // table: the generated constraint→error-code registry is keyed by
   // name and flat, so two tables claiming one name is refused.
   repeated TableCheck checks = 12;
+
+  // The full name of the message this one used to be, when the message
+  // was renamed. A table belongs to its message's full name, so without
+  // this a renamed message is a table dropped and another created: the
+  // rows are lost, and a migration asks for that decision. With it the
+  // table is the same one, renamed when its name changes, and its columns
+  // are compared field number by field number as usual.
+  //
+  //   message OrgBankRate {
+  //     option (w17.db.table) = { renamed_from: "identity.v1.TenantBankRate" };
+  //     ...
+  //   }
+  //
+  // It matters while a database still holds the old message's table. Once
+  // the rename is applied everywhere it says nothing, and it can stay or
+  // go. Refused: a name that is not a message's full name, this message
+  // itself, a message that still has its table in this build, or the
+  // message another one already names. A table that
+  // moves to another connection at the same time is a move, with the
+  // move's decision.
+  string renamed_from = 13;
 }
 
 // TableValidationMessage — table-level validation override.
