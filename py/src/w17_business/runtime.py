@@ -18,10 +18,14 @@ does what Go's generated business ``main`` does:
    a plugin hook is bound to must then have a handler;
 7. serve h2c, or TLS with ``W17_INTERNAL_TLS``; ``grpc.health.v1``; reflection
    when ``<PREFIX>_GRPC_REFLECTION`` is ``1``/``true``;
-8. on SIGTERM/SIGINT: report NOT_SERVING, refuse new calls, give the in-flight
-   ones ``shutdown_timeout_seconds`` (10, Go's ShutdownTimeout), cancel the
-   rest, then run the shutdown hooks under one 30s drain deadline (Go's
-   shutdownDrainTimeout), close the buses and the channels, flush telemetry.
+8. on SIGTERM/SIGINT: report NOT_SERVING, refuse new calls, give the
+   in-flight ones ``shutdown_timeout_seconds`` (10, Go's ShutdownTimeout),
+   cancel the rest and give them one more timeout to return (a rollback, a
+   commit in progress), wait for the work committed transactions still owe
+   (events, on_commit hooks), then run the shutdown hooks under one 30s
+   drain deadline (Go's shutdownDrainTimeout), close the buses and the
+   channels, flush telemetry. The whole drain is ONE budget, set when it
+   starts: every step draws from what is left of it.
 """
 
 from __future__ import annotations
@@ -57,8 +61,10 @@ __all__ = ["Clients", "App", "BootError", "SHUTDOWN_TIMEOUT", "DRAIN_TIMEOUT", "
 log = logging.getLogger("w17_business")
 
 SHUTDOWN_TIMEOUT = 10.0  # lifecycle.DefaultShutdownTimeout; the manifest's shutdown_timeout_seconds wins
-DRAIN_TIMEOUT = 30.0  # runtime.shutdownDrainTimeout: the shutdown hooks
-CANCEL_TIMEOUT = 5.0  # bounds the wait for post-commit work cancelled after the drain
+# runtime.shutdownDrainTimeout: the budget of the whole drain — the server's
+# stop, the handlers and the work after a commit, the shutdown hooks and the
+# bus close — unless the shutdown timeout is longer.
+DRAIN_TIMEOUT = 30.0
 ENV_MANIFEST = "W17_BUSINESS_MANIFEST"
 ENV_PROJECT_ROOT = "W17_BUSINESS_PROJECT_ROOT"
 
@@ -205,8 +211,10 @@ class App:
     """One business tier, booted from a manifest. ``run`` serves it."""
 
     def __init__(self, manifest: Manifest, environ: Mapping[str, str] | None = None,
-                 project_root: str | None = None) -> None:
+                 project_root: str | None = None, drain_timeout: float = DRAIN_TIMEOUT) -> None:
         self.manifest = manifest
+        # The drain's budget (DRAIN_TIMEOUT); tests shorten it.
+        self.drain_timeout = drain_timeout
         self.env = dict(os.environ if environ is None else environ)
         self.project_root = project_root or self.env.get(ENV_PROJECT_ROOT) or os.getcwd()
         self.pool = default_pool()
@@ -366,49 +374,73 @@ class App:
         reg, srv = self.registry, self.server
         timeout = self.manifest.shutdown_timeout or SHUTDOWN_TIMEOUT
         log.info("%s: shutting down", self.manifest.bundle)
+        # One budget for the whole drain, set once, now: Go's shutdown drain
+        # timeout, or the operator's shutdown timeout when that is longer.
+        # Every step below draws from what is left of it, so a deployment's
+        # termination grace bounds the drain as a whole, not each step alone.
+        drain = Context().with_timeout(max(self.drain_timeout, timeout))
+
+        def left() -> float:
+            return max(drain.time_remaining() or 0.0, 0.0)
+
         self.health_status.set(False)
         if reg is not None:
             reg.draining = True
+        aserver = None
         if srv is not None:
-            # grpclib has no graceful stop: stop accepting connections, give
-            # the in-flight calls the timeout, then let grpclib cancel the rest.
+            # Go's GracefulStop bounded by the timeout, then Stop. grpclib has
+            # no graceful stop: stop accepting connections, give the in-flight
+            # calls the timeout, then let grpclib cancel the rest.
             aserver = _grpclib.listener(srv)
             if aserver is not None:
                 aserver.close()
-            if reg is not None and not await reg.wait_idle(timeout):
-                observability.report_error(None, f"runtime: gRPC handler(s) still running after {timeout}s; cancelling them")
+            stop = min(timeout, left())
+            if reg is not None and not await reg.wait_idle(stop):
+                observability.report_error(None, f"runtime: gRPC handler(s) still running after {stop:g}s; cancelling them")
             srv.close()
             # Since Python 3.12 asyncio's wait_closed waits for every client
             # connection to close, and a peer tier keeps its connection open
             # (keepalive) indefinitely: close them, or the drain never ends.
             if aserver is not None and hasattr(aserver, "close_clients"):
                 aserver.close_clients()
+        # After the server's close, one more timeout (within the budget),
+        # computed once and SHARED by the two waits below:
+        #  - the handlers it cancelled: the server's close does not wait for
+        #    them, and one still running (a rollback, a commit) needs the
+        #    storage channel and the bus it would close under it;
+        #  - the work a committed transaction (or an emit) owes, which
+        #    outlives its request. Waited for only after the handlers: one
+        #    cancelled may have committed and started that work just then.
+        # What is still running at the deadline is cancelled (bounded by the
+        # rest of the budget) and reported, and only then does the bus close.
+        loop = asyncio.get_running_loop()
+        after_stop = loop.time() + min(timeout, left())
+
+        def until_after_stop() -> float:
+            return max(after_stop - loop.time(), 0.0)
+
+        if srv is not None:
             try:
-                await asyncio.wait_for(srv.wait_closed(), timeout)
+                await asyncio.wait_for(srv.wait_closed(), max(until_after_stop(), 0.001))
             except TimeoutError:
                 if aserver is not None and hasattr(aserver, "abort_clients"):
                     aserver.abort_clients()
-        # The work a committed transaction (or an emit) owes outlives its
-        # request. Waited for only now, after the server's close: a handler
-        # it cancelled may have committed and started that work just then.
-        # One deadline for all of it; what is left is cancelled (bounded) and
-        # reported, and only then does the bus close under it.
-        if not await txscope.drain(timeout):
-            n = await txscope.cancel_pending(CANCEL_TIMEOUT)
+        if not await txscope.drain(until_after_stop()):
+            n = await txscope.cancel_pending(max(left(), 0.001))
             observability.report_error(
                 None, f"runtime: {n} piece(s) of work after a commit (events, on_commit hooks) still running "
-                      f"after {timeout}s; cancelled")
-        drain = Context().with_timeout(DRAIN_TIMEOUT)
+                      "at the shutdown deadline; cancelled")
+        # The shutdown hooks and the bus close get the rest of the budget.
         for i, fn in enumerate(reg.shutdowns if reg else []):
             try:
                 r = fn(drain)
                 if inspect.isawaitable(r):
-                    await asyncio.wait_for(r, max(drain.time_remaining() or 0, 0.001))
+                    await asyncio.wait_for(r, max(left(), 0.001))
             except Exception as e:  # noqa: BLE001
                 observability.report_error(drain, RuntimeError(f"runtime: shutdown hook {i}: {e!r}"))
         if self.dispatcher is not None:
             try:
-                await asyncio.wait_for(self.dispatcher.close(), max(drain.time_remaining() or 0, 0.001))
+                await asyncio.wait_for(self.dispatcher.close(), max(left(), 0.001))
             except Exception as e:  # noqa: BLE001
                 log.warning("eventbus close: %s", e)
         if self.clients is not None:
