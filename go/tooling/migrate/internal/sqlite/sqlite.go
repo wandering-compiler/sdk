@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -140,6 +141,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 		return fmt.Errorf("sqlite apply (migration %s): %w", m.GetId(), err)
 	}
 	if _, err := conn.ExecContext(ctx, m.GetUpSql()); err != nil {
+		abandonOpenTx(conn)
 		return fmt.Errorf("sqlite apply up_sql: %w", err)
 	}
 	if pt := m.GetUpPostTx(); pt != "" {
@@ -483,11 +485,13 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 	}
 	if pre := m.GetDownPreTx(); pre != "" {
 		if _, err := conn.ExecContext(ctx, pre); err != nil {
+			abandonOpenTx(conn)
 			return fmt.Errorf("sqlite rollback down_pre_tx: %w", err)
 		}
 	}
 	if down := m.GetDownSql(); down != "" {
 		if _, err := conn.ExecContext(ctx, down); err != nil {
+			abandonOpenTx(conn)
 			return fmt.Errorf("sqlite rollback down_sql: %w", err)
 		}
 	}
@@ -662,4 +666,18 @@ func liteCheckErr(err error) error {
 		return errors.New("the check timed out")
 	}
 	return errors.New("the check failed")
+}
+
+// abandonOpenTx ends the transaction a failed script left open on conn
+// before conn goes back to the pool. A migration body carries its own BEGIN …
+// COMMIT; a statement failing between them leaves the connection inside that
+// transaction, holding the database's write lock, and the next migration on
+// it fails ("cannot start a transaction within a transaction") or waits for
+// the lock ("database is locked"). The failed body is undone by the
+// ROLLBACK. On a fresh context, the caller's may be what was cancelled;
+// outside a transaction SQLite refuses ROLLBACK, which is the state wanted.
+func abandonOpenTx(conn *sql.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = conn.ExecContext(ctx, "ROLLBACK")
 }

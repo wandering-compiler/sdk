@@ -24,6 +24,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/dbsession"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -253,9 +254,25 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 		return fmt.Errorf("postgres apply: ensure phase column: %w", err)
 	}
 	if _, err := a.conn.Exec(ctx, m.GetUpSql(), pgx.QueryExecModeSimpleProtocol); err != nil {
+		a.abandonOpenTx()
 		return fmt.Errorf("postgres apply up_sql: %w", err)
 	}
 	return a.applyPostTx(ctx, m)
+}
+
+// abandonOpenTx ends the transaction a failed script left open on the
+// applier's connection. A migration body carries its own BEGIN … COMMIT, and
+// a statement failing between them leaves the session in an aborted
+// transaction: every later statement on it — the next migration, a
+// rollback, a ledger read — fails with 25P02 until something ends it. The
+// failed body changed nothing (its transaction is aborted), so ROLLBACK is
+// all there is to do. On a fresh context: the caller's may be what was
+// cancelled. Outside a transaction PostgreSQL only warns, so the error is
+// ignored.
+func (a *Applier) abandonOpenTx() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = a.conn.Exec(ctx, "ROLLBACK", pgx.QueryExecModeSimpleProtocol)
 }
 
 // ApplyPostTx runs ONLY the migration's post-tx half — the resume
@@ -352,6 +369,7 @@ func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error
 	}
 	if down := m.GetDownSql(); down != "" {
 		if _, err := a.conn.Exec(ctx, down, pgx.QueryExecModeSimpleProtocol); err != nil {
+			a.abandonOpenTx()
 			return fmt.Errorf("postgres rollback down_sql: %w", err)
 		}
 	}
