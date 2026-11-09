@@ -559,11 +559,34 @@ impl Served {
             }
         };
 
+        // What ends a call from the network before it answers: its deadline,
+        // or the drain cancelling what is still running.
+        let cut_off = async {
+            if !wire {
+                return std::future::pending().await;
+            }
+            tokio::select! {
+                _ = async {
+                    match deadline {
+                        Some(d) => tokio::time::sleep_until(d.into()).await,
+                        None => std::future::pending().await,
+                    }
+                } => Status::deadline_exceeded("context deadline exceeded"),
+                _ = shared.kill.cancelled() => Status::unavailable("server is shutting down"),
+            }
+        };
+        tokio::pin!(cut_off);
+
         // An emitting method's request is kept: its event is built from it.
+        // Reading it is part of the call, bound as the handler is.
         let mut req_msg = None;
         if method.emits() {
             let (parts, body) = req.into_parts();
-            let bytes = match body.collect().await {
+            let collected = tokio::select! {
+                r = body.collect() => r,
+                st = &mut cut_off => return st.into_http(),
+            };
+            let bytes = match collected {
                 Ok(b) => b.to_bytes(),
                 Err(e) => return e.into_http(),
             };
@@ -572,20 +595,9 @@ impl Served {
         }
 
         let call = AssertUnwindSafe(self.routes.clone().oneshot(req)).catch_unwind();
-        let outcome = if wire {
-            let sleep = async {
-                match deadline {
-                    Some(d) => tokio::time::sleep_until(d.into()).await,
-                    None => std::future::pending().await,
-                }
-            };
-            tokio::select! {
-                r = call => r,
-                _ = sleep => return Status::deadline_exceeded("context deadline exceeded").into_http(),
-                _ = shared.kill.cancelled() => return Status::unavailable("server is shutting down").into_http(),
-            }
-        } else {
-            call.await
+        let outcome = tokio::select! {
+            r = call => r,
+            st = &mut cut_off => return st.into_http(),
         };
         let mut resp = match outcome {
             Ok(Ok(resp)) => resp,

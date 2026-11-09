@@ -615,3 +615,69 @@ async fn a_service_the_manifest_does_not_list_is_refused() {
         .unwrap_err();
     assert!(e.0.contains("not a business service of this tier"), "{e}");
 }
+
+// An emitting method reads its whole request before the handler runs (the
+// event is built from it). That read is part of the call: a body that never
+// ends is cut off by the caller's deadline, as the handler would be.
+struct Idle;
+
+#[tonic::async_trait]
+impl W17Files for Idle {
+    async fn put(
+        &self,
+        _req: Request<tonic::Streaming<PutRequest>>,
+    ) -> Result<Response<PutResponse>, Status> {
+        Err(Status::unimplemented("put"))
+    }
+
+    type OpenStream = futures::stream::BoxStream<'static, Result<OpenResponse, Status>>;
+
+    async fn open(&self, _req: Request<OpenRequest>) -> Result<Response<Self::OpenStream>, Status> {
+        Err(Status::unimplemented("open"))
+    }
+
+    async fn stat(&self, _req: Request<StatRequest>) -> Result<Response<StatResponse>, Status> {
+        Ok(Response::new(StatResponse::default()))
+    }
+
+    async fn delete(
+        &self,
+        _req: Request<DeleteRequest>,
+    ) -> Result<Response<DeleteResponse>, Status> {
+        Err(Status::unimplemented("delete"))
+    }
+}
+
+#[tokio::test]
+async fn an_emitting_methods_request_body_is_bound_by_the_deadline() {
+    let pool =
+        prost_reflect::DescriptorPool::decode(&include_bytes!("../sdk_descriptors.binpb")[..])
+            .unwrap();
+    let inv = crate::manifest::Invalidate {
+        method: "/w17.common.files.W17Files/Stat".into(),
+        channel: "c".into(),
+        topic: "w17.invalidate".into(),
+        group: "g".into(),
+        entities: vec!["e".into()],
+    };
+    let mut r = Registry::new(pool, &["w17.common.files.W17Files".to_string()], &[], &[inv]);
+    r.register(W17FilesServer::new(Idle)).unwrap();
+    let served = r.finish(None, |routes| routes);
+    // A request whose body never arrives.
+    let body = http_body_util::StreamBody::new(futures::stream::pending::<
+        Result<http_body::Frame<bytes::Bytes>, std::convert::Infallible>,
+    >());
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/w17.common.files.W17Files/Stat")
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .header("grpc-timeout", "100m")
+        .body(body)
+        .unwrap();
+    let resp = tokio::time::timeout(Duration::from_secs(2), served.serve_wire(req))
+        .await
+        .expect("the deadline ends the read of the request");
+    let st = Status::from_header_map(resp.headers()).unwrap();
+    assert_eq!(st.code(), Code::DeadlineExceeded, "{st:?}");
+}
