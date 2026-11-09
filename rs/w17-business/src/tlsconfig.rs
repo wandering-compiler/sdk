@@ -117,7 +117,8 @@ fn pair(env: &Env) -> Result<(Vec<u8>, Vec<u8>), String> {
 /// half set, or a pair that does not load.
 pub fn client_tls(env: &Env) -> Result<Option<ClientTlsConfig>, String> {
     let v = get(env, ENV_INTERNAL_TLS);
-    if check(v).is_ok() && !dial_tls(v) {
+    check(v)?;
+    if !dial_tls(v) {
         return Ok(None);
     }
     if terminated(v) {
