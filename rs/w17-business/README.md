@@ -79,9 +79,11 @@ It finds the manifest — `$W17_BUSINESS_MANIFEST` (the image sets it), else by
 walking up to the project's `w17/services/` and taking the
 `*-business/w17-business.json` whose `language` is `rust` and whose
 `register.path` is this crate — and compiles the descriptor set it names into
-`OUT_DIR`. `.w17` (the vocabulary, `w17.common.distx`, `w17.common.files`) and
-`.google.protobuf` map onto this crate's types, so a message that crosses
-into the SDK is one type, not two.
+`OUT_DIR`. The SDK's own types (the vocabulary, `w17.common.distx`,
+`w17.common.files`) and `.google.protobuf` map onto this crate's types, so a
+message that crosses into the SDK is one type, not two. The mapping is type
+by type: a plugin's package (`w17.contrib.auth`) is generated into your
+crate like any other.
 
 `src/main.rs`:
 
