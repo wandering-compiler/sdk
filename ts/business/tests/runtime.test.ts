@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { main, parseDuration, probe, probeTarget } from "../src/cli.ts";
 import { Conn, ServiceClient } from "../src/client.ts";
 import { Context } from "../src/context.ts";
+import { Status } from "../src/errors.ts";
 import * as health from "../src/health.ts";
 import { type Manifest, load } from "../src/manifest.ts";
 import * as observability from "../src/observability.ts";
@@ -123,6 +124,31 @@ describe("serving", () => {
       expect(hook.length).toBe(1);
       expect(hook[0]!).toBeGreaterThan(0);
       expect(hook[0]!).toBeLessThanOrEqual(30_000); // the hook gets the drain deadline
+    }));
+
+  it("a reflection request that does not decode ends its call, not the process", () =>
+    inTmpDir(async () => {
+      quiet();
+      const app = new App(load(MANIFEST), { projectRoot: PROJECT, environ: env({ NOTES_GRPC_REFLECTION: "1" }) });
+      await app.boot();
+      await app.start();
+      const c = new Client(`127.0.0.1:${app.port}`, credentials.createInsecure());
+      const ask = (b: Buffer) =>
+        new Promise<{ code?: number; data?: string }>((res) => {
+          const call = c.makeBidiStreamRequest("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo", (x: Buffer) => x, (x: Buffer) => x, new GrpcMetadata());
+          call.on("data", (d: Buffer) => {
+            res({ data: d.toString("latin1") });
+            call.end();
+          });
+          call.on("error", (e: { code: number }) => res({ code: e.code }));
+          call.write(b);
+        });
+      // file_containing_symbol whose length runs past the message.
+      expect((await ask(Buffer.from([0x1a, 0x32, 0x61, 0x62]))).code).toBe(Status.INVALID_ARGUMENT);
+      // The server is still there and still answers.
+      expect((await ask(Buffer.from([0x3a, 0x00]))).data).toContain("conformance.v1.NoteService");
+      c.close();
+      await app.shutdown();
     }));
 
   it("the drain waits for in-flight calls", () =>

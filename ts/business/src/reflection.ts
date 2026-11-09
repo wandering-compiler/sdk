@@ -164,9 +164,21 @@ export function addTo(server: Server, pool: Pool, services: () => string[]): voi
       { ServerReflectionInfo: d },
       {
         ServerReflectionInfo: (call: ServerDuplexStream<Buffer, Buffer>) => {
-          call.on("data", (b: Buffer) => call.write(answer(pool, services, b)));
+          // These listeners run on grpc-js's emitter: a throw from one is an
+          // uncaught exception that ends the process. A request that does
+          // not decode ends the call instead, as Go's codec refuses it.
+          call.on("data", (b: Buffer) => {
+            let out: Buffer;
+            try {
+              out = answer(pool, services, b);
+            } catch (e) {
+              call.removeAllListeners("data");
+              call.emit("error", { code: Status.INVALID_ARGUMENT, details: `grpc: error unmarshalling request: ${e instanceof Error ? e.message : String(e)}` });
+              return;
+            }
+            call.write(out);
+          });
           call.on("end", () => call.end());
-          call.on("error", () => call.end());
         },
       },
     );
