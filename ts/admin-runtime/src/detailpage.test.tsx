@@ -165,7 +165,12 @@ describe("DetailPage row heading", () => {
       <MantineProvider>
         <DetailPage
           spec={titled}
-          page={{ ...page(), name: "OrgPlans", model: "billing.PlanLine", title: "Organization plans" }}
+          page={{
+            ...page(),
+            name: "OrgPlans",
+            model: "billing.PlanLine",
+            title: "Organization plans",
+          }}
           rowId="1"
           onBack={() => {}}
         />

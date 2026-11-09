@@ -32,14 +32,7 @@ import {
 
 /** The closed filter set, as the compiler lowers it. */
 export type FormatPreset =
-  | "number"
-  | "decimal"
-  | "percent"
-  | "money"
-  | "date"
-  | "short_date"
-  | "time"
-  | "datetime";
+  "number" | "decimal" | "percent" | "money" | "date" | "short_date" | "time" | "datetime";
 
 /**
  * A substitution string carried by a slot. `translatable` records that the
