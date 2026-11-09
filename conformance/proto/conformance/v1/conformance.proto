@@ -43,7 +43,15 @@ message ListNotesResponse {
   w17.Paging paging = 2;
 }
 
-message InspectRequest {}
+message InspectRequest {
+  // Business only: before relaying, put STALE copies of relayed principal
+  // keys on the outgoing side (x-w17-user, x-w17-scope-org_id,
+  // x-w17-audience, w17-label-tenant set to "stale-*", and
+  // x-w17-scope-stale_only, which the request does not carry). The relay
+  // replaces the whole set: storage must see the verified incoming values
+  // only, and no x-w17-scope-stale_only. Storage ignores it.
+  bool stale_outgoing = 1;
+}
 
 message Header {
   string key = 1;
@@ -66,7 +74,8 @@ service NoteService {
   // Several writes in one transaction, each through the served CreateNote.
   rpc CreateNotes(CreateNotesRequest) returns (CreateNotesResponse);
   // A paged list: paging.forward onto the one storage call that serves it,
-  // and a sibling Inspect call WITHOUT it.
+  // and a sibling Inspect call WITHOUT it both before and after that call (a
+  // relay that ignored the forward mark would let either one move the page).
   rpc ListNotes(ListNotesRequest) returns (ListNotesResponse);
   // Relays storage's Inspect: what header forwarding and the deadline did.
   rpc Inspect(InspectRequest) returns (InspectResponse);
@@ -114,7 +123,10 @@ message SleepRequest {
 
 message TxErrorsRequest {
   // "finished": commit a handle twice. "unknown": commit while the harness
-  // drops the commit's reply.
+  // drops the commit's reply, with work parked on the transaction: a
+  // CreateNote of "outcome-unknown-composed" through the served method (its
+  // write lands with the commit, its event waits for the commit)
+  // and an on_commit insert of "after-outcome-unknown" — neither may run.
   string case = 1;
 }
 

@@ -72,11 +72,25 @@ class NoteService:
         return self.CreateNotesResponse(notes=notes)
 
     async def ListNotes(self, ctx, req):
-        # A sibling call that must NOT see the page.
+        # Sibling calls that must NOT see the page, nor move it: one before the
+        # forwarded call and one after it, so a relay that ignored the forward
+        # mark is caught whichever position (first or last) would win.
         await self.storage.Inspect(ctx, self.InspectRequest())
-        return await self.storage.ListNotes(paging.forward(ctx), req)
+        resp = await self.storage.ListNotes(paging.forward(ctx), req)
+        await self.storage.Inspect(ctx, self.InspectRequest())
+        return resp
 
     async def Inspect(self, ctx, req):
+        if req.stale_outgoing:
+            # A context reused from another request: the relay must replace
+            # this whole set with the verified incoming principal.
+            ctx = ctx.with_outgoing(ctx.outgoing.merged({
+                "x-w17-user": ["stale-user"],
+                "x-w17-scope-org_id": ["stale-org"],
+                "x-w17-audience": ["stale-audience"],
+                "w17-label-tenant": ["stale-tenant"],
+                "x-w17-scope-stale_only": ["leak"],
+            }))
         return await self.storage.Inspect(ctx, req)
 
     async def Refuse(self, ctx, req):
@@ -96,6 +110,12 @@ class NoteService:
             elif req.case == "unknown":
                 h, tx_ctx = await distx.begin(ctx, self.tx, distx.begin_request(CONN))
                 await self.storage.InsertNote(tx_ctx, self.InsertNoteRequest(text="outcome-unknown"))
+                # Work parked on the transaction, which a commit of unknown
+                # outcome must not run: a composed method's event, and a hook.
+                await self.me.CreateNote(tx_ctx, self.CreateNoteRequest(text="outcome-unknown-composed"))
+                detached = ctx.without_cancel()
+                await on_commit(tx_ctx, lambda: self.storage.InsertNote(
+                    detached, self.InsertNoteRequest(text="after-outcome-unknown")))
                 await h.commit(ctx)
             elif req.case == "mismatch":
                 h, tx_ctx = await distx.begin(ctx, self.tx, distx.begin_request(CONN))

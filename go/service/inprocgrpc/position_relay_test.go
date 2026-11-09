@@ -30,11 +30,17 @@ func TestConn_Invoke_RelaysThePagePositionOfAForwardedCall(t *testing.T) {
 
 	business := inprocgrpc.New()
 	business.RegisterService(unaryDesc("test.Facade", "Browse", func(ctx context.Context, _ *wrapperspb.StringValue) (*wrapperspb.StringValue, error) {
+		// The sibling runs both before and after the forwarded call: a relay
+		// that ignored the forward mark would put its position on the
+		// header whichever value (the first or the last) the reader takes.
 		out := new(wrapperspb.StringValue)
-		if err := storage.Invoke(ctx, "/test.Counts/Count", wrapperspb.String(""), out); err != nil {
+		if err := storage.Invoke(ctx, "/test.Counts/Count", wrapperspb.String(""), new(wrapperspb.StringValue)); err != nil {
 			return nil, err
 		}
 		if err := storage.Invoke(paging.Forward(ctx), "/test.Query/List", wrapperspb.String(""), out); err != nil {
+			return nil, err
+		}
+		if err := storage.Invoke(ctx, "/test.Counts/Count", wrapperspb.String(""), new(wrapperspb.StringValue)); err != nil {
 			return nil, err
 		}
 		return out, nil

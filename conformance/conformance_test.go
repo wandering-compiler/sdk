@@ -136,29 +136,56 @@ func noteCreated(t *testing.T, evs []event) []string {
 
 // ---------------------------------------------------------------------------
 
+// Every key go/lib/principal relays (isRelayedKey: the exact keys and both
+// prefixes, more than one of each prefix) reaches storage exactly once with
+// the gateway's value, and nothing else does. With stale_outgoing the business
+// method first puts stale copies of relayed keys on its outgoing side, as a
+// context reused across requests would carry them: the relay REPLACES the
+// whole set — each stale value overwritten, the outgoing-only key dropped.
 func TestHeaderForwarding(t *testing.T) {
-	ctx, cancel := timeout(gatewayCtx(t, "x-w17-paging-limit", "3"), 5*time.Second)
-	defer cancel()
-	resp, err := env.call(ctx, "Inspect", env.msg("InspectRequest"), "InspectResponse")
-	if err != nil {
-		t.Fatal(err)
+	relayed := map[string]string{
+		"x-w17-user":             "", // the envelope; checked for presence and count
+		"x-w17-scope-org_id":     "org-7",
+		"x-w17-scope-tenant_id":  "tn-7",
+		"w17-label-tenant":       "tenant-7",
+		"w17-label-region":       "eu",
+		"x-w17-device":           "device-jkt",
+		"x-w17-dpop-jkt":         "mint-jkt",
+		"x-w17-data-scope":       "org",
+		"x-w17-audience":         "console",
+		"x-w17-membership-kinds": "member,admin",
+		"x-w17-org-from":         "header",
+		"x-w17-host":             "app.example.test",
 	}
-	h := headers(resp)
-	for k, want := range map[string]string{
-		"x-w17-user":         "",
-		"x-w17-scope-org_id": "org-7",
-		"w17-label-tenant":   "tenant-7",
-		"x-w17-device":       "device-jkt",
-		"x-w17-data-scope":   "org",
-	} {
-		got, ok := h[k]
-		if !ok || len(got) != 1 || (want != "" && got[0] != want) {
-			t.Errorf("storage saw %s = %v, want exactly [%s] relayed", k, got, want)
+	extra := []string{"x-w17-paging-limit", "3"}
+	for k, v := range relayed {
+		switch k {
+		case "x-w17-user", "x-w17-scope-org_id", "w17-label-tenant", "x-w17-device", "x-w17-data-scope":
+			continue // gatewayCtx stamps these
 		}
+		extra = append(extra, k, v)
 	}
-	for _, k := range []string{"authorization", "w17-language", "x-custom", "x-w17-paging-limit"} {
-		if v, ok := h[k]; ok {
-			t.Errorf("storage saw %s = %v: only the principal is relayed", k, v)
+	for _, stale := range []bool{false, true} {
+		ctx, cancel := timeout(gatewayCtx(t, extra...), 5*time.Second)
+		resp, err := env.call(ctx, "Inspect", set(env.msg("InspectRequest"), map[string]any{"stale_outgoing": stale}), "InspectResponse")
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := headers(resp)
+		for k, want := range relayed {
+			got, ok := h[k]
+			if !ok || len(got) != 1 || (want != "" && got[0] != want) {
+				t.Errorf("stale_outgoing=%v: storage saw %s = %v, want exactly [%s] relayed", stale, k, got, want)
+			}
+		}
+		if got := h["x-w17-user"]; len(got) == 1 && strings.HasPrefix(got[0], "stale") {
+			t.Errorf("stale_outgoing=%v: a stale x-w17-user survived the relay", stale)
+		}
+		for _, k := range []string{"authorization", "w17-language", "x-custom", "x-w17-paging-limit", "x-w17-scope-stale_only"} {
+			if v, ok := h[k]; ok {
+				t.Errorf("stale_outgoing=%v: storage saw %s = %v: only the verified principal is relayed", stale, k, v)
+			}
 		}
 	}
 }
@@ -413,8 +440,12 @@ func TestHandleFinished(t *testing.T) {
 }
 
 // The commit lands and its reply is lost: the probe rollback finds the
-// transaction gone, so the outcome is unknown — and the write did land.
+// transaction gone, so the outcome is unknown — and the writes did land. The
+// work parked on the transaction (a composed CreateNote's event, an on_commit
+// insert) does NOT run: announcing a write that may not exist is the worse
+// failure.
 func TestCommitOutcomeUnknown(t *testing.T) {
+	mark := env.eventCount()
 	before := len(env.rows(t))
 	env.mu.Lock()
 	env.dropCommitReply = true
@@ -428,8 +459,17 @@ func TestCommitOutcomeUnknown(t *testing.T) {
 	if got := get(resp, "error").String(); got != "CommitOutcomeUnknown" {
 		t.Errorf("error = %q (%s), want CommitOutcomeUnknown", got, get(resp, "message").String())
 	}
-	if rows := env.rows(t); !slices.Equal(rows[before:], []string{"outcome-unknown"}) {
-		t.Errorf("rows = %v: the commit landed although its reply was lost", rows[before:])
+	// Give parked work that wrongly ran the time to show.
+	time.Sleep(500 * time.Millisecond)
+	if rows := env.rows(t); !slices.Equal(rows[before:], []string{"outcome-unknown", "outcome-unknown-composed"}) {
+		t.Errorf("rows = %v: want the transaction's two writes (it landed although its reply was lost) and no on_commit write", rows[before:])
+	}
+	if evs := env.eventsSince(mark); len(evs) != 0 {
+		var topics []string
+		for _, e := range evs {
+			topics = append(topics, e.topic)
+		}
+		t.Errorf("events %v were published for a commit of unknown outcome", topics)
 	}
 }
 
