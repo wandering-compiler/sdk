@@ -206,6 +206,19 @@ describe("nats", () => {
 
   it("the DSN scheme is checked", async () => {
     await expect(events.NatsPublisher.connect("http://x")).rejects.toThrow(/nats:\/\/ or tls:\/\//);
+    await expect(events.NatsPublisher.connect("nats://a:4222,http://b")).rejects.toThrow(/nats:\/\/ or tls:\/\//);
+  });
+
+  it("the DSN reads as nats.go reads it", () => {
+    const o = events.natsConnectOptions;
+    // A user with no password is a token.
+    expect(o("nats://s3cr%40t@nats")).toEqual({ servers: ["nats:4222"], token: "s3cr@t", tls: false });
+    expect(o("nats://u:p%3Aw@nats:4223")).toEqual({ servers: ["nats:4223"], user: "u", pass: "p:w", tls: false });
+    expect(o("nats://u:@nats")).toEqual({ servers: ["nats:4222"], user: "u", pass: "", tls: false });
+    // A server list keeps every server; tls:// anywhere is TLS.
+    expect(o("nats://t@a:4222, tls://b:4333,c")).toEqual({ servers: ["a:4222", "b:4333", "c:4222"], token: "t", tls: true });
+    expect(o("tls://[::1]:4222")).toEqual({ servers: ["[::1]:4222"], tls: true });
+    expect(() => o("nats://")).toThrow(RangeError);
   });
 });
 

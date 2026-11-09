@@ -343,8 +343,8 @@ export class NatsPublisher implements Dispatcher {
    * (eventbus.DefaultConnectWait: a broker started in the same deploy).
    */
   static async connect(dsn: string, opts: { connectWaitMs?: number; publishTimeoutMs?: number } = {}): Promise<NatsPublisher> {
-    if (!(dsn.startsWith("nats://") || dsn.startsWith("tls://"))) throw new RangeError("NATS DSN must use nats:// or tls:// scheme");
-    return new NatsPublisher(await natsJetStream(dsn, opts.connectWaitMs ?? 30_000), opts);
+    const o = natsConnectOptions(dsn);
+    return new NatsPublisher(await natsJetStream(o, opts.connectWaitMs ?? 30_000), opts);
   }
 
   async #ensureStream(channel: string): Promise<void> {
@@ -393,20 +393,80 @@ export class NatsPublisher implements Dispatcher {
   }
 }
 
+/** What a NATS DSN connects with. */
+export interface NatsConnectOptions {
+  /** `host:port`, one per server of the list. */
+  servers: string[];
+  user?: string;
+  pass?: string;
+  token?: string;
+  tls: boolean;
+}
+
+/**
+ * A NATS DSN as nats.go's `nats.Connect` (and nats.py) read it: a
+ * comma-separated list of `nats://` / `tls://` URLs (the first must carry
+ * its scheme; a later one without is `nats://`), port 4222 by default,
+ * TLS when any of them is `tls://`. A URL's `user:pass@` is user and
+ * password; a bare `user@` (no colon) is a TOKEN, not a user with an empty
+ * password. nats.js takes one set of credentials for the connection: the
+ * first URL that carries any supplies them, as the first server is the one
+ * dialled first.
+ */
+export function natsConnectOptions(dsn: string): NatsConnectOptions {
+  const out: NatsConnectOptions = { servers: [], tls: false };
+  let creds = false;
+  for (const raw of dsn.split(",")) {
+    let s = raw.trim();
+    if (!s) continue;
+    // Past the first, a server without a scheme is nats://, as nats.go adds it.
+    if (out.servers.length && !s.includes("://")) s = `nats://${s}`;
+    const m = /^(nats|tls):\/\/(.*)$/.exec(s);
+    if (m === null) throw new RangeError("NATS DSN must use nats:// or tls:// scheme");
+    if (m[1] === "tls") out.tls = true;
+    let url: URL;
+    try {
+      url = new URL(s);
+    } catch {
+      throw new RangeError(`NATS DSN: ${JSON.stringify(redactNats(s))} is not a URL`);
+    }
+    if (!url.hostname) throw new RangeError(`NATS DSN: ${JSON.stringify(redactNats(s))} names no host`);
+    out.servers.push(`${url.hostname}:${url.port || "4222"}`);
+    // The userinfo as written: URL cannot tell "user@" from "user:@".
+    const authority = m[2]!.split(/[/?#]/, 1)[0]!;
+    const at = authority.lastIndexOf("@");
+    if (at < 0 || creds) continue;
+    creds = true;
+    const info = authority.slice(0, at);
+    const colon = info.indexOf(":");
+    if (colon < 0) out.token = decodeURIComponent(info);
+    else {
+      out.user = decodeURIComponent(info.slice(0, colon));
+      out.pass = decodeURIComponent(info.slice(colon + 1));
+    }
+  }
+  if (!out.servers.length) throw new RangeError("NATS DSN must use nats:// or tls:// scheme");
+  return out;
+}
+
+/** A NATS URL without its credentials, for an error message. */
+function redactNats(s: string): string {
+  return s.replace(/^([a-z]+:\/\/)[^/?#]*@/i, "$1***@");
+}
+
 /** The real JetStream, behind {@link JetStreamLike}. */
-async function natsJetStream(dsn: string, connectWaitMs: number): Promise<JetStreamLike> {
+async function natsJetStream(o: NatsConnectOptions, connectWaitMs: number): Promise<JetStreamLike> {
   const { connect } = await import("@nats-io/transport-node");
   const jsmod = await import("@nats-io/jetstream");
-  const url = new URL(dsn);
-  const tls = url.protocol === "tls:";
   const deadline = Date.now() + connectWaitMs;
   let nc: Awaited<ReturnType<typeof connect>>;
   for (;;) {
     try {
       nc = await connect({
-        servers: `${url.hostname}:${url.port || "4222"}`,
-        ...(url.username && { user: decodeURIComponent(url.username), pass: decodeURIComponent(url.password) }),
-        ...(tls && { tls: {} }),
+        servers: o.servers,
+        ...(o.user !== undefined && { user: o.user, pass: o.pass ?? "" }),
+        ...(o.token !== undefined && { token: o.token }),
+        ...(o.tls && { tls: {} }),
         reconnect: true,
         maxReconnectAttempts: -1,
         timeout: 2000,
