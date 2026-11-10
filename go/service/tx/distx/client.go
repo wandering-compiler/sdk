@@ -57,12 +57,25 @@ var ErrHandleFinished = errors.New("distx: this transaction handle was already u
 //
 // When the transport failed BEFORE the commit took effect, Commit finds out:
 // its Rollback of the still-open transaction succeeds, and Commit returns an
-// ordinary failure, the transaction rolled back.
+// ordinary failure, the transaction rolled back. When the transaction is gone
+// but the coordinator remembers how it ended (the ended detail on its
+// NotFound, kept for its last 256 ids), Commit settles on that: success and
+// the parked work runs when it committed, an ordinary failure when it did
+// not. Only a coordinator that cannot say leaves the outcome unknown.
 var ErrCommitOutcomeUnknown = errors.New("distx: the commit's outcome is unknown")
 
 // outcomeProbeTimeout bounds the Rollback a Commit sends to settle an
 // ambiguous outcome.
 var outcomeProbeTimeout = 10 * time.Second
+
+// rollbackWait bounds every rollback the client sends on a context detached
+// from its caller's (TxHandle.Rollback, the rollback-only Commit, distx.Run's
+// rollback). Detaching drops the caller's deadline too, so without a bound a
+// coordinator that accepted the call and stalls would hold the caller's
+// goroutine forever. The server dooms the transaction before it waits for a
+// running handler's lease, so a rollback cut by this bound is still decided.
+// Equal to the auto-rollback interceptor's RollbackWait.
+var rollbackWait = txregistry.DefaultFinishWait
 
 // ConnIDHeader is the gRPC metadata header carrying the storage
 // proxy's routing token. The Rust storage proxy (srcrs/storage-
@@ -245,7 +258,9 @@ func (h *TxHandle) Commit(ctx context.Context) error {
 	if h.scope != nil && h.scope.RollbackOnly() {
 		defer unlock()
 		h.scope.Discarded()
-		_, rerr := h.client.Rollback(h.attach(context.WithoutCancel(ctx)), &distxpb.RollbackRequest{TxId: h.txID})
+		rctx, cancel := detachedRollbackCtx(ctx)
+		defer cancel()
+		_, rerr := h.client.Rollback(h.attach(rctx), &distxpb.RollbackRequest{TxId: h.txID})
 		if rerr != nil {
 			return errors.Join(ErrRollbackOnly, fmt.Errorf("the rollback also failed: %w", rerr))
 		}
@@ -266,7 +281,13 @@ func (h *TxHandle) Commit(ctx context.Context) error {
 		return err
 	}
 	if err != nil {
-		h.scope.Discarded()
+		// Only an answer that ENDED the transaction drops its parked
+		// work. A refusal that left it open (a call still holds it) is
+		// retryable on this handle, and the retry's commit must still
+		// run the work waiting for it.
+		if !leftOpen(err) {
+			h.scope.Discarded()
+		}
 		return err
 	}
 	// The transaction IS committed from here on, whatever the parked work
@@ -278,6 +299,22 @@ func (h *TxHandle) Commit(ctx context.Context) error {
 			fmt.Errorf("distx: work parked on committed transaction %s panicked: %v", h.txID, p))
 	}
 	return nil
+}
+
+// leftOpen reports a Commit (or Rollback) failure after which the
+// transaction is still open: the coordinator refused to finish it because a
+// call inside it still holds it past the finish wait (FailedPrecondition).
+// The handle is not used up; the caller retries, or rolls back — a caller
+// that gives up must roll back, or the transaction keeps its locks until the
+// orphan timeout. [Run] rolls back.
+func leftOpen(err error) bool {
+	return status.Code(err) == codes.FailedPrecondition
+}
+
+// detachedRollbackCtx is ctx without its cancellation (values and metadata
+// kept), bounded by [rollbackWait].
+func detachedRollbackCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), rollbackWait)
 }
 
 // outcomeUnknown reports a Commit failure that does not say whether the
@@ -314,6 +351,18 @@ func (h *TxHandle) settleAmbiguousCommit(ctx context.Context, commitErr error) e
 		h.ended = "rolled back"
 		return fmt.Errorf("distx: the commit of transaction %s did not take effect and it was rolled back: %w", h.txID, commitErr)
 	}
+	// The transaction is gone. When the coordinator remembers how it ended
+	// (its NotFound carries the ended detail) that settles it: the commit
+	// landed and only the reply was lost, or the transaction ended
+	// without committing (rolled back, timed out, the database refused).
+	switch endedFrom(rerr) {
+	case txregistry.EndedCommitted:
+		h.ended = "committed"
+		return nil
+	case txregistry.EndedNotCommitted:
+		h.ended = "rolled back"
+		return fmt.Errorf("distx: transaction %s did not commit (%v): %w", h.txID, rerr, commitErr) //nolint:errorlint // the coordinator's answer is named; the commit's error is the one wrapped.
+	}
 	pending := 0
 	if h.scope != nil {
 		pending = h.scope.Pending()
@@ -331,7 +380,8 @@ func (h *TxHandle) settleAmbiguousCommit(ctx context.Context, commitErr error) e
 // A JOINED handle cannot roll back its part alone, so it marks the root
 // rollback-only and the root's Commit rolls the whole transaction back.
 //
-// The rollback outlives ctx's cancellation (its values and metadata are kept).
+// The rollback outlives ctx's cancellation (its values and metadata are
+// kept), bounded by its own wait (30 s, the auto-rollback interceptor's).
 // The commonest reason to roll back is that the request's context is done —
 // the client hung up, the deadline passed — and a gRPC client refuses a call on
 // a done context before it leaves the process. So exactly when the rollback
@@ -353,9 +403,21 @@ func (h *TxHandle) Rollback(ctx context.Context) error {
 	if h.scope != nil {
 		h.scope.Discarded()
 	}
-	_, err = h.client.Rollback(h.attach(context.WithoutCancel(ctx)), &distxpb.RollbackRequest{TxId: h.txID})
-	if err == nil {
+	rctx, cancel := detachedRollbackCtx(ctx)
+	defer cancel()
+	_, err = h.client.Rollback(h.attach(rctx), &distxpb.RollbackRequest{TxId: h.txID})
+	switch {
+	case err == nil:
 		h.ended = "rolled back"
+	case endedFrom(err) == txregistry.EndedNotCommitted:
+		// Already ended without committing — the auto-rollback interceptor
+		// discarded it after a failed call, or its orphan bound ran out.
+		// That is what this rollback asked for, so it is not a failure.
+		h.ended = "rolled back"
+		return nil
+	case endedFrom(err) == txregistry.EndedCommitted:
+		h.ended = "committed"
+		return fmt.Errorf("distx: cannot roll back transaction %s, it was already committed: %w", h.txID, err)
 	}
 	return err
 }

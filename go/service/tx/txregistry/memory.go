@@ -68,11 +68,46 @@ type Memory struct {
 	// earlier. Keeping the reason turns that into a sentence naming the
 	// culprit (see [Memory.explainUnknownLocked]).
 	//
-	// Diagnostic only — nothing branches on it. `order` is the
+	// The reason is diagnostic; the [Ended] kind next to it is what a
+	// coordinator branches on (see [Memory.EndedAs]). `order` is the
 	// insertion sequence backing the eviction of the oldest entry, so
 	// the map cannot grow with the process.
-	outcomes     map[string]string
+	outcomes     map[string]tombstone
 	outcomeOrder []string
+}
+
+// tombstone is what the registry remembers about a drained id.
+type tombstone struct {
+	reason string
+	ended  Ended
+}
+
+// Ended is how a transaction this registry no longer holds ended, as far
+// as it knows. It is what lets a coordinator whose Commit call failed in
+// transport settle the outcome instead of reporting it unknown.
+type Ended int
+
+const (
+	// EndedUnknown: the id is not remembered (never held, evicted from
+	// the tombstones, another replica's), or its commit is still running.
+	EndedUnknown Ended = iota
+	// EndedCommitted: the database commit returned success.
+	EndedCommitted
+	// EndedNotCommitted: rolled back (by its holder, the auto-rollback
+	// interceptor, a Commit that found it doomed, or the orphan watcher)
+	// or the database commit failed. Its writes are gone.
+	EndedNotCommitted
+)
+
+// String names the kind for messages and the wire detail.
+func (e Ended) String() string {
+	switch e {
+	case EndedCommitted:
+		return "committed"
+	case EndedNotCommitted:
+		return "not_committed"
+	}
+	return "unknown"
 }
 
 // tombstoneCap bounds how many drained tx ids keep their reason. The
@@ -237,7 +272,7 @@ func NewMemory(dbs map[string]*sql.DB, opts ...MemoryOption) *Memory {
 		dbs:        owned,
 		txs:        map[string]txEntry{},
 		finishWait: DefaultFinishWait,
-		outcomes:   map[string]string{},
+		outcomes:   map[string]tombstone{},
 	}
 	for _, o := range opts {
 		o(m)
@@ -305,7 +340,7 @@ func (m *Memory) Begin(ctx context.Context, opts BeginOptions) (string, error) {
 // noteOutcomeLocked records why txID is no longer in the registry,
 // evicting the oldest reason once [tombstoneCap] is reached. Caller
 // must hold m.mu.
-func (m *Memory) noteOutcomeLocked(txID, reason string) {
+func (m *Memory) noteOutcomeLocked(txID, reason string, ended Ended) {
 	if _, seen := m.outcomes[txID]; !seen {
 		if len(m.outcomeOrder) >= tombstoneCap {
 			delete(m.outcomes, m.outcomeOrder[0])
@@ -313,7 +348,20 @@ func (m *Memory) noteOutcomeLocked(txID, reason string) {
 		}
 		m.outcomeOrder = append(m.outcomeOrder, txID)
 	}
-	m.outcomes[txID] = reason
+	m.outcomes[txID] = tombstone{reason: reason, ended: ended}
+}
+
+// EndedAs reports how the drained transaction txID ended, from the
+// registry's tombstones. [EndedUnknown] for an id it does not remember,
+// for one it still holds, and for one whose database commit has not
+// returned yet — a commit in flight can still fail.
+func (m *Memory) EndedAs(txID string) Ended {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, live := m.txs[txID]; live {
+		return EndedUnknown
+	}
+	return m.outcomes[txID].ended
 }
 
 // explainUnknownLocked builds the [ErrUnknownTxID] every surface
@@ -325,18 +373,18 @@ func (m *Memory) noteOutcomeLocked(txID, reason string) {
 // NotFound. Only the human-readable half changes, which is the half
 // that was pointing at the wrong thing.
 func (m *Memory) explainUnknownLocked(txID string) error {
-	if reason, ok := m.outcomes[txID]; ok {
-		return fmt.Errorf("%w %q: %s", ErrUnknownTxID, txID, reason)
+	if t, ok := m.outcomes[txID]; ok {
+		return fmt.Errorf("%w %q: %s", ErrUnknownTxID, txID, t.reason)
 	}
 	return fmt.Errorf("%w %q", ErrUnknownTxID, txID)
 }
 
 // noteOutcome is [Memory.noteOutcomeLocked] for callers that do not
 // already hold the mutex.
-func (m *Memory) noteOutcome(txID, reason string) {
+func (m *Memory) noteOutcome(txID, reason string, ended Ended) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.noteOutcomeLocked(txID, reason)
+	m.noteOutcomeLocked(txID, reason, ended)
 }
 
 // watchTimeout drains the registry entry for `txID` when its
@@ -364,7 +412,7 @@ func (m *Memory) watchTimeout(ctx context.Context, txID string) {
 	entry, ok := m.txs[txID]
 	if ok {
 		delete(m.txs, txID)
-		m.noteOutcomeLocked(txID, "the transaction exceeded its tx_timeout_ms and was rolled back by the registry's orphan watcher")
+		m.noteOutcomeLocked(txID, "the transaction exceeded its tx_timeout_ms and was rolled back by the registry's orphan watcher", EndedNotCommitted)
 	}
 	// Deliberately NOT lease-aware, unlike Commit / Rollback.
 	// This is the reclaimer of last resort and its ctx has
@@ -399,7 +447,10 @@ func (m *Memory) watchTimeout(ctx context.Context, txID string) {
 // issuing statements (see [Memory.take]); [ErrTxBusy] when that
 // wait runs out, with the transaction left open and retryable.
 func (m *Memory) Commit(ctx context.Context, txID string) error {
-	entry, err := m.take(ctx, txID, "the transaction was committed", true)
+	// Recorded as "being committed" (kind unknown) while the database
+	// commit runs: a coordinator settling an ambiguous Commit must not
+	// read "committed" off a commit that can still fail.
+	entry, err := m.take(ctx, txID, "the transaction is being committed", true)
 	if err != nil {
 		return err
 	}
@@ -424,9 +475,10 @@ func (m *Memory) Commit(ctx context.Context, txID string) error {
 		// out for clarity. Deferred work is dropped: the writes it
 		// would announce do not exist.
 		_ = entry.tx.Rollback()
-		m.noteOutcome(txID, "the underlying database transaction failed to commit")
+		m.noteOutcome(txID, "the underlying database transaction failed to commit", EndedNotCommitted)
 		return fmt.Errorf("txregistry: Commit %q: %w", txID, err)
 	}
+	m.noteOutcome(txID, "the transaction was committed", EndedCommitted)
 	// The writes are durable now — release the work that was waiting on
 	// exactly this moment. Runs outside the registry lock so a callback
 	// may re-enter the registry, and after the entry was taken, so a
@@ -618,7 +670,7 @@ func (m *Memory) drainIfDoomedLocked(txID string, entry txEntry) (txEntry, bool)
 		return txEntry{}, false
 	}
 	delete(m.txs, txID)
-	m.noteOutcomeLocked(txID, entry.doomCause)
+	m.noteOutcomeLocked(txID, entry.doomCause, EndedNotCommitted)
 	return entry, true
 }
 
@@ -916,12 +968,16 @@ func (m *Memory) take(ctx context.Context, txID, outcome string, commit bool) (t
 		}
 		if entry.adopters == 0 {
 			delete(m.txs, txID)
-			if entry.doomed {
+			switch {
+			case entry.doomed:
 				// Whoever finishes a doomed entry rolls it back, so the
 				// recorded outcome is the doom's, not the caller's.
-				m.noteOutcomeLocked(txID, entry.doomCause)
-			} else {
-				m.noteOutcomeLocked(txID, outcome)
+				m.noteOutcomeLocked(txID, entry.doomCause, EndedNotCommitted)
+			case commit:
+				// Settled by Commit once the database answers.
+				m.noteOutcomeLocked(txID, outcome, EndedUnknown)
+			default:
+				m.noteOutcomeLocked(txID, outcome, EndedNotCommitted)
 			}
 			m.mu.Unlock()
 			announced = false
