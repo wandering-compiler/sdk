@@ -152,6 +152,9 @@ var credentialHeaders = map[string]bool{
 	// in the gateway-owned namespace, so it is named here explicitly rather
 	// than caught by the segment rule below.
 	"x-w17-credential": true,
+	// A DPoP proof (RFC 9449), sent next to `authorization: DPoP <token>`:
+	// a signed JWS bound to this request.
+	"dpop": true,
 }
 
 // credentialNameSegments flag a header as credential-bearing when any
@@ -235,7 +238,8 @@ func LabelsFromContext(ctx context.Context) map[string]string {
 	}
 	var labels map[string]string
 	for k, vs := range md {
-		if len(vs) == 0 || len(k) <= len(LabelKeyPrefix) || k[:len(LabelKeyPrefix)] != LabelKeyPrefix {
+		// An empty value is no label, as principal.Label reads it.
+		if len(vs) == 0 || vs[0] == "" || len(k) <= len(LabelKeyPrefix) || k[:len(LabelKeyPrefix)] != LabelKeyPrefix {
 			continue
 		}
 		if labels == nil {

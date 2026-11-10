@@ -435,7 +435,9 @@ func entitled(isolation bool, eventLabels, principalLabels map[string]string) bo
 // labels. (See [entitled] for the unlabelled-event isolation rule.)
 func labelsSubset(eventLabels, principalLabels map[string]string) bool {
 	for k, v := range eventLabels {
-		if principalLabels[k] != v {
+		// Presence, not the zero value: a missing key reads as "", which
+		// would match an empty-valued event label.
+		if pv, ok := principalLabels[k]; !ok || pv != v {
 			return false
 		}
 	}

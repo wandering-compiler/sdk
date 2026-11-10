@@ -187,7 +187,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| Event context (I8) | Principal relay into subscribers (I10) | The subscriber runs with the emitter's principal and scopes carried in `Event.Metadata`, and the metadata carries no credentials. | `TestEventContextReaders_*`, `TestMetadataFromContext_DropsCredentials` |
+| Event context (I8) | Principal relay into subscribers (I10) | The subscriber runs with the emitter's principal and scopes carried in `Event.Metadata`, and the metadata carries no credentials — a DPoP proof (E35, E37) included. | `TestEventContextReaders_*`, `TestMetadataFromContext_DropsCredentials`, `TestMetadataFromContext_DropsTheDPoPProof` |
 | Event labels (I8) | Server-sent-events hub audience (I9) | Labelled events reach only principals holding every label; unlabelled events reach nobody under isolation. | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEvent*`, `TestEmitInvalidate_*` |
 | Principal, gateway side (I11) | Event context (I8) | A client cannot inject `x-w17-*` or `w17-label-*` keys into an event envelope. | `TestWithGatewayMD_SanitizesBothSides` |
 | Principal relay (I12) | Dispatcher (I1) | An emit reached through several tiers keeps its scopes and labels. | `TestForwardToOutgoing_SecondHopKeepsTheLabel` |

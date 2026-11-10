@@ -390,7 +390,7 @@ subscriber that does not use the generated dispatch and for an envelope from a
 publisher outside the SDK.
 
 Credential rule: `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and
-`x-w17-credential` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
+`x-w17-credential` and the DPoP proof `dpop` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
 plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
 `apikey`, `api`+`key`, `cookie`, `credential(s)`, `jwt`, `passwd`, `password`,
 `secret`, `session`, `token`. The gateway-owned namespaces (`x-w17-*`,
@@ -399,7 +399,8 @@ plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
 Repeated keys collapse to one value, chosen as the key's reader on the subscriber
 side chooses: the first value for the gateway-owned namespaces, the last value for
 every other key (the metadata-binding convention the locale readers follow). `LabelsFromContext`
-extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
+extracts `w17-label-<name>` entries with a non-empty value into `Event.Labels`, the event's audience
+(an empty value is no label, as `principal.Label` reads it).
 `EmitInvalidate` dispatches an `InvalidateEvent` on the reserved topic
 `w17.invalidate`, labelled from the context like any other event. The event is
 not the domain's envelope; only the hub (`EveryTopic`) and filters naming `w17`
@@ -415,6 +416,7 @@ receive it (I2.7).
 | I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel. | `TestMetadataFromContext_DropsCredentials` |
 | I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` |
 | I8.6 | A delivery whose envelope metadata carries `w17-tx-id` or `w17-conn-id` (any letter case) MUST be refused on every transport before any handler runs, reported, and dead-lettered through the transport's normal failure path; the key as a value, in labels, or as part of a longer name MUST NOT be refused. | `TestEnvelopeGuard_Memory`, `TestEnvelopeGuard_NATS_Embedded`, `TestEnvelopeGuard_Redis_Embedded`, `TestEnvelopeGuard_RefusedEnvelopeIsDeadLettered_Redis`, `TestEnvelopeGuard_RefusedKeysAreStrippedOnEmit` |
+| I8.7 | A DPoP proof (`dpop`, any letter case, also behind `grpcgateway-`) MUST NOT ride `Event.Metadata` and MUST be a reserved key for the subscriber-side filter; a label with an empty value MUST NOT be extracted into `Event.Labels`. | `TestMetadataFromContext_DropsTheDPoPProof`, `TestLabelsFromContext_DropsEmptyValues` |
 
 **Deliberate limits.**
 - The delivery refusal reads field 50001 only. A hand-written envelope that keeps its metadata elsewhere is not checked.
@@ -441,8 +443,8 @@ by labels.
 | Per-write deadline | 30 s | — |
 
 **Audience rule.** With isolation, an unlabelled event reaches nobody; a labelled
-event reaches a client only if every event label is present with the same value in
-the principal's labels. A client whose principal cannot be resolved receives nothing.
+event reaches a client only if every event label is present (a missing key is not
+an empty value) with the same value in the principal's labels. A client whose principal cannot be resolved receives nothing.
 
 **Guarantees.**
 
@@ -457,6 +459,7 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | I9.8 | A write to a stalled client MUST end within the write deadline. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
 | I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | `TestEventbusEventSource_ResumesAfterTheBrokerRecreatesItsConsumer` |
+| I9.10 | An event label MUST be matched by presence: an empty-valued event label MUST NOT be granted to a principal that lacks the label. | `TestEntitled_ALabelMustBePresentNotMerelyEqualToTheZeroValue` |
 
 **Deliberate limits.**
 - Deliveries are always acked; nothing is retried.
