@@ -1329,7 +1329,7 @@ the HTTP request or gRPC metadata and answers refusals itself.
 | `WithMaxJTIsPerKey(n)` | 10 000 entries per key thumbprint | `n <= 0` keeps the default; a key at its share is refused with `ErrJTIStoreFull`, other keys are not affected |
 | `MaxProofBytes` / `MaxJTIBytes` | 8 KiB / 256 bytes | Longer → `ErrMalformed` |
 | `GenerateKey(kt)` | `KeyP256` | `KeyEd25519`; anything else → `ErrUnsupportedKey` |
-| `Request.AccessToken` / `Request.Binding` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed) |
+| `Request.AccessToken` / `Request.Binding` / `Request.BindingLookup` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed). `BindingLookup` answers the binding when `Binding` is empty, called only once the proof's signature, nonce, target and ath checks passed; its error is returned as is |
 | `Request.Path` | required | Must start with `/`; anything else → `ErrHTUMismatch` |
 
 **Shares.** E37 (the REST wiring), E38 (shared stores). Every replica configured with the same nonce key
@@ -1507,6 +1507,7 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 | E37.21 | Only `lib/dpop`, its subpackages, `lib/restgw/dpopgw`, and `tooling/e2e/dpope2e` MAY import `lib/dpop` or go-jose, and `tooling/migrate/migratecli` (a deployment's console fetch must sign when the console binds devices — T4) only `lib/dpop` and `lib/dpop/dpopclient`, never go-jose; every other package MUST NOT, so the DPoP dependency stays opt-in | `TestDPoPImportsStayInsideTheOptInPackages` |
 | E37.22 | `CachedAuthFuncWithDecision` MUST bypass without reading or filling, keep namespaces apart from each other and from un-namespaced entries, neither key on nor be defeated by `IgnoreHeader`, and behave as `CachedAuthFuncWithKeyHeaders` for the zero decision or a nil hook | `TestCachedAuthFuncWithDecision` |
 | E37.23 | A mint request the verifier accepted unrecorded (`dpop.MintFullAcceptUnrecorded`, full mint store) MUST reach `next` with `Verified.MintUnrecorded` set and no device; a recorded one, or any one under the default policy, MUST NOT be reported unrecorded | `TestDPoPGate_MintUnrecordedIsReported` |
+| E37.24 | The gate MUST ask `BindingFunc` only for a proof that verified (signature, nonce, target, ath): a forged proof, a proof for another path or one without a nonce MUST be refused without the lookup, a good one MUST cost exactly one lookup, and a proof by another key MUST still be a binding mismatch | `TestGate_BindingIsLookedUpOnlyForAProofThatVerified` |
 
 **Deliberate limits.**
 - The gate does not decide what a token is worth; `dpopgw.BindingFunc` and the auth method do.
