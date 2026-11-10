@@ -629,7 +629,26 @@ message LockEditIntent {
     EditInfraIntent edit_infra = 28;
     RemoveGrpcClientIntent remove_grpc_client = 29;
     RemoveBusinessBundleIntent remove_business_bundle = 30;
+    SetCodegenVersionIntent set_codegen_version = 31;
   }
+}
+
+// SetCodegenVersionIntent sets (or clears) `lock.codegen_version` — the codegen
+// engine the project generates with. A console routes each run to the engine
+// the pin resolves to, among the engines it carries.
+//
+// Two shapes, validated server-side like the SDK pin:
+//   - a release channel, `vMAJOR.MINOR` (`v0.1`): the newest patch of that
+//     minor the console carries. A patch is never pinned — fixes reach every
+//     project on the minor with no action.
+//   - an RC, an exact canonical version whose prerelease starts `rc.`
+//     (`v0.2.0-rc.3`): exactly that engine, and only for a project the
+//     console has opted in to RCs.
+//
+// Empty clears the pin: the console then generates with its newest release
+// channel and says so with a notice.
+message SetCodegenVersionIntent {
+  string version = 1;
 }
 
 // SetInfraIntent replaces the lock's whole `infra` block (`w17ctl infra
@@ -1184,6 +1203,69 @@ message PlaceGenerateStart {
   // Which generating RPC the run is. Zero is GenerateProject, so a client that
   // predates the field places what it always placed.
   PlacementOp op = 3;
+
+  // The codegen version handshake: the one place the console decides which
+  // engine runs the project. Every field below is additive: a client that predates them sends none,
+  // and the console then answers as for a project with no pin on a client
+  // speaking stream protocol 1.
+  //
+  // codegen_version is the lock's `codegen_version`, sent typed so the
+  // console routes without decoding the lock. Empty for a lock with no pin
+  // (and for PLACEMENT_OP_PLUGIN_PB, which has no lock).
+  string codegen_version = 4;
+  // w17ctl_version is the client's own build version ("dev" for a local
+  // build), for the envelope's REQUIRES_CLIENT notice.
+  string w17ctl_version = 5;
+  // supported_stream_protocols are the generating-stream protocols this client
+  // speaks (CodegenEnvelope.stream_protocol). Empty means {1}.
+  repeated int32 supported_stream_protocols = 6;
+  // metadata is room to grow. A console ignores keys it does not know; no key
+  // is defined yet.
+  map<string, string> metadata = 7;
+}
+
+// CodegenEnvelope is the console's answer to the handshake, beside the
+// placement: which engine runs this project and what the client should tell
+// its user about it. A fixed, typed shape because w17ctl reads it — new facts
+// arrive as notices, which an older client prints by their text.
+message CodegenEnvelope {
+  // engine_version is the exact engine the run goes to (`v0.1.0-rc.71`), or
+  // "dev" on a console that does not know its own version.
+  string engine_version = 1;
+  // latest_version is the newest release engine the console carries;
+  // update_available says the project's pin resolves to an older minor.
+  string latest_version = 2;
+  bool update_available = 3;
+  // superseded_by is the newer minor already out (`v0.2`) when the pin is the
+  // older minor of the window. Support for the pin ends when the next minor
+  // after it ships — there is no date, only that release.
+  string superseded_by = 4;
+  // stream_protocol is the generating-stream protocol the engine speaks; the
+  // client opens the stream in it.
+  int32 stream_protocol = 5;
+  repeated CodegenNotice notices = 6;
+}
+
+// CodegenNotice is one thing the console wants said. A client that does not
+// know `kind` prints `text` (and `url` when set), so a new kind needs no client
+// release.
+message CodegenNotice {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // The project's pin is behind the newest minor.
+    UPDATE_AVAILABLE = 1;
+    // The pin is the older minor of the window; the next minor ends it.
+    SUPERSEDED = 2;
+    // The engine needs a different w17ctl than the one placing the run.
+    REQUIRES_CLIENT = 3;
+    // The lock carries no codegen_version; the console chose for it.
+    NO_PIN = 4;
+    // The engine is a release candidate.
+    RELEASE_CANDIDATE = 5;
+  }
+  Kind kind = 1;
+  string text = 2;
+  string url = 3;
 }
 
 // PlacementOp names the generating RPC a placement is for. Every one of them
@@ -1226,6 +1308,10 @@ message PlaceGenerateResponse {
   // Warnings raised while signing (an organization stamp the console could
   // not complete, say), printed by the client like a run's warnings.
   repeated string warnings = 4;
+  // The handshake's answer: the engine the run is bound to, and what to tell
+  // the user about it. Set on the answer to `start` only, like
+  // signed_lock_yaml; a console that predates it sends none.
+  CodegenEnvelope envelope = 5;
 }
 
 // PlaceGenerateQueued — no worker is free yet.
@@ -1338,6 +1424,10 @@ message PlaceGenerateGranted {
   string cert_fingerprint = 2;
   // Single-use ticket, sent as the `w17-cluster-ticket` metadata of the
   // GenerateProject call. Valid for a short claim window only.
+  //
+  // The call also carries `w17-cluster-engine: <envelope.engine_version>`
+  // when the envelope names one. The relay refuses a call whose header names
+  // another engine than the reservation's; the worker routes on it.
   string ticket = 3;
 }
 
@@ -1456,6 +1546,11 @@ message LockView {
   // sealed `.env.enc` files and certificates beside the generated stack. Only
   // files carrying the generated-code marker are ever pruned.
   repeated string prune_paths = 24;
+
+  // codegen_version is the lock's codegen engine pin, read so the client can
+  // send it typed in the codegen handshake (PlaceGenerateStart). Empty for a
+  // lock without one.
+  string codegen_version = 28;
 
   // 18 was a `gen_dir` projection, added and withdrawn on 2026-09-15. It went
   // out in one SDK snapshot and one console deploy before being reverted: no
