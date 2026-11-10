@@ -472,7 +472,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 |---|---|---|
 | `<PREFIX>_CORS_ORIGINS` (CSV) | unset → middleware disabled | — |
 | `<PREFIX>_CORS_METHODS` | `GET, POST, PUT, PATCH, DELETE, OPTIONS` | — |
-| `<PREFIX>_CORS_HEADERS` | `Content-Type, Authorization, W17-Org` | — |
+| `<PREFIX>_CORS_HEADERS` | `Content-Type, Authorization, W17-Org, W17-Captcha-Token` | — |
 | `<PREFIX>_CORS_ALLOW_CREDENTIALS` | false | `1/true/yes/on` → true |
 | `<PREFIX>_CORS_MAX_AGE` | 600 | `0` → header omitted; negative or invalid → 600 |
 | `CORSConfig.ExposedHeaders` | empty → no `Access-Control-Expose-Headers` | Set in code (no env var); `WithDPoPCORS` (E37) adds the DPoP response headers |
@@ -493,8 +493,8 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 
 **Deliberate limits.**
 - Disallowed origins are still served; the browser enforces CORS.
-- The WebSocket upgrade is governed by the library's same-origin check, not by this
-  configuration.
+- The WebSocket upgrade follows the allowlist's explicit origins only (same origin plus every
+  listed origin; `*` opens no socket to other sites — matrix CORS × WebSocket, E15.10).
 
 ---
 
@@ -579,9 +579,14 @@ close detection for write-only sockets.
 | E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used: a write to a client that stopped reading MUST fail within the timeout and the handler return | `TestWSWriteProtoWithTimeout_StalledClientEndsTheStream`, `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
 | E15.7 | One inbound message MUST be accepted up to `MaxWebSocketMessageBytes`, by default the REST body cap, so a frame that is a valid REST body is a valid stream message | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable` |
 | E15.8 | An error close MUST always send a close frame (1008 for a refusal): the close reason is cut to fit and stays valid UTF-8, and the full sentence arrives in the error frame | `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly`, `TestWSCloseReason_FitsAndStaysValidUTF8` |
+| E15.9 | The bounded terminal writers (`WSWriteGRPCErrorWithTimeout`, `WSWriteErrorWithDetailsWithTimeout`, timeout > 0) MUST write the error frame and then close even when the caller's context is already cancelled (the re-auth watchdog's way of ending a socket): the write is detached from that cancellation, keeps its values, and is bounded by the timeout | `TestWSTerminalFrame_IsWrittenOnACancelledContext` |
+| E15.10 | `AcceptWebSocket` MUST accept an upgrade from the gateway's own origin and from every origin the CORS allowlist names explicitly, and refuse any other browser origin; `*` opens no socket to other sites | `TestAcceptWebSocket_HonoursTheCORSAllowlist`, `TestAcceptWebSocket_SameOriginBehindCORS` |
 
 **Deliberate limits.**
-- Cross-origin browser clients are refused by the library's same-origin check.
+- A cross-origin browser client is refused unless the CORS allowlist (E12) names its origin
+  explicitly (E15.10); the `*` wildcard does not open sockets.
+- With a timeout of 0 the terminal writers use the caller's context as is: a cancelled
+  context then sends only the close frame.
 
 ---
 

@@ -616,10 +616,15 @@ func wsCloseReason(reason string) string {
 // WSWriteErrorWithDetailsWithTimeout wraps WSWriteErrorWithDetails with a
 // derived ctx deadline so the validation-rejection frame + close
 // can't pin the goroutine. timeout of 0 disables the bound.
+//
+// With a bound, the frame is written on a context detached from ctx's
+// cancellation (its values kept): a terminal frame is usually written
+// BECAUSE ctx ended — the re-auth watchdog cancels it — and a write on a
+// cancelled context sends nothing, leaving the client a bare close.
 func WSWriteErrorWithDetailsWithTimeout(ctx context.Context, conn *websocket.Conn, code, message string, details []FieldError, timeout time.Duration) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
 	}
 	WSWriteErrorWithDetails(ctx, conn, code, message, details)
@@ -654,11 +659,14 @@ func WSWriteGRPCError(ctx context.Context, conn *websocket.Conn, err error) {
 
 // WSWriteGRPCErrorWithTimeout wraps WSWriteGRPCError with a derived ctx
 // deadline so the terminal error frame + close can't pin the
-// goroutine. timeout of 0 disables the bound.
+// goroutine. timeout of 0 disables the bound. As in
+// [WSWriteErrorWithDetailsWithTimeout], a bounded write does not inherit
+// ctx's cancellation, so the frame still reaches a client whose stream
+// ended because ctx was cancelled.
 func WSWriteGRPCErrorWithTimeout(ctx context.Context, conn *websocket.Conn, err error, timeout time.Duration) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
 	}
 	WSWriteGRPCError(ctx, conn, err)
