@@ -141,6 +141,50 @@ type Surface struct {
 	api      w17pb.RequestApi
 	purposes Purposes
 	pipe     *Pipeline[*Record]
+
+	// credentialPages are the referrers seen on a credential route
+	// (Method.URLCredential): the capability-link pages that called it. A
+	// later call from the same page carries the same credential in its
+	// referrer, so it records none either. Bounded, oldest out first.
+	credMu          sync.Mutex
+	credentialPages map[string]struct{}
+	credentialOrder []string
+}
+
+// maxCredentialPages bounds [Surface.credentialPages].
+const maxCredentialPages = 1024
+
+func (s *Surface) noteCredentialPage(referrer string) {
+	s.credMu.Lock()
+	defer s.credMu.Unlock()
+	if _, ok := s.credentialPages[referrer]; ok {
+		return
+	}
+	if s.credentialPages == nil {
+		s.credentialPages = map[string]struct{}{}
+	}
+	if len(s.credentialOrder) >= maxCredentialPages {
+		delete(s.credentialPages, s.credentialOrder[0])
+		s.credentialOrder = s.credentialOrder[1:]
+	}
+	s.credentialPages[referrer] = struct{}{}
+	s.credentialOrder = append(s.credentialOrder, referrer)
+}
+
+func (s *Surface) isCredentialPage(referrer string) bool {
+	s.credMu.Lock()
+	defer s.credMu.Unlock()
+	_, ok := s.credentialPages[referrer]
+	return ok
+}
+
+// referrerPage is the referrer without its query and fragment, where a page
+// most often carries a token (`?token=`, `#access_token=`).
+func referrerPage(referrer string) string {
+	if i := strings.IndexAny(referrer, "?#"); i >= 0 {
+		return referrer[:i]
+	}
+	return referrer
 }
 
 // NewRecorder ensures the stream and starts one pipeline per surface.
@@ -347,15 +391,15 @@ func (s *Surface) Start(m *Method) *Record {
 	return &Record{s: s, method: m, start: time.Now()}
 }
 
-// SetClient records what the request says about the client; the referrer
-// only when the method takes no credential in its URL (Method.URLCredential).
+// SetClient records what the request says about the client. The referrer is
+// kept without its query and fragment, and left out on a method that takes
+// its credential in the URL (Method.URLCredential) — the page that called it
+// was opened from a capability link — and on any later record of the surface
+// whose referrer is a page seen calling such a method.
 // It does nothing once the record is finished: the batcher may be reading it.
 func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]string) {
 	if rec == nil || rec.finished {
 		return
-	}
-	if rec.method.URLCredential {
-		referrer = ""
 	}
 	rec.clientCut = rec.clientCut[:0]
 	var cut bool
@@ -365,7 +409,16 @@ func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]stri
 	if userAgent, cut = boundClient(userAgent, MaxClientField); cut {
 		rec.clientCut = append(rec.clientCut, "client.user_agent")
 	}
-	if referrer, cut = boundClient(referrer, MaxClientField); cut {
+	referrer, cut = boundClient(referrerPage(referrer), MaxClientField)
+	switch {
+	case referrer == "" || rec.s == nil:
+	case rec.method.URLCredential:
+		rec.s.noteCredentialPage(referrer)
+		referrer = ""
+	case rec.s.isCredentialPage(referrer):
+		referrer = ""
+	}
+	if cut && referrer != "" {
 		rec.clientCut = append(rec.clientCut, "client.referrer")
 	}
 	if utm, cut = boundUTM(utm); cut {

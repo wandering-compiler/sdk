@@ -847,10 +847,12 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.19 | A record's organization MUST be the caller's `org_id` scope, from the stamped metadata or the auth response; no other scope MAY name one. | `TestRecorder_TheOrgScopeIsTheOrganization` |
 | I20.20 | On Redis, each surface's batch MUST be stored with its subject, its id and its organizations as entry fields, a re-sent batch MUST be stored once within the duplicate window, and entries past the max age MUST be trimmed on publish. | `TestRedisSink_StoresTheBatchWithItsSubjectAndOrgs`, `TestRedisSink_ARetriedBatchIsStoredOnce`, `TestRedisSink_TrimsPastMaxAge` |
 | I20.21 | A handler that panics after `Begin` MUST still be recorded, with the status written before the panic or 500, and the panic MUST go on unrecovered; a second `Begin` in one request MUST NOT drop the first record: every record begun is finished with the request's status. | `TestHTTPMiddleware_HandlerPanicAfterBeginIsStillRecorded`, `TestHTTPMiddleware_SecondBeginKeepsTheFirstRecord` |
+| I20.22 | A referrer MUST be recorded without its query and fragment; a method that takes its credential in the URL (`Method.URLCredential`) MUST record no referrer, and a later record of the same surface whose referrer is a page seen calling such a method MUST record none either. | `TestHTTPMiddleware_URLCredentialRouteRecordsNoReferrer`, `TestHTTPMiddleware_ReferrerKeepsNoQueryAndOrdinaryPagesKeepTheirPath` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
 - One record per request: a second recorded backend call in the same admin request is not recorded.
+- Capability-link pages are learned per surface and per process (the last 1024): a call made from such a page before it called its credential route, or served by another replica, records the page's path, credential included when the credential is in the path.
 - Consent is not the recorder's to enforce: a marketing record is the project's usage data, and whether its caller may be sent marketing messages is for the consumer that sends them, which reads `marketing_consent`.
 
 ## I21. Request event consumers
