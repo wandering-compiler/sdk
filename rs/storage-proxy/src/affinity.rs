@@ -7,6 +7,14 @@
 //! map entries; the backend's own orphan-rollback watcher reclaims the
 //! `*sql.Tx` independently.
 //!
+//! The TTL is an IDLE timeout: every routed call of the transaction
+//! ([`AffinityMap::lookup`]) starts it again. Counted from `Begin` alone, a
+//! transaction that is busy past it — one whose caller chose a
+//! `tx_timeout_ms` longer than the TTL — lost its route mid-way, and its
+//! Rollback with it, while storage still held it open. Storage stays the
+//! authority on how long a transaction may live: past its own timeout it
+//! answers the routed call itself.
+//!
 //! Clock is injected (`Clock` trait) so TTL expiry is deterministically
 //! unit-testable without sleeping.
 
@@ -80,13 +88,17 @@ impl AffinityMap {
         );
     }
 
-    /// Look up the replica for `conn_id`. Returns `None` if absent or
-    /// expired (an expired entry is dropped as a side effect).
+    /// Look up the replica for `conn_id` and start its TTL again (the
+    /// transaction is in use). Returns `None` if absent or expired (an
+    /// expired entry is dropped as a side effect).
     pub fn lookup(&self, conn_id: &str) -> Option<usize> {
         let now = self.clock.now();
         let mut map = self.guard();
-        match map.get(conn_id) {
-            Some(e) if e.expires_at > now => Some(e.replica),
+        match map.get_mut(conn_id) {
+            Some(e) if e.expires_at > now => {
+                e.expires_at = now + self.ttl;
+                Some(e.replica)
+            }
             Some(_) => {
                 map.remove(conn_id);
                 None
@@ -220,6 +232,18 @@ mod tests {
         m.insert("c1".into(), 3); // refresh: now expires at 1900
         clock.store(1800, Ordering::SeqCst);
         assert_eq!(m.lookup("c1"), Some(3));
+    }
+
+    #[test]
+    fn lookup_refreshes_ttl() {
+        let (m, clock) = map_with_clock(1000);
+        m.insert("c1".into(), 3);
+        clock.store(900, Ordering::SeqCst);
+        assert_eq!(m.lookup("c1"), Some(3)); // in use: now expires at 1900
+        clock.store(1800, Ordering::SeqCst);
+        assert_eq!(m.lookup("c1"), Some(3)); // and now at 2800
+        clock.store(2900, Ordering::SeqCst);
+        assert_eq!(m.lookup("c1"), None, "idle past the TTL");
     }
 
     #[test]

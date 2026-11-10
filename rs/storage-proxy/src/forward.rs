@@ -141,7 +141,9 @@ pub async fn handle(
                         .forward_duration(class, elapsed_ms(started));
                     let resp = apply_stamp(resp, stamp_conn_id);
                     if let Some(id) = evict {
-                        router.affinity.evict(&id);
+                        if finished(&resp) {
+                            router.affinity.evict(&id);
+                        }
                     }
                     if let Some(s) = span.take() {
                         s.finish(GRPC_OK);
@@ -216,6 +218,22 @@ async fn forward(
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         .boxed();
     Ok(Response::from_parts(resp_parts, boxed))
+}
+
+/// Whether a Commit/Rollback the replica answered finished the transaction,
+/// so its route can go. A trailers-only `UNAVAILABLE` (status in the leading
+/// headers) is the replica refusing the call — draining, overloaded — before
+/// it ran, so the transaction is still open there: the route stays for the
+/// caller's retry and for its settle Rollback, which would otherwise be
+/// refused as an unknown conn-id and leave the outcome unknown. Every other
+/// answer (an OK, a refusal, a status in the trailers) ends the route; a
+/// second Commit/Rollback of a finished transaction is answered NotFound by
+/// storage anyway.
+fn finished(resp: &Response<ResBody>) -> bool {
+    resp.headers()
+        .get("grpc-status")
+        .map(|v| v.as_bytes() != b"14")
+        .unwrap_or(true)
 }
 
 /// Inject `w17-conn-id` into the response headers without touching the
