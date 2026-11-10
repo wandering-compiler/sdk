@@ -346,8 +346,9 @@ func (s *Surface) Start(m *Method) *Record {
 
 // SetClient records what the request says about the client; the referrer
 // only when the method takes no credential in its URL (Method.URLCredential).
+// It does nothing once the record is finished: the batcher may be reading it.
 func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]string) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	if rec.method.URLCredential {
@@ -356,9 +357,10 @@ func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]stri
 	rec.ip, rec.userAgent, rec.referrer, rec.utm = ip, userAgent, referrer, utm
 }
 
-// SetRequestID records the request id the surface assigned.
+// SetRequestID records the request id the surface assigned; nothing once the
+// record is finished.
 func (rec *Record) SetRequestID(id string) {
-	if rec != nil {
+	if rec != nil && !rec.finished {
 		rec.requestID = id
 	}
 }

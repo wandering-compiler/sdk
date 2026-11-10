@@ -36,7 +36,7 @@ func (c *recordingConn) Invoke(ctx context.Context, method string, args, reply a
 		return c.ClientConnInterface.Invoke(ctx, method, args, reply, opts...)
 	}
 	rec := c.s.Start(m)
-	sl.rec = rec
+	sl.begin(ctx, rec)
 	rec.SetRequestAny(args)
 	rec.SetCallerOutgoing(ctx)
 	err := c.ClientConnInterface.Invoke(ctx, method, args, reply, opts...)

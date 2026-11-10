@@ -14,39 +14,64 @@ import (
 
 // HTTP surfaces (REST, admin): the handler knows the method, the request
 // and the result, the middleware around it knows the status and the
-// client. [Surface.HTTPMiddleware] gives each request a slot; the handler's
-// first line, [Begin], starts the record in it; the middleware finishes it
-// once the handler has returned.
+// client. [Surface.HTTPMiddleware] gives each request a slot holding what
+// the request says about its client; the handler's first line, [Begin] (or
+// the first recorded call through [Surface.Conn]), starts the record in it
+// with those facts already set; the middleware finishes it once the handler
+// has returned.
+//
+// The client facts go in when the record begins, not when the middleware
+// finishes it: a sync audit record is finished inside the handler, before
+// the response, and handed to the batcher there — anything written to it
+// afterwards was lost to the stored record and raced the batcher's read.
 
 type slotKey struct{}
 
-type slot struct{ rec *Record }
+type slot struct {
+	rec *Record
 
-// HTTPMiddleware finishes the record a handler began for the request: the
-// status written, the client (through trustedProxies, as the rate limiter
-// reads it), the request id (requestID may be nil). A nil Surface returns
-// next unchanged.
+	// What the request says about its client, read before the handler ran.
+	ip, userAgent, referrer string
+	utm                     map[string]string
+	requestID               func(context.Context) string
+}
+
+// begin puts rec in the slot and gives it the request's client and its
+// request id, read from ctx — the handler's, so a request id set by any
+// middleware between this one and the handler is seen.
+func (sl *slot) begin(ctx context.Context, rec *Record) {
+	sl.rec = rec
+	rec.SetClient(sl.ip, sl.userAgent, sl.referrer, sl.utm)
+	if sl.requestID != nil {
+		rec.SetRequestID(sl.requestID(ctx))
+	}
+}
+
+// HTTPMiddleware gives the record a handler begins for the request the
+// client (through trustedProxies, as the rate limiter reads it) and the
+// request id (requestID may be nil), and finishes it with the status
+// written. A nil Surface returns next unchanged.
 func (s *Surface) HTTPMiddleware(trustedProxies []netip.Prefix, requestID func(context.Context) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if s == nil {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sl := &slot{}
+			sl := &slot{
+				ip:        clientIP(r, trustedProxies),
+				userAgent: r.UserAgent(),
+				referrer:  r.Referer(),
+				requestID: requestID,
+			}
+			if s.purposes.Marketing {
+				sl.utm = utmOf(r)
+			}
 			sw := &statusWriter{ResponseWriter: w}
 			ctx := context.WithValue(r.Context(), slotKey{}, sl)
 			next.ServeHTTP(sw, r.WithContext(ctx))
 			rec := sl.rec
 			if rec == nil {
 				return // no recorded method served it
-			}
-			var utm map[string]string
-			if s.purposes.Marketing {
-				utm = utmOf(r)
-			}
-			rec.SetClient(clientIP(r, trustedProxies), r.UserAgent(), r.Referer(), utm)
-			if requestID != nil {
-				rec.SetRequestID(requestID(ctx))
 			}
 			st := sw.status
 			if st == 0 {
@@ -67,7 +92,7 @@ func Begin(ctx context.Context, s *Surface, m *Method) *Record {
 	if sl == nil {
 		return nil
 	}
-	sl.rec = s.Start(m)
+	sl.begin(ctx, s.Start(m))
 	return sl.rec
 }
 
