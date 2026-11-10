@@ -47,8 +47,8 @@ type POEntry struct {
 // canonical header order (Project-Id-Version, Language, MIME
 // headers, …) so two runs producing the same entry set
 // produce byte-identical files (modulo POT-Creation-Date,
-// which advances on every call — pass options to suppress if
-// you need full reproducibility).
+// which advances on every call; a caller that needs byte-identical
+// output treats that one header line as noise).
 //
 // Entries are sorted by msgid before emit; ordering is stable
 // across runs given the same input.
@@ -57,6 +57,20 @@ type POEntry struct {
 // + filename convention. Empty `lang` is a parse-time error
 // — gettext consumers don't tolerate a missing Language header.
 func MarshalPO(lang string, entries []POEntry) ([]byte, error) {
+	return marshalPO(lang, entries, nil, nil)
+}
+
+// ownHeaders are the header fields MarshalPO writes itself; a prior
+// catalog's other fields are carried through a merge.
+var ownHeaders = map[string]bool{
+	"project-id-version": true, "pot-creation-date": true, "language": true,
+	"mime-version": true, "content-type": true, "content-transfer-encoding": true,
+}
+
+// marshalPO is MarshalPO plus what a merge carries over from the catalog it
+// replaces: header fields MarshalPO does not write itself (keep), and the
+// translator comments (`# …`) of each msgid (comments).
+func marshalPO(lang string, entries []POEntry, keep gotext.HeaderMap, comments map[string][]string) ([]byte, error) {
 	if lang == "" {
 		return nil, fmt.Errorf("i18n: MarshalPO: lang is empty")
 	}
@@ -72,6 +86,11 @@ func MarshalPO(lang string, entries []POEntry) ([]byte, error) {
 	d.Headers.Set("MIME-Version", "1.0")
 	d.Headers.Set("Content-Type", "text/plain; charset=UTF-8")
 	d.Headers.Set("Content-Transfer-Encoding", "8bit")
+	for k, vs := range keep {
+		if !ownHeaders[strings.ToLower(k)] && len(vs) > 0 {
+			d.Headers[k] = append([]string(nil), vs...)
+		}
+	}
 
 	sorted := make([]POEntry, len(entries))
 	copy(sorted, entries)
@@ -106,7 +125,68 @@ func MarshalPO(lang string, entries []POEntry) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return markFuzzy(out, sorted), nil
+	return addTranslatorComments(markFuzzy(out, sorted), comments), nil
+}
+
+// addTranslatorComments inserts each msgid's translator comments above its
+// entry, before the other comment lines (`#:`, `#,`), as gettext orders them.
+func addTranslatorComments(body []byte, comments map[string][]string) []byte {
+	if len(comments) == 0 {
+		return body
+	}
+	lines := strings.SplitAfter(string(body), "\n")
+	_, found := scanPO(body)
+	at := map[int][]string{} // 0-based line index → comments to insert before it
+	for _, e := range found {
+		c := comments[e.id]
+		if e.ctxt != "" || e.id == "" || len(c) == 0 {
+			continue
+		}
+		start := e.line - 1
+		for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "#") {
+			start--
+		}
+		at[start] = c
+	}
+	var b strings.Builder
+	for i, l := range lines {
+		for _, c := range at[i] {
+			b.WriteString(c)
+			b.WriteByte('\n')
+		}
+		b.WriteString(l)
+	}
+	return []byte(b.String())
+}
+
+// translatorComments reads the translator comments (`#` alone or `# …`;
+// not `#.`, `#:`, `#,`, `#|`, `#~`) above each entry of body, by msgid.
+func translatorComments(body []byte) map[string][]string {
+	lines := strings.Split(string(body), "\n")
+	_, found := scanPO(body)
+	var out map[string][]string
+	for _, e := range found {
+		if e.ctxt != "" || e.id == "" {
+			continue
+		}
+		var c []string
+		for i := e.line - 2; i >= 0; i-- {
+			l := strings.TrimSpace(lines[i])
+			if !strings.HasPrefix(l, "#") {
+				break
+			}
+			if l == "#" || strings.HasPrefix(l, "# ") {
+				c = append([]string{l}, c...)
+			}
+		}
+		if len(c) > 0 {
+			if out == nil {
+				out = map[string][]string{}
+			}
+			out[e.id] = c
+		}
+	}
+	return out
 }
 
 // markFuzzy inserts a `#, fuzzy` line before each entry of body that
@@ -229,7 +309,11 @@ func MarshalJSON(lang string, entries []POEntry) ([]byte, error) {
 //     CompileTimeDefaultLanguage` and empty msgstr otherwise,
 //   - obsolete entries (in `existing` but not in `msgids`)
 //     drop silently, which keeps the format tight; gettext's
-//     `#~ msgid` comment-out is not emitted.
+//     `#~ msgid` comment-out is not emitted,
+//   - an entry's `#, fuzzy` flag and its translator comments
+//     (`# …`) are kept, and so are the header fields MarshalPO
+//     does not write itself (Plural-Forms, Last-Translator,
+//     Language-Team, PO-Revision-Date, …).
 //
 // Use this from codegen orchestrators that want regen to keep
 // adding new msgids over time without overwriting translations.
@@ -244,7 +328,9 @@ func MergePO(existing []byte, lang string, msgids []string) ([]byte, error) {
 	prior.Parse(existing)
 	priorFuzzy := fuzzyIDs(existing)
 	priorMsgstr := map[string]string{}
+	var keep gotext.HeaderMap
 	if d := prior.GetDomain(); d != nil {
+		keep = d.Headers
 		for _, t := range d.GetTranslations() {
 			if t == nil || t.ID == "" {
 				continue
@@ -260,7 +346,7 @@ func MergePO(existing []byte, lang string, msgids []string) ([]byte, error) {
 		}
 		entries = append(entries, POEntry{Msgid: m, Msgstr: msgstr, Fuzzy: ok && priorFuzzy[m]})
 	}
-	return MarshalPO(lang, entries)
+	return marshalPO(lang, entries, keep, translatorComments(existing))
 }
 
 // EntriesFromMsgids returns the POEntry slice that mirrors what
@@ -368,9 +454,9 @@ type DomainCatalogFile struct {
 //
 // **Output writes are "if not exists" at the orchestrator
 // level** — translator edits to existing `.po` files
-// MUST survive regen. The codegen seeds first; msgmerge
-// (adding new msgids while preserving translations) is a
-// follow-up.
+// MUST survive regen. The codegen seeds a missing file here;
+// once it exists, a regen adds new msgids through [MergePO],
+// which keeps the translations.
 func EmitDomainCatalogs(domain, languagesDir string, languages, msgids []string) ([]DomainCatalogFile, error) {
 	if domain == "" {
 		return nil, fmt.Errorf("i18n: EmitDomainCatalogs: domain is empty")
