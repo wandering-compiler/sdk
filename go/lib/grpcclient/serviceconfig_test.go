@@ -45,8 +45,11 @@ func TestDefaultServiceConfig_IsValidJSON(t *testing.T) {
 }
 
 // TestDefaultServiceConfig_RetriesOnlyUnavailable is the SAFETY invariant: the
-// policy may retry ONLY codes.UNAVAILABLE — the request provably never reached
-// the server, so replaying it is safe even for non-idempotent mutations. Any
+// policy may retry ONLY codes.UNAVAILABLE, which grpc-go replays only when the
+// response was Trailers-Only — a transport failure, or a handler answer marked
+// grpcerr.ReplaySafe; a w17 handler's other UNAVAILABLE carries
+// grpcerr.AnsweredHeader and is not replayed
+// (TestDial_AHandlersUnavailableIsNotReplayed). Any
 // code where the server might have already applied the write (ABORTED,
 // DEADLINE_EXCEEDED, INTERNAL, …) must NOT be retryable, or a dropped-response
 // mutation could be double-applied. This pins the exact set so a "let's also

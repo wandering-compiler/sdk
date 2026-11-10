@@ -7,6 +7,7 @@ import base64
 import pytest
 from grpclib.client import Channel
 from grpclib.const import Cardinality, Status
+from grpclib.events import RecvRequest, listen
 from grpclib.exceptions import GRPCError
 from grpclib.server import Server
 
@@ -42,20 +43,27 @@ class FakeStorage:
         self.rows = []
         self.staged = {}
         self.seen = []
-        self.unavailable = 0
+        self.unavailable = 0  # refused before the handler runs (a transport-level answer)
+        self.handler_unavailable = 0  # answered UNAVAILABLE by the handler after its write
         self.n = 0
 
     # NoteStorage
     async def InsertNote(self, ctx, req):
         self.seen.append(("InsertNote", ctx))
-        if self.unavailable:
-            self.unavailable -= 1
-            raise GRPCError(Status.UNAVAILABLE, "try again")
         self.n += 1
         note = self.M("Note")(id=self.n, text=req.text)
         tx = ctx.incoming.first("w17-tx-id")
         (self.staged.setdefault(tx, []) if tx else self.rows).append(note.text)
+        if self.handler_unavailable:
+            self.handler_unavailable -= 1
+            raise GRPCError(Status.UNAVAILABLE, "the upstream went away after the write")
         return note
+
+    async def refuse(self, event):
+        """A grpclib RecvRequest hook: UNAVAILABLE before any handler runs."""
+        if self.unavailable and event.method_name.endswith("/InsertNote"):
+            self.unavailable -= 1
+            raise GRPCError(Status.UNAVAILABLE, "try again")
 
     async def ListNotes(self, ctx, req):
         self.seen.append(("ListNotes", ctx))
@@ -171,6 +179,7 @@ async def stack(pool):
     coord = FakeCoordinator(storage)
     sreg.register("w17.common.distx.W17DistributedTransaction", coord)
     ssrv = Server(sreg.served, status_details_codec=StatusDetailsCodec())
+    listen(ssrv, RecvRequest, storage.refuse)
     await ssrv.start("127.0.0.1", 0)
     sport = ssrv._server.sockets[0].getsockname()[1]
 
@@ -312,6 +321,30 @@ async def test_client_retries_unavailable_three_times(stack, msg):
         await storage.InsertNote(Context(), msg("InsertNoteRequest")(text="r"))
     assert ei.value.status == Status.UNAVAILABLE
     assert stack.storage.unavailable == 0  # exactly three attempts
+
+
+async def test_a_handlers_unavailable_is_answered_and_not_replayed(stack, msg):
+    # The handler wrote, then answered UNAVAILABLE: the response carries
+    # w17-answered before the status, so the client (which replays only a
+    # trailers-only UNAVAILABLE) does not run it again.
+    storage = ServiceClient(stack.conn, "conformance.v1.NoteStorage", stack.registry.pool)
+    before = len(stack.storage.rows)
+    stack.storage.handler_unavailable = 1
+    with pytest.raises(GRPCError) as ei:
+        await storage.InsertNote(Context(), msg("InsertNoteRequest")(text="once"))
+    assert ei.value.status == Status.UNAVAILABLE
+    assert stack.storage.rows[before:] == ["once"], "one write, no replay"
+    async with stack.conn.channel.request(
+        "/conformance.v1.NoteStorage/InsertNote", Cardinality.UNARY_UNARY,
+        msg("InsertNoteRequest"), msg("Note"),
+    ) as raw:
+        stack.storage.handler_unavailable = 1
+        await raw.send_message(msg("InsertNoteRequest")(text="raw"), end=True)
+        await raw.recv_initial_metadata()
+        assert raw.initial_metadata.get("w17-answered") == "1"
+        with pytest.raises(GRPCError):
+            await raw.recv_message()
+            await raw.recv_trailing_metadata()
 
 
 async def test_client_refuses_a_done_context(stack, msg):

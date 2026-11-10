@@ -299,13 +299,13 @@ export class App {
     let redis: events.Dispatcher | undefined;
     try {
       const dsn = ev.natsDsnEnv ? res.get(ev.natsDsnEnv) : "";
-      if (dsn) nats = await events.NatsPublisher.connect(dsn);
+      if (dsn) nats = await events.NatsPublisher.connect(dsn, { domain: this.manifest.domain });
     } catch (e) {
       throw new BootError(`eventbus nats: ${ev.natsDsnEnv}: ${msgOf(e)}`);
     }
     try {
       const dsn = ev.redisDsnEnv ? res.get(ev.redisDsnEnv) : "";
-      if (dsn) redis = await events.RedisPublisher.connect(dsn);
+      if (dsn) redis = await events.RedisPublisher.connect(dsn, { domain: this.manifest.domain });
     } catch (e) {
       throw new BootError(`eventbus redis: ${ev.redisDsnEnv}: ${msgOf(e)}`);
     }

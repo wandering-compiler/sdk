@@ -34,7 +34,7 @@ plus a round-robin balancer over the replica set. Classification is by
 |---|---|---|
 | **Begin** | `:path` ends with `…/W17DistributedTransaction/Begin` | round-robin a replica; **mint** a fresh `conn_id`; pin `conn_id -> replica` (with TTL); forward; **inject `w17-conn-id` into the response headers** (body untouched). |
 | **In-tx RPC** | request carries `w17-conn-id` (any other path) | look up the pinned replica and forward. Unknown / expired id → gRPC `FAILED_PRECONDITION` (status 9), no upstream call. |
-| **Commit / Rollback** | `:path` ends with `…/Commit` or `…/Rollback`, with `w17-conn-id` | route to the pinned replica, forward, then **evict** the affinity entry. |
+| **Commit / Rollback** | `:path` ends with `…/Commit` or `…/Rollback`, with `w17-conn-id` | route to the pinned replica, forward, then **evict** the affinity entry — unless the replica answered a trailers-only `UNAVAILABLE` (it refused the call before running it, so the transaction is still open there and the caller's retry or settle Rollback must still reach it). A transport failure to the replica keeps the entry too. |
 | **Other** | no `w17-conn-id` | free round-robin load-balance. |
 
 `conn_id` is **proxy-minted and opaque** — storage never produces or
@@ -51,7 +51,7 @@ Upstream connection failures map to `UNAVAILABLE` (status 14).
 |---|---|---|
 | `W17_PROXY_LISTEN` | `0.0.0.0:50051` | listen address (`host:port`). |
 | `W17_PROXY_REPLICAS` | *(required)* | comma-separated replica `host:port` endpoints, e.g. `app-storage-0:50051,app-storage-1:50051`. Empty → fail fast. |
-| `W17_PROXY_AFFINITY_TTL_SECS` | `300` | affinity entry TTL in seconds (aligned with the Go `distx.DefaultOrphanTimeout` = 5 min). |
+| `W17_PROXY_AFFINITY_TTL_SECS` | `300` | affinity entry IDLE timeout in seconds (aligned with the Go `distx.DefaultOrphanTimeout` = 5 min): every routed call of the transaction starts it again, so a busy transaction keeps its route however long storage lets it live. |
 | `W17_OTEL_ENDPOINT` | *(unset)* | OTLP/gRPC endpoint for telemetry, e.g. `http://w17-tracing:4317` (same convention as the rest of the project). **Set** → metrics are exported periodically. **Unset/empty** → the telemetry pipeline is never built (zero overhead). |
 | `W17_PROXY_TRACE_SAMPLE_RATIO` | `0.0` | per-RPC span sampling ratio, float in `[0,1]`. `0.0` (default) → **no** per-RPC spans. `> 0` **and** `W17_OTEL_ENDPOINT` set → one sampled span per forwarded RPC. Out-of-range / non-numeric → fail fast. |
 | `RUST_LOG` | `info` | log filter (`tracing-subscriber` env filter). |
@@ -155,12 +155,13 @@ storage-proxy/
 │   ├── otel.rs         # OTEL providers, metric instruments, sampled spans, propagator
 │   └── server.rs       # bind / accept loop / affinity reaper / telemetry lifecycle
 └── tests/
-    └── integration.rs  # fake h2 upstreams: Begin→follow-up→Commit→evict + traceparent passthrough
+    ├── integration.rs  # fake h2 upstreams: Begin→follow-up→Commit→evict + traceparent passthrough
+    └── failure_modes.rs # idle TTL, UNAVAILABLE Commit keeps the route, trailers, dead pinned replica
 ```
 
 ## Tests
 
-- **Unit** (45 tests): `:path` classification, the routing decision
+- **Unit** (53 tests): `:path` classification, the routing decision
   function for every class, affinity insert/lookup/evict/TTL-expiry
   (deterministic via an injected clock), round-robin LB, config
   parsing/validation (incl. the OTEL env vars + sample-ratio bounds), and
@@ -174,6 +175,15 @@ storage-proxy/
   upstream), non-tx traffic round-robins, an unknown `conn_id` is
   rejected without an upstream call, and an incoming `traceparent` /
   `tracestate` reaches the upstream **unchanged** (trace continuity).
+- **Failure modes** (4 tests, `tests/failure_modes.rs`): the affinity TTL
+  is an idle timeout (a transaction busy past it keeps its route and its
+  Rollback reaches the replica; one idle past it is refused `9`); a Commit
+  the replica answers with a trailers-only `UNAVAILABLE` keeps the route,
+  so the settle Rollback reaches the pinned replica; a status carried in
+  the trailers (with `grpc-status-details-bin`) reaches the caller intact
+  on every class of call; a pinned replica that dies mid-transaction is
+  answered `UNAVAILABLE` (`14`) and the call is never re-balanced onto
+  another replica.
 
 The routing **decision** is the pure function
 [`router::decide`](src/router.rs)

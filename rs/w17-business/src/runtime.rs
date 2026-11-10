@@ -437,7 +437,8 @@ impl App {
             Some(Box::new(
                 NatsPublisher::connect(&nats_dsn, Duration::from_secs(30))
                     .await
-                    .map_err(|e| BootError(format!("eventbus nats: {}: {e}", ev.nats_dsn_env)))?,
+                    .map_err(|e| BootError(format!("eventbus nats: {}: {e}", ev.nats_dsn_env)))?
+                    .with_domain(&m.domain),
             ))
         };
         let redis_dsn = get(&ev.redis_dsn_env);
@@ -447,7 +448,8 @@ impl App {
             Some(Box::new(
                 RedisPublisher::connect(&redis_dsn)
                     .await
-                    .map_err(|e| BootError(format!("eventbus redis: {}: {e}", ev.redis_dsn_env)))?,
+                    .map_err(|e| BootError(format!("eventbus redis: {}: {e}", ev.redis_dsn_env)))?
+                    .with_domain(&m.domain),
             ))
         };
         if nats.is_none() && redis.is_none() {

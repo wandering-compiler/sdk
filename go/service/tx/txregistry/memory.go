@@ -431,20 +431,131 @@ func (m *Memory) Commit(ctx context.Context, txID string) error {
 	// exactly this moment. Runs outside the registry lock so a callback
 	// may re-enter the registry, and after the entry was taken, so a
 	// late OnCommit for this id correctly reports "unknown".
-	//
-	// Each callback runs under its own recover. The transaction IS
-	// committed whatever a callback does: a panic escaping here would
-	// skip every later callback (other methods' events) and reach the
-	// coordinator as a failed Commit for a write that landed. The
-	// in-process path (txscope) recovers per hook for the same reason.
-	for i, fn := range entry.onCommit {
-		if p := runHook(fn); p != nil {
-			observx.ReportError(context.WithoutCancel(ctx), fmt.Errorf(
-				"txregistry: after-commit work #%d of committed transaction %s panicked: %v\n%s",
-				i+1, txID, p.value, p.stack))
-		}
-	}
+	runAfterCommit(ctx, txID, entry.onCommit)
 	return nil
+}
+
+// runAfterCommit runs the work parked on a committed transaction, in
+// registration order, on its own goroutine, and waits for it only as long
+// as the caller can still read the reply (see [replyBudget]). Work slower
+// than that — N deferred emits each bounded by the bus's publish timeout
+// while the broker is down — keeps running after Commit returns: the
+// transaction IS committed, and a reply that missed the caller's deadline
+// would make the caller report it as an unknown outcome (and a retrying
+// caller apply the write twice). [WaitAfterCommit] waits for such work at
+// shutdown.
+//
+// Each callback runs under its own recover. The transaction IS committed
+// whatever a callback does: a panic escaping here would skip every later
+// callback (other methods' events) and reach the coordinator as a failed
+// Commit for a write that landed. The in-process path (txscope) recovers
+// per hook for the same reason.
+func runAfterCommit(ctx context.Context, txID string, hooks []func()) {
+	if len(hooks) == 0 {
+		return
+	}
+	reportCtx := context.WithoutCancel(ctx)
+	done := make(chan struct{})
+	afterCommit.add()
+	go func() {
+		defer afterCommit.done()
+		defer close(done)
+		for i, fn := range hooks {
+			if p := runHook(fn); p != nil {
+				observx.ReportError(reportCtx, fmt.Errorf(
+					"txregistry: after-commit work #%d of committed transaction %s panicked: %v\n%s",
+					i+1, txID, p.value, p.stack))
+			}
+		}
+	}()
+	budget, bounded := replyBudget(ctx)
+	if !bounded {
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+		return
+	}
+	if budget <= 0 {
+		return
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
+// replyBudget is how long a Commit may wait for its after-commit work: the
+// time left before the caller's deadline less a margin for the reply to
+// travel (a fifth of what is left, at least 20 ms and at most 1 s). bounded
+// is false when the caller set no deadline; the wait then ends only with the
+// work or the caller's cancellation.
+func replyBudget(ctx context.Context) (budget time.Duration, bounded bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	left := time.Until(deadline)
+	margin := min(max(left/5, 20*time.Millisecond), time.Second)
+	return left - margin, true
+}
+
+// afterCommit counts the after-commit work still running in this process,
+// across every registry.
+var afterCommit workCount
+
+// workCount is a count of running work that can be waited on while work
+// keeps starting (a sync.WaitGroup may not be added to while waited on).
+type workCount struct {
+	mu   sync.Mutex
+	n    int
+	idle chan struct{}
+}
+
+func (w *workCount) add() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.n == 0 {
+		w.idle = make(chan struct{})
+	}
+	w.n++
+}
+
+func (w *workCount) done() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.n--
+	if w.n == 0 {
+		close(w.idle)
+	}
+}
+
+func (w *workCount) wait(ctx context.Context) error {
+	w.mu.Lock()
+	if w.n == 0 {
+		w.mu.Unlock()
+		return nil
+	}
+	idle := w.idle
+	w.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// WaitAfterCommit waits until the after-commit work of every transaction
+// this process committed has finished, or ctx ends (its error is returned).
+// A server calls it once it stopped taking calls and before it closes what
+// the work uses (the event bus): work that outlived its Commit reply runs to
+// its end instead of being cut off by the shutdown.
+func WaitAfterCommit(ctx context.Context) error {
+	return afterCommit.wait(ctx)
 }
 
 // hookPanic is what [runHook] recovered.
@@ -733,8 +844,10 @@ func (m *Memory) Active() int {
 // there is nothing to wait for).
 //
 // Callbacks run in registration order, outside the registry lock, after
-// the underlying Commit returns nil. A failed Commit and any Rollback
-// drop them: the writes are gone, so the events must not be published.
+// the underlying Commit returns nil, on a goroutine Commit waits for only
+// until shortly before its caller's deadline (see [WaitAfterCommit] for the
+// shutdown wait). A failed Commit and any Rollback drop them: the writes
+// are gone, so the events must not be published.
 func (m *Memory) OnCommit(txID string, fn func()) bool {
 	if fn == nil {
 		return false

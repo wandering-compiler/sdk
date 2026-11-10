@@ -524,3 +524,43 @@ func TestCall_DotSegmentIsRefused(t *testing.T) {
 		t.Errorf("%d requests sent, want none", len(up.reqs))
 	}
 }
+
+// A redirect MUST be the upstream's answer, never a second request: the
+// client does not follow it, so the credential it sends never reaches the
+// host the redirect names — a compromised or misconfigured upstream cannot
+// collect the bearer token by answering 302. The call ends with the 3xx as
+// its outcome, after exactly one request, and is not retried.
+func TestCall_RedirectIsNotFollowed(t *testing.T) {
+	var elsewhere []*http.Request
+	var mu sync.Mutex
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		elsewhere = append(elsewhere, r)
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"id":"o1","status":"paid","customer":"c"}`)
+	}))
+	defer other.Close()
+	conn, up := serve(t, "auth=bearer&token=s3cret",
+		reply{status: http.StatusFound, header: map[string]string{"Location": other.URL + "/collect"}})
+	err := conn.Invoke(context.Background(), svcPath+"GetOrdersByOrderId",
+		msg(t, "GetOrdersByOrderIdRequest", `{"orderId":"o1"}`), out("GetOrdersByOrderId"))
+	mu.Lock()
+	followed := len(elsewhere)
+	mu.Unlock()
+	if followed != 0 {
+		t.Fatalf("the redirect was followed: %d request(s) reached the other host (Authorization %q)",
+			followed, elsewhere[0].Header.Get("Authorization"))
+	}
+	if len(up.reqs) != 1 {
+		t.Fatalf("%d requests to the upstream, want exactly 1 (a 3xx is not retried)", len(up.reqs))
+	}
+	if got := up.reqs[0].Header.Get("Authorization"); got != "Bearer s3cret" {
+		t.Fatalf("the upstream got Authorization %q", got)
+	}
+	if err == nil {
+		t.Fatal("a redirect answered as a success")
+	}
+	if i := info(t, err); i.Reason != "UPSTREAM_HTTP_302" || i.Metadata["attempts"] != "1" {
+		t.Errorf("ErrorInfo = %+v, want UPSTREAM_HTTP_302 after 1 attempt", i)
+	}
+}

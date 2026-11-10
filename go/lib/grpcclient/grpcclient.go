@@ -13,11 +13,10 @@
 //     `lib/observx` configured at boot.
 //   - resiliency is ON by default and uniform across every w17
 //     client: a retry service config ([DefaultServiceConfig])
-//     transparently replays `UNAVAILABLE` RPCs — the one code that
-//     means the request never reached the server, so replay is safe
-//     even for non-idempotent mutations — with a channel-level
-//     throttle that stops a backend outage being amplified into a
-//     retry storm; and application keepalive
+//     replays an RPC that failed `UNAVAILABLE` before any handler
+//     answered it (see [DefaultServiceConfig] for exactly when) — with a
+//     channel-level throttle that stops a backend outage being amplified
+//     into a retry storm; and application keepalive
 //     ([DefaultClientKeepalive]) holds an idle service-to-service
 //     connection open across NAT / LB / firewall idle reapers and
 //     detects a half-dead peer mid-call. Both are PAIRED with the
@@ -74,13 +73,30 @@ import (
 // backoff), but an RPC that lands on the connection in the window
 // BEFORE the reconnect completes returns `UNAVAILABLE` — and without a
 // retry policy that error escapes to the caller even though the very
-// next dial would succeed. The policy retries ONLY `UNAVAILABLE`: it
-// means the request never reached the server, so replay is safe even
-// for non-idempotent mutations. Codes where the server may have
-// already applied the write (`ABORTED`, `DEADLINE_EXCEEDED`, …) are
-// deliberately NOT retried. `retryThrottling` is a channel-level token
-// bucket — sustained failures drain it and suspend retries, so a
-// backend outage can't be amplified into a retry storm.
+// next dial would succeed.
+//
+// The policy names only `UNAVAILABLE`, and grpc-go replays a retryable
+// status only when the response was Trailers-Only (the server sent no
+// headers before it). That covers a failure in transport — no
+// connection, a refused or reset stream, a server going away — where the
+// request reached no handler. A handler's own `UNAVAILABLE` is a
+// Trailers-Only response too, and it may follow work the handler already
+// did (a write committed, an upstream called), so it is NOT safe to
+// replay: a w17 server (sdk/go/service/runtime, grpcerr's recovery
+// interceptors) sends it with the `w17-answered` header
+// (grpcerr.AnsweredHeader), which makes the response not Trailers-Only,
+// and the client returns it to its caller. The one handler answer that
+// stays retryable is one marked grpcerr.ReplaySafe: a database that could
+// not be reached at all, so no statement ran. A server that is not a w17
+// server sends no such header, and its handler's `UNAVAILABLE` IS
+// replayed — do not point these clients at one that answers
+// `UNAVAILABLE` after a side effect.
+//
+// Codes where the server may have already applied the write
+// (`ABORTED`, `DEADLINE_EXCEEDED`, …) are never retried.
+// `retryThrottling` is a channel-level token bucket — sustained failures
+// drain it and suspend retries, so a backend outage can't be amplified
+// into a retry storm.
 const DefaultServiceConfig = `{
   "methodConfig": [{
     "name": [{}],

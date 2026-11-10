@@ -76,12 +76,14 @@ type Config struct {
 
 	// Replaced is what the console says `w17ctl migrate replace` superseded
 	// on each connection: connection → replaced migration id → the id that
-	// replaced it (FetchMigrationsResponse.replaced; `--fetch` only). A
-	// replaced migration is never served, so without this a database whose
-	// applied head was replaced looks like one with an unknown past, and the
-	// replacement would run on top of the migration it replaces. With it,
-	// Plan refuses that database before anything runs. Nil = not known (an
-	// on-disk set, or a console from before replace).
+	// replaced it (FetchMigrationsResponse.replaced). A replaced migration
+	// is never served, so without this a database whose applied head was
+	// replaced looks like one with an unknown past, and the replacement would
+	// run on top of the migration it replaces. With it, Plan refuses that
+	// database before anything runs, and Run asks again under the run lock.
+	// Nil = read the list the migration set carries beside its connection
+	// directories (ReplacedFileName, written by `migrate fetch`); a set
+	// without one is judged by the ids alone (refuseHeadOffChain).
 	Replaced map[string]map[string]string
 
 	// ApplierFor opens a per-connection driver. Production wires
@@ -170,6 +172,11 @@ type Pending struct {
 	// equals the first id and the refusal fired forever, blaming a
 	// concurrent run that did not exist.
 	PlannedHead string
+
+	// chain is the connection's history this entry was planned from (oldest
+	// first, ending at the pinned target). Run re-plans the connection from it
+	// when the head under the run lock is not PlannedHead — see planConnection.
+	chain []*applyfetchpb.Migration
 }
 
 // RollbackConfig pins everything RunRollback needs to drive the
@@ -234,6 +241,10 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 	}
 	if cfg.ApplierFor == nil {
 		return nil, fmt.Errorf("migrate.Plan: ApplierFor is nil")
+	}
+	replaced, err := cfg.replacedOf(migFS)
+	if err != nil {
+		return nil, fmt.Errorf("migrate.Plan: %w", err)
 	}
 
 	targets, err := sortedTargets(cfg.Targets)
@@ -334,57 +345,78 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			}
 		}
 
-		if err := refuseReplacedHead(ct.Connection, chain, head, cfg.Replaced[ct.Connection]); err != nil {
+		pend, err := planConnection(ct.Connection, chain, head, replaced[ct.Connection])
+		if err != nil {
 			return nil, err
 		}
-		if err := refuseHeadOffChain(ct.Connection, chain, head); err != nil {
-			return nil, err
-		}
+		out = append(out, pend...)
+	}
+	return out, nil
+}
 
-		// Filter pending. chain is ordered oldest→newest and ends at the
-		// target, so the upper bound is structural now; head=="" →
-		// everything on the chain, otherwise strict-after head.
-		for _, m := range chain {
-			if head != "" && m.GetId() <= head {
-				continue
-			}
-			// A squash baseline whose superseded set contains this
-			// database's applied head describes a schema this database
-			// already has. Record it, run nothing.
-			//
-			// Deliberately keyed on the HEAD rather than on "any applied
-			// id": the head is the one fact the target database reports,
-			// and it is exactly the question being asked — is this
-			// database at a point the baseline replaces? A database that
-			// never applied any of the superseded set has head=="" or an
-			// unrelated id, falls through, and gets the real CREATE.
-			//
-			// And the head must be the LAST id the baseline collapsed, not
-			// merely one of them. A database
-			// mid-range applied a PREFIX of the collapsed set, so the
-			// remainder is exactly the DDL it still needs — adopting there
-			// records the baseline as done and runs none of it, and the
-			// superseded rows are never served again, so the gap is
-			// permanent and silent. Refuse instead: the operator can raise
-			// the database to the end of the range (or rebuild it) and
-			// deploy again, and neither choice is one this tool may make on
-			// its own.
-			adopt := false
-			if head != "" && supersedes(m, head) {
-				last := lastSuperseded(m)
-				if head != last {
-					return nil, fmt.Errorf("connection %s: refusing to adopt squash baseline %s — this database is at %s, which the baseline replaces, but %s is the LAST migration it collapsed. Adopting would record the baseline while never running the DDL between %s and %s, and those migrations are no longer served. Bring the database up to %s before deploying the squash, or rebuild it from the baseline",
-						ct.Connection, m.GetId(), head, last, head, last, last)
-				}
-				adopt = true
-			}
-			out = append(out, Pending{
-				Connection:  ct.Connection,
-				Migration:   m,
-				Adopt:       adopt,
-				PlannedHead: head,
-			})
+// planConnection decides what one connection still needs from the chain that
+// ends at its pinned target, given the database's applied head: the REPLACE
+// refusals (refuseReplacedHead, refuseHeadOffChain), then every chain entry
+// above the head, a squash baseline that supersedes the head marked Adopt.
+//
+// Plan calls it with the head it read before any run lock existed; Run calls
+// it AGAIN when the head it reads under the lock differs, because every one of
+// these decisions depends on the head — a replaced or off-chain head that
+// another deploy applied while this run queued must be refused, and a baseline
+// planned as real DDL for a fresh database must be adopted (or refused) once
+// that database turns out to be at the collapsed range.
+func planConnection(conn string, chain []*applyfetchpb.Migration, head string, replaced map[string]string) ([]Pending, error) {
+	if err := refuseReplacedHead(conn, chain, head, replaced); err != nil {
+		return nil, err
+	}
+	if err := refuseHeadOffChain(conn, chain, head); err != nil {
+		return nil, err
+	}
+	var out []Pending
+	// Filter pending. chain is ordered oldest→newest and ends at the
+	// target, so the upper bound is structural now; head=="" →
+	// everything on the chain, otherwise strict-after head.
+	for _, m := range chain {
+		if head != "" && m.GetId() <= head {
+			continue
 		}
+		// A squash baseline whose superseded set contains this
+		// database's applied head describes a schema this database
+		// already has. Record it, run nothing.
+		//
+		// Deliberately keyed on the HEAD rather than on "any applied
+		// id": the head is the one fact the target database reports,
+		// and it is exactly the question being asked — is this
+		// database at a point the baseline replaces? A database that
+		// never applied any of the superseded set has head=="" or an
+		// unrelated id, falls through, and gets the real CREATE.
+		//
+		// And the head must be the LAST id the baseline collapsed, not
+		// merely one of them. A database
+		// mid-range applied a PREFIX of the collapsed set, so the
+		// remainder is exactly the DDL it still needs — adopting there
+		// records the baseline as done and runs none of it, and the
+		// superseded rows are never served again, so the gap is
+		// permanent and silent. Refuse instead: the operator can raise
+		// the database to the end of the range (or rebuild it) and
+		// deploy again, and neither choice is one this tool may make on
+		// its own.
+		adopt := false
+		if head != "" && supersedes(m, head) {
+			last := lastSuperseded(m)
+			if head != last {
+				return nil, fmt.Errorf("connection %s: refusing to adopt squash baseline %s — this database is at %s, which the baseline replaces, but %s is the LAST migration it collapsed. Adopting would record the baseline while never running the DDL between %s and %s, and those migrations are no longer served. Bring the database up to %s before deploying the squash, or rebuild it from the baseline",
+					conn, m.GetId(), head, last, head, last, last)
+			}
+			adopt = true
+		}
+		out = append(out, Pending{
+			Connection:  conn,
+			Migration:   m,
+			Adopt:       adopt,
+			PlannedHead: head,
+			chain:       chain,
+		})
 	}
 	return out, nil
 }
@@ -406,6 +438,18 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		out = io.Discard
 	}
 
+	// The replaced list is resolved once, here, so the re-plan under the run
+	// lock judges the head by the same list Plan did (a set on disk carries
+	// it beside the artefacts — see replaced.go).
+	if cfg.Replaced == nil {
+		if migFS, fsErr := cfg.migrationsFS(); fsErr == nil {
+			rep, rErr := cfg.replacedOf(migFS)
+			if rErr != nil {
+				return fmt.Errorf("migrate.Plan: %w", rErr)
+			}
+			cfg.Replaced = rep
+		}
+	}
 	pending, err := Plan(ctx, cfg)
 	if err != nil {
 		return err
@@ -472,6 +516,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	// Read once per connection, on first use, which is the same moment
 	// `ac.get` takes the lock.
 	headUnderLock := map[string]string{}
+	// The adopt decision per migration id, for a connection re-planned under
+	// the lock because its head moved (nil entry = Plan's decision stands).
+	adoptUnderLock := map[string]map[string]bool{}
 
 	// What the closing line reports. Only work this run actually did is
 	// counted as applied: a migration skipped because a concurrent run got
@@ -517,6 +564,25 @@ func Run(ctx context.Context, cfg Config) (err error) {
 				return fmt.Errorf("connection %s: refusing to apply %s — the applied head was %q when this run was planned and is %q now, so another run rolled back while this one waited for the lock and nothing the plan decided still describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
 			}
+			// A head that moved FORWARD is not only a skip. Every decision
+			// Plan took from the head — the REPLACE refusals and the squash
+			// adopt — was taken against PlannedHead, so the connection is
+			// planned again against the head that is really there: a head
+			// another deploy applied while this one queued may be one the
+			// console replaced (the replacement would run on top of it), may
+			// sit off the chain, or may be the end of a range a baseline
+			// collapsed (whose DDL must then not run).
+			if h != p.PlannedHead && p.chain != nil {
+				replan, rErr := planConnection(p.Connection, p.chain, h, cfg.Replaced[p.Connection])
+				if rErr != nil {
+					return fmt.Errorf("%w (asked again under the run lock: the applied head moved from %q to %q while this run waited)", rErr, p.PlannedHead, h)
+				}
+				adopt := make(map[string]bool, len(replan))
+				for _, rp := range replan {
+					adopt[rp.Migration.GetId()] = rp.Adopt
+				}
+				adoptUnderLock[p.Connection] = adopt
+			}
 			headUnderLock[p.Connection] = h
 			head = h
 		}
@@ -534,6 +600,11 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		// key); loadConnectionMigrations already did the
 		// keyless content_sha256 integrity check.
 
+		adopt := p.Adopt
+		if re, ok := adoptUnderLock[p.Connection]; ok {
+			adopt = re[p.Migration.GetId()]
+		}
+
 		started := time.Now()
 		if cfg.Fake {
 			// An operator asserting "this database is already at that
@@ -546,7 +617,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			faked++
 			continue
 		}
-		if p.Adopt {
+		if adopt {
 			// This database already sits at a migration the baseline
 			// replaces, so the schema it describes is the schema in front
 			// of us: record it, run none of its DDL. See Pending.Adopt.
@@ -884,7 +955,7 @@ func refuseReplacedHead(conn string, chain []*applyfetchpb.Migration, head strin
 	where := "to " + back
 	if back == "" {
 		to = `""`
-		where = "all the way back (nothing before it on this connection stays live)"
+		where = "to before its first migration (nothing before the replaced one on this connection stays live)"
 	}
 	return fmt.Errorf("connection %s: refusing — this database's applied head %s was replaced by %s in the console (`w17ctl migrate replace`) after it ran here, and the replacement would run on top of it; nothing was applied. "+
 		"Bring this database back onto the history first: roll it back %s with the artefacts it was migrated from (`migrate rollback --to %s --migrations <that directory>`), then deploy again",

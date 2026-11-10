@@ -7,7 +7,8 @@ DPoP proof of possession.
 Packages: `go/lib/restgw` (with `go/lib/restgw/dpopgw`), `go/lib/ratelimit`, `go/lib/mcp`, `go/lib/protojsonx`,
 `go/lib/grpcclient` (dial side; server TLS is in [server.md](server.md)), `go/lib/egress/wire`,
 `go/core/grpcerr` (with `go/core/grpcerr/dialect`), `go/core/grpcx`, `go/lib/dpop` (with
-`go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`); the TypeScript DPoP client is
+`go/lib/dpop/dpopclient` and `go/lib/dpop/dpopstore`), `go/lib/oauthas` (the OAuth authorization-server
+wire), `go/lib/egress` (the egress client runtime); the TypeScript DPoP client is
 `ts/dpop` (`@w17/dpop`), and the admin runtime's use of it is in `ts/admin-runtime`.
 
 Much of the gateway's behaviour is decided by the generated code that calls these helpers:
@@ -23,22 +24,23 @@ assembles this chain; the SDK does not.
 ```
 http.Server
  └─ RecoverPanicMiddleware
-     └─ StripReservedHeadersMiddleware        drops X-W17-Credential
-         └─ ObservabilityMiddleware           otelhttp span + request id
-             └─ CORSMiddleware                preflight answered here (204)
-                 └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
-                     └─ chi router
-                         ├─ per-RPC handler: [AdmitPublic] → [WithURLCredential / WithOrgFromPath]
-                         │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
-                         │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
-                         │        [+ SetDeviceMetadata] → scopes
-                         │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
-                         │      → WriteResponse / WriteGRPCErrorCtx
-                         ├─ SSE / WS handlers: [AdmitPublicStream] → auth → WatchStreamAuth
-                         │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
-                         ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
-                         ├─ ticket issuer (POST): NewTicketIssuer
-                         └─ downloads: auth → ServeDownload
+     └─ ClientAddrMiddleware                  client address + host behind the trusted proxies
+         └─ StripReservedHeadersMiddleware    drops X-W17-Credential
+             └─ ObservabilityMiddleware           otelhttp span + request id
+                 └─ CORSMiddleware                preflight answered here (204)
+                     └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
+                         └─ chi router
+                             ├─ per-RPC handler: [AdmitPublic (Methods.For)] → [WithURLCredential / WithOrgFromPath]
+                             │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
+                             │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
+                             │        [+ SetDeviceMetadata] → scopes
+                             │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
+                             │      → WriteResponse / WriteGRPCErrorCtx
+                             ├─ SSE / WS handlers: [AdmitPublicStreamOf] → auth → WatchStreamAuth
+                             │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
+                             ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
+                             ├─ ticket issuer (POST): NewTicketIssuer (per-address share, E16.11)
+                             └─ downloads: auth → ServeDownload
 ```
 
 Outgoing: `grpcclient.Dial` (gateway → backend) and `grpcx.DialOpts` + `grpcx.Pool` (business
@@ -52,7 +54,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E2 | The w17 JSON dialect | `go/lib/restgw/json.go`, `aliases.go`, `jsoncodec.go` — `Marshaller`, `RegisterJSONMarshaler` |
 | E3 | Error envelope and gRPC → HTTP mapping | `go/lib/restgw/errors.go` — `WriteGRPCErrorCtx` |
 | E4 | Gateway-own refusals | `go/lib/restgw/refusal.go` — `WriteRefusal`, `WriteBadInput` |
-| E5 | Authentication hook and principal threading | `go/lib/restgw/auth.go` — `MakeAuthFunc`, `RequireAuth`, `SetUserMetadata` |
+| E5 | Authentication hook and principal threading | `go/lib/restgw/auth.go` — `MakeAuthFunc`, `RequireAuth`, `SetUserMetadata`; `authcontext.go` — `ClientAddrMiddleware`, `WithAuthMethod`, `AudienceContextMiddleware` |
 | E6 | Auth result cache | `go/lib/restgw/auth.go`, `authlookupcache.go` — `CachedAuthFunc`, `AuthLookupCache` |
 | E7 | URL-carried credentials and reserved-header scrub | `go/lib/restgw/url_credential.go` — `WithURLCredential`, `StripReservedHeadersMiddleware` |
 | E8 | Organization from the path | `go/lib/restgw/org_from_path.go` — `WithOrgFromPath` |
@@ -66,16 +68,16 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E16 | Browser stream auth: tickets | `go/lib/restgw/ws_auth.go`, `ticket.go` — `NewWSAuth`, `NewTicketIssuer`, `MemoryTicketStore` |
 | E17 | Stream re-authentication watchdog | `go/lib/restgw/stream_reauth.go` — `WatchStreamAuth` |
 | E18 | The reserved `w17-events` channel | `go/lib/restgw/w17events.go`, `w17events_eventbus.go` — `HandleW17Events`, `EventbusEventSource` |
-| E19 | Public-method rate-limit adapters | `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream` |
+| E19 | Public-method rate-limit adapters | `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `AdmitPublicStreamOf`, `NonceChallenge` |
 | E20 | Multipart uploads | `go/lib/restgw/upload.go` — `ProcessFilePart`, `RollbackUploads` |
-| E21 | Downloads | `go/lib/restgw/download.go` — `ServeDownload`, `BuildDownloadURL` |
+| E21 | Downloads | `go/lib/restgw/download.go` — `ServeDownload`, `BuildDownloadURL`; `variant_render.go`, `variant_queue.go` — image variants |
 | E22 | Browser redirects | `go/lib/restgw/browserredirect.go` — `WriteBrowserRedirect` |
 | E23 | Pagination links | `go/lib/restgw/pagination.go` |
 | E24 | Query-string enum parsing | `go/lib/restgw/queryenum.go` — `SetEnumField` |
 | E25 | Health handler | `go/lib/restgw` — `HealthHandler` |
-| E26 | Per-client rate limiter | `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope` |
-| E27 | MCP server and transports | `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary` |
-| E28 | MCP auth translation and permission gating | `go/lib/mcp/auth.go`, `server.go` — `DefaultAuthFunc`, `SetPermResolver`, `SetToolPerm` |
+| E26 | Per-client rate limiter | `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`; `methods.go` — `NewMethods`, `Methods` |
+| E27 | MCP server and transports | `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`; `sessions.go` — `SetSessionLimits` |
+| E28 | MCP auth translation, permission gating and protected resource | `go/lib/mcp/auth.go`, `server.go`, `resource.go` — `DefaultAuthFunc`, `SetPermResolver`, `SetToolPerm`, `SetResourceServer` |
 | E29 | Oneof collapse and expand | `go/lib/protojsonx/oneof.go` — `ExpandOneofs` |
 | E30 | Client dial | `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption` |
 | E31 | Inter-tier dial options and principal relay | `go/core/grpcx/dial.go` — `DialOpts`, `InternalTLSEnabled` |
@@ -90,6 +92,8 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E40 | DPoP in the admin runtime | `ts/admin-runtime/src` — `auth.ts` (`configureAuth`, `deviceFetch`), `api.ts`, `oauth.ts`, `Login.tsx`, `App.tsx` |
 | E41 | Captcha verification | `go/lib/captcha` — `Verifier`, `New`, `NewFromEnv`; `go/lib/restgw` — `RequireCaptcha` |
 | E42 | Raw responses | `go/lib/restgw/rawresponse.go` — `WriteRawResponse` |
+| E43 | OAuth 2.1 authorization-server wire | `go/lib/oauthas` — `Mount`, `Config`, `Backend`, `Error`, `CodePath` |
+| E44 | Egress client runtime | `go/lib/egress` — `Register`, `RegisterFromEnv`, `ParseDSN`, `BeforeRequest`, `AfterResponse` |
 
 ---
 
@@ -242,7 +246,7 @@ upload msgids); `observx.ReportRefusal`
 
 ## E5. Authentication hook and principal threading
 
-**Code.** `go/lib/restgw/auth.go` — `MakeAuthFunc`, `NoAuth`, `ClassifyAuthScheme`, `RequireAuth`, `SetUserMetadata`, `GetUserMetadata`, `WriteAuthError`.
+**Code.** `go/lib/restgw/auth.go` — `MakeAuthFunc`, `NoAuth`, `ClassifyAuthScheme`, `RequireAuth`, `SetUserMetadata`, `GetUserMetadata`, `WriteAuthError`; `go/lib/restgw/authcontext.go` — `ClientAddrMiddleware`, `ClientAddrFrom`, `RequestHostFrom`, `WithAuthMethod`, `AuthMethodFrom`, `AudienceContextMiddleware`.
 
 **Purpose.** Runs the surface's auth RPC with all request headers and stores the marshalled
 auth response in outgoing metadata (`x-w17-user`, base64) and on the request context.
@@ -255,6 +259,9 @@ auth response in outgoing metadata (`x-w17-user`, base64) and on the request con
 | `NoAuth()` | — | Always succeeds with nil user data |
 | `ClassifyAuthScheme(r)` | `""` | `Bearer` / `Basic`, case-insensitive |
 | `RequireAuth(authFn, next)` | — | Gate for routes mounted outside per-RPC handlers (SSE, WS) |
+| `ClientAddrMiddleware(trusted)` | — | Records the client address (`ratelimit.HTTPClientAddr` behind `trusted`) and the request host: the first `X-Forwarded-Host` only from a trusted peer, else `Host`; lower-case, without port or trailing dot. Without it both read `""` |
+| `WithAuthMethod(ctx, fullMethod)` | — | The backing RPC a route calls, for the auth method (`AuthMethodFrom`); carried in the context, not a header |
+| `AudienceContextMiddleware(stamps, withHost)` | — | An audience gateway's constant `x-w17-*` stamps (and, with `withHost`, the recorded host) on every request's outgoing metadata; must run inside `ClientAddrMiddleware` |
 
 **Shares.** Auth cache (E6), URL credentials (E7), org from path (E8), WS tickets (E16), stream
 re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which reads
@@ -271,10 +278,16 @@ re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which
 | E5.5 | `GetUserMetadata` MUST treat absent, empty and non-base64 values as "no principal" | `TestAuth_GetUserMetadata_AbsentOrBad`, `TestGetUserMetadata_EmptyValueIsAbsent` |
 | E5.6 | A handler MUST NOT run after a failed auth (per-RPC routes: generated handler; mounted streams: `RequireAuth`) | `TestRequireAuth_TicketSentinel401`, `TestRequireAuth_TransportError500` (mounted streams; per-RPC routes are generated and not covered here) |
 | E5.7 | A client MUST NOT be able to set `x-w17-user` through the REST surface, on any route | `TestEdge_ClientCannotSetReservedMetadataOnAnySurface`, `TestMetadataMiddlewares_RefuseReservedKeysWithoutTheScrub` |
+| E5.8 | `ClientAddrMiddleware` MUST record the caller resolved behind the trusted proxies, never the proxy; without it `ClientAddrFrom` is empty | `TestClientAddrMiddleware_ResolvesTheCaller` |
+| E5.9 | The recorded host MUST be the first `X-Forwarded-Host` only when the peer is a trusted proxy, else `Host`, normalised (lower case, no port, no trailing dot); an untrusted peer's `X-Forwarded-Host` MUST be ignored | `TestClientAddrMiddleware_RecordsTheHost` |
+| E5.10 | `AudienceContextMiddleware` MUST put the gateway's stamps — and, inside `ClientAddrMiddleware` with `withHost`, the recorded host under `principal.HostKey` — on the outgoing metadata of every request, auth-excluded ones included, whatever the client sent | `TestAudienceContextMiddleware` |
+| E5.11 | `WithAuthMethod` MUST round-trip the method through the context | `TestAuthMethod_RoundTrips` |
 
 **Deliberate limits.**
 - `RequireAuth`'s non-ticket errors use the context-free writer (source locale).
 - Multi-valued headers reach the auth method as their first value only.
+- The host is the client's to state (`Host`, or `X-Forwarded-Host` through a trusted proxy): what it
+  chooses is an organization it must be a member of anyway, as with `W17-Org`.
 
 ---
 
@@ -291,7 +304,7 @@ that not every request costs an auth RPC.
 |---|---|---|
 | `<PREFIX>_AUTH_CACHE_TTL_SECONDS` | off | Unset, 0, negative or unparseable → off |
 | `<PREFIX>_AUTH_CACHE_CRED_HEADERS` | none | Extra credential headers folded into the key |
-| Key headers | `Authorization`, `Cookie`, `X-Api-Key`, `X-W17-Credential` | — |
+| Key | The recorded host and client address (E5.8, E5.9), each length-prefixed, then the credential headers `Authorization`, `Cookie`, `X-Api-Key`, `X-W17-Credential` | Without `ClientAddrMiddleware` the key is the credential headers alone |
 | Size ceiling | 8192 entries, swept to 4096 | Not configurable |
 | `NewAuthLookupCache(ttl)` | — | Same key rule for a typed lookup; nil (off) when `ttl <= 0` |
 
@@ -309,6 +322,8 @@ that not every request costs an auth RPC.
 | E6.5 | Every hit MUST return a private copy | `TestAuth_CachedAuthFunc_HitsDoNotShareABackingArray`, `TestAuthLookupCache_HitsDoNotAlias` |
 | E6.6 | The entry count MUST stay bounded under distinct valid credentials; expired entries MUST be reaped without a same-key get | `TestAuthCache_BoundedUnderDistinctValidCredentials`, `TestAuthCache_ReapsExpiredWithoutASameKeyGet` |
 | E6.7 | TTL expiry MUST force a fresh auth call | `TestAuth_CachedAuthFunc_TTLExpiry`, `TestAuthLookupCache_Expires` |
+| E6.8 | A result MUST NOT be answered to another client address than the one it was made for — in the key-header cache, the decision cache (E37) and the lookup cache alike: an auth method may decide by address | `TestAuthCaches_KeyByClientAddress` |
+| E6.9 | A result MUST NOT be answered to another request host than the one it was made for, for the same caller and address, in every cache: an audience may take the organization from the host | `TestAuthCaches_KeyByHost` |
 
 **Deliberate limits.**
 - Revocation is invisible for up to the TTL.
@@ -526,7 +541,7 @@ error frames carrying the same envelope as unary responses, per-write deadlines.
 | E14.2 | Each event MUST be exactly one `data: <single-line json>\n\n` frame | `TestWriteSSEEvent_MultipleFrames` |
 | E14.3 | A backend status mid-stream MUST become `event: error` with the E3 envelope including `details[]`; a non-status error MUST become a generic INTERNAL frame | `TestWriteSSEGRPCErrorCtx_ForwardsDetails`, `TestWriteSSEGRPCError_NonStatusInternal` |
 | E14.4 | With a timeout, each write MUST have a deadline that is cleared afterwards; writers without deadline support fall back to none | `streaming_timeout_test.go` (all), `TestWriteSSEEventWithTimeout_DeadlineInstalled` |
-| E14.5 | A half-open client MUST NOT pin a goroutine when the `WithTimeout` variants are used | covered by E14.4 tests |
+| E14.5 | A half-open client MUST NOT pin a goroutine when the `WithTimeout` variants are used: a write to a client that stopped reading MUST fail within the deadline and the handler return | `TestWriteSSEEventWithTimeout_StalledClientEndsTheStream` |
 
 **Deliberate limits.**
 - Per-RPC streams have no heartbeat (only `w17-events` has one); idle streams can be cut by
@@ -561,7 +576,7 @@ close detection for write-only sockets.
 | E15.3 | Protobuf mode MUST require binary frames, JSON mode text frames | `TestWSReadProto_ExpectedBinaryGotText` |
 | E15.4 | A graceful client close on a write-only socket MUST cancel the stream context | `TestWSWatchClientClose_GracefulCloseReleasesTheStream` |
 | E15.5 | Error frames MUST forward `details[]` and close the socket | `TestWSWriteGRPCError_ForwardsFieldViolations` |
-| E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used | `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
+| E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used: a write to a client that stopped reading MUST fail within the timeout and the handler return | `TestWSWriteProtoWithTimeout_StalledClientEndsTheStream`, `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
 | E15.7 | One inbound message MUST be accepted up to `MaxWebSocketMessageBytes`, by default the REST body cap, so a frame that is a valid REST body is a valid stream message | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable` |
 | E15.8 | An error close MUST always send a close frame (1008 for a refusal): the close reason is cut to fit and stays valid UTF-8, and the full sentence arrives in the error frame | `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly`, `TestWSCloseReason_FitsAndStaysValidUTF8` |
 
@@ -572,7 +587,7 @@ close detection for write-only sockets.
 
 ## E16. Browser stream auth: tickets
 
-**Code.** `go/lib/restgw/ws_auth.go` — `NewWSAuth`, `WSAuthConfig`, `WSAuthTicketPrincipal`, `MaxTicketAuthorizationBytes`; `go/lib/restgw/ticket.go` — `MemoryTicketStore`, `NewMemoryTicketStore`, `WithMaxTickets`, `WithMaxTicketBytes`, `ErrTicketStoreFull`, `NewTicketIssuer`, `TicketIssuerConfig`.
+**Code.** `go/lib/restgw/ws_auth.go` — `NewWSAuth`, `WSAuthConfig`, `WSAuthTicketPrincipal`, `MaxTicketAuthorizationBytes`; `go/lib/restgw/ticket.go` — `MemoryTicketStore`, `NewMemoryTicketStore`, `WithMaxTickets`, `WithMaxTicketBytes`, `WithMaxTicketsPerAddress`, `ErrTicketStoreFull`, `ErrTicketAddressFull`, `NewTicketIssuer`, `TicketIssuerConfig`.
 
 **Purpose.** Browsers cannot set `Authorization` on `EventSource` or `WebSocket`; they trade it
 for a one-shot ticket and pass `?ticket=`.
@@ -587,9 +602,10 @@ for a one-shot ticket and pass `?ticket=`.
 | `MemoryTicketStore` janitor | every 60 s | A store at a limit also sweeps expired tickets itself before refusing |
 | `WithMaxTickets(n)` | `DefaultMaxTickets` = 10 000 outstanding tickets | `n <= 0` keeps the default |
 | `WithMaxTicketBytes(n)` | `DefaultMaxTicketBytes` = 16 MiB (ticket id, label keys and values, plus a fixed per-entry overhead) | `n <= 0` keeps the default |
+| `WithMaxTicketsPerAddress(n)` | `DefaultMaxTicketsPerAddress` = 64 outstanding tickets per client address | `n <= 0` keeps the default. The address is `ClientAddrFrom` of `Issue`'s context: the one `ClientAddrMiddleware` resolved behind the trusted proxies, else the connection's peer (the issuer puts it there). `Issue` with no address in its context is bounded by the store limits only |
 | `MaxTicketAuthorizationBytes` | 8 KiB, fixed | A longer `Authorization` value is refused by `WSAuthTicketPrincipal` with `ErrWSAuthTicketHeaderTooLarge` |
 | Issuer method | POST | Anything else → 405 with `Allow`, code `UNIMPLEMENTED` |
-| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431 with code `INVALID_ARGUMENT`; full store → 503 with `Retry-After: 1`; any other store failure → 500. Every refusal is the JSON error envelope (E3) |
+| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431 with code `INVALID_ARGUMENT`; address at its cap → 429 `RESOURCE_EXHAUSTED` with `Retry-After: 1`; full store → 503 with `Retry-After: 1`; any other store failure → 500. Every refusal is the JSON error envelope (E3) |
 
 **Shares.** E5 (`RequireAuth`), E17 (the promoted header keeps re-auth working), E6 (the
 promotion marker header forces a cache bypass on probes).
@@ -608,13 +624,16 @@ promotion marker header forces a cache bypass on probes).
 | E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
 | E16.9 | An `Authorization` value longer than `MaxTicketAuthorizationBytes` MUST be answered 431 and store nothing; a value at the limit is accepted | `TestTicketIssuer_OversizedAuthorization` |
 | E16.10 | Every issuer refusal MUST be the JSON error envelope with a catalog sentence; the detail goes to observability | `TestTicketIssuer_ErrorsAreTheEnvelope` |
+| E16.11 | One client address MUST NOT be able to fill the default store: it holds at most `DefaultMaxTicketsPerAddress` outstanding tickets, the next is refused 429 with `Retry-After` while other addresses keep getting tickets, and a redeemed or expired ticket gives its slot back. The address is the resolved client behind trusted proxies; an untrusted peer cannot choose one by `X-Forwarded-For`. A refusal at the cap looks at that address's own tickets only, never sweeps the store | `TestTicketIssuer_OneAddressCannotFillTheStore`, `TestTicketIssuer_PerAddressCapUsesTheResolvedClient` |
 
 **Deliberate limits.**
 - `MemoryTicketStore` is per process: issuer and redeemer must be the same replica.
 - `WSAuthTicketPrincipal` records only `Authorization`; cookie-only sessions cannot obtain
   tickets.
 - The issuer does not validate the credential (redeem does), so tickets are minted for any
-  request that carries one; the store limits, not validation, bound what that costs.
+  request that carries one; the store limits, not validation, bound what that costs, and the
+  per-address share (E16.11) keeps one address from spending them all. Many addresses together
+  can still fill the store until the TTL frees it.
 - A full store delays new tickets until redeems or the TTL free room; it does not make room by
   evicting.
 
@@ -711,17 +730,19 @@ label isolation.
 
 ## E19. Public-method rate-limit adapters
 
-**Code.** `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `WriteTooManyRequests`, `WriteTooManyRequestsCtx`.
+**Code.** `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `AdmitPublicStreamOf`, `NonceChallenge`, `WriteTooManyRequests`, `WriteTooManyRequestsCtx`.
 
 **Purpose.** Applies the per-client limiter (E26) to REST methods excluded from auth: a unary
-method holds a token while it runs and keeps it charged only on failure (status ≥ 400, or nothing
-written); streams are charged on every open.
+method holds a token while it runs and keeps it charged only on failure (status ≥ 400 except a
+DPoP nonce challenge, or nothing written); streams are charged on every open. With per-method
+limits (`ratelimit.Methods`, E26) a unary method passes its own limiter (`Methods.For(key)`) and a
+stream passes the transport's stream cap and its method's limiter (`AdmitPublicStreamOf`).
 
 **Configuration.**
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| Limiter | from generated main | nil admits everything |
+| Limiter | from generated main: `Methods.For(<KEY>)` per public method, `Methods.Streams()` for the stream cap | nil admits everything (an unlisted or switched-off method) |
 | `Retry-After` | 60 | Fixed |
 
 **Guarantees.**
@@ -729,9 +750,15 @@ written); streams are charged on every open.
 | ID | Guarantee | Test |
 |---|---|---|
 | E19.1 | A drained bucket MUST answer 429 `RESOURCE_EXHAUSTED` before the handler runs, with the catalog sentence in the request's locale | `TestAdmitPublic_ChargesFailuresPerClient`, `TestAdmitPublic_RefusalIsTheCatalogSentence` |
-| E19.2 | Only responses with status ≥ 400, and handlers that wrote nothing, MUST stay charged; a success (including an implicit 200) MUST return its token | `TestAdmitPublic_ImplicitOKAndUnwrap`, `TestAdmitPublic_SuccessReturnsItsToken`, `TestAdmitPublic_NothingWrittenIsCharged` |
+| E19.2 | Only responses with status ≥ 400 (except a DPoP nonce challenge, E19.5), and handlers that wrote nothing, MUST stay charged; a success (including an implicit 200) MUST return its token | `TestAdmitPublic_ImplicitOKAndUnwrap`, `TestAdmitPublic_SuccessReturnsItsToken`, `TestAdmitPublic_NothingWrittenIsCharged` |
 | E19.3 | Each stream open MUST be charged; the writer MUST NOT be wrapped (flush and hijack keep working) | `TestAdmitPublicStream_ChargesEveryStream` |
 | E19.4 | Concurrent requests MUST NOT exceed the configured budget: each request in flight holds its own token | `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
+| E19.5 | A DPoP nonce challenge (401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"`) MUST give its token back: nothing was checked, and a new device's first sign-in must not spend the address's guess budget. `NonceChallenge` MUST agree with the DPoP package's own reading of the header. The only writer of that header on a REST surface is the DPoP gate (E37) | `TestAdmitPublic_ANonceChallengeIsNotCharged`, `TestNonceChallenge_AgreesWithDPoP` |
+| E19.6 | `AdmitPublicStreamOf(streams, l)` MUST refuse, without spending a token, a client at the stream cap of `streams`, charge one token of `l` per opened stream, and stop counting the stream when its request ends; both nil admit everything | `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
+
+**Deliberate limits.**
+- The bound on nonce-challenge churn is the DPoP mint limiter in front of unbound proofs, not this
+  limiter.
 
 ---
 
@@ -778,13 +805,20 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 
 ## E21. Downloads
 
-**Code.** `go/lib/restgw/download.go` — `NewDownloadConfig`, `ServeDownload`, `BuildDownloadURL`.
+**Code.** `go/lib/restgw/download.go` — `NewDownloadConfig`, `ServeDownload`, `BuildDownloadURL`, `VariantKey`; `go/lib/restgw/variant_render.go` — `SetMaxConcurrentVariantRenders`; `go/lib/restgw/variant_queue.go` — `StartVariantWorkers`, `VariantWorkersFromEnv`.
 
 **Purpose.** Serves stored objects by URL with longest-prefix bucket matching, ETag, ranges and a
-forced non-renderable content type.
+forced non-renderable content type; serves an image field's declared variants
+(`?variant=<name>`), rendering one on its first request and storing it beside the original.
 
 **Configuration.** `NewDownloadConfig(prefix, fields, cacheControl, asAttachment, disableETag,
 disableRange)`.
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `SetMaxConcurrentVariantRenders(n)` | `DefaultMaxConcurrentVariantRenders` = 2 per process | `n <= 0` restores the default. Bounds the renders download requests run at once; the background workers are bounded by their own count |
+| Render slot wait | 10 s | Fixed; past it the request is answered 503 `UNAVAILABLE` with `Retry-After: 1` |
+| `<PREFIX>_VARIANT_WORKERS` (`VariantWorkersFromEnv`) | 2 | `0` turns background rendering off; not a whole number `>= 0` → error |
 
 **Guarantees.**
 
@@ -792,14 +826,21 @@ disableRange)`.
 |---|---|---|
 | E21.1 | Any `.` or `..` segment (either slash) MUST answer 404 | `TestServeDownload_PathTraversal404`, `TestServeDownload_BackslashTraversal404` |
 | E21.2 | An unknown bucket and a missing object MUST both answer 404 | `TestServeDownload_UnknownBucket_404`, `TestServeDownload_NotFound` |
-| E21.3 | Responses MUST always be `Content-Type: application/octet-stream` with `nosniff` | `TestServeDownload_NoContentSniffXSS` |
+| E21.3 | Responses MUST be `Content-Type: application/octet-stream` with `nosniff`, except an image field's original and its variants whose bytes sniff as PNG, JPEG, GIF or WebP, which carry that type (never SVG or HTML); `nosniff` always | `TestServeDownload_NoContentSniffXSS`, `TestServeDownload_AnImageFieldsOriginalCarriesItsRasterType` |
 | E21.4 | Driver errors MUST become a generic, logged 500 | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors` |
 | E21.5 | URLs from `BuildDownloadURL` MUST resolve through `ServeDownload` | `TestDownloadURLRoundTrip` |
 | E21.6 | Only GET and HEAD MUST be served | `TestServeDownload_DELETE_405`, `TestServeDownload_HEAD` |
 | E21.7 | Every refusal, 404 included, MUST be the JSON error envelope; the detail goes to observability | `TestServeDownload_ErrorsAreTheEnvelope` |
+| E21.8 | Only declared variant names MUST be served (400 otherwise); a variant MUST be rendered once and stored under `<key>~<name>`; a missing original → 404, a non-image or an oversized source → 415 | `TestServeDownload_VariantIsRenderedOnceAndStored`, `TestServeDownload_VariantRefusals` |
+| E21.9 | Concurrent first requests of one variant in a process MUST render it once and share the outcome | `TestServeDownload_ConcurrentRequestsOfOneVariantRenderOnce` |
+| E21.10 | Renders for download requests MUST NOT run more than the process bound at once (each decodes a whole original, up to ~200 MB); a request that gets no slot within the wait MUST be answered 503 with `Retry-After`, not queued without bound | `TestServeDownload_ConcurrentVariantRendersAreBounded`, `TestServeDownload_VariantRenderBusyIs503` |
 
 **Deliberate limits.**
 - Authorization is per endpoint, not per object.
+- The render bound and the sharing are per process: N replicas may render the same variant N
+  times, and the store's atomic put keeps one copy.
+- A busy refusal (503) is not reported to observability: it is the bound working, and a burst would
+  be a burst of reports.
 
 ---
 
@@ -877,7 +918,7 @@ origin-relative references (`</path?cursor=…>`, RFC 8288 §3.2).
 
 ## E26. Per-client rate limiter
 
-**Code.** `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`, `Allow`, `Reserve`, `ReserveRequest`, `AllowChargeable`, `OpenStream`, `TrustPrivateRanges`; `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`.
+**Code.** `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope`, `Allow`, `Reserve`, `ReserveRequest`, `AllowChargeable`, `OpenStream`, `TrustPrivateRanges`; `go/lib/ratelimit/methods.go` — `NewMethods`, `Method`, `Methods.For`, `Methods.Streams`, `Methods.TrustedProxies`; `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream`, `AdmitPublicStreamOf`.
 
 **Purpose.** A token bucket per client address for methods that take no credential, so guessing
 is bounded without a global cap.
@@ -889,8 +930,9 @@ is bounded without a global cap.
 | `<PREFIX>_RATELIMIT_PER_MINUTE` | 30 | float; `<= 0` disables |
 | `<PREFIX>_RATELIMIT_BURST` | 10 | int > 0 |
 | `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | none: every caller is keyed by its connection's address | Comma-separated CIDRs or bare addresses; `private` adds the loopback and RFC 1918 ranges (combinable with CIDRs); `none` states the default; any other entry is logged once and skipped. List exactly the hops that terminate HTTP and append to `X-Forwarded-For` |
-| `<PREFIX>_RATELIMIT_MAX_STREAMS` | 0: no cap | Opt-in cap on the public streams one client holds open at once; a value that is not a whole number `>= 0` is logged once and caps nothing. Too many streams is an overload, not a breach, so nothing is capped unasked |
+| `<PREFIX>_RATELIMIT_MAX_STREAMS` | 0: no cap | Opt-in cap on the public streams one client holds open at once; a value that is not a whole number `>= 0` is logged once and caps nothing. Too many streams is an overload, not a breach, so nothing is capped unasked. Independent of the rate: with `PER_MINUTE <= 0` (the scope's or the transport's) and a cap set, `New` builds a limiter that spends no token and still caps streams |
 | `FromEnvScope(prefix, scope, transport)` | `<PREFIX>_<SCOPE>_RATELIMIT_*` | The unscoped `<PREFIX>_RATELIMIT_*` form is read with a one-time warning; `_<TRANSPORT>_PER_MINUTE` / `_BURST` override per transport; an off limiter is logged once |
+| `NewMethods(prefix, scope, transport, methods...)` | one limiter per listed method, each with its own bucket per address | Precedence per method, most specific first: (1) `<PREFIX>_<SCOPE>_RATELIMIT_<KEY>_PER_MINUTE` / `_BURST` (`<= 0` switches the method off, logged once); (2) the scope or transport switched off (`PER_MINUTE <= 0`) switches every method off, a declared threshold included; (3) the threshold the method declares (`public_rate` / `public_limits[].rate`); (4) the scope's values. Trusted proxies, TTL and the key ceiling are the scope's for every method. `<KEY>` is `<SERVICE>_<METHOD>` in upper snake case |
 | `TTL` | 10 min | Struct field only |
 | `MaxKeys` | 10 000 | Struct field only; reaching it evicts the least recently seen bucket |
 | Malformed `PER_MINUTE` / `BURST` | — | Ignored silently; the previous value stands |
@@ -916,8 +958,12 @@ is bounded without a global cap.
 | E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback and private ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
 | E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestUntrustedForwarderWarningIsHourly` |
 | E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
-| E26.15 | Without `MAX_STREAMS` no stream is capped. With it, a client already holding that many open public streams (SSE and WebSocket together) MUST be refused with 429 without spending a token, other clients MUST be unaffected, and a stream MUST stop counting once its handler returned; a release frees exactly one slot | `TestFromEnv_MaxStreamsIsOffUnlessSet`, `TestOpenStream_NoCapAdmitsEveryStream`, `TestOpenStream_CapsOpenStreamsPerClient`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault` |
+| E26.15 | Without `MAX_STREAMS` no stream is capped. With it, a client already holding that many open public streams (SSE and WebSocket together) MUST be refused with 429 without spending a token, other clients MUST be unaffected, and a stream MUST stop counting once its handler returned; a release frees exactly one slot. The cap MUST hold while the per-minute rate is off — the scope's, the transport's or a plain config's — and such a limiter MUST spend no token | `TestOpenStream_CapHoldsWhileTheRateIsOff`, `TestFromEnv_MaxStreamsIsOffUnlessSet`, `TestOpenStream_NoCapAdmitsEveryStream`, `TestOpenStream_CapsOpenStreamsPerClient`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault` |
 | E26.16 | `ClientIP` MUST read the client as the limiter keys it, as the address itself: the peer, unless it is a trusted proxy — then the right-most untrusted `X-Forwarded-For` hop; an unusable hop leaves the peer. | `TestClientIP` |
+| E26.17 | Each listed method MUST have its own bucket per address: spending one method's budget MUST leave another's whole | `TestMethods_EachMethodHasItsOwnBucket` |
+| E26.18 | A method that is not listed MUST NOT be limited: `For` answers nil, which admits everything; a nil `Methods` limits nothing | `TestMethods_AnUnlistedMethodIsNotLimited` |
+| E26.19 | A method's limiter MUST follow the `NewMethods` precedence: its own variable, then the scope or transport switched off, then its declared threshold, then the scope's values; its own variable revives it under a scope switched off | `TestMethods_ConfigPrecedence` |
+| E26.20 | The scope's trusted proxies, TTL, key ceiling and stream cap MUST reach every method (the stream cap through `Streams()` only) | `TestMethods_ScopeSettingsReachEveryMethod`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
 
 **Deliberate limits.**
 - The limiter is in-process: N replicas give N times the budget.
@@ -925,12 +971,14 @@ is bounded without a global cap.
   terminator's bucket; the warning (E26.13) names the setting.
 - `AllowChargeable` cannot hear a success, so a call whose context never ends keeps its token
   charged; `Reserve` settles explicitly.
+- Which public methods are listed, and with which declared threshold, is the generated gateway's
+  (`ratelimit.NewMethods(envPrefix, "PUBLIC", "REST"|"RPC", …)`); an endpoint left out is unlimited.
 
 ---
 
 ## E27. MCP server and transports
 
-**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`.
+**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`; `go/lib/mcp/sessions.go` — `SetSessionLimits`, `SessionLimits`.
 
 **Purpose.** Runs generated MCP tool proxies over stdio or streamable HTTP; each tool call is a
 unary gRPC call using the w17 JSON dialect.
@@ -945,6 +993,9 @@ unary gRPC call using the w17 JSON dialect.
 | `ReadHeaderTimeout` | 10 s | — |
 | Shutdown timeout | `W17_MCP_SHUTDOWN_TIMEOUT_SECONDS` via `lifecycle.ShutdownTimeoutFromEnv` | — |
 | Request body cap | `SetMaxRequestBodyBytes(n)`, else `W17_MCP_MAX_BODY_BYTES`, else 10 MiB (`DefaultMaxRequestBodyBytes`, the REST default) | `n <= 0` restores the default; a non-numeric or non-positive variable is ignored. A declared `Content-Length` over the cap → 413 with a JSON-RPC error; a body without one is cut at the cap |
+| Session idle TTL | `SetSessionLimits(SessionLimits{IdleTTL})`, else `W17_MCP_SESSION_IDLE_SECONDS`, else 30 min (`DefaultSessionIdleTTL`) | Only a positive value is read; a session cannot be kept forever. A session with an open notification stream is never idle |
+| Live sessions per process | `SessionLimits.Max`, else `W17_MCP_MAX_SESSIONS`, else 10 000 (`DefaultMaxSessions`) | Only a positive value is read. Past it an `initialize` (or a GET opening a new session) → 503 with `Retry-After` and a JSON-RPC error |
+| Live sessions per client address | `SessionLimits.MaxPerAddress`, else `W17_MCP_MAX_SESSIONS_PER_ADDRESS`, else 100 (`DefaultMaxSessionsPerAddress`) | Only a positive value is read. The address is resolved behind `SetTrustedProxies`. Past it → 429 with `Retry-After` |
 
 **Shares.** `protojsonx` (E29), `go/core/lifecycle` drain, `go/core/healthz`, `observx`;
 `restgw.ClientError` (E3) for tool errors.
@@ -965,18 +1016,27 @@ unary gRPC call using the w17 JSON dialect.
 | E27.10 | A backend error MUST be reported by code as E3.7: refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
 | E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | `TestAddTool_EachCallRunsInItsOwnReportingScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 | E27.12 | With `SetRequestEvents`, every call of a recorded tool MUST be recorded — a refused one too — with its request once decoded, the caller after auth and its gRPC code; an unknown tool records nothing. | `TestCallUnary_RecordsTheCall` |
+| E27.13 | A streamable HTTP session that no request touched for the idle TTL, and that has no open notification stream, MUST be ended with all of its transport state (as a client's DELETE ends it); a session in use MUST be kept, and one whose stream ended goes idle from then | `TestServeStreamableHTTP_IdleSessionIsEnded`, `TestServeStreamableHTTP_OpenStreamKeepsItsSession` |
+| E27.14 | The live sessions MUST stay within the per-address and the per-process cap: a request that would open one more is refused (429 per address, 503 in total, both with `Retry-After`) before the MCP library keeps anything; requests on a live session pass at the cap; an ended session frees its slot. On a protected resource (E28) the token check runs first, so a caller without a token takes no slot | `TestServeStreamableHTTP_SessionsAreCapped`, `TestSessionLimits_EnvAndDefaults` |
 
 **Deliberate limits.**
 - Unary tools only.
+- Session bounds are per process. A request naming a session this process does not hold is served
+  without one (the transport validates the id's form only, so a session from another replica keeps
+  working) and keeps nothing.
+- The idle sweep runs every half TTL, so a session ends between 1 and 1.5 TTL after its last request.
 
 ---
 
-## E28. MCP auth translation and permission gating
+## E28. MCP auth translation, permission gating and protected resource
 
-**Code.** `go/lib/mcp/auth.go` — `DefaultAuthFunc`, `CollectAuthHeaders`, `SetAuthEnvPrefix`; `go/lib/mcp/server.go` — `SetPermResolver`, `SetToolPerm`, `SetToolPerms`.
+**Code.** `go/lib/mcp/auth.go` — `DefaultAuthFunc`, `CollectAuthHeaders`, `SetAuthEnvPrefix`; `go/lib/mcp/server.go` — `SetPermResolver`, `SetPermScopesResolver`, `SetToolPerm`, `SetToolPerms`, `SetToolMethod`, `SetTrustedProxies`, `SetGatewayHeaders`, `WithInstructions`; `go/lib/mcp/resource.go` — `SetResourceServer`, `ResourceServer`, `ResourceServerFromEnv`, `ProtectedResourceMetadataPath`.
 
 **Purpose.** Turns connection identity (HTTP headers, or the environment on stdio) into backend
-metadata, and hides or refuses tools whose permission ids the caller's token does not cover.
+metadata, and hides or refuses tools whose permission ids the caller's token does not cover. With
+`SetResourceServer` the HTTP transport is an OAuth 2.1 protected resource (RFC 9728 metadata,
+RFC 6750 challenges): every request to the MCP endpoint needs a bearer token the auth method
+accepts for this resource.
 
 **Configuration.**
 
@@ -987,6 +1047,13 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 | `SetAuthEnvPrefix(prefix)` | — | Environment prefix for the stdio identity; not attached to HTTP connections |
 | `SetPermResolver(r)` | nil → no gating | — |
 | `SetToolPerm(s)` | — | AND of all ids; `0` ignored |
+| `SetPermScopesResolver(r)` | — | A resolver that also answers the auth response's scopes, so a caller who must name an organization is told `ORGANIZATION_REQUIRED`; backs the list filter too |
+| `SetToolMethod(tool, fullMethod)` | none | The backing RPC the auth method is told as the call's method (`principal.MethodKey`) |
+| `SetTrustedProxies(prefixes)` | none: the peer is the caller | Proxies whose `X-Forwarded-For` is believed for the caller's address (`principal.ClientAddrKey`), read right to left as E26 does; also the key of the session caps (E27.14) |
+| `SetGatewayHeaders(map)` | none | Only the audience, membership-kinds, org-from and product keys, case-insensitive; any other key, or one given twice, panics at boot |
+| `WithInstructions(text)` | none | The `instructions` of the initialize result |
+| `SetResourceServer(rs)` | not a protected resource | `Resource` absolute, https (http only on loopback), no query or fragment; at least one authorization server, each https (loopback excepted); scopes default `["mcp"]`; anything else is an error. Serving one needs a resolver (`SetPermResolver`), else `ServeStreamableHTTP` refuses to start |
+| `ResourceServerFromEnv(prefix, getenv)` | — | `<PREFIX>_MCP_PUBLIC_URL` and `<PREFIX>_MCP_AUTHORIZATION_SERVER` (comma-separated); either missing → error naming both |
 
 **Shares.** `principal.IsGatewayOwnedKey`; the backend auth service.
 
@@ -996,16 +1063,29 @@ metadata, and hides or refuses tools whose permission ids the caller's token doe
 |---|---|---|
 | E28.1 | With a resolver, `tools/list` MUST show a gated tool only if all its ids are held; a resolver error or panic MUST hide every gated tool | `TestFilterTools_GatedByPerms`, `TestFilterTools_AuthError_FailsClosed`, `TestResolvePermsSafe_PanicFailsClosed`, `TestSetToolPerms_ListHidesToolMissingAnyPerm` |
 | E28.2 | `tools/call` MUST re-check permissions before decoding arguments or dialling | `TestCallUnary_Gate_DeniesWithoutPerm`, `TestCallUnary_Gate_DeniesBeforeDecode`, `TestSetToolPerms_CallRequiresEveryPerm` |
-| E28.3 | `x-w17-*` and `w17-label-*` keys MUST NOT be forwarded by `DefaultAuthFunc` | `TestDefaultAuthFunc_DropsGatewayOwnedNamespaces` |
+| E28.3 | Edge-reserved keys (`principal.IsEdgeReservedKey`: every gateway-owned key — `x-w17-*`, `w17-label-*`, `w17-tx-id`, `w17-conn-id` — plus `grpcgateway-*` and the `Grpc-Metadata-` form of a gateway-owned key) MUST NOT be forwarded from any source, environment, initialize parameters or HTTP headers | `TestDefaultAuthFunc_DropsGatewayOwnedNamespaces`, `TestCollectAuthHeaders_DropsReservedKeysFromEverySource` |
 | E28.4 | HTTP headers MUST outrank the environment | `TestDefaultAuthFunc_HTTPWinsOverEnv`, `TestCollectAuthHeaders_Precedence` |
 | E28.5 | Over HTTP, a caller's identity MUST come from that request only, never from the process environment; a caller that sends no credential has none | `TestConnInfo_HTTPCallerGetsNoEnvIdentity`, `TestDefaultAuthFunc_HTTPHasNoEnvFallback`, `TestServeStreamableHTTP_AnonymousCallerGetsNoEnvIdentity`, `TestCollectAuthHeaders_MergesAllSources` |
 | E28.6 | Over HTTP no environment value MUST be forwarded to the auth backend; on stdio only `<PREFIX>_*` variables are | `TestConnInfo_HTTPCallerGetsNoEnvIdentity`, `TestServeStreamableHTTP_AnonymousCallerGetsNoEnvIdentity`, `TestSetAuthEnvPrefix_ScopesAndStrips` |
+| E28.7 | The request context the gateway owns — the surface, the caller's address, the method, the MCP resource and the `SetGatewayHeaders` keys — MUST be written after every client source, so no client header, initialize parameter or environment variable can supply it; the address is never stamped on stdio | `TestCollectAuthHeaders_StampsTheRequestContext`, `TestSetGatewayHeaders_ReachTheAuthMethod`, `TestResourceServer_ResourceReachesTheAuthMethod` |
+| E28.8 | Over HTTP the auth method MUST be told the tool's backing RPC (`SetToolMethod`) and the caller's address resolved behind the trusted proxies | `TestServeStreamableHTTP_TellsTheAuthMethodTheToolMethodAndTheResolvedAddress` |
+| E28.9 | `SetGatewayHeaders` MUST accept only the gateway auth-context keys and panic on any other key or a duplicate | `TestSetGatewayHeaders_RefusesOtherKeys` |
+| E28.10 | With a scopes resolver, a caller without the permission who holds it in some organization MUST be refused `ORGANIZATION_REQUIRED`, not `PERMISSION_DENIED`; the same resolver MUST back the list filter | `TestCallUnary_Gate_UnnamedOrganizationIsOrganizationRequired`, `TestCallUnary_Gate_WithoutTheHintStaysPermissionDenied`, `TestSetPermScopesResolver_BacksTheListFilter` |
+| E28.11 | A protected resource MUST serve its RFC 9728 metadata (resource, authorization servers, scopes, `bearer_methods_supported: header`) at the well-known path and at it with the resource's path appended, with `Access-Control-Allow-Origin: *` | `TestResourceServer_Metadata` |
+| E28.12 | A request without a bearer token MUST be answered 401 with `WWW-Authenticate: Bearer resource_metadata=…` and no error code, before the auth method or the MCP library is reached | `TestResourceServer_NoTokenIsAChallenge` |
+| E28.13 | A token the auth method refuses (`UNAUTHENTICATED`, `NOT_FOUND`, `INVALID_ARGUMENT`) MUST be 401 `invalid_token`; an accepted token holding no permission MUST be 403 `insufficient_scope`; a token accepted but denied where the request asks (`PERMISSION_DENIED`) MUST be 403 with the refusal's envelope and no challenge; any other resolver error or a panic MUST be 503 and never reach the endpoint | `TestResourceServer_TokenOutcomes`, `TestResourceServer_AcceptedButDeniedIsNoChallenge` |
+| E28.14 | The token MUST be checked with the auth method on every request, never from an earlier answer, so a revoked token is refused on its next request | `TestResourceServer_RevokedTokenIsRefusedAtOnce` |
+| E28.15 | A broken protected-resource configuration MUST be an error before serving: a non-absolute, non-https (loopback excepted), query- or fragment-carrying resource, no or a non-https authorization server, missing environment, or no resolver | `TestSetResourceServer_RefusesABrokenConfiguration`, `TestResourceServerFromEnv` |
 
 **Deliberate limits.**
 - With no resolver every tool is open, even when permissions are recorded.
 - On stdio every `<PREFIX>_*` variable is forwarded as a header; keep that prefix for identity
   values only.
 - The resolver runs on every `tools/list` and every gated `tools/call`; there is no caching.
+- The token check of a protected resource has no rate limit of its own in this package: each
+  request costs one auth-method call; a limit in front is the deployment's.
+- The audience check (a token issued for another resource) is the auth method's: this package
+  only tells it the resource.
 
 ---
 
@@ -1049,7 +1129,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | `W17_INTERNAL_TLS` | plaintext h2c | `on/true/1/yes` → TLS; `terminated` → TLS against system roots; `off/false/0/no` → plaintext; any other value → error at dial construction |
 | `W17_INTERNAL_TLS_CA` | system roots | Unreadable or no PEM → error; ignored in `terminated` mode, with a warning naming it |
 | `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error; ignored in `terminated` mode, with a warning naming them |
-| Retry | 3 attempts, 0.1 s → 1 s backoff, `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | — |
+| Retry | 3 attempts, 0.1 s → 1 s backoff, Trailers-Only `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | A w17 handler's own `UNAVAILABLE` is not retried (S18.12) |
 | Keepalive | 30 s / 10 s, permit without stream | — |
 | Caller `opts` | appended last | Override earlier options |
 | Per-call deadline | none | — |
@@ -1058,7 +1138,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E30.1 | Only `UNAVAILABLE` MUST be retried, with throttling | `TestDefaultServiceConfig_RetriesOnlyUnavailable`, `TestDefaultServiceConfig_HasRetryThrottling` |
+| E30.1 | Only `UNAVAILABLE` MUST be retried, with throttling, and only when no w17 handler answered it (S18.12) | `TestDefaultServiceConfig_RetriesOnlyUnavailable`, `TestDefaultServiceConfig_HasRetryThrottling`, `TestDial_AHandlersUnavailableIsNotReplayed`, `TestDial_AReplaySafeOrTransportUnavailableIsRetried` |
 | E30.2 | Misconfigured TLS environment MUST fail at dial construction, not at the first RPC | `TestTLSDialOption_MissingCAFile_Errors`, `TestTLSDialOption_HalfMTLS_Errors` |
 | E30.3 | TLS MUST verify the server; mTLS MUST present the client leaf | `handshake_test.go` (all four) |
 | E30.4 | Dial MUST be non-blocking | `TestDial_NonBlocking` |
@@ -1089,7 +1169,7 @@ E30, and are ignored the same way in `terminated` mode.
 | ID | Guarantee | Test |
 |---|---|---|
 | E31.1 | Principal stamps MUST be relayed through `principal.ForwardToOutgoing` and other metadata MUST NOT be; when the incoming side carries a principal, the relayed set replaces any outgoing copy of it (I12) | `TestForwardPrincipalUnaryInterceptor`, `TestForwardToOutgoing_VerifiedPrincipalWins`, `TestDialOpts_StreamRelaysThePrincipalOnly` |
-| E31.2 | The retry config MUST parse and retry only `UNAVAILABLE` | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable` |
+| E31.2 | The retry config MUST parse and retry only `UNAVAILABLE`, and never one a w17 handler returned (S18.12) | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable`, `TestGRPCComponent_AHandlersUnavailableIsNotReplayed` |
 | E31.3 | An unrecognised `W17_INTERNAL_TLS` value MUST make `InternalTLSEnabled` answer true (dial TLS), never plaintext | `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 | E31.4 | In `terminated` mode `DialOpts` MUST verify against the system roots only, ignoring a private CA | `TestClientTLSConfig_TerminatedIgnoresPrivateCA` |
 
@@ -1154,7 +1234,7 @@ statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message
 | E33.6 | Panic recovery (`RecoverPanic`, the interceptors, `RecoverPump`) MUST return a generic Internal and report the stack | `recover_test.go`, `recover_interceptor_test.go` |
 | E33.7 | `Wrap` MUST NOT retry on its own; Aborted is the caller's signal | holds by construction (`Wrap` takes an error, not an operation it could run again); no test |
 | E33.8 | Constraint and table names MUST NOT reach a client on any surface | `TestConstraintFailure_NamesNoConstraintOrTableToTheClient` (REST and the MCP reading; the generated rpc surface is not covered here) |
-| E33.9 | A database the call never reached (the dial failed or the connection was refused) MUST answer Unavailable, the code w17 clients retry, and an outage MUST be reported at most once a minute rather than once per call; a connection that broke mid-call, or a server that answered (an authentication failure), MUST stay Internal and be reported | `TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce`, `TestWrap_AnOngoingOutageIsReportedAgainAfterTheWindow`, `TestWrap_ABrokenConnectionOrAnAnsweringServerIsNotUnavailable` |
+| E33.9 | A database the call never reached (the dial failed or the connection was refused) MUST answer Unavailable marked `ReplaySafe` (the one handler answer w17 clients retry, S18.12), and an outage MUST be reported at most once a minute rather than once per call; a connection that broke mid-call, or a server that answered (an authentication failure), MUST stay Internal and be reported | `TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce`, `TestWrap_AnOngoingOutageIsReportedAgainAfterTheWindow`, `TestWrap_ABrokenConnectionOrAnAnsweringServerIsNotUnavailable` |
 
 **Deliberate limits.**
 - `RecoverPump` blocks if its error channel is unbuffered and nobody reads it.
@@ -1167,8 +1247,8 @@ statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message
 
 **Purpose.** Encodes a proto message the way a third-party HTTP API expects (keys, enum strings,
 unions, wrapper bodies, form encoding) and decodes its JSON back, from options the compiler put on
-the client proto. It is a codec only: the HTTP client, base URL and timeouts live in generated
-code.
+the client proto. It is a codec only: the HTTP client, the call policy and the DSN are the egress runtime
+(E44).
 
 **Configuration.**
 
@@ -1379,7 +1459,7 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 | E37.7 | The DPoP auth cache MUST key a verified request on the verified thumbprint: one key's fresh proofs hit its entry, another key with the same credential headers MUST NOT read it | `TestCachedDPoPAuthFunc_KeysOnTheVerifiedThumbprint` |
 | E37.8 | A request carrying DPoP material that was not verified on this request MUST NOT be answered from the cache nor fill it, on any presentation | `TestCachedDPoPAuthFunc_NeverAnswersAnUnverifiedRequest` |
 | E37.9 | A request without DPoP material MUST be cached as E6 caches it; `ttl <= 0` MUST disable the cache | `TestCachedDPoPAuthFunc_BearerAndOff` |
-| E37.10 | A bound ticket MUST be issued only for a request the gate verified as bound, and record its thumbprint; redemption MUST promote the token, report the thumbprint, survive re-auth, and stay one-shot | `TestDPoPTicket_BoundFlow`, `TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest`, `TestDPoPTicketPrincipal_RefusesAnUnboundVerification` |
+| E37.10 | A bound ticket MUST be issued only for a request the gate verified as bound, and record its thumbprint; redemption MUST promote the token, report the thumbprint, survive re-auth, and stay one-shot | `TestDPoPTicket_BoundFlow`, `TestDPoPTicket_IssuerNeedsAVerifiedBoundRequest`, `TestTicketPrincipal_RefusesAnUnboundVerification` |
 | E37.11 | Redemption MUST re-check the binding: a token rebound, unbound or revoked, or a bound ticket holding a non-DPoP credential, MUST be `ErrTicketInvalid` and run nothing; a lookup that cannot answer MUST be a 503-class error, not a refusal | `TestDPoPTicket_RedemptionChecksTheBinding` |
 | E37.12 | An unbound ticket MUST be accepted with no device only when the gate is not required | `TestDPoPTicket_UnboundTicket` |
 | E37.13 | A header upgrade MUST be verified by the gate; a bad proof MUST be a 401-class `dpopgw.Error`; a client MUST NOT make `Thumbprint` report a device through its own headers, and one wrapper MUST NOT trust another's promotion | `TestDPoPWSAuth_HeaderModeAndForgery` |
@@ -1663,3 +1743,104 @@ instead of a JSON document — a file a link opens.
 
 **Deliberate limits.**
 - The body is held in memory; the ETag saves the transfer, not the handler's render.
+
+---
+
+## E43. OAuth 2.1 authorization-server wire
+
+**Code.** `go/lib/oauthas/oauthas.go` — `Mount`, `Config`, `Backend`, `Error`, `DPoPFunc`, `ErrDPoPUseNonce`, `ErrDPoPUnavailable`, `ErrDPoPSlowDown`; `endpoints.go` — authorize, token, register, revoke; `page.go`, `codepage.go` — `CodePath`, `CodeRedirectURI`.
+
+**Purpose.** The HTTP protocol of an OAuth 2.1 authorization server that MCP clients and native apps
+speak — RFC 8414 metadata, the authorization endpoint (PKCE, RFC 8707 resources, RFC 9207 `iss`),
+the token endpoint (with RFC 9449 DPoP), RFC 7591 registration, RFC 7009 revocation — turned into
+calls of a `Backend`, plus the two pages it shows a person (an error page and the sign-in code page).
+It holds no state and decides nothing about clients, codes or tokens: the backend does. What it owns
+is which refusal goes where, the request-shape refusals, the per-address limits and the pages.
+
+**Configuration** (`Config`).
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `Issuer` | — | Absolute, no query, fragment, trailing slash or path; https (http only on a loopback host). Anything else → `Mount` error |
+| `ConsentURL` | — | Absolute https URL (loopback excepted); `request=<id>` is added. Anything else → `Mount` error |
+| `TrustedProxies` | none | Believed for the client address (limits, the backend's records), as E26 |
+| `DPoP` | nil | nil: a token request carrying a proof is refused `invalid_dpop_proof`, and the metadata advertises no DPoP algorithms |
+| `RegisterPerHour` | 20 per address (burst 5) | negative = no cap |
+| `AuthorizePerMinute` | 30 per address (burst 10) | negative = no cap |
+| `TokenPerMinute` | 60 per address (burst 20), shared by token and revocation | negative = no cap |
+| Request body | 64 KiB | Cut at the cap |
+
+**Shares.** E26 (`ratelimit.New`, `HTTPClientAddr`); E35 through the gateway's `DPoPFunc` adapter
+(this package imports no DPoP implementation); the backend's own rules (the auth plugin's
+`oauth_server` feature: client and redirect matching, PKCE, single-use codes, audience).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E43.1 | `Mount` MUST refuse an issuer or consent URL that would serve a broken flow, and accept a loopback http development pair | `TestMount_RefusesABrokenConfiguration` |
+| E43.2 | The metadata MUST name the issuer and every endpoint under it, `S256` as the only PKCE method, the registration endpoint only while the backend allows dynamic registration (registration then answers 404), and DPoP algorithms only with a verifier | `TestMetadata`, `TestToken_DPoP` |
+| E43.3 | A valid authorization request MUST be handed to the backend with the issuer and every `resource`, and the browser sent to the consent page with the pending request's id | `TestAuthorize_GoesToTheConsentPage` |
+| E43.4 | An authorization error the backend marks `NoRedirect` (the client or the redirect failed to check), a backend failure that is not an `*Error`, a repeated single-valued parameter and a per-address refusal MUST be shown on the error page, never redirected; only a redirectable `*Error` goes to the redirect URI, with `state` and `iss`. A backend failure's text MUST NOT reach the page | `TestAuthorize_Errors`, `TestAuthorize_RateLimited` |
+| E43.5 | A single-valued parameter repeated (RFC 6749 §3.1, §3.2) MUST be refused `invalid_request` before the backend is asked, on the authorization and the token endpoint | `TestAuthorize_Errors`, `TestToken_RepeatedParameterIsRefused`, `TestPagesCarryTheirOwnNonce` |
+| E43.6 | The token endpoint MUST take a form-encoded POST body only: parameters in the query, a JSON body or a GET are `invalid_request`; no `client_id` is 401 `invalid_client`; a backend `*Error` is 400 with its code, any other failure 503 `temporarily_unavailable` with no backend text; responses are `no-store` | `TestToken` |
+| E43.7 | The token endpoint's per-address budget MUST keep a failed attempt charged and give a success its token back; past it the answer is 429 `slow_down` with `Retry-After` | `TestToken_FailuresStayChargedSuccessesDoNot` |
+| E43.8 | A token request with a DPoP proof MUST be verified and the proof key's thumbprint handed to the backend, with the verifier's nonce in `DPoP-Nonce`; a nonce demand is `use_dpop_nonce`; `ErrDPoPSlowDown` is the endpoint's rate limit (429 `slow_down`), never a refused proof; without a verifier a proof is refused | `TestToken_DPoP` |
+| E43.9 | Registration MUST take public clients only (`token_endpoint_auth_method` `none`), fill the default grant and response types, and be capped per address | `TestRegister`, `TestRegister_RateLimited` |
+| E43.10 | Revocation MUST hand the token to the backend and refuse a request without one | `TestRevoke` |
+| E43.11 | The JSON endpoints MUST answer a CORS preflight with `Access-Control-Allow-Origin: *` and allow the `DPoP` header (no credential travels by cookie, so the wildcard grants nothing) | `TestCORSPreflight` |
+| E43.12 | Every page shown to a person MUST escape every value it displays, carry a fresh per-response CSP nonce (`default-src 'none'`, `base-uri`, `form-action` and `frame-ancestors` `'none'`), allow a script only on the code page, and send `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store` | `TestCodePage`, `TestPagesCarryTheirOwnNonce` |
+| E43.13 | The code page MUST show `code#state` only for a response with both, refuse a response whose `iss` names another server (without showing its code), and show a declined sign-in as declined | `TestCodePage` |
+
+**Deliberate limits.**
+- A redirectable error is sent to the request's `redirect_uri` as the backend answered it: the
+  backend must answer one only after matching the redirect against the client's registration
+  (`NoRedirect` otherwise); this package does not check the redirect's shape itself.
+- The code page and the error page show text from their query, escaped, on the issuer's origin; an
+  `iss` is checked only when present.
+- The metadata and registration ask the backend's `Settings` before any limit; revocation shares the
+  token budget.
+
+---
+
+## E44. Egress client runtime
+
+**Code.** `go/lib/egress/server.go` — `Register`, `RegisterFromEnv`, `RegisterUnconfigured`, `WithTransport`; `call.go` — the call policy; `dsn.go` — `ParseDSN`, `DSN`; `hooks.go` — `BeforeRequest`, `AfterResponse`; `errors.go` — the `Reason*` codes. The wire codec is E34.
+
+**Purpose.** Serves a generated egress client's gRPC service in-process: each call is an HTTP
+request to a third-party API built from the client proto's options, sent with one call policy
+(retries, timeouts, a response cap), and its outcome a gRPC status describing the caller's situation.
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| DSN (`RegisterFromEnv`: the named variable) | — | Base URL plus `auth=` (`none`, `bearer`, `basic`, `api_key` in a header or the query) and its parameters, `timeout`, `max_attempts`, `proxy`. An unknown parameter, one foreign to the auth scheme, a missing credential, `max_attempts=0` or a timeout that cannot fit the total → error naming the variable, never the value. Unset → every call `FAILED_PRECONDITION` naming the variable |
+| Attempt timeout | 10 s (`DefaultTimeout`) | DSN `timeout` |
+| Attempts | 3 (`DefaultMaxAttempts`) | DSN `max_attempts` |
+| Total per call | 30 s (`TotalTimeout`) | Fixed: every attempt and back-off included |
+| Back-off | 200 ms doubling, capped at 5 s; `Retry-After` honoured within the cap | Fixed |
+| Response body | 10 MiB (`MaxResponseBytes`) | Fixed; enforced while reading |
+| Proxy | the DSN's, else none | The environment's `HTTP_PROXY` is not read |
+
+**Shares.** E34 (the codec); `observx` (one client span per call, a span event per retry); the
+in-process connection it is registered on (no gRPC retry policy there).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E44.1 | A call MUST be retried only when a retry cannot double it — GET, HEAD, PUT, DELETE, OPTIONS, or a POST/PATCH with an idempotency header — and only on 429, 502, 503, 504 or a transport error; a POST or PATCH without one is sent once | `TestCall_IdempotentPostRetriesWithOneKey`, `TestCall_PostWithoutIdempotencyIsSentOnce`, `TestCall_ErrorMapping`, `TestCall_HooksRunPerAttempt` |
+| E44.2 | With an idempotency header, one key MUST be generated per call (unless the caller set one) and every attempt MUST carry the same key | `TestCall_IdempotentPostRetriesWithOneKey` |
+| E44.3 | A redirect MUST NOT be followed: the 3xx is the call's outcome after exactly one request, so the credential never reaches the host a redirect names | `TestCall_RedirectIsNotFollowed` |
+| E44.4 | An upstream status MUST map to the caller's code (400/422 → `INVALID_ARGUMENT`, 404 → `NOT_FOUND`, 409 → `ABORTED`, 401/403 → `INTERNAL` — the credential is ours —, 429/5xx → `UNAVAILABLE`) with an `ErrorInfo` carrying the upstream status, the attempt count and the error body truncated; a transport failure → `UNAVAILABLE` `UPSTREAM_TRANSPORT` | `TestCall_ErrorMapping`, `TestCall_NotFoundFailsFast`, `TestCall_TransportErrorIsRetriedThenUnavailable` |
+| E44.5 | The DSN and its credential MUST NOT appear in an error, a span or a retry event — an `api_key` in the query included | `TestCall_TransportErrorDoesNotCarryTheQueryKey`, `TestCall_ErrorMapping`, `TestRegisterFromEnv`, `TestParseDSN` |
+| E44.6 | A response over the cap MUST end the call `UPSTREAM_BODY_TOO_LARGE`; a success body that does not decode `UPSTREAM_UNDECODABLE`; neither is retried | `TestCall_BodyCapAndUndecodable` |
+| E44.7 | A call whose deadline ends during a back-off MUST end `DEADLINE_EXCEEDED` with the failure it was waiting on, not the last attempt's code | `TestCall_DeadlineDuringBackoff` |
+| E44.8 | A path value MUST be one segment: `.` and `..` are refused before any request | `TestCall_DotSegmentIsRefused`, `TestCall_PathParameters` |
+| E44.9 | Request hooks MUST run on every attempt, for their own method only | `TestCall_HooksRunPerAttempt` |
+
+**Deliberate limits.**
+- A call is not part of a storage transaction: a rollback does not undo what an upstream did.
+- An `UNAVAILABLE` a business handler passes on to its own caller over a real hop is subject to that
+  hop's retry policy (S18), which does not know whether the upstream already acted.

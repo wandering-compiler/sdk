@@ -129,6 +129,16 @@ describe("resolveFormatsKind", () => {
     expect(resolveFormatsKind("cs", "number", {}).thousand_separator).toBe(" ");
   });
 
+  it("applies a language's override to a regional request", () => {
+    // Overrides are keyed by declared language; a browser reports cs-CZ.
+    for (const tag of ["cs-CZ", "cs_CZ", "CS-cz"]) {
+      expect(resolveFormatsKind(tag, "number", overrides).thousand_separator).toBe(",");
+      expect(resolveFormatsKind(tag, "date", overrides).date_format).toBe("DD.MM.YYYY");
+    }
+    const both = { cs: { number: "en" as const }, "cs-cz": { number: "de" as const } };
+    expect(resolveFormatsKind("cs-CZ", "number", both).thousand_separator).toBe(".");
+  });
+
   it("falls through when an override names an unknown locale", () => {
     // The lock parser rejects this; the runtime must degrade, not break.
     const bad: Record<string, Partial<Record<FormatKind, string>>> = { cs: { number: "zz" } };

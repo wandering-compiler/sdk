@@ -11,9 +11,14 @@ Brokers, as the Go adapters address them:
 - NATS JetStream: stream ``<channel>`` over subjects ``<channel>.>`` (limits
   retention, discard old, max age 7 days, no count limit — created or updated
   on first use, as Go's ``ensureStream``), subject ``<channel>.<topic>``,
-  payload the marshalled envelope;
+  payload the marshalled envelope, header ``W17-Domain: <domain>``;
 - Redis Streams: ``XADD <channel> MINID ~ <now-7d>-0 * topic <topic> payload
-  <envelope bytes>``.
+  <envelope bytes> domain <domain>``.
+
+The domain stamp is the manifest's domain (eventbus ``Domain`` option): two
+domains that declare one channel name share its stream on one broker, and a
+Go subscriber with a Domain settles a message stamped with another domain
+unread. A publisher without a domain writes no stamp.
 
 Emits are fire-and-forget: a failure is logged and reported, never raised into
 the RPC, and bounded by the publish timeout (2s).
@@ -302,12 +307,20 @@ class MemoryPublisher:
         pass
 
 
+#: eventbus.DomainHeader: the NATS header carrying the emitting domain.
+DOMAIN_HEADER = "W17-Domain"
+#: The Redis stream entry field carrying it.
+REDIS_FIELD_DOMAIN = "domain"
+
+
 class NatsPublisher:
     """Publishes to NATS JetStream as eventbus.NatsBus.Dispatch does."""
 
     def __init__(self, nc, js, *, publish_timeout: float = DEFAULT_PUBLISH_TIMEOUT,
-                 max_age: float = DEFAULT_STREAM_MAX_AGE, max_msgs: int = -1) -> None:
+                 max_age: float = DEFAULT_STREAM_MAX_AGE, max_msgs: int = -1,
+                 domain: str = "") -> None:
         self._nc, self._js = nc, js
+        self._headers = {DOMAIN_HEADER: domain} if domain else None
         self._timeout = self.publish_timeout = publish_timeout
         self._max_age, self._max_msgs = max_age, max_msgs
         self._streams: set[str] = set()
@@ -367,13 +380,13 @@ class NatsPublisher:
         async def go() -> None:
             await self._ensure_stream(channel)
             try:
-                await self._js.publish(subject, raw, timeout=self._timeout)
+                await self._js.publish(subject, raw, timeout=self._timeout, headers=self._headers)
             except (NoStreamResponseError, NotFoundError):
                 # The broker lost the stream (recreated without persistence):
                 # forget it, re-create it, publish once more.
                 self._streams.discard(channel)
                 await self._ensure_stream(channel)
-                await self._js.publish(subject, raw, timeout=self._timeout)
+                await self._js.publish(subject, raw, timeout=self._timeout, headers=self._headers)
 
         await asyncio.wait_for(go(), self._timeout)
 
@@ -387,8 +400,9 @@ class RedisPublisher:
 
     def __init__(self, client, *, publish_timeout: float = DEFAULT_PUBLISH_TIMEOUT,
                  max_age: float = DEFAULT_STREAM_MAX_AGE, max_msgs: int = 0,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time, domain: str = "") -> None:
         self._client = client
+        self._domain = domain
         self._timeout = self.publish_timeout = publish_timeout
         self._max_age, self._max_msgs = max_age, max_msgs
         self._clock = clock
@@ -436,7 +450,10 @@ class RedisPublisher:
             kw["approximate"] = True
 
         async def go() -> None:
-            await self._client.xadd(channel, {"topic": topic, "payload": raw}, **kw)
+            fields: dict[str, Any] = {"topic": topic, "payload": raw}
+            if self._domain:
+                fields[REDIS_FIELD_DOMAIN] = self._domain
+            await self._client.xadd(channel, fields, **kw)
             if self._max_age > 0 and self._max_msgs > 0:
                 try:
                     await self._client.xtrim(channel, maxlen=self._max_msgs, approximate=True)

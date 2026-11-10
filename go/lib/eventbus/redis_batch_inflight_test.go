@@ -2,6 +2,8 @@ package eventbus_test
 
 import (
 	"context"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,5 +105,87 @@ func TestRedisBus_BatchSiblingIsNotReclaimedWhileQueued(t *testing.T) {
 	}
 	if _, _, _, _, drops := obs.snapshots(); drops != 0 {
 		t.Errorf("OnDrop fired %d time(s) for a batch nothing failed in", drops)
+	}
+}
+
+// A message queued behind a slow handler must not be taken over by ANOTHER
+// replica either.
+//
+// The in-flight marks keep this process's own claim loop off its queued
+// siblings, but they are process-local. Every entry of one XREADGROUP read
+// enters the pending list at once and ages from that moment; a replica's
+// claim loop sees the ones still queued behind a slow handler idle past
+// AckWait and takes them over, and when their turn comes the first replica
+// runs them as well — a message that never failed, handled twice. The
+// reader now keeps the idle time of the entries it holds but has not
+// started fresh while it serves the batch.
+func TestRedisBus_QueuedEntryIsNotTakenOverByAnotherReplica(t *testing.T) {
+	dsn := startEmbeddedRedis(t)
+	newReplica := func(name string) eventbus.Subscriber {
+		bus, err := eventbus.NewRedisBus(eventbus.RedisBusOptions{
+			DSN:               dsn,
+			GroupPrefix:       "replicas",
+			ConsumerName:      name,
+			DefaultMaxDeliver: 10,
+			DefaultAckWait:    300 * time.Millisecond,
+			ReadBatch:         10,
+		})
+		if err != nil {
+			t.Fatalf("NewRedisBus: %v", err)
+		}
+		t.Cleanup(func() { _ = bus.Close(timeout(t, 5*time.Second)) })
+		sub, err := bus.Subscriber(context.Background(), "default")
+		if err != nil {
+			t.Fatalf("Subscriber: %v", err)
+		}
+		return sub
+	}
+	pub, err := eventbus.NewRedisBus(eventbus.RedisBusOptions{DSN: dsn, GroupPrefix: "replicas", ConsumerName: "pub"})
+	if err != nil {
+		t.Fatalf("NewRedisBus: %v", err)
+	}
+	t.Cleanup(func() { _ = pub.Close(timeout(t, 5*time.Second)) })
+
+	var mu sync.Mutex
+	runs := map[string]int{}
+	var calls atomic.Int32
+	handler := func(_ context.Context, topic string, _ []byte) error {
+		mu.Lock()
+		runs[topic]++
+		mu.Unlock()
+		if calls.Add(1) == 1 {
+			time.Sleep(1200 * time.Millisecond) // well past AckWait
+		}
+		return nil
+	}
+	a := newReplica("replica-a")
+	// Six entries in the stream before replica A reads: one read takes them all.
+	for i := 0; i < 6; i++ {
+		if err := pub.Dispatch(context.Background(), "default", "m"+strconv.Itoa(i), wrapperspb.String("x")); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+	}
+	if err := a.Subscribe(context.Background(), "**", handler); err != nil {
+		t.Fatalf("Subscribe a: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond) // A has read the batch and is in the slow handler
+	b := newReplica("replica-b")
+	if err := b.Subscribe(context.Background(), "**", handler); err != nil {
+		t.Fatalf("Subscribe b: %v", err)
+	}
+	waitFor(t, 10*time.Second, "every message handled", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(runs) == 6
+	})
+	time.Sleep(1500 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	// m0 is the slow one: its handler overran AckWait, the attempt's timeout,
+	// so another replica taking it over is the documented behaviour.
+	for i := 1; i < 6; i++ {
+		if got := runs["m"+strconv.Itoa(i)]; got != 1 {
+			t.Errorf("m%d ran %d times — an entry queued behind a slow handler was taken over by another replica and run twice", i, got)
+		}
 	}
 }

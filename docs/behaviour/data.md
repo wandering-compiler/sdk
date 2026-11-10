@@ -20,7 +20,7 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 | D3 | Transaction lifecycle (`distx.Run`) | `go/service/tx/distx/run.go` — `Run` |
 | D4 | Nested transactions | `go/service/tx/distx/client.go` — `Begin`, `TxHandle`; `go/service/tx/txscope/txscope.go` |
 | D5 | Transaction registry and coordinator server | `go/service/tx/txregistry/memory.go` — `Memory`; `go/service/tx/txregistry/txregistry.go` — `AdoptTx`, `AdoptTxIsolated`; `go/service/tx/distx/server.go` — `Server` |
-| D6 | After-commit work (emit deferral) | `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txscope/txscope.go` |
+| D6 | After-commit work (emit deferral) | `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`, `WaitAfterCommit`; `go/service/tx/txscope/txscope.go` |
 | D7 | Auto-rollback interceptor | `go/service/tx/grpcrollback/grpcrollback.go` — `Interceptor` |
 | D8 | Runtime SQL shape and binding helpers | `go/lib/dqlbind/dqlbind.go` |
 | D9 | Cursor (keyset) paging, limit, totals | `go/lib/paging/cursor.go`, `keyset.go`, `metadata.go` |
@@ -126,6 +126,8 @@ its own per-method transaction when no header is present.
 | D3.10 | A Commit that fails in transport (Unavailable, DeadlineExceeded, Canceled) MUST be settled with a Rollback on a detached context. When the Rollback succeeds, the caller gets an ordinary failure saying the transaction was rolled back. | `TestCommit_ATransportFailureBeforeTheCommitIsSettledByRollingBack` |
 | D3.11 | When that Rollback fails too, Commit MUST return `ErrCommitOutcomeUnknown` wrapping the transport error (its status code kept), MUST NOT run the parked after-commit work, and MUST report the ambiguity through `observx` with the transaction id and the amount of work not run. | `TestCommit_AnUnsettledTransportFailureIsReportedAsUnknown` |
 | D3.12 | Any other commit failure (a coordinator answer such as Aborted or NotFound, or a non-status error) MUST NOT be settled by a Rollback or reported as unknown; it is an ordinary commit failure. | `TestCommit_ARefusalIsNotSettled` |
+| D3.13 | The Rust business SDK's `distx::run` MUST roll back, detached, a root transaction whose future is dropped before it ended (the caller's deadline passed or the caller hung up mid-handler); the work parked on it never runs. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the `hang` case) |
+| D3.14 | The Rust business SDK's storage channel MUST send a Commit again only when it was answered with a trailers-only `UNAVAILABLE` (at most three attempts), and never once the server's response headers arrived: a status in the trailers is settled as an unknown outcome after exactly one Commit. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the two `COMMIT_UNAVAILABLE` cases) |
 
 **Deliberate limits.**
 - No automatic retry on serialization failures or deadlocks; such errors surface to the caller, and inside a distributed transaction they discard it (D7).
@@ -194,16 +196,19 @@ its own per-method transaction when no header is present.
 | D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | `TestSanitizeGatewayMD_StripsTransactionKeys`, `TestHeaderName_IsGatewayOwned`, `TestConnIDHeader_IsGatewayOwned` (no edge forwards a client's transaction id; keeping the storage port internal is deployment and not covered) |
 | D5.12 | A Rollback MUST doom the transaction before it waits for the lease. A doomed transaction refuses Commit (`ErrTxDoomed`) and new adoptions, and is rolled back by whoever reaches it first: the rollback itself, a Commit that finds it idle, the release of the last lease, or the timeout watcher. A rollback that cannot run at once returns `ErrTxDoomed` wrapping `ErrTxBusy`, whatever the state of its context or the finish wait. | `TestRollbackBehindALease_CancelledContext_DoomsTheTransaction`, `TestRollbackBehindALease_ZeroFinishWait_DoomsTheTransaction`, `TestDoom_ACommitQueuedBeforeTheRollbackDoesNotCommit` |
 | D5.13 | The coordinator server MUST answer a Commit of a doomed transaction with `Aborted` (not retryable) and a Rollback of one with success, since the rollback is already decided. | `TestServer_DoomedTransaction_CommitAbortsAndRollbackSucceeds` |
+| D5.14 | A COMMIT that fails with a serialization failure or a deadlock (PostgreSQL 40001 / 40P01, MySQL 1213 / 1205) MUST be answered as the same failure at a statement is: `Aborted` with `CONFLICT_RETRY`, not `Internal`; any other COMMIT failure that is not a deferred constraint stays `Internal`. | `TestServer_Commit_ASerializationFailureAtCommitIsAborted` |
+| D5.15 | The storage routing proxy (`rs/storage-proxy`) MUST route every call carrying a transaction's `w17-conn-id` to the replica its Begin was pinned to, and never re-balance it: a pinned replica that is gone answers `UNAVAILABLE`, an unknown or expired id `FAILED_PRECONDITION`, neither reaching another replica. Its affinity TTL is an idle timeout, started again by every routed call. | `rs/storage-proxy/tests/integration.rs` — `begin_pins_followup_routes_commit_evicts`, `unknown_conn_id_rejected_without_upstream`; `tests/failure_modes.rs` — `ttl_counts_from_the_last_call_not_from_begin`, `a_dead_pinned_replica_is_unavailable_never_rebalanced`; `affinity.rs` — `lookup_refreshes_ttl` |
+| D5.16 | The proxy MUST keep a transaction's route after a Commit or Rollback the replica refused with a trailers-only `UNAVAILABLE` (or that failed in transport), so the caller's retry and its settle Rollback (D3.10) reach the replica that holds the transaction; any other answer ends the route. Response trailers (`grpc-status`, `grpc-status-details-bin`) MUST reach the caller unchanged. | `tests/failure_modes.rs` — `an_unavailable_commit_keeps_the_route`, `trailers_are_forwarded` |
 
 **Deliberate limits.**
 - In-memory registry: a restart loses every open transaction, and the coordinator's Commit gets NotFound without a cause.
-- One instance per domain; multi-replica routing relies on an external proxy honouring `w17-conn-id`.
+- One instance per domain; multi-replica routing relies on a proxy honouring `w17-conn-id` (`rs/storage-proxy`, D5.15–D5.16).
 - Isolation support depends on the driver; SQLite accepts only its default (serializable) level.
 - With the orphan guard disabled and no caller timeout, an abandoned transaction holds its connection until process exit.
 
 ## D6. After-commit work (emit deferral)
 
-**Code.** `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`; `go/service/tx/txscope/txscope.go`.
+**Code.** `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`, `WaitAfterCommit`; `go/service/tx/txscope/txscope.go`; `go/service/runtime/runtime.go` — `GRPCComponent`.
 
 **Purpose.** Work such as event emission runs only after the write it announces has committed.
 
@@ -215,9 +220,13 @@ its own per-method transaction when no header is present.
 | D6.2 | In-process hooks MUST run once, in registration order, after a successful commit; a panicking hook is recovered and reported and does not stop the others or undo the commit. | `txscope_test.go`, `TestEmit_APanickingHookAfterCommitDoesNotUndoTheCommit` |
 | D6.3 | A panic in a registry after-commit hook MUST be recovered under its own recover and reported; the later hooks still run and `Commit` returns success for the committed transaction. | `TestCommit_APanickingHookIsRecoveredAndTheRestRun` |
 | D6.4 | Nothing MUST be announced for a rolled-back or cancelled root, or for a commit the server refused. | `TestEmit_NothingIsAnnouncedForARolledBackTransaction`, `TestEmit_ACancelledRootAnnouncesNothing`, `TestEmit_ACommitTheServerRefusesDropsTheParkedWork` |
+| D6.5 | In the Rust business SDK, a panic in a piece of after-commit work (`on_commit`, the event middleware's publish) MUST be caught per piece and reported: the pieces after it still run, the call answers the committed outcome, and the panic text never reaches the caller. Work run at once outside a transaction is caught the same way. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the `panic-hook` case) |
+| D6.6 | The coordinator's Commit MUST NOT hold its reply past the caller's deadline for the registry's after-commit work: the work starts after the database commit, in registration order, and the reply waits for it only until a margin before the deadline (a fifth of the time left, between 20 ms and 1 s; without a deadline, until the work ends or the caller cancels). Work still running then finishes after the reply, so a committed transaction is never answered as an unknown outcome because its work is slow. | `TestServer_Commit_ASlowAfterCommitHookDoesNotDelayTheReply` |
+| D6.7 | A gRPC server built by `runtime.GRPCComponent` MUST wait (bounded by the 30 s teardown) for after-commit work that outlived its Commit reply before it runs the shutdown hooks that close what the work uses; `txregistry.WaitAfterCommit` is that wait for any other host. | `TestGRPCComponent_ShutdownWaitsForAfterCommitWork` |
 
 **Deliberate limits.**
 - Publication after commit is at-most-once: there is no transactional outbox, so a crash between the database commit and the publish loses the event. A commit whose outcome is unknown (D3.11) runs none of its parked work.
+- After-commit work of different transactions runs in commit order only while each finishes within its Commit's reply budget (D6.6); work that outlives it overlaps the next transaction's, so their events may publish out of commit order.
 
 ## D7. Auto-rollback interceptor
 

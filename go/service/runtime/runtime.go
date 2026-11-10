@@ -42,6 +42,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/grpcserver"
 	"github.com/wandering-compiler/sdk/go/service/bootstrap"
 	"github.com/wandering-compiler/sdk/go/service/internal/server"
+	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
 
 // Config is the input to [Serve]. The observability fields map
@@ -115,8 +116,10 @@ type Config struct {
 	// the server (storage handlers, plugin wire-up, …). Required.
 	RegisterServices func(s *grpc.Server) error
 
-	// Shutdowns run after the server stops and every handler has
-	// returned, before observx flush — drain plugin shutdown hooks,
+	// Shutdowns run after the server stops, every handler has
+	// returned and the after-commit work of the transactions this
+	// process committed has finished (txregistry.WaitAfterCommit),
+	// before observx flush — drain plugin shutdown hooks,
 	// close the eventbus, etc. When a forced stop leaves a handler
 	// running past a short grace, they are skipped (and reported) rather
 	// than run under it.
@@ -185,6 +188,7 @@ func GRPCComponent(cfg Config) bootstrap.Component {
 					bootstrap.HoldResources(ctx, reason)
 					return
 				}
+				waitAfterCommit()
 				runShutdowns(cfg.Shutdowns)
 			},
 		})
@@ -262,6 +266,20 @@ func effectiveShutdownTimeout(d time.Duration) time.Duration {
 		return lifecycle.DefaultShutdownTimeout
 	}
 	return d
+}
+
+// waitAfterCommit lets the after-commit work of transactions this process
+// committed (the events of their writes) run to its end before the
+// shutdown hooks close what it uses: a Commit replies without waiting past
+// its caller's deadline, so that work may still be running once the server
+// stopped. Bounded like the hooks; what is still running after the bound is
+// reported and left to the process exit.
+func waitAfterCommit() {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownDrainTimeout)
+	defer cancel()
+	if err := txregistry.WaitAfterCommit(ctx); err != nil {
+		observx.ReportError(ctx, fmt.Errorf("runtime: after-commit work still running after %s; shutting down without it: %w", shutdownDrainTimeout, err))
+	}
 }
 
 // shutdownDrainTimeout bounds the whole cfg.Shutdowns phase.

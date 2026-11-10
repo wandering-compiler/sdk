@@ -359,7 +359,7 @@ pub(crate) fn frame_message(mut b: Bytes) -> Result<Bytes, String> {
     Ok(b.split_to(len))
 }
 
-fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = p.downcast_ref::<String>() {
@@ -405,6 +405,34 @@ struct ServerBody {
     kill: Option<Pin<Box<tokio_util::sync::WaitForCancellationFutureOwned>>>,
     ended: bool,
     guards: CallGuards,
+}
+
+/// The response header a served method's own `UNAVAILABLE` goes out with
+/// (Go: `grpcerr.AnsweredHeader`).
+pub(crate) const ANSWERED_HEADER: &str = "w17-answered";
+
+/// `st` as the answer of a method that ran: an `UNAVAILABLE` goes out after
+/// response headers carrying [`ANSWERED_HEADER`], in the trailers, so a w17
+/// client — which replays a trailers-only `UNAVAILABLE`, the shape of a
+/// transport failure that reached no handler — does not run the method
+/// again after work it may have done. Any other status is trailers-only.
+fn answer(st: Status) -> http::Response<Body> {
+    if st.code() != tonic::Code::Unavailable {
+        return st.into_http();
+    }
+    let mut resp = http::Response::new(Body::new(StreamBody::new(futures::stream::iter([Ok::<
+        _,
+        Status,
+    >(
+        Frame::trailers(status_trailers(st)),
+    )]))));
+    resp.headers_mut().insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/grpc"),
+    );
+    resp.headers_mut()
+        .insert(ANSWERED_HEADER, HeaderValue::from_static("1"));
+    resp
 }
 
 fn status_trailers(st: Status) -> HeaderMap {
@@ -597,7 +625,7 @@ impl Served {
         let call = AssertUnwindSafe(self.routes.clone().oneshot(req)).catch_unwind();
         let outcome = tokio::select! {
             r = call => r,
-            st = &mut cut_off => return st.into_http(),
+            st = &mut cut_off => return answer(st),
         };
         let mut resp = match outcome {
             Ok(Ok(resp)) => resp,
@@ -617,7 +645,10 @@ impl Served {
                 s.end(Some(st.message()));
             }
             if let Some(user) = finish_for_user(&st, &path) {
-                return user.into_http();
+                return answer(user);
+            }
+            if st.code() == tonic::Code::Unavailable {
+                return answer(st);
             }
         }
 

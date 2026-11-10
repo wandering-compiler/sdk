@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -32,6 +33,11 @@ type RedisBusOptions struct {
 	// Conventionally `<domain>-subscribers` (or with surface
 	// suffix). Required.
 	GroupPrefix string
+
+	// Domain — as [NatsBusOptions.Domain]: stamped on every entry as the
+	// `domain` field, and an entry stamped with another domain is
+	// acknowledged without calling the handler.
+	Domain string
 
 	// Delivery selects competing-consumer (default) vs fan-out semantics for
 	// every subscriber this bus hands out — see [DeliveryMode]. It also
@@ -241,6 +247,10 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 		_ = client.Close()
 		return nil, err
 	}
+	if err := validateDomain("RedisBusOptions", opts.Domain); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
 	if opts.PublishTimeout <= 0 {
 		opts.PublishTimeout = DefaultPublishTimeout
 	}
@@ -325,10 +335,14 @@ func (b *RedisBus) Dispatch(ctx context.Context, channel, topic string, envelope
 	// Bounded by PublishTimeout: the emit runs on the committing goroutine.
 	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.opts.PublishTimeout)
 	defer cancel()
-	if err := b.xadd(pubCtx, channel, map[string]any{
+	values := map[string]any{
 		redisFieldTopic:   topic,
 		redisFieldPayload: string(raw),
-	}, b.opts.Retention, DefaultStreamMaxAge); err != nil {
+	}
+	if b.opts.Domain != "" {
+		values[redisFieldDomain] = b.opts.Domain
+	}
+	if err := b.xadd(pubCtx, channel, values, b.opts.Retention, DefaultStreamMaxAge); err != nil {
 		b.opts.Observer.OnEmitFailure(channel, topic, err)
 		return err
 	}
@@ -746,12 +760,74 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 					done()
 				}
 			}()
+			var batch []goredis.XMessage
 			for _, stream := range streams {
-				for _, msg := range stream.Messages {
-					s.processMessage(bgCtx, h, msg.ID, msg.Values, 0)
-				}
+				batch = append(batch, stream.Messages...)
+			}
+			// The marks above are process-local: another replica's claim
+			// loop cannot see them, and every entry of the read ages from
+			// the read. Keep the idle time of the entries still queued
+			// fresh while the batch is served, so none of them looks
+			// abandoned to another replica before it has even started.
+			var started atomic.Int64
+			stopFresh := s.keepQueuedFresh(ctx, batch, &started)
+			defer stopFresh()
+			for i, msg := range batch {
+				started.Store(int64(i + 1))
+				s.processMessage(bgCtx, h, msg.ID, msg.Values, 0)
 			}
 		}()
+	}
+}
+
+// keepQueuedFresh re-claims, to this consumer, the entries of batch that
+// have not started yet (index >= *started), every third of the channel's
+// AckWait until the returned stop is called. XCLAIM with a zero min-idle
+// resets an entry's idle time without moving it, so an entry waiting its
+// turn behind a slow handler never reaches the AckWait another replica's
+// claim loop takes over at. RETRYCOUNT 1 keeps the delivery count of a
+// fresh read (the reader's own entries, read once) on every server; JUSTID
+// skips returning the payloads. A single-entry batch has nothing queued and
+// starts nothing.
+func (s *redisSubscription) keepQueuedFresh(ctx context.Context, batch []goredis.XMessage, started *atomic.Int64) func() {
+	if len(batch) < 2 {
+		return func() {}
+	}
+	_, ackWait := s.bus.retryFor(s.channel)
+	every := ackWait / 3
+	if every <= 0 {
+		every = time.Millisecond
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer recoverLoopTick(ctx, "eventbus redis keepQueuedFresh")
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			from := int(started.Load())
+			if from >= len(batch) {
+				return
+			}
+			args := []any{"XCLAIM", s.channel, s.group, s.bus.opts.ConsumerName, 0}
+			for _, m := range batch[from:] {
+				args = append(args, m.ID)
+			}
+			args = append(args, "RETRYCOUNT", 1, "JUSTID")
+			_ = s.bus.client.Do(ctx, args...).Err()
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
 	}
 }
 
@@ -1054,6 +1130,13 @@ func (s *redisSubscription) processMessage(
 		// Outside this subscription's filter: settle it unhandled. The
 		// group is per filter (subscriptionGroup), so no sibling
 		// subscription loses the entry by this acknowledgement.
+		_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
+		return
+	}
+	// Another domain's entry on a channel name both declare (see domain.go):
+	// acknowledged unread, as an entry outside the filter is.
+	if stamped, _ := values[redisFieldDomain].(string); foreignDomain(s.bus.opts.Domain, stamped) {
+		noteForeignDomain(s.bus.opts.Domain, s.channel, stamped)
 		_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
 		return
 	}

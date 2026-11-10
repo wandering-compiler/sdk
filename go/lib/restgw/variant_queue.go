@@ -121,7 +121,7 @@ func (q *VariantWorkers) render(ctx context.Context, j VariantJob) {
 		if _, err := j.Driver.Stat(ctx, vkey); err == nil {
 			continue // a download rendered it first
 		}
-		status, err := renderVariant(ctx, j.Driver, j.Key, vkey, spec)
+		status, err := renderVariantShared(ctx, j.Driver, j.Key, vkey, spec, false)
 		if err != nil && q.report != nil {
 			if status == http.StatusUnsupportedMediaType {
 				// Not an image this server resizes: every variant would fail

@@ -42,7 +42,9 @@ type Methods struct {
 //     declares none.
 //
 // Trusted proxies, the key TTL and the key ceiling are the scope's for every
-// method.
+// method. The stream cap ([Methods.Streams]) is the scope's MAX_STREAMS and is
+// independent of every rate: switching the scope or the transport off leaves
+// it in force.
 func NewMethods(prefix, scope, transport string, methods ...Method) *Methods {
 	sc := FromEnvScope(prefix, scope, transport)
 	m := &Methods{scope: sc, byKey: make(map[string]*Limiter, len(methods)), streams: New(sc)}
@@ -53,8 +55,11 @@ func NewMethods(prefix, scope, transport string, methods ...Method) *Methods {
 }
 
 // methodConfig is one method's config in the order NewMethods documents.
+// It carries no stream cap: that is [Methods.Streams]' alone, so a method
+// switched off has no limiter at all ([Methods.For] answers nil).
 func methodConfig(sc Config, name string, meth Method) Config {
 	cfg := sc
+	cfg.MaxStreams = 0
 	if meth.PerMinute > 0 && sc.PerMinute > 0 {
 		cfg.PerMinute = meth.PerMinute
 	}
@@ -88,7 +93,8 @@ func (m *Methods) For(key string) *Limiter {
 
 // Streams is the limiter whose [Limiter.OpenStream] caps the streams one
 // client holds open across every public stream of the transport
-// ([Config.MaxStreams], off unless set). It spends no method's tokens.
+// ([Config.MaxStreams], off unless set). It spends no method's tokens, and
+// the cap holds whether or not the scope's per-minute limit is on ([New]).
 func (m *Methods) Streams() *Limiter {
 	if m == nil {
 		return nil

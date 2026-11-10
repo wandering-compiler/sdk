@@ -157,13 +157,16 @@ func RegisterCatalog(lang string, poContents []byte) error {
 		return nil
 	}
 	syntaxErr := ValidatePO(poContents)
+	fuzzy := fuzzyIDs(poContents)
 	po := gotext.NewPo()
 	po.Parse(poContents)
 	entries := map[string]string{}
 	for id, tr := range po.GetDomain().GetTranslations() {
 		// "" is the header entry; an empty msgstr is "untranslated" in
-		// gettext and must fall through like an absent entry.
-		if id == "" {
+		// gettext and must fall through like an absent entry. So is a
+		// `#, fuzzy` one: an unreviewed guess msgfmt would leave out (the
+		// parser ignores `#,` flags, so they are read here).
+		if id == "" || fuzzy[id] {
 			continue
 		}
 		if s := rawMsgstr(tr); s != "" {
@@ -192,7 +195,7 @@ func RegisterCatalog(lang string, poContents []byte) error {
 
 	var errs []error
 	if syntaxErr != nil {
-		errs = append(errs, fmt.Errorf("i18n: %s: malformed catalog (registered what parses): %w", lang, syntaxErr))
+		errs = append(errs, fmt.Errorf("i18n: %s: catalog problems (registered what parses; fuzzy entries are not served): %w", lang, syntaxErr))
 	}
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)

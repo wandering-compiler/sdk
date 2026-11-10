@@ -77,3 +77,68 @@ func TestOpenStream_CapsOpenStreamsPerClient(t *testing.T) {
 		t.Fatal("opening streams spent the client's only token")
 	}
 }
+
+// The stream cap is a bound of its own: switching the per-minute limit off —
+// the scope's, the transport's, or a plain config's — MUST NOT switch it off
+// too. A limiter whose rate is off still counts open streams, and spends no
+// token on anything.
+func TestOpenStream_CapHoldsWhileTheRateIsOff(t *testing.T) {
+	open2 := func(t *testing.T, l *Limiter) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/s", nil)
+		r.RemoteAddr = "203.0.113.9:4000"
+		ok1, _ := l.OpenStream(r)
+		ok2, _ := l.OpenStream(r)
+		if !ok1 || ok2 {
+			t.Fatalf("MAX_STREAMS=1 with the rate off: first=%v second=%v, want true/false", ok1, ok2)
+		}
+		other := httptest.NewRequest("GET", "/s", nil)
+		other.RemoteAddr = "198.51.100.4:4000"
+		if ok, _ := l.OpenStream(other); !ok {
+			t.Fatal("another client was refused")
+		}
+		// The rate is off: nothing is token-limited.
+		for i := 0; i < 500; i++ {
+			if !l.AllowRequest(r) || !l.Allow(ctxFrom("203.0.113.9:1")) {
+				t.Fatalf("a limiter whose rate is off refused request %d", i)
+			}
+			if ok, done := l.ReserveRequest(r); !ok {
+				t.Fatalf("a limiter whose rate is off refused reservation %d", i)
+			} else {
+				done(true)
+			}
+			if ok, charge := l.AllowChargeableRequest(r); !ok {
+				t.Fatalf("a limiter whose rate is off refused chargeable %d", i)
+			} else {
+				charge()
+			}
+		}
+	}
+	t.Run("config", func(t *testing.T) {
+		open2(t, New(Config{PerMinute: 0, MaxStreams: 1}))
+	})
+	t.Run("transport off", func(t *testing.T) {
+		t.Setenv("VX_PUBLIC_RATELIMIT_MAX_STREAMS", "1")
+		t.Setenv("VX_PUBLIC_RATELIMIT_REST_PER_MINUTE", "0")
+		m := NewMethods("VX", "PUBLIC", "REST", Method{Key: "K", PerMinute: 20, Burst: 4})
+		if m.For("K") != nil {
+			t.Fatal("the transport is off, yet the method is limited")
+		}
+		open2(t, m.Streams())
+	})
+	t.Run("scope off, method revived", func(t *testing.T) {
+		t.Setenv("VY_PUBLIC_RATELIMIT_MAX_STREAMS", "1")
+		t.Setenv("VY_PUBLIC_RATELIMIT_PER_MINUTE", "0")
+		t.Setenv("VY_PUBLIC_RATELIMIT_K_PER_MINUTE", "30")
+		m := NewMethods("VY", "PUBLIC", "REST", Method{Key: "K"})
+		if m.For("K") == nil {
+			t.Fatal("the method's own env no longer revives it")
+		}
+		open2(t, m.Streams())
+	})
+	t.Run("no cap and no rate is nil", func(t *testing.T) {
+		if l := New(Config{PerMinute: 0}); l != nil {
+			t.Fatalf("a config with neither a rate nor a cap built a limiter: %+v", l.cfg)
+		}
+	})
+}

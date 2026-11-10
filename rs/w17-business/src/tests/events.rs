@@ -5,9 +5,10 @@ use super::context::conformance_pool;
 use crate::{
     ctx::Ctx,
     events::{
-        Dispatcher, EnvelopeBuilder, MemoryPublisher, Router, invalidate_events, is_credential_key,
-        labels_from_context, metadata_from_context, nats_connect_options, reserved_metadata_key,
-        validate_channel, validate_topic,
+        DOMAIN_HEADER, Dispatcher, EnvelopeBuilder, MemoryPublisher, Router, invalidate_events,
+        is_credential_key, labels_from_context, metadata_from_context, nats_connect_options,
+        nats_domain_headers, redis_xadd_cmd, reserved_metadata_key, validate_channel,
+        validate_topic,
     },
     manifest::{Emit, Invalidate, PayloadBinding},
     metadata::Metadata,
@@ -205,6 +206,52 @@ fn nats_dsns_as_nats_go_reads_them() {
     assert_eq!((t.token.as_deref(), t.tls), (Some("tok"), true));
     assert!(nats_connect_options("http://h").is_err());
     assert!(nats_connect_options("").is_err());
+}
+
+// Two domains that declare the same channel name share one broker stream; a
+// Go subscriber with a Domain settles unread a message stamped with another
+// domain. The publishers stamp the business domain as the Go bus does: NATS
+// header `W17-Domain`, Redis entry field `domain` after topic and payload.
+// Without a domain the wire is what it always was.
+#[test]
+fn nats_publish_carries_the_domain_header() {
+    assert_eq!(DOMAIN_HEADER, "W17-Domain");
+    let h = nats_domain_headers("billing").expect("a domain is stamped");
+    assert_eq!(
+        h.get(DOMAIN_HEADER).map(|v| v.as_str().to_string()),
+        Some("billing".to_string())
+    );
+    assert!(nats_domain_headers("").is_none());
+}
+
+#[test]
+fn redis_entry_carries_the_domain_field() {
+    let args = |domain: &str| -> Vec<Vec<u8>> {
+        redis_xadd_cmd("notes", "a.b", vec![7], domain, "100-0")
+            .args_iter()
+            .map(|a| match a {
+                redis::Arg::Simple(b) => b.to_vec(),
+                _ => b"<cursor>".to_vec(),
+            })
+            .collect()
+    };
+    let wire = |xs: &[&[u8]]| -> Vec<Vec<u8>> { xs.iter().map(|x| x.to_vec()).collect() };
+    let base: &[&[u8]] = &[
+        b"XADD",
+        b"notes",
+        b"MINID",
+        b"~",
+        b"100-0",
+        b"*",
+        b"topic",
+        b"a.b",
+        b"payload",
+        &[7],
+    ];
+    assert_eq!(args(""), wire(base));
+    let mut stamped = base.to_vec();
+    stamped.extend_from_slice(&[b"domain".as_slice(), b"billing".as_slice()]);
+    assert_eq!(args("billing"), wire(&stamped));
 }
 
 #[tokio::test]

@@ -46,7 +46,7 @@ from typing import Any
 
 import grpclib.const
 from grpclib.const import Cardinality, Status
-from grpclib.exceptions import GRPCError
+from grpclib.exceptions import GRPCError, ProtocolError
 
 from . import events, observability, paging, txscope
 from .config import ConfigError
@@ -311,6 +311,27 @@ def _to_status(e: BaseException, path: str, ctx: Context) -> GRPCError:
     return GRPCError(Status.INTERNAL, f"{path}: internal error")
 
 
+ANSWERED_HEADER = "w17-answered"
+"""The response header a served method's own ``UNAVAILABLE`` goes out with
+(Go: ``grpcerr.AnsweredHeader``)."""
+
+
+async def _mark_answered(stream, st: GRPCError) -> None:
+    """Send response headers carrying :data:`ANSWERED_HEADER` before an
+    ``UNAVAILABLE`` the method answered, so the status leaves in the trailers.
+
+    A w17 client replays a trailers-only ``UNAVAILABLE`` — the shape of a
+    transport failure that reached no handler. A method that ran may have done
+    work first (a write committed, an upstream called); answered this way, the
+    client returns the status to its caller instead of running it again."""
+    if st.status != Status.UNAVAILABLE:
+        return
+    try:
+        await stream.send_initial_metadata(metadata=[(ANSWERED_HEADER, "1")])
+    except ProtocolError:
+        pass  # headers already went out: the status is in the trailers anyway
+
+
 def _span(ctx: Context, path: str):
     tr = observability.tracer()
     if tr is None:
@@ -349,7 +370,9 @@ def _handler(m: _Method, served: Served) -> grpclib.const.Handler:
             ctx.cancel()
             raise
         except Exception as e:  # noqa: BLE001
-            raise _to_status(e, path, ctx) from e
+            st = _to_status(e, path, ctx)
+            await _mark_answered(stream, st)
+            raise st from e
         finally:
             reg._leave()
 

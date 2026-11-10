@@ -277,12 +277,12 @@ class App:
         nats = redis = None
         try:
             if ev.nats_dsn_env and (dsn := res.get(ev.nats_dsn_env)):
-                nats = await events.NatsPublisher.connect(dsn)
+                nats = await events.NatsPublisher.connect(dsn, domain=self.manifest.domain)
         except Exception as e:
             raise BootError(f"eventbus nats: {ev.nats_dsn_env}: {e}") from e
         try:
             if ev.redis_dsn_env and (dsn := res.get(ev.redis_dsn_env)):
-                redis = await events.RedisPublisher.connect(dsn)
+                redis = await events.RedisPublisher.connect(dsn, domain=self.manifest.domain)
         except Exception as e:
             raise BootError(f"eventbus redis: {ev.redis_dsn_env}: {e}") from e
         if nats is None and redis is None:

@@ -344,7 +344,11 @@ func matchBucket(fields []DownloadField, remainder string) (DownloadField, strin
 // The variant is rendered the first time it is asked for and stored in the
 // same store under `<key>~<name>`, so every later request — from this replica
 // or another — reads it back instead of resizing again. Concurrent first
-// requests may each render it; the store's atomic put keeps one whole copy.
+// requests in one process render it once and share the outcome; renders of
+// different variants run at most SetMaxConcurrentVariantRenders at once, and a
+// request that waits too long for a slot is answered 503 with Retry-After
+// (variant_render.go). Replicas may each render it; the store's atomic put
+// keeps one whole copy.
 //
 // Only declared names exist (400 for any other): a server that resized to
 // whatever a URL asked for would render and store a new image per request.
@@ -366,7 +370,14 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 	vkey := VariantKey(key, name)
 	info, err := field.Driver.Stat(ctx, vkey)
 	if errors.Is(err, kvfs.ErrNotFound) {
-		if status, rerr := renderVariant(ctx, field.Driver, key, vkey, spec); rerr != nil {
+		if status, rerr := renderVariantShared(ctx, field.Driver, key, vkey, spec, true); rerr != nil {
+			if status == http.StatusServiceUnavailable {
+				w.Header().Set("Retry-After", "1")
+				// Not reported: a burst would be a burst of reports, and the
+				// refusal is the bound working, not a fault.
+				writeRefusalStatus(ctx, w, status, codes.Unavailable, "")
+				return
+			}
 			if status == http.StatusInternalServerError {
 				WriteInternal(ctx, w, "download variant: "+rerr.Error())
 			} else {

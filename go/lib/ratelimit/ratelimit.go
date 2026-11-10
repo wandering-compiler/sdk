@@ -374,10 +374,14 @@ func (b *bucket) give(now time.Time, perSec float64, burst int) {
 // A nil *Limiter allows everything, so a caller that decided not to build one
 // needs no branch at the call site.
 type Limiter struct {
-	cfg     Config
-	perSec  float64
-	mu      sync.Mutex
-	buckets map[string]*bucket
+	cfg    Config
+	perSec float64
+	// streamsOnly marks a limiter built for its stream cap alone: the
+	// per-minute rate is off, so it spends no token and admits every
+	// request, and only [Limiter.OpenStream] refuses.
+	streamsOnly bool
+	mu          sync.Mutex
+	buckets     map[string]*bucket
 	// newest and oldest are the ends of the recency list every bucket is on,
 	// so eviction takes the least recently seen key without looking at any
 	// other.
@@ -397,10 +401,19 @@ type Limiter struct {
 	streams   map[string]int
 }
 
-// New builds a Limiter, or returns nil when the config disables it.
+// New builds a Limiter, or returns nil when the config disables it: no
+// per-minute rate and no stream cap.
+//
+// The stream cap is a bound of its own. With the rate off (PerMinute <= 0)
+// and MaxStreams set, New returns a limiter that admits every request and
+// spends no token, and still caps the streams a client holds open — switching
+// the guess bound off must not lift the overload bound with it.
 func New(cfg Config) *Limiter {
 	if cfg.PerMinute <= 0 {
-		return nil
+		if cfg.MaxStreams <= 0 {
+			return nil
+		}
+		return &Limiter{cfg: cfg, streamsOnly: true, streams: make(map[string]int), now: time.Now}
 	}
 	if cfg.Burst <= 0 {
 		cfg.Burst = DefaultBurst
@@ -448,10 +461,14 @@ func (l *Limiter) OpenStream(r *http.Request) (ok bool, release func()) {
 	}
 }
 
+// rateOff reports whether l spends no token: nil, or built for its stream
+// cap alone.
+func (l *Limiter) rateOff() bool { return l == nil || l.streamsOnly }
+
 // Allow reports whether the caller behind ctx may proceed, spending one
 // token when it may.
 func (l *Limiter) Allow(ctx context.Context) bool {
-	if l == nil {
+	if l.rateOff() {
 		return true
 	}
 	return l.allowKey(l.resolve(l.clientKey(ctx)))
@@ -535,7 +552,7 @@ func (l *Limiter) warnUntrustedForwarder() {
 // done that is never called leaves the token spent. A nil Limiter admits and
 // returns a no-op done.
 func (l *Limiter) Reserve(ctx context.Context) (ok bool, done func(failed bool)) {
-	if l == nil {
+	if l.rateOff() {
 		return true, func(bool) {}
 	}
 	return l.reserve(l.resolve(l.clientKey(ctx)))
@@ -544,7 +561,7 @@ func (l *Limiter) Reserve(ctx context.Context) (ok bool, done func(failed bool))
 // ReserveRequest is [Limiter.Reserve] for an HTTP request (see
 // [Limiter.AllowRequest] for how the caller is resolved).
 func (l *Limiter) ReserveRequest(r *http.Request) (ok bool, done func(failed bool)) {
-	if l == nil {
+	if l.rateOff() {
 		return true, func(bool) {}
 	}
 	return l.reserve(l.resolve(l.requestKey(r)))
@@ -581,7 +598,7 @@ func (l *Limiter) reserve(key string) (bool, func(failed bool)) {
 // after the context already gave the token back takes one again when the
 // bucket has one. A nil Limiter admits and returns a no-op charge.
 func (l *Limiter) AllowChargeable(ctx context.Context) (allowed bool, charge func()) {
-	if l == nil {
+	if l.rateOff() {
 		return true, func() {}
 	}
 	return l.chargeable(ctx, l.resolve(l.clientKey(ctx)))
@@ -591,7 +608,7 @@ func (l *Limiter) AllowChargeable(ctx context.Context) (allowed bool, charge fun
 // (see [Limiter.AllowRequest] for how the caller is resolved); the token is
 // given back when r's context ends without a charge.
 func (l *Limiter) AllowChargeableRequest(r *http.Request) (allowed bool, charge func()) {
-	if l == nil {
+	if l.rateOff() {
 		return true, func() {}
 	}
 	return l.chargeable(r.Context(), l.resolve(l.requestKey(r)))
@@ -901,7 +918,7 @@ func bucketForAddr(ip netip.Addr) string {
 // would resolve to the one fallback key and the per-client limit would be a
 // single global bucket.
 func (l *Limiter) AllowRequest(r *http.Request) bool {
-	if l == nil {
+	if l.rateOff() {
 		return true
 	}
 	return l.allowKey(l.resolve(l.requestKey(r)))

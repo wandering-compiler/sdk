@@ -27,8 +27,9 @@ const W17InvalidateTopic = "w17.invalidate"
 //     = "Account";` (repeated for multi-entity mutations). The
 //     storage codegen pipeline walks the annotation at build time
 //     and wires the call into the generated EmitInterceptor — no
-//     handler-body code change. Channel is pinned to "default";
-//     ids are passed as nil (matches the FE's family-level drop
+//     handler-body code change. The channel is the domain's hub
+//     channel (the one its gateway's /w17-events hub reads); ids
+//     are passed as nil (matches the FE's family-level drop
 //     behavior today).
 //
 //  2. **Manual (still supported).** Call from operator handler
@@ -50,6 +51,12 @@ const W17InvalidateTopic = "w17.invalidate"
 // request's context with the same shared rule every other event uses
 // ([LabelsFromContext]), so no call site has to pass anything: an emit
 // inside a labelled request is labelled, an emit outside one is not.
+//
+// **Who receives it.** The InvalidateEvent is not the domain's envelope,
+// so it is delivered only to subscriptions that ask for the reserved
+// topics: [EveryTopic] (the /w17-events hub) or a filter naming `w17`
+// literally. A domain subscriber's `**` leaves it out ([MatchGlob]), so the
+// generated subscriber bundle on the same channel never tries to decode it.
 //
 // **Ids are informational** — the FE client today drops by
 // (group, message) family without consulting the id list.

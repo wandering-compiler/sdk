@@ -34,9 +34,12 @@ func TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable(t *testing.T) {
 	if len(sc.MethodConfig) != 1 || sc.MethodConfig[0].RetryPolicy == nil {
 		t.Fatalf("want one methodConfig with a retryPolicy; got %+v", sc.MethodConfig)
 	}
-	// SAFETY: only UNAVAILABLE (request provably never reached the server) is
-	// replay-safe for non-idempotent mutations. ABORTED / DEADLINE_EXCEEDED /
-	// INTERNAL must stay off the list or a mutation could double-apply.
+	// SAFETY: only UNAVAILABLE is retried, and grpc-go replays it only when
+	// Trailers-Only — a transport failure; a w17 handler's own UNAVAILABLE
+	// carries grpcerr.AnsweredHeader and is not replayed
+	// (TestGRPCComponent_AHandlersUnavailableIsNotReplayed). ABORTED /
+	// DEADLINE_EXCEEDED / INTERNAL must stay off the list or a mutation could
+	// double-apply.
 	codes := sc.MethodConfig[0].RetryPolicy.RetryableStatusCodes
 	if len(codes) != 1 || codes[0] != "UNAVAILABLE" {
 		t.Errorf("retryableStatusCodes = %v, want exactly [UNAVAILABLE]", codes)

@@ -246,9 +246,16 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	return errors.Join(all...)
 }
 
+// consumeLoop fetches and consumes one batch at a time. JetStream starts a
+// message's AckWait when it delivers the message, so a fetch of several
+// made every batch queued behind a slow Consume age past AckWait without
+// being started: it was redelivered although it never failed, consumed
+// twice, and its delivery count — read as the attempt number — grew, so a
+// later single failure could dead-letter it early. With one message per
+// fetch the next is asked for only once the previous one is settled.
 func consumeLoop(ctx context.Context, cons jetstream.Consumer, r registered, cfg ConsumerConfig, dlq string) error {
 	for ctx.Err() == nil {
-		batch, err := cons.Fetch(16, jetstream.FetchMaxWait(time.Second))
+		batch, err := cons.Fetch(1, jetstream.FetchMaxWait(time.Second))
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -315,15 +322,30 @@ func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq,
 	}
 	out.Header.Set("W17-Dead-Letter-Reason", cause.Error())
 	out.Header.Set("W17-Dead-Letter-Subject", msg.Subject())
+	// The copied Nats-Msg-Id is the batch id, and the dead letter stream's
+	// duplicate window is per stream, not per subject: a second consumer
+	// dead-lettering the same batch within the window was answered as a
+	// duplicate and nothing was stored. The id is scoped to this consumer's
+	// dead letter subject, so each consumer's copy is stored once and a
+	// retried publish of the same one is still deduplicated.
+	if id := out.Header.Get(nats.MsgIdHdr); id != "" {
+		out.Header.Set(nats.MsgIdHdr, id+"@"+dlq)
+	}
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := cfg.JS.PublishMsg(pctx, out); err != nil {
+	ack, err := cfg.JS.PublishMsg(pctx, out)
+	if err != nil {
 		// Not stored: leave it to be offered again rather than lose it.
 		_ = msg.Nak()
 		observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: dead-lettering a batch failed (%w) after: %w", name, err, cause))
 		return
 	}
 	_ = msg.Term()
+	if ack != nil && ack.Duplicate {
+		// This consumer's dead letter of the batch is already stored (an
+		// earlier attempt whose Term did not land): nothing new to report.
+		return
+	}
 	observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: a batch moved to %s: %w", name, dlq, cause))
 }
 

@@ -319,3 +319,58 @@ func TestCORSPreflight(t *testing.T) {
 		t.Errorf("%d %v", w.Code, w.Header())
 	}
 }
+
+// The token endpoint's per-address budget bounds guesses: a failed attempt
+// stays charged, a success gives its token back, so a client redeeming codes
+// and refreshing is never limited while a guesser is after the burst.
+func TestToken_FailuresStayChargedSuccessesDoNot(t *testing.T) {
+	ok := mount(t, Config{TokenPerMinute: 3}, &fakeBackend{})
+	v := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"rt"}, "client_id": {"c"}}
+	for i := range 10 {
+		if w := do(ok, form(TokenPath, v)); w.Code != http.StatusOK {
+			t.Fatalf("success %d: %d %s — successes must not spend the budget", i, w.Code, w.Body)
+		}
+	}
+	bad := mount(t, Config{TokenPerMinute: 3}, &fakeBackend{tokenErr: &Error{Code: "invalid_grant"}})
+	for i := range 3 {
+		if w := do(bad, form(TokenPath, v)); w.Code != http.StatusBadRequest {
+			t.Fatalf("failure %d: %d", i, w.Code)
+		}
+	}
+	w := do(bad, form(TokenPath, v))
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), `"error":"slow_down"`) || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("after the burst of failures: %d %s, want 429 slow_down with Retry-After", w.Code, w.Body)
+	}
+}
+
+// A token request naming a single-valued parameter twice is refused before
+// the backend sees it: two readings of one request are not the server's to
+// pick between.
+func TestToken_RepeatedParameterIsRefused(t *testing.T) {
+	b := &fakeBackend{}
+	h := mount(t, Config{}, b)
+	w := do(h, form(TokenPath, url.Values{"grant_type": {"authorization_code"}, "client_id": {"c"}, "code": {"a", "b"}}))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"error":"invalid_request"`) || b.tokenReq.ClientID != "" {
+		t.Fatalf("%d %s, backend asked: %v", w.Code, w.Body, b.tokenReq.ClientID != "")
+	}
+}
+
+// Authorization requests are capped per address (each is a stored pending
+// request): past the burst the user is shown a page, with Retry-After, and
+// the backend is not asked.
+func TestAuthorize_RateLimited(t *testing.T) {
+	b := &fakeBackend{}
+	h := mount(t, Config{AuthorizePerMinute: 2}, b)
+	q := url.Values{"response_type": {"code"}, "client_id": {"c"}, "redirect_uri": {"https://c.example/cb"}}
+	for i := range 2 {
+		if w := do(h, httptest.NewRequest(http.MethodGet, AuthorizePath+"?"+q.Encode(), nil)); w.Code != http.StatusFound {
+			t.Fatalf("request %d: %d", i, w.Code)
+		}
+	}
+	b.authReq = AuthorizeRequest{}
+	w := do(h, httptest.NewRequest(http.MethodGet, AuthorizePath+"?"+q.Encode(), nil))
+	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || w.Header().Get("Retry-After") == "" ||
+		!strings.Contains(w.Body.String(), "temporarily_unavailable") || b.authReq.ClientID != "" {
+		t.Fatalf("third request: %d %v %s", w.Code, w.Header(), w.Body)
+	}
+}

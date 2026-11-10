@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/binroots"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/factory"
@@ -298,7 +299,9 @@ process listing on the host.
 "apply --fetch" is the one-step form for a container with no writable disk.
 "fetch" then "apply" stays available for an operator who wants to look at the
 artefacts in between, and for a deployment that would rather not hold a
-console credential at all.
+console credential at all. "fetch" writes the console's list of replaced
+migrations (w17-replaced.json) beside the artefacts; ship it with them, so
+"apply" refuses a database whose applied migration was replaced.
 `
 
 func usageErr(got string) error {
@@ -624,6 +627,11 @@ func buildConfig(ctx context.Context, f applyFlags, opts Options, out io.Writer)
 	}
 	if !f.fetch {
 		cfg.MigrationsDir = f.migrations
+		if f.verb == "apply" || f.verb == "status" {
+			if err := warnNoReplacedList(f.verb, targets, f.migrations, out); err != nil {
+				return migrate.Config{}, err
+			}
+		}
 		return cfg, nil
 	}
 	// --fetch: the artefacts arrive over the wire and never land anywhere.
@@ -662,7 +670,8 @@ func runFetch(ctx context.Context, args []string, opts Options, out io.Writer) e
 	targets := ownedTargets(lk.ConnTargets(), opts.Connections)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	migs, err := fetchMigrations(ctx, lk.ProjectID, targets, consoleAddrOf(f.console, opts.getenv()))
+	heads := fetchHeads(ctx, targets, opts.getenv())
+	migs, replaced, err := fetchMigrationsReporting(ctx, lk.ProjectID, targets, heads, consoleAddrOf(f.console, opts.getenv()))
 	if err != nil {
 		return err
 	}
@@ -671,7 +680,97 @@ func runFetch(ctx context.Context, args []string, opts Options, out io.Writer) e
 			return fmt.Errorf("migrate fetch: write %s/%s: %w", m.GetConnection(), m.GetId(), err)
 		}
 	}
+	// The console's replaced list travels with the artefacts, so `apply
+	// --migrations` refuses a replaced head exactly as `apply --fetch` does.
+	// Recorded for every connection that was fetched, replaced or not.
+	var fetched []string
+	for _, t := range targets {
+		if t.TargetMigrationID != "" {
+			fetched = append(fetched, t.Connection)
+		}
+	}
+	if len(fetched) > 0 {
+		if err := migrate.WriteReplaced(f.migrations, fetched, replaced); err != nil {
+			return fmt.Errorf("migrate fetch: write the replaced list: %w", err)
+		}
+	}
 	fmt.Fprintf(out, "migrate fetch: %d migration(s) written to %s\n", len(migs), f.migrations)
+	if len(heads) > 0 {
+		fmt.Fprintf(out, "migrate fetch: reported the applied head of %d database(s) to the console\n", len(heads))
+	}
+	return nil
+}
+
+// fetchHeads reads, for `migrate fetch`, the applied head of every pinned
+// connection whose DSN this environment holds, so the console's replace guard
+// hears from a deployment that fetches to disk as it does from `apply
+// --fetch`. A fetch on a workstation holds no DSN and reports nothing; a
+// database that cannot be read is skipped, as appliedHeads always does — the
+// report is best effort, and the apply that follows reads the head again.
+//
+// Bounded on its own, so a database that does not answer delays the fetch by
+// at most headReadBudget rather than by the whole fetch timeout.
+func fetchHeads(ctx context.Context, targets []migrate.ConnTarget, getenv func(string) string) []*applyfetchpb.AppliedHead {
+	var specs []factory.TargetSpec
+	dsns := map[string]string{}
+	for _, t := range targets {
+		if t.TargetMigrationID == "" {
+			continue
+		}
+		dsn := getenv(migrate.TargetEnvVar(t.Connection))
+		if dsn == "" {
+			continue
+		}
+		specs = append(specs, factory.TargetSpec{Connection: t.Connection, DSN: dsn})
+		dsns[t.Connection] = dsn
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, headReadBudget)
+	defer cancel()
+	var held []migrate.ConnTarget
+	for _, t := range targets {
+		if _, ok := dsns[t.Connection]; ok {
+			held = append(held, t)
+		}
+	}
+	return appliedHeads(ctx, held, factory.FromTargets(specs), func(conn string) string { return dsns[conn] })
+}
+
+// headReadBudget bounds fetchHeads.
+const headReadBudget = 30 * time.Second
+
+// warnNoReplacedList names the pinned connections a migration directory
+// carries no replaced list for (migrate.ReplacedFileName).
+//
+// Such a directory was fetched by a binary from before the list was written,
+// or assembled by hand. It still applies — a replaced head between two chain
+// migrations is refused from the ids alone — but a replaced FIRST migration
+// cannot be told from an unknown past without the list, so the operator is
+// told which guard is missing and how to get it back. A list that is there
+// but unreadable refuses: it would otherwise read as "nothing replaced".
+func warnNoReplacedList(verb string, targets []migrate.ConnTarget, dir string, out io.Writer) error {
+	var pinned []string
+	for _, t := range targets {
+		if t.TargetMigrationID != "" {
+			pinned = append(pinned, t.Connection)
+		}
+	}
+	if len(pinned) == 0 || dir == "" {
+		return nil
+	}
+	missing, err := migrate.UnrecordedConnections(os.DirFS(dir), pinned)
+	if err != nil {
+		return fmt.Errorf("migrate %s: %s: %w", verb, dir, err)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	fmt.Fprintf(out, "migrate %s: WARNING %s carries no replaced list (%s) for %s.\n"+
+		"  The console's list of migrations replaced by `w17ctl migrate replace` is what refuses a database whose applied head was the FIRST migration on its connection and was then replaced; without it that database gets the replacement on top of the replaced migration.\n"+
+		"  fix: re-run `migrate fetch` into this directory with this binary (it writes the list), or apply with --fetch.\n",
+		verb, dir, migrate.ReplacedFileName, strings.Join(missing, ", "))
 	return nil
 }
 

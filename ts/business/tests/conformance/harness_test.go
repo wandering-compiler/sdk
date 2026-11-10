@@ -202,7 +202,9 @@ func start(businessAddr string) (*harness, func(), error) {
 	if err != nil {
 		return nil, cleanup, err
 	}
-	if err := sub.Subscribe(context.Background(), "**", func(_ context.Context, topic string, envelope []byte) error {
+	// EveryTopic: the tier publishes the reserved w17.invalidate too, which
+	// a `**` subscription leaves out.
+	if err := sub.Subscribe(context.Background(), eventbus.EveryTopic, func(_ context.Context, topic string, envelope []byte) error {
 		h.mu.Lock()
 		h.events = append(h.events, event{topic: topic, raw: append([]byte(nil), envelope...)})
 		h.mu.Unlock()

@@ -292,7 +292,11 @@ func (e *EventbusEventSource) ensureOpen() error {
 		handler := func(ctx context.Context, topic string, envelope []byte) error {
 			return e.handleDelivery(ctx, ch, topic, envelope)
 		}
-		if err := sub.Subscribe(context.Background(), "**", handler); err != nil {
+		// EveryTopic, not `**`: the hub forwards the reserved `w17.*`
+		// topics (cache invalidation) as well as the domain's events, and
+		// `**` leaves the reserved ones out for the domain subscribers that
+		// cannot decode them.
+		if err := sub.Subscribe(context.Background(), eventbus.EveryTopic, handler); err != nil {
 			// Drain this one too: Subscriber() handed back a live handle
 			// whether or not the subscription took.
 			subs = append(subs, sub)

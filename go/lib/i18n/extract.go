@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/leonelquinteros/gotext"
@@ -33,6 +34,12 @@ type POEntry struct {
 	// `#: <text>`. Use it for "file:line where this msgid
 	// originated". Empty = no reference.
 	Reference string
+
+	// Fuzzy marks the entry `#, fuzzy`: a translation not yet
+	// reviewed, which the runtime does not serve. MarshalPO writes
+	// the flag; MergePO keeps it; EntriesFromPO reports it (with an
+	// empty Msgstr, so a catalog built from it does not serve it).
+	Fuzzy bool
 }
 
 // MarshalPO serialises the supplied entries into a gettext
@@ -95,7 +102,42 @@ func MarshalPO(lang string, entries []POEntry) ([]byte, error) {
 		_ = e.ExtractedComment
 	}
 
-	return d.MarshalText()
+	out, err := d.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	return markFuzzy(out, sorted), nil
+}
+
+// markFuzzy inserts a `#, fuzzy` line before each entry of body that
+// entries marks Fuzzy (the gotext writer has no flag lines of its own).
+func markFuzzy(body []byte, entries []POEntry) []byte {
+	want := map[string]bool{}
+	for _, e := range entries {
+		if e.Fuzzy && e.Msgid != "" {
+			want[e.Msgid] = true
+		}
+	}
+	if len(want) == 0 {
+		return body
+	}
+	_, found := scanPO(body)
+	at := map[int]bool{}
+	for _, e := range found {
+		if e.ctxt == "" && want[e.id] {
+			at[e.line] = true
+		}
+	}
+	lines := strings.SplitAfter(string(body), "\n")
+	var b strings.Builder
+	b.Grow(len(body) + 10*len(at))
+	for i, l := range lines {
+		if at[i+1] {
+			b.WriteString("#, fuzzy\n")
+		}
+		b.WriteString(l)
+	}
+	return []byte(b.String())
 }
 
 // ScaffoldPO returns a `.po` body for `lang` containing every
@@ -200,6 +242,7 @@ func MergePO(existing []byte, lang string, msgids []string) ([]byte, error) {
 	}
 	prior := gotext.NewPo()
 	prior.Parse(existing)
+	priorFuzzy := fuzzyIDs(existing)
 	priorMsgstr := map[string]string{}
 	if d := prior.GetDomain(); d != nil {
 		for _, t := range d.GetTranslations() {
@@ -215,7 +258,7 @@ func MergePO(existing []byte, lang string, msgids []string) ([]byte, error) {
 		if !ok && lang == CompileTimeDefaultLanguage {
 			msgstr = m
 		}
-		entries = append(entries, POEntry{Msgid: m, Msgstr: msgstr})
+		entries = append(entries, POEntry{Msgid: m, Msgstr: msgstr, Fuzzy: ok && priorFuzzy[m]})
 	}
 	return MarshalPO(lang, entries)
 }
@@ -249,9 +292,14 @@ func EntriesFromPO(body []byte) []POEntry {
 		return nil
 	}
 	trans := d.GetTranslations()
+	fuzzy := fuzzyIDs(body)
 	out := make([]POEntry, 0, len(trans))
 	for _, t := range trans {
 		if t == nil || t.ID == "" {
+			continue
+		}
+		if fuzzy[t.ID] {
+			out = append(out, POEntry{Msgid: t.ID, Fuzzy: true})
 			continue
 		}
 		out = append(out, POEntry{Msgid: t.ID, Msgstr: rawMsgstr(t)})

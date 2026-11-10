@@ -12,6 +12,7 @@ package eventbus
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -362,4 +363,32 @@ func TestNopObserver_Internal(t *testing.T) {
 	nop.OnDeliverSuccess("c", "t")
 	nop.OnDeliverFailure("c", "t", context.Canceled)
 	nop.OnDrop("c", "t", DropReasonBufferFull)
+}
+
+// TestNatsFilterSubjects pins the push-down of a topic filter to consumer
+// subjects: exact where the subject syntax can say it, the whole channel
+// otherwise, never narrower than what MatchGlob accepts.
+func TestNatsFilterSubjects(t *testing.T) {
+	for _, tc := range []struct {
+		filter string
+		want   []string
+	}{
+		{"**", []string{"ch.>"}},
+		{EveryTopic, []string{"ch.>"}},
+		{"", []string{"ch.>"}},
+		{"user.created", []string{"ch.user.created"}},
+		{"user.*", []string{"ch.user.*"}},
+		{"*.created", []string{"ch.*.created"}},
+		{"user.**", []string{"ch.user", "ch.user.>"}},
+		{"user.**.created", []string{"ch.>"}},
+		{"**.created", []string{"ch.>"}},
+		{"user..x", []string{"ch.>"}},
+		{"us er", []string{"ch.>"}},
+		{"w17.invalidate", []string{"ch.w17.invalidate"}},
+	} {
+		got := natsFilterSubjects("ch", tc.filter)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("natsFilterSubjects(%q) = %q, want %q", tc.filter, got, tc.want)
+		}
+	}
 }

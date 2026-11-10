@@ -6,7 +6,7 @@ health, internal-mesh TLS, observability bootstrap and the in-process gRPC bridg
 Packages: `go/service/bootstrap`, `go/service/runtime`, `go/service/internal/server`,
 `go/service/inprocgrpc`, `go/service/healthcheck`, `go/lib/grpcserver`,
 `go/lib/grpcclient` (internal-mesh TLS and dial defaults only), `go/core/lifecycle`,
-`go/core/healthz`, `go/core/observx`, `go/lib/redact`.
+`go/core/healthz`, `go/core/observx`, `go/lib/redact`, `go/lib/privatesurface`.
 
 ## Process shape
 
@@ -62,6 +62,7 @@ gRPC server options built by `runtime.GRPCComponent`, in order:
 | S20 | Error, event and refusal reporting | `go/core/observx/observx.go` — `ReportError`, `ReportEvent`, `ReportRefusal`; `go/core/observx/requestdata.go` — `WithRequest` |
 | S21 | In-process gRPC bridge | `go/service/inprocgrpc/inprocgrpc.go` — `New`, `Conn`, `Invoke`, `NewStream` |
 | S22 | Redacted records | `go/lib/redact/redact.go` — `Register`, `Set.Append` |
+| S23 | Private surfaces | `go/lib/privatesurface/privatesurface.go` — `ServerTLS`, `ClientTLS`, `SelfTLS`, `ProxyID`, `Caller`, `Admit`, `Forwarded`, `ToBackend`, `Dial` |
 
 ## S1. Component supervisor
 
@@ -533,7 +534,7 @@ variables with S16 and S18.
 | S17.1 | Switch off → no option. | `TestSwitchOffNoTLS`, `TestExplicitOff` |
 | S17.2 | Switch on without certificate and key → error. | `TestSwitchOnRequiresCertKey` |
 | S17.3 | Switch on → server-authenticated TLS. | `TestServerAuthTLSEnabled` |
-| S17.4 | A client CA set → mutual TLS; a client without a certificate is rejected in a real handshake. | `TestMutualTLSWithClientCA`, `TestBackendDial_MTLSRejectsClientWithoutCert` |
+| S17.4 | A client CA set → mutual TLS: a listener built from the option MUST refuse, in a real handshake, a client without a certificate and one whose certificate another CA issued, and serve a leaf of the client CA. | `TestTLSServerOption_MutualTLSRefusesAClientWithoutAValidCertificate`, `TestMutualTLSWithClientCA` |
 | S17.5 | A bad client CA → error. | `TestBadClientCAErrors` |
 | S17.6 | `terminated` → plaintext listener. | `TestTLSServerOption_TerminatedListensPlain` |
 | S17.7 | A listener MUST NOT serve plaintext when TLS was requested. | `TestGRPCComponent_ServesInternalTLS` |
@@ -554,7 +555,7 @@ retry service config, and keepalive.
 | `W17_INTERNAL_TLS_CA` | system roots | unreadable or no PEM → error; ignored under `terminated`, with a warning |
 | `W17_INTERNAL_TLS_CERT` / `W17_INTERNAL_TLS_KEY` | no client certificate | both set → presented for mTLS; only one set → error; ignored under `terminated`, with a warning |
 | `lookup` | `os.Getenv` in `Dial` | nil passed directly to `TLSDialOption` → plaintext |
-| retry | `UNAVAILABLE` only, 3 attempts, backoff 0.1s–1s, throttling 100 tokens at ratio 0.1 | — |
+| retry | `UNAVAILABLE` only, and only a Trailers-Only one (grpc-go's rule); 3 attempts, backoff 0.1s–1s, throttling 100 tokens at ratio 0.1 | a w17 server's handler `UNAVAILABLE` carries `w17-answered` and is not retried |
 | caller `opts` | appended last | for single-valued options the last one wins |
 
 **Guarantees.**
@@ -568,6 +569,7 @@ retry service config, and keepalive.
 | S18.5 | Dial MUST NOT block, so a backend that is down at start does not fail startup. | `TestDial_NonBlocking` |
 | S18.6 | Real handshakes: a custom CA verifies, an untrusted server fails, mTLS succeeds, a client without a certificate is rejected. | `TestBackendDial_HandshakeWithCustomCA`, `TestBackendDial_HandshakeFailsWithoutTrust`, `TestBackendDial_MTLSHandshake`, `TestBackendDial_MTLSRejectsClientWithoutCert` |
 | S18.7 | Retry MUST cover only `UNAVAILABLE` and MUST be throttled; codes where the server may already have applied a write MUST NOT be retried. | `TestDefaultServiceConfig_RetriesOnlyUnavailable`, `TestDefaultServiceConfig_HasRetryThrottling`, `TestDefaultServiceConfig_IsValidJSON` |
+| S18.12 | An `UNAVAILABLE` a handler of a w17 server returned MUST NOT be replayed by `Dial` or `grpcx.DialOpts`, unary or streaming: the handler may already have written. Every w17 server sends it after response headers carrying `w17-answered` (`grpcerr.AnsweredHeader`), which makes the response not Trailers-Only — Go (the recovery interceptors of `runtime.GRPCComponent` and `grpcerr.RecoverUnaryInterceptor` / `RecoverStreamInterceptor`), and the Python, TypeScript and Rust business tiers. A Trailers-Only `UNAVAILABLE` (a transport failure, a drain refusal before the handler) and a handler answer marked `grpcerr.ReplaySafe` (a database never reached, E33.9) MUST still be retried. | `TestDial_AHandlersUnavailableIsNotReplayed`, `TestDial_AReplaySafeOrTransportUnavailableIsRetried`, `TestGRPCComponent_AHandlersUnavailableIsNotReplayed`, `TestMarkAnswered_OnlyAHandlersUnavailable`; `py/tests/test_server.py` — `test_a_handlers_unavailable_is_answered_and_not_replayed`; `ts/business/tests/server.test.ts` — "a handler's UNAVAILABLE is answered after headers and not replayed"; `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the `unavailable` case) |
 | S18.8 | No path MUST skip certificate verification. | `TestMeshDialers_NeverSkipCertificateVerification` |
 | S18.9 | In `terminated` mode the client MUST verify against the system roots only: `W17_INTERNAL_TLS_CA` and the client pair MUST be ignored, and a warning MUST name the ignored variables. | `TestClientTLSConfig_TerminatedUsesSystemRootsOnly`, `TestInternalTLS_Terminated` |
 | S18.10 | An unrecognised switch value MUST be refused at dial construction with an error naming the variable, the value and the accepted spellings. | `TestTLSDialOption_UnrecognisedSwitchIsRefused`, `TestCheckInternalTLS` |
@@ -760,3 +762,56 @@ list is not cut on its own.
 **Deliberate limits.**
 - Field order on the wire is declaration order, not number order; decoders accept either.
 - A record over the ceiling is encoded twice.
+
+## S23. Private surfaces
+
+**Code.** `go/lib/privatesurface/privatesurface.go` — `ServerTLS`, `ClientTLS`, `SelfTLS`, `ProxyID`, `Caller`, `ParseIdentity`, `Admit`, `ForwardedKeys`, `Forwarded`, `ToBackend`, `Dial`
+
+**Purpose.** The runtime of a gateway another domain's services call (`(w17.private_api)`), never
+a person: who may connect, who the call is for, what the gateway passes on to its backend. Every
+hop is mutual TLS on a private PKI separate from the internal-mesh switch:
+
+```
+caller bundle ──mTLS──▶ private proxy ──mTLS──▶ <domain>-gateway-private ──▶ backend
+(its identity leaf)     (verifies the caller,     (accepts the proxy only,
+                         sets x-w17-caller)        reads the caller, admits its domain)
+```
+
+An identity is a certificate's URI SAN, `spiffe://w17/<domain>/<bundle>`. The generated private
+gateway calls `ServerTLS` for its listener, then per call `Caller`, `Admit` against the surface's
+`callers`, `Forwarded` and `ToBackend`; a caller reaches a surface with `Dial`; the container's
+health probe dials its own listener with `SelfTLS`.
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `W17_PRIVATE_TLS_CERT` / `W17_PRIVATE_TLS_KEY` | — (required) | missing, unreadable or not a key pair → error from `ServerTLS`, `ClientTLS`, `SelfTLS`, `Dial`; nothing listens or dials |
+| `W17_PRIVATE_TLS_CA` | — (required) | missing, unreadable, or holding no PEM certificate → the same error |
+| `W17_PRIVATE_PROXY_ID` | `spiffe://w17/proxy/private` | surrounding space ignored; any other value is the only proxy identity the gateway accepts |
+| `W17_INTERNAL_TLS` | — | not read: a private hop is mutual TLS whatever the mesh switch says |
+| `Dial` address | `<domain>-private:50061` (`DefaultAddr`) | no port → error; a host that does not resolve → one warning at dial time naming the host and the private proxy |
+
+**Shares.** `principal.ForwardToOutgoing` (I12) on `Dial`'s interceptors; the principal key names in
+`ForwardedKeys`; `tooling/certgen.EnsureIdentity` mints the dev PKI.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| S23.1 | The gateway listener (`ServerTLS`) MUST require a client certificate verified against the private CA: a client with none, or with one from another CA, MUST NOT complete the handshake. | `TestCallerOnlyThroughTheProxy`, `TestServerTLS_RefusesAClientOutsideThePrivateCA` |
+| S23.2 | `Caller` MUST answer `Unauthenticated` unless the call came over verified TLS from a peer whose certificate carries the proxy identity (`ProxyID`, `W17_PRIVATE_PROXY_ID` when set) AND carries exactly one `x-w17-caller` value that parses as `spiffe://w17/<domain>/<bundle>`: no peer, a non-TLS or unverified peer, another identity (a caller dialling the gateway directly), no value, two values or a malformed one are all refused. | `TestCallerOnlyThroughTheProxy`, `TestCaller_RefusesAllButOneWellFormedCallerFromTheProxy`, `TestCaller_RefusesACallWithoutAVerifiedTLSPeer`, `TestAdmitAndParse` |
+| S23.3 | `Admit` MUST answer `PermissionDenied` for a caller whose domain is not in the surface's callers. | `TestAdmitAndParse` |
+| S23.4 | `Forwarded` MUST pass on only the `ForwardedKeys` (request facts a calling gateway states) and drop every other key, the identity stamps (`x-w17-user`, `x-w17-scope-*`, `w17-label-*`), `x-w17-caller-domain` and credentials among them; a product key naming any domain other than the caller's MUST be `PermissionDenied`. | `TestForwarded`, `TestForwarded_RefusesAnyForeignProductValue` |
+| S23.5 | `ToBackend` MUST stamp the admitted caller's domain as `x-w17-caller-domain` — written only by the private gateway — beside the forwarded facts. | `TestForwarded` |
+| S23.6 | `SelfTLS` MUST accept only this bundle's own listener: a chain verifying against the private CA AND a leaf carrying this bundle's URI SAN; a foreign CA's leaf with the same URI, or the private CA's leaf of another bundle, MUST be refused; a leaf with no URI SAN MUST be an error. No host name is checked (a production identity need carry no DNS SAN). | `TestSelfTLS_AcceptsOnlyThisBundlesListener` |
+| S23.7 | `ServerTLS`, `ClientTLS`, `SelfTLS` and `Dial` MUST refuse to build without the whole material: a missing variable, an unreadable CA, a CA without a PEM certificate, an unreadable key. | `TestMaterialIsRequired`, `TestMaterial_RefusesWhatIsMissingOrUnreadable` |
+| S23.8 | `Dial` MUST present this bundle's leaf, verify the surface's certificate against the private CA under the address's host name (a server of another CA is refused), and relay the gateway's stamps of the incoming call onto the outgoing one (I12). | `TestDialRelaysTheGatewaysStamps`, `TestDial_RefusesAServerOutsideThePrivateCA` |
+| S23.9 | A surface host that does not resolve MUST be said once, at dial time, naming the host and the private proxy; an IP address or a resolving host MUST say nothing. | `TestWarnUnresolvable` |
+| S23.10 | The private hop MUST be mutual TLS whatever `W17_INTERNAL_TLS` says: the listener requires and verifies a client certificate and a caller presents its leaf with the switch off. | `TestMTLSWhateverTheMeshSwitchSays` |
+
+**Deliberate limits.**
+- The proxy is trusted for the caller's identity: the gateway reads `x-w17-caller` from the proxy's connection and cannot re-verify the caller's certificate itself. That the proxy drops a client's own `x-w17-caller` and is the only route to the gateway is the proxy's and the deployment's guarantee, not this package's.
+- The trust level of each forwarded fact (`x-w17-host`, `x-w17-org-from`, audience keys) is what an admitted domain's gateway states; the surface does not check them beyond the product key.
+- No certificate revocation: a leaf of the private CA is valid until it expires.
+

@@ -40,6 +40,9 @@ use crate::{
 
 static CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static COMMIT_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+/// The coordinator's error statuses leave after response headers (in
+/// trailers), as a w17 Go server answers a status its handler returned.
+static STATUS_AFTER_HEADERS: AtomicBool = AtomicBool::new(false);
 static HOOK_RAN: AtomicUsize = AtomicUsize::new(0);
 
 fn calls() -> Vec<String> {
@@ -202,6 +205,8 @@ impl W17Files for Biz {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 0
             }
+            // The handler's own UNAVAILABLE, after work it may have done.
+            "unavailable" => return Err(Status::unavailable("the upstream went away")),
             "ctx" => {
                 i64::from(ctx.deadline().is_some()) + 10 * i64::from(ctx.incoming().has("x-custom"))
             }
@@ -263,10 +268,23 @@ impl W17Files for Biz {
                     async |_c: Ctx| Ok::<_, Status>(()),
                 )
                 .await?;
+                if handle == "panic-hook" {
+                    // An author's hook that panics, parked BEFORE the counting
+                    // one (and the method's own events).
+                    let loud = handle.clone();
+                    on_commit(&tx_ctx, async move {
+                        if !loud.is_empty() {
+                            panic!("author hook panicked: secret detail");
+                        }
+                    });
+                }
                 on_commit(&tx_ctx, async {
                     HOOK_RAN.fetch_add(1, Ordering::SeqCst);
                 });
                 match handle.as_str() {
+                    // The handler never returns: only its caller's deadline
+                    // ends the call, by dropping this future.
+                    "hang" => futures::future::pending().await,
                     "fail" => Err(Status::aborted("refused after the writes")),
                     "mismatch" => distx::begin(&tx_ctx, &self.tx, distx::begin_request("other"))
                         .await
@@ -311,10 +329,33 @@ async fn coordinator() -> u16 {
     let port = l.local_addr().unwrap().port();
     tokio::spawn(
         tonic::transport::Server::builder()
+            .layer(tower::util::MapResponseLayer::new(status_after_headers))
             .add_service(W17DistributedTransactionServer::new(Coordinator))
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(l)),
     );
     port
+}
+
+/// With [`STATUS_AFTER_HEADERS`], a trailers-only error response becomes
+/// response headers, then the status in the trailers.
+fn status_after_headers(
+    resp: http::Response<tonic::body::Body>,
+) -> http::Response<tonic::body::Body> {
+    if !STATUS_AFTER_HEADERS.load(Ordering::SeqCst) || resp.headers().get("grpc-status").is_none() {
+        return resp;
+    }
+    let (mut parts, _) = resp.into_parts();
+    let mut trailers = http::HeaderMap::new();
+    for k in ["grpc-status", "grpc-message"] {
+        if let Some(v) = parts.headers.remove(k) {
+            trailers.insert(k, v);
+        }
+    }
+    let frames = futures::stream::iter([Ok::<_, Status>(http_body::Frame::trailers(trailers))]);
+    http::Response::from_parts(
+        parts,
+        tonic::body::Body::new(http_body_util::StreamBody::new(frames)),
+    )
 }
 
 struct Tier {
@@ -378,6 +419,45 @@ fn stat(handle: &str) -> Request<StatRequest> {
     r
 }
 
+/// One unary call sent as raw HTTP/2: the response headers and trailers as
+/// the server wrote them (a tonic client folds them into one status).
+async fn raw_unary<M: prost::Message>(
+    port: u16,
+    path: &str,
+    req: Request<M>,
+) -> (http::HeaderMap, http::HeaderMap) {
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+    let msg = req.into_inner().encode_to_vec();
+    let mut framed = vec![0u8];
+    framed.extend_from_slice(&u32::try_from(msg.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(&msg);
+    let ch = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let http_req = http::Request::builder()
+        .method("POST")
+        .uri(format!("http://127.0.0.1:{port}{path}"))
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .body(tonic::body::Body::new(http_body_util::Full::new(
+            bytes::Bytes::from(framed),
+        )))
+        .unwrap();
+    let resp = ch.oneshot(http_req).await.unwrap();
+    let (parts, body) = resp.into_parts();
+    let trailers = body
+        .collect()
+        .await
+        .unwrap()
+        .trailers()
+        .cloned()
+        .unwrap_or_default();
+    (parts.headers, trailers)
+}
+
 fn delete(handle: &str) -> Request<DeleteRequest> {
     Request::new(DeleteRequest {
         connection: String::new(),
@@ -412,6 +492,29 @@ async fn the_tier_over_the_wire() {
             Code::Internal,
             "/w17.common.files.W17Files/Stat: internal error"
         )
+    );
+    // A handler's own UNAVAILABLE goes out after response headers carrying
+    // `w17-answered`, so a w17 client (which replays a trailers-only
+    // UNAVAILABLE) does not run the handler again.
+    let (headers, trailers) = raw_unary(
+        t.port,
+        "/w17.common.files.W17Files/Stat",
+        stat("unavailable"),
+    )
+    .await;
+    assert!(
+        headers.get("grpc-status").is_none(),
+        "trailers-only: {headers:?}"
+    );
+    assert_eq!(
+        headers.get("w17-answered").map(|v| v.as_bytes()),
+        Some(&b"1"[..]),
+        "{headers:?}"
+    );
+    assert_eq!(
+        trailers.get("grpc-status").map(|v| v.as_bytes()),
+        Some(&b"14"[..]),
+        "{trailers:?}"
     );
     // for_user leaves prefixed with the method, the detail kept.
     let e = c.stat(stat("user")).await.unwrap_err();
@@ -526,6 +629,38 @@ async fn the_tier_over_the_wire() {
     );
     assert_eq!(calls(), ["begin main", "rollback tx-main"]);
     assert_eq!(HOOK_RAN.load(Ordering::SeqCst), hooks + 1);
+    // A panicking hook is one reported failure: the transaction committed,
+    // so the call succeeds, the hooks after it still run, and nothing of the
+    // panic reaches the caller.
+    CALLS.lock().unwrap().clear();
+    let hooks = HOOK_RAN.load(Ordering::SeqCst);
+    let r = c.delete(delete("panic-hook")).await;
+    assert_eq!(calls(), ["begin main", "commit tx-main tx-main"]);
+    assert!(r.is_ok(), "a committed call must answer OK: {r:?}");
+    assert_eq!(
+        HOOK_RAN.load(Ordering::SeqCst),
+        hooks + 1,
+        "the hook parked after the panicking one ran"
+    );
+    // A handler whose caller hangs up (its deadline passed) is dropped
+    // mid-transaction: the drop guard rolls the transaction back, detached,
+    // and the parked hook never runs.
+    CALLS.lock().unwrap().clear();
+    let mut hang = delete("hang");
+    hang.set_timeout(Duration::from_millis(200));
+    let code = c.delete(hang).await.unwrap_err().code();
+    assert!(
+        matches!(code, Code::DeadlineExceeded | Code::Cancelled),
+        "{code:?}"
+    );
+    let start = Instant::now();
+    while calls().last().map(String::as_str) != Some("rollback tx-main")
+        && start.elapsed() < Duration::from_secs(2)
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(calls(), ["begin main", "rollback tx-main"]);
+    assert_eq!(HOOK_RAN.load(Ordering::SeqCst), hooks + 1);
     // A begin on another connection cannot join.
     let e = c.delete(delete("mismatch")).await.unwrap_err();
     assert!(
@@ -546,6 +681,19 @@ async fn the_tier_over_the_wire() {
         HOOK_RAN.load(Ordering::SeqCst),
         hooks + 1,
         "work parked on an unknown outcome does not run"
+    );
+    // The same UNAVAILABLE after response headers: the server answered, so
+    // the commit is never sent again (gRPC A6) — one commit, then the probe.
+    CALLS.lock().unwrap().clear();
+    COMMIT_UNAVAILABLE.store(true, Ordering::SeqCst);
+    STATUS_AFTER_HEADERS.store(true, Ordering::SeqCst);
+    let e = c.delete(delete("ok")).await.unwrap_err();
+    COMMIT_UNAVAILABLE.store(false, Ordering::SeqCst);
+    STATUS_AFTER_HEADERS.store(false, Ordering::SeqCst);
+    assert!(e.message().contains("outcome is unknown"), "{e:?}");
+    assert_eq!(
+        calls(),
+        ["begin main", "commit tx-main tx-main", "rollback tx-main"]
     );
 
     // Health answers SERVING; the drain ends the server.

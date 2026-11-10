@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -97,6 +98,13 @@ type Server struct {
 	// resource (SetResourceServer, resource.go); nil = not one.
 	resource    *ResourceServer
 	resourceURL *url.URL
+
+	// sessions counts and caps the HTTP transport's sessions (sessions.go);
+	// sessionLimits are the bounds SetSessionLimits set (zero = env/default).
+	sessions      *sessionGuard
+	sessionLimits SessionLimits
+	// transport is the streamable HTTP transport while it serves.
+	transport atomic.Pointer[mcpserver.StreamableHTTPServer]
 }
 
 // SetTrustedProxies names the proxies whose X-Forwarded-For is believed when
@@ -142,14 +150,17 @@ func NewServer(name, version string, auth MCPAuthFunc, opts ...Option) *Server {
 	s := &Server{
 		auth:      auth,
 		toolPerms: map[string][]int32{},
+		sessions:  newSessionGuard(),
 	}
+	hooks := exactArgumentHooks()
+	s.sessions.hook(hooks)
 	// WithToolFilter must be set at construction (mcp-go option). The
 	// filter is a no-op until a PermResolver is injected.
 	serverOpts := []mcpserver.ServerOption{
 		mcpserver.WithToolFilter(s.filterTools),
 		// Tool arguments reach CallUnary with their numbers as written
 		// (see args.go).
-		mcpserver.WithHooks(exactArgumentHooks()),
+		mcpserver.WithHooks(hooks),
 	}
 	if o.instructions != "" {
 		serverOpts = append(serverOpts, mcpserver.WithInstructions(o.instructions))
@@ -487,6 +498,10 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	httpSrv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
 	stopper := lifecycle.BindHTTP(httpSrv)
 
+	limits := s.resolvedSessionLimits()
+	s.sessions.mu.Lock()
+	s.sessions.max, s.sessions.perAddr = limits.Max, limits.MaxPerAddress
+	s.sessions.mu.Unlock()
 	srv := mcpserver.NewStreamableHTTPServer(s.inner,
 		mcpserver.WithEndpointPath(EndpointPath),
 		mcpserver.WithStreamableHTTPServer(httpSrv),
@@ -504,7 +519,12 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	)
 
 	mux := http.NewServeMux()
-	endpoint := drainAwareStream(srv)
+	// Inside the token check (a protected resource spends no session slot
+	// on a caller without a token) and the body cap (the guard reads the
+	// POST body to tell an initialize).
+	endpoint := s.sessions.middleware(drainAwareStream(srv), func(r *http.Request) string {
+		return ratelimit.HTTPClientAddr(r, s.trustedProxies)
+	})
 	if s.resource != nil {
 		endpoint = s.requireToken(endpoint)
 		s.mountResourceServer(mux)
@@ -515,6 +535,12 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	mux.Handle(healthz.Path, healthz.Handler())
 	// The security headers every published listener sends (lib/secheaders).
 	httpSrv.Handler = secheaders.Middleware(mux)
+
+	s.transport.Store(srv)
+	// Idle sessions end through the transport itself (sessions.go).
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	defer stopSweep()
+	go s.sessions.sweep(sweepCtx, limits.IdleTTL, func(id string) { endSession(srv, id) })
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(addr) }()
