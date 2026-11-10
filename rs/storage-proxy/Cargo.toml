@@ -1,6 +1,6 @@
 [package]
 name = "storage-proxy"
-version = "0.1.0-rc2"
+version = "0.1.0-rc3"
 edition = "2021"
 description = "Contract-blind L7 gRPC proxy that pins distributed-transaction RPCs to the replica that opened the tx. Routes by :path + w17-conn-id metadata only; never decodes protobuf message bodies."
 license = "MIT"
