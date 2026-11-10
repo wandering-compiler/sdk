@@ -688,7 +688,7 @@ foreign-key closure, digested by the console) differs from what it was rendered 
 parser enforces the mutual exclusion, not that one is present. The runner checks the shape again:
 a stream step must assert its frames or its refusal (T19.2), and a unary step with no
 expectation, no awaited event and no download passes only on a response with no fields — an
-`expect: {}` names a method whose response is empty, and codegen bakes it as no `Expect` (T19.3).
+`expect: {}` is the case saying "the call answers": codegen bakes it as an empty, non-nil `Expect`, which a step without an `expect` (a nil one) is told apart from (T19.3).
 
 **Guarantees.**
 
@@ -696,7 +696,7 @@ expectation, no awaited event and no download passes only on a response with no 
 |---|---|---|
 | T19.1 | The first failing step MUST abort the scenario. | `TestRunScenario_FailAborts` |
 | T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | `TestExpectStream_AStreamStepAssertingNothingFails`, `TestExpectStream_ACredentialIsRefused`, `TestExpectStream_ATransportErrorExpectationIsRefused` |
-| T19.3 | A unary step that asserts nothing (no `expect` fields, no `expect_error` or `expect_transport_error`, no awaited event, no download) MUST fail when the response carries any field other than the synthetic `w17_wire`, naming the fields; on a response with no fields it passes. | `TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields` |
+| T19.3 | A unary step that asserts nothing (no `expect` at all, no `expect_error` or `expect_transport_error`, no awaited event, no download) MUST fail when the response carries any field other than the synthetic `w17_wire`, naming the fields; on a response with no fields it passes. An explicit `expect: {}` asserts that the call answers and passes whatever the response carries. | `TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields` |
 
 ## T20. E2E auth token threading
 

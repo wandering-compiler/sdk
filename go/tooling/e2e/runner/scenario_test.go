@@ -158,6 +158,18 @@ func TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields(t *tes
 		t.Fatalf("a unary step asserting nothing over a response with fields: %v", err)
 	}
 
+	// `expect: {}` written by the case is an assertion — "the call answers" —
+	// and codegen bakes it as an empty, non-nil Expect: it passes over a
+	// response with fields too.
+	callers = map[string]Caller{"rest": NewRESTCaller(srv.URL, srv.Client())}
+	if err := RunScenario(context.Background(), []Step{{
+		Endpoint: ep("forge.P.CreateProject", "POST", "/projects", false),
+		Input:    map[string]any{"name": "demo"},
+		Expect:   map[string]any{},
+	}}, callers); err != nil {
+		t.Fatalf("a step with `expect: {}` over a response with fields: %v", err)
+	}
+
 	callers = map[string]Caller{"rest": NewRESTCaller(empty.URL, empty.Client())}
 	if err := RunScenario(context.Background(), []Step{{
 		Endpoint: ep("forge.Auth.Logout", "POST", "/logout", false),
