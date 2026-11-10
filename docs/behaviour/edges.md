@@ -858,6 +858,7 @@ the URL fragment, never the query.
 | E22.1 | Site-only mode MUST accept only `/path` (not `//`, `/\`, `://`, control characters) | `TestIsSiteRelativeRedirect`, `TestWriteBrowserRedirect_RefusesATargetThatLeavesTheSite` |
 | E22.2 | External mode MUST accept only absolute `http(s)` URLs | `TestWriteBrowserRedirectExternal_StillRefusesAScriptTarget` |
 | E22.3 | The token MUST travel in the fragment and the response MUST be `no-store` | `TestWriteBrowserRedirect_SendsTheBrowserOnWithTheTokenInTheFragment`, `TestWriteBrowserRedirect_IsNotCacheable` |
+| E22.4 | The token MUST own the fragment: a target that already carries a `#` MUST be refused (reported, 502) when a token is to be appended, and sent unchanged when none is | `TestWriteBrowserRedirect_TheTokenOwnsTheFragment` |
 
 **Deliberate limits.**
 - External mode allows plain `http`.

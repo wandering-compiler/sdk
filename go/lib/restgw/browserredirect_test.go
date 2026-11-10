@@ -169,3 +169,19 @@ func TestWriteBrowserRedirect_SiteOnlyStillRefusesAbsolute(t *testing.T) {
 		t.Fatalf("the credential-bearing redirect left the site: %q", res.Header.Get("Location"))
 	}
 }
+
+// TestWriteBrowserRedirect_TheTokenOwnsTheFragment — a target that already
+// carries a fragment (a hash-routed app's `/#/app`) would get a second `#`,
+// and the page would read `/app#token=…` as its route: the session is lost
+// in the router. With a token to append such a target is refused like any
+// other the gateway will not act on; without one it is sent as is.
+func TestWriteBrowserRedirect_TheTokenOwnsTheFragment(t *testing.T) {
+	res := redirectResult(t, "/#/app", "/", "token", "secret")
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, Location = %q; want 502 for a fragment target that a token would be appended to", res.StatusCode, res.Header.Get("Location"))
+	}
+	res = redirectResult(t, "/#/app", "/", "token", "")
+	if loc := res.Header.Get("Location"); res.StatusCode != http.StatusFound || loc != "/#/app" {
+		t.Fatalf("no token: status %d, Location %q; want the target unchanged", res.StatusCode, loc)
+	}
+}
