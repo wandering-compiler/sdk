@@ -201,6 +201,27 @@ message RpcApi {
   // over gRPC unless it is listed. The gateway's own auth methods are
   // exempt on every surface without being listed.
   repeated string exclude_auth = 10;
+
+  // How the per-address rate limit treats a method listed in
+  // `exclude_auth`, by the same ref: the gRPC twin of
+  // `RestEndpoint.public_limit` and `public_rate`, with the same rules —
+  // each limited method has its own bucket per address, a method not listed
+  // here is not limited, and codegen refuses a listed method it sees a
+  // reason to limit (a secret in its request; a method whose storage method
+  // is not read-only, or that has none) until it is declared here. A ref
+  // that is not in `exclude_auth` is refused. The gateway's own auth
+  // methods are FAILED_ONLY without being listed.
+  repeated RpcPublicLimit public_limits = 11;
+}
+
+// RpcPublicLimit is one entry of `RpcApi.public_limits`.
+message RpcPublicLimit {
+  // The method, as `exclude_auth` names it.
+  string ref = 1;
+  // FAILED_ONLY, EVERY_REQUEST or NONE (UNSPECIFIED is refused).
+  PublicLimit limit = 2;
+  // Its own threshold; unset = the surface's default. Not with NONE.
+  PublicRate rate = 3;
 }
 
 // RpcGroup buckets backend methods under one public gRPC service

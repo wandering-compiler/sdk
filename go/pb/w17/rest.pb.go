@@ -304,21 +304,26 @@ func (ContentDisposition) EnumDescriptor() ([]byte, []int) {
 	return file_w17_rest_proto_rawDescGZIP(), []int{3}
 }
 
-// PublicLimit — how a method that takes no credential charges the gateway's
-// per-address rate limit. See RestEndpoint.public_limit.
+// PublicLimit — how the gateway's per-address rate limit treats a method that
+// takes no credential. See RestEndpoint.public_limit.
 type PublicLimit int32
 
 const (
-	// Not declared: every request takes a token, unless the endpoint republishes
-	// a plugin method whose preset marks it FAILED_ONLY, which it then inherits.
-	// The default.
+	// Not declared: not limited — unless codegen sees a reason to limit the
+	// method (a secret in its request, a possible change), and then it refuses
+	// until one of the values below is declared. An endpoint that republishes
+	// a plugin method inherits the preset's value. The default.
 	PublicLimit_PUBLIC_LIMIT_UNSPECIFIED PublicLimit = 0
 	// Only a request answered with a 4xx/5xx takes a token; admission still
 	// checks that one is left.
 	PublicLimit_PUBLIC_LIMIT_FAILED_ONLY PublicLimit = 1
 	// Every request takes a token, success or not, whatever a plugin preset
-	// says about the same method. The way to decline the inherited mode.
+	// says about the same method.
 	PublicLimit_PUBLIC_LIMIT_EVERY_REQUEST PublicLimit = 2
+	// Not limited, deliberately: a public read the whole site calls, which a
+	// limit per address would refuse to an office behind one address. Also
+	// declines a plugin preset's limit on a republished method.
+	PublicLimit_PUBLIC_LIMIT_NONE PublicLimit = 3
 )
 
 // Enum value maps for PublicLimit.
@@ -327,11 +332,13 @@ var (
 		0: "PUBLIC_LIMIT_UNSPECIFIED",
 		1: "PUBLIC_LIMIT_FAILED_ONLY",
 		2: "PUBLIC_LIMIT_EVERY_REQUEST",
+		3: "PUBLIC_LIMIT_NONE",
 	}
 	PublicLimit_value = map[string]int32{
 		"PUBLIC_LIMIT_UNSPECIFIED":   0,
 		"PUBLIC_LIMIT_FAILED_ONLY":   1,
 		"PUBLIC_LIMIT_EVERY_REQUEST": 2,
+		"PUBLIC_LIMIT_NONE":          3,
 	}
 )
 
@@ -1663,28 +1670,51 @@ type RestEndpoint struct {
 	//
 	// Empty (the default) = the org comes from the header alone.
 	OrgFromPath string `protobuf:"bytes,19,opt,name=org_from_path,json=orgFromPath,proto3" json:"org_from_path,omitempty"`
-	// How the per-address rate limit on a method that takes no credential
-	// (`exclude_auth`) charges its token bucket. FAILED_ONLY on an endpoint
-	// that requires a credential is refused at parse time; nothing applies
-	// when the gateway's limit is off.
+	// How the gateway's per-address rate limit treats a method that takes no
+	// credential (`exclude_auth`). FAILED_ONLY, EVERY_REQUEST or NONE on an
+	// endpoint that requires a credential is refused at parse time; nothing
+	// applies when the gateway's limit is off.
 	//
-	// Undeclared, an endpoint charges EVERY request: the limit then bounds
-	// how often one address may call the method at all, which is what a
-	// method that does something on SUCCESS needs. Registration creates an account and sends
-	// a mail; a password-reset request sends one and answers success either
-	// way, so it never fails at all. Charging only failures leaves both
-	// unbounded: dozens of registrations in a row from one address.
+	// Each limited method has its own bucket per client address, at the
+	// threshold `public_rate` declares (or the surface's default,
+	// `<PREFIX>_PUBLIC_RATELIMIT_PER_MINUTE` / `_BURST`, 30 a minute with a
+	// burst of 10). There is no shared bucket: a landing page under load
+	// never spends the budget of a sign-in, and an undeclared method that
+	// codegen does not flag (below) is not limited at all — a forgotten
+	// declaration must never throttle ordinary use of a site, as a room full
+	// of people behind one address (an office, a conference) would be.
 	//
 	// FAILED_ONLY suits a method that checks a guessable secret: a sign-in, a
 	// one-time code, a link token. An attacker's guesses fail and are
 	// counted; the right answer, which a legitimate caller sends, is free, so
-	// an office behind one address is never locked out. A sign-in is one and
-	// must say so: it is an ordinary exclude_auth endpoint. Only a method
-	// listed in `RestApi.auth_methods` — the RPC that checks a presented
-	// token, when it is also published — is FAILED_ONLY without saying so.
-	// So is an endpoint that republishes a plugin method its preset marks
-	// FAILED_ONLY (the same ref, declared here instead of through `include`);
-	// PUBLIC_LIMIT_EVERY_REQUEST declines that.
+	// an office behind one address is never locked out.
+	//
+	// EVERY_REQUEST suits a method that does something on SUCCESS:
+	// registration creates an account and sends a mail; a password-reset
+	// request sends one and answers success either way, so it never fails at
+	// all. Charging only failures would leave both unbounded.
+	//
+	// NONE says, deliberately, that the method is not limited: a read the
+	// whole site calls on every page, a public lookup. Write the reason in a
+	// comment beside it — codegen asks for the declaration because it could
+	// not tell on its own.
+	//
+	// Codegen refuses a public method on a surface with auth that declares
+	// nothing when it can see a reason to limit it:
+	//   - its request carries a secret — a field of `type: PASSWORD`, `SECRET`
+	//     or `CRYPTED_SECRET` (in a nested message too): a guess at it is free
+	//     and repeatable;
+	//   - it may change something — a verb other than GET/HEAD whose storage
+	//     method is not read-only: a registration, a contact form, an order.
+	//
+	// The refusal names the rule that matched and the line to add. Everything
+	// else — public reads — is not limited and not asked about.
+	//
+	// Only a method listed in `RestApi.auth_methods` — the RPC that checks a
+	// presented token, when it is also published — is FAILED_ONLY without
+	// saying so. An endpoint that republishes a plugin method (the same ref,
+	// declared here instead of through `include`) inherits the plugin preset's
+	// public_limit and public_rate unless it declares its own.
 	PublicLimit PublicLimit `protobuf:"varint,20,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
 	// dpop_mint marks the project's own method as a token mint, on a surface
 	// whose auth method binds tokens to device keys: a facade that calls the
@@ -1732,7 +1762,14 @@ type RestEndpoint struct {
 	//
 	// Mutually exclusive with `browser_redirect` and `paged`, and only on a
 	// unary method. See `RawResponse`.
-	RawResponse   *RawResponse `protobuf:"bytes,23,opt,name=raw_response,json=rawResponse,proto3" json:"raw_response,omitempty"`
+	RawResponse *RawResponse `protobuf:"bytes,23,opt,name=raw_response,json=rawResponse,proto3" json:"raw_response,omitempty"`
+	// public_rate is this public method's own threshold, per client address.
+	// Requires `public_limit` FAILED_ONLY or EVERY_REQUEST. Unset, the method
+	// takes the surface's default (`<PREFIX>_PUBLIC_RATELIMIT_PER_MINUTE` /
+	// `_BURST`). Either way the operator can override it for this method
+	// alone: `<PREFIX>_PUBLIC_RATELIMIT_<SERVICE>_<METHOD>_PER_MINUTE` /
+	// `_BURST` (the generated `.env` files list the names).
+	PublicRate    *PublicRate `protobuf:"bytes,24,opt,name=public_rate,json=publicRate,proto3" json:"public_rate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1903,6 +1940,13 @@ func (x *RestEndpoint) GetCaptcha() Captcha {
 func (x *RestEndpoint) GetRawResponse() *RawResponse {
 	if x != nil {
 		return x.RawResponse
+	}
+	return nil
+}
+
+func (x *RestEndpoint) GetPublicRate() *PublicRate {
+	if x != nil {
+		return x.PublicRate
 	}
 	return nil
 }
@@ -2377,7 +2421,15 @@ type RestStream struct {
 	// Refused on a stream that resolves to WS (a WebSocket upgrade is a GET by
 	// definition) and for PUT / PATCH / DELETE — a stream is opened, not an
 	// edit.
-	Method        HttpMethod `protobuf:"varint,10,opt,name=method,proto3,enum=w17.HttpMethod" json:"method,omitempty"`
+	Method HttpMethod `protobuf:"varint,10,opt,name=method,proto3,enum=w17.HttpMethod" json:"method,omitempty"`
+	// public_limit / public_rate: how the per-address rate limit treats this
+	// stream when it takes no credential (`exclude_auth`) — the same as on an
+	// endpoint (RestEndpoint.public_limit). A limited stream spends one token
+	// per opened stream, FAILED_ONLY included: a stream's outcome is not one
+	// status. Undeclared, a public GET stream is not limited; a POST stream is
+	// refused until it says how.
+	PublicLimit   PublicLimit `protobuf:"varint,11,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
+	PublicRate    *PublicRate `protobuf:"bytes,12,opt,name=public_rate,json=publicRate,proto3" json:"public_rate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2473,6 +2525,20 @@ func (x *RestStream) GetMethod() HttpMethod {
 		return x.Method
 	}
 	return HttpMethod_HTTP_METHOD_UNSPECIFIED
+}
+
+func (x *RestStream) GetPublicLimit() PublicLimit {
+	if x != nil {
+		return x.PublicLimit
+	}
+	return PublicLimit_PUBLIC_LIMIT_UNSPECIFIED
+}
+
+func (x *RestStream) GetPublicRate() *PublicRate {
+	if x != nil {
+		return x.PublicRate
+	}
+	return nil
 }
 
 // DownloadEndpoint binds a static download route under the
@@ -2649,6 +2715,64 @@ func (x *DownloadEndpoint) GetUrlForm() URLForm {
 	return URLForm_URL_FORM_UNSPECIFIED
 }
 
+// PublicRate is a public method's threshold per client address: a token
+// bucket refilled at `per_minute` that holds at most `burst`. See
+// RestEndpoint.public_rate.
+type PublicRate struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Requests a minute one address may keep up. Required, > 0.
+	PerMinute uint32 `protobuf:"varint,1,opt,name=per_minute,json=perMinute,proto3" json:"per_minute,omitempty"`
+	// Requests one address may make at once, before the rate applies.
+	// Required, > 0.
+	Burst         uint32 `protobuf:"varint,2,opt,name=burst,proto3" json:"burst,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublicRate) Reset() {
+	*x = PublicRate{}
+	mi := &file_w17_rest_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublicRate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublicRate) ProtoMessage() {}
+
+func (x *PublicRate) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rest_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublicRate.ProtoReflect.Descriptor instead.
+func (*PublicRate) Descriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *PublicRate) GetPerMinute() uint32 {
+	if x != nil {
+		return x.PerMinute
+	}
+	return 0
+}
+
+func (x *PublicRate) GetBurst() uint32 {
+	if x != nil {
+		return x.Burst
+	}
+	return 0
+}
+
 var file_w17_rest_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.FileOptions)(nil),
@@ -2726,7 +2850,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\xbe\x06\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\xf0\x06\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2750,7 +2874,9 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fpublic_limit\x18\x14 \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimit\x12\x1b\n" +
 	"\tdpop_mint\x18\x15 \x01(\bR\bdpopMint\x12&\n" +
 	"\acaptcha\x18\x16 \x01(\x0e2\f.w17.CaptchaR\acaptcha\x123\n" +
-	"\fraw_response\x18\x17 \x01(\v2\x10.w17.RawResponseR\vrawResponseJ\x04\b\x05\x10\x06R\vauth_scopes\"\xe1\x01\n" +
+	"\fraw_response\x18\x17 \x01(\v2\x10.w17.RawResponseR\vrawResponse\x120\n" +
+	"\vpublic_rate\x18\x18 \x01(\v2\x0f.w17.PublicRateR\n" +
+	"publicRateJ\x04\b\x05\x10\x06R\vauth_scopes\"\xe1\x01\n" +
 	"\vRawResponse\x12\x1d\n" +
 	"\n" +
 	"body_field\x18\x01 \x01(\tR\tbodyField\x12!\n" +
@@ -2773,7 +2899,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fFieldBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1b\n" +
-	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\x98\x03\n" +
+	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xff\x03\n" +
 	"\n" +
 	"RestStream\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
@@ -2787,7 +2913,10 @@ const file_w17_rest_proto_rawDesc = "" +
 	"credential\x18\t \x01(\v2\x0f.w17.CredentialR\n" +
 	"credential\x12'\n" +
 	"\x06method\x18\n" +
-	" \x01(\x0e2\x0f.w17.HttpMethodR\x06methodJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
+	" \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x123\n" +
+	"\fpublic_limit\x18\v \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimit\x120\n" +
+	"\vpublic_rate\x18\f \x01(\v2\x0f.w17.PublicRateR\n" +
+	"publicRateJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
 	"\x10DownloadEndpoint\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\ainclude\x18\x02 \x03(\tR\ainclude\x12\x18\n" +
@@ -2798,7 +2927,12 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fdisable_etag\x18\b \x01(\bR\vdisableEtag\x12#\n" +
 	"\rdisable_range\x18\t \x01(\bR\fdisableRange\x12'\n" +
 	"\burl_form\x18\n" +
-	" \x01(\x0e2\f.w17.URLFormR\aurlFormJ\x04\b\x05\x10\x06R\vauth_scopes*\x82\x01\n" +
+	" \x01(\x0e2\f.w17.URLFormR\aurlFormJ\x04\b\x05\x10\x06R\vauth_scopes\"A\n" +
+	"\n" +
+	"PublicRate\x12\x1d\n" +
+	"\n" +
+	"per_minute\x18\x01 \x01(\rR\tperMinute\x12\x14\n" +
+	"\x05burst\x18\x02 \x01(\rR\x05burst*\x82\x01\n" +
 	"\tTokenType\x12\x1a\n" +
 	"\x16TOKEN_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11TOKEN_TYPE_BEARER\x10\x01\x12\x14\n" +
@@ -2819,11 +2953,12 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x12ContentDisposition\x12#\n" +
 	"\x1fCONTENT_DISPOSITION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aCONTENT_DISPOSITION_INLINE\x10\x01\x12\"\n" +
-	"\x1eCONTENT_DISPOSITION_ATTACHMENT\x10\x02*i\n" +
+	"\x1eCONTENT_DISPOSITION_ATTACHMENT\x10\x02*\x80\x01\n" +
 	"\vPublicLimit\x12\x1c\n" +
 	"\x18PUBLIC_LIMIT_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18PUBLIC_LIMIT_FAILED_ONLY\x10\x01\x12\x1e\n" +
-	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x02*J\n" +
+	"\x1aPUBLIC_LIMIT_EVERY_REQUEST\x10\x02\x12\x15\n" +
+	"\x11PUBLIC_LIMIT_NONE\x10\x03*J\n" +
 	"\aCaptcha\x12\x17\n" +
 	"\x13CAPTCHA_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10CAPTCHA_REQUIRED\x10\x01\x12\x10\n" +
@@ -2856,7 +2991,7 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 }
 
 var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
 	(FieldSource)(0),                 // 1: w17.FieldSource
@@ -2881,17 +3016,18 @@ var file_w17_rest_proto_goTypes = []any{
 	(*FieldBinding)(nil),             // 20: w17.FieldBinding
 	(*RestStream)(nil),               // 21: w17.RestStream
 	(*DownloadEndpoint)(nil),         // 22: w17.DownloadEndpoint
-	(*RequestEvents)(nil),            // 23: w17.RequestEvents
-	(*Audience)(nil),                 // 24: w17.Audience
-	(*descriptorpb.FileOptions)(nil), // 25: google.protobuf.FileOptions
+	(*PublicRate)(nil),               // 23: w17.PublicRate
+	(*RequestEvents)(nil),            // 24: w17.RequestEvents
+	(*Audience)(nil),                 // 25: w17.Audience
+	(*descriptorpb.FileOptions)(nil), // 26: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
 	11, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
 	15, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
 	13, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
 	9,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
-	23, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
-	24, // 5: w17.RestApi.audience:type_name -> w17.Audience
+	24, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
+	25, // 5: w17.RestApi.audience:type_name -> w17.Audience
 	0,  // 6: w17.AuthMethod.token_types:type_name -> w17.TokenType
 	14, // 7: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
 	16, // 8: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
@@ -2906,22 +3042,25 @@ var file_w17_rest_proto_depIdxs = []int32{
 	4,  // 17: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
 	5,  // 18: w17.RestEndpoint.captcha:type_name -> w17.Captcha
 	17, // 19: w17.RestEndpoint.raw_response:type_name -> w17.RawResponse
-	1,  // 20: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 21: w17.FieldBinding.from:type_name -> w17.FieldSource
-	7,  // 22: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	18, // 23: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	20, // 24: w17.RestStream.fields:type_name -> w17.FieldBinding
-	12, // 25: w17.RestStream.credential:type_name -> w17.Credential
-	6,  // 26: w17.RestStream.method:type_name -> w17.HttpMethod
-	3,  // 27: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 28: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	25, // 29: w17.rest_api:extendee -> google.protobuf.FileOptions
-	8,  // 30: w17.rest_api:type_name -> w17.RestApi
-	31, // [31:31] is the sub-list for method output_type
-	31, // [31:31] is the sub-list for method input_type
-	30, // [30:31] is the sub-list for extension type_name
-	29, // [29:30] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	23, // 20: w17.RestEndpoint.public_rate:type_name -> w17.PublicRate
+	1,  // 21: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 22: w17.FieldBinding.from:type_name -> w17.FieldSource
+	7,  // 23: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	18, // 24: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	20, // 25: w17.RestStream.fields:type_name -> w17.FieldBinding
+	12, // 26: w17.RestStream.credential:type_name -> w17.Credential
+	6,  // 27: w17.RestStream.method:type_name -> w17.HttpMethod
+	4,  // 28: w17.RestStream.public_limit:type_name -> w17.PublicLimit
+	23, // 29: w17.RestStream.public_rate:type_name -> w17.PublicRate
+	3,  // 30: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 31: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	26, // 32: w17.rest_api:extendee -> google.protobuf.FileOptions
+	8,  // 33: w17.rest_api:type_name -> w17.RestApi
+	34, // [34:34] is the sub-list for method output_type
+	34, // [34:34] is the sub-list for method input_type
+	33, // [33:34] is the sub-list for extension type_name
+	32, // [32:33] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -2937,7 +3076,7 @@ func file_w17_rest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 1,
 			NumServices:   0,
 		},

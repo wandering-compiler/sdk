@@ -170,3 +170,35 @@ func TestAdmitPublic_NothingWrittenIsCharged(t *testing.T) {
 		t.Fatal("a request that wrote no response was refunded")
 	}
 }
+
+// A DPoP nonce challenge is a protocol step, not a failed attempt: a fresh
+// key's first sign-in is answered with one and repeated with the nonce, and
+// charging it spent a token of the address's guess budget on every new
+// device. Any other 401 — a wrong password — is still charged.
+func TestAdmitPublic_ANonceChallengeIsNotCharged(t *testing.T) {
+	l := ratelimit.New(ratelimit.Config{PerMinute: 6, Burst: 2})
+	challenge := func(www string) int {
+		w := httptest.NewRecorder()
+		rw, done, ok := AdmitPublic(l, w, publicReq("203.0.113.9:1"))
+		if ok {
+			rw.Header().Set("WWW-Authenticate", www)
+			rw.WriteHeader(http.StatusUnauthorized)
+			done()
+		}
+		return w.Code
+	}
+	for i := 0; i < 10; i++ {
+		if got := challenge(`DPoP error="use_dpop_nonce", algs="ES256 EdDSA"`); got != http.StatusUnauthorized {
+			t.Fatalf("nonce challenge %d answered %d: the challenges were charged", i+1, got)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		challenge(`DPoP error="invalid_token"`)
+	}
+	if got := challenge(`DPoP error="use_dpop_nonce"`); got != http.StatusTooManyRequests {
+		t.Errorf("after two other 401s the bucket answered %d, want 429: they were not charged", got)
+	}
+	if NonceChallenge(http.StatusBadRequest, http.Header{"Www-Authenticate": {`DPoP error="use_dpop_nonce"`}}) {
+		t.Error("a 400 is not a nonce challenge")
+	}
+}

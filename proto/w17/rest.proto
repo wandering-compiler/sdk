@@ -780,28 +780,50 @@ message RestEndpoint {
   // Empty (the default) = the org comes from the header alone.
   string org_from_path = 19;
 
-  // How the per-address rate limit on a method that takes no credential
-  // (`exclude_auth`) charges its token bucket. FAILED_ONLY on an endpoint
-  // that requires a credential is refused at parse time; nothing applies
-  // when the gateway's limit is off.
+  // How the gateway's per-address rate limit treats a method that takes no
+  // credential (`exclude_auth`). FAILED_ONLY, EVERY_REQUEST or NONE on an
+  // endpoint that requires a credential is refused at parse time; nothing
+  // applies when the gateway's limit is off.
   //
-  // Undeclared, an endpoint charges EVERY request: the limit then bounds
-  // how often one address may call the method at all, which is what a
-  // method that does something on SUCCESS needs. Registration creates an account and sends
-  // a mail; a password-reset request sends one and answers success either
-  // way, so it never fails at all. Charging only failures leaves both
-  // unbounded: dozens of registrations in a row from one address.
+  // Each limited method has its own bucket per client address, at the
+  // threshold `public_rate` declares (or the surface's default,
+  // `<PREFIX>_PUBLIC_RATELIMIT_PER_MINUTE` / `_BURST`, 30 a minute with a
+  // burst of 10). There is no shared bucket: a landing page under load
+  // never spends the budget of a sign-in, and an undeclared method that
+  // codegen does not flag (below) is not limited at all — a forgotten
+  // declaration must never throttle ordinary use of a site, as a room full
+  // of people behind one address (an office, a conference) would be.
   //
   // FAILED_ONLY suits a method that checks a guessable secret: a sign-in, a
   // one-time code, a link token. An attacker's guesses fail and are
   // counted; the right answer, which a legitimate caller sends, is free, so
-  // an office behind one address is never locked out. A sign-in is one and
-  // must say so: it is an ordinary exclude_auth endpoint. Only a method
-  // listed in `RestApi.auth_methods` — the RPC that checks a presented
-  // token, when it is also published — is FAILED_ONLY without saying so.
-  // So is an endpoint that republishes a plugin method its preset marks
-  // FAILED_ONLY (the same ref, declared here instead of through `include`);
-  // PUBLIC_LIMIT_EVERY_REQUEST declines that.
+  // an office behind one address is never locked out.
+  //
+  // EVERY_REQUEST suits a method that does something on SUCCESS:
+  // registration creates an account and sends a mail; a password-reset
+  // request sends one and answers success either way, so it never fails at
+  // all. Charging only failures would leave both unbounded.
+  //
+  // NONE says, deliberately, that the method is not limited: a read the
+  // whole site calls on every page, a public lookup. Write the reason in a
+  // comment beside it — codegen asks for the declaration because it could
+  // not tell on its own.
+  //
+  // Codegen refuses a public method on a surface with auth that declares
+  // nothing when it can see a reason to limit it:
+  //   - its request carries a secret — a field of `type: PASSWORD`, `SECRET`
+  //     or `CRYPTED_SECRET` (in a nested message too): a guess at it is free
+  //     and repeatable;
+  //   - it may change something — a verb other than GET/HEAD whose storage
+  //     method is not read-only: a registration, a contact form, an order.
+  // The refusal names the rule that matched and the line to add. Everything
+  // else — public reads — is not limited and not asked about.
+  //
+  // Only a method listed in `RestApi.auth_methods` — the RPC that checks a
+  // presented token, when it is also published — is FAILED_ONLY without
+  // saying so. An endpoint that republishes a plugin method (the same ref,
+  // declared here instead of through `include`) inherits the plugin preset's
+  // public_limit and public_rate unless it declares its own.
   PublicLimit public_limit = 20;
 
   // dpop_mint marks the project's own method as a token mint, on a surface
@@ -853,6 +875,14 @@ message RestEndpoint {
   // Mutually exclusive with `browser_redirect` and `paged`, and only on a
   // unary method. See `RawResponse`.
   RawResponse raw_response = 23;
+
+  // public_rate is this public method's own threshold, per client address.
+  // Requires `public_limit` FAILED_ONLY or EVERY_REQUEST. Unset, the method
+  // takes the surface's default (`<PREFIX>_PUBLIC_RATELIMIT_PER_MINUTE` /
+  // `_BURST`). Either way the operator can override it for this method
+  // alone: `<PREFIX>_PUBLIC_RATELIMIT_<SERVICE>_<METHOD>_PER_MINUTE` /
+  // `_BURST` (the generated `.env` files list the names).
+  PublicRate public_rate = 24;
 }
 
 // RawResponse names the response fields the HTTP answer is made of.
@@ -1121,6 +1151,15 @@ message RestStream {
   // definition) and for PUT / PATCH / DELETE — a stream is opened, not an
   // edit.
   HttpMethod method = 10;
+
+  // public_limit / public_rate: how the per-address rate limit treats this
+  // stream when it takes no credential (`exclude_auth`) — the same as on an
+  // endpoint (RestEndpoint.public_limit). A limited stream spends one token
+  // per opened stream, FAILED_ONLY included: a stream's outcome is not one
+  // status. Undeclared, a public GET stream is not limited; a POST stream is
+  // refused until it says how.
+  PublicLimit public_limit = 11;
+  PublicRate public_rate = 12;
 }
 
 // DownloadEndpoint binds a static download route under the
@@ -1231,19 +1270,35 @@ enum ContentDisposition {
   CONTENT_DISPOSITION_ATTACHMENT  = 2;
 }
 
-// PublicLimit — how a method that takes no credential charges the gateway's
-// per-address rate limit. See RestEndpoint.public_limit.
+// PublicLimit — how the gateway's per-address rate limit treats a method that
+// takes no credential. See RestEndpoint.public_limit.
 enum PublicLimit {
-  // Not declared: every request takes a token, unless the endpoint republishes
-  // a plugin method whose preset marks it FAILED_ONLY, which it then inherits.
-  // The default.
+  // Not declared: not limited — unless codegen sees a reason to limit the
+  // method (a secret in its request, a possible change), and then it refuses
+  // until one of the values below is declared. An endpoint that republishes
+  // a plugin method inherits the preset's value. The default.
   PUBLIC_LIMIT_UNSPECIFIED = 0;
   // Only a request answered with a 4xx/5xx takes a token; admission still
   // checks that one is left.
   PUBLIC_LIMIT_FAILED_ONLY = 1;
   // Every request takes a token, success or not, whatever a plugin preset
-  // says about the same method. The way to decline the inherited mode.
+  // says about the same method.
   PUBLIC_LIMIT_EVERY_REQUEST = 2;
+  // Not limited, deliberately: a public read the whole site calls, which a
+  // limit per address would refuse to an office behind one address. Also
+  // declines a plugin preset's limit on a republished method.
+  PUBLIC_LIMIT_NONE = 3;
+}
+
+// PublicRate is a public method's threshold per client address: a token
+// bucket refilled at `per_minute` that holds at most `burst`. See
+// RestEndpoint.public_rate.
+message PublicRate {
+  // Requests a minute one address may keep up. Required, > 0.
+  uint32 per_minute = 1;
+  // Requests one address may make at once, before the rate applies.
+  // Required, > 0.
+  uint32 burst = 2;
 }
 
 // Captcha is RestEndpoint.captcha.
