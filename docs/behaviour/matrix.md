@@ -181,7 +181,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| SQLite collation stamp (D12) | Migration applier | The applier stamps; the runtime verifies and refuses a known mismatch. | tested in the SQLite migration driver, not in-package |
+| SQLite collation stamp (D12) | Migration applier | The applier stamps (racing appliers on a fresh database all succeed), upgrades a plain-UCA database's indexes and refuses a database built with another collator; the runtime verifies and refuses a known mismatch. | `TestApply_RefusesADatabaseBuiltWithAnotherCollator` (`go/tooling/migrate/internal/sqlite`), `TestEnsureStamp_UpgradesAPlainUCADatabase`, `TestEnsureStamp_TwoWritersOnAFreshDatabaseBothSucceed`, `TestVerifyStamp_UnstampedAcceptedForeignTablesReported` (`go/lib/sqlitecollate`; `VerifyStamp`'s caller is the generated runtime, not covered here) |
 | Session pins (D1) | Migration applier and runtime | Applier and runtime open the database with identical pins, parsed per driver; an operator's own value is kept and logged once. | `TestNew_ConnectionCarriesTheSessionPins_Live`, `TestNew_EveryPooledConnectionCarriesTheSessionPins_Live`, `TestNew_EveryPooledConnectionCarriesThePinsAndTheCollation`, `TestApplyMySQLDSNParams_KeepsAnOperatorCollation`, `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` (applier side, read back from each server; the runtime opens the database in generated code: examples) |
 
 ## Events and identity × Events and identity

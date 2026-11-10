@@ -415,11 +415,12 @@ Stamp table: `w17_collation`.
 | D12.4 | The fingerprint MUST derive from behaviour, not from a module version. | `TestFingerprint_StableAndOrderingDerived` |
 | D12.5 | Equality and UNIQUE behaviour for canonically equivalent (NFC/NFD) strings and for strings differing only in ignorable characters MUST match PostgreSQL's deterministic collations: ties under UCA are broken by bytes. | `TestCompare_EqualityIsDeterministic` |
 | D12.6 | `EnsureStamp` MUST recognise a database stamped by the comparison without the byte tie-break (same Unicode tables), rebuild every index using the collation and restamp it in one transaction; `VerifyStamp` MUST report such a database as a mismatch until then. | `TestEnsureStamp_UpgradesAPlainUCADatabase`, `TestLegacyFingerprint_IsThePlainUCABuildsStamp` |
+| D12.7 | `EnsureStamp` MUST stamp a fresh database with `INSERT OR IGNORE` and judge the stamp it reads back, so appliers racing on one fresh database all succeed (the losers read the winner's stamp) instead of failing on the stamp row's primary key. | `TestEnsureStamp_TwoWritersOnAFreshDatabaseBothSucceed` |
 
 **Deliberate limits.**
 - SQLite does not order like PostgreSQL, which follows the database locale.
 - MySQL `utf8mb4_0900_as_cs` still treats canonically equivalent and ignorable-character look-alikes as equal; D12.5 aligns SQLite with PostgreSQL, not with MySQL.
-- `EnsureStamp` is check-then-insert without a transaction; two appliers on a fresh database at once can collide on the stamp row.
+- `VerifyStamp` has no caller in the SDK: the generated runtime calls it at connect, so its read-side refusal is proven here only as a function (D12.3, D12.6).
 
 ## D13. Blob store for uploads
 
