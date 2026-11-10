@@ -740,7 +740,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 | ID | Guarantee | Test |
 |---|---|---|
 | I18.1 | Output MUST be exactly `n` characters from the base64url alphabet, with no padding. | `TestToken_LengthInvariant`, `TestToken_CharsetInvariant`, `TestToken_NoPaddingInTruncated` |
-| I18.2 | Every character MUST be drawn from `crypto/rand`, never `math/rand`. | `TestToken_NonRepeating` |
+| I18.2 | Every character MUST be drawn from `crypto/rand`, never `math/rand`. | `TestToken_SourceUsesCryptoRandOnly` (the package's imports), `TestToken_NonRepeating` |
 | I18.3 | `n <= 0` MUST be an error. | `TestToken_RejectsNonPositive` |
 
 **Deliberate limits.**
