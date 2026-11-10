@@ -120,6 +120,23 @@ fn the_top_level_is_read_with_gos_rules() {
             json!({"descriptor_set": {}}),
             "descriptor_set must be a string",
         ),
+        // Keys only the SDKs read, held to their JSON types all the same.
+        (
+            json!({"shutdown_timeout_seconds": "abc"}),
+            "shutdown_timeout_seconds must be a number",
+        ),
+        (
+            json!({"shutdown_timeout_seconds": true}),
+            "shutdown_timeout_seconds must be a number",
+        ),
+        (
+            json!({"config": [{"name": "x", "required": "false"}]}),
+            "config[].required must be true or false",
+        ),
+        (
+            json!({"events": {"envelope": "e", "emits": {}}}),
+            "events.emits must be a list",
+        ),
     ];
     for (change, want) in table {
         let msg = refused(min(change.clone()));

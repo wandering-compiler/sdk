@@ -300,6 +300,11 @@ describe("manifest", () => {
     [{ env_prefix: ["D"] }, /env_prefix must be a string/],
     [{ bundle: 7 }, /bundle must be a string/],
     [{ descriptor_set: {} }, /descriptor_set must be a string/],
+    // Keys only the SDKs read, held to their JSON types all the same.
+    [{ shutdown_timeout_seconds: "abc" }, /shutdown_timeout_seconds must be a number/],
+    [{ shutdown_timeout_seconds: true }, /shutdown_timeout_seconds must be a number/],
+    [{ config: [{ name: "x", required: "false" }] }, /config\[\]\.required must be true or false/],
+    [{ events: { envelope: "e", emits: {} } }, /events\.emits must be a list/],
   ];
 
   it.each(TOP_LEVEL_REFUSALS)("the top level is read with Go's rules: %j", (change, want) => {
