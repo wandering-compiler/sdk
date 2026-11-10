@@ -723,7 +723,7 @@ directly, with behaviour equivalent to a wire hop.
 | S21.12 | Caller cancellation MUST reach the handler. | `TestConn_Streaming_CallerCancel` |
 | S21.13 | A handler error MUST become the caller's final status. | `TestConn_Streaming_TrailerErrorPropagates`, `TestInvoke_HandlerError` |
 | S21.14 | Context errors on streams (`Header`, `SendMsg`, `RecvMsg` on both sides), and a bare context error returned by a unary or stream handler, MUST be delivered as gRPC status errors (`Canceled` / `DeadlineExceeded`), as on the wire. | `TestConn_Stream_ContextErrorsAreStatusErrors`, `TestInvoke_HandlerContextErrorIsStatusError` |
-| S21.15 | Messages MUST be deep-copied, so neither side can mutate the other's value. | no direct test; error paths covered by `TestCloneMsg_NonProto`, `TestCopyProto_Errors` |
+| S21.15 | Messages MUST be deep-copied, so neither side can mutate the other's value. | `TestConn_MessagesAreDeepCopiedBothWays`; error paths `TestCloneMsg_NonProto`, `TestCopyProto_Errors` |
 | S21.16 | A nested call MUST NOT be granted more than a wire hop. | covered by the S21.4 tests |
 | S21.17 | Registering a service twice, or an impl that does not satisfy the handler type, MUST panic instead of replacing or accepting it. | `TestConn_RegisterService_DuplicateIsRefused`, `TestConn_RegisterService_WrongImplIsRefused` |
 | S21.18 | Repeated interceptor options MUST append to one chain in option order; a later option MUST NOT drop an earlier one. | `TestConn_UnaryInterceptorOptionsAppend`, `TestConn_StreamInterceptorOptionsAppend` |
@@ -763,7 +763,7 @@ list is not cut on its own.
 | S22.3 | With a ceiling, the record MUST fit it, decode, keep strings valid UTF-8 and lists as prefixes, cut the largest fields to one common level, leave smaller fields whole, and name the cut paths. | `TestAppend_CutsTheLargestFirst`, `TestAppend_CutsInsideNestedMessagesButNotInsideLists`, `TestAppend_PackedAndMapCut`, `TestAppend_ManyCeilings`, `TestWaterLevel` |
 | S22.4 | A record that cannot fit even with every variable-size field emptied MUST be an error (`ErrTooLarge`). | `TestAppend_TooLarge` |
 | S22.5 | A record without a map MUST be written without allocating. | `TestAppend_NoAllocations` |
-| S22.6 | `Register` MUST add to the plans already held and replace a re-registered name, safely beside concurrent `Append`. | `TestRegister_AddsAndReplaces` |
+| S22.6 | `Register` MUST add to the plans already held and replace a re-registered name, safely beside concurrent `Append`. | `TestRegister_AddsAndReplaces`, `TestRegister_IsSafeBesideConcurrentAppend` (a map written in place fails it, reliably under `-race`) |
 
 **Deliberate limits.**
 - Field order on the wire is declaration order, not number order; decoders accept either.
