@@ -674,7 +674,7 @@ the stream context, which the `w17-events` hub reads (E18).
 | E17.1 | A definite refusal MUST cancel the returned context | `TestWatchStreamAuth_CancelsWhenAuthStartsFailing`, `TestWatchStreamAuth_DefiniteRefusalsCancel` |
 | E17.2 | A probe that times out MUST NOT be treated as revocation | `TestWatchStreamAuth_ProbeTimeoutIsNotARevocation` |
 | E17.3 | The probe MUST be independent of the stream's own cancellation | `TestWatchStreamAuth_ProbeDoesNotInheritStreamCancellation` |
-| E17.4 | Disabled MUST return the input context and a no-op stop | `TestWatchStreamAuth_DisabledIsAPassThrough`, `TestWatchStreamAuth_NilAuthIsAPassThrough` |
+| E17.4 | Disabled MUST return the input context and a no-op stop: an interval `<= 0`, a nil `authFn`, and `NoAuth()` itself (recognised by `IsNoAuth`; a wrapper around it is polled) | `TestWatchStreamAuth_DisabledIsAPassThrough`, `TestWatchStreamAuth_NilAuthIsAPassThrough`, `TestWatchStreamAuth_NoAuthStartsNoWatchdog` |
 | E17.5 | The watchdog goroutine MUST exit when the stream ends (stop or parent cancel) | `TestWatchStreamAuth_EndsWithTheStream` |
 | E17.6 | An auth-backend outage of any kind MUST NOT disconnect every stream: only a definite refusal revokes | `TestWatchStreamAuth_FastBackendFailureIsNotARevocation`, `TestW17Events_AuthOutageKeepsTheStream` |
 | E17.7 | A probe without a verdict MUST be reported (throttled to one report per minute per process) and retried with a backoff from 5 s up to the interval | `TestReportUnansweredReauth_ReportedAndThrottled`, `TestStreamReauthRetryDelay` |

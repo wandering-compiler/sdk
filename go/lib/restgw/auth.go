@@ -35,6 +35,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,10 +95,20 @@ func MakeAuthFunc(caller AuthCaller) AuthFunc {
 // userData. Used when the proto file declares no
 // `(w17.http_auth_method)` — the generated main.go wires
 // this so the auth-aware handler shape stays uniform.
+//
+// It is one package-level function, so [IsNoAuth] can recognise it: a
+// stream on such a surface has no credential to re-check.
 func NoAuth() AuthFunc {
-	return func(_ context.Context, _ *http.Request) ([]byte, error) {
-		return nil, nil
-	}
+	return noAuth
+}
+
+func noAuth(_ context.Context, _ *http.Request) ([]byte, error) {
+	return nil, nil
+}
+
+// IsNoAuth reports whether fn is [NoAuth] itself (not a wrapper around it).
+func IsNoAuth(fn AuthFunc) bool {
+	return fn != nil && reflect.ValueOf(fn).Pointer() == reflect.ValueOf(AuthFunc(noAuth)).Pointer()
 }
 
 // (HasPermission moved to the acllock package. The
