@@ -672,7 +672,7 @@ untranslated. Substitution is one left-to-right pass over the translated text.
 
 ## I15. Number and date formatting
 
-**Code.** `go/lib/i18n/formats.go`, `go/lib/i18n/formatnum.go`, `go/lib/i18n/formatdate.go`, `go/lib/i18n/formatlocale.go` — `FormatLocaleFromContext`
+**Code.** `go/lib/i18n/formats.go` — `FormatTableJSON`, `HasFormatLocale`, `FormatKinds`; `go/lib/i18n/formatnum.go` — `DecimalString`; `go/lib/i18n/formatmoney.go` — `FormatMoney`; `go/lib/i18n/formatdate.go` — `RenderTimePattern`; `go/lib/i18n/formatlocale.go` — `FormatLocaleFromContext`
 
 **Purpose.** A frozen per-locale table embedded from `formats.json`, resolved locale
 → base language → `en` with case and `_` normalisation, with per-kind project
@@ -692,6 +692,10 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 | I15.4 | Format-locale fallback and negotiation MUST apply; an empty `w17-format-locale` value is skipped. | `TestFormatLocaleFromContext`, `TestFormatLocaleFromContextNegotiatesAcceptLanguage`, `TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped` |
 | I15.5 | An explicit format locale MUST be honoured on both incoming and outgoing metadata. | `TestFormatLocaleFromContext_OutgoingMetadata` |
 | I15.6 | A project override MUST apply to a regional request of its language, unless the regional tag has an override of its own, in Go and in the admin runtime alike. | `TestResolveFormatsKindOverride_RegionalRequest`, `ts/admin-runtime/src/valueformat.test.ts` ("applies a language's override to a regional request") |
+| I15.7 | `FormatMoney(value, scale, currency)` MUST read `value` as minor units at `scale` (a negative scale is 0), render at the currency's own decimals (rounded half-up, padded), place the currency's symbol per the locale (an unknown code renders as itself, a lowercase or padded code is normalised), lead with the sign, render zero (and an amount that rounds to zero) unsigned, render without a currency at the scale's decimals, and pass a non-numeric value through unchanged — in Go and in the admin runtime alike. | `TestFormatGoldenVectors` (the `money` vectors), `TestCurrencyTableDecimals`, `TestFormatMoneyEdges`, `ts/admin-runtime/src/valueformat.test.ts` |
+| I15.8 | `FormatTableJSON` MUST be the embedded `formats.json` byte for byte, a fresh copy on each call. | `TestFormatTableJSON_IsTheEmbeddedFileByteForByte` |
+| I15.9 | `DecimalString` MUST never render exponent notation, at either end of the float range: its output always parses as a decimal. | `TestDecimalString_NeverRendersAnExponent` |
+| I15.10 | `HasFormatLocale` MUST answer for exactly the locale asked, walking no fallback (`cs-CZ` has no row of its own); `FormatKinds` MUST be the closed set of six kinds. | `TestHasFormatLocale`, `TestFormatKinds` |
 
 ---
 
@@ -705,6 +709,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 |---|---|---|
 | I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty; it MUST keep each kept entry's translator comments (`# …`) and the prior header fields it does not write itself (`Plural-Forms`, `Last-Translator`, `Language-Team`, `PO-Revision-Date`, …); an entry marked `#, fuzzy` MUST keep its flag and its suggested `msgstr`, and `EntriesFromPO` MUST report it `Fuzzy` with no `msgstr`, so a catalog built from it does not serve it. | `TestMergePO_PreservesTranslatorEdits`, `TestMergePO_DropsObsoleteMsgids`, `TestMergePO_LeavesAnUntranslatedEntryUntranslated`, `TestEntriesFromPO_ReportsAnUntranslatedEntryAsEmpty`, `TestMergePO_KeepsTheFuzzyFlag`, `TestMergePO_KeepsTheTranslatorsHeaderAndComments` |
 | I16.2 | Extraction, scaffolding and enum-label harvesting MUST produce the catalogs the runtime reads. | `TestMarshalPO_BasicShape`, `TestMarshalPO_RoundTripsThroughRegister`, `TestScaffoldPO_AllMsgstrEmpty`, `TestDefaultLocalePO_MsgstrMirrorsMsgid`, `TestEmitDomainCatalogs_PerLanguageOutput`, `TestEntriesFromPO_RoundTrip`, `TestMarshalJSON_SortedAndStable`, `TestHarvestEnumLabels_TopLevelEnum`, `TestHarvestEnumLabels_NestedMessageEnums` |
+| I16.3 | `MarshalJSON` MUST emit `{msgid: msgstr}` sorted by msgid with a stable indent, keep empty msgstrs, skip the empty msgid and refuse an empty language; `EntriesFromMsgids` MUST give the default language its baseline (msgstr = msgid) and every other language empty msgstrs. | `TestMarshalJSON_SortedAndStable`, `TestMarshalJSON_UnicodeAndQuotes`, `TestMarshalJSON_EmptyLangAndEmptyMsgid`, `TestEntriesFromMsgids_BaselineVsScaffold`, `TestEntriesFromMsgids_Empty` |
 
 ---
 
