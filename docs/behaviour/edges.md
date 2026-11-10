@@ -759,7 +759,7 @@ stream passes the transport's stream cap and its method's limiter (`AdmitPublicS
 | E19.3 | Each stream open MUST be charged; the writer MUST NOT be wrapped (flush and hijack keep working) | `TestAdmitPublicStream_ChargesEveryStream` |
 | E19.4 | Concurrent requests MUST NOT exceed the configured budget: each request in flight holds its own token | `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 | E19.5 | A DPoP nonce challenge (401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"`) MUST give its token back: nothing was checked, and a new device's first sign-in must not spend the address's guess budget. `NonceChallenge` MUST agree with the DPoP package's own reading of the header. The only writer of that header on a REST surface is the DPoP gate (E37) | `TestAdmitPublic_ANonceChallengeIsNotCharged`, `TestNonceChallenge_AgreesWithDPoP` |
-| E19.6 | `AdmitPublicStreamOf(streams, l)` MUST refuse, without spending a token, a client at the stream cap of `streams`, charge one token of `l` per opened stream, and stop counting the stream when its request ends; both nil admit everything | `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
+| E19.6 | `AdmitPublicStreamOf(streams, l)` MUST refuse, without spending a token, a client at the stream cap of `streams`, charge one token of `l` per opened stream, and stop counting the stream when its request ends; a stream `l` refuses MUST give its cap slot back; both nil admit everything | `TestAdmitPublicStreamOf_CapOnStreamsTokenOnTheMethod`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
 
 **Deliberate limits.**
 - The bound on nonce-challenge churn is the DPoP mint limiter in front of unbound proofs, not this
@@ -973,6 +973,7 @@ is bounded without a global cap.
 | E26.20 | The scope's trusted proxies, TTL, key ceiling and stream cap MUST reach every method (the stream cap through `Streams()` only) | `TestMethods_ScopeSettingsReachEveryMethod`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
 | E26.21 | A `PER_MINUTE` of `NaN` or an infinity MUST NOT switch a limiter on with a bucket that never empties, nor switch it off: like any malformed value it MUST leave the previous value standing, for the scope's and for a method's variable | `TestPerMinute_NotAFiniteNumberIsMalformed` |
 | E26.22 | `RequireTrustedProxies` MUST refuse a start outside `W17_ENV=dev` while neither the scoped nor the bare `TRUSTED_PROXIES` variable is set (blank counts as unset, another scope's variable does not count), with an error naming the variable and the fix; `none`, CIDRs, the bare name and a development stack MUST pass | `TestRequireTrustedProxies` |
+| E26.23 | `HTTPClientAddr` and `GRPCClientAddr` MUST give the `ClientIP` reading as text: unmapped (an IPv4 peer of a dual-stack listener as IPv4), without an IPv6 zone, and `""` for a peer that is no address (HTTP) or a context without a peer (gRPC) | `TestClientAddr_HTTPAndGRPC` |
 
 **Deliberate limits.**
 - The limiter is in-process: N replicas give N times the budget.
@@ -1725,7 +1726,8 @@ backend is called. Off unless the gateway has the provider's secret.
 | E41.3 | No token MUST be ErrMissing and a token over 2048 bytes ErrRejected, both without asking the provider; a rejection (used, expired, forged, another hostname) MUST be ErrRejected; a refused secret, an HTTP 5xx or a second internal-error MUST be ErrUnavailable | `› TestVerify_Refusals` |
 | E41.4 | A provider error MUST be retried once, with the same idempotency key | `› TestVerify_ARetryKeepsItsIdempotencyKey` |
 | E41.5 | An unknown provider MUST be refused, and FromEnv MUST read every setting | `› TestNew_RefusesAnUnknownProvider`, `› TestFromEnv` |
-| E41.6 | `RequireCaptcha` MUST pass with a nil verifier or a solved token, and otherwise answer 403 `CAPTCHA_REQUIRED`, 403 `CAPTCHA_INVALID` or 503 `CAPTCHA_UNAVAILABLE` and report false | `restgw/captcha_test.go › TestRequireCaptcha` |
+| E41.6 | `RequireCaptcha` MUST pass with a nil verifier or a solved token, and otherwise report false having answered the canonical envelope (E3): 403 `PERMISSION_DENIED` with detail code `CAPTCHA_REQUIRED` (no token) or `CAPTCHA_INVALID` (rejected), 503 `UNAVAILABLE` with detail code `CAPTCHA_UNAVAILABLE` (provider unreachable); the message is the catalog sentence in the request's language (harvested by `Vocabulary`), and the cause is reported by code — a refusal on the non-exception channel, an unreachable provider on the exception channel | `restgw/captcha_test.go › TestRequireCaptcha`, `› TestVocabulary_CarriesTheCaptchaSentences` |
+| E41.8 | The address `RequireCaptcha` sends the provider (`remoteip`, E41.2) MUST be the client `ClientAddrMiddleware` resolved behind the trusted proxies (E5.8, E26.23), never the proxy's own nor an untrusted peer's `X-Forwarded-For` | `restgw/captcha_test.go › TestRequireCaptcha_SendsTheResolvedClientAddress` |
 | E41.7 | The default CORS allowlist MUST include `W17-Captcha-Token` | `› TestCORSDefaultsAllowTheCaptchaHeader` |
 
 **Deliberate limits.**
