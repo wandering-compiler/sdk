@@ -204,6 +204,13 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 		if mapped, ok := grpcerr.CommitConstraint(ctx, "commit", err); ok {
 			return nil, mapped
 		}
+		// A serialization failure or deadlock at COMMIT (routine under
+		// SERIALIZABLE) is what it is at a statement: Aborted, the
+		// caller restarts the whole transaction. The transaction did not
+		// commit.
+		if mapped, ok := grpcerr.CommitRetryable(ctx, "commit", err); ok {
+			return nil, mapped
+		}
 		return nil, status.Errorf(codes.Internal, "commit: %v", err)
 	}
 	return &distxpb.CommitResponse{}, nil

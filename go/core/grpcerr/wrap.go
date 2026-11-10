@@ -654,6 +654,26 @@ func CommitConstraint(ctx context.Context, method string, err error) (error, boo
 	return nil, false
 }
 
+// CommitRetryable maps a failed COMMIT that is a serialization failure or a
+// deadlock (PostgreSQL 40001 / 40P01, MySQL 1213 / 1205) to what the same
+// failure at a statement answers: Aborted with CodeConflictRetry, the
+// caller's signal to run its whole transaction again. Under SERIALIZABLE,
+// PostgreSQL raises 40001 at COMMIT routinely; it is not a server fault. ok
+// is false for any other error. The dialect is not known at the COMMIT, so
+// every dialect's check is tried (each recognises only its own driver's
+// errors).
+func CommitRetryable(ctx context.Context, method string, err error) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	for _, d := range []Dialect{DialectPostgres, DialectMySQL} {
+		if isRetryable(err, d) {
+			return forCaller(ctx, codes.Aborted, method, "retryable failure at commit", CodeConflictRetry, UserMsgid(codes.Aborted), nil), true
+		}
+	}
+	return nil, false
+}
+
 // parseByDialect dispatches to the right adapter. Falls
 // through to ok=false for DialectUnknown so callers without
 // a known dialect get the internal-error path.
