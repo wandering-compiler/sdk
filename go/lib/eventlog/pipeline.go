@@ -73,6 +73,10 @@ type Config[T any] struct {
 	Size func(T) int
 	// Encode appends one record's wire form to dst (the redacted envelope).
 	Encode func(dst []byte, item T) ([]byte, error)
+	// EncodeFailed, when set, encodes an item that never reached a batch
+	// for Fail, on the submitter's goroutine; default Encode. A recorder
+	// uses it to skip what only a stored record does (telemetry).
+	EncodeFailed func(dst []byte, item T) ([]byte, error)
 	// Sink delivers a batch. The batch's buffer is reused once Sink returns:
 	// a sink must not keep it.
 	Sink func(ctx context.Context, b *Batch) error
@@ -370,7 +374,8 @@ func (p *Pipeline[T]) SubmitWait(ctx context.Context, item T) error {
 }
 
 // TrySubmit queues item only if there is room now; otherwise it goes to
-// Fail with ErrQueueFull at once (a marketing record set to drop).
+// Fail with ErrQueueFull at once (a marketing record set to drop), without
+// its encoding: a drop costs the request path nothing more.
 func (p *Pipeline[T]) TrySubmit(item T) error {
 	p.submitted.Add(1)
 	size := int64(p.cfg.Size(item))
@@ -381,18 +386,18 @@ func (p *Pipeline[T]) TrySubmit(item T) error {
 		size = p.cfg.QueueBytes
 	}
 	if !p.enter() {
-		return p.failItem(item, ErrClosed)
+		return p.failBare(ErrClosed)
 	}
 	defer p.leave()
 	if !p.sem.TryAcquire(size) {
-		return p.failItem(item, ErrQueueFull)
+		return p.failBare(ErrQueueFull)
 	}
 	select {
 	case p.in <- queued[T]{item: item, size: size}:
 		return nil
 	default:
 		p.sem.Release(size)
-		return p.failItem(item, ErrQueueFull)
+		return p.failBare(ErrQueueFull)
 	}
 }
 
@@ -418,10 +423,16 @@ func (p *Pipeline[T]) submitSlow(ctx context.Context, item T, size int64) error 
 	}
 }
 
+// failBare fails one item without encoding it.
+func (p *Pipeline[T]) failBare(reason error) error {
+	p.fail(Failure{Err: reason, Count: 1})
+	return reason
+}
+
 // failItem encodes one item that never reached a batch and fails it.
 func (p *Pipeline[T]) failItem(item T, reason error) error {
 	var rec []byte
-	if b, err := p.encode(nil, item); err == nil {
+	if b, err := p.encodeFailed(item); err == nil {
 		rec = b
 	}
 	f := Failure{Err: reason, Count: 1}
@@ -430,6 +441,18 @@ func (p *Pipeline[T]) failItem(item T, reason error) error {
 	}
 	p.fail(f)
 	return reason
+}
+
+func (p *Pipeline[T]) encodeFailed(item T) (out []byte, err error) {
+	if p.cfg.EncodeFailed == nil {
+		return p.encode(nil, item)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = nil, p.recovered("EncodeFailed", r)
+		}
+	}()
+	return p.cfg.EncodeFailed(nil, item)
 }
 
 func (p *Pipeline[T]) encode(dst []byte, item T) (out []byte, err error) {

@@ -758,6 +758,7 @@ batcher encodes the records into batches, one sender delivers each batch.
 | Setting | Default / effect |
 |---|---|
 | `Size`, `Encode`, `Sink`, `Fail` | required; `Size` runs on the request path, the rest in the background |
+| `EncodeFailed` | optional: encodes, for `Fail`, a record that never reached a batch (on the submitter's goroutine); default `Encode` |
 | `BatchBytes` | required (> 64): a batch's largest encoded size, the sink's limit |
 | `BatchItems` | 1000: a batch closes at this many records |
 | `BatchPeriod` | 10ms: a batch closes this long after its first record |
@@ -788,7 +789,7 @@ field 2 each record as `Encode` wrote it, so a consumer decodes it with its own 
 | I19.11 | `Submit` with room MUST NOT allocate. | `TestPipeline_SubmitDoesNotAllocate` |
 | I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes` (more than 64). | `TestNew_RequiresItsParts` (each part dropped in turn, `BatchBytes` 64 refused and 65 accepted) |
 | I19.13 | A batch MUST carry the distinct tags of its records (`Config.Tag`), at most `MaxBatchTags`, and say when there were more. | `TestPipeline_BatchCarriesItsDistinctTags` |
-| I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once. | `TestRecorder_DropDoesNotWait` |
+| I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once, without being encoded. | `TestRecorder_DropDoesNotWait`, `TestRecorder_ADroppedRecordIsNotEncoded` |
 | I19.15 | `SubmitWait` MUST return once its record's batch is stored, closing the batch at once rather than at the period. | `TestPipeline_SubmitWaitReturnsOnDelivery` |
 | I19.16 | `SubmitWait` MUST return the batch's failure when the sink keeps refusing it past `RetryFor`; a wait that ends with its context MUST leave the record in the pipeline, delivered later. | `TestPipeline_SubmitWaitLearnsTheFailure`, `TestPipeline_SubmitWaitEndsWithItsContext` |
 | I19.17 | A batch the sink refuses MUST be retried with backoff for `RetryFor` before it fails. | `TestPipeline_RetryDelivers`, `TestPipeline_SubmitWaitLearnsTheFailure` |
@@ -837,7 +838,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.9 | `Surface.Conn` MUST record a request's first call of a recorded method into the request's record and pass every other call through. | `TestConn_RecordsTheRequestsBackendCall` |
 | I20.10 | The caller MUST be read from the stamped metadata, outgoing or incoming, and an interceptor's untyped request and response MUST be recorded. | `TestRecord_SetCallerFromContext`, `TestRecord_InterceptorShape` |
 | I20.11 | `Open` MUST start with NATS not up yet, and `Close` MUST close the connection it owns; `Open` and `Consumers.Serve` MUST NOT return the DSN's password in an error, a DSN that does not parse included. | `TestOpen_StartsBeforeNATSAndOwnsTheConnection`, `TestOpenAndServe_ABadDSNIsNotEchoedWithItsPassword` |
-| I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink` |
+| I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered; a record refused before it reached a batch MUST NOT be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink`, `TestRecorder_ARefusedRecordIsNotRenderedToTelemetry` |
 | I20.13 | A sync audit record MUST hold its caller until its batch is stored; a later `Finish` MUST do nothing. | `TestRecorder_SyncAuditWaitsForTheAck` |
 | I20.14 | The sync wait MUST NOT outlast `SyncWait`; the record MUST still be delivered after the request went on. | `TestRecorder_SyncAuditWaitIsBounded` |
 | I20.15 | Marketing MUST never wait, whatever the method's mode. | `TestRecorder_SyncIsAuditOnly` |

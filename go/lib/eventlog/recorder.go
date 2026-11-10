@@ -246,6 +246,7 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 		p, err := New(Config[*Record]{
 			Size:         recordSize,
 			Encode:       r.encode,
+			EncodeFailed: r.encodeFailed,
 			Sink:         sf,
 			Fail:         r.fail,
 			Tag:          func(rec *Record) string { return rec.orgID },
@@ -830,6 +831,16 @@ var metas = sync.Pool{New: func() any { return new(w17pb.RequestEventMeta) }}
 // encode writes one envelope: the request and response by their
 // redaction plans (cut to share the ceiling), then the meta.
 func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
+	return r.encodeRecord(dst, rec, true)
+}
+
+// encodeFailed encodes a record that never reached a batch, for the failure
+// path: no telemetry, which only a recorded request gets.
+func (r *Recorder) encodeFailed(dst []byte, rec *Record) ([]byte, error) {
+	return r.encodeRecord(dst, rec, false)
+}
+
+func (r *Recorder) encodeRecord(dst []byte, rec *Record, telemetry bool) ([]byte, error) {
 	reqBudget := r.ceiling - 4<<10 // the meta's room
 	if rec.resp != nil {
 		reqBudget /= 2
@@ -899,7 +910,7 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	dst = protowire.AppendTag(dst, EnvelopeMetaField, protowire.BytesType)
 	dst = protowire.AppendVarint(dst, uint64(proto.Size(m)))
 	dst, err = proto.MarshalOptions{}.MarshalAppend(dst, m)
-	if err == nil && rec.otel {
+	if err == nil && telemetry && rec.otel {
 		emitTelemetry(rec, m, dst[reqAt[0]:reqAt[1]], dst[respAt[0]:respAt[1]])
 	}
 	return dst, err
