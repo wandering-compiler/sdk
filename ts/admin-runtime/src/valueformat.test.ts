@@ -22,7 +22,7 @@ import {
 } from "./valueFormat";
 
 // The load-bearing suite: these are the SAME vectors sdk/go/lib/i18n runs
-// (format_vectors_test.go over testdata/format_vectors.json, kept identical by
+// (format_test.go TestFormatGoldenVectors over testdata/format_vectors.json, kept identical by
 // `make sync-i18n-formats`). Every case passing on both sides is what makes
 // "Go and TS format a value identically" a checked property rather than a hope
 // — which is why the format table is explicit data, not Intl.
@@ -36,6 +36,7 @@ interface Vector {
   currency?: string;
   value?: string;
   float?: number;
+  pattern?: string;
   want: string;
 }
 
@@ -65,6 +66,10 @@ function applyVector(v: Vector): string {
       return formatTime(raw, f);
     case "datetime":
       return formatDateTime(raw, f);
+    case "pattern": {
+      const c = parseTemporal(raw);
+      return c ? renderTimePattern(v.pattern ?? "", c) : raw;
+    }
     default:
       return `unknown kind ${v.kind}`;
   }

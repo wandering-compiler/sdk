@@ -685,10 +685,10 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I15.1 | Numbers MUST use decimal-string arithmetic, round half-up away from zero, never print negative zero, and return non-decimal input unchanged. | `TestFormatGoldenVectors` |
-| I15.2 | Dates MUST render in UTC with a closed token vocabulary; unparseable input MUST be returned unchanged. | `TestFormatGoldenVectors` |
-| I15.3 | The table MUST be complete; the resolution chain and overrides MUST apply. | `go/lib/i18n/format_test.go` |
-| I15.4 | Format-locale fallback and negotiation MUST apply. | `go/lib/i18n/format_test.go` |
+| I15.1 | Numbers MUST use decimal-string arithmetic, round half-up away from zero, never print negative zero, drop leading integer zeros (keeping one), and return non-decimal input unchanged. | `TestFormatGoldenVectors` |
+| I15.2 | Dates MUST render in UTC with a closed token vocabulary — every token, the 12-hour `hh`/`h`, `A` and the second `ss` included, renders as documented (`RenderTimePattern`); unparseable input MUST be returned unchanged. | `TestFormatGoldenVectors` (the `pattern` vectors render every token) |
+| I15.3 | The table MUST be complete; the resolution chain and overrides MUST apply. | `TestFormatTableRowsAreComplete`, `TestFormatTablePatternsAreRenderable`, `TestResolveFormatsChain`, `TestResolveFormatsKindOverride` |
+| I15.4 | Format-locale fallback and negotiation MUST apply; an empty `w17-format-locale` value is skipped. | `TestFormatLocaleFromContext`, `TestFormatLocaleFromContextNegotiatesAcceptLanguage`, `TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped` |
 | I15.5 | An explicit format locale MUST be honoured on both incoming and outgoing metadata. | `TestFormatLocaleFromContext_OutgoingMetadata` |
 | I15.6 | A project override MUST apply to a regional request of its language, unless the regional tag has an override of its own, in Go and in the admin runtime alike. | `TestResolveFormatsKindOverride_RegionalRequest`, `ts/admin-runtime/src/valueformat.test.ts` ("applies a language's override to a regional request") |
 
@@ -702,8 +702,8 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty; an entry marked `#, fuzzy` MUST keep its flag and its suggested `msgstr`, and `EntriesFromPO` MUST report it `Fuzzy` with no `msgstr`, so a catalog built from it does not serve it. | `go/lib/i18n/merge_untranslated_test.go`, `go/lib/i18n/extract_test.go`, `TestMergePO_KeepsTheFuzzyFlag` |
-| I16.2 | Extraction, scaffolding and enum-label harvesting MUST produce the catalogs the runtime reads. | `go/lib/i18n/extract_test.go`, `go/lib/i18n/extract_extra_test.go`, `go/lib/i18n/harvest_test.go`, `go/lib/i18n/harvest_extra_test.go` |
+| I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty; an entry marked `#, fuzzy` MUST keep its flag and its suggested `msgstr`, and `EntriesFromPO` MUST report it `Fuzzy` with no `msgstr`, so a catalog built from it does not serve it. | `TestMergePO_PreservesTranslatorEdits`, `TestMergePO_DropsObsoleteMsgids`, `TestMergePO_LeavesAnUntranslatedEntryUntranslated`, `TestEntriesFromPO_ReportsAnUntranslatedEntryAsEmpty`, `TestMergePO_KeepsTheFuzzyFlag` |
+| I16.2 | Extraction, scaffolding and enum-label harvesting MUST produce the catalogs the runtime reads. | `TestMarshalPO_BasicShape`, `TestMarshalPO_RoundTripsThroughRegister`, `TestScaffoldPO_AllMsgstrEmpty`, `TestDefaultLocalePO_MsgstrMirrorsMsgid`, `TestEmitDomainCatalogs_PerLanguageOutput`, `TestEntriesFromPO_RoundTrip`, `TestMarshalJSON_SortedAndStable`, `TestHarvestEnumLabels_TopLevelEnum`, `TestHarvestEnumLabels_NestedMessageEnums` |
 
 ---
 
