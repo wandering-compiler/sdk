@@ -9,7 +9,7 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 `go/service/tx/txregistry`, `go/service/tx/txscope`, `go/service/tx/grpcrollback`,
 `go/lib/dqlbind`, `go/lib/paging`, `go/lib/listsort`, `go/lib/materialize`,
 `go/lib/sqlitecollate`, `go/lib/kvfs`, `go/lib/kvhash`, `go/lib/kvposture`,
-`go/lib/fieldcrypt`, `go/service/secret`.
+`go/lib/fieldcrypt`, `go/service/secret`, `go/lib/secretseal`.
 
 ## Features
 
@@ -31,7 +31,7 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 | D14 | Redis HASH entity codec | `go/lib/kvhash/kvhash.go` |
 | D15 | Redis eviction check | `go/lib/kvposture/kvposture.go` |
 | D16 | Column encryption (`CRYPTED_SECRET`) | `go/lib/fieldcrypt/fieldcrypt.go`, `shared.go` — `Init` |
-| D17 | Secret values and sources | `go/service/secret/secret.go` — `Secret`; `source.go` — `Resolver`; `go/service/secret/sopsenv` |
+| D17 | Secret values and sources | `go/service/secret/secret.go` — `Secret`; `source.go` — `Resolver`; `sealed.go` — `Seal`, `OpenSealed`; `go/service/secret/sopsenv`; `go/lib/secretseal` |
 
 ## D1. Per-dialect session pins
 
@@ -534,9 +534,9 @@ nonce from an HMAC of the plaintext, truncated to 96 bits. Stored form: `w17c.<v
 
 ## D17. Secret values and sources
 
-**Code.** `go/service/secret/secret.go` — `Secret`, `New`; `go/service/secret/source.go` — `Resolver`, `NewResolver`; `go/service/secret/sopsenv/sopsenv.go` — `Rekey`.
+**Code.** `go/service/secret/secret.go` — `Secret`, `New`; `go/service/secret/source.go` — `Resolver`, `NewResolver`; `go/service/secret/sopsenv/sopsenv.go` — `Rekey`; `go/service/secret/sealed.go` — `Seal`, `OpenSealed`, `CheckRecipient`; `go/lib/secretseal/secretseal.go` — `Seal`, `Open`, `ErrOpen`.
 
-**Purpose.** `Secret[T]` makes accidental printing of a secret redact; `Resolver` loads declared secrets from the environment, an age-encrypted file or a plain dotenv file.
+**Purpose.** `Secret[T]` makes accidental printing of a secret redact; `Resolver` loads declared secrets from the environment, an age-encrypted file or a plain dotenv file. `secret.Seal` puts a credential on an event as ciphertext to one age recipient; `secretseal` seals one environment value to a short-lived write grant's HPKE key (DHKEM(X25519), HKDF-SHA256, AES-256-GCM), bound to its address.
 
 **Configuration.**
 
@@ -562,6 +562,9 @@ Precedence: environment, then age file, then plain file.
 | D17.7 | `sopsenv` MUST be byte-compatible with the sops dotenv format, bind each value to its key name as associated data, and verify the whole-file MAC before returning values. | `TestRoundTrip`, `TestDecrypt_RefusesTampering` |
 | D17.8 | `Rekey` MUST refuse a tampered file and open the result for the new key only. | `TestRekey_KeepsValuesOpensForTheNewKeyOnly` |
 | D17.9 | `Reveal`, `IsZero` and the unmarshalling methods MUST return the held value regardless of how it is stored. | `TestPointerRepresentationKeepsSemantics` |
+| D17.10 | The plain and age file sources MUST parse every line of the file whatever its length: a value longer than a line buffer neither ends the parse nor makes the keys after it resolve as absent. | `TestParseDotenv_ALongLineDoesNotDropTheKeysAfterIt` |
+| D17.11 | `secret.Seal` MUST produce randomised base64 ciphertext to one age X25519 recipient that carries no part of the credential; `OpenSealed` MUST open it with the recipient's identity (a key file's content, comments and several identities included) and refuse another identity, an altered or non-base64 value, and a plaintext over 64 KiB. `CheckRecipient` refuses anything but an `age1…` recipient, so a configured recipient fails the boot rather than the first seal. | `TestSealOpen`, `TestOpenSealed_RefusesAValueOverTheCap`, `TestCheckRecipient` |
+| D17.12 | `secretseal.Seal` MUST bind each value to its address — the grant id, the service and the key, with a version prefix, as the HPKE info — so it opens only with the grant's private key for the same address; every failure to open (wrong key, another address or grant, a tampered ciphertext) is the one `ErrOpen`. Two seals of one value differ, and a malformed public key is refused. | `TestSeal_OpensOnlyWithTheGrantAndTheAddress`, `TestSeal_IsRandomized`, `TestSeal_RefusesABadPublicKey` |
 
 **Deliberate limits.**
 - Plain dotenv values are taken literally: no quote stripping, inline comments or `export` prefix (`KEY="x"` yields `"x"` with the quotes).
