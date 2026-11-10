@@ -1758,7 +1758,7 @@ instead of a JSON document — a file a link opens.
 | E42.3 | `Range` MUST answer 206 and `HEAD` MUST send no body | `TestWriteRawResponse_RangeAndHead` |
 | E42.4 | The file name MUST be reduced to its last path segment and stripped of control characters; a non-ASCII name MUST use RFC 2231 `filename*` | `TestWriteRawResponse_FilenameIsSanitised` |
 | E42.5 | A method other than GET / HEAD MUST answer 200 with the whole body whatever its `If-None-Match` / `Range` — the handler already ran | `TestWriteRawResponse_NonGetAlwaysSendsTheWholeBody` |
-| E42.6 | A scriptable type (HTML, XHTML, SVG, XML) MUST carry `Content-Security-Policy: sandbox`; a file name MUST lose format characters (bidi overrides) and C1 controls | `TestWriteRawResponse_ScriptableTypesAreSandboxed`, `TestWriteRawResponse_FilenameDropsFormatCharacters` |
+| E42.6 | A scriptable type (HTML, XHTML, SVG, XML and any `+xml` type, in any letter case) MUST carry exactly `Content-Security-Policy: sandbox; default-src 'none'`, and another type none; a file name MUST lose format characters (bidi overrides) and C1 controls | `TestWriteRawResponse_ScriptableTypesAreSandboxed`, `TestWriteRawResponse_FilenameDropsFormatCharacters` |
 
 **Deliberate limits.**
 - The body is held in memory; the ETag saves the transfer, not the handler's render.

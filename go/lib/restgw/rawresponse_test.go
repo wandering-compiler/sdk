@@ -135,12 +135,18 @@ func TestWriteRawResponse_ScriptableTypesAreSandboxed(t *testing.T) {
 		"text/html; charset=utf-8": true,
 		"image/svg+xml":            true,
 		"application/xhtml+xml":    true,
+		"application/rss+xml":      true,
+		"TEXT/HTML":                true,
 		"application/pdf":          false,
 		"text/plain":               false,
 	} {
 		rec := rawResult(t, http.MethodGet, nil, restgw.RawResponse{Body: []byte("x"), ContentType: ct, Inline: true})
-		if got := rec.Header().Get("Content-Security-Policy") != ""; got != want {
-			t.Errorf("%s: sandboxed = %v, want %v", ct, got, want)
+		csp := rec.Header().Get("Content-Security-Policy")
+		if want && csp != "sandbox; default-src 'none'" {
+			t.Errorf("%s: Content-Security-Policy = %q, want exactly %q", ct, csp, "sandbox; default-src 'none'")
+		}
+		if !want && csp != "" {
+			t.Errorf("%s: sandboxed (%q), want no policy", ct, csp)
 		}
 	}
 }
