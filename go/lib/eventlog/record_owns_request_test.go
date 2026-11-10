@@ -15,7 +15,7 @@ type reusingStream struct {
 	msgs []string
 }
 
-func (s *reusingStream) Context() context.Context     { return context.Background() }
+func (s *reusingStream) Context() context.Context    { return context.Background() }
 func (s *reusingStream) SetHeader(metadata.MD) error { return nil }
 func (s *reusingStream) RecvMsg(m any) error {
 	v := m.(*wrapperspb.StringValue)

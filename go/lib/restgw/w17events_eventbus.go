@@ -392,7 +392,9 @@ func (e *EventbusEventSource) reportTranscodeFailure(ctx context.Context, channe
 	if suppressed > 0 {
 		more = fmt.Sprintf(" (%d more on this topic since the last report)", suppressed)
 	}
-	log.Printf("restgw: /w17-events dropped an event it could not transcode (channel %q, topic %q): %v%s", channel, topic, err, more)
+	// channel and topic are %q-quoted (no line breaks reach the log), more is
+	// a count, and err is the transcoder's.
+	log.Printf("restgw: /w17-events dropped an event it could not transcode (channel %q, topic %q): %v%s", channel, topic, err, more) //nolint:gosec // G706: see above
 	observx.ReportError(ctx, fmt.Errorf("w17-events transcode (channel %q, topic %q)%s: %w", channel, topic, more, err))
 }
 

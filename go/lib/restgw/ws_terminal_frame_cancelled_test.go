@@ -46,7 +46,7 @@ func TestWSTerminalFrame_IsWrittenOnACancelledContext(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer c.CloseNow()
+			defer func() { _ = c.CloseNow() }()
 			_, data, err := c.Read(ctx)
 			if err != nil {
 				t.Fatalf("no error frame reached the client, only: %v", err)
