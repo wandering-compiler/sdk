@@ -236,6 +236,8 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
   looked up first and a transient error changes nothing; otherwise the stream, dead-letter stream
   and claim bucket are re-ensured, the consumer re-created and a new pull loop swapped into the
   subscription under the subscriber lock. Recovery retries until it succeeds or the subscriber drains.
+  A recovery that re-created the consumer before `Subscribe` registered the subscription waits for
+  the registration, then swaps its loop in.
 - `Drain` stops each pull loop by draining it, not stopping it: messages already prefetched into
   the client still reach the consume callback, which Naks them, and `Drain` returns once that
   buffer is empty (bounded by its context). They go back to the broker at once instead of waiting
@@ -266,6 +268,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.16 | A subscription's consumer MUST be delivered only the subjects its topic filter can match, never the whole channel for a filter with an exact subject form. | `TestNatsBus_NarrowFilterReadsOnlyItsSubjects_Embedded`, `TestNatsFilterSubjects` |
 | I5.17 | A message delivered to the client MUST NOT age past `AckWait` before its handler starts: one slow handler MUST NOT cause the messages after it to be redelivered. | `TestNatsBus_QueuedDeliveriesDoNotOverrunAckWait_Embedded` |
 | I5.18 | With `Domain` set, a subscriber MUST NOT hand its handler a message stamped with another domain, and MUST deliver an unstamped one; without `Domain` nothing is stamped or filtered. | `TestDomainIsolation_Nats_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
+| I5.19 | A consumer recovery that finishes before `Subscribe` has registered the subscription MUST wait for the registration and swap its pull loop in; it MUST NOT stop the new loop and leave the subscription on the lost consumer. | `TestNatsRecoverConsumer_WaitsForTheHandleToBeRegistered` |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
