@@ -21,14 +21,14 @@ type formatVector struct {
 	Places *int   `json:"places"`
 	// Scale / Currency are read by the `money` kind only: the value is a
 	// count of minor units at Scale, rendered in Currency (empty = none).
-	Scale    *int     `json:"scale"`
-	Currency string   `json:"currency"`
-	Value    *string  `json:"value"`
+	Scale    *int    `json:"scale"`
+	Currency string  `json:"currency"`
+	Value    *string `json:"value"`
 	// Pattern is read by the `pattern` kind only: RenderTimePattern over
 	// the parsed value.
-	Pattern string `json:"pattern"`
-	Float    *float64 `json:"float"`
-	Want     string   `json:"want"`
+	Pattern string   `json:"pattern"`
+	Float   *float64 `json:"float"`
+	Want    string   `json:"want"`
 }
 
 func loadFormatVectors(t *testing.T) []formatVector {

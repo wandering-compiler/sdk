@@ -76,13 +76,13 @@ func TestNegotiation_BoundsTheValueItParses(t *testing.T) {
 	huge := "cs," + strings.Repeat("en-US;q=0.1,", 80000)
 	ctx := langCtx(huge)
 	start := time.Now()
-	for range 50 {
+	for range 200 {
 		if got := i18n.T(ctx, "hello", nil); got != "ahoj" {
 			t.Fatalf("T(huge) = %q, want ahoj", got)
 		}
 	}
-	if d := time.Since(start); d > 50*time.Millisecond {
-		t.Errorf("50 translations of a %d-byte value took %v; the value is parsed whole", len(huge), d)
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("200 translations of a %d-byte value took %v; the value is parsed whole", len(huge), d)
 	}
 }
 
