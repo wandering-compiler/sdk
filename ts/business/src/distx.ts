@@ -427,12 +427,16 @@ export async function run<T>(
     throw ferr;
   }
   if (ctx.done()) {
+    // The refusal is what the caller acts on; a failed rollback is named in
+    // it, as Go's Run does — the transaction may be left open until the
+    // server times it out.
+    let also = "";
     try {
       await handle.rollback(detachedCtx);
-    } catch {
-      // the refusal below is what the caller acts on
+    } catch (rerr) {
+      also = ` (rollback also failed: ${errorText(rerr)})`;
     }
-    throw new DistxError(`distx.run: not committing, the caller's context is done: ${ctx.err()}`);
+    throw new DistxError(`distx.run: not committing, the caller's context is done: ${ctx.err()}${also}`);
   }
   try {
     await handle.commit(ctx);

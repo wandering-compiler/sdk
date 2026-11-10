@@ -403,11 +403,15 @@ async def run(
             ferr.add_note(f"distx.run: rollback also failed: {rerr!r}")
         raise
     if ctx.done():
+        # The refusal is what the caller acts on; a failed rollback is named
+        # in it, as Go's Run does — the transaction may be left open until
+        # the server times it out.
+        also = ""
         try:
             await asyncio.shield(handle.rollback(detached))
-        except Exception:  # noqa: BLE001 — the refusal below is what the caller acts on
-            pass
-        raise DistxError(f"distx.run: not committing, the caller's context is done: {ctx.err()}")
+        except Exception as rerr:  # noqa: BLE001
+            also = f" (rollback also failed: {rerr!r})"
+        raise DistxError(f"distx.run: not committing, the caller's context is done: {ctx.err()}{also}")
     try:
         await handle.commit(ctx)
     except Exception as cerr:
