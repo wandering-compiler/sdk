@@ -298,9 +298,7 @@ func (b *RedisBus) Close(ctx context.Context) error {
 	client := b.client
 	b.mu.Unlock()
 
-	for _, s := range subs {
-		_ = s.Drain(ctx)
-	}
+	drainErr := drainAll(ctx, "redis", subs, func(s *redisSubscriber) string { return s.channel })
 	if client != nil {
 		// Every subscriber is drained, so nothing in this process still reads
 		// through these groups — and no OTHER process ever did, that being what
@@ -308,9 +306,9 @@ func (b *RedisBus) Close(ctx context.Context) error {
 		for _, g := range groups {
 			_ = client.XGroupDestroy(ctx, g.channel, g.group).Err()
 		}
-		return client.Close()
+		return errors.Join(drainErr, client.Close())
 	}
-	return nil
+	return drainErr
 }
 
 // Dispatch XADDs one envelope to the channel's stream as

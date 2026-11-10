@@ -348,16 +348,14 @@ func (b *NatsBus) Close(ctx context.Context) error {
 	conn := b.conn
 	b.mu.Unlock()
 
-	for _, s := range subs {
-		_ = s.Drain(ctx)
-	}
+	drainErr := drainAll(ctx, "nats", subs, func(s *natsSubscriber) string { return s.channel })
 	if conn != nil {
 		conn.Close()
 		// Said here, by the closer: the connection's own handlers stay silent
 		// for a close this process asked for (NoCallbacksAfterClientClose).
 		log.Print("eventbus nats: connection closed (shutdown)")
 	}
-	return nil
+	return drainErr
 }
 
 // Dispatch publishes one envelope to JetStream on the
