@@ -99,14 +99,29 @@ func TestTLSDialOption_HalfMTLS_Errors(t *testing.T) {
 	}
 }
 
-// Nil lookup short-circuits to plain — the in-process / test shortcut.
-func TestTLSDialOption_NilLookup_Plain(t *testing.T) {
-	opt, err := grpcclient.TLSDialOption(nil)
-	if err != nil {
-		t.Fatalf("nil lookup: %v", err)
+// A nil lookup reads the process environment, in every builder as in Dial:
+// with the switch off it is plaintext, with it on it is TLS, and an
+// unrecognised value is refused (E30.6) — never a silent plaintext.
+func TestTLSBuilders_NilLookupReadsTheEnvironment(t *testing.T) {
+	t.Setenv(grpcclient.EnvInternalTLS, "")
+	if cfg, err := grpcclient.ClientTLSConfig(nil); cfg != nil || err != nil {
+		t.Fatalf("switch off, nil lookup: cfg=%v err=%v, want plaintext", cfg, err)
 	}
-	if opt == nil {
-		t.Fatal("opt is nil")
+	if opt, err := grpcclient.TLSDialOption(nil); err != nil || opt == nil {
+		t.Fatalf("switch off, nil lookup: opt=%v err=%v", opt, err)
+	}
+
+	t.Setenv(grpcclient.EnvInternalTLS, "on")
+	if cfg, err := grpcclient.ClientTLSConfig(nil); cfg == nil || err != nil {
+		t.Fatalf("W17_INTERNAL_TLS=on, nil lookup: cfg=%v err=%v, want a TLS config", cfg, err)
+	}
+
+	t.Setenv(grpcclient.EnvInternalTLS, "garbage")
+	if _, err := grpcclient.ClientTLSConfig(nil); err == nil {
+		t.Fatal("ClientTLSConfig(nil): an unrecognised switch value was not refused")
+	}
+	if _, err := grpcclient.TLSDialOption(nil); err == nil {
+		t.Fatal("TLSDialOption(nil): an unrecognised switch value was not refused")
 	}
 }
 

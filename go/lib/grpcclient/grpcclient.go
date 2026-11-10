@@ -305,9 +305,13 @@ func TLSDialOption(lookup LookupFunc) (grpc.DialOption, error) {
 // presents no client certificate: the stack's private CA and this node's
 // leaf are ignored, with a warning when they are set, rather than making
 // verification of the platform certificate fail.
+//
+// A nil lookup reads the process environment, as [Dial] does: a nil that
+// meant "plaintext" would dial in the clear while the switch is on, and let
+// an unrecognised switch value through unrefused.
 func ClientTLSConfig(lookup LookupFunc) (*tls.Config, error) {
 	if lookup == nil {
-		return nil, nil
+		lookup = os.Getenv
 	}
 	switchVal := lookup(EnvInternalTLS)
 	if err := CheckInternalTLS(switchVal); err != nil {

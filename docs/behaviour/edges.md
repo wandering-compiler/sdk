@@ -1134,6 +1134,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error; ignored in `terminated` mode, with a warning naming them |
 | Retry | 3 attempts, 0.1 s → 1 s backoff, Trailers-Only `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | A w17 handler's own `UNAVAILABLE` is not retried (S18.12) |
 | Keepalive | 30 s / 10 s, permit without stream | — |
+| `lookup` | `os.Getenv` when nil, in every builder | — |
 | Caller `opts` | appended last | Override earlier options |
 | Per-call deadline | none | — |
 
@@ -1148,6 +1149,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | E30.5 | Keepalive MUST pair with the server's enforcement policy | `TestDefaultClientKeepalive_PairsWithServerEnforcement` |
 | E30.6 | An unrecognised `W17_INTERNAL_TLS` value MUST be refused at dial construction, not read as plaintext | `TestTLSDialOption_UnrecognisedSwitchIsRefused` |
 | E30.7 | In `terminated` mode the client MUST verify against the system roots only, whatever the CA and client-pair variables say; with the switch off `ClientTLSConfig` MUST return no TLS config | `TestClientTLSConfig_TerminatedUsesSystemRootsOnly`, `TestClientTLSConfig_OffIsNil`, `TestInternalTLS_Terminated` |
+| E30.8 | A nil lookup MUST read the process environment in `Dial`, `TLSDialOption` and `ClientTLSConfig` alike: with the switch on it builds TLS and an unrecognised value is refused, never a silent plaintext | `TestTLSBuilders_NilLookupReadsTheEnvironment`, `TestDial_NilLookupDefaults` |
 
 **Deliberate limits.**
 - No circuit breaker beyond retry throttling.
