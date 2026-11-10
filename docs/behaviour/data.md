@@ -423,9 +423,9 @@ Stamp table: `w17_collation`.
 
 ## D13. Blob store for uploads
 
-**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`.
+**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3/s3.go` — `ParseDSN`, `New`, `Driver`; `go/lib/kvfs/store/store.go` — `Open`; `go/lib/kvfs/kvfsgrpc/kvfsgrpc.go` — `W17Files` server.
 
-**Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys.
+**Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys. `store.Open` picks the driver (a directory or an S3-compatible bucket) from one URL; `kvfsgrpc` serves a business tier's stores over the `w17.common.files.W17Files` service for the non-Go business SDKs.
 
 **Configuration.**
 
@@ -433,6 +433,8 @@ Stamp table: `w17_collation`.
 |---|---|---|
 | `BuildKey(bucketPath, objectKey, expectedObjects, maxPerBucket)` | `<bucket>/<hh>/<hh>/…/<objectKey>`; depth `ceil(log256(expected/maxPerBucket))`, `0` when flat | capped at 16 |
 | `local_fs.New(root)`, `EnsureRoot(root)` | root created with mode 0755; published objects 0644; staging under `<root>/.w17-staging` | — |
+| `store.Open(ctx, url, ensure)` | `file:///<dir>` or an absolute path → `local_fs`; `s3://[<key-id>:<key>@]<bucket>[/<prefix>][?endpoint=…&region=…&profile=…&path_style=…]` → `kvfs/s3` (path-style whenever `endpoint` is set); `ensure` (the writer) creates a missing directory or bucket | empty, relative, `file://host/…`, another scheme, half a key pair, a non-boolean `path_style` → error |
+| `kvfsgrpc` chunks | Open sends 64 KiB chunks; a Put chunk is at most 1 MiB (`MaxChunkBytes`) | larger → `InvalidArgument` / `BAD_REQUEST` |
 
 **Guarantees.**
 
@@ -449,11 +451,19 @@ Stamp table: `w17_collation`.
 | D13.9 | A connection has ONE writer: the gateway for an upload connection, the business tier for one whose fields declare `upload.writer: BUSINESS`. Every other holder MUST receive only the `Reader` half. | `TestReader_CarriesNoWriteMethod` (the interface; the generated business `ClientSet` is not covered here) |
 | D13.10 | `Put` MUST store the body under `BuildKey(placement.BucketPath, ObjectKey(sha256), …)` — the key an upload of the same field gets — and return that handle; two puts of one body MUST be two objects. | `TestPut_PlacesUnderTheFieldsLayoutAndReadsBack`, `TestPut_IdenticalBodiesAreDistinctObjects` |
 | D13.11 | A body past `MaxSizeBytes`, or a failing driver, MUST store nothing and leave no staging file. | `TestPut_TooLargeStoresNothing`, `TestPut_DriverErrorCleansUp` |
+| D13.12 | `Put`'s commit MUST be its own: a context that ends before it stores nothing, and once it returned a handle the object is stored whatever happens to the caller's distributed transaction afterwards (see the limits). | `TestPut_CancelledBeforeCommitStoresNothing` |
+| D13.13 | `store.Open` MUST pick the driver from the URL alone and refuse anything else; a reader (`ensure` false) is refused a directory that does not exist rather than creating an empty one; no error repeats the URL's credentials. | `TestOpen_PicksTheDriverByURL`, `TestOpen_Refuses`, `TestParseDSN`, `TestParseDSN_Refuses` |
+| D13.14 | The S3 driver's `PutFromTempFile` MUST be one PutObject and remove the staging file only after the store accepted it; a failed put leaves the staging file for the caller; a staging file that cannot be removed after a successful put is reported through `observx` and the put succeeds (the object is stored). | `TestLive_PutOpenStatDelete`, `TestLive_FailedPutKeepsTheStagingFile`, `TestPutFromTempFile_AStagingFileThatCannotBeRemovedIsNotAFailedPut` |
+| D13.15 | The S3 driver MUST map a missing object to `ErrNotFound` — `NoSuchKey` on any call, a 404 without a body only on a HEAD (`Stat`, the bucket check) — and any other 404 (a wrong endpoint or path) to a store error, so a misconfigured store is not reported as a missing file and a Delete through it does not report success. | `TestLive_MissingIsErrNotFound`, `TestNotFound_ABare404IsMissingOnlyForAHead` |
+| D13.16 | The `W17Files` server MUST store a Put through `kvfs.Put` with the field's placement, so the handle and layout are a Go tier's byte for byte, and MUST store only after the end marker whose size matches the chunks: a stream that closes or is cancelled before it, even after half-close, stores nothing. | `TestRoundTrip`, `TestPutChunkingDoesNotChangeTheBody`, `TestPutEmptyBodyStoresAnEmptyObject`, `TestPutStoresOnlyAfterTheEnd`, `TestCancelledPutStoresNothing`, `TestCancelAfterHalfCloseStoresNothing` |
+| D13.17 | The `W17Files` server MUST refuse a Put or Delete on a connection the business tier does not write (`FailedPrecondition`, `READ_ONLY_CONNECTION`), an unknown field or connection (`InvalidArgument`), a malformed stream or a chunk over 1 MiB (`BAD_REQUEST`), and a body past the placement's `MaxSizeBytes` (`FILE_TOO_LARGE`); every refusal carries an `ErrorInfo` in domain `w17.files`. | `TestPutRefusals`, `TestPutPlacementOnAMissingConnection`, `TestOpenStatDeleteRefusals`, `TestPutTooLarge`, `TestPutNoCap` |
+| D13.18 | No `W17Files` status MUST carry a driver's own error text (a store root, a bucket URL, a credential); it goes to the process's error sink, the caller gets `STORE_ERROR`. | `TestStoreErrorsDoNotLeakTheDriverText`, `TestOpenReadFailureMidStream` |
 
 **Deliberate limits.**
 - No `fsync` before or after rename; durability across power loss is not guaranteed.
 - `local_fs` ignores the context (file I/O is not cancellable).
 - The memory driver reads whole files into memory (test and development use).
+- A file a business method stores with `kvfs.Put` is not part of its distributed transaction: when the transaction rolls back afterwards, the object stays, referenced by no row, and nothing collects it. Storing it from `distx.OnCommit` instead inverts the risk (the row commits, the store can still fail). Which order a method needs is its own decision; the upload path's `RollbackUploads` has no business-tier counterpart.
 
 ## D14. Redis HASH entity codec
 
