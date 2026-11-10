@@ -616,11 +616,16 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 | T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | `TestApply_YAMLApplyTimeoutLeavesAResumableState_Live`, `TestApply_YAMLApplyTimeoutLeavesAResumableState` |
 | T16.11 | A stored JSON `null` MUST be treated like an empty value: every op is a no-op on it and none panics. | `TestJSONApplyOp_NullValueIsANoOp` |
 | T16.12 | A data migration body MUST be exactly one YAML document; a body with more is refused. | `TestUnmarshal_MoreThanOneDocumentIsRefused` |
+| T16.13 | A run in one direction MUST first delete the other direction's cursor (it can only be stale: this direction runs because the ledger says that one finished), and MUST delete both cursors after its ledger write, so a crash between a ledger write and its cursor delete cannot make a later apply or rollback skip every op and record success over data it never touched (Redis and S3). | `TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared_Live` (Redis, in-process server), `TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared` (S3) |
 
 **Deliberate limits.**
 - Values are rewritten per key with GET then SET, not compare-and-set; run a data migration while
   no application writes that keyspace.
 - NATS has no data-migration path.
+- The once-per-key guarantee of `TRANSFORM_FIELD` (T16.8) keeps every key the op has handed out
+  in an in-process set for the whole op, so the applier's memory grows with the keyspace (key
+  bytes plus map overhead per key). A keyspace too large for that has to be split across
+  several operations with narrower `keyspace` patterns.
 - An irreversible data migration has no override flag; the way past it is a rollback target
   that keeps it applied.
 
