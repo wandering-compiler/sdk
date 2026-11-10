@@ -105,7 +105,7 @@ segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 | I2.2 | Every transport MUST honour `topicFilter` identically, so a hand-written subscriber receives only matching topics. | `TestMemoryBus_TopicFilterMatches`, `TestTopicFilter_Memory`, `TestTopicFilter_Nats_Embedded`, `TestTopicFilter_Redis_Embedded` |
 | I2.3 | `Subscriber()` after `Close` MUST return `ErrBusClosed`, checked atomically with registration. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded` |
 | I2.4 | `Subscribe()` after `Drain` MUST return `ErrSubscriberDraining`, checked atomically with registration. | `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused` |
-| I2.5 | A handler panic MUST become a delivery error (retry or dead-letter on brokers) and be reported; it MUST NOT crash the process. | `TestRecoverHandler_PanicBecomesError` |
+| I2.5 | A handler panic MUST become a delivery error (retry or dead-letter on brokers) and be reported; it MUST NOT crash the process. The in-memory transport recovers and reports it only: no retry, no dead letter (I4.2). | `TestRecoverHandler_PanicBecomesError`, `TestHandlerPanic_IsRetriedThenDeadLettered`, `TestHandlerPanic_MemoryTransportRecoversAndReportsOnly` |
 | I2.6 | A panic in loop plumbing MUST be recovered. | `TestRecoverLoopTick_RecoversPanic` |
 | I2.7 | A reserved `w17.*` topic MUST NOT reach a subscription whose filter reaches it only through a wildcard (`**`, `*`), on every transport; a filter naming `w17` literally, and `EveryTopic`, MUST receive it. | `TestReservedTopic_Memory`, `TestReservedTopic_Nats_Embedded`, `TestReservedTopic_Redis_Embedded`, `TestMatchGlob_ReservedTopic` |
 
@@ -211,6 +211,8 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | `DefaultMaxDeliver` | 0 → 3 | negative passed to JetStream unchanged |
 | `DefaultAckWait` | 0 → 30 s | negative passed to JetStream unchanged |
 | `ChannelRetries map[channel]ChannelRetry` | none | a zero field inherits the default; a key that breaks the channel rule is refused at construction |
+| `ChannelRetry.Backoff` | `BackoffNone`: redelivered at once (NATS) or once idle `AckWait` (Redis) | `BackoffConstant` waits `AckWait`, `BackoffLinear` attempt × `AckWait`, `BackoffExponential` 2^attempt × `AckWait`; every delay is capped at `MaxBackoff` (5 min). NATS applies it with `NakWithDelay`; ignored by a fan-out subscription |
+| `ChannelRetry.Topics map[topic]TopicRetry` | none: every topic retries as its channel | keyed by exact topic. `MaxDeliver` can only lower the channel's (a higher value is the channel's, because the broker consumer stops at the channel's cap); `AckWait` is the base of the topic's `Backoff`, not the attempt timeout (the consumer has one); `Backoff` overrides the channel's. A delivery past the topic's cap is dead-lettered without running the handler |
 | `PublishTimeout` | 0 → 2 s (`DefaultPublishTimeout`) | one bound over the stream check, the publish and the acknowledgement |
 | `Retention StreamRetention{MaxAge, MaxMsgs}` | `MaxAge` 0 → 7 days (`DefaultStreamMaxAge`), no count limit | negative `MaxAge` → no age limit; `MaxMsgs <= 0` → no count limit. Applied to every channel stream the bus ensures, oldest discarded first |
 | `DLQRetention StreamRetention` | `MaxAge` 0 → 30 days (`DefaultDLQMaxAge`), no count limit | as `Retention`, for every dead-letter stream |
@@ -269,6 +271,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.17 | A message delivered to the client MUST NOT age past `AckWait` before its handler starts: one slow handler MUST NOT cause the messages after it to be redelivered. | `TestNatsBus_QueuedDeliveriesDoNotOverrunAckWait_Embedded` |
 | I5.18 | With `Domain` set, a subscriber MUST NOT hand its handler a message stamped with another domain, and MUST deliver an unstamped one; without `Domain` nothing is stamped or filtered. | `TestDomainIsolation_Nats_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
 | I5.19 | A consumer recovery that finishes before `Subscribe` has registered the subscription MUST wait for the registration and swap its pull loop in; it MUST NOT stop the new loop and leave the subscription on the lost consumer. | `TestNatsRecoverConsumer_WaitsForTheHandleToBeRegistered` |
+| I5.20 | A topic's `MaxDeliver` below its channel's MUST dead-letter the topic's message at the topic's cap, without another handler run; a higher one MUST be treated as the channel's. A `Backoff` MUST space redeliveries as configured, capped at `MaxBackoff`; a fan-out subscription MUST redeliver without backoff and keep the caps. | `TestNatsBus_TopicRetry_Embedded`, `TestRetryPlan_FanOutStripsBackoffKeepsCaps`, `TestRetryPlan_CapsAndShapes`, `TestRetryPlanDelay` |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
@@ -321,6 +324,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | `DefaultAckWait` | 0 → 30 s | — |
 | `ReadBatch` | 0 → 10 | — |
 | `ChannelRetries`, `Observer` | as I5 | — |
+| `ChannelRetry.Backoff`, `ChannelRetry.Topics` | as I5 | the claim loop re-claims an entry once it has been idle `AckWait`, so a backoff shorter than `AckWait` cannot space retries closer than that; a failed delivery re-claims its own entry to restart the idle time, so the backoff counts from the failure, not from the delivery |
 | `PublishTimeout` | 0 → 2 s (`DefaultPublishTimeout`) | bounds one `XADD` and its reply |
 | `Retention`, `DLQRetention` | as I5 (7 days and 30 days, no count limit) | applied on each append to the channel stream and to `<channel>.dlq` |
 
@@ -341,6 +345,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.11 | An entry queued behind a slow handler in one read MUST NOT be taken over by another replica's claim loop before it starts. | `TestRedisBus_QueuedEntryIsNotTakenOverByAnotherReplica` |
 | I6.12 | I5.18 MUST hold on Redis. | `TestDomainIsolation_Redis_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
 | I6.13 | An entry without a `topic` field (not an event envelope) MUST NOT reach any handler, the catch-all `**` included; it MUST be acknowledged and reported through `OnDeliverFailure`. | `TestRedisBus_EntryWithoutTopicIsSettledUnhandled_Embedded` |
+| I6.14 | I5.20 MUST hold on Redis, a backoff counting from the failed attempt; entries not yet due MUST NOT hide due entries behind them from the claim loop. | `TestRedisBus_TopicRetry_Embedded`, `TestRedisBus_BackoffCountsFromTheFailure_Embedded`, `TestRedisBus_BackoffDoesNotHideDueEntries_Embedded` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.

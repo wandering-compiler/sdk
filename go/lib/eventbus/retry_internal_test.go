@@ -143,3 +143,58 @@ func TestNextStreamID(t *testing.T) {
 		t.Error("nextStreamID accepted an id without a sequence")
 	}
 }
+
+// A fan-out subscription (a gateway's live hub) redelivers without backoff:
+// a channel's or topic's Backoff is stripped while its caps still apply, and
+// a channel whose only override is a Backoff needs no per-delivery plan.
+func TestRetryPlan_FanOutStripsBackoffKeepsCaps(t *testing.T) {
+	overrides := map[string]ChannelRetry{
+		"hub": {MaxDeliver: 5, AckWait: time.Second, Backoff: BackoffExponential,
+			Topics: map[string]TopicRetry{"user.created": {MaxDeliver: 2, Backoff: BackoffLinear}}},
+		"backoffonly": {Backoff: BackoffConstant},
+	}
+	queue := resolveTopicRetry(overrides, "hub", "user.created", 3, 30*time.Second)
+	fan := queue.forMode(DeliveryFanOut)
+	if queue.delay(1) == 0 {
+		t.Fatal("queue mode lost the topic's backoff; the comparison below proves nothing")
+	}
+	if d := fan.delay(1); d != 0 {
+		t.Errorf("fan-out delay = %v, want 0 (no backoff on a live surface)", d)
+	}
+	if fan.maxDeliver != 2 {
+		t.Errorf("fan-out maxDeliver = %d, want the topic's cap 2", fan.maxDeliver)
+	}
+	if other := resolveTopicRetry(overrides, "hub", "user.deleted", 3, 30*time.Second).forMode(DeliveryFanOut); other.maxDeliver != 5 || other.delay(3) != 0 {
+		t.Errorf("fan-out channel plan = %+v, want the channel's cap 5 and no delay", other)
+	}
+	if hasTopicRetries(overrides, "backoffonly", DeliveryFanOut) {
+		t.Error("a backoff-only channel needs no per-delivery plan in fan-out mode")
+	}
+	if !hasTopicRetries(overrides, "backoffonly", DeliveryQueue) {
+		t.Error("a backoff-only channel needs a per-delivery plan in queue mode")
+	}
+	if !hasTopicRetries(overrides, "hub", DeliveryFanOut) {
+		t.Error("a channel with per-topic caps needs a plan in fan-out mode too")
+	}
+}
+
+// MaxBackoff caps every computed delay, and a topic can only lower its
+// channel's MaxDeliver.
+func TestRetryPlan_CapsAndShapes(t *testing.T) {
+	p := retryPlan{base: time.Second, backoff: BackoffLinear}
+	if p.delay(3) != 3*time.Second {
+		t.Errorf("linear delay(3) = %v, want 3s", p.delay(3))
+	}
+	p.backoff = BackoffExponential
+	if p.delay(2) != 4*time.Second || p.delay(40) != MaxBackoff {
+		t.Errorf("exponential delay(2) = %v, delay(40) = %v; want 4s and MaxBackoff", p.delay(2), p.delay(40))
+	}
+	p.backoff = BackoffConstant
+	if p.delay(7) != time.Second {
+		t.Errorf("constant delay(7) = %v, want 1s", p.delay(7))
+	}
+	raised := resolveTopicRetry(map[string]ChannelRetry{"c": {MaxDeliver: 3, Topics: map[string]TopicRetry{"t": {MaxDeliver: 9}}}}, "c", "t", 5, time.Second)
+	if raised.maxDeliver != 3 {
+		t.Errorf("topic MaxDeliver above the channel's = %d, want the channel's 3", raised.maxDeliver)
+	}
+}
