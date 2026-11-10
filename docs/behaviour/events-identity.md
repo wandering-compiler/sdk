@@ -829,7 +829,7 @@ previous one, so no batch waits in the process while its `AckWait` runs.
 |---|---|---|
 | I21.1 | Each consumer MUST receive only the records of its purpose, the request and response decoded with the method's types. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
 | I21.2 | A consumer that fails MUST be offered the batch again after its backoff, without another consumer receiving it twice. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
-| I21.3 | A batch its consumer fails (or panics on) MaxDeliver times MUST go to the dead letter subject with the reason and the original subject, and be reported. | `TestConsumers_DeadLetterAfterMaxDeliver` |
+| I21.3 | A batch its consumer fails (or panics on) MaxDeliver times MUST go to the dead letter subject with the reason and the original subject, and be reported; several consumers dead-lettering one batch MUST each store their own dead letter (its `Nats-Msg-Id` is the batch id scoped to the consumer's dead letter subject). | `TestConsumers_DeadLetterAfterMaxDeliver`, `TestConsumers_TwoConsumersDeadLetterOneBatch` |
 | I21.4 | Registration MUST refuse a bad name, a subject outside the stream and a duplicate of one purpose. | `TestConsumers_Registration` |
 | I21.5 | A record whose method the binary does not link MUST keep its bytes; a record without meta MUST NOT decode. | `TestDecodeBatch_UnlinkedTypesKeepTheirBytes` |
 | I21.6 | `Serve` MUST refuse an empty DSN and, with NATS down, wait for it until its context ends. | `TestConsumers_ServeNeedsADSNAndStopsWithItsContext` |

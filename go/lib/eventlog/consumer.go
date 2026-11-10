@@ -322,15 +322,30 @@ func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq,
 	}
 	out.Header.Set("W17-Dead-Letter-Reason", cause.Error())
 	out.Header.Set("W17-Dead-Letter-Subject", msg.Subject())
+	// The copied Nats-Msg-Id is the batch id, and the dead letter stream's
+	// duplicate window is per stream, not per subject: a second consumer
+	// dead-lettering the same batch within the window was answered as a
+	// duplicate and nothing was stored. The id is scoped to this consumer's
+	// dead letter subject, so each consumer's copy is stored once and a
+	// retried publish of the same one is still deduplicated.
+	if id := out.Header.Get(nats.MsgIdHdr); id != "" {
+		out.Header.Set(nats.MsgIdHdr, id+"@"+dlq)
+	}
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := cfg.JS.PublishMsg(pctx, out); err != nil {
+	ack, err := cfg.JS.PublishMsg(pctx, out)
+	if err != nil {
 		// Not stored: leave it to be offered again rather than lose it.
 		_ = msg.Nak()
 		observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: dead-lettering a batch failed (%w) after: %w", name, err, cause))
 		return
 	}
 	_ = msg.Term()
+	if ack != nil && ack.Duplicate {
+		// This consumer's dead letter of the batch is already stored (an
+		// earlier attempt whose Term did not land): nothing new to report.
+		return
+	}
 	observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: a batch moved to %s: %w", name, dlq, cause))
 }
 

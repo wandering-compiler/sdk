@@ -193,6 +193,43 @@ func TestConsumers_DeadLetterAfterMaxDeliver(t *testing.T) {
 	}
 }
 
+// Two consumers that dead-letter the same batch each leave their own dead
+// letter. The DLQ message used to copy the source's headers, Nats-Msg-Id (the
+// batch id) included, and the dead letter stream's duplicate window is per
+// stream: the second consumer's dead letter within two minutes was answered
+// as a duplicate, not stored, and reported as moved all the same.
+func TestConsumers_TwoConsumersDeadLetterOneBatch(t *testing.T) {
+	_, js := embeddedJetStream(t)
+	recordTwo(t, js)
+	cs := &Consumers{}
+	broken := func(context.Context, *ConsumedBatch) error { return errors.New("broken") }
+	_ = cs.Audit("a1", funcConsumer{audit: broken})
+	_ = cs.Audit("a2", funcConsumer{audit: broken})
+	stop := runConsumers(t, cs, js, ConsumerConfig{MaxDeliver: 2, Backoff: func(int) time.Duration { return 20 * time.Millisecond }})
+	var dl jetstream.Stream
+	waitUntil(t, func() bool {
+		s, err := js.Stream(context.Background(), DeadLetterStream)
+		if err != nil {
+			return false
+		}
+		dl = s
+		for _, c := range []string{"a1", "a2"} {
+			if _, err := s.GetLastMsgForSubject(context.Background(), DeadLetterPrefix+".audit."+c); err != nil {
+				return false
+			}
+		}
+		return true
+	})
+	stop()
+	info, err := dl.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 2 {
+		t.Fatalf("dead letter stream holds %d messages, want one per consumer", info.State.Msgs)
+	}
+}
+
 func TestConsumers_Registration(t *testing.T) {
 	cs := &Consumers{}
 	c := funcConsumer{}
