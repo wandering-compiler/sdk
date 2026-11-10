@@ -784,7 +784,7 @@ field 2 each record as `Encode` wrote it, so a consumer decodes it with its own 
 | I19.7 | A batch the sink refuses or panics on MUST go to `Fail` whole, with its id and records. | `TestPipeline_SinkErrorAndPanicFailTheBatch` |
 | I19.8 | `Close` MUST deliver everything queued; a record submitted after it MUST go to `Fail` with `ErrClosed`. | `TestPipeline_CloseDrainsThenRefuses` |
 | I19.9 | A `Close` whose context ends MUST return, failing what it still holds: every record is delivered or failed, none lost unreported. | `TestPipeline_CloseBoundedByItsContext`, `TestPipeline_SubmitRacingClose` |
-| I19.10 | `Submit` racing `Close` MUST NOT panic. | `TestPipeline_SubmitRacingClose` |
+| I19.10 | `Submit` racing `Close` MUST NOT panic; a `Submit` arriving once `Close` has begun MUST fail with `ErrClosed` at once, not wait behind a submitter that waits for room; submitters still waiting when `Close`'s context ends MUST give up with `ErrClosed`. | `TestPipeline_SubmitRacingClose`, `TestPipeline_SubmitDuringACloseThatWaitsFailsAtOnce` |
 | I19.11 | `Submit` with room MUST NOT allocate. | `TestPipeline_SubmitDoesNotAllocate` |
 | I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes`. | `TestNew_RequiresItsParts` |
 | I19.13 | A batch MUST carry the distinct tags of its records (`Config.Tag`), at most `MaxBatchTags`, and say when there were more. | `TestPipeline_BatchCarriesItsDistinctTags` |
