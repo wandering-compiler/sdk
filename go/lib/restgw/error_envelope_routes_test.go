@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,10 +109,17 @@ func TestServeDownload_ErrorsAreTheEnvelope(t *testing.T) {
 			[]restgw.DownloadField{{BucketPath: "/avatars", Driver: statFailingDriver{memory.New(), errors.New("stat /srv/uploads/avatars/x: permission denied")}}},
 			"", false, false, false)
 		rec := httptest.NewRecorder()
-		restgw.ServeDownload(rec, httptest.NewRequest(http.MethodGet, "/api/files/static/avatars/x", nil), broken)
+		logged := captureLog(t, func() {
+			restgw.ServeDownload(rec, httptest.NewRequest(http.MethodGet, "/api/files/static/avatars/x", nil), broken)
+		})
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, want 500", rec.Code)
 		}
 		assertEnvelope(t, rec, "INTERNAL", "/srv/uploads", "permission denied")
+		// The detail the client does not get goes to the operator, as a
+		// fault (exception channel), not a refusal.
+		if !strings.Contains(logged, "error:") || strings.Contains(logged, "refused:") || !strings.Contains(logged, "permission denied") {
+			t.Fatalf("the driver failure was not reported as a fault with its cause; logged %q", logged)
+		}
 	})
 }

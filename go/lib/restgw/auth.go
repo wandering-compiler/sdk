@@ -35,6 +35,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,8 @@ import (
 
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // AuthFunc authenticates an HTTP request and returns the
@@ -76,11 +79,21 @@ func MakeAuthFunc(caller AuthCaller) AuthFunc {
 		// shape only carries one. Multi-valued headers
 		// (e.g. comma-joined Cookie) are the auth method's
 		// concern to split.
+		//
+		// Keys are lower-cased, as every other auth path hands them over,
+		// and a gateway-owned key is never the client's to send: only the
+		// credential slot the gateway itself fills from a URL credential
+		// (E7) passes.
 		headers := make(map[string]string, len(r.Header))
 		for k, v := range r.Header {
-			if len(v) > 0 {
-				headers[k] = v[0]
+			if len(v) == 0 {
+				continue
 			}
+			k = strings.ToLower(k)
+			if k != CredentialMetadataKey && principal.IsEdgeReservedKey(k) {
+				continue
+			}
+			headers[k] = v[0]
 		}
 		resp, err := caller.CallAuth(ctx, headers)
 		if err != nil {
@@ -94,10 +107,20 @@ func MakeAuthFunc(caller AuthCaller) AuthFunc {
 // userData. Used when the proto file declares no
 // `(w17.http_auth_method)` — the generated main.go wires
 // this so the auth-aware handler shape stays uniform.
+//
+// It is one package-level function, so [IsNoAuth] can recognise it: a
+// stream on such a surface has no credential to re-check.
 func NoAuth() AuthFunc {
-	return func(_ context.Context, _ *http.Request) ([]byte, error) {
-		return nil, nil
-	}
+	return noAuth
+}
+
+func noAuth(_ context.Context, _ *http.Request) ([]byte, error) {
+	return nil, nil
+}
+
+// IsNoAuth reports whether fn is [NoAuth] itself (not a wrapper around it).
+func IsNoAuth(fn AuthFunc) bool {
+	return fn != nil && reflect.ValueOf(fn).Pointer() == reflect.ValueOf(AuthFunc(noAuth)).Pointer()
 }
 
 // (HasPermission moved to the acllock package. The

@@ -23,24 +23,28 @@ assembles this chain; the SDK does not.
 
 ```
 http.Server
- └─ RecoverPanicMiddleware
-     └─ ClientAddrMiddleware                  client address + host behind the trusted proxies
-         └─ StripReservedHeadersMiddleware    drops X-W17-Credential
-             └─ ObservabilityMiddleware           otelhttp span + request id
-                 └─ CORSMiddleware                preflight answered here (204)
-                     └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
-                         └─ chi router
-                             ├─ per-RPC handler: [AdmitPublic (Methods.For)] → [WithURLCredential / WithOrgFromPath]
-                             │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
-                             │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
-                             │        [+ SetDeviceMetadata] → scopes
-                             │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
-                             │      → WriteResponse / WriteGRPCErrorCtx
-                             ├─ SSE / WS handlers: [AdmitPublicStreamOf] → auth → WatchStreamAuth
-                             │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
-                             ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
-                             ├─ ticket issuer (POST): NewTicketIssuer (per-address share, E16.11)
-                             └─ downloads: auth → ServeDownload
+ └─ secheaders.Middleware                     security response headers on every answer (E45)
+     ├─ /healthz: HealthHandler                outside the API chain
+     ├─ OAuth authorization-server wire        outside the API chain (E43)
+     └─ RecoverPanicMiddleware
+         └─ ClientAddrMiddleware              client address + host behind the trusted proxies
+             └─ AudienceContextMiddleware     gateway stamps on outgoing metadata (outside the scrub)
+                 └─ StripReservedHeadersMiddleware    drops X-W17-Credential
+                     └─ CORSMiddleware                preflight answered here (204)
+                         └─ ObservabilityMiddleware   otelhttp span + request id
+                             └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
+                                 └─ chi router
+                                     ├─ per-RPC handler: [AdmitPublic (Methods.For)] → [WithURLCredential / WithOrgFromPath]
+                                     │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
+                                     │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
+                                     │        [+ SetDeviceMetadata] → scopes
+                                     │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
+                                     │      → WriteResponse / WriteGRPCErrorCtx
+                                     ├─ SSE / WS handlers: [AdmitPublicStreamOf] → auth → WatchStreamAuth
+                                     │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
+                                     ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
+                                     ├─ ticket issuer (POST): NewTicketIssuer (per-address share, E16.11)
+                                     └─ downloads: auth → ServeDownload
 ```
 
 Outgoing: `grpcclient.Dial` (gateway → backend) and `grpcx.DialOpts` + `grpcx.Pool` (business
@@ -94,6 +98,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E42 | Raw responses | `go/lib/restgw/rawresponse.go` — `WriteRawResponse` |
 | E43 | OAuth 2.1 authorization-server wire | `go/lib/oauthas` — `Mount`, `Config`, `Backend`, `Error`, `CodePath` |
 | E44 | Egress client runtime | `go/lib/egress` — `Register`, `RegisterFromEnv`, `ParseDSN`, `BeforeRequest`, `AfterResponse` |
+| E45 | Security response headers | `go/lib/secheaders` — `Middleware`, `Defaults` |
 
 ---
 
@@ -132,9 +137,13 @@ writers.
 | E1.8 | A JSON key rewrite hook MUST NOT be called for protobuf or empty bodies | `TestDecodeRequestRewrite` |
 | E1.9 | Decode errors MUST NOT reach the client as decoder prose; callers route them through `WriteInvalidRequest` (E4) | `TestWriteInvalidRequest_KeepsDecoderProseFromTheClient` |
 | E1.10 | A negotiated response (a request passed to `WriteResponse`) MUST carry `Vary: Accept`, whichever format won, so a shared cache never serves one format to a request for the other | `TestWriteResponse_NegotiatedResponseVariesOnAccept` |
+| E1.11 | An `application/x-www-form-urlencoded` body MUST decode as the JSON object of its fields: each value a JSON string (a string, an integer or an enum name field takes it), a key given more than once a list, an undeclared key dropped as an unknown JSON key; a body `url.ParseQuery` refuses MUST be a decode error (`invalid form body`), never decoded as something else | `TestDecodeRequest_FormBody`, `TestDecodeRequest_FormBodyRepeatedKey`, `TestDecodeRequest_FormBodyMalformed` |
 
 **Deliberate limits.**
 - The protobuf input path skips alias and oneof normalisation (binary keys on field numbers).
+- A form body cannot express a bool or a message field. The decoder reads no cookie and does not
+  guard against cross-site form posts: the SDK treats no cookie as a credential, and an auth method
+  that accepted one would make a cross-site form POST act as the user.
 
 ---
 
@@ -166,9 +175,9 @@ the alias rewrite. SSE and WS writers use `MarshalProtoAppend`.
 | E2.3 | Aliased fields MUST be written under the alias; input MUST accept the alias or the proto name | `TestMarshalProto_AliasedFieldRenamesKey`, `TestRestoreAliasesOnRequestJSON_AcceptsBoth` |
 | E2.4 | A body giving the same field under both alias and canonical name MUST be refused | `TestUnmarshalProto_AliasAndCanonicalCollision_Rejected` |
 | E2.5 | A registered generated marshaler MUST be preferred over protojson | `TestMarshalProto_PrefersRegisteredMarshaler` |
-| E2.6 | Invalid UTF-8 in a string field MUST be a marshal error, not mangled output | `TestMarshalProto_InvalidUTF8Errors` |
+| E2.6 | Invalid UTF-8 in a string field MUST be a marshal error, not mangled output — on the reflective path and on a registered generated marshaler's (whose output is validated and answered with protojson's error) | `TestMarshalProto_InvalidUTF8Errors`, `TestMarshalProto_InvalidUTF8ErrorsOnTheFastPath` |
 | E2.7 | Decoding MUST NOT lose numeric precision on input: a 64-bit integer sent as a JSON number keeps its value on every message, including messages reshaped for a oneof or a `rest_alias` | `TestUnmarshalProto_KeepsSixtyFourBitNumbersExact`, `TestDecodeRequest_KeepsSixtyFourBitNumbersExact`, `TestRestoreAliasesOnRequestJSON_KeepsNumbersExact` |
-| E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message | `TestFastPathEncoders_MatchTheReflectivePath` (the well-known-type encoders; per-message marshalers are generated and not covered here) |
+| E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message, and the float leaves MUST be byte-identical to protojson (`'f'` form unless the magnitude is below `1e-6` or at least `1e21`, then `'e'` with `e-07` written `e-7`) | `TestFastPathEncoders_MatchTheReflectivePath`, `TestFastPathFloatLeaves_AreByteIdenticalToProtojson` (the well-known-type and scalar encoders; per-message marshalers are generated and not covered here) |
 
 **Deliberate limits.**
 - The reflective alias and oneof rewrite re-encodes through `encoding/json`, which HTML-escapes
@@ -206,7 +215,7 @@ tool errors from it.
 | E3.4 | A non-status error (dial failure, transport) MUST become a generic 500 "internal error" without backend addresses | `TestWriteGRPCError_DialFailureDoesNotLeakBackendAddress`, `TestWriteGRPCError_PlainErr` |
 | E3.5 | Field-level `ErrorDetail`s MUST be forwarded as `details[]` | `TestWriteGRPCError_ForwardsFieldViolationDetails` |
 | E3.6 | A nil error MUST still produce a valid 500 envelope | `TestWriteGRPCError_NilErr` |
-| E3.7 | A client error MUST NOT be reported as a server fault: `WriteGRPCErrorCtx` classifies by code as the SSE and WS writers do, refusals going to the non-exception channel and faults to the exception channel; reports MUST carry the request's trace context | `TestWriteGRPCErrorCtx_ReportsByCodeOnTheRequestsTrace` |
+| E3.7 | A client error MUST NOT be reported as a server fault: `WriteGRPCErrorCtx` classifies by code as the SSE and WS writers do, refusals going to the non-exception channel and faults to the exception channel; the faults are `Internal`, `Unknown`, `DataLoss`, `Unavailable`, `DeadlineExceeded` and `Unimplemented` (`IsServerFault`), every other code is a refusal; reports MUST carry the request's trace context | `TestWriteGRPCErrorCtx_ReportsByCodeOnTheRequestsTrace` |
 
 **Deliberate limits.**
 - Request-level and field-level detail messages written by a backend are shown verbatim; the
@@ -255,7 +264,7 @@ auth response in outgoing metadata (`x-w17-user`, base64) and on the request con
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `MakeAuthFunc(caller)` | — | Forwards the first value of every header, keyed by canonical name |
+| `MakeAuthFunc(caller)` | — | Forwards the first value of every header, keyed by lower-case name; gateway-owned keys (`principal.IsEdgeReservedKey`) are dropped except the URL-credential slot `x-w17-credential` (E7) |
 | `NoAuth()` | — | Always succeeds with nil user data |
 | `ClassifyAuthScheme(r)` | `""` | `Bearer` / `Basic`, case-insensitive |
 | `RequireAuth(authFn, next)` | — | Gate for routes mounted outside per-RPC handlers (SSE, WS) |
@@ -282,6 +291,7 @@ re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which
 | E5.9 | The recorded host MUST be the first `X-Forwarded-Host` only when the peer is a trusted proxy, else `Host`, normalised (lower case, no port, no trailing dot); an untrusted peer's `X-Forwarded-Host` MUST be ignored | `TestClientAddrMiddleware_RecordsTheHost` |
 | E5.10 | `AudienceContextMiddleware` MUST put the gateway's stamps — and, inside `ClientAddrMiddleware` with `withHost`, the recorded host under `principal.HostKey` — on the outgoing metadata of every request, auth-excluded ones included, whatever the client sent | `TestAudienceContextMiddleware` |
 | E5.11 | `WithAuthMethod` MUST round-trip the method through the context | `TestAuthMethod_RoundTrips` |
+| E5.12 | `MakeAuthFunc` MUST hand the auth caller lower-case keys and no gateway-owned key a client sent (`x-w17-*`, `w17-label-*`, `w17-tx-id`, `w17-conn-id`, `grpcgateway-*`, the `Grpc-Metadata-` form), keeping only the URL-credential slot | `TestAuth_MakeAuthFunc_KeysAreLowerCaseAndReservedFree`, `TestAuth_MakeAuthFunc_HeadersForwarded` |
 
 **Deliberate limits.**
 - `RequireAuth`'s non-ticket errors use the context-free writer (source locale).
@@ -349,7 +359,7 @@ normal auth path by copying the URL value into a reserved header slot that clien
 | E7.1 | Any inbound `X-W17-Credential`, in any case variant, MUST be removed before the next handler runs, without mutating the caller's header map | `TestStripReservedHeadersMiddleware_ForgedCredentialNeverReachesHandler`, `..._CanonicalisationVariants`, `..._DoesNotMutateCallersHeaders` |
 | E7.2 | An empty URL credential MUST count as absent and answer 401, not 400 | `TestHasURLCredential_EmptyValueIsNotACredential`, `TestMissingURLCredentialIsUnauthenticated` |
 | E7.3 | Injection MUST return a clone and leave the original request unchanged | `TestWithURLCredential_RoundTrip` |
-| E7.4 | `StripReservedHeadersMiddleware` MUST be mounted outside every header reader (caller contract) | no test at chain level |
+| E7.4 | `StripReservedHeadersMiddleware` MUST be mounted outside every header reader (caller contract); in that chain a forged `X-W17-Credential` (any case) MUST NOT reach the URL_TOKEN method from an ordinary route, and on a capability route the method sees the URL's value | `TestURLCredential_ForgedSlotNeverReachesTheURLTokenMethod` (the SDK chain: scrub → `WithURLCredential` → auth; the mount order in a gateway is generated) |
 | E7.5 | A URL credential MUST NOT reach the trace or a panic report: once injected, the span's `url.path` and the reported path name it `{credential}` | `TestURLCredential_NeverReachesTheTrace`, `TestURLCredential_NeverReachesAPanicReport` |
 | E7.6 | A next-page link MUST keep the capability path and query, and a browser redirect MUST NOT copy them into `Location` | `TestURLCredential_NextPageLinkKeepsIt`, `TestURLCredential_NeverReachesARedirect` |
 
@@ -472,7 +482,7 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 |---|---|---|
 | `<PREFIX>_CORS_ORIGINS` (CSV) | unset → middleware disabled | — |
 | `<PREFIX>_CORS_METHODS` | `GET, POST, PUT, PATCH, DELETE, OPTIONS` | — |
-| `<PREFIX>_CORS_HEADERS` | `Content-Type, Authorization, W17-Org` | — |
+| `<PREFIX>_CORS_HEADERS` | `Content-Type, Authorization, W17-Org, W17-Captcha-Token` | — |
 | `<PREFIX>_CORS_ALLOW_CREDENTIALS` | false | `1/true/yes/on` → true |
 | `<PREFIX>_CORS_MAX_AGE` | 600 | `0` → header omitted; negative or invalid → 600 |
 | `CORSConfig.ExposedHeaders` | empty → no `Access-Control-Expose-Headers` | Set in code (no env var); `WithDPoPCORS` (E37) adds the DPoP response headers |
@@ -493,8 +503,8 @@ tags the OTel span, and serves Prometheus metrics on an optional side port.
 
 **Deliberate limits.**
 - Disallowed origins are still served; the browser enforces CORS.
-- The WebSocket upgrade is governed by the library's same-origin check, not by this
-  configuration.
+- The WebSocket upgrade follows the allowlist's explicit origins only (same origin plus every
+  listed origin; `*` opens no socket to other sites — matrix CORS × WebSocket, E15.10).
 
 ---
 
@@ -540,7 +550,7 @@ error frames carrying the same envelope as unary responses, per-write deadlines.
 | E14.1 | Headers MUST be flushed before the first event; a writer without `http.Flusher` is reported (false) | `TestWriteSSEHeaders_AndEvent`, `TestWriteSSEHeaders_NoFlusher` |
 | E14.2 | Each event MUST be exactly one `data: <single-line json>\n\n` frame | `TestWriteSSEEvent_MultipleFrames` |
 | E14.3 | A backend status mid-stream MUST become `event: error` with the E3 envelope including `details[]`; a non-status error MUST become a generic INTERNAL frame | `TestWriteSSEGRPCErrorCtx_ForwardsDetails`, `TestWriteSSEGRPCError_NonStatusInternal` |
-| E14.4 | With a timeout, each write MUST have a deadline that is cleared afterwards; writers without deadline support fall back to none | `streaming_timeout_test.go` (all), `TestWriteSSEEventWithTimeout_DeadlineInstalled` |
+| E14.4 | With a timeout, each write MUST have a deadline that is cleared afterwards; writers without deadline support fall back to none. The deadline MUST reach the connection through the wrappers the generated chain puts in front of a stream (security headers, CORS, observability, panic recovery) | `streaming_timeout_test.go` (all), `TestWriteSSEEventWithTimeout_DeadlineInstalled`, `TestWriteSSEEventWithTimeout_StalledClientEndsTheStreamThroughTheGeneratedChain` |
 | E14.5 | A half-open client MUST NOT pin a goroutine when the `WithTimeout` variants are used: a write to a client that stopped reading MUST fail within the deadline and the handler return | `TestWriteSSEEventWithTimeout_StalledClientEndsTheStream` |
 
 **Deliberate limits.**
@@ -579,9 +589,14 @@ close detection for write-only sockets.
 | E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used: a write to a client that stopped reading MUST fail within the timeout and the handler return | `TestWSWriteProtoWithTimeout_StalledClientEndsTheStream`, `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
 | E15.7 | One inbound message MUST be accepted up to `MaxWebSocketMessageBytes`, by default the REST body cap, so a frame that is a valid REST body is a valid stream message | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable` |
 | E15.8 | An error close MUST always send a close frame (1008 for a refusal): the close reason is cut to fit and stays valid UTF-8, and the full sentence arrives in the error frame | `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly`, `TestWSCloseReason_FitsAndStaysValidUTF8` |
+| E15.9 | The bounded terminal writers (`WSWriteGRPCErrorWithTimeout`, `WSWriteErrorWithDetailsWithTimeout`, timeout > 0) MUST write the error frame and then close even when the caller's context is already cancelled (the re-auth watchdog's way of ending a socket): the write is detached from that cancellation, keeps its values, and is bounded by the timeout | `TestWSTerminalFrame_IsWrittenOnACancelledContext` |
+| E15.10 | `AcceptWebSocket` MUST accept an upgrade from the gateway's own origin and from every origin the CORS allowlist names explicitly, and refuse any other browser origin; `*` opens no socket to other sites | `TestAcceptWebSocket_HonoursTheCORSAllowlist`, `TestAcceptWebSocket_SameOriginBehindCORS` |
 
 **Deliberate limits.**
-- Cross-origin browser clients are refused by the library's same-origin check.
+- A cross-origin browser client is refused unless the CORS allowlist (E12) names its origin
+  explicitly (E15.10); the `*` wildcard does not open sockets.
+- With a timeout of 0 the terminal writers use the caller's context as is: a cancelled
+  context then sends only the close frame.
 
 ---
 
@@ -614,13 +629,13 @@ promotion marker header forces a cache bypass on probes).
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E16.1 | Tickets MUST be one-shot and expire; unknown, expired and spent tickets MUST be indistinguishable | `TestTicket_OneShot`, `TestTicket_TTLExpiry`, `TestTicket_UnknownInvalid` |
+| E16.1 | Tickets MUST be one-shot and expire; unknown, expired and spent tickets MUST be indistinguishable (all `ErrTicketInvalid`); of concurrent redemptions of one ticket exactly one MUST succeed | `TestTicket_OneShot`, `TestTicket_TTLExpiry`, `TestTicket_UnknownInvalid`, `TestTicket_EmptyInvalid`, `TestTicket_ConcurrentRedeemsAdmitOne` |
 | E16.2 | Ticket-only mode MUST refuse a request without a ticket even if it carries `Authorization` | `TestWSAuth_TicketOnly_NoTicket_FailsFast`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
 | E16.3 | In header-and-ticket mode a header MUST win | `TestWSAuth_HeaderAndTicket_HeaderWins` |
 | E16.4 | A redeemed ticket MUST be promoted to `Authorization` on the caller's request so later re-auth probes work, in both modes | `TestWatchStreamAuth_TicketStreamSurvivesTheTick`, `TestWatchStreamAuth_TicketOnlyModeSurvivesTheTick` |
 | E16.5 | Issuer responses MUST be `no-store` with `Vary: Authorization, Cookie` | `TestTicketIssuer_HappyPOST` |
-| E16.6 | A client MUST NOT be able to present the promotion marker (a per-instance 256-bit random value) | `TestWSAuth_TicketOnly_ClientCannotPresentThePromotionMarker`, `TestWSAuth_PromotionMarkerIsPerInstance`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
-| E16.7 | The default store MUST NOT grow memory without bound: outstanding tickets and the bytes they hold are both capped, and a redeemed or expired ticket frees its share | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_ByteBudget`, `TestTicketStore_RedeemFreesCapacity`, `TestMemoryTicketStore_FullStoreSweepsExpired` |
+| E16.6 | A client MUST NOT be able to present the promotion marker (a per-instance 256-bit random value, compared in constant time here and in `dpopgw`) | `TestWSAuth_TicketOnly_ClientCannotPresentThePromotionMarker`, `TestWSAuth_PromotionMarkerIsPerInstance`, `TestWSAuth_TicketOnlyStillRefusesAClientSuppliedBearer` |
+| E16.7 | The default store MUST NOT grow memory without bound: outstanding tickets and the bytes they hold are both capped, and a redeemed or expired ticket frees its share. The sweep a full store runs before refusing MUST cost what expired (tickets are kept in expiry order), not a walk over every live ticket | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_ByteBudget`, `TestTicketStore_RedeemFreesCapacity`, `TestMemoryTicketStore_FullStoreSweepsExpired`, `TestMemoryTicketStore_FullStoreSweepCostsOnlyWhatExpired` |
 | E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
 | E16.9 | An `Authorization` value longer than `MaxTicketAuthorizationBytes` MUST be answered 431 and store nothing; a value at the limit is accepted | `TestTicketIssuer_OversizedAuthorization` |
 | E16.10 | Every issuer refusal MUST be the JSON error envelope with a catalog sentence; the detail goes to observability | `TestTicketIssuer_ErrorsAreTheEnvelope` |
@@ -669,7 +684,7 @@ the stream context, which the `w17-events` hub reads (E18).
 | E17.1 | A definite refusal MUST cancel the returned context | `TestWatchStreamAuth_CancelsWhenAuthStartsFailing`, `TestWatchStreamAuth_DefiniteRefusalsCancel` |
 | E17.2 | A probe that times out MUST NOT be treated as revocation | `TestWatchStreamAuth_ProbeTimeoutIsNotARevocation` |
 | E17.3 | The probe MUST be independent of the stream's own cancellation | `TestWatchStreamAuth_ProbeDoesNotInheritStreamCancellation` |
-| E17.4 | Disabled MUST return the input context and a no-op stop | `TestWatchStreamAuth_DisabledIsAPassThrough`, `TestWatchStreamAuth_NilAuthIsAPassThrough` |
+| E17.4 | Disabled MUST return the input context and a no-op stop: an interval `<= 0`, a nil `authFn`, and `NoAuth()` itself (recognised by `IsNoAuth`; a wrapper around it is polled) | `TestWatchStreamAuth_DisabledIsAPassThrough`, `TestWatchStreamAuth_NilAuthIsAPassThrough`, `TestWatchStreamAuth_NoAuthStartsNoWatchdog` |
 | E17.5 | The watchdog goroutine MUST exit when the stream ends (stop or parent cancel) | `TestWatchStreamAuth_EndsWithTheStream` |
 | E17.6 | An auth-backend outage of any kind MUST NOT disconnect every stream: only a definite refusal revokes | `TestWatchStreamAuth_FastBackendFailureIsNotARevocation`, `TestW17Events_AuthOutageKeepsTheStream` |
 | E17.7 | A probe without a verdict MUST be reported (throttled to one report per minute per process) and retried with a backoff from 5 s up to the interval | `TestReportUnansweredReauth_ReportedAndThrottled`, `TestStreamReauthRetryDelay` |
@@ -717,7 +732,7 @@ label isolation.
 | E18.8 | A subscribe failure MUST NOT reveal internal detail to the client: it answers 503 `UNAVAILABLE` in the envelope, without broker channel names or broker error text | `TestHandleW17Events_SubscribeError`, `TestHandleW17Events_NoSource` |
 | E18.9 | A revoked credential or removed membership MUST stop delivery on an open connection: under the re-auth watchdog (E17), a refusal ends the stream, and `EventbusEventSource` ends a client whose labels, derived again from the latest verdict, differ from those at connect | `TestW17Events_RevokedCredentialEndsTheStream`, `TestW17Events_ChangedMembershipEndsTheStream` |
 | E18.10 | A verdict with the same labels MUST keep the stream, even when the auth response bytes differ | `TestW17Events_SameLabelsKeepTheStream` |
-| E18.11 | An envelope the hub cannot transcode MUST be logged with channel, topic and cause and reported; the event is dropped | `TestEventbusEventSource_TranscodeErrorIsLogged` |
+| E18.11 | An envelope the hub cannot transcode MUST be logged with channel, topic and cause and reported; the event is dropped. The log line and the report MUST be throttled to one per topic per minute, the next one counting the failures suppressed since | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeReportIsThrottledPerTopic` |
 
 **Deliberate limits.**
 - E18.9 holds only when the route runs `HandleW17Events` on the context `WatchStreamAuth`
@@ -754,7 +769,7 @@ stream passes the transport's stream cap and its method's limiter (`AdmitPublicS
 | E19.3 | Each stream open MUST be charged; the writer MUST NOT be wrapped (flush and hijack keep working) | `TestAdmitPublicStream_ChargesEveryStream` |
 | E19.4 | Concurrent requests MUST NOT exceed the configured budget: each request in flight holds its own token | `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 | E19.5 | A DPoP nonce challenge (401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"`) MUST give its token back: nothing was checked, and a new device's first sign-in must not spend the address's guess budget. `NonceChallenge` MUST agree with the DPoP package's own reading of the header. The only writer of that header on a REST surface is the DPoP gate (E37) | `TestAdmitPublic_ANonceChallengeIsNotCharged`, `TestNonceChallenge_AgreesWithDPoP` |
-| E19.6 | `AdmitPublicStreamOf(streams, l)` MUST refuse, without spending a token, a client at the stream cap of `streams`, charge one token of `l` per opened stream, and stop counting the stream when its request ends; both nil admit everything | `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
+| E19.6 | `AdmitPublicStreamOf(streams, l)` MUST refuse, without spending a token, a client at the stream cap of `streams`, charge one token of `l` per opened stream, and stop counting the stream when its request ends; a stream `l` refuses MUST give its cap slot back; both nil admit everything | `TestAdmitPublicStreamOf_CapOnStreamsTokenOnTheMethod`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
 
 **Deliberate limits.**
 - The bound on nonce-challenge churn is the DPoP mint limiter in front of unbound proofs, not this
@@ -777,7 +792,7 @@ random 128-bit suffix), and rolls back on a later failure.
 | `FormName`, `Driver` | — | Required |
 | `TmpDir` | driver's staging dir, else `os.TempDir()` | — |
 | `BucketPath`, `ExpectedObjects`, `MaxPerBucket` | — | — |
-| `MaxSizeBytes` | — | `0` = unlimited (generated code never uses 0) |
+| `MaxSizeBytes` | — | `0` = unlimited (generated code never uses 0); `>= math.MaxInt64` cannot be an `int64` limit and is no cap either (the whole body is stored, never an empty object) |
 | `AllowedExtensions` | — | `*` = any; empty = reject all |
 
 **Shares.** `go/lib/kvfs` (`BuildKey`, drivers); E21 (downloads read the same keys). The
@@ -787,7 +802,7 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E20.1 | A part over `MaxSizeBytes` MUST be refused with `ErrUploadTooLarge` and its staging file removed | `TestProcessFilePart_TooLarge` |
+| E20.1 | A part over `MaxSizeBytes` MUST be refused with `ErrUploadTooLarge` and its staging file removed | `TestProcessFilePart_TooLarge`, `TestProcessFilePart_TooLargeLeavesNoStagingFile` |
 | E20.2 | A missing part MUST give `ErrFilePartMissing`; a wrong or absent extension `ErrUploadBadExt` | `TestProcessFilePart_MissingPart`, `TestProcessFilePart_BadExtension`, `TestProcessFilePart_NoExtensionRejected` |
 | E20.3 | Every upload MUST be stored under its own object key, `<sha256>-<random 128-bit suffix>`; identical bodies MUST get distinct objects | `TestProcessFilePart_IdenticalBodiesGetDistinctObjects` |
 | E20.4 | The staging file MUST be removed after a copy-style publish | `TestProcessFilePart_RemovesTempFileOnCopyDriver` |
@@ -796,6 +811,7 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 | E20.7 | An unbounded request body MUST NOT be spilled to disk (relies on the generated `MaxBytesReader`) | no test |
 | E20.8 | Rollback MUST NOT delete an object another request references, including one with identical bytes that committed earlier or is still in flight | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
 | E20.9 | Upload refusals MUST NOT show developer prose or configuration to the client: each sentinel answers one of the upload msgids (`MsgidUploadMissing`, `MsgidUploadTooLarge`, `MsgidUploadBadType`), and the allowlist and size limit go to the operator channel | `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestVocabulary_CarriesTheUploadSentences` |
+| E20.10 | A `MaxSizeBytes` at or past `math.MaxInt64` MUST be no cap: the whole body is stored | `TestProcessFilePart_MaxSizeAtTheInt64CeilingIsNoCap` |
 
 **Deliberate limits.**
 - Content is not sniffed; only the filename extension is checked.
@@ -819,6 +835,7 @@ disableRange)`.
 | `SetMaxConcurrentVariantRenders(n)` | `DefaultMaxConcurrentVariantRenders` = 2 per process | `n <= 0` restores the default. Bounds the renders download requests run at once; the background workers are bounded by their own count |
 | Render slot wait | 10 s | Fixed; past it the request is answered 503 `UNAVAILABLE` with `Retry-After: 1` |
 | `<PREFIX>_VARIANT_WORKERS` (`VariantWorkersFromEnv`) | 2 | `0` turns background rendering off; not a whole number `>= 0` → error |
+| Variant queue | 1024 jobs | Fixed. A full queue drops the job instead of blocking the request that queued it; `Dropped()` counts the drops and is the only signal (nothing is reported); a dropped variant is rendered on its first request |
 
 **Guarantees.**
 
@@ -827,13 +844,16 @@ disableRange)`.
 | E21.1 | Any `.` or `..` segment (either slash) MUST answer 404 | `TestServeDownload_PathTraversal404`, `TestServeDownload_BackslashTraversal404` |
 | E21.2 | An unknown bucket and a missing object MUST both answer 404 | `TestServeDownload_UnknownBucket_404`, `TestServeDownload_NotFound` |
 | E21.3 | Responses MUST be `Content-Type: application/octet-stream` with `nosniff`, except an image field's original and its variants whose bytes sniff as PNG, JPEG, GIF or WebP, which carry that type (never SVG or HTML); `nosniff` always | `TestServeDownload_NoContentSniffXSS`, `TestServeDownload_AnImageFieldsOriginalCarriesItsRasterType` |
-| E21.4 | Driver errors MUST become a generic, logged 500 | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors` |
+| E21.4 | Driver errors MUST become a generic 500 envelope, the driver's text reported to the operator as a fault | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors`, `TestServeDownload_ErrorsAreTheEnvelope` (driver failure) |
 | E21.5 | URLs from `BuildDownloadURL` MUST resolve through `ServeDownload` | `TestDownloadURLRoundTrip` |
 | E21.6 | Only GET and HEAD MUST be served | `TestServeDownload_DELETE_405`, `TestServeDownload_HEAD` |
 | E21.7 | Every refusal, 404 included, MUST be the JSON error envelope; the detail goes to observability | `TestServeDownload_ErrorsAreTheEnvelope` |
 | E21.8 | Only declared variant names MUST be served (400 otherwise); a variant MUST be rendered once and stored under `<key>~<name>`; a missing original → 404, a non-image or an oversized source → 415 | `TestServeDownload_VariantIsRenderedOnceAndStored`, `TestServeDownload_VariantRefusals` |
 | E21.9 | Concurrent first requests of one variant in a process MUST render it once and share the outcome | `TestServeDownload_ConcurrentRequestsOfOneVariantRenderOnce` |
 | E21.10 | Renders for download requests MUST NOT run more than the process bound at once (each decodes a whole original, up to ~200 MB); a request that gets no slot within the wait MUST be answered 503 with `Retry-After`, not queued without bound | `TestServeDownload_ConcurrentVariantRendersAreBounded`, `TestServeDownload_VariantRenderBusyIs503` |
+| E21.11 | A variant MUST live and die with its original: when the original is gone (deleted by any writer, the business tier's file server included) a variant request MUST answer 404 and the stored variant MUST be removed | `TestServeDownload_VariantIsRenderedOnceAndStored` |
+| E21.12 | A store that must ask for an object's size before it can seek (S3) MUST NOT be asked twice per download, and the bytes read to sniff an image's type MUST NOT be fetched again after the rewind: one HEAD and one GET per download of an original; ranges stay exact | `TestServeDownload_AnS3ImageIsOneHeadAndOneGet`, `TestServeDownload_S3RangesAreExact` |
+| E21.13 | Variants MUST be queued for the background workers only after the request succeeded, rendered by them into the store, and a full queue MUST drop rather than block; an upload rollback MUST delete the object's `<handle>~<name>` variants with it | `TestVariantWorkers_RenderWhatASucceededRequestQueued`, `TestVariantWorkers_AFullQueueDropsRatherThanBlocks`, `TestRollbackUploads_DeletesTheVariantsToo` |
 
 **Deliberate limits.**
 - Authorization is per endpoint, not per object.
@@ -841,6 +861,8 @@ disableRange)`.
   times, and the store's atomic put keeps one copy.
 - A busy refusal (503) is not reported to observability: it is the bound working, and a burst would
   be a burst of reports.
+- A variant of a deleted original stays stored until it is next requested (E21.11): only the upload
+  rollback knows the variant names, the business tier's file server deletes the original alone.
 
 ---
 
@@ -858,6 +880,7 @@ the URL fragment, never the query.
 | E22.1 | Site-only mode MUST accept only `/path` (not `//`, `/\`, `://`, control characters) | `TestIsSiteRelativeRedirect`, `TestWriteBrowserRedirect_RefusesATargetThatLeavesTheSite` |
 | E22.2 | External mode MUST accept only absolute `http(s)` URLs | `TestWriteBrowserRedirectExternal_StillRefusesAScriptTarget` |
 | E22.3 | The token MUST travel in the fragment and the response MUST be `no-store` | `TestWriteBrowserRedirect_SendsTheBrowserOnWithTheTokenInTheFragment`, `TestWriteBrowserRedirect_IsNotCacheable` |
+| E22.4 | The token MUST own the fragment: a target that already carries a `#` MUST be refused (reported, 502) when a token is to be appended, and sent unchanged when none is | `TestWriteBrowserRedirect_TheTokenOwnsTheFragment` |
 
 **Deliberate limits.**
 - External mode allows plain `http`.
@@ -929,13 +952,14 @@ is bounded without a global cap.
 |---|---|---|
 | `<PREFIX>_RATELIMIT_PER_MINUTE` | 30 | float; `<= 0` disables |
 | `<PREFIX>_RATELIMIT_BURST` | 10 | int > 0 |
-| `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | none: every caller is keyed by its connection's address | Comma-separated CIDRs or bare addresses; `private` adds the loopback and RFC 1918 ranges (combinable with CIDRs); `none` states the default; any other entry is logged once and skipped. List exactly the hops that terminate HTTP and append to `X-Forwarded-For` |
+| `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` | none: every caller is keyed by its connection's address | Comma-separated CIDRs or bare addresses; `private` adds the loopback, RFC 1918 and IPv6 unique local (`fc00::/7`) ranges — every range the untrusted-forwarder warning calls private (combinable with CIDRs); `none` states the default; any other entry is logged once and skipped. List exactly the hops that terminate HTTP and append to `X-Forwarded-For` |
 | `<PREFIX>_RATELIMIT_MAX_STREAMS` | 0: no cap | Opt-in cap on the public streams one client holds open at once; a value that is not a whole number `>= 0` is logged once and caps nothing. Too many streams is an overload, not a breach, so nothing is capped unasked. Independent of the rate: with `PER_MINUTE <= 0` (the scope's or the transport's) and a cap set, `New` builds a limiter that spends no token and still caps streams |
 | `FromEnvScope(prefix, scope, transport)` | `<PREFIX>_<SCOPE>_RATELIMIT_*` | The unscoped `<PREFIX>_RATELIMIT_*` form is read with a one-time warning; `_<TRANSPORT>_PER_MINUTE` / `_BURST` override per transport; an off limiter is logged once |
 | `NewMethods(prefix, scope, transport, methods...)` | one limiter per listed method, each with its own bucket per address | Precedence per method, most specific first: (1) `<PREFIX>_<SCOPE>_RATELIMIT_<KEY>_PER_MINUTE` / `_BURST` (`<= 0` switches the method off, logged once); (2) the scope or transport switched off (`PER_MINUTE <= 0`) switches every method off, a declared threshold included; (3) the threshold the method declares (`public_rate` / `public_limits[].rate`); (4) the scope's values. Trusted proxies, TTL and the key ceiling are the scope's for every method. `<KEY>` is `<SERVICE>_<METHOD>` in upper snake case |
 | `TTL` | 10 min | Struct field only |
 | `MaxKeys` | 10 000 | Struct field only; reaching it evicts the least recently seen bucket |
-| Malformed `PER_MINUTE` / `BURST` | — | Ignored silently; the previous value stands |
+| Malformed `PER_MINUTE` / `BURST` | — | Ignored silently; the previous value stands. `NaN` and infinities are malformed (scope, transport and `<KEY>` variables alike) |
+| `RequireTrustedProxies(prefix, scope)` | — | Boot check the generated main runs: outside `W17_ENV=dev` it returns an error naming `<PREFIX>_<SCOPE>_RATELIMIT_TRUSTED_PROXIES` and the fix unless that variable or the bare `<PREFIX>_RATELIMIT_TRUSTED_PROXIES` is non-blank. Presence is all it checks: a value whose every entry is skipped as malformed passes and trusts nobody |
 
 **Shares.** E19 (REST adapters); the gRPC transport through `Allow(ctx)` (`peer` and
 `x-forwarded-for` metadata); admin sign-in.
@@ -955,7 +979,7 @@ is bounded without a global cap.
 | E26.9 | A client MUST NOT be able to choose its own bucket: with the default configuration a forwarded header is ignored, whatever the peer's range | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestForwardedIgnoredFromUntrustedPeer` |
 | E26.10 | Concurrency MUST NOT multiply the per-client budget: every attempt in flight holds its own token | `TestChargeable_ConcurrentFailuresStayWithinTheBudget`, `TestAdmitPublic_ConcurrentFailuresStayWithinTheBurst` |
 | E26.11 | The limiter MUST NOT become a CPU sink under a stream of fresh keys: eviction at the ceiling is constant time (buckets sit on a recency list) | `TestLimiter_FreshKeysAtTheCeilingStayCheap`, `BenchmarkLimiter_FreshKeyAtTheCeiling`, `BenchmarkLimiter_KnownKey` |
-| E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback and private ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
+| E26.12 | Unset `TRUSTED_PROXIES` MUST trust no proxy; `private` MUST trust the loopback, RFC 1918 and IPv6 unique local (`fc00::/7`) ranges only when set, together with any listed CIDRs; a bare address MUST trust exactly that host | `TestFromEnvDefaultsAreOn`, `TestTrustedProxiesPrivateKeywordIsOptIn` |
 | E26.13 | A private-range peer that sends `X-Forwarded-For` without being a configured proxy MUST be keyed by its own address and produce a warning (at most hourly) naming `_RATELIMIT_TRUSTED_PROXIES` | `TestForwardedFromUnconfiguredPrivatePeerIsIgnored`, `TestUntrustedForwarderWarningIsHourly` |
 | E26.14 | `Reserve` MUST take the token at admission; `done(false)` MUST give it back, `done(true)` MUST keep it, and only the first call counts | `TestReserve_SettlesOnce` |
 | E26.15 | Without `MAX_STREAMS` no stream is capped. With it, a client already holding that many open public streams (SSE and WebSocket together) MUST be refused with 429 without spending a token, other clients MUST be unaffected, and a stream MUST stop counting once its handler returned; a release frees exactly one slot. The cap MUST hold while the per-minute rate is off — the scope's, the transport's or a plain config's — and such a limiter MUST spend no token | `TestOpenStream_CapHoldsWhileTheRateIsOff`, `TestFromEnv_MaxStreamsIsOffUnlessSet`, `TestOpenStream_NoCapAdmitsEveryStream`, `TestOpenStream_CapsOpenStreamsPerClient`, `TestAdmitPublicStream_CapsOpenStreamsAndFreesAClosedOne`, `TestAdmitPublicStream_NoCapByDefault` |
@@ -964,6 +988,9 @@ is bounded without a global cap.
 | E26.18 | A method that is not listed MUST NOT be limited: `For` answers nil, which admits everything; a nil `Methods` limits nothing | `TestMethods_AnUnlistedMethodIsNotLimited` |
 | E26.19 | A method's limiter MUST follow the `NewMethods` precedence: its own variable, then the scope or transport switched off, then its declared threshold, then the scope's values; its own variable revives it under a scope switched off | `TestMethods_ConfigPrecedence` |
 | E26.20 | The scope's trusted proxies, TTL, key ceiling and stream cap MUST reach every method (the stream cap through `Streams()` only) | `TestMethods_ScopeSettingsReachEveryMethod`, `TestOpenStream_CapHoldsWhileTheRateIsOff` |
+| E26.21 | A `PER_MINUTE` of `NaN` or an infinity MUST NOT switch a limiter on with a bucket that never empties, nor switch it off: like any malformed value it MUST leave the previous value standing, for the scope's and for a method's variable | `TestPerMinute_NotAFiniteNumberIsMalformed` |
+| E26.22 | `RequireTrustedProxies` MUST refuse a start outside `W17_ENV=dev` while neither the scoped nor the bare `TRUSTED_PROXIES` variable is set (blank counts as unset, another scope's variable does not count), with an error naming the variable and the fix; `none`, CIDRs, the bare name and a development stack MUST pass | `TestRequireTrustedProxies` |
+| E26.23 | `HTTPClientAddr` and `GRPCClientAddr` MUST give the `ClientIP` reading as text: unmapped (an IPv4 peer of a dual-stack listener as IPv4), without an IPv6 zone, and `""` for a peer that is no address (HTTP) or a context without a peer (gRPC) | `TestClientAddr_HTTPAndGRPC` |
 
 **Deliberate limits.**
 - The limiter is in-process: N replicas give N times the budget.
@@ -991,6 +1018,7 @@ unary gRPC call using the w17 JSON dialect.
 | `W17_MCP_HTTP_ADDR` | `:8081` | — |
 | Endpoint path | `/mcp` | Health at the `core/healthz` path |
 | `ReadHeaderTimeout` | 10 s | — |
+| Allowed browser origins | `SetAllowedOrigins(origins)`, else `W17_MCP_ALLOWED_ORIGINS` (comma-separated), else none | `*` accepts any; entries compare as `scheme://host[:port]`, case-insensitive. A request without `Origin` (every non-browser client) is unaffected; any other `Origin` → 403 before a session, a token check or a body read |
 | Shutdown timeout | `W17_MCP_SHUTDOWN_TIMEOUT_SECONDS` via `lifecycle.ShutdownTimeoutFromEnv` | — |
 | Request body cap | `SetMaxRequestBodyBytes(n)`, else `W17_MCP_MAX_BODY_BYTES`, else 10 MiB (`DefaultMaxRequestBodyBytes`, the REST default) | `n <= 0` restores the default; a non-numeric or non-positive variable is ignored. A declared `Content-Length` over the cap → 413 with a JSON-RPC error; a body without one is cut at the cap |
 | Session idle TTL | `SetSessionLimits(SessionLimits{IdleTTL})`, else `W17_MCP_SESSION_IDLE_SECONDS`, else 30 min (`DefaultSessionIdleTTL`) | Only a positive value is read; a session cannot be kept forever. A session with an open notification stream is never idle |
@@ -1013,11 +1041,12 @@ unary gRPC call using the w17 JSON dialect.
 | E27.7 | The HTTP transport MUST NOT read unbounded request bodies: a declared length over the cap MUST be refused with 413 before the handler runs, and an undeclared body MUST stop at the cap | `TestLimitBody`, `TestMaxBodyBytes_DefaultAndOverrides`, `TestServeStreamableHTTP_RefusesOversizedBody` |
 | E27.8 | Every `CallUnary` error MUST be a gRPC status carrying the code, the sentence a REST client reads for the same failure, and its field details; a non-status error MUST read as `INTERNAL` | `TestCallUnary_BackendErrorIsSanitised`, `TestCallUnary_PermissionDeniedIsAStatus`, `TestCallUnary_NonStatusErrorIsInternal` |
 | E27.9 | Tool arguments MUST keep 64-bit integers exact over HTTP and stdio: the raw arguments are captured before the MCP library decodes them and handed to `CallUnary`; a refused call leaves no captured arguments behind | `TestServeStreamableHTTP_ToolArgumentsKeepSixtyFourBitNumbers`, `TestHandleMessage_ScopedContextKeepsSixtyFourBitNumbers`, `TestHandleMessage_RefusedCallLeavesNoCapture` |
-| E27.10 | A backend error MUST be reported by code as E3.7: refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
+| E27.10 | A backend error MUST be reported by code as E3.7 (the same `IsServerFault` set): refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
 | E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | `TestAddTool_EachCallRunsInItsOwnReportingScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 | E27.12 | With `SetRequestEvents`, every call of a recorded tool MUST be recorded — a refused one too — with its request once decoded, the caller after auth and its gRPC code; an unknown tool records nothing. | `TestCallUnary_RecordsTheCall` |
 | E27.13 | A streamable HTTP session that no request touched for the idle TTL, and that has no open notification stream, MUST be ended with all of its transport state (as a client's DELETE ends it); a session in use MUST be kept, and one whose stream ended goes idle from then | `TestServeStreamableHTTP_IdleSessionIsEnded`, `TestServeStreamableHTTP_OpenStreamKeepsItsSession` |
 | E27.14 | The live sessions MUST stay within the per-address and the per-process cap: a request that would open one more is refused (429 per address, 503 in total, both with `Retry-After`) before the MCP library keeps anything; requests on a live session pass at the cap; an ended session frees its slot. On a protected resource (E28) the token check runs first, so a caller without a token takes no slot | `TestServeStreamableHTTP_SessionsAreCapped`, `TestSessionLimits_EnvAndDefaults` |
+| E27.15 | The HTTP transport MUST refuse (403) a request whose browser `Origin` is not allowed — by default every one, the endpoint's own included, since a DNS-rebound page is same-origin by its Host — before a session is opened; a request without `Origin` MUST be served; a listed origin is served exactly as written, `*` accepts any, and the environment lists them when the code did not | `TestServeStreamableHTTP_RefusesAForeignOrigin`, `TestServeStreamableHTTP_AllowedOrigins` |
 
 **Deliberate limits.**
 - Unary tools only.
@@ -1131,6 +1160,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error; ignored in `terminated` mode, with a warning naming them |
 | Retry | 3 attempts, 0.1 s → 1 s backoff, Trailers-Only `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | A w17 handler's own `UNAVAILABLE` is not retried (S18.12) |
 | Keepalive | 30 s / 10 s, permit without stream | — |
+| `lookup` | `os.Getenv` when nil, in every builder | — |
 | Caller `opts` | appended last | Override earlier options |
 | Per-call deadline | none | — |
 
@@ -1145,6 +1175,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | E30.5 | Keepalive MUST pair with the server's enforcement policy | `TestDefaultClientKeepalive_PairsWithServerEnforcement` |
 | E30.6 | An unrecognised `W17_INTERNAL_TLS` value MUST be refused at dial construction, not read as plaintext | `TestTLSDialOption_UnrecognisedSwitchIsRefused` |
 | E30.7 | In `terminated` mode the client MUST verify against the system roots only, whatever the CA and client-pair variables say; with the switch off `ClientTLSConfig` MUST return no TLS config | `TestClientTLSConfig_TerminatedUsesSystemRootsOnly`, `TestClientTLSConfig_OffIsNil`, `TestInternalTLS_Terminated` |
+| E30.8 | A nil lookup MUST read the process environment in `Dial`, `TLSDialOption` and `ClientTLSConfig` alike: with the switch on it builds TLS and an unrecognised value is refused, never a silent plaintext | `TestTLSBuilders_NilLookupReadsTheEnvironment`, `TestDial_NilLookupDefaults` |
 
 **Deliberate limits.**
 - No circuit breaker beyond retry throttling.
@@ -1300,7 +1331,7 @@ the HTTP request or gRPC metadata and answers refusals itself.
 | `WithMaxJTIsPerKey(n)` | 10 000 entries per key thumbprint | `n <= 0` keeps the default; a key at its share is refused with `ErrJTIStoreFull`, other keys are not affected |
 | `MaxProofBytes` / `MaxJTIBytes` | 8 KiB / 256 bytes | Longer → `ErrMalformed` |
 | `GenerateKey(kt)` | `KeyP256` | `KeyEd25519`; anything else → `ErrUnsupportedKey` |
-| `Request.AccessToken` / `Request.Binding` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed) |
+| `Request.AccessToken` / `Request.Binding` / `Request.BindingLookup` | — | Both empty on a mint endpoint; a token with no binding is refused (fail closed). `BindingLookup` answers the binding when `Binding` is empty, called only once the proof's signature, nonce, target and ath checks passed; its error is returned as is |
 | `Request.Path` | required | Must start with `/`; anything else → `ErrHTUMismatch` |
 
 **Shares.** E37 (the REST wiring), E38 (shared stores). Every replica configured with the same nonce key
@@ -1322,7 +1353,7 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 | E35.10 | Replicas sharing the nonce key MUST accept each other's nonces with no shared state; a replica with another key MUST NOT | `TestHMACNonces_SharedKeyAcrossReplicas` |
 | E35.11 | With nonces on, `iat` MUST NOT be checked (client clock skew is irrelevant); with nonces off, `iat` MUST lie within ±`IATWindow` | `TestVerify_ClockSkewIrrelevantWithNonces`, `TestVerify_IATWindowWithoutNonces` |
 | E35.12 | A jti MUST NOT be accepted twice for different proofs, and MUST be remembered for as long as its proof could be accepted (the nonce lifetime, or twice the iat window) | `TestVerify_ReplayRefused`, `TestMemoryJTIStore_RecordAndExpiry` |
-| E35.13 | The same proof MUST be accepted again while its reuse window lasts and refused after it; with reuse off every repeat MUST be a replay | `TestVerify_ReuseWindow`, `TestVerify_ReplayRefused` |
+| E35.13 | The same proof MUST be accepted again while its reuse window lasts and refused after it, an unbound (mint) proof exactly as a bound one; with reuse off every repeat MUST be a replay | `TestVerify_ReuseWindow`, `TestVerify_ReplayRefused`, `TestVerify_AMintProofHasTheBoundProofsReuseWindow` |
 | E35.14 | A reused proof MUST still pass the nonce and target checks: only the signature result is cached | `TestVerify_ReuseStillChecksNonceAndTarget` |
 | E35.15 | The signature cache MUST be keyed by the hash of the whole proof: altered claims under a cached proof's signature MUST be verified afresh and refused | `TestVerify_SignatureCacheKeyedByProofHash` |
 | E35.16 | Concurrent presentations of one proof with reuse off MUST yield exactly one acceptance | `TestVerify_ConcurrentSameProofOneWinnerWithoutReuse` |
@@ -1357,6 +1388,11 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
   Device rows are written, events are emitted. `MintFullRefuse` is the default and the
   recommended setting; use `MintFullAcceptUnrecorded` only behind per-address limits on the
   mint endpoints, with an alert on `Result.MintUnrecorded`.
+- The reuse window applies to mint proofs too (E35.13): the byte-identical unbound proof is accepted
+  again for 30 s by default, and each acceptance re-runs the mint handler. It stays because a
+  transport retry (the gRPC retry of `UNAVAILABLE` replays the same metadata) must not turn into a
+  replay refusal on sign-in; a replay inside the window is bounded by the per-address limit in front
+  of the mint endpoints (E19, E26), and a deployment that wants none sets a negative `ReuseWindow`.
 - The verifier does not answer the request; the caller sets the challenge with `SetChallenge` or
   `ChallengeMetadata` and writes its own status and body.
 - `Request.Path` is compared as given; percent-encoding case is not normalised.
@@ -1473,6 +1509,7 @@ E16 (ticket store, issuer, promotion marker), E17 (the watchdog loop), E12 (CORS
 | E37.21 | Only `lib/dpop`, its subpackages, `lib/restgw/dpopgw`, and `tooling/e2e/dpope2e` MAY import `lib/dpop` or go-jose, and `tooling/migrate/migratecli` (a deployment's console fetch must sign when the console binds devices — T4) only `lib/dpop` and `lib/dpop/dpopclient`, never go-jose; every other package MUST NOT, so the DPoP dependency stays opt-in | `TestDPoPImportsStayInsideTheOptInPackages` |
 | E37.22 | `CachedAuthFuncWithDecision` MUST bypass without reading or filling, keep namespaces apart from each other and from un-namespaced entries, neither key on nor be defeated by `IgnoreHeader`, and behave as `CachedAuthFuncWithKeyHeaders` for the zero decision or a nil hook | `TestCachedAuthFuncWithDecision` |
 | E37.23 | A mint request the verifier accepted unrecorded (`dpop.MintFullAcceptUnrecorded`, full mint store) MUST reach `next` with `Verified.MintUnrecorded` set and no device; a recorded one, or any one under the default policy, MUST NOT be reported unrecorded | `TestDPoPGate_MintUnrecordedIsReported` |
+| E37.24 | The gate MUST ask `BindingFunc` only for a proof that verified (signature, nonce, target, ath): a forged proof, a proof for another path or one without a nonce MUST be refused without the lookup, a good one MUST cost exactly one lookup, and a proof by another key MUST still be a binding mismatch | `TestGate_BindingIsLookedUpOnlyForAProofThatVerified` |
 
 **Deliberate limits.**
 - The gate does not decide what a token is worth; `dpopgw.BindingFunc` and the auth method do.
@@ -1714,7 +1751,8 @@ backend is called. Off unless the gateway has the provider's secret.
 | E41.3 | No token MUST be ErrMissing and a token over 2048 bytes ErrRejected, both without asking the provider; a rejection (used, expired, forged, another hostname) MUST be ErrRejected; a refused secret, an HTTP 5xx or a second internal-error MUST be ErrUnavailable | `› TestVerify_Refusals` |
 | E41.4 | A provider error MUST be retried once, with the same idempotency key | `› TestVerify_ARetryKeepsItsIdempotencyKey` |
 | E41.5 | An unknown provider MUST be refused, and FromEnv MUST read every setting | `› TestNew_RefusesAnUnknownProvider`, `› TestFromEnv` |
-| E41.6 | `RequireCaptcha` MUST pass with a nil verifier or a solved token, and otherwise answer 403 `CAPTCHA_REQUIRED`, 403 `CAPTCHA_INVALID` or 503 `CAPTCHA_UNAVAILABLE` and report false | `restgw/captcha_test.go › TestRequireCaptcha` |
+| E41.6 | `RequireCaptcha` MUST pass with a nil verifier or a solved token, and otherwise report false having answered the canonical envelope (E3): 403 `PERMISSION_DENIED` with detail code `CAPTCHA_REQUIRED` (no token) or `CAPTCHA_INVALID` (rejected), 503 `UNAVAILABLE` with detail code `CAPTCHA_UNAVAILABLE` (provider unreachable); the message is the catalog sentence in the request's language (harvested by `Vocabulary`), and the cause is reported by code — a refusal on the non-exception channel, an unreachable provider on the exception channel | `restgw/captcha_test.go › TestRequireCaptcha`, `› TestVocabulary_CarriesTheCaptchaSentences` |
+| E41.8 | The address `RequireCaptcha` sends the provider (`remoteip`, E41.2) MUST be the client `ClientAddrMiddleware` resolved behind the trusted proxies (E5.8, E26.23), never the proxy's own nor an untrusted peer's `X-Forwarded-For` | `restgw/captcha_test.go › TestRequireCaptcha_SendsTheResolvedClientAddress` |
 | E41.7 | The default CORS allowlist MUST include `W17-Captcha-Token` | `› TestCORSDefaultsAllowTheCaptchaHeader` |
 
 **Deliberate limits.**
@@ -1739,7 +1777,7 @@ instead of a JSON document — a file a link opens.
 | E42.3 | `Range` MUST answer 206 and `HEAD` MUST send no body | `TestWriteRawResponse_RangeAndHead` |
 | E42.4 | The file name MUST be reduced to its last path segment and stripped of control characters; a non-ASCII name MUST use RFC 2231 `filename*` | `TestWriteRawResponse_FilenameIsSanitised` |
 | E42.5 | A method other than GET / HEAD MUST answer 200 with the whole body whatever its `If-None-Match` / `Range` — the handler already ran | `TestWriteRawResponse_NonGetAlwaysSendsTheWholeBody` |
-| E42.6 | A scriptable type (HTML, XHTML, SVG, XML) MUST carry `Content-Security-Policy: sandbox`; a file name MUST lose format characters (bidi overrides) and C1 controls | `TestWriteRawResponse_ScriptableTypesAreSandboxed`, `TestWriteRawResponse_FilenameDropsFormatCharacters` |
+| E42.6 | A scriptable type (HTML, XHTML, SVG, XML and any `+xml` type, in any letter case) MUST carry exactly `Content-Security-Policy: sandbox; default-src 'none'`, and another type none; a file name MUST lose format characters (bidi overrides) and C1 controls | `TestWriteRawResponse_ScriptableTypesAreSandboxed`, `TestWriteRawResponse_FilenameDropsFormatCharacters` |
 
 **Deliberate limits.**
 - The body is held in memory; the ETag saves the transfer, not the handler's render.
@@ -1844,3 +1882,37 @@ in-process connection it is registered on (no gRPC retry policy there).
 - A call is not part of a storage transaction: a rollback does not undo what an upstream did.
 - An `UNAVAILABLE` a business handler passes on to its own caller over a real hop is subject to that
   hop's retry policy (S18), which does not know whether the upstream already acted.
+
+---
+
+## E45. Security response headers
+
+**Code.** `go/lib/secheaders/secheaders.go` — `Middleware`, `Defaults`.
+
+**Purpose.** Every listener a generated binary publishes (the REST gateway with its API, `/healthz`
+and the OAuth server; the admin; the MCP endpoint) sends the browser-facing security headers itself,
+because not every deployment target has an edge that adds them.
+
+**Configuration.** None. `Defaults`:
+
+| Header | Value |
+|---|---|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (no `preload`; ignored by browsers over http) |
+| `X-Content-Type-Options` | `nosniff` |
+| `Content-Security-Policy` | `frame-ancestors 'none'` (framing only; a page's script policy is its handler's) |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+
+**Shares.** Mounted outermost by the generated `main.go` (Request path above), so it covers every
+early return of the chain inside it: a CORS preflight, a 404, a recovered panic, `/healthz`.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E45.1 | Every response MUST carry each default exactly once, an early return (a bare 404) included | `TestMiddleware_SetsEveryDefault` |
+| E45.2 | A header the handler sets itself MUST replace the default (a stricter `Referrer-Policy`, a page's own `Content-Security-Policy`), and the other defaults MUST stay | `TestMiddleware_HandlerValueWins` |
+
+**Deliberate limits.**
+- The defaults are fixed; a handler overrides one per response, nothing configures them per listener.
+- Mounting it outermost is the generated `main.go`'s; a listener built by hand without it sends none.

@@ -27,6 +27,8 @@ func TestCallUnary_BackendErrorsAreReportedByCode(t *testing.T) {
 		{status.Error(codes.InvalidArgument, "Svc.Put: bad"), "refused:"},
 		{status.Error(codes.PermissionDenied, "Svc.Put: denied"), "refused:"},
 		{status.Error(codes.Internal, "Svc.Put: boom"), "error:"},
+		{status.Error(codes.DeadlineExceeded, "Svc.Put: slow"), "error:"},
+		{status.Error(codes.Unimplemented, "Svc.Put: skew"), "error:"},
 		{errors.New("dial tcp 10.0.0.1:9090: refused"), "error:"},
 	} {
 		var buf bytes.Buffer
@@ -36,7 +38,10 @@ func TestCallUnary_BackendErrorsAreReportedByCode(t *testing.T) {
 		_, _ = s.CallUnary(context.Background(), mcp.CallToolRequest{}, &emptypb.Empty{},
 			func(context.Context, proto.Message) (proto.Message, error) { return nil, tc.err })
 		log.SetOutput(orig)
-		if got := buf.String(); !strings.Contains(got, tc.want) {
+		// "refused: rpc error: …" also contains "error:", so a fault is
+		// told apart by the absence of the refusal prefix.
+		got := buf.String()
+		if !strings.Contains(got, tc.want) || (tc.want == "error:" && strings.Contains(got, "refused:")) {
 			t.Errorf("%v: logged %q, want a %q line", tc.err, got, tc.want)
 		}
 	}

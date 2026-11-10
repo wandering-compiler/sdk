@@ -10,7 +10,6 @@ changing it.
 | [server.md](server.md) | Process startup and lifecycle: supervisor, gRPC server, bounded stops, health, internal-mesh TLS, observability, in-process bridge, redacted records, private surfaces, the business companion process |
 | [edges.md](edges.md) | Edges and traffic: REST gateway, authentication, streams, uploads, rate limiting, MCP, client dial, error mapping, DPoP (proofs, client, REST wiring, shared replay stores, TypeScript client, admin runtime), the OAuth authorization-server wire, the egress client runtime |
 | [data.md](data.md) | Data layer: database sessions, transactions, SQL helpers, paging, blob and key-value stores (local, S3, the `W17Files` server), field encryption, secrets and sealed values |
-| [events-identity.md](events-identity.md) | Events, identity and language: event bus, principal, permission checks, i18n, small helpers, the request event pipeline, recorder and consumers |
 | [events-identity.md](events-identity.md) | Events, identity and language: event bus, principal, permission checks, i18n, small helpers, the request event pipeline, recorder and consumers, plugin hooks |
 | [tooling.md](tooling.md) | Tooling: migrations, data migrations, the e2e runner, dev PKI, digests |
 | [business-sdks.md](business-sdks.md) | The Python, TypeScript and Rust business SDKs, one guarantee per row with a column per language and the conformance case: manifest, boot, serving, context, transactions, work after commit, events, principal relay, clients, drain, companion |
@@ -22,11 +21,11 @@ changing it.
 |---|---|---|---|---|
 | [server.md](server.md) | 24 | 198 | 0 | 6 |
 | [edges.md](edges.md) | 45 | 417 | 1 | 5 |
-| [data.md](data.md) | 18 | 171 | 2 | 4 |
-| [events-identity.md](events-identity.md) | 22 | 205 | 0 | 1 |
+| [data.md](data.md) | 18 | 167 | 2 | 4 |
+| [events-identity.md](events-identity.md) | 22 | 204 | 0 | 1 |
 | [tooling.md](tooling.md) | 30 | 217 | 0 | 0 |
 | [business-sdks.md](business-sdks.md) | 11 | 50 | 0 | 9 |
-| **All areas** | **150** | **1258** | **3** | **25** |
+| **All areas** | **150** | **1253** | **3** | **25** |
 | [matrix.md](matrix.md) | — | 163 interactions | 9 | 16 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of

@@ -214,12 +214,26 @@ func ClientError(ctx context.Context, err error) (codes.Code, string, []FieldErr
 // delete the information. observx.ReportRefusal is the channel that claim
 // describes.
 func reportByCode(ctx context.Context, c codes.Code, err error) {
-	switch c {
-	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable:
+	if IsServerFault(c) {
 		observx.ReportError(ctx, err)
-	default:
-		observx.ReportRefusal(ctx, err)
+		return
 	}
+	observx.ReportRefusal(ctx, err)
+}
+
+// IsServerFault reports whether a gRPC code is a server fault — reported on
+// the exception channel — rather than an expected outcome of the request:
+// Internal, Unknown, DataLoss, Unavailable, DeadlineExceeded (a backend that
+// ran out of time) and Unimplemented (a method the server does not serve: a
+// version skew between tiers). Every other code is the caller's outcome.
+// The REST, SSE and WebSocket writers and the MCP proxy share this set.
+func IsServerFault(c codes.Code) bool {
+	switch c {
+	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable,
+		codes.DeadlineExceeded, codes.Unimplemented:
+		return true
+	}
+	return false
 }
 
 // clientFacing picks the code and sentence a person should see.

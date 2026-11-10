@@ -71,12 +71,11 @@ func refusal(ctx context.Context, c codes.Code, operator error) error {
 // server faults are exceptions, everything else is an expected outcome of a
 // request and goes to the non-exception channel.
 func report(ctx context.Context, c codes.Code, err error) {
-	switch c {
-	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable:
+	if restgw.IsServerFault(c) {
 		observx.ReportError(ctx, err)
-	default:
-		observx.ReportRefusal(ctx, err)
+		return
 	}
+	observx.ReportRefusal(ctx, err)
 }
 
 // toolErrorResult is how a failed tool call reaches the client: a tool

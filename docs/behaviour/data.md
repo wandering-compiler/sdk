@@ -27,11 +27,12 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 | D10 | Admin column sort selector | `go/lib/listsort/metadata.go` |
 | D11 | Bounded app-side materialization | `go/lib/materialize/guard.go` — `Guard`; `go/lib/materialize/batch.go` — `FetchBatches` |
 | D12 | SQLite Unicode collation and stamp | `go/lib/sqlitecollate/sqlitecollate.go` — `Register`; `stamp.go` — `EnsureStamp`, `VerifyStamp` |
-| D13 | Blob store for uploads | `go/lib/kvfs/kvfs.go` — `BuildKey`; `go/lib/kvfs/local_fs/local_fs.go`; `go/lib/kvfs/memory` |
+| D13 | Blob store for uploads | `go/lib/kvfs/kvfs.go` — `BuildKey`, `OpenSeekableSized`; `go/lib/kvfs/local_fs/local_fs.go`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3`; `go/lib/kvfs/store` — `Open` |
 | D14 | Redis HASH entity codec | `go/lib/kvhash/kvhash.go` |
 | D15 | Redis eviction check | `go/lib/kvposture/kvposture.go` |
 | D16 | Column encryption (`CRYPTED_SECRET`) | `go/lib/fieldcrypt/fieldcrypt.go`, `shared.go` — `Init` |
 | D17 | Secret values and sources | `go/service/secret/secret.go` — `Secret`; `source.go` — `Resolver`; `sealed.go` — `Seal`, `OpenSealed`; `go/service/secret/sopsenv`; `go/lib/secretseal` |
+| D18 | Business companion file server | `go/lib/kvfs/kvfsgrpc` — `NewServer`, `Conn`, `Placement` |
 
 ## D1. Per-dialect session pins
 
@@ -432,7 +433,7 @@ Stamp table: `w17_collation`.
 
 ## D13. Blob store for uploads
 
-**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3/s3.go` — `ParseDSN`, `New`, `Driver`; `go/lib/kvfs/store/store.go` — `Open`; `go/lib/kvfs/kvfsgrpc/kvfsgrpc.go` — `W17Files` server.
+**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`, `SizedSeekableOpener`, `OpenSeekableSized`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3/s3.go` — `ParseDSN`, `New`, `EnsureBucket`, `Driver`; `go/lib/kvfs/store/store.go` — `Open`; the `W17Files` server is D18.
 
 **Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys. `store.Open` picks the driver (a directory or an S3-compatible bucket) from one URL; `kvfsgrpc` serves a business tier's stores over the `w17.common.files.W17Files` service for the non-Go business SDKs.
 
@@ -441,9 +442,9 @@ Stamp table: `w17_collation`.
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `BuildKey(bucketPath, objectKey, expectedObjects, maxPerBucket)` | `<bucket>/<hh>/<hh>/…/<objectKey>`; depth `ceil(log256(expected/maxPerBucket))`, `0` when flat | capped at 16 |
-| `local_fs.New(root)`, `EnsureRoot(root)` | root created with mode 0755; published objects 0644; staging under `<root>/.w17-staging` | — |
+| `local_fs.New(root)`, `EnsureRoot(root)` | root created with mode 0755; published objects 0644; staging under `<root>/.w17-staging` | A key under `.w17-staging` is not an object key (D13.17) |
 | `store.Open(ctx, url, ensure)` | `file:///<dir>` or an absolute path → `local_fs`; `s3://[<key-id>:<key>@]<bucket>[/<prefix>][?endpoint=…&region=…&profile=…&path_style=…]` → `kvfs/s3` (path-style whenever `endpoint` is set); `ensure` (the writer) creates a missing directory or bucket | empty, relative, `file://host/…`, another scheme, half a key pair, a non-boolean `path_style` → error |
-| `kvfsgrpc` chunks | Open sends 64 KiB chunks; a Put chunk is at most 1 MiB (`MaxChunkBytes`) | larger → `InvalidArgument` / `BAD_REQUEST` |
+| S3 DSN (`s3.ParseDSN`) | default AWS credential chain, region `us-east-1` | `s3://[<key id>:<key>@]<bucket>[/<prefix>]?endpoint=…&region=…&profile=…&path_style=…`; half a key pair, no bucket, another scheme or a `path_style` that is not a boolean → error. An `endpoint` (a non-AWS store) implies path-style addressing unless `path_style=false` |
 
 **Guarantees.**
 
@@ -462,17 +463,18 @@ Stamp table: `w17_collation`.
 | D13.11 | A body past `MaxSizeBytes`, or a failing driver, MUST store nothing and leave no staging file. | `TestPut_TooLargeStoresNothing`, `TestPut_DriverErrorCleansUp` |
 | D13.12 | `Put`'s commit MUST be its own: a context that ends before it stores nothing, and once it returned a handle the object is stored whatever happens to the caller's distributed transaction afterwards (see the limits). | `TestPut_CancelledBeforeCommitStoresNothing` |
 | D13.13 | `store.Open` MUST pick the driver from the URL alone and refuse anything else; a reader (`ensure` false) is refused a directory that does not exist rather than creating an empty one; no error repeats the URL's credentials. | `TestOpen_PicksTheDriverByURL`, `TestOpen_Refuses`, `TestParseDSN`, `TestParseDSN_Refuses` |
-| D13.14 | The S3 driver's `PutFromTempFile` MUST be one PutObject and remove the staging file only after the store accepted it; a failed put leaves the staging file for the caller; a staging file that cannot be removed after a successful put is reported through `observx` and the put succeeds (the object is stored). | `TestLive_PutOpenStatDelete`, `TestLive_FailedPutKeepsTheStagingFile`, `TestPutFromTempFile_AStagingFileThatCannotBeRemovedIsNotAFailedPut` |
-| D13.15 | The S3 driver MUST map a missing object to `ErrNotFound` — `NoSuchKey` on any call, a 404 without a body only on a HEAD (`Stat`, the bucket check) — and any other 404 (a wrong endpoint or path) to a store error, so a misconfigured store is not reported as a missing file and a Delete through it does not report success. | `TestLive_MissingIsErrNotFound`, `TestNotFound_ABare404IsMissingOnlyForAHead` |
-| D13.16 | The `W17Files` server MUST store a Put through `kvfs.Put` with the field's placement, so the handle and layout are a Go tier's byte for byte, and MUST store only after the end marker whose size matches the chunks: a stream that closes or is cancelled before it, even after half-close, stores nothing. | `TestRoundTrip`, `TestPutChunkingDoesNotChangeTheBody`, `TestPutEmptyBodyStoresAnEmptyObject`, `TestPutStoresOnlyAfterTheEnd`, `TestCancelledPutStoresNothing`, `TestCancelAfterHalfCloseStoresNothing` |
-| D13.17 | The `W17Files` server MUST refuse a Put or Delete on a connection the business tier does not write (`FailedPrecondition`, `READ_ONLY_CONNECTION`), an unknown field or connection (`InvalidArgument`), a malformed stream or a chunk over 1 MiB (`BAD_REQUEST`), and a body past the placement's `MaxSizeBytes` (`FILE_TOO_LARGE`); every refusal carries an `ErrorInfo` in domain `w17.files`. | `TestPutRefusals`, `TestPutPlacementOnAMissingConnection`, `TestOpenStatDeleteRefusals`, `TestPutTooLarge`, `TestPutNoCap` |
-| D13.18 | No `W17Files` status MUST carry a driver's own error text (a store root, a bucket URL, a credential); it goes to the process's error sink, the caller gets `STORE_ERROR`. | `TestStoreErrorsDoNotLeakTheDriverText`, `TestOpenReadFailureMidStream` |
+| D13.14 | The S3 DSN MUST carry the bucket, the key prefix, the endpoint, the region, the profile and an optional key pair (percent-encoded), with path-style addressing on for an endpoint unless turned off; a half key pair MUST be refused, and no refusal MUST echo the secret. | `TestParseDSN`, `TestParseDSN_Refuses` |
+| D13.15 | The S3 driver's `PutFromTempFile` MUST be one PutObject and remove the staging file only after the store accepted it; a failed put leaves the staging file for the caller; a staging file that cannot be removed after a successful put is reported through `observx` and the put succeeds (the object is stored). | `TestLive_PutOpenStatDelete`, `TestLive_FailedPutKeepsTheStagingFile`, `TestPutFromTempFile_AStagingFileThatCannotBeRemovedIsNotAFailedPut` |
+| D13.16 | The S3 driver MUST map a missing object to `ErrNotFound` — `NoSuchKey` on any call, a 404 without a body only on a HEAD (`Stat`, the bucket check) — and any other 404 (a wrong endpoint or path) to a store error, so a misconfigured store is not reported as a missing file and a Delete through it does not report success. | `TestLive_MissingIsErrNotFound`, `TestNotFound_ABare404IsMissingOnlyForAHead` |
+| D13.17 | A `local_fs` key naming a file under the staging area (`.w17-staging/…`, however spelled) MUST be refused like a key outside the root: reads report `ErrNotFound`, Delete errors and removes nothing. | `TestLocalFS_StagingAreaIsNotAnObjectKey` |
+| D13.18 | `OpenSeekableSized` MUST hand the size the caller already has to a driver that needs one (S3 opens without a second HEAD) and fall back to `OpenSeekable` for any other; the S3 reader MUST fetch lazily from the current offset and replay the first 512 bytes after a rewind instead of fetching them again. | `TestServeDownload_AnS3ImageIsOneHeadAndOneGet`, `TestServeDownload_S3RangesAreExact` (through the download handler, against a counting S3 endpoint) |
 
 **Deliberate limits.**
 - No `fsync` before or after rename; durability across power loss is not guaranteed.
 - `local_fs` ignores the context (file I/O is not cancellable).
 - The memory driver reads whole files into memory (test and development use).
 - A file a business method stores with `kvfs.Put` is not part of its distributed transaction: when the transaction rolls back afterwards, the object stays, referenced by no row, and nothing collects it. Storing it from `distx.OnCommit` instead inverts the risk (the row commits, the store can still fail). Which order a method needs is its own decision; the upload path's `RollbackUploads` has no business-tier counterpart.
+- The S3 driver's live tests run only against a reachable S3-compatible store (`W17_S3_ENDPOINT`); without one they skip unless `W17_REQUIRE_LIVE_S3=1`.
 
 ## D14. Redis HASH entity codec
 
@@ -589,3 +591,30 @@ Precedence: environment, then age file, then plain file.
 - Plain dotenv values are taken literally: no quote stripping, inline comments or `export` prefix (`KEY="x"` yields `"x"` with the quotes).
 - `Resolver.Lookup` returns a plain `string`; wrapping it in `Secret` is the caller's job.
 - The value is held behind a pointer, so `==` on two `Secret`s compares identity, not content; compare `Reveal()` results where content equality is meant.
+
+## D18. Business companion file server
+
+**Code.** `go/lib/kvfs/kvfsgrpc/kvfsgrpc.go` — `NewServer`, `Conn`, `Placement`, `Reason*`, `Domain`.
+
+**Purpose.** Serves a business tier's upload connections over gRPC (`w17.common.files.W17Files`:
+Put, Open, Stat, Delete), mapped one to one onto the kvfs calls a Go business tier makes in-process,
+so a business tier in another language stores and reads files exactly as a Go one does.
+
+**Configuration.** None from the environment. `NewServer(conns, placements)`: the opened stores by
+connection name (`Writable` for a connection the business tier writes) and the placement of every
+field it writes files for. Put chunks are at most `MaxChunkBytes` (1 MiB).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| D18.1 | The `W17Files` server MUST store a Put through `kvfs.Put` with the field's placement, so the handle and layout are a Go tier's byte for byte, and MUST store only after the end marker whose size matches the chunks: a stream that closes or is cancelled before it, even after half-close, stores nothing. | `TestRoundTrip`, `TestPutChunkingDoesNotChangeTheBody`, `TestPutEmptyBodyStoresAnEmptyObject`, `TestPutStoresOnlyAfterTheEnd`, `TestCancelledPutStoresNothing`, `TestCancelAfterHalfCloseStoresNothing` |
+| D18.2 | The `W17Files` server MUST refuse a Put or Delete on a connection the business tier does not write (`FailedPrecondition`, `READ_ONLY_CONNECTION`), an unknown field or connection (`InvalidArgument`), a malformed stream or a chunk over 1 MiB (`BAD_REQUEST`), and a body past the placement's `MaxSizeBytes` (`FILE_TOO_LARGE`); every refusal carries an `ErrorInfo` in domain `w17.files`. | `TestPutRefusals`, `TestPutPlacementOnAMissingConnection`, `TestOpenStatDeleteRefusals`, `TestPutTooLarge`, `TestPutNoCap` |
+| D18.3 | No `W17Files` status MUST carry a driver's own error text (a store root, a bucket URL, a credential); it goes to the process's error sink, the caller gets `STORE_ERROR`. | `TestStoreErrorsDoNotLeakTheDriverText`, `TestOpenReadFailureMidStream` |
+| D18.4 | A handle with a dot-segment (`.`, `..`, the local driver's `.w17-staging`) MUST be refused `INVALID_ARGUMENT` `BAD_REQUEST` before the driver is asked: no call reads or deletes another request's in-flight upload. | `TestDotSegmentHandlesAreRefused` |
+
+**Deliberate limits.**
+- No idle timeout: a stalled Put holds the call and its staging file until the caller's deadline or
+  cancellation, as `kvfs.Put` on a stalled reader does in a Go tier.
+- Delete removes the original alone; its stored image variants go when they are next requested
+  (E21.11).

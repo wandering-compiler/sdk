@@ -404,7 +404,7 @@ subscriber that does not use the generated dispatch and for an envelope from a
 publisher outside the SDK.
 
 Credential rule: `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and
-`x-w17-credential` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
+`x-w17-credential` and the DPoP proof `dpop` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
 plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
 `apikey`, `api`+`key`, `bearer`, `cookie`, `credential(s)`, `jwt`, `key`, `otp`,
 `pass`, `passwd`, `password`, `pwd`, `secret`, `session`, `signature`, `token`. The gateway-owned namespaces (`x-w17-*`,
@@ -413,7 +413,8 @@ plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
 Repeated keys collapse to one value, chosen as the key's reader on the subscriber
 side chooses: the first value for the gateway-owned namespaces, the last value for
 every other key, skipping an empty one (the metadata-binding convention the locale readers follow). `LabelsFromContext`
-extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
+extracts `w17-label-<name>` entries with a non-empty value into `Event.Labels`, the event's audience
+(an empty value is no label, as `principal.Label` reads it).
 `EmitInvalidate` dispatches an `InvalidateEvent` on the reserved topic
 `w17.invalidate`, labelled from the context like any other event. The event is
 not the domain's envelope; only the hub (`EveryTopic`) and filters naming `w17`
@@ -429,6 +430,7 @@ receive it (I2.7).
 | I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel; a name that holds a flagged word only as letters inside a segment (`x-keyboard-layout`) still travels. | `TestMetadataFromContext_DropsCredentials`, `TestMetadataFromContext_DropsCommonSecretHeaderShapes` |
 | I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last non-empty otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders`, `TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped` |
 | I8.6 | A delivery whose envelope metadata carries `w17-tx-id` or `w17-conn-id` (any letter case) MUST be refused on every transport before any handler runs, reported, and dead-lettered through the transport's normal failure path; the key as a value, in labels, or as part of a longer name MUST NOT be refused. | `TestEnvelopeGuard_Memory`, `TestEnvelopeGuard_NATS_Embedded`, `TestEnvelopeGuard_Redis_Embedded`, `TestEnvelopeGuard_RefusedEnvelopeIsDeadLettered_Redis`, `TestEnvelopeGuard_RefusedKeysAreStrippedOnEmit` |
+| I8.7 | A DPoP proof (`dpop`, any letter case, also behind `grpcgateway-`) MUST NOT ride `Event.Metadata` and MUST be a reserved key for the subscriber-side filter; a label with an empty value MUST NOT be extracted into `Event.Labels`. | `TestMetadataFromContext_DropsTheDPoPProof`, `TestLabelsFromContext_DropsEmptyValues` |
 
 **Deliberate limits.**
 - The delivery refusal reads field 50001 only. A hand-written envelope that keeps its metadata elsewhere is not checked.
@@ -455,8 +457,8 @@ by labels.
 | Per-write deadline | 30 s | — |
 
 **Audience rule.** With isolation, an unlabelled event reaches nobody; a labelled
-event reaches a client only if every event label is present with the same value in
-the principal's labels. A client whose principal cannot be resolved receives nothing.
+event reaches a client only if every event label is present (a missing key is not
+an empty value) with the same value in the principal's labels. A client whose principal cannot be resolved receives nothing.
 
 **Guarantees.**
 
@@ -467,10 +469,11 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.3 | Every replica MUST receive every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent`, `go/lib/restgw/w17events_replicas_test.go` |
 | I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `TestEventbusEventSource_FailedOpenDrainsWhatItOpened`, `TestEventbusEventSource_PartialOpenDrainsWithoutHoldingTheHubLock`, `TestEventbusEventSource_FailedOpenDrainIsBoundedAtTenSeconds` |
 | I9.5 | Streams MUST end on client disconnect or server drain. | `TestW17EventsEndsOnDrain`, `go/lib/restgw/w17events_drain_test.go` |
-| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeError`, `TestEventbusEventSource_TranscodeSkip` |
+| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter (both at most once per topic per minute, the next one counting the suppressed failures), and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeError`, `TestEventbusEventSource_TranscodeSkip`, `TestEventbusEventSource_TranscodeReportIsThrottledPerTopic` |
 | I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | I9.8 | A write to a stalled client MUST end within the write deadline. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
 | I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | `TestEventbusEventSource_ResumesAfterTheBrokerRecreatesItsConsumer` |
+| I9.10 | An event label MUST be matched by presence: an empty-valued event label MUST NOT be granted to a principal that lacks the label. | `TestEntitled_ALabelMustBePresentNotMerelyEqualToTheZeroValue` |
 
 **Deliberate limits.**
 - Deliveries are always acked; nothing is retried.
@@ -859,12 +862,17 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.24 | A streaming call's record MUST count the messages sent and received (`CountStream`, `MessageSent`, `MessageReceived`, safe from two goroutines) and hold the first message the client sent as its request; `FinishStream` records the stream's gRPC code and no response. | `TestRecord_StreamCountsItsMessages`, `TestRecord_MessageCountsFromTwoGoroutines` |
 | I20.25 | A method without a redaction plan (or whose request or response fails to redact) MUST NOT be recorded at all, meta included: the record takes the failure path, without an encoding, and is reported. Fail closed: nothing of a request is stored that its plan does not cover. | `TestRecorder_ARequestWithoutARedactionPlanIsNotRecorded` |
 | I20.26 | The recorder's own connection lines (lost, reconnected) MUST name the server without the DSN's credential. | `TestOpen_ReconnectLogMasksTheCredential` |
+| I20.27 | A record MUST own the request it records (a copy taken at `SetRequest`): a streaming handler that reuses its receive buffer records the stream's first message, and a handler that edits what it decoded does not change the record. | `TestRecord_KeepsItsOwnCopyOfTheRequest` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
 - One record per request: a second recorded backend call in the same admin request is not recorded.
 - Capability-link pages are learned per surface and per process (the last 1024): a call made from such a page before it called its credential route, or served by another replica, records the page's path, credential included when the credential is in the path.
 - The failure log is a second store of what the records hold (the redacted request, the client, the caller): its retention and who may read it are the log driver's, not the stream's.
+- The consent a record carries is the caller's as of the auth verdict the request used: for a unary
+  request at most `ConsentCacheCeiling` old (I20.18); for a stream, the verdict at connect — the
+  re-auth watchdog (E17) re-probes the credential but does not refresh the record's caller, so a
+  withdrawal during a long stream is not in that stream's record.
 - Consent is not the recorder's to enforce: a marketing record is the project's usage data, and whether its caller may be sent marketing messages is for the consumer that sends them, which reads `marketing_consent`.
 
 ## I21. Request event consumers

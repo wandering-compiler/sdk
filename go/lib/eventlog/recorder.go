@@ -513,10 +513,13 @@ func (rec *Record) SetRequestID(id string) {
 }
 
 // SetRequest records the decoded request — as soon as it is decoded, so a
-// request refused after decoding still carries it.
+// request refused after decoding still carries it. The record keeps its own
+// copy: it is encoded after the call, on the pipeline's goroutine, and the
+// caller's message may change meanwhile (a stream handler reusing its
+// receive buffer, a handler editing what it decoded).
 func (rec *Record) SetRequest(req proto.Message) {
-	if rec != nil && !rec.finished {
-		rec.req = req
+	if rec != nil && !rec.finished && req != nil {
+		rec.req = proto.Clone(req)
 	}
 }
 

@@ -137,7 +137,7 @@ func StreamReauthIntervalFromEnv(prefix string, getenv func(string) string) time
 // [NoAuth], which always succeeds — polling it would burn a goroutine per
 // stream to learn nothing.
 func WatchStreamAuth(ctx context.Context, authFn AuthFunc, r *http.Request, interval time.Duration) (context.Context, context.CancelFunc) {
-	if interval <= 0 || authFn == nil || r == nil {
+	if interval <= 0 || authFn == nil || IsNoAuth(authFn) || r == nil {
 		return ctx, func() {}
 	}
 	watched, cancel := context.WithCancel(ctx)

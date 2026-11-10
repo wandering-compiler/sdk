@@ -107,6 +107,26 @@ type Driver interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// SizedSeekableOpener is the OPTIONAL capability of a driver that has to
+// ask the store for an object's size before it can seek in it (S3: a HEAD
+// per open). A caller that already holds the size from [Driver.Stat] hands
+// it over and saves the round trip. Use [OpenSeekableSized], which falls
+// back to OpenSeekable for a driver without it.
+type SizedSeekableOpener interface {
+	// OpenSeekableSized is OpenSeekable for an object whose size the
+	// caller has just read with Stat.
+	OpenSeekableSized(ctx context.Context, key string, size int64) (io.ReadSeekCloser, error)
+}
+
+// OpenSeekableSized opens key for seeking with the size the caller already
+// has, through [SizedSeekableOpener] when d implements it.
+func OpenSeekableSized(ctx context.Context, d Driver, key string, size int64) (io.ReadSeekCloser, error) {
+	if o, ok := d.(SizedSeekableOpener); ok {
+		return o.OpenSeekableSized(ctx, key, size)
+	}
+	return d.OpenSeekable(ctx, key)
+}
+
 // StagingDirProvider is the OPTIONAL capability a driver backed by a
 // local filesystem advertises: "stage uploads HERE and my
 // PutFromTempFile stays a same-filesystem rename".

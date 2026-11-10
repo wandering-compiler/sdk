@@ -2,28 +2,46 @@ package restgw
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wandering-compiler/sdk/go/lib/captcha"
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
 )
 
-// The error codes a captcha refusal answers with, for a client to branch
-// on: the first two are fixed by solving the captcha again, the last by
-// trying later.
+// The detail codes a captcha refusal carries in the envelope's details[],
+// for a client to branch on: the first two are fixed by solving the captcha
+// again, the last by trying later. The envelope's own `code` stays the
+// canonical gRPC name (PERMISSION_DENIED, UNAVAILABLE), as on every other
+// refusal.
 const (
 	CodeCaptchaRequired    = "CAPTCHA_REQUIRED"
 	CodeCaptchaInvalid     = "CAPTCHA_INVALID"
 	CodeCaptchaUnavailable = "CAPTCHA_UNAVAILABLE"
 )
 
+// Sentences for the captcha refusals, translated with the request locale
+// and harvested through [Vocabulary].
+const (
+	MsgidCaptchaRequired    = "This request needs a solved captcha."
+	MsgidCaptchaInvalid     = "The captcha was not accepted. Solve it again."
+	MsgidCaptchaUnavailable = "The captcha could not be checked. Try again later."
+)
+
 // RequireCaptcha verifies the request's solved captcha (the
 // [captcha.Header] header) with v, for an endpoint that requires one
 // (RestEndpoint.captcha). It answers the refusal itself and reports false
-// when the handler must stop: 403 CAPTCHA_REQUIRED without a token, 403
-// CAPTCHA_INVALID for one the provider rejects, 503 CAPTCHA_UNAVAILABLE when
-// the provider cannot be asked — the gateway fails closed. A nil v (no
-// captcha secret configured) passes every request.
+// when the handler must stop: 403 PERMISSION_DENIED with detail
+// CAPTCHA_REQUIRED without a token, 403 PERMISSION_DENIED with detail
+// CAPTCHA_INVALID for one the provider rejects, 503 UNAVAILABLE with detail
+// CAPTCHA_UNAVAILABLE when the provider cannot be asked — the gateway fails
+// closed. The sentence is the catalog's, in the request's language; the
+// cause goes to observability (a refusal on the non-exception channel, an
+// unreachable provider on the exception channel). A nil v (no captcha
+// secret configured) passes every request.
 //
 // The client address is the one [ClientAddrMiddleware] recorded, which the
 // provider weighs with the token.
@@ -31,17 +49,26 @@ func RequireCaptcha(v *captcha.Verifier, w http.ResponseWriter, r *http.Request)
 	if !v.Enabled() {
 		return true
 	}
-	err := v.Verify(r.Context(), r.Header.Get(captcha.Header), ClientAddrFrom(r.Context()))
+	ctx := r.Context()
+	err := v.Verify(ctx, r.Header.Get(captcha.Header), ClientAddrFrom(ctx))
+	var (
+		code   codes.Code
+		detail string
+		msgid  string
+	)
 	switch {
 	case err == nil:
 		return true
 	case errors.Is(err, captcha.ErrMissing):
-		WriteError(w, http.StatusForbidden, CodeCaptchaRequired, "this request needs a solved captcha in the "+captcha.Header+" header")
+		code, detail, msgid = codes.PermissionDenied, CodeCaptchaRequired, MsgidCaptchaRequired
 	case errors.Is(err, captcha.ErrRejected):
-		WriteError(w, http.StatusForbidden, CodeCaptchaInvalid, "the captcha was not accepted: solve it again")
+		code, detail, msgid = codes.PermissionDenied, CodeCaptchaInvalid, MsgidCaptchaInvalid
 	default:
-		log.Printf("restgw: captcha verification failed: %v", err)
-		WriteError(w, http.StatusServiceUnavailable, CodeCaptchaUnavailable, "the captcha could not be verified: try again later")
+		code, detail, msgid = codes.Unavailable, CodeCaptchaUnavailable, MsgidCaptchaUnavailable
 	}
+	reportByCode(ctx, code, status.Error(code, fmt.Sprintf("captcha (%s): %v", detail, err)))
+	sentence := i18n.T(ctx, msgid, nil)
+	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(code), GRPCCodeName(code), sentence,
+		[]FieldError{{Code: detail, Message: sentence}})
 	return false
 }
