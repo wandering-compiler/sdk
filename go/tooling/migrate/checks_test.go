@@ -3,6 +3,8 @@ package migrate_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -209,5 +211,67 @@ func TestRollback_ChecksRefuseWhereTheyCannotRun(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot run") || len(a.RollbackCalls()) != 0 {
 		t.Fatalf("err %v, rollbacks %v", err, a.RollbackCalls())
+	}
+}
+
+// lockLosingChecker is a checking applier whose run lock is lost while a
+// check runs: the lock is held when the run starts and before the checks,
+// and reports itself lost once any probe ran.
+type lockLosingChecker struct{ *checkingApplier }
+
+func (l *lockLosingChecker) AcquireRunLock(context.Context) (migrate.RunLock, error) {
+	return checkLostLock{l.checkingApplier}, nil
+}
+
+type checkLostLock struct{ a *checkingApplier }
+
+func (k checkLostLock) Check(context.Context) error {
+	if len(k.a.ran) > 0 {
+		return fmt.Errorf("%w: lease ran out during a check", migrate.ErrLockLost)
+	}
+	return nil
+}
+
+func (checkLostLock) Release(context.Context) error { return nil }
+
+// A run lock lost while a pre-apply check ran (a slow probe outlives the
+// lease) stops the migration before its body: the checks run on their own
+// connections, and the lock is asked again after them.
+func TestRun_LostRunLockDuringAChecksStopsTheBody(t *testing.T) {
+	m := checkedMigration()
+	dir := seedDir(t, m)
+	a := &lockLosingChecker{&checkingApplier{Applier: stub.New()}}
+	err := migrate.Run(context.Background(), migrate.Config{
+		Targets: targets(lockTarget{"main", m.GetId(), m.GetContentSha256()}), MigrationsDir: dir,
+		ApplierFor: func(string) (migrate.Applier, error) { return a, nil },
+		Checks:     true,
+	})
+	if !errors.Is(err, migrate.ErrLockLost) {
+		t.Fatalf("Run = %v, want an error wrapping ErrLockLost", err)
+	}
+	if len(a.ran) != 1 {
+		t.Fatalf("checks run %q, want the forward check", a.ran)
+	}
+	if len(a.Calls()) != 0 {
+		t.Fatalf("the body ran after the lock was lost during its check: %v", a.Calls())
+	}
+}
+
+// The same on rollback: a lock lost during a down check stops the down body.
+func TestRunRollback_LostRunLockDuringAChecksStopsTheBody(t *testing.T) {
+	m := checkedMigration()
+	dir := seedDir(t, m)
+	a := &lockLosingChecker{&checkingApplier{Applier: stub.New()}}
+	a.Head = m.GetId()
+	err := migrate.RunRollback(context.Background(), migrate.RollbackConfig{
+		Targets: targets(lockTarget{"main", m.GetId(), m.GetContentSha256()}), MigrationsDir: dir,
+		ApplierFor: func(string) (migrate.Applier, error) { return a, nil },
+		Checks:     true,
+	})
+	if !errors.Is(err, migrate.ErrLockLost) {
+		t.Fatalf("RunRollback = %v, want an error wrapping ErrLockLost", err)
+	}
+	if len(a.ran) != 1 || len(a.RollbackCalls()) != 0 {
+		t.Fatalf("checks run %q, rollbacks %v; the down body ran after the lock was lost", a.ran, a.RollbackCalls())
 	}
 }
