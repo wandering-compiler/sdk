@@ -23,8 +23,61 @@ import (
 // strings follow a keyword; keywords appear in entry order (an entry's
 // `msgstr` follows its `msgid`, indexed forms only after `msgid_plural`);
 // every entry ends with a translation; no msgid is defined twice in the
-// same context. Comment (`#…`) and blank lines are ignored.
+// same context; no entry is marked `#, fuzzy` (a translator's unreviewed
+// guess, which the runtime does not serve — see [RegisterCatalog]; the
+// header entry is exempt). Other comment (`#…`) and blank lines are ignored.
 func ValidatePO(body []byte) error {
+	errs, entries := scanPO(body)
+	for _, e := range entries {
+		if e.fuzzy && e.id != "" {
+			errs = append(errs, fmt.Errorf("line %d: entry %q is marked fuzzy and is not served until the flag is removed", e.line, e.id))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// poEntryPos is one entry [scanPO] found: its context and msgid (continuation
+// strings joined), the line its first keyword is on, and whether a `#,`
+// flag line before it carries `fuzzy`.
+type poEntryPos struct {
+	ctxt, id string
+	line     int
+	fuzzy    bool
+}
+
+// fuzzyIDs is the set of msgids (with no msgctxt) of body's fuzzy entries,
+// the header excepted.
+func fuzzyIDs(body []byte) map[string]bool {
+	_, entries := scanPO(body)
+	var out map[string]bool
+	for _, e := range entries {
+		if e.fuzzy && e.id != "" && e.ctxt == "" {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[e.id] = true
+		}
+	}
+	return out
+}
+
+// isFuzzyFlagLine reports whether l is a `#,` flag line naming `fuzzy`.
+func isFuzzyFlagLine(l string) bool {
+	rest, ok := strings.CutPrefix(l, "#,")
+	if !ok {
+		return false
+	}
+	for _, f := range strings.Split(rest, ",") {
+		if strings.TrimSpace(f) == "fuzzy" {
+			return true
+		}
+	}
+	return false
+}
+
+// scanPO walks body by the gettext entry grammar ValidatePO documents and
+// returns the grammar problems and the entries found.
+func scanPO(body []byte) ([]error, []poEntryPos) {
 	const (
 		stNone   = iota // between entries
 		stCtxt          // after msgctxt
@@ -33,11 +86,13 @@ func ValidatePO(body []byte) error {
 		stStr           // after msgstr / msgstr[N]
 	)
 	var (
-		errs      []error
-		state     = stNone
-		ctxt, id  string
-		entryLine int
-		seen      = map[string]int{}
+		errs                     []error
+		entries                  []poEntryPos
+		state                    = stNone
+		ctxt, id                 string
+		entryLine                int
+		seen                     = map[string]int{}
+		pendingFuzzy, entryFuzzy bool
 	)
 	fail := func(line int, format string, args ...any) {
 		errs = append(errs, fmt.Errorf("line %d: "+format, append([]any{line}, args...)...))
@@ -55,7 +110,12 @@ func ValidatePO(body []byte) error {
 		} else {
 			seen[key] = entryLine
 		}
-		state, ctxt, id = stNone, "", ""
+		entries = append(entries, poEntryPos{ctxt: ctxt, id: id, line: entryLine, fuzzy: entryFuzzy})
+		state, ctxt, id, entryFuzzy = stNone, "", "", false
+	}
+	// open starts an entry at line n, taking the flags read since the last one.
+	open := func(n int) {
+		entryLine, entryFuzzy, pendingFuzzy = n, pendingFuzzy, false
 	}
 	// quoted parses the one quoted string a keyword line carries.
 	quoted := func(line int, rest string) (string, bool) {
@@ -77,6 +137,9 @@ func ValidatePO(body []byte) error {
 		l := strings.TrimSpace(raw)
 		switch {
 		case l == "" || strings.HasPrefix(l, "#"):
+			if isFuzzyFlagLine(l) {
+				pendingFuzzy = true
+			}
 			continue
 
 		case strings.HasPrefix(l, `"`):
@@ -102,7 +165,8 @@ func ValidatePO(body []byte) error {
 				fail(n, "msgctxt inside an unfinished entry")
 				finish()
 			}
-			entryLine, state = n, stCtxt
+			open(n)
+			state = stCtxt
 			ctxt, _ = quoted(n, strings.TrimPrefix(l, "msgctxt"))
 
 		case strings.HasPrefix(l, "msgid_plural"):
@@ -125,7 +189,7 @@ func ValidatePO(body []byte) error {
 				finish()
 			}
 			if state == stNone {
-				entryLine = n
+				open(n)
 			}
 			state = stID
 			id, _ = quoted(n, strings.TrimPrefix(l, "msgid"))
@@ -164,5 +228,5 @@ func ValidatePO(body []byte) error {
 		}
 	}
 	finish()
-	return errors.Join(errs...)
+	return errs, entries
 }

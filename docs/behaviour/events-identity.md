@@ -611,10 +611,10 @@ untranslated. Substitution is one left-to-right pass over the translated text.
 | I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing. | `TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31`, `TestT_AcceptLanguageRegion_FallsBackToBase_B31`, `TestLocaleFromContext_LastValueWins`, `TestLocaleFromContext_OutgoingMetadata`, `TestLocaleFromContext_IncomingBeatsOutgoing` |
 | I14.3 | Unknown placeholders MUST survive verbatim; an empty msgid MUST return "" so the `.po` header never leaks. | `TestSubstitute_UnknownPlaceholderPassesThrough`, `TestT_EmptyMsgid_ReturnsEmpty` |
 | I14.4 | Concurrent use MUST be safe. | `go/lib/i18n/i18n_extra_test.go` |
-| I14.5 | A msgid missing from the requested catalog, or present with an empty `msgstr`, MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | `TestT_FallbackIsPerMessage`, `TestT_EmptyMsgstrFallsThrough` |
+| I14.5 | A msgid missing from the requested catalog, present with an empty `msgstr`, or marked `#, fuzzy`, MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | `TestT_FallbackIsPerMessage`, `TestT_EmptyMsgstrFallsThrough`, `TestFuzzyEntryIsNotServed` |
 | I14.6 | Substitution MUST be deterministic and MUST NOT expand placeholder tokens inside parameter values. | `TestSubstitute_DeterministicSinglePass`, `TestSubstitute_BraceEdges` |
 | I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`). | `TestCatalogTag_UnderscoreAndCaseInsensitive` |
-| I14.8 | A malformed catalog, and a catalog tree without any `.po` file, MUST be reported at registration: `ValidatePO` and `RegisterCatalog` return the problems with line numbers, `RegisterFS` joins them per file path and adds `ErrNoCatalogs`. | `TestValidatePO`, `TestRegisterFS_ReportsMalformedCatalog`, `TestRegisterFS_NoCatalogIsReported` |
+| I14.8 | A malformed catalog, an entry marked `#, fuzzy` (the header excepted), and a catalog tree without any `.po` file, MUST be reported at registration: `ValidatePO` and `RegisterCatalog` return the problems with line numbers, `RegisterFS` joins them per file path and adds `ErrNoCatalogs`. | `TestValidatePO`, `TestValidatePO_ReportsFuzzyEntries`, `TestRegisterFS_ReportsMalformedCatalog`, `TestRegisterFS_NoCatalogIsReported` |
 | I14.9 | Registering a language twice MUST merge the catalogs; a conflicting translation MUST keep the first one and be reported. | `TestRegisterCatalog_MergesAndReportsConflicts` |
 
 ---
@@ -652,7 +652,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty. | `go/lib/i18n/merge_untranslated_test.go`, `go/lib/i18n/extract_test.go` |
+| I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty; an entry marked `#, fuzzy` MUST keep its flag and its suggested `msgstr`, and `EntriesFromPO` MUST report it `Fuzzy` with no `msgstr`, so a catalog built from it does not serve it. | `go/lib/i18n/merge_untranslated_test.go`, `go/lib/i18n/extract_test.go`, `TestMergePO_KeepsTheFuzzyFlag` |
 | I16.2 | Extraction, scaffolding and enum-label harvesting MUST produce the catalogs the runtime reads. | `go/lib/i18n/extract_test.go`, `go/lib/i18n/extract_extra_test.go`, `go/lib/i18n/harvest_test.go`, `go/lib/i18n/harvest_extra_test.go` |
 
 ---
