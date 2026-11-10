@@ -3,10 +3,10 @@ package restgw
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
 
@@ -44,8 +44,26 @@ func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (
 // nonce; nothing was checked, so it is not a failed attempt, and a limit that
 // charges only failures must not count it — or every first sign-in of a new
 // device would spend a token of the address's guess budget.
+//
+// It reads the header itself rather than through lib/dpop, which stays out of
+// this package so a project that never binds devices takes no DPoP
+// dependency; nonce_challenge_test.go holds it to dpop.IsUseNonceChallenge.
 func NonceChallenge(status int, h http.Header) bool {
-	return status == http.StatusUnauthorized && dpop.IsUseNonceChallenge(h.Values(dpop.HeaderWWWAuthenticate))
+	if status != http.StatusUnauthorized {
+		return false
+	}
+	for _, v := range h.Values("WWW-Authenticate") {
+		l := strings.ToLower(v)
+		i := strings.Index(l, "dpop ")
+		if i < 0 || (i > 0 && !strings.HasSuffix(strings.TrimRight(l[:i], " "), ",")) {
+			continue
+		}
+		rest := strings.ReplaceAll(l[i:], " ", "")
+		if strings.Contains(rest, `error="use_dpop_nonce"`) || strings.Contains(rest, "error=use_dpop_nonce") {
+			return true
+		}
+	}
+	return false
 }
 
 // AdmitPublicStream is AdmitPublic for a streaming method (SSE, WebSocket):
