@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
@@ -322,6 +324,7 @@ type Record struct {
 
 	ip, userAgent, referrer string
 	utm                     map[string]string
+	clientCut               []string // the client fields SetClient cut, as truncated paths
 
 	// A stream's messages, counted from the goroutines that send and
 	// receive them (a WebSocket's pump is a second one).
@@ -354,14 +357,91 @@ func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]stri
 	if rec.method.URLCredential {
 		referrer = ""
 	}
+	rec.clientCut = rec.clientCut[:0]
+	var cut bool
+	if ip, cut = boundClient(ip, MaxClientField); cut {
+		rec.clientCut = append(rec.clientCut, "client.ip")
+	}
+	if userAgent, cut = boundClient(userAgent, MaxClientField); cut {
+		rec.clientCut = append(rec.clientCut, "client.user_agent")
+	}
+	if referrer, cut = boundClient(referrer, MaxClientField); cut {
+		rec.clientCut = append(rec.clientCut, "client.referrer")
+	}
+	if utm, cut = boundUTM(utm); cut {
+		rec.clientCut = append(rec.clientCut, "client.utm")
+	}
 	rec.ip, rec.userAgent, rec.referrer, rec.utm = ip, userAgent, referrer, utm
+}
+
+// Bounds of the client facts a record keeps. The record ceiling bounds the
+// request and the response; these bound the meta, which comes from request
+// headers and the query string an unauthenticated client controls: without
+// them a megabyte Referer made the record larger than a batch, and the
+// request went unaudited.
+const (
+	// MaxClientField is the most bytes kept of the user agent, the referrer
+	// and the request id.
+	MaxClientField = 2 << 10
+	// MaxUTMParams is the most UTM parameters kept (by name, in order).
+	MaxUTMParams = 8
+	// MaxUTMField is the most bytes kept of one UTM parameter's name or value.
+	MaxUTMField = 256
+)
+
+// boundClient makes s valid UTF-8 (a proto string must be; an invalid byte
+// would fail the whole record) and cuts it to max bytes on a rune boundary.
+// It reports whether anything was cut or replaced.
+func boundClient(s string, limit int) (string, bool) {
+	changed := false
+	if !utf8.ValidString(s) {
+		s, changed = strings.ToValidUTF8(s, "\uFFFD"), true
+	}
+	if len(s) <= limit {
+		return s, changed
+	}
+	n := limit
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n], true
+}
+
+// boundUTM keeps at most MaxUTMParams parameters, the first by name, each
+// name and value bounded by MaxUTMField; it reports whether anything was
+// dropped or cut. The input map is not modified.
+func boundUTM(utm map[string]string) (map[string]string, bool) {
+	if len(utm) == 0 {
+		return utm, false
+	}
+	keys := make([]string, 0, len(utm))
+	for k := range utm {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	cut := len(keys) > MaxUTMParams
+	if cut {
+		keys = keys[:MaxUTMParams]
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		v := utm[k]
+		bk, ck := boundClient(k, MaxUTMField)
+		bv, cv := boundClient(v, MaxUTMField)
+		cut = cut || ck || cv
+		out[bk] = bv
+	}
+	return out, cut
 }
 
 // SetRequestID records the request id the surface assigned; nothing once the
 // record is finished.
 func (rec *Record) SetRequestID(id string) {
 	if rec != nil && !rec.finished {
-		rec.requestID = id
+		var cut bool
+		if rec.requestID, cut = boundClient(id, MaxClientField); cut {
+			rec.clientCut = append(rec.clientCut, "request_id")
+		}
 	}
 }
 
@@ -679,7 +759,10 @@ func mapEntry(b []byte) (key, val string) {
 }
 
 func recordSize(rec *Record) int {
-	n := 256 + len(rec.method.FullName) + len(rec.userAgent) + len(rec.referrer)
+	n := 256 + len(rec.method.FullName) + len(rec.userAgent) + len(rec.referrer) + len(rec.requestID)
+	for k, v := range rec.utm {
+		n += len(k) + len(v) + 8
+	}
 	if rec.req != nil {
 		n += proto.Size(rec.req)
 	}
@@ -749,6 +832,7 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	if rec.ip != "" || rec.userAgent != "" || rec.referrer != "" || len(rec.utm) > 0 {
 		m.Client = &w17pb.RequestClient{Ip: rec.ip, UserAgent: rec.userAgent, Referrer: rec.referrer, Utm: rec.utm}
 	}
+	cut = append(cut, rec.clientCut...)
 	m.Truncated = len(cut) > 0
 	m.TruncatedPaths = cut
 	m.TraceId = rec.traceID
