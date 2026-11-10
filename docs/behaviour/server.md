@@ -482,7 +482,7 @@ loopback, and exits non-zero naming the failed ones.
 |---|---|---|
 | `argv[0] == "health"` | — | runs the check |
 | `--timeout` | 3s | `<= 0` → error |
-| `Options.Probes` | — | `HTTP` (GET `/healthz` must be 200), `GRPC` (health Check `""` must be SERVING, dialled with the mesh posture), `PublicGRPC` (always plaintext). Empty → error |
+| `Options.Probes` | — | `HTTP` (GET `/healthz` must be 200), `GRPC` (health Check `""` must be SERVING, dialled with the mesh posture), `PublicGRPC` (always plaintext), `PrivateGRPC` (a private listener, S23: mutual TLS on the private PKI whatever the mesh switch says, presenting this container's own private identity and accepting the listener only as that identity, `privatesurface.SelfTLS`). Empty → error |
 | `Options.Final` | false | true: `--help` prints usage and any other bare word is an error instead of starting the server |
 | `Options.Getenv` | `os.Getenv` | reads the internal-TLS variables |
 | listen address | — | wildcard (`""`, `0.0.0.0`, `::`) → `127.0.0.1`; an explicit host is kept; port `0` or empty → error |
@@ -495,14 +495,14 @@ leaf lacks it, the check fails before dialing with an error that names the cause
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S16.1 | Every check MUST run concurrently under one overall timeout. | `TestRun_TimeoutBoundsAHungListener` |
+| S16.1 | Every check MUST run concurrently under one overall timeout, so hung listeners do not use up the time of a healthy one. | `TestRun_TimeoutBoundsAHungListener`, `TestRun_HungListenersDoNotStarveAHealthyOne` |
 | S16.2 | Exit MUST be OK only if every listener answered, and the failing ones are named. | `TestRun_AllListenersAnswer`, `TestRun_NamesOnlyTheFailingListener` |
 | S16.3 | HTTP without `/healthz` MUST fail. | `TestRun_HTTPWithoutHealthzFails` |
 | S16.4 | gRPC NOT_SERVING MUST fail. | `TestRun_GRPCNotServingFails` |
 | S16.5 | No configured checks MUST be an error, not success. | `TestRun_NoProbesIsAnError` |
 | S16.6 | Bad flags or extra arguments MUST give an error with usage. | `TestRun_FlagErrors` |
 | S16.7 | Address forms MUST be mapped as listed. | `TestRun_ListenAddressForms` |
-| S16.8 | Under internal TLS the gRPC check MUST verify the chain against the configured CA, naming the server by the leaf's first DNS SAN (else IP SAN), and MUST NOT skip verification. | `TestRun_GRPCUnderInternalTLS` |
+| S16.8 | Under internal TLS the gRPC check MUST verify the chain against the configured CA, naming the server by the leaf's first DNS SAN (else IP SAN), and MUST NOT skip verification. The `PrivateGRPC` check verifies by identity instead of host name: the chain against the private CA and the leaf's URI SAN equal to this container's own (S23.6), so a production identity with no DNS SAN is healthy and another identity of the same CA is not. | `TestRun_GRPCUnderInternalTLS`, `TestRun_PrivateGRPCAcceptsItsOwnURIIdentity`, `TestSelfTLS_AcceptsOnlyThisBundlesListener` |
 | S16.9 | `PublicGRPC` MUST be plaintext even with the switch on. | `TestRun_GRPCUnderInternalTLS` |
 | S16.10 | Under `terminated` the gRPC check MUST dial plaintext, as the listener does. | `TestRun_GRPCUnderTerminatedIsPlaintext` |
 | S16.11 | Under mutual TLS the check MUST present this node's leaf as its client certificate. | `TestRun_GRPCUnderMutualTLS` |
