@@ -813,10 +813,16 @@ it; the batcher builds the envelope: the request and response by their redaction
 | I20.18 | The caller's marketing consent MUST be carried, never applied: a signed-in request on a marketing surface MUST be recorded whether its consent is yes, no or not kept, and the record's `marketing_consent` MUST be the principal's value, unset when the auth response does not declare the field. | `TestRecorder_ConsentIsCarriedNotApplied` |
 | I20.19 | A record's organization MUST be the caller's `org_id` scope, from the stamped metadata or the auth response; no other scope MAY name one. | `TestRecorder_TheOrgScopeIsTheOrganization` |
 | I20.20 | On Redis, each surface's batch MUST be stored with its subject, its id and its organizations as entry fields, a re-sent batch MUST be stored once within the duplicate window, and entries past the max age MUST be trimmed on publish. | `TestRedisSink_StoresTheBatchWithItsSubjectAndOrgs`, `TestRedisSink_ARetriedBatchIsStoredOnce`, `TestRedisSink_TrimsPastMaxAge` |
+| I20.21 | A record MUST own the request it records (a copy taken at `SetRequest`): a streaming handler that reuses its receive buffer records the stream's first message, and a handler that edits what it decoded does not change the record. | `TestRecord_KeepsItsOwnCopyOfTheRequest` |
+| I20.22 | A surface whose records carry the marketing consent MUST answer from a cached auth verdict for at most `ConsentCacheCeiling` (5 min): `CapAuthCacheTTL` keeps a TTL that fits, caps a longer one (logged) and keeps 0 (cache off). | `TestCapAuthCacheTTL_KeepsWhatFitsAndCapsTheRest` (which surfaces apply the cap is the generated gateway's) |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
 - One record per request: a second recorded backend call in the same admin request is not recorded.
+- The consent a record carries is the caller's as of the auth verdict the request used: for a unary
+  request at most `ConsentCacheCeiling` old (I20.22); for a stream, the verdict at connect — the
+  re-auth watchdog (E17) re-probes the credential but does not refresh the record's caller, so a
+  withdrawal during a long stream is not in that stream's record.
 - Consent is not the recorder's to enforce: a marketing record is the project's usage data, and whether its caller may be sent marketing messages is for the consumer that sends them, which reads `marketing_consent`.
 
 ## I21. Request event consumers
