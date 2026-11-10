@@ -173,7 +173,7 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Transaction routing metadata (D4, D5) | Event bus subscriber context | Event envelopes MUST NOT carry transaction routing metadata (`w17-tx-id`, `w17-conn-id`) into a subscriber, so a subscriber is never a participant and its storage calls are not pinned to a settled transaction's connection. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
 | Cursor paging metadata (D9) | Principal relay (`ForwardToOutgoing`) | Paging headers are never relayed hop-to-hop. | `TestForwardPrincipalUnaryInterceptor`, `TestDialOpts_StreamRelaysThePrincipalOnly` |
 | Secret values (D17) | Structured logging | A `Secret` redacts on every logging path, wherever it is held. | `TestSlogRedacts`, `TestStructRedacts`, `TestUnexportedFieldRedactsInEveryVerb`, `TestUnexportedFieldRedactsInSlog` |
-| Column encryption (D16) | Error layer and logs | Decryption errors carry no plaintext or key material. | `TestDecrypt_*` |
+| Column encryption (D16) | Error layer and logs | Decryption errors carry no plaintext, stored value or key material. | `TestDecryptErrors_CarryNoStoredBytesPlaintextOrKey` (`go/lib/fieldcrypt`) |
 | In-process transaction scope | In-memory transport (I4) | A memory subscriber does not inherit the emitter's transaction, metadata or context values; it runs on its subscription's context. | `TestMemoryBus_HandlerContextIsNotTheEmitters` |
 
 ## Data × Tooling

@@ -516,11 +516,11 @@ nonce from an HMAC of the plaintext, truncated to 96 bits. Stored form: `w17c.<v
 | ID | Guarantee | Test |
 |---|---|---|
 | D16.1 | Randomised and deterministic values MUST round-trip, including the empty string; decryption is mode-agnostic. | `TestRandomised_*`, `TestDeterministic_*`, `TestDecrypt_IsModeAgnostic`, `TestRoundTrip_TheEmptyStringIsAValue` |
-| D16.2 | A plaintext row MUST yield `ErrNotEncrypted`, distinct from a tampered or wrong-key value (authentication error). | `TestDecrypt_ATamperedValueIsDistinguishedFromPlaintext`, `TestDecrypt_AWrongKeyDoesNotSilentlyProduceGarbage` |
+| D16.2 | A plaintext row (a value without the four-part `w17c.<version>.<mode>.<body>` envelope) MUST yield `ErrNotEncrypted`, distinct from a tampered or wrong-key value (authentication error) and from a value that carries the envelope but cannot be read as one — a non-numeric version, an unknown mode, a body that is not base64 or is shorter than the nonce — which MUST yield `ErrMalformed`. | `TestDecrypt_PlaintextIsReportedAsNotEncrypted`, `TestDecrypt_ATamperedValueIsDistinguishedFromPlaintext`, `TestDecrypt_AWrongKeyDoesNotSilentlyProduceGarbage` |
 | D16.3 | An unknown key version MUST yield `ErrUnknownKeyVersion` naming the versions held. | `fieldcrypt_test.go` |
 | D16.4 | After rotation, old versions MUST stay decryptable and new randomised writes MUST use the newest key. | `TestRotation_OldValuesStayReadableAndNewOnesUseTheNewestKey`, `TestDeterministic_StableAcrossRotation` |
 | D16.5 | Deterministic values MUST be written under the lowest key version, so adding a key (in any listing order) leaves the ciphertext of a plaintext unchanged and equality lookups and UNIQUE enforcement keep working. | `TestDeterministic_StableAcrossRotation` |
-| D16.6 | Error messages MUST NOT include plaintext or key material. | `TestDecrypt_*` |
+| D16.6 | Error messages MUST NOT include plaintext, the stored value or key material, for every decryption failure (tampered, wrong key, unknown version, malformed, not encrypted). | `TestDecryptErrors_CarryNoStoredBytesPlaintextOrKey` |
 | D16.7 | A missing or malformed keyring MUST fail the boot, not the first query. | `TestParse_*`, `shared_test.go` |
 | D16.8 | `DevKeys` MUST be refused outside development: `FromEnv` and `Init` return `ErrDevKeys` unless `W17_ENV=dev`. | `TestInit_RefusesTheDevelopmentKeyOutsideDev` |
 | D16.9 | Dropping the lowest key MUST move deterministic writes to the next lowest version, which `DeterministicVersion` names so a re-encryption can target it. | `TestDeterministic_DroppingTheLowestKeyMovesToTheNext` |

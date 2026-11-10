@@ -143,6 +143,14 @@ const KeyBytes = 32
 // CRYPTED_SECRET, which is a data migration nobody ran.
 var ErrNotEncrypted = errors.New("fieldcrypt: value is not encrypted")
 
+// ErrMalformed is returned for a stored value that carries this package's
+// envelope (`w17c.<version>.<mode>.<body>`) but cannot be read as one: a
+// version that is not a number, an unknown mode letter, a body that is not
+// base64 or is shorter than the nonce. The value IS ours and was damaged
+// (truncated, altered, re-encoded); unlike [ErrNotEncrypted], running the
+// plaintext data migration is not the remedy.
+var ErrMalformed = errors.New("fieldcrypt: encrypted value is malformed")
+
 // ErrUnknownKeyVersion is returned when a value names a key the keyring does
 // not hold. During a rotation this means a retired key was dropped before its
 // rows were re-encrypted; the fix is to put it back until they are.
@@ -346,24 +354,27 @@ func (k *Keyring) Decrypt(stored string) (string, error) {
 	if len(parts) != 4 || parts[0] != prefix {
 		return "", ErrNotEncrypted
 	}
+	// From here on the value carries this package's envelope: a failure to
+	// read it is damage to an encrypted value (ErrMalformed), not a
+	// plaintext row. No message quotes the stored bytes.
 	ver, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return "", ErrNotEncrypted
+		return "", fmt.Errorf("%w: the key version is not a number", ErrMalformed)
 	}
 	ks, ok := k.keys[ver]
 	if !ok {
 		return "", fmt.Errorf("%w: version %d (keyring holds %s)", ErrUnknownKeyVersion, ver, k.versions())
 	}
 	if parts[2] != modeRandomised && parts[2] != modeDeterministic {
-		return "", ErrNotEncrypted
+		return "", fmt.Errorf("%w: unknown mode (key version %d)", ErrMalformed, ver)
 	}
 	body, err := base64.RawURLEncoding.DecodeString(parts[3])
 	if err != nil {
-		return "", ErrNotEncrypted
+		return "", fmt.Errorf("%w: the body is not base64 (key version %d)", ErrMalformed, ver)
 	}
 	ns := ks.aead.NonceSize()
 	if len(body) < ns {
-		return "", ErrNotEncrypted
+		return "", fmt.Errorf("%w: the body is shorter than its nonce (key version %d)", ErrMalformed, ver)
 	}
 	plain, err := ks.aead.Open(nil, body[:ns], body[ns:], nil)
 	if err != nil {
