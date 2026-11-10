@@ -162,3 +162,57 @@ check-conformance-ts-descriptors: conformance-ts-descriptors
 conformance-ts:
 	docker build -q -t $(TS_CONF_IMAGE) -f ts/business/tests/conformance/service/Dockerfile . >/dev/null
 	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh ts/business/tests/conformance/run.sh $(TS_CONF_IMAGE) $(TS_CONF_PREFIX)
+
+# The Rust business SDK (rs/w17-business/: the runtime crate `w17-business`,
+# the build helper `w17-business-build` in build/, and the conformance
+# service) and its own copy of the conformance suite
+# (rs/w17-business/tests/conformance/), all in Docker with no published port.
+#
+#   make test-rs-business      rustfmt, clippy, the tests and cargo audit, for the workspace
+#   make rs-descriptors        regenerate rs/w17-business/src/sdk_descriptors.binpb
+#   make check-rs-descriptors  fail when the committed set is not what that writes
+#   make conformance-rs        the Go harness against the Rust tier
+#   make conformance-rs-descriptors / check-conformance-rs-descriptors
+#                              the same for rs/w17-business/tests/conformance/testdata
+#
+# RS_DOCKER_FLAGS lets a caller mount a cargo home into the test container
+# (e.g. `-v $$HOME/.cargo-docker:/tmp/cargo`).
+RS_TEST_IMAGE ?= w17-sdk-rs-test:dev
+RS_CONF_IMAGE ?= w17-sdk-rs-conformance:dev
+RS_CONF_PREFIX ?= w17-sdk-rs-conformance
+RS_DOCKER_FLAGS ?=
+RS_RUN = docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -e CARGO_HOME=/tmp/cargo $(RS_DOCKER_FLAGS) \
+	-v "$(CURDIR)/rs/w17-business:/w" -w /w $(RS_TEST_IMAGE)
+
+.PHONY: test-rs-business rs-descriptors check-rs-descriptors conformance-rs-descriptors check-conformance-rs-descriptors conformance-rs
+test-rs-business:
+	docker build -q -t $(RS_TEST_IMAGE) -f rs/w17-business/Dockerfile.test rs/w17-business >/dev/null
+	$(RS_RUN) cargo fmt --all --check
+	$(RS_RUN) cargo clippy --locked --workspace --all-targets -- -D warnings
+	$(RS_RUN) cargo test --locked --workspace
+	$(RS_RUN) cargo audit
+
+# The w17 vocabulary the Rust runtime speaks and maps an author's crate onto:
+# every package under w17 (the whole vocabulary, not only the messages the
+# runtime reads, because an author's descriptor set may name any of them),
+# the transaction coordinator and the companion's W17Files.
+rs-descriptors: protoc-image
+	$(PROTOC_DESC) --proto_path=proto --descriptor_set_out=rs/w17-business/src/sdk_descriptors.binpb \
+		$$(cd proto && ls w17/*.proto w17/*/*.proto) common/distx/distributed_tx.proto common/files/files.proto
+
+check-rs-descriptors: rs-descriptors
+	@if [ -n "$$(git status --porcelain -- rs/w17-business/src/sdk_descriptors.binpb)" ]; then \
+		echo "check-rs-descriptors: run make rs-descriptors and commit"; exit 1; fi
+
+conformance-rs-descriptors: protoc-image
+	$(PROTOC_DESC) --proto_path=proto --proto_path=rs/w17-business/tests/conformance/proto \
+		--descriptor_set_out=rs/w17-business/tests/conformance/testdata/descriptors.binpb \
+		conformance/v1/conformance.proto conformance/events/lock.proto conformance/clients/echo/echo.proto
+
+check-conformance-rs-descriptors: conformance-rs-descriptors
+	@if [ -n "$$(git status --porcelain -- rs/w17-business/tests/conformance/testdata/descriptors.binpb)" ]; then \
+		echo "check-conformance-rs-descriptors: run make conformance-rs-descriptors and commit"; exit 1; fi
+
+conformance-rs:
+	docker build -q -t $(RS_CONF_IMAGE) -f rs/w17-business/tests/conformance/service/Dockerfile . >/dev/null
+	GO_IMAGE="$(GO_IMAGE)" GO_DOCKER_FLAGS="$(GO_DOCKER_FLAGS)" sh rs/w17-business/tests/conformance/run.sh $(RS_CONF_IMAGE) $(RS_CONF_PREFIX)

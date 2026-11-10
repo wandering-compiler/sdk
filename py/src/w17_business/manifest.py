@@ -475,8 +475,15 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
     language = d.get("language", "python")
     if language != "python":
         raise ManifestError(f"manifest: language {language!r} is not python — this is the Python business SDK")
-    domain = _req(d, "domain", "")
-    prefix = d.get("env_prefix") or domain.upper().replace("-", "_")
+    # The keys the Go companion decodes (bizcompanion.Load) are read with its
+    # rules, so the two agree on which manifests boot: a string key takes a
+    # string (null is ""), domain and env_prefix are required — codegen always
+    # writes env_prefix, and a value derived from the domain is a guess that
+    # can differ from the one the companion reads.
+    domain = _req_str(d, "domain", "")
+    prefix = _req_str(d, "env_prefix", "")
+    bundle = _str(d, "bundle", "") or f"{domain}-business"
+    descriptor_set = _str(d, "descriptor_set", "") or "descriptors.binpb"
     listen = _obj(d, "listen", "") or {}
     reg = _obj(d, "register", "")
     if reg is None:
@@ -592,7 +599,7 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
     return Manifest(
         format=fmt,
         domain=domain,
-        bundle=d.get("bundle") or f"{domain}-business",
+        bundle=bundle,
         language=language,
         sdk_version=d.get("sdk_version", ""),
         env_prefix=prefix,
@@ -600,7 +607,7 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
         default_listen_addr=listen.get("default") or ":50051",
         reflection_env=d.get("reflection_env") or f"{prefix}_GRPC_REFLECTION",
         shutdown_timeout=float(d.get("shutdown_timeout_seconds") or 10),
-        descriptor_set=d.get("descriptor_set") or "descriptors.binpb",
+        descriptor_set=descriptor_set,
         register=register,
         services=services,
         config=config,

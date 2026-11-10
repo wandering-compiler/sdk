@@ -1,0 +1,17 @@
+// The conformance domain's event envelope, in the shape the events lock
+// renders for a real domain (eventbus RenderLockProto): metadata 50001,
+// labels 50002, one payload case per event.
+syntax = "proto3";
+
+package conformance.events;
+
+import "conformance/v1/conformance.proto";
+
+message Event {
+  map<string, string> metadata = 50001;
+  map<string, string> labels = 50002;
+
+  oneof payload {
+    conformance.v1.NoteCreated v1_note_created = 1;
+  }
+}

@@ -181,7 +181,7 @@ def test_the_specs_example_reads_as_specified():
 
 
 def _min(**kw):
-    d = {"format": 1, "domain": "d", "language": "python", "register": {"path": "biz/d"}}
+    d = {"format": 1, "domain": "d", "env_prefix": "D", "language": "python", "register": {"path": "biz/d"}}
     d.update(kw)
     return d
 
@@ -207,7 +207,7 @@ def test_manifest_defaults_nulls_and_unknown_fields():
 
 def test_manifest_required_fields(tmp_path):
     p = tmp_path / "m.json"
-    p.write_text(json.dumps({"format": 1, "domain": "d"}))
+    p.write_text(json.dumps({"format": 1, "domain": "d", "env_prefix": "D"}))
     with pytest.raises(ManifestError, match="register is required"):
         load(p)
     p.write_text("{nope")
@@ -216,6 +216,36 @@ def test_manifest_required_fields(tmp_path):
     with pytest.raises(ManifestError, match="envelope is required"):
         from_dict(_min(events={"envelope": "", "emits": [
             {"method": "/a.S/M", "event": "a.E", "envelope_field": "e", "channel": "c", "topic": "t"}]}))
+
+
+# The top level the Go companion decodes (bizcompanion.Load), refused as it
+# refuses it: the same table in every SDK's unit tests (py, ts, rs).
+_TOP_LEVEL_REFUSALS = [
+    ({"format": "1"}, "format"),
+    ({"format": True}, "format"),
+    ({"format": 1.0}, "format"),
+    ({"format": 3}, "reads formats 1 and 2"),
+    ({"domain": None}, "domain is required"),
+    ({"domain": ""}, "domain is required"),
+    ({"domain": 5}, "domain must be a string"),
+    ({"env_prefix": None}, "env_prefix is required"),
+    ({"env_prefix": ""}, "env_prefix is required"),
+    ({"env_prefix": ["D"]}, "env_prefix must be a string"),
+    ({"bundle": 7}, "bundle must be a string"),
+    ({"descriptor_set": {}}, "descriptor_set must be a string"),
+]
+
+
+@pytest.mark.parametrize("change,want", _TOP_LEVEL_REFUSALS)
+def test_manifest_top_level_is_read_with_gos_rules(change, want):
+    d = _min(**change)  # a null is refused as an absent key is
+    with pytest.raises(ManifestError, match=want):
+        from_dict(d)
+
+
+def test_manifest_top_level_nulls_take_gos_defaults():
+    m = from_dict(_min(bundle=None, descriptor_set=None))
+    assert (m.bundle, m.descriptor_set, m.env_prefix) == ("d-business", "descriptors.binpb", "D")
 
 
 @pytest.mark.parametrize("raw", ["9223372036854775808", "-9223372036854775809", "1" + "0" * 30, "9" * 5000])

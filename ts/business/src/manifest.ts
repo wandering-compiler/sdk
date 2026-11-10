@@ -500,8 +500,15 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
       `manifest: language ${JSON.stringify(language)} is not typescript — this is the TypeScript business SDK`,
     );
   }
-  const domain = req(d, "domain", "");
-  const prefix = str(d.env_prefix) || domain.toUpperCase().replaceAll("-", "_");
+  // The keys the Go companion decodes (bizcompanion.Load) are read with its
+  // rules, so the two agree on which manifests boot: a string key takes a
+  // string (null is ""), domain and env_prefix are required — codegen always
+  // writes env_prefix, and a value derived from the domain is a guess that
+  // can differ from the one the companion reads.
+  const domain = creq(d, "domain", "");
+  const prefix = creq(d, "env_prefix", "");
+  const bundle = cstr(d, "bundle", "") || `${domain}-business`;
+  const descriptorSet = cstr(d, "descriptor_set", "") || "descriptors.binpb";
   const listen = obj(d, "listen", "") ?? {};
   const reg = obj(d, "register", "");
   if (reg === null) throw new ManifestError("manifest: register is required");
@@ -610,7 +617,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
   return {
     format: fmt,
     domain,
-    bundle: str(d.bundle) || `${domain}-business`,
+    bundle,
     language,
     sdkVersion: str(d.sdk_version),
     envPrefix: prefix,
@@ -618,7 +625,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
     defaultListenAddr: str(listen.default) || ":50051",
     reflectionEnv: str(d.reflection_env) || `${prefix}_GRPC_REFLECTION`,
     shutdownTimeoutMs: timeout * 1000,
-    descriptorSet: str(d.descriptor_set) || "descriptors.binpb",
+    descriptorSet,
     register,
     services,
     config,

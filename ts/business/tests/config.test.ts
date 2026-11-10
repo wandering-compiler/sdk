@@ -4,7 +4,7 @@ import { inspect } from "node:util";
 import { Encrypter, generateX25519Identity, identityToRecipient } from "age-encryption";
 import { describe, expect, it } from "vitest";
 import { Config, ConfigError } from "../src/config.ts";
-import { type ConfigKey, ManifestError, fromObject, load } from "../src/manifest.ts";
+import { type ConfigKey, ManifestError, fromObject, load, parseJSON } from "../src/manifest.ts";
 import * as secrets from "../src/secrets.ts";
 import { MANIFEST, TESTDATA, inTmpDir } from "./helpers.ts";
 
@@ -175,6 +175,7 @@ describe("secrets", () => {
 const min = (kw: Record<string, unknown> = {}) => ({
   format: 1,
   domain: "d",
+  env_prefix: "D",
   language: "typescript",
   register: { path: "biz/d" },
   ...kw,
@@ -272,7 +273,7 @@ describe("manifest", () => {
   it("required fields", () =>
     inTmpDir((dir) => {
       const p = join(dir, "m.json");
-      writeFileSync(p, JSON.stringify({ format: 1, domain: "d", language: "typescript" }));
+      writeFileSync(p, JSON.stringify({ format: 1, domain: "d", env_prefix: "D", language: "typescript" }));
       expect(() => load(p)).toThrow(/register is required/);
       writeFileSync(p, "{nope");
       expect(() => load(p)).toThrow(/not JSON/);
@@ -283,4 +284,37 @@ describe("manifest", () => {
         ),
       ).toThrow(/envelope is required/);
     }));
+
+  // The top level the Go companion decodes (bizcompanion.Load), refused as
+  // it refuses it: the same table in every SDK's unit tests (py, ts, rs).
+  const TOP_LEVEL_REFUSALS: [Record<string, unknown>, RegExp][] = [
+    [{ format: "1" }, /format/],
+    [{ format: true }, /format/],
+    [{ format: Object(1) }, /format/], // 1.0 as parseJSON reads it
+    [{ format: 3 }, /reads formats 1 and 2/],
+    [{ domain: null }, /domain is required/],
+    [{ domain: "" }, /domain is required/],
+    [{ domain: 5 }, /domain must be a string/],
+    [{ env_prefix: null }, /env_prefix is required/],
+    [{ env_prefix: "" }, /env_prefix is required/],
+    [{ env_prefix: ["D"] }, /env_prefix must be a string/],
+    [{ bundle: 7 }, /bundle must be a string/],
+    [{ descriptor_set: {} }, /descriptor_set must be a string/],
+  ];
+
+  it.each(TOP_LEVEL_REFUSALS)("the top level is read with Go's rules: %j", (change, want) => {
+    // a null is refused as an absent key is
+    expect(() => fromObject(min(change))).toThrow(want);
+  });
+
+  it("1.0 written in the file is not format 1", () => {
+    expect(() => fromObject(parseJSON(JSON.stringify(min()).replace('"format":1', '"format":1.0')) as Record<string, unknown>)).toThrow(
+      /format/,
+    );
+  });
+
+  it("top-level nulls take Go's defaults", () => {
+    const m = fromObject(min({ bundle: null, descriptor_set: null }));
+    expect([m.bundle, m.descriptorSet, m.envPrefix]).toEqual(["d-business", "descriptors.binpb", "D"]);
+  });
 });
