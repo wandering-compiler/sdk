@@ -1018,6 +1018,7 @@ unary gRPC call using the w17 JSON dialect.
 | `W17_MCP_HTTP_ADDR` | `:8081` | — |
 | Endpoint path | `/mcp` | Health at the `core/healthz` path |
 | `ReadHeaderTimeout` | 10 s | — |
+| Allowed browser origins | `SetAllowedOrigins(origins)`, else `W17_MCP_ALLOWED_ORIGINS` (comma-separated), else none | `*` accepts any; entries compare as `scheme://host[:port]`, case-insensitive. A request without `Origin` (every non-browser client) is unaffected; any other `Origin` → 403 before a session, a token check or a body read |
 | Shutdown timeout | `W17_MCP_SHUTDOWN_TIMEOUT_SECONDS` via `lifecycle.ShutdownTimeoutFromEnv` | — |
 | Request body cap | `SetMaxRequestBodyBytes(n)`, else `W17_MCP_MAX_BODY_BYTES`, else 10 MiB (`DefaultMaxRequestBodyBytes`, the REST default) | `n <= 0` restores the default; a non-numeric or non-positive variable is ignored. A declared `Content-Length` over the cap → 413 with a JSON-RPC error; a body without one is cut at the cap |
 | Session idle TTL | `SetSessionLimits(SessionLimits{IdleTTL})`, else `W17_MCP_SESSION_IDLE_SECONDS`, else 30 min (`DefaultSessionIdleTTL`) | Only a positive value is read; a session cannot be kept forever. A session with an open notification stream is never idle |
@@ -1045,6 +1046,7 @@ unary gRPC call using the w17 JSON dialect.
 | E27.12 | With `SetRequestEvents`, every call of a recorded tool MUST be recorded — a refused one too — with its request once decoded, the caller after auth and its gRPC code; an unknown tool records nothing. | `TestCallUnary_RecordsTheCall` |
 | E27.13 | A streamable HTTP session that no request touched for the idle TTL, and that has no open notification stream, MUST be ended with all of its transport state (as a client's DELETE ends it); a session in use MUST be kept, and one whose stream ended goes idle from then | `TestServeStreamableHTTP_IdleSessionIsEnded`, `TestServeStreamableHTTP_OpenStreamKeepsItsSession` |
 | E27.14 | The live sessions MUST stay within the per-address and the per-process cap: a request that would open one more is refused (429 per address, 503 in total, both with `Retry-After`) before the MCP library keeps anything; requests on a live session pass at the cap; an ended session frees its slot. On a protected resource (E28) the token check runs first, so a caller without a token takes no slot | `TestServeStreamableHTTP_SessionsAreCapped`, `TestSessionLimits_EnvAndDefaults` |
+| E27.15 | The HTTP transport MUST refuse (403) a request whose browser `Origin` is not allowed — by default every one, the endpoint's own included, since a DNS-rebound page is same-origin by its Host — before a session is opened; a request without `Origin` MUST be served; a listed origin is served exactly as written, `*` accepts any, and the environment lists them when the code did not | `TestServeStreamableHTTP_RefusesAForeignOrigin`, `TestServeStreamableHTTP_AllowedOrigins` |
 
 **Deliberate limits.**
 - Unary tools only.

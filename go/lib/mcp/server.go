@@ -103,6 +103,10 @@ type Server struct {
 	// sessionLimits are the bounds SetSessionLimits set (zero = env/default).
 	sessions      *sessionGuard
 	sessionLimits SessionLimits
+	// allowedOrigins are the browser origins the HTTP transport accepts
+	// (origin.go); originsSet says SetAllowedOrigins chose them.
+	allowedOrigins map[string]bool
+	originsSet     bool
 	// transport is the streamable HTTP transport while it serves.
 	transport atomic.Pointer[mcpserver.StreamableHTTPServer]
 }
@@ -529,7 +533,9 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 		endpoint = s.requireToken(endpoint)
 		s.mountResourceServer(mux)
 	}
-	mux.Handle(EndpointPath, limitBody(endpoint, s.maxBodyBytes()))
+	// The Origin check is outermost on the endpoint: a browser origin the
+	// deployment did not name opens no session and reads no body.
+	mux.Handle(EndpointPath, originGuard(s.resolvedAllowedOrigins(), limitBody(endpoint, s.maxBodyBytes())))
 	// Liveness for `<binary> health` and any orchestrator probe. Outside the
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
