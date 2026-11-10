@@ -166,9 +166,9 @@ the alias rewrite. SSE and WS writers use `MarshalProtoAppend`.
 | E2.3 | Aliased fields MUST be written under the alias; input MUST accept the alias or the proto name | `TestMarshalProto_AliasedFieldRenamesKey`, `TestRestoreAliasesOnRequestJSON_AcceptsBoth` |
 | E2.4 | A body giving the same field under both alias and canonical name MUST be refused | `TestUnmarshalProto_AliasAndCanonicalCollision_Rejected` |
 | E2.5 | A registered generated marshaler MUST be preferred over protojson | `TestMarshalProto_PrefersRegisteredMarshaler` |
-| E2.6 | Invalid UTF-8 in a string field MUST be a marshal error, not mangled output | `TestMarshalProto_InvalidUTF8Errors` |
+| E2.6 | Invalid UTF-8 in a string field MUST be a marshal error, not mangled output — on the reflective path and on a registered generated marshaler's (whose output is validated and answered with protojson's error) | `TestMarshalProto_InvalidUTF8Errors`, `TestMarshalProto_InvalidUTF8ErrorsOnTheFastPath` |
 | E2.7 | Decoding MUST NOT lose numeric precision on input: a 64-bit integer sent as a JSON number keeps its value on every message, including messages reshaped for a oneof or a `rest_alias` | `TestUnmarshalProto_KeepsSixtyFourBitNumbersExact`, `TestDecodeRequest_KeepsSixtyFourBitNumbersExact`, `TestRestoreAliasesOnRequestJSON_KeepsNumbersExact` |
-| E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message | `TestFastPathEncoders_MatchTheReflectivePath` (the well-known-type encoders; per-message marshalers are generated and not covered here) |
+| E2.8 | The fast path and the reflective path MUST produce the same JSON value for the same message, and the float leaves MUST be byte-identical to protojson (`'f'` form unless the magnitude is below `1e-6` or at least `1e21`, then `'e'` with `e-07` written `e-7`) | `TestFastPathEncoders_MatchTheReflectivePath`, `TestFastPathFloatLeaves_AreByteIdenticalToProtojson` (the well-known-type and scalar encoders; per-message marshalers are generated and not covered here) |
 
 **Deliberate limits.**
 - The reflective alias and oneof rewrite re-encodes through `encoding/json`, which HTML-escapes
