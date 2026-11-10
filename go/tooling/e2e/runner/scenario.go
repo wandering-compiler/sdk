@@ -642,9 +642,28 @@ func runUnaryStep(ctx context.Context, s Step, caller Caller, input map[string]a
 		return matchCallError(s.ExpectError, err, scope)
 	case err != nil:
 		return err
+	case len(s.Expect) == 0 && len(s.AwaitEvents) == 0 && s.Download == nil && len(responseFields(resp)) > 0:
+		// Nothing asserted but "the status was below 400": a response of any
+		// shape would pass. `expect: {}` is how a case names a method whose
+		// response is empty (codegen bakes it as no Expect), so a step that
+		// asserts nothing passes only on a response with no fields — the
+		// unary twin of runStreamStep's refusal.
+		return fmt.Errorf("step asserts nothing about the response of %s, which carries fields (%s) — add an expect, or expect_error for a refusal", s.Endpoint.Ref, strings.Join(responseFields(resp), ", "))
 	default:
 		return runtime.MatchExpect(s.Expect, resp, scope)
 	}
+}
+
+// responseFields lists the response's own fields, without the synthetic
+// WireKey a caller attaches to every response.
+func responseFields(resp map[string]any) []string {
+	var out []string
+	for _, k := range sortedKeys(resp) {
+		if k != WireKey {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // ExpectError is a step's refusal contract — the canonical code the

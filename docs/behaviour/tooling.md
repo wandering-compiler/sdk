@@ -677,9 +677,12 @@ foreign-key closure, digested by the console) differs from what it was rendered 
 **Purpose.** Run codegen-baked steps in order with one capture scope; the first failure aborts.
 `Repeat` runs a step N times. Output is a text checklist or NDJSON, always to stdout.
 
-**Configuration.** Each step carries exactly one of `expect`, `expect_error`,
-`expect_transport_error`, `expect_stream` (with `expect_error` for a refused stream). The spec
-parser enforces this; streams are checked again at run time.
+**Configuration.** A step carries at most one of `expect`, `expect_error`,
+`expect_transport_error`, `expect_stream` (with `expect_error` for a refused stream); the spec
+parser enforces the mutual exclusion, not that one is present. The runner checks the shape again:
+a stream step must assert its frames or its refusal (T19.2), and a unary step with no
+expectation, no awaited event and no download passes only on a response with no fields — an
+`expect: {}` names a method whose response is empty, and codegen bakes it as no `Expect` (T19.3).
 
 **Guarantees.**
 
@@ -687,6 +690,7 @@ parser enforces this; streams are checked again at run time.
 |---|---|---|
 | T19.1 | The first failing step MUST abort the scenario. | `TestRunScenario_FailAborts` |
 | T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | `TestExpectStream_AStreamStepAssertingNothingFails`, `TestExpectStream_ACredentialIsRefused`, `TestExpectStream_ATransportErrorExpectationIsRefused` |
+| T19.3 | A unary step that asserts nothing (no `expect` fields, no `expect_error` or `expect_transport_error`, no awaited event, no download) MUST fail when the response carries any field other than the synthetic `w17_wire`, naming the fields; on a response with no fields it passes. | `TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields` |
 
 ## T20. E2E auth token threading
 
