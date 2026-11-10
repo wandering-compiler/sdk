@@ -74,7 +74,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E24 | Query-string enum parsing | `go/lib/restgw/queryenum.go` — `SetEnumField` |
 | E25 | Health handler | `go/lib/restgw` — `HealthHandler` |
 | E26 | Per-client rate limiter | `go/lib/ratelimit/ratelimit.go` — `Limiter`, `FromEnv`, `FromEnvScope` |
-| E27 | MCP server and transports | `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary` |
+| E27 | MCP server and transports | `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`; `sessions.go` — `SetSessionLimits` |
 | E28 | MCP auth translation and permission gating | `go/lib/mcp/auth.go`, `server.go` — `DefaultAuthFunc`, `SetPermResolver`, `SetToolPerm` |
 | E29 | Oneof collapse and expand | `go/lib/protojsonx/oneof.go` — `ExpandOneofs` |
 | E30 | Client dial | `go/lib/grpcclient/grpcclient.go` — `Dial`, `TLSDialOption` |
@@ -948,7 +948,7 @@ is bounded without a global cap.
 
 ## E27. MCP server and transports
 
-**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`.
+**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`; `go/lib/mcp/sessions.go` — `SetSessionLimits`, `SessionLimits`.
 
 **Purpose.** Runs generated MCP tool proxies over stdio or streamable HTTP; each tool call is a
 unary gRPC call using the w17 JSON dialect.
@@ -963,6 +963,9 @@ unary gRPC call using the w17 JSON dialect.
 | `ReadHeaderTimeout` | 10 s | — |
 | Shutdown timeout | `W17_MCP_SHUTDOWN_TIMEOUT_SECONDS` via `lifecycle.ShutdownTimeoutFromEnv` | — |
 | Request body cap | `SetMaxRequestBodyBytes(n)`, else `W17_MCP_MAX_BODY_BYTES`, else 10 MiB (`DefaultMaxRequestBodyBytes`, the REST default) | `n <= 0` restores the default; a non-numeric or non-positive variable is ignored. A declared `Content-Length` over the cap → 413 with a JSON-RPC error; a body without one is cut at the cap |
+| Session idle TTL | `SetSessionLimits(SessionLimits{IdleTTL})`, else `W17_MCP_SESSION_IDLE_SECONDS`, else 30 min (`DefaultSessionIdleTTL`) | Only a positive value is read; a session cannot be kept forever. A session with an open notification stream is never idle |
+| Live sessions per process | `SessionLimits.Max`, else `W17_MCP_MAX_SESSIONS`, else 10 000 (`DefaultMaxSessions`) | Only a positive value is read. Past it an `initialize` (or a GET opening a new session) → 503 with `Retry-After` and a JSON-RPC error |
+| Live sessions per client address | `SessionLimits.MaxPerAddress`, else `W17_MCP_MAX_SESSIONS_PER_ADDRESS`, else 100 (`DefaultMaxSessionsPerAddress`) | Only a positive value is read. The address is resolved behind `SetTrustedProxies`. Past it → 429 with `Retry-After` |
 
 **Shares.** `protojsonx` (E29), `go/core/lifecycle` drain, `go/core/healthz`, `observx`;
 `restgw.ClientError` (E3) for tool errors.
@@ -983,9 +986,15 @@ unary gRPC call using the w17 JSON dialect.
 | E27.10 | A backend error MUST be reported by code as E3.7: refusals to the non-exception channel, faults to the exception channel | `TestCallUnary_BackendErrorsAreReportedByCode` |
 | E27.11 | Each tool call MUST run with its own reporting scope (`observx.WithRequestScope`) | `TestAddTool_EachCallRunsInItsOwnReportingScope`, `TestRequestScope_KeepsBreadcrumbsPerRequest` |
 | E27.12 | With `SetRequestEvents`, every call of a recorded tool MUST be recorded — a refused one too — with its request once decoded, the caller after auth and its gRPC code; an unknown tool records nothing. | `TestCallUnary_RecordsTheCall` |
+| E27.13 | A streamable HTTP session that no request touched for the idle TTL, and that has no open notification stream, MUST be ended with all of its transport state (as a client's DELETE ends it); a session in use MUST be kept, and one whose stream ended goes idle from then | `TestServeStreamableHTTP_IdleSessionIsEnded`, `TestServeStreamableHTTP_OpenStreamKeepsItsSession` |
+| E27.14 | The live sessions MUST stay within the per-address and the per-process cap: a request that would open one more is refused (429 per address, 503 in total, both with `Retry-After`) before the MCP library keeps anything; requests on a live session pass at the cap; an ended session frees its slot. On a protected resource (E28) the token check runs first, so a caller without a token takes no slot | `TestServeStreamableHTTP_SessionsAreCapped`, `TestSessionLimits_EnvAndDefaults` |
 
 **Deliberate limits.**
 - Unary tools only.
+- Session bounds are per process. A request naming a session this process does not hold is served
+  without one (the transport validates the id's form only, so a session from another replica keeps
+  working) and keeps nothing.
+- The idle sweep runs every half TTL, so a session ends between 1 and 1.5 TTL after its last request.
 
 ---
 
