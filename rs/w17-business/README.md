@@ -33,13 +33,13 @@ publish = false
 [workspace]               # standalone: never captured by a project workspace
 
 [dependencies]
-w17-business = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0-rc.69" }
+w17-business = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0-rc.72" }
 tonic = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["macros"] }
 
 [build-dependencies]
-w17-business-build = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0-rc.69" }
+w17-business-build = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0-rc.72" }
 ```
 
 `tonic` and `prost` are your own dependencies because the generated code names
@@ -115,7 +115,7 @@ impl CheckoutService for Checkout {
                 .create_order(tx_ctx.request(pb::shop::core::CreateOrderReq { user_id: uid, ..Default::default() }))
                 .await?.into_inner();
             let id = order.id.clone();
-            on_commit(&tx_ctx, async move { send_mail(id).await });
+            on_commit(&tx_ctx, async move { send_mail(id).await }).await.map_err(Status::internal)?;
             Ok::<_, Status>(order)
         }).await?;
         Ok(Response::new(pb::shop::core::PlaceOrderResp { order_id: order.id }))

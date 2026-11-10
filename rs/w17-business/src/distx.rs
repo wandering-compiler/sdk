@@ -546,9 +546,15 @@ where
         }
         Ok(v) => {
             if let Some(why) = ctx.err() {
-                let _ = handle.rollback(&detached).await;
+                // The refusal is what the caller acts on; a failed rollback
+                // is named in it, as Go's Run does — the transaction may be
+                // left open until the server times it out.
+                let also = match handle.rollback(&detached).await {
+                    Ok(()) => String::new(),
+                    Err(rerr) => format!(" (rollback also failed: {rerr})"),
+                };
                 return Err(Error::NotCommitted(format!(
-                    "distx.run: not committing, the caller's context is done: {why}"
+                    "distx.run: not committing, the caller's context is done: {why}{also}"
                 ))
                 .into());
             }

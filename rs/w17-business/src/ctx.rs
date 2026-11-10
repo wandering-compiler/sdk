@@ -17,7 +17,7 @@
 
 use std::{
     fmt,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -72,6 +72,48 @@ struct Inner {
     response_headers: Option<HeaderSink>,
     trace: Option<opentelemetry::Context>,
     bidi: bool,
+    /// When each cancellation of the chain from the root to this context was
+    /// cancelled through the SDK (its own last): `err` keeps the first cause,
+    /// as Go's `ctx.Err()` does, so it has to know whether the cancel or the
+    /// deadline came first.
+    clocks: Arc<Vec<CancelClock>>,
+}
+
+/// When a cancellation fired, recorded by whoever cancels through the SDK
+/// ([`Ctx::cancel`], the server ending a call).
+#[derive(Clone, Default)]
+pub(crate) struct CancelClock(Arc<OnceLock<Instant>>);
+
+impl CancelClock {
+    fn mark(&self) {
+        let _ = self.0.set(Instant::now());
+    }
+
+    fn at(&self) -> Option<Instant> {
+        self.0.get().copied()
+    }
+}
+
+/// Cancels a served call's context when dropped (the call ended, or the
+/// caller went away), recording when.
+pub(crate) struct CancelOnDrop {
+    token: CancellationToken,
+    clock: CancelClock,
+}
+
+impl CancelOnDrop {
+    pub(crate) fn new(token: CancellationToken, clock: CancelClock) -> Self {
+        Self { token, clock }
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if !self.token.is_cancelled() {
+            self.clock.mark();
+        }
+        self.token.cancel();
+    }
 }
 
 /// An immutable request context (cheap to clone). See the module doc.
@@ -99,6 +141,7 @@ impl Ctx {
             response_headers: None,
             trace: None,
             bidi: false,
+            clocks: Arc::new(vec![CancelClock::default()]),
         }))
     }
 
@@ -155,16 +198,22 @@ impl Ctx {
             deadline = deadline.min(own);
         }
         let token = self.0.cancel.child_token();
+        let clocks = self.child_clocks();
         self.with(|i| {
             i.deadline = Some(deadline);
             i.cancel = token;
+            i.clocks = clocks;
         })
     }
 
     /// A child that [`Ctx::cancel`] ends without ending this one.
     pub fn with_cancel(&self) -> Self {
         let token = self.0.cancel.child_token();
-        self.with(|i| i.cancel = token)
+        let clocks = self.child_clocks();
+        self.with(|i| {
+            i.cancel = token;
+            i.clocks = clocks;
+        })
     }
 
     /// Go's `context.WithoutCancel`: the same metadata and values, no
@@ -174,22 +223,45 @@ impl Ctx {
         self.with(|i| {
             i.deadline = None;
             i.cancel = CancellationToken::new();
+            i.clocks = Arc::new(vec![CancelClock::default()]);
         })
+    }
+
+    fn child_clocks(&self) -> Arc<Vec<CancelClock>> {
+        let mut clocks = (*self.0.clocks).clone();
+        clocks.push(CancelClock::default());
+        Arc::new(clocks)
     }
 
     /// Cancel this context and every one derived from it.
     pub fn cancel(&self) {
+        if !self.0.cancel.is_cancelled()
+            && let Some(own) = self.0.clocks.last()
+        {
+            own.mark();
+        }
         self.0.cancel.cancel();
     }
 
     /// Why the context is done, `None` while it is not (Go's `ctx.Err()`).
+    ///
+    /// Whichever came first, as Go keeps the first: a cancel before the
+    /// deadline stays [`CtxError::Canceled`] after the deadline passes, and a
+    /// deadline that had passed when the context was cancelled is the reason.
     pub fn err(&self) -> Option<CtxError> {
         let past = self.0.deadline.is_some_and(|d| Instant::now() >= d);
+        if self.0.cancel.is_cancelled() {
+            let at = self.0.clocks.iter().filter_map(CancelClock::at).min();
+            return Some(match (at, self.0.deadline) {
+                (Some(at), Some(d)) if d <= at => CtxError::DeadlineExceeded,
+                (Some(_), _) => CtxError::Canceled,
+                // cancelled where no clock saw it: the deadline, if passed
+                (None, _) if past => CtxError::DeadlineExceeded,
+                (None, _) => CtxError::Canceled,
+            });
+        }
         if past {
             return Some(CtxError::DeadlineExceeded);
-        }
-        if self.0.cancel.is_cancelled() {
-            return Some(CtxError::Canceled);
         }
         None
     }
@@ -228,6 +300,7 @@ impl Ctx {
         incoming: Metadata,
         deadline: Option<Instant>,
         cancel: CancellationToken,
+        clock: CancelClock,
         method: &str,
         sink: Option<HeaderSink>,
         bidi: bool,
@@ -243,6 +316,7 @@ impl Ctx {
             response_headers: sink,
             trace: None,
             bidi,
+            clocks: Arc::new(vec![clock]),
         }))
     }
 
