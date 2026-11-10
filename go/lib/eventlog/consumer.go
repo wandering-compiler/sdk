@@ -509,7 +509,7 @@ func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) 
 		}),
 	)
 	if err != nil {
-		return fmt.Errorf("eventlog: nats connect: %w", err)
+		return fmt.Errorf("eventlog: nats connect: %w", dsnredact.Err(err))
 	}
 	defer nc.Close()
 	js, err := jetstream.New(nc)

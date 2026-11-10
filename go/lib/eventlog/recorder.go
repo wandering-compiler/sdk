@@ -285,7 +285,7 @@ func Open(ctx context.Context, dsn string, cfg RecorderConfig) (*Recorder, error
 		}),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("eventlog: nats connect: %w", err)
+		return nil, fmt.Errorf("eventlog: nats connect: %w", dsnredact.Err(err))
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {

@@ -291,7 +291,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	if err != nil {
 		// The DSN carries the broker's credential (a bare userinfo is the
 		// whole token), and this error goes to the log.
-		return nil, fmt.Errorf("nats connect %s: %w", dsnredact.String(opts.DSN), err)
+		return nil, fmt.Errorf("nats connect %s: %w", dsnredact.String(opts.DSN), dsnredact.Err(err))
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {
