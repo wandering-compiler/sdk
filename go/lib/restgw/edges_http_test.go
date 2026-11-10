@@ -225,6 +225,12 @@ func TestWriteGRPCErrorCtx_ReportsByCodeOnTheRequestsTrace(t *testing.T) {
 		{codes.PermissionDenied, "refused:", false},
 		{codes.Internal, "error:", true},
 		{codes.Unavailable, "error:", true},
+		{codes.Unknown, "error:", true},
+		{codes.DataLoss, "error:", true},
+		// A backend that ran out of time, or a method the server does
+		// not implement (a version skew), is the deployment's fault.
+		{codes.DeadlineExceeded, "error:", true},
+		{codes.Unimplemented, "error:", true},
 	} {
 		t.Run(tc.code.String(), func(t *testing.T) {
 			ctx, sr, end := tracedContext(t)
