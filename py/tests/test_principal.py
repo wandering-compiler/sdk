@@ -208,3 +208,23 @@ def test_paging_forward_replaces_stale_outgoing_as_a_set():
 def test_paging_forward_nothing_when_absent():
     ctx = Context(incoming={"x-w17-user": "e"}, outgoing={paging.LIMIT_MD_KEY: "10"})
     assert paging.forward(ctx) is ctx
+
+
+def test_a_cancel_before_the_deadline_stays_a_cancel_after_it_passes():
+    # Go keeps the first cause: a context cancelled before its deadline reads
+    # "context canceled" after the deadline passes, and one whose deadline
+    # had passed when it was cancelled (the server cancels a call that ran
+    # out of time) reads "context deadline exceeded".
+    import time
+
+    ctx = Context().with_timeout(0.01)
+    ctx.cancel()
+    time.sleep(0.025)
+    assert ctx.err() == "context canceled"
+
+    parent = Context().with_timeout(0.005)
+    child = parent.with_cancel()
+    time.sleep(0.02)
+    parent.cancel()
+    assert child.err() == "context deadline exceeded"
+    assert parent.err() == "context deadline exceeded"

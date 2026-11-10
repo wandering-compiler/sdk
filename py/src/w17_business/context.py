@@ -124,11 +124,27 @@ def _as_str(v: Any) -> str:
 class _Cancel:
     """A cancellation flag shared by a context and the contexts derived from it."""
 
-    __slots__ = ("cancelled", "parent")
+    __slots__ = ("at", "cancelled", "parent")
 
     def __init__(self, parent: _Cancel | None = None) -> None:
         self.cancelled = False
+        self.at = 0.0  # time.monotonic() when cancelled
         self.parent = parent
+
+    def cancel(self) -> None:
+        if not self.cancelled:
+            self.cancelled = True
+            self.at = time.monotonic()
+
+    def first_at(self) -> float | None:
+        """When the chain was first cancelled, None while it is not."""
+        out: float | None = None
+        c: _Cancel | None = self
+        while c is not None:
+            if c.cancelled and (out is None or c.at < out):
+                out = c.at
+            c = c.parent
+        return out
 
     def is_set(self) -> bool:
         c: _Cancel | None = self
@@ -209,7 +225,7 @@ class Context:
     # --- state ----------------------------------------------------------------
 
     def cancel(self) -> None:
-        self._cancel.cancelled = True
+        self._cancel.cancel()
 
     def time_remaining(self) -> float | None:
         if self.deadline is None:
@@ -224,8 +240,16 @@ class Context:
 
     def err(self) -> str | None:
         """Why the context is done — "context canceled" / "context deadline
-        exceeded", Go's spellings — or None."""
-        if self._cancel.is_set():
+        exceeded", Go's spellings — or None.
+
+        Whichever came first, as Go keeps the first: a deadline that had
+        passed when the context was cancelled is the reason (the server
+        cancels a call that ran out of time), and a cancel before the
+        deadline stays "context canceled" after it passes."""
+        at = self._cancel.first_at()
+        if at is not None:
+            if self.deadline is not None and self.deadline <= at:
+                return "context deadline exceeded"
             return "context canceled"
         if self.deadline is not None and time.monotonic() >= self.deadline:
             return "context deadline exceeded"
