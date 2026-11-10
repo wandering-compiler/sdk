@@ -526,7 +526,7 @@ error frames carrying the same envelope as unary responses, per-write deadlines.
 | E14.2 | Each event MUST be exactly one `data: <single-line json>\n\n` frame | `TestWriteSSEEvent_MultipleFrames` |
 | E14.3 | A backend status mid-stream MUST become `event: error` with the E3 envelope including `details[]`; a non-status error MUST become a generic INTERNAL frame | `TestWriteSSEGRPCErrorCtx_ForwardsDetails`, `TestWriteSSEGRPCError_NonStatusInternal` |
 | E14.4 | With a timeout, each write MUST have a deadline that is cleared afterwards; writers without deadline support fall back to none | `streaming_timeout_test.go` (all), `TestWriteSSEEventWithTimeout_DeadlineInstalled` |
-| E14.5 | A half-open client MUST NOT pin a goroutine when the `WithTimeout` variants are used | covered by E14.4 tests |
+| E14.5 | A half-open client MUST NOT pin a goroutine when the `WithTimeout` variants are used: a write to a client that stopped reading MUST fail within the deadline and the handler return | `TestWriteSSEEventWithTimeout_StalledClientEndsTheStream` |
 
 **Deliberate limits.**
 - Per-RPC streams have no heartbeat (only `w17-events` has one); idle streams can be cut by
@@ -561,7 +561,7 @@ close detection for write-only sockets.
 | E15.3 | Protobuf mode MUST require binary frames, JSON mode text frames | `TestWSReadProto_ExpectedBinaryGotText` |
 | E15.4 | A graceful client close on a write-only socket MUST cancel the stream context | `TestWSWatchClientClose_GracefulCloseReleasesTheStream` |
 | E15.5 | Error frames MUST forward `details[]` and close the socket | `TestWSWriteGRPCError_ForwardsFieldViolations` |
-| E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used | `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
+| E15.6 | Each write MUST be bounded by the timeout when the `WithTimeout` variant is used: a write to a client that stopped reading MUST fail within the timeout and the handler return | `TestWSWriteProtoWithTimeout_StalledClientEndsTheStream`, `TestWSWriteProtoWithTimeout_PassesTimeoutThrough` |
 | E15.7 | One inbound message MUST be accepted up to `MaxWebSocketMessageBytes`, by default the REST body cap, so a frame that is a valid REST body is a valid stream message | `TestAcceptWebSocket_ReadLimitIsTheRequestBodyCap`, `TestAcceptWebSocket_ReadLimitIsConfigurable` |
 | E15.8 | An error close MUST always send a close frame (1008 for a refusal): the close reason is cut to fit and stays valid UTF-8, and the full sentence arrives in the error frame | `TestWSWriteErrorWithDetails_LongSentenceStillClosesCleanly`, `TestWSCloseReason_FitsAndStaysValidUTF8` |
 
