@@ -85,3 +85,78 @@ func TestCodePage(t *testing.T) {
 		t.Errorf("CodeRedirectURI = %q", got)
 	}
 }
+
+// pageNonces returns the nonce the CSP header allows for styles and for
+// scripts ("" when it allows none), and fails when the header is not the
+// strict one every page shown to a person carries.
+func pageNonces(t *testing.T, name string, w *httptest.ResponseRecorder) (style, script string) {
+	t.Helper()
+	csp := w.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("%s: CSP %q lacks %q", name, csp, want)
+		}
+	}
+	for _, d := range strings.Split(csp, ";") {
+		d = strings.TrimSpace(d)
+		for prefix, dst := range map[string]*string{"style-src 'nonce-": &style, "script-src 'nonce-": &script} {
+			if rest, ok := strings.CutPrefix(d, prefix); ok {
+				*dst = strings.TrimSuffix(rest, "'")
+			}
+		}
+	}
+	if style == "" {
+		t.Errorf("%s: CSP %q allows no style", name, csp)
+	}
+	for h, want := range map[string]string{"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"} {
+		if got := w.Header().Get(h); got != want {
+			t.Errorf("%s: %s %q, want %q", name, h, got, want)
+		}
+	}
+	return style, script
+}
+
+// The pages shown to a person style themselves through a per-response nonce:
+// one <style> and, on the code page only, one <script>, both carrying the
+// nonce the CSP header allows, and no inline style attribute the CSP would
+// block.
+func TestPagesCarryTheirOwnNonce(t *testing.T) {
+	h := mount(t, Config{}, &fakeBackend{})
+	seen := map[string]bool{}
+	for name, c := range map[string]struct {
+		path       string
+		wantScript bool
+	}{
+		"code":          {CodePath + "?code=abc&state=xyz", true},
+		"code again":    {CodePath + "?code=abc&state=xyz", true},
+		"code refused":  {CodePath + "?error=invalid_request&state=xyz", false},
+		"authorize err": {AuthorizePath + "?client_id=a&client_id=b", false},
+	} {
+		w := do(h, httptest.NewRequest(http.MethodGet, c.path, nil))
+		body := w.Body.String()
+		style, script := pageNonces(t, name, w)
+		if seen[style] {
+			t.Errorf("%s: nonce %q reused across responses", name, style)
+		}
+		seen[style] = true
+		if n := strings.Count(body, "<style"); n != 1 || !strings.Contains(body, `<style nonce="`+style+`">`) {
+			t.Errorf("%s: want one <style> with the CSP nonce, %d in %s", name, n, body)
+		}
+		if strings.Contains(body, "style=") {
+			t.Errorf("%s: an inline style attribute the CSP blocks: %s", name, body)
+		}
+		if c.wantScript {
+			if script != style || strings.Count(body, "<script") != 1 || !strings.Contains(body, `<script nonce="`+script+`">`) {
+				t.Errorf("%s: want one <script> with the CSP nonce %q: %s", name, script, body)
+			}
+			if strings.Count(body, "abc#xyz") != 1 {
+				t.Errorf("%s: the code appears %d times, want once", name, strings.Count(body, "abc#xyz"))
+			}
+		} else if script != "" || strings.Contains(body, "<script") {
+			t.Errorf("%s: a page without the copy button allows or carries a script: %q", name, script)
+		}
+		if name == "authorize err" && (w.Code != http.StatusBadRequest || !strings.Contains(body, "client_id is repeated")) {
+			t.Errorf("%s: status %d body %s", name, w.Code, body)
+		}
+	}
+}
