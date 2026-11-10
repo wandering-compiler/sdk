@@ -722,7 +722,7 @@ label isolation.
 | E18.8 | A subscribe failure MUST NOT reveal internal detail to the client: it answers 503 `UNAVAILABLE` in the envelope, without broker channel names or broker error text | `TestHandleW17Events_SubscribeError`, `TestHandleW17Events_NoSource` |
 | E18.9 | A revoked credential or removed membership MUST stop delivery on an open connection: under the re-auth watchdog (E17), a refusal ends the stream, and `EventbusEventSource` ends a client whose labels, derived again from the latest verdict, differ from those at connect | `TestW17Events_RevokedCredentialEndsTheStream`, `TestW17Events_ChangedMembershipEndsTheStream` |
 | E18.10 | A verdict with the same labels MUST keep the stream, even when the auth response bytes differ | `TestW17Events_SameLabelsKeepTheStream` |
-| E18.11 | An envelope the hub cannot transcode MUST be logged with channel, topic and cause and reported; the event is dropped | `TestEventbusEventSource_TranscodeErrorIsLogged` |
+| E18.11 | An envelope the hub cannot transcode MUST be logged with channel, topic and cause and reported; the event is dropped. The log line and the report MUST be throttled to one per topic per minute, the next one counting the failures suppressed since | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeReportIsThrottledPerTopic` |
 
 **Deliberate limits.**
 - E18.9 holds only when the route runs `HandleW17Events` on the context `WatchStreamAuth`
