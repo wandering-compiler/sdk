@@ -131,6 +131,24 @@ type CheckRunner interface {
 	RunCheck(ctx context.Context, sql, body string) (int64, error)
 }
 
+// ScriptRunner is the optional capability the run's own preparation steps use
+// (the extension preflight, the schema prep): it executes SQL that is not a
+// migration, so it writes no ledger row and must not upgrade or lock the
+// ledger the way an Apply may. An applier without it gets the script through
+// Apply, as a migration with no ledger statement.
+type ScriptRunner interface {
+	RunScript(ctx context.Context, sql string) error
+}
+
+// runScript hands sql to the applier's ScriptRunner, or to Apply as the
+// migration m when it has none.
+func runScript(ctx context.Context, applier Applier, m *applyfetchpb.Migration) error {
+	if sr, ok := applier.(ScriptRunner); ok {
+		return sr.RunScript(ctx, m.GetUpSql())
+	}
+	return applier.Apply(ctx, m)
+}
+
 type ResumableApplier interface {
 	// MigrationPhase reports the applied-state phase of the migration
 	// `id` on the target. A missing table / missing row is PhaseFresh

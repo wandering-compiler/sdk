@@ -58,6 +58,7 @@ var _ migrate.Wiper = (*Applier)(nil)
 var _ migrate.FingerprintCapable = (*Applier)(nil)
 var _ migrate.SeedCapable = (*Applier)(nil)
 var _ migrate.ResumableApplier = (*Applier)(nil)
+var _ migrate.ScriptRunner = (*Applier)(nil)
 
 // New opens a pgx connection to the supplied DSN. Accepts both
 // keyword (`host=… user=… …`) and URI (`postgres://…`) forms;
@@ -173,7 +174,19 @@ func (a *Applier) ensurePhaseColumn(ctx context.Context) error {
 	if a.phaseColEnsured {
 		return nil
 	}
-	_, err := a.conn.Exec(ctx,
+	// Ask the catalogue first. ALTER TABLE takes ACCESS EXCLUSIVE and needs
+	// the table's owner even when IF NOT EXISTS turns it into a no-op, so an
+	// unconditional ALTER queued every apply behind any reader of the ledger
+	// and refused a role that may write the ledger but does not own it.
+	has, err := a.hasPhaseColumn(ctx)
+	if err != nil {
+		return err
+	}
+	if has {
+		a.phaseColEnsured = true
+		return nil
+	}
+	_, err = a.conn.Exec(ctx,
 		`ALTER TABLE w17_migrations ADD COLUMN IF NOT EXISTS post_tx_complete BOOLEAN NOT NULL DEFAULT true`,
 		pgx.QueryExecModeSimpleProtocol)
 	if err != nil {
@@ -258,6 +271,19 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 		return fmt.Errorf("postgres apply up_sql: %w", err)
 	}
 	return a.applyPostTx(ctx, m)
+}
+
+// RunScript executes SQL that is not a migration — the run's extension
+// preflight and schema prep (migrate.ScriptRunner) — verbatim on the simple
+// protocol. Unlike Apply it never upgrades the ledger: a probe must not write
+// the schema or take the ledger's ACCESS EXCLUSIVE lock before the run has
+// decided anything.
+func (a *Applier) RunScript(ctx context.Context, sql string) error {
+	if _, err := a.conn.Exec(ctx, sql, pgx.QueryExecModeSimpleProtocol); err != nil {
+		a.abandonOpenTx()
+		return fmt.Errorf("postgres: %w", err)
+	}
+	return nil
 }
 
 // abandonOpenTx ends the transaction a failed script left open on the
