@@ -6,7 +6,8 @@ health, internal-mesh TLS, observability bootstrap and the in-process gRPC bridg
 Packages: `go/service/bootstrap`, `go/service/runtime`, `go/service/internal/server`,
 `go/service/inprocgrpc`, `go/service/healthcheck`, `go/lib/grpcserver`,
 `go/lib/grpcclient` (internal-mesh TLS and dial defaults only), `go/core/lifecycle`,
-`go/core/healthz`, `go/core/observx`, `go/lib/redact`, `go/lib/privatesurface`.
+`go/core/healthz`, `go/core/observx`, `go/lib/redact`, `go/lib/privatesurface`,
+`go/service/bizcompanion` (its process shape only).
 
 ## Process shape
 
@@ -63,6 +64,7 @@ gRPC server options built by `runtime.GRPCComponent`, in order:
 | S21 | In-process gRPC bridge | `go/service/inprocgrpc/inprocgrpc.go` — `New`, `Conn`, `Invoke`, `NewStream` |
 | S22 | Redacted records | `go/lib/redact/redact.go` — `Register`, `Set.Append` |
 | S23 | Private surfaces | `go/lib/privatesurface/privatesurface.go` — `ServerTLS`, `ClientTLS`, `SelfTLS`, `ProxyID`, `Caller`, `Admit`, `Forwarded`, `ToBackend`, `Dial` |
+| S24 | Business companion process | `go/service/bizcompanion/main.go` — `Main`, `Component`, `ListenAddr`, `ServiceName` |
 
 ## S1. Component supervisor
 
@@ -820,4 +822,34 @@ health probe dials its own listener with `SelfTLS`.
 - The proxy is trusted for the caller's identity: the gateway reads `x-w17-caller` from the proxy's connection and cannot re-verify the caller's certificate itself. That the proxy drops a client's own `x-w17-caller` and is the only route to the gateway is the proxy's and the deployment's guarantee, not this package's.
 - The trust level of each forwarded fact (`x-w17-host`, `x-w17-org-from`, audience keys) is what an admitted domain's gateway states; the surface does not check them beyond the product key.
 - No certificate revocation: a leaf of the private CA is valid until it expires.
+
+## S24. Business companion process
+
+**Code.** `go/service/bizcompanion/main.go` — `Main`, `Component`, `ListenAddr`, `ServiceName`, `ManifestEnv`, `ShutdownTimeout`
+
+**Purpose.** The whole `main` of the split business-companion bundle: the Go process that serves a
+non-Go business tier's egress clients and upload file stores (`W17Files`, D13) over gRPC, read from
+the business bundle's manifest. It is assembled from the same parts as a generated service process:
+the `health` subcommand (S16), the supervisor (S1) and the gRPC component (S5).
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `W17_COMPANION_MANIFEST` (`ManifestEnv`) | required | empty → error naming it; a manifest without a `companion` section → error ("needs no companion") |
+| `<PREFIX>_BUSINESS_COMPANION_LISTEN_ADDR` (`ListenEnv`) | `:50051` | one function (`ListenAddr`) for the server and for `health`, so the probe asks the port the server bound |
+| telemetry | service name `<domain>-business-companion`; `W17_SERVICE_VERSION`, `W17_ENV`, `W17_SENTRY_DSN`, `W17_OTEL_ENDPOINT` read directly | `SampleRate`, `EnableMetrics` and `ConfigAttrs` are left at their defaults (every trace sampled, no metrics listener, no config attributes); the S19 environment fallbacks (`OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `W17_OTEL_TLS`) apply |
+| drain | `ShutdownTimeout` 10s | — |
+
+**Shares.** Everything S1, S5 and S19 share; the secret chain (D17) for the egress clients' DSNs.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| S24.1 | `<binary> health` MUST probe the companion's gRPC listener (S16, `Final: true`) without reading secrets or starting a server; otherwise the companion MUST serve under `bootstrap.Run` with `runtime.GRPCComponent` (internal TLS, health, recovery, the per-RPC span) until SIGINT/SIGTERM, closing what `Register` opened in its shutdown hook. | `TestMainServesAndProbes` |
+| S24.2 | A missing manifest variable, or a manifest whose business tier needs no companion, MUST be an error before anything is served. | `TestMainRefusals` |
+
+**Deliberate limits.**
+- Its telemetry surface is narrower than a generated main's (see the configuration table); a deployment that needs sampling or a metrics listener on the companion has no knob for it.
 
