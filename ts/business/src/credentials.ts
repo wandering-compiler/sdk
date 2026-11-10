@@ -7,8 +7,9 @@ import { isGatewayOwnedKey } from "./principal.js";
 
 const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-w17-credential"]);
 const CREDENTIAL_SEGMENTS = new Set([
-  "auth", "authorization", "apikey", "cookie", "credential", "credentials",
-  "jwt", "passwd", "password", "secret", "session", "token",
+  "auth", "authorization", "apikey", "bearer", "cookie", "credential", "credentials",
+  "jwt", "key", "otp", "pass", "passwd", "password", "pwd", "secret", "session",
+  "signature", "token",
 ]);
 const GRPC_GATEWAY_PREFIX = "grpcgateway-";
 const TX_KEYS = new Set(["w17-tx-id", "w17-conn-id"]);

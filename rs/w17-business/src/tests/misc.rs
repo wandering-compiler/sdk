@@ -10,7 +10,7 @@ use crate::{
     manifest::FilePlacement,
     pb::w17::common::files::put_request::Part,
     runtime::{parse_addr, parse_duration, probe_target},
-    server::{frame_message, parse_timeout},
+    server::{event_frames, frame_message, parse_timeout},
     txscope::{Outcome, Scope},
 };
 
@@ -199,4 +199,21 @@ async fn parked_work_runs_after_commit_and_never_after_rollback() {
         rolled.park(Box::pin(async { Ok(()) })).0,
         Outcome::Discarded
     );
+}
+
+/// An emitting method whose frames cannot be read says why, so the call's
+/// lost event is reported instead of skipped in silence.
+#[test]
+fn event_frames_name_what_cannot_be_read() {
+    let ok = Bytes::from_static(&[0, 0, 0, 0, 1, 7]);
+    let compressed = Bytes::from_static(&[1, 0, 0, 0, 1, 7]);
+    assert_eq!(
+        event_frames(Some(Ok(Bytes::from_static(&[7]))), ok.clone()),
+        Ok((Bytes::from_static(&[7]), Bytes::from_static(&[7])))
+    );
+    let e = event_frames(Some(frame_message(compressed.clone())), ok.clone()).unwrap_err();
+    assert!(e.contains("request") && e.contains("compressed"), "{e}");
+    let e = event_frames(Some(Ok(Bytes::new())), compressed).unwrap_err();
+    assert!(e.contains("response") && e.contains("compressed"), "{e}");
+    assert!(event_frames(None, ok).is_err());
 }

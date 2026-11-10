@@ -72,14 +72,20 @@ const CREDENTIAL_SEGMENTS: &[&str] = &[
     "auth",
     "authorization",
     "apikey",
+    "bearer",
     "cookie",
     "credential",
     "credentials",
     "jwt",
+    "key",
+    "otp",
+    "pass",
     "passwd",
     "password",
+    "pwd",
     "secret",
     "session",
+    "signature",
     "token",
 ];
 const GRPC_GATEWAY_PREFIX: &str = "grpcgateway-";
@@ -174,7 +180,7 @@ fn context_md(ctx: &Ctx) -> Option<&Metadata> {
 
 /// eventbus.MetadataFromContext: the request's metadata flattened for
 /// `Event.metadata` — gateway-owned keys keep their FIRST value, every other
-/// key its LAST; transaction keys and credentials are dropped.
+/// key its LAST non-empty one; transaction keys and credentials are dropped.
 pub fn metadata_from_context(ctx: &Ctx) -> Option<HashMap<String, String>> {
     let md = context_md(ctx)?;
     let mut flat = HashMap::new();
@@ -185,7 +191,11 @@ pub fn metadata_from_context(ctx: &Ctx) -> Option<HashMap<String, String>> {
         let v = if is_gateway_owned_key(k) {
             &vs[0]
         } else {
-            &vs[vs.len() - 1]
+            // The last value that is not blank, else the last value.
+            vs.iter()
+                .rev()
+                .find(|v| !v.trim().is_empty())
+                .unwrap_or(&vs[vs.len() - 1])
         };
         flat.insert(k.to_string(), v.clone());
     }

@@ -45,7 +45,8 @@ const MsgidMalformedValue = "This value is not in the expected format."
 // defaults', so these sentences are translatable rather than permanently
 // English. A msgid with no catalog entry falls back to itself.
 func Vocabulary() []string {
-	return []string{MsgidMalformedValue, MsgidUploadMissing, MsgidUploadTooLarge, MsgidUploadBadType}
+	return []string{MsgidMalformedValue, MsgidUploadMissing, MsgidUploadTooLarge, MsgidUploadBadType,
+		MsgidCaptchaRequired, MsgidCaptchaInvalid, MsgidCaptchaUnavailable}
 }
 
 // WriteRefusal writes the canonical envelope for a refusal the gateway itself

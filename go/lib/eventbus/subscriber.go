@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -267,6 +268,11 @@ func MatchGlob(filter, topic string) bool {
 	if !strings.ContainsRune(filter, '*') {
 		return filter == topic
 	}
+	// The empty topic has no segment for a `*` to consume; split, it
+	// would read as one empty segment and `*` would match it.
+	if topic == "" {
+		return false
+	}
 	return matchSegments(strings.Split(filter, "."), strings.Split(topic, "."))
 }
 
@@ -314,4 +320,20 @@ func matchSegments(filter, topic []string) bool {
 		return matchSegments(filter[1:], topic[1:])
 	}
 	return false
+}
+
+// drainAll drains every subscriber of a closing bus and returns what did not
+// drain: a handler still running when ctx ended is about to lose its broker
+// connection, and Close says so instead of reporting a clean shutdown. Each
+// failure is logged once, naming the channel.
+func drainAll[S interface{ Drain(context.Context) error }](ctx context.Context, transport string, subs []S, channel func(S) string) error {
+	var errs []error
+	for _, s := range subs {
+		if err := s.Drain(ctx); err != nil {
+			err = fmt.Errorf("eventbus %s: drain channel %q: %w", transport, channel(s), err)
+			log.Print(err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

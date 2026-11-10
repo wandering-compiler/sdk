@@ -7,24 +7,26 @@ changing it.
 
 | File | Area |
 |---|---|
-| [server.md](server.md) | Process startup and lifecycle: supervisor, gRPC server, bounded stops, health, internal-mesh TLS, observability, in-process bridge, redacted records, private surfaces |
+| [server.md](server.md) | Process startup and lifecycle: supervisor, gRPC server, bounded stops, health, internal-mesh TLS, observability, in-process bridge, redacted records, private surfaces, the business companion process |
 | [edges.md](edges.md) | Edges and traffic: REST gateway, authentication, streams, uploads, rate limiting, MCP, client dial, error mapping, DPoP (proofs, client, REST wiring, shared replay stores, TypeScript client, admin runtime), the OAuth authorization-server wire, the egress client runtime |
-| [data.md](data.md) | Data layer: database sessions, transactions, SQL helpers, paging, blob and key-value stores, field encryption, secrets |
-| [events-identity.md](events-identity.md) | Events, identity and language: event bus, principal, permission checks, i18n, small helpers, the request event pipeline, recorder and consumers |
+| [data.md](data.md) | Data layer: database sessions, transactions, SQL helpers, paging, blob and key-value stores (local, S3, the `W17Files` server), field encryption, secrets and sealed values |
+| [events-identity.md](events-identity.md) | Events, identity and language: event bus, principal, permission checks, i18n, small helpers, the request event pipeline, recorder and consumers, plugin hooks |
 | [tooling.md](tooling.md) | Tooling: migrations, data migrations, the e2e runner, dev PKI, digests |
+| [business-sdks.md](business-sdks.md) | The Python, TypeScript and Rust business SDKs, one guarantee per row with a column per language and the conformance case: manifest, boot, serving, context, transactions, work after commit, events, principal relay, clients, drain, companion |
 | [matrix.md](matrix.md) | Feature-interaction matrix across all areas |
 
 ## Totals
 
 | Area | Features | Guarantees | No test | Covered in part |
 |---|---|---|---|---|
-| [server.md](server.md) | 23 | 190 | 0 | 7 |
-| [edges.md](edges.md) | 44 | 399 | 2 | 4 |
-| [data.md](data.md) | 17 | 144 | 2 | 2 |
-| [events-identity.md](events-identity.md) | 21 | 173 | 0 | 0 |
-| [tooling.md](tooling.md) | 30 | 209 | 0 | 0 |
-| **All areas** | **135** | **1115** | **4** | **13** |
-| [matrix.md](matrix.md) | — | 153 interactions | 9 | 7 |
+| [server.md](server.md) | 24 | 198 | 0 | 6 |
+| [edges.md](edges.md) | 45 | 417 | 1 | 5 |
+| [data.md](data.md) | 18 | 167 | 2 | 4 |
+| [events-identity.md](events-identity.md) | 22 | 204 | 0 | 1 |
+| [tooling.md](tooling.md) | 30 | 217 | 0 | 0 |
+| [business-sdks.md](business-sdks.md) | 11 | 50 | 0 | 9 |
+| **All areas** | **150** | **1253** | **3** | **25** |
+| [matrix.md](matrix.md) | — | 163 interactions | 9 | 16 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of
 it says **no test**.
@@ -42,7 +44,7 @@ Each feature section answers the same questions:
 6. **Test** — for every guarantee, the test that proves it.
 
 Guarantees are numbered per area: `S` server, `E` edges, `D` data, `I` events and identity,
-`T` tooling, then the feature and the guarantee (`S12.3` is the third guarantee of feature
+`T` tooling, `B` business SDKs, then the feature and the guarantee (`S12.3` is the third guarantee of feature
 S12). Code is cited by path from the repository root and symbol name, not by line number.
 
 A guarantee without a test says **no test** in its Test column. That is a statement about

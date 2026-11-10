@@ -1,7 +1,6 @@
 package secret
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -206,10 +205,11 @@ func newPlainFileSource(path string) (Source, error) {
 // env_file semantics), only a trailing CR (CRLF files) is trimmed.
 func parseDotenv(s string) map[string]string {
 	kv := map[string]string{}
-	sc := bufio.NewScanner(strings.NewReader(s))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
+	// Split, not bufio.Scanner: the file is already in memory, and a
+	// scanner's line cap (1 MiB here before) ended the parse at the first
+	// longer value without an error, so every key after it resolved as
+	// absent.
+	for line := range strings.SplitSeq(s, "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" || strings.HasPrefix(t, "#") {
 			continue

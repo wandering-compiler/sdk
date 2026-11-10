@@ -17,6 +17,12 @@ import "slices"
 // the slice IS the wire shape the auth plugin contract
 // defines.
 func HasPermission(ids []int32, id int32) bool {
+	// IDs are allocated from 1 (Allocate): 0 and below name no
+	// permission, so a 0 in the granted list (an unset slot) never
+	// satisfies a check.
+	if id <= 0 {
+		return false
+	}
 	for _, granted := range ids {
 		if granted == id {
 			return true

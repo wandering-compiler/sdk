@@ -73,6 +73,25 @@ type EventbusEventSource struct {
 	opened  bool
 	subs    []eventbus.Subscriber
 	clients map[*hubClient]struct{}
+
+	// transcodeReports throttles the transcode-failure report per topic
+	// (topic → *transcodeReport); now is its clock.
+	transcodeReports sync.Map
+	now              func() time.Time
+}
+
+// transcodeReportEvery is the window of the per-topic transcode-failure
+// report: a producer writing envelopes the hub cannot read fails every
+// delivery of its topic alike, and one report per window says what all of
+// them would.
+const transcodeReportEvery = time.Minute
+
+// transcodeReport is one topic's throttle: the time of the last report and
+// the failures suppressed since.
+type transcodeReport struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
 }
 
 // hubClient is one connected SSE client: the topic set it asked
@@ -140,6 +159,7 @@ func NewEventbusEventSource(factory eventbus.SubscriberFactory, channels []strin
 		transcode: transcode,
 		principal: principal,
 		clients:   map[*hubClient]struct{}{},
+		now:       time.Now,
 	}
 }
 
@@ -339,8 +359,7 @@ func (e *EventbusEventSource) handleDelivery(ctx context.Context, channel, topic
 	}
 	payload, labels, skip, err := e.transcode(topic, envelope)
 	if err != nil {
-		log.Printf("restgw: /w17-events dropped an event it could not transcode (channel %q, topic %q): %v", channel, topic, err)
-		observx.ReportError(ctx, fmt.Errorf("w17-events transcode (channel %q, topic %q): %w", channel, topic, err))
+		e.reportTranscodeFailure(ctx, channel, topic, err)
 		return nil
 	}
 	if skip {
@@ -348,6 +367,35 @@ func (e *EventbusEventSource) handleDelivery(ctx context.Context, channel, topic
 	}
 	e.fanOut(topic, labels, Event{Topic: topic, Data: payload})
 	return nil
+}
+
+// reportTranscodeFailure logs and reports a dropped, untranscodable
+// delivery: at most once per topic per [transcodeReportEvery], the line
+// carrying how many failures of that topic were suppressed since the last.
+func (e *EventbusEventSource) reportTranscodeFailure(ctx context.Context, channel, topic string, err error) {
+	v, _ := e.transcodeReports.LoadOrStore(topic, &transcodeReport{})
+	r := v.(*transcodeReport)
+	now := time.Now()
+	if e.now != nil {
+		now = e.now()
+	}
+	r.mu.Lock()
+	if !r.last.IsZero() && now.Sub(r.last) < transcodeReportEvery {
+		r.suppressed++
+		r.mu.Unlock()
+		return
+	}
+	suppressed := r.suppressed
+	r.last, r.suppressed = now, 0
+	r.mu.Unlock()
+	more := ""
+	if suppressed > 0 {
+		more = fmt.Sprintf(" (%d more on this topic since the last report)", suppressed)
+	}
+	// channel and topic are %q-quoted (no line breaks reach the log), more is
+	// a count, and err is the transcoder's.
+	log.Printf("restgw: /w17-events dropped an event it could not transcode (channel %q, topic %q): %v%s", channel, topic, err, more) //nolint:gosec // G706: see above
+	observx.ReportError(ctx, fmt.Errorf("w17-events transcode (channel %q, topic %q)%s: %w", channel, topic, more, err))
 }
 
 // anyInterested reports whether at least one connected client
@@ -435,7 +483,9 @@ func entitled(isolation bool, eventLabels, principalLabels map[string]string) bo
 // labels. (See [entitled] for the unlabelled-event isolation rule.)
 func labelsSubset(eventLabels, principalLabels map[string]string) bool {
 	for k, v := range eventLabels {
-		if principalLabels[k] != v {
+		// Presence, not the zero value: a missing key reads as "", which
+		// would match an empty-valued event label.
+		if pv, ok := principalLabels[k]; !ok || pv != v {
 			return false
 		}
 	}

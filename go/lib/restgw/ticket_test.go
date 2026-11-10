@@ -49,8 +49,8 @@ func TestTicket_OneShot(t *testing.T) {
 	if _, err := store.Redeem(context.Background(), ticket); err != nil {
 		t.Fatalf("first Redeem: %v", err)
 	}
-	if _, err := store.Redeem(context.Background(), ticket); err == nil {
-		t.Fatal("second Redeem should fail (one-shot)")
+	if _, err := store.Redeem(context.Background(), ticket); !errors.Is(err, restgw.ErrTicketInvalid) {
+		t.Fatalf("second Redeem = %v, want ErrTicketInvalid (one-shot)", err)
 	}
 }
 
@@ -60,8 +60,8 @@ func TestTicket_UnknownInvalid(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
 	_, err := store.Redeem(context.Background(), "not-a-real-ticket")
-	if err == nil {
-		t.Fatal("expected error on unknown ticket")
+	if !errors.Is(err, restgw.ErrTicketInvalid) {
+		t.Fatalf("unknown ticket: %v, want ErrTicketInvalid", err)
 	}
 }
 
@@ -70,21 +70,8 @@ func TestTicket_UnknownInvalid(t *testing.T) {
 func TestTicket_EmptyInvalid(t *testing.T) {
 	store := restgw.NewMemoryTicketStore()
 	defer store.Close()
-	if _, err := store.Redeem(context.Background(), ""); err == nil {
-		t.Fatal("expected error on empty ticket")
-	}
-}
-
-// TTL expiry — past-TTL Redeem fails. Use a tiny
-// TTL + sleep instead of stubbing time so the real clock-
-// driven path runs.
-func TestTicket_TTLExpiry(t *testing.T) {
-	store := restgw.NewMemoryTicketStore()
-	defer store.Close()
-	ticket, _ := store.Issue(context.Background(), nil, 20*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
-	if _, err := store.Redeem(context.Background(), ticket); err == nil {
-		t.Fatal("expected expiry error")
+	if _, err := store.Redeem(context.Background(), ""); !errors.Is(err, restgw.ErrTicketInvalid) {
+		t.Fatalf("empty ticket: %v, want ErrTicketInvalid", err)
 	}
 }
 

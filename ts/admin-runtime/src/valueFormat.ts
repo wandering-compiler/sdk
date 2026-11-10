@@ -355,7 +355,9 @@ function parseDecimal(value: string): DecimalParts | null {
   if (!isDigits(ip) || !isDigits(fp)) return null;
   if (ip === "" && fp === "") return null; // "", ".", "-."
   if (hasDot && fp === "") return null; // "5."
-  return { neg, ipart: ip === "" ? "0" : ip, fpart: fp };
+  // Leading zeros carry no value: "0001234" is 1234, "000.5" is 0.5.
+  const trimmed = ip.replace(/^0+/, "");
+  return { neg, ipart: trimmed === "" ? "0" : trimmed, fpart: fp };
 }
 
 function isDigits(s: string): boolean {

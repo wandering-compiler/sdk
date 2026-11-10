@@ -510,7 +510,9 @@ describe("registration", () => {
     expect(() => new Registry(pool()).register("conformance.v1.NoteService", new OnlyCamel())).toThrow(/CreateNote/);
   });
 
-  it("a method that is not async is refused", () => {
+  it("a method that is not async answers INTERNAL on its call; an async generator is refused", async () => {
+    // A plain function cannot be told from a decorator's wrapper by its tag,
+    // so it registers and what a call returns is checked: no promise, INTERNAL.
     class Sync extends NoteService {
       // @ts-expect-error -- deliberately not async
       override CreateNote() {
@@ -518,7 +520,16 @@ describe("registration", () => {
       }
     }
     const reg = new Registry(pool());
-    expect(() => reg.register("conformance.v1.NoteService", new Sync(reg, undefined, undefined))).toThrow(/CreateNote.*an async function/);
+    reg.register("conformance.v1.NoteService", new Sync(reg, undefined, undefined));
+    const e = await reg.self("conformance.v1.NoteService").CreateNote(new Context(), msg("CreateNoteRequest")({ text: "x" })).then(() => undefined, (err: unknown) => err);
+    expect((e as StatusError).code).toBe(Status.INTERNAL);
+    expect(String((e as Error).message)).toMatch(/CreateNote: handler returned no promise — want an async function/);
+    class Gen extends NoteService {
+      // @ts-expect-error -- deliberately an async generator on a unary method
+      override async *CreateNote() {}
+    }
+    const reg2 = new Registry(pool());
+    expect(() => reg2.register("conformance.v1.NoteService", new Gen(reg2, undefined, undefined))).toThrow(/CreateNote.*an async function/);
   });
 
   it("an unknown or duplicate service", () => {
@@ -615,6 +626,101 @@ describe("streams", () => {
       }
     }
     expect(() => new Registry(p).register("test.stream.Streamer", new NotAGenerator())).toThrow(/Count.*async generator/);
+  });
+
+  it("a wrapped method is served; one that returns no promise or stream answers INTERNAL", async () => {
+    // A decorator or proxy hands back a plain function that returns a promise
+    // (or an async iterable): its tag is "[object Function]", not
+    // "[object AsyncFunction]". The shape is checked on what a call returns.
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    const wrap = <F extends (...a: never[]) => unknown>(f: F) =>
+      function (this: unknown, ...a: Parameters<F>) {
+        return f.apply(this, a);
+      };
+    const inner = new Streamer();
+    const wrapped = {
+      Echo: wrap(inner.Echo.bind(inner)),
+      Count: wrap(inner.Count.bind(inner)),
+      Sum: wrap(inner.Sum.bind(inner)),
+      Chat: wrap(inner.Chat.bind(inner)),
+    };
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", wrapped);
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      const c = new ServiceClient(conn, "test.stream.Streamer", p);
+      expect((await c.Echo(new Context(), Ping({ n: 4 }))).n).toBe(4);
+      const counted: number[] = [];
+      for await (const r of c.Count(new Context(), Ping({ n: 2 }))) counted.push(r.n);
+      expect(counted).toEqual([1, 2]);
+    } finally {
+      conn.close();
+      await stop(srv);
+    }
+
+    const sync = { ...wrapped, Echo: (_ctx: Context, req: AnyMessage) => Ping({ n: req.n }) };
+    const reg2 = new Registry(p);
+    reg2.register("test.stream.Streamer", sync);
+    const [srv2, port2] = await listen(reg2);
+    const conn2 = new Conn(`127.0.0.1:${port2}`, { tls: false });
+    try {
+      const c = new ServiceClient(conn2, "test.stream.Streamer", p);
+      const e = await c.Echo(new Context(), Ping({ n: 4 })).then(() => undefined, (err: unknown) => err);
+      expect((e as StatusError).code).toBe(Status.INTERNAL);
+    } finally {
+      conn2.close();
+      await stop(srv2);
+    }
+  });
+
+  it("a bidi method cannot open a transaction", async () => {
+    // As in Go and the Rust SDK: a bidirectional stream's messages interleave
+    // with the caller's and nothing would bound the transaction, so begin (and
+    // run) refuse FAILED_PRECONDITION before any coordinator call.
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    let begun = 0;
+    const tx: distx.TxClient = {
+      begin: async () => {
+        begun++;
+        throw new Error("begin reached the coordinator");
+      },
+      commit: async () => undefined,
+      rollback: async () => undefined,
+    };
+    class TxChat extends Streamer {
+      override async *Chat(ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        for await (const r of reqs) {
+          await distx.begin(ctx, tx, distx.beginRequest("main"));
+          yield Ping({ n: r.n });
+        }
+      }
+    }
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new TxChat());
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      const c = new ServiceClient(conn, "test.stream.Streamer", p);
+      const e = await (async () => {
+        try {
+          for await (const _ of c.Chat(new Context(), [Ping({ n: 1 })])) void _;
+        } catch (err) {
+          return err;
+        }
+        return undefined;
+      })();
+      expect((e as StatusError).code).toBe(Status.FAILED_PRECONDITION);
+      expect(String((e as Error).message)).toMatch(/bidirectional-streaming/);
+      expect(begun).toBe(0);
+    } finally {
+      conn.close();
+      await stop(srv);
+    }
   });
 
   it("a request stream that fails once the caller is gone reads as the cancel, not a panic", async () => {

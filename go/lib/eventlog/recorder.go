@@ -141,6 +141,50 @@ type Surface struct {
 	api      w17pb.RequestApi
 	purposes Purposes
 	pipe     *Pipeline[*Record]
+
+	// credentialPages are the referrers seen on a credential route
+	// (Method.URLCredential): the capability-link pages that called it. A
+	// later call from the same page carries the same credential in its
+	// referrer, so it records none either. Bounded, oldest out first.
+	credMu          sync.Mutex
+	credentialPages map[string]struct{}
+	credentialOrder []string
+}
+
+// maxCredentialPages bounds [Surface.credentialPages].
+const maxCredentialPages = 1024
+
+func (s *Surface) noteCredentialPage(referrer string) {
+	s.credMu.Lock()
+	defer s.credMu.Unlock()
+	if _, ok := s.credentialPages[referrer]; ok {
+		return
+	}
+	if s.credentialPages == nil {
+		s.credentialPages = map[string]struct{}{}
+	}
+	if len(s.credentialOrder) >= maxCredentialPages {
+		delete(s.credentialPages, s.credentialOrder[0])
+		s.credentialOrder = s.credentialOrder[1:]
+	}
+	s.credentialPages[referrer] = struct{}{}
+	s.credentialOrder = append(s.credentialOrder, referrer)
+}
+
+func (s *Surface) isCredentialPage(referrer string) bool {
+	s.credMu.Lock()
+	defer s.credMu.Unlock()
+	_, ok := s.credentialPages[referrer]
+	return ok
+}
+
+// referrerPage is the referrer without its query and fragment, where a page
+// most often carries a token (`?token=`, `#access_token=`).
+func referrerPage(referrer string) string {
+	if i := strings.IndexAny(referrer, "?#"); i >= 0 {
+		return referrer[:i]
+	}
+	return referrer
 }
 
 // NewRecorder ensures the stream and starts one pipeline per surface.
@@ -199,9 +243,23 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 			sf = (&NATSSink{JS: cfg.JS, Subject: Subject(cfg.Domain, api), Ensure: ensure}).Sink
 		}
 		s := &Surface{r: r, api: api, purposes: purposes}
+		if cfg.Sink == nil && cfg.Redis == nil {
+			// The server's max_payload is 0 until the connection is up
+			// (a recorder opened before NATS): learn it on each publish
+			// and lower the batch bound to it, so the batches after the
+			// first fit a server whose limit is below NATS's default.
+			inner, nc := sf, cfg.NC
+			sf = func(ctx context.Context, b *Batch) error {
+				if s.pipe != nil {
+					s.pipe.LowerBatchBytes(NATSBatchBytes(nc))
+				}
+				return inner(ctx, b)
+			}
+		}
 		p, err := New(Config[*Record]{
 			Size:         recordSize,
 			Encode:       r.encode,
+			EncodeFailed: r.encodeFailed,
 			Sink:         sf,
 			Fail:         r.fail,
 			Tag:          func(rec *Record) string { return rec.orgID },
@@ -285,7 +343,7 @@ func Open(ctx context.Context, dsn string, cfg RecorderConfig) (*Recorder, error
 		}),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("eventlog: nats connect: %w", err)
+		return nil, fmt.Errorf("eventlog: nats connect: %w", dsnredact.Err(err))
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {
@@ -347,15 +405,15 @@ func (s *Surface) Start(m *Method) *Record {
 	return &Record{s: s, method: m, start: time.Now()}
 }
 
-// SetClient records what the request says about the client; the referrer
-// only when the method takes no credential in its URL (Method.URLCredential).
+// SetClient records what the request says about the client. The referrer is
+// kept without its query and fragment, and left out on a method that takes
+// its credential in the URL (Method.URLCredential) — the page that called it
+// was opened from a capability link — and on any later record of the surface
+// whose referrer is a page seen calling such a method.
 // It does nothing once the record is finished: the batcher may be reading it.
 func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]string) {
 	if rec == nil || rec.finished {
 		return
-	}
-	if rec.method.URLCredential {
-		referrer = ""
 	}
 	rec.clientCut = rec.clientCut[:0]
 	var cut bool
@@ -365,7 +423,16 @@ func (rec *Record) SetClient(ip, userAgent, referrer string, utm map[string]stri
 	if userAgent, cut = boundClient(userAgent, MaxClientField); cut {
 		rec.clientCut = append(rec.clientCut, "client.user_agent")
 	}
-	if referrer, cut = boundClient(referrer, MaxClientField); cut {
+	referrer, cut = boundClient(referrerPage(referrer), MaxClientField)
+	switch {
+	case referrer == "" || rec.s == nil:
+	case rec.method.URLCredential:
+		rec.s.noteCredentialPage(referrer)
+		referrer = ""
+	case rec.s.isCredentialPage(referrer):
+		referrer = ""
+	}
+	if cut && referrer != "" {
 		rec.clientCut = append(rec.clientCut, "client.referrer")
 	}
 	if utm, cut = boundUTM(utm); cut {
@@ -446,10 +513,13 @@ func (rec *Record) SetRequestID(id string) {
 }
 
 // SetRequest records the decoded request — as soon as it is decoded, so a
-// request refused after decoding still carries it.
+// request refused after decoding still carries it. The record keeps its own
+// copy: it is encoded after the call, on the pipeline's goroutine, and the
+// caller's message may change meanwhile (a stream handler reusing its
+// receive buffer, a handler editing what it decoded).
 func (rec *Record) SetRequest(req proto.Message) {
-	if rec != nil {
-		rec.req = req
+	if rec != nil && !rec.finished && req != nil {
+		rec.req = proto.Clone(req)
 	}
 }
 
@@ -468,7 +538,7 @@ func (rec *Record) setResultAny(resp any, err error) {
 // FinishUnary is SetResult and Finish for a gRPC interceptor: its untyped
 // response and error, no HTTP status.
 func (rec *Record) FinishUnary(ctx context.Context, resp any, err error) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	rec.setResultAny(resp, err)
@@ -502,7 +572,7 @@ func (rec *Record) CountStream(ss grpc.ServerStream) grpc.ServerStream {
 // FinishStream is Finish for a streaming RPC: its error (the gRPC code), no
 // response (a stream has many) and no HTTP status.
 func (rec *Record) FinishStream(ctx context.Context, err error) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	rec.grpcCode = int32(status.Code(err))
@@ -533,7 +603,7 @@ func (s *countedStream) RecvMsg(m any) error {
 // SetResult records the call's outcome: its error (the gRPC code) and,
 // when the method opts in and the call succeeded, its response.
 func (rec *Record) SetResult(resp proto.Message, err error) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	rec.grpcCode = int32(status.Code(err))
@@ -546,7 +616,7 @@ func (rec *Record) SetResult(resp proto.Message, err error) {
 // stamped (`x-w17-user`, the organization's `x-w17-scope-*`): the outgoing
 // metadata it sends the backend, or the incoming metadata on the rpc surface.
 func (rec *Record) SetCaller(md metadata.MD) {
-	if rec != nil {
+	if rec != nil && !rec.finished {
 		rec.readCaller(md)
 	}
 }
@@ -554,7 +624,7 @@ func (rec *Record) SetCaller(md metadata.MD) {
 // SetCallerService records the calling service on a private surface: its
 // verified identity (`spiffe://w17/<domain>/<bundle>`).
 func (rec *Record) SetCallerService(identity string) {
-	if rec != nil {
+	if rec != nil && !rec.finished {
 		rec.callerService = identity
 	}
 }
@@ -562,7 +632,7 @@ func (rec *Record) SetCallerService(identity string) {
 // SetCallerOutgoing records the caller from the metadata ctx carries out —
 // what an HTTP gateway stamped for the backend call.
 func (rec *Record) SetCallerOutgoing(ctx context.Context) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	if md, ok := metadata.FromOutgoingContext(ctx); ok {
@@ -573,7 +643,7 @@ func (rec *Record) SetCallerOutgoing(ctx context.Context) {
 // SetCallerIncoming records the caller from the metadata ctx carries in —
 // the rpc gateway's, after it stamped the verified principal.
 func (rec *Record) SetCallerIncoming(ctx context.Context) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -777,6 +847,16 @@ var metas = sync.Pool{New: func() any { return new(w17pb.RequestEventMeta) }}
 // encode writes one envelope: the request and response by their
 // redaction plans (cut to share the ceiling), then the meta.
 func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
+	return r.encodeRecord(dst, rec, true)
+}
+
+// encodeFailed encodes a record that never reached a batch, for the failure
+// path: no telemetry, which only a recorded request gets.
+func (r *Recorder) encodeFailed(dst []byte, rec *Record) ([]byte, error) {
+	return r.encodeRecord(dst, rec, false)
+}
+
+func (r *Recorder) encodeRecord(dst []byte, rec *Record, telemetry bool) ([]byte, error) {
 	reqBudget := r.ceiling - 4<<10 // the meta's room
 	if rec.resp != nil {
 		reqBudget /= 2
@@ -846,7 +926,7 @@ func (r *Recorder) encode(dst []byte, rec *Record) ([]byte, error) {
 	dst = protowire.AppendTag(dst, EnvelopeMetaField, protowire.BytesType)
 	dst = protowire.AppendVarint(dst, uint64(proto.Size(m)))
 	dst, err = proto.MarshalOptions{}.MarshalAppend(dst, m)
-	if err == nil && rec.otel {
+	if err == nil && telemetry && rec.otel {
 		emitTelemetry(rec, m, dst[reqAt[0]:reqAt[1]], dst[respAt[0]:respAt[1]])
 	}
 	return dst, err

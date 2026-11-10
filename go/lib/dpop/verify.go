@@ -209,6 +209,12 @@ type Request struct {
 	// AccessToken and no Binding is refused (fail closed): a caller that
 	// verifies a token must say which key it is bound to.
 	Binding string
+	// BindingLookup, when Binding is empty and AccessToken is set, answers
+	// the binding instead. The verifier calls it only once the proof's
+	// signature, nonce, target and ath checks passed, so a proof that does
+	// not verify never costs the lookup (typically a call to the auth
+	// backend). Its error is returned as it is.
+	BindingLookup func(ctx context.Context) (string, error)
 }
 
 // Verifier checks DPoP proofs. It is safe for concurrent use.
@@ -438,10 +444,16 @@ func (v *Verifier) verify(ctx context.Context, req Request) (string, bool, error
 		return "", false, fmt.Errorf("%w: ath present without an access token", ErrATHMismatch)
 	}
 
-	// 6. Binding.
+	// 6. Binding: given, or looked up now that the proof verified.
+	binding := req.Binding
+	if binding == "" && req.AccessToken != "" && req.BindingLookup != nil {
+		if binding, err = req.BindingLookup(ctx); err != nil {
+			return "", false, err
+		}
+	}
 	switch {
-	case req.Binding != "":
-		if subtle.ConstantTimeCompare([]byte(req.Binding), []byte(thumb)) != 1 {
+	case binding != "":
+		if subtle.ConstantTimeCompare([]byte(binding), []byte(thumb)) != 1 {
 			return "", false, ErrBindingMismatch
 		}
 	case req.AccessToken != "":
@@ -452,7 +464,7 @@ func (v *Verifier) verify(ctx context.Context, req Request) (string, bool, error
 	// so refused proofs never take room in the store. The insert is atomic;
 	// a jti already there is a replay unless it is this very proof inside
 	// its reuse window.
-	store, mint := v.jtis, req.Binding == ""
+	store, mint := v.jtis, binding == ""
 	if mint {
 		store = v.mintJTIs // unbound: kept apart, see Config.MintJTIs
 	}

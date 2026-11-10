@@ -167,6 +167,34 @@ func TestRun_TimeoutBoundsAHungListener(t *testing.T) {
 	}
 }
 
+// Probes run side by side under the one --timeout: two hung listeners do
+// not use up the healthy one's time. Run in order they would, and the
+// healthy listener probed last would be reported failing too.
+func TestRun_HungListenersDoNotStarveAHealthyOne(t *testing.T) {
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	hung := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hang })
+	a, b := listenHTTP(t, hung), listenHTTP(t, hung)
+	mux := http.NewServeMux()
+	mux.Handle(healthz.Path, healthz.Handler())
+	healthy := listenHTTP(t, mux)
+	start := time.Now()
+	out, err := run(t, []string{"--timeout", "300ms"},
+		healthcheck.HTTP("hung-a", a), healthcheck.HTTP("hung-b", b), healthcheck.HTTP("healthy", healthy))
+	if err == nil {
+		t.Fatal("two hung listeners passed")
+	}
+	if took := time.Since(start); took > 600*time.Millisecond {
+		t.Errorf("the probes took %s under --timeout 300ms", took)
+	}
+	if !strings.Contains(out, "ok   healthy") {
+		t.Errorf("the healthy listener was not reported ok:\n%s", out)
+	}
+	if strings.Contains(err.Error(), "healthy") {
+		t.Errorf("err = %v names the healthy listener", err)
+	}
+}
+
 // A binary with nothing to probe must not report healthy.
 func TestRun_NoProbesIsAnError(t *testing.T) {
 	if _, err := run(t, nil); err == nil {

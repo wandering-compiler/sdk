@@ -21,11 +21,14 @@ type formatVector struct {
 	Places *int   `json:"places"`
 	// Scale / Currency are read by the `money` kind only: the value is a
 	// count of minor units at Scale, rendered in Currency (empty = none).
-	Scale    *int     `json:"scale"`
-	Currency string   `json:"currency"`
-	Value    *string  `json:"value"`
-	Float    *float64 `json:"float"`
-	Want     string   `json:"want"`
+	Scale    *int    `json:"scale"`
+	Currency string  `json:"currency"`
+	Value    *string `json:"value"`
+	// Pattern is read by the `pattern` kind only: RenderTimePattern over
+	// the parsed value.
+	Pattern string   `json:"pattern"`
+	Float   *float64 `json:"float"`
+	Want    string   `json:"want"`
 }
 
 func loadFormatVectors(t *testing.T) []formatVector {
@@ -83,6 +86,12 @@ func applyVector(v formatVector) string {
 		return FormatTime(raw, f)
 	case "datetime":
 		return FormatDateTime(raw, f)
+	case "pattern":
+		c, ok := parseTemporal(raw)
+		if !ok {
+			return raw
+		}
+		return RenderTimePattern(v.Pattern, c)
 	}
 	return "unknown kind " + v.Kind
 }
@@ -107,6 +116,7 @@ func TestFormatVectorsUseKnownKinds(t *testing.T) {
 	known := map[string]bool{
 		"number": true, "decimal": true, "percent": true, "money": true,
 		"date": true, "short_date": true, "time": true, "datetime": true,
+		"pattern": true,
 	}
 	for _, v := range loadFormatVectors(t) {
 		if !known[v.Kind] {

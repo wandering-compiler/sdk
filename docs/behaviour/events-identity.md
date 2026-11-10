@@ -5,7 +5,7 @@ between tiers, how permissions are checked, and how messages are translated and
 formatted. Includes the eventbus-backed server-sent-events hub, because it is the
 eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 (event hub only), `go/lib/principal`, `go/lib/acllock`, `go/lib/i18n`,
-`go/lib/typere`, `go/lib/randstr`, `go/lib/eventlog`.
+`go/lib/typere`, `go/lib/randstr`, `go/lib/eventlog`, `go/lib/pluginhook`.
 
 ## Features
 
@@ -32,6 +32,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
 | I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `redisstream.go` — `RedisSink`; `otel.go` |
 | I21 | Request event consumers | `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers`, `DecodeBatch` |
+| I22 | Plugin hooks | `go/lib/pluginhook/pluginhook.go` — `Conn`, `Lazy`, `Late`, `Unary`, `ErrNotConnected` |
 
 ---
 
@@ -93,7 +94,8 @@ cannot decode; the server-sent-events hub, which forwards them, subscribes with
 
 **Configuration.** Glob syntax for `topicFilter`: `*` is one segment, `**` is zero
 or more segments, a literal matches exactly; an empty filter matches only an
-empty topic. A reserved `w17.*` topic is matched only by a filter whose first
+empty topic. The empty topic has no segment, so only the empty filter, `**` and
+`EveryTopic` match it; a filter with a `*` never does. A reserved `w17.*` topic is matched only by a filter whose first
 segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 
 **Guarantees.**
@@ -104,7 +106,7 @@ segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 | I2.2 | Every transport MUST honour `topicFilter` identically, so a hand-written subscriber receives only matching topics. | `TestMemoryBus_TopicFilterMatches`, `TestTopicFilter_Memory`, `TestTopicFilter_Nats_Embedded`, `TestTopicFilter_Redis_Embedded` |
 | I2.3 | `Subscriber()` after `Close` MUST return `ErrBusClosed`, checked atomically with registration. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded` |
 | I2.4 | `Subscribe()` after `Drain` MUST return `ErrSubscriberDraining`, checked atomically with registration. | `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused` |
-| I2.5 | A handler panic MUST become a delivery error (retry or dead-letter on brokers) and be reported; it MUST NOT crash the process. | `TestRecoverHandler_PanicBecomesError` |
+| I2.5 | A handler panic MUST become a delivery error (retry or dead-letter on brokers) and be reported; it MUST NOT crash the process. The in-memory transport recovers and reports it only: no retry, no dead letter (I4.2). | `TestRecoverHandler_PanicBecomesError`, `TestHandlerPanic_IsRetriedThenDeadLettered`, `TestHandlerPanic_MemoryTransportRecoversAndReportsOnly` |
 | I2.6 | A panic in loop plumbing MUST be recovered. | `TestRecoverLoopTick_RecoversPanic` |
 | I2.7 | A reserved `w17.*` topic MUST NOT reach a subscription whose filter reaches it only through a wildcard (`**`, `*`), on every transport; a filter naming `w17` literally, and `EveryTopic`, MUST receive it. | `TestReservedTopic_Memory`, `TestReservedTopic_Nats_Embedded`, `TestReservedTopic_Redis_Embedded`, `TestMatchGlob_ReservedTopic` |
 
@@ -136,7 +138,7 @@ segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 **Deliberate limits.**
 - A restarted process gets a new fan-out identity starting at "new"; events emitted while it was down are not seen.
 - Fan-out Redis groups of a process killed without `Close` remain (stream metadata only).
-- An event hub (I9) needs fan-out; queue mode would split its audience between replicas. The generated main selects fan-out.
+- An event hub (I9) needs fan-out; queue mode would split its audience between replicas. `Delivery` is per bus and nothing in the SDK refuses a mismatch: a surface that needs both modes (a hub and a queue subscriber) builds two buses. The generated main builds the hub's bus in fan-out.
 
 ---
 
@@ -173,6 +175,7 @@ sees only what the envelope carries.
 | I4.8 | `Subscribe` after Drain MUST return `ErrSubscriberDraining`, checked under the same lock as the registration. | `TestMemoryBus_SubscribeAfterDrainIsRefused` |
 | I4.9 | Drain of any subscriber MUST apply to the whole bus: after it, `Dispatch` on every channel, including channels the drained subscriber never served, is refused with `ErrBusDraining`. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
 | I4.10 | A handler MUST run with its subscription's context and MUST NOT see the emitter's context values or its incoming or outgoing metadata (transaction id, principal, scopes). | `TestMemoryBus_HandlerContextIsNotTheEmitters` |
+| I4.11 | A dispatch that matches no subscribed handler MUST fire `OnDrop(no_handler)`; the default Observer MUST log it once per channel and topic, not report every emit. | `TestMemoryBus_DispatchWithNoMatchingHandlerIsADrop`, `TestDefaultObserver_NoHandlerDropIsLoggedOncePerTopic` |
 
 **Deliberate limits.**
 - No ordering between events: each delivery is an independent goroutine.
@@ -209,6 +212,8 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | `DefaultMaxDeliver` | 0 → 3 | negative passed to JetStream unchanged |
 | `DefaultAckWait` | 0 → 30 s | negative passed to JetStream unchanged |
 | `ChannelRetries map[channel]ChannelRetry` | none | a zero field inherits the default; a key that breaks the channel rule is refused at construction |
+| `ChannelRetry.Backoff` | `BackoffNone`: redelivered at once (NATS) or once idle `AckWait` (Redis) | `BackoffConstant` waits `AckWait`, `BackoffLinear` attempt × `AckWait`, `BackoffExponential` 2^attempt × `AckWait`; every delay is capped at `MaxBackoff` (5 min). NATS applies it with `NakWithDelay`; ignored by a fan-out subscription |
+| `ChannelRetry.Topics map[topic]TopicRetry` | none: every topic retries as its channel | keyed by exact topic. `MaxDeliver` can only lower the channel's (a higher value is the channel's, because the broker consumer stops at the channel's cap); `AckWait` is the base of the topic's `Backoff`, not the attempt timeout (the consumer has one); `Backoff` overrides the channel's. A delivery past the topic's cap is dead-lettered without running the handler |
 | `PublishTimeout` | 0 → 2 s (`DefaultPublishTimeout`) | one bound over the stream check, the publish and the acknowledgement |
 | `Retention StreamRetention{MaxAge, MaxMsgs}` | `MaxAge` 0 → 7 days (`DefaultStreamMaxAge`), no count limit | negative `MaxAge` → no age limit; `MaxMsgs <= 0` → no count limit. Applied to every channel stream the bus ensures, oldest discarded first |
 | `DLQRetention StreamRetention` | `MaxAge` 0 → 30 days (`DefaultDLQMaxAge`), no count limit | as `Retention`, for every dead-letter stream |
@@ -234,6 +239,8 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
   looked up first and a transient error changes nothing; otherwise the stream, dead-letter stream
   and claim bucket are re-ensured, the consumer re-created and a new pull loop swapped into the
   subscription under the subscriber lock. Recovery retries until it succeeds or the subscriber drains.
+  A recovery that re-created the consumer before `Subscribe` registered the subscription waits for
+  the registration, then swaps its loop in.
 - `Drain` stops each pull loop by draining it, not stopping it: messages already prefetched into
   the client still reach the consume callback, which Naks them, and `Drain` returns once that
   buffer is empty (bounded by its context). They go back to the broker at once instead of waiting
@@ -251,10 +258,10 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.3 | `OnDrop(max_deliver_exceeded)` MUST fire only after the payload is in the DLQ; a failed DLQ write MUST report `OnDeliverFailure` and Nak instead. | `TestNatsBus_DLQRouting_Embedded`, `TestNatsBus_FailedDLQWriteIsAFailureNotADrop_Embedded`, `TestNatsSubscriber_RouteToDLQ_BrokerFreeGuards` |
 | I5.4 | Exactly one terminal outcome per message across replicas (DLQ or success), including for slow handlers. | `TestNatsBus_MaxDeliverAdvisory_SingleReplicaRoutes_Embedded`, `TestNatsBus_SlowSuccessNotDropped_Embedded`, `TestNatsBus_SlowFailureAtCapStillDLQs_Embedded`, `TestNatsBus_AdvisoryWhileBuffered_NoDropPlusSuccess_Embedded`, `TestNatsBus_CrossReplicaAdvisory_NoDropPlusSuccess_Embedded` |
 | I5.5 | Deliveries that arrive during drain MUST be Nak'd for redelivery, not dropped. | `TestNatsBus_DeliveryDuringDrainIsHandedBack_Embedded`, `TestNatsBus_DrainDuringDelivery_NoWaitGroupRace_Embedded`, `TestNatsSubscriber_AdvisoryRespectsDraining` |
-| I5.6 | `Close` MUST drain all subscribers, then close the connection; it MUST be idempotent and MUST NOT produce error-level callbacks for its own close. | `TestNatsBus_CloseAtShutdownIsNotAnError`, `TestNatsBus_CloseIdempotent_Embedded` |
+| I5.6 | `Close` MUST drain all subscribers, then close the connection; a handler still running when `Close`'s context ends MUST be returned as an error wrapping the context's, naming the channel. It MUST be idempotent and MUST NOT produce error-level callbacks for its own close. | `TestNatsBus_CloseAtShutdownIsNotAnError`, `TestNatsBus_CloseIdempotent_Embedded`, `TestBusClose_WaitsForAnInFlightHandler`, `TestBusClose_ReportsADrainThatTimedOut` |
 | I5.7 | A broker outage MUST be logged. | `TestNatsBus_ABrokerOutageIsStillHeard` |
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
-| I5.9 | `NewNatsBus` MUST retry a broker it cannot reach for `ConnectWait` and then fail; a broker that refuses MUST fail at once. | `TestNewNatsBus_UnreachableBrokerFails` (`ConnectWait: -1`), `TestNewNatsBus_GivesUpAfterConnectWait_WithoutTheToken` |
+| I5.9 | `NewNatsBus` MUST retry a broker it cannot reach for `ConnectWait` and then fail; a broker that refuses MUST fail at once; the error MUST NOT carry the DSN's credential, a DSN that does not parse included. | `TestNewNatsBus_UnreachableBrokerFails` (`ConnectWait: -1`), `TestNewNatsBus_GivesUpAfterConnectWait_WithoutTheToken`, `TestNewNatsBus_ABadDSNIsNotEchoedWithItsPassword` |
 | I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_EmitOnlyProcessRecreatesALostStream_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
 | I5.11 | After the client stops reconnecting, the bus MUST log a "closed for good" line, report an error, and fail every later `Dispatch` at once through `OnEmitFailure`. | `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I5.12 | Channel and topic names MUST be valid on every transport or be refused before use; `DurablePrefix` and the keys of `ChannelRetries` MUST be checked at construction. | `TestChannelNameRefusedOnEveryTransport`, `TestDispatch_EmptyTopicRefusedOnEveryTransport`, `TestBusConstruction_RefusesInvalidNames` |
@@ -264,6 +271,8 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.16 | A subscription's consumer MUST be delivered only the subjects its topic filter can match, never the whole channel for a filter with an exact subject form. | `TestNatsBus_NarrowFilterReadsOnlyItsSubjects_Embedded`, `TestNatsFilterSubjects` |
 | I5.17 | A message delivered to the client MUST NOT age past `AckWait` before its handler starts: one slow handler MUST NOT cause the messages after it to be redelivered. | `TestNatsBus_QueuedDeliveriesDoNotOverrunAckWait_Embedded` |
 | I5.18 | With `Domain` set, a subscriber MUST NOT hand its handler a message stamped with another domain, and MUST deliver an unstamped one; without `Domain` nothing is stamped or filtered. | `TestDomainIsolation_Nats_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
+| I5.19 | A consumer recovery that finishes before `Subscribe` has registered the subscription MUST wait for the registration and swap its pull loop in; it MUST NOT stop the new loop and leave the subscription on the lost consumer. | `TestNatsRecoverConsumer_WaitsForTheHandleToBeRegistered` |
+| I5.20 | A topic's `MaxDeliver` below its channel's MUST dead-letter the topic's message at the topic's cap, without another handler run; a higher one MUST be treated as the channel's. A `Backoff` MUST space redeliveries as configured, capped at `MaxBackoff`; a fan-out subscription MUST redeliver without backoff and keep the caps. | `TestNatsBus_TopicRetry_Embedded`, `TestRetryPlan_FanOutStripsBackoffKeepsCaps`, `TestRetryPlan_CapsAndShapes`, `TestRetryPlanDelay` |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
@@ -307,7 +316,8 @@ a timeout, before returning. Each append trims its stream to the retention limit
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `DSN` | required | `redis://…`, parsed by `ParseURL` |
+| `DSN` | required | `redis://…` / `rediss://…`, opened by `go/lib/redisdsn`: with `cluster=true` a cluster client that follows the slots from the DSN's host and any `addr=`, else a single-server client. A single-server DSN at a cluster fails on the first key another shard holds with an error that says to add `cluster=true` |
+| Server | Redis ≥ 7.0 | the claim loop relies on `XCLAIM` of an entry the stream has trimmed returning nothing and removing it from the pending list; Redis 6 keeps such a row, and the claim loop would offer it again on every tick |
 | `GroupPrefix` | required | — |
 | `Domain` | empty | as I5: set → every entry carries field `domain`, an entry stamped with another domain is acknowledged without calling the handler |
 | `Delivery`, `InstanceID` | see I3 | — |
@@ -316,6 +326,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | `DefaultAckWait` | 0 → 30 s | — |
 | `ReadBatch` | 0 → 10 | — |
 | `ChannelRetries`, `Observer` | as I5 | — |
+| `ChannelRetry.Backoff`, `ChannelRetry.Topics` | as I5 | the claim loop re-claims an entry once it has been idle `AckWait`, so a backoff shorter than `AckWait` cannot space retries closer than that; a failed delivery re-claims its own entry to restart the idle time, so the backoff counts from the failure, not from the delivery |
 | `PublishTimeout` | 0 → 2 s (`DefaultPublishTimeout`) | bounds one `XADD` and its reply |
 | `Retention`, `DLQRetention` | as I5 (7 days and 30 days, no count limit) | applied on each append to the channel stream and to `<channel>.dlq` |
 
@@ -326,7 +337,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.1 | Delivery MUST be at-least-once with up to `MaxDeliver` handler attempts, then dead-letter. | `TestRedisBus_HandlerErrorClaimRedelivers_Embedded`, `TestRedisBus_DLQRouting_Embedded`, `TestRedisBus_ChannelRetriesOverride_Embedded` |
 | I6.2 | The claim loop MUST NOT reclaim or dead-letter a message whose handler is still running, including queued siblings of the same batch; the guard is per consumer identity. | `TestRedisBus_BatchSiblingIsNotReclaimedWhileQueued`, `TestRedisBus_InFlightGuardIsPerConsumerIdentity_Embedded`, `TestRedisBus_InFlightAtCapNotDLQd_Embedded` |
 | I6.3 | A lost group (flush or non-persistent restart) MUST be recreated at `$`; entries between loss and recreation are skipped. | `TestRedisBus_RecoversFromLostGroup_Embedded` |
-| I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent. | `TestRedisBus_DrainOneOfTwoSubscribers_Embedded`, `TestRedisBus_CloseIdempotent_Embedded` |
+| I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent, and MUST drain and report as I5.6 does. | `TestRedisBus_DrainOneOfTwoSubscribers_Embedded`, `TestRedisBus_CloseIdempotent_Embedded`, `TestBusClose_WaitsForAnInFlightHandler`, `TestBusClose_ReportsADrainThatTimedOut` |
 | I6.5 | `NewRedisBus` MUST fail when the broker is unreachable at construction, with any DSN password redacted from the error. | `TestNewRedisBus_UnreachableBrokerFails` |
 | I6.6 | Consume-loop and pending-scan errors MUST be logged and reported once per outage, and the recovery logged. | `TestRedisSubscriber_LoopFailuresAreReported` |
 | I6.7 | `ReadBatch` and pending lists larger than one page MUST be handled without loss: a claim tick pages on past entries that are not due yet. | `TestRedisBus_ReadBatchAbove100LosesNothing`, `TestRedisBus_BackoffDoesNotHideDueEntries_Embedded` |
@@ -335,6 +346,9 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | `TestRedisBus_PublishTimeoutBoundsAHangingBroker` |
 | I6.11 | An entry queued behind a slow handler in one read MUST NOT be taken over by another replica's claim loop before it starts. | `TestRedisBus_QueuedEntryIsNotTakenOverByAnotherReplica` |
 | I6.12 | I5.18 MUST hold on Redis. | `TestDomainIsolation_Redis_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
+| I6.13 | An entry without a `topic` field (not an event envelope) MUST NOT reach any handler, the catch-all `**` included; it MUST be acknowledged and reported through `OnDeliverFailure`. | `TestRedisBus_EntryWithoutTopicIsSettledUnhandled_Embedded` |
+| I6.14 | I5.20 MUST hold on Redis, a backoff counting from the failed attempt; entries not yet due MUST NOT hide due entries behind them from the claim loop. | `TestRedisBus_TopicRetry_Embedded`, `TestRedisBus_BackoffCountsFromTheFailure_Embedded`, `TestRedisBus_BackoffDoesNotHideDueEntries_Embedded` |
+| I6.15 | With `cluster=true` every channel MUST be delivered and claimed again after a failure whichever shard holds its stream; every bus command names one key, so a channel's stream and its `<channel>.dlq` MAY live on different shards. A single-server DSN at a cluster MUST fail naming `cluster=true`. | `TestRedisBus_Cluster_EveryChannelOnEveryShard`, `TestRedisBus_Cluster_ASingleServerDSNSaysToAddCluster` (live, CI's cluster job), `TestOpen_PicksTheClientTheDSNNames`, `TestHint_SaysToAddClusterOnMOVEDOnly` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.
@@ -390,16 +404,17 @@ subscriber that does not use the generated dispatch and for an envelope from a
 publisher outside the SDK.
 
 Credential rule: `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and
-`x-w17-credential` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
+`x-w17-credential` and the DPoP proof `dpop` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
 plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
-`apikey`, `api`+`key`, `cookie`, `credential(s)`, `jwt`, `passwd`, `password`,
-`secret`, `session`, `token`. The gateway-owned namespaces (`x-w17-*`,
+`apikey`, `api`+`key`, `bearer`, `cookie`, `credential(s)`, `jwt`, `key`, `otp`,
+`pass`, `passwd`, `password`, `pwd`, `secret`, `session`, `signature`, `token`. The gateway-owned namespaces (`x-w17-*`,
 `w17-label-*`) are exempt from the segment rule.
 
 Repeated keys collapse to one value, chosen as the key's reader on the subscriber
 side chooses: the first value for the gateway-owned namespaces, the last value for
-every other key (the metadata-binding convention the locale readers follow). `LabelsFromContext`
-extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
+every other key, skipping an empty one (the metadata-binding convention the locale readers follow). `LabelsFromContext`
+extracts `w17-label-<name>` entries with a non-empty value into `Event.Labels`, the event's audience
+(an empty value is no label, as `principal.Label` reads it).
 `EmitInvalidate` dispatches an `InvalidateEvent` on the reserved topic
 `w17.invalidate`, labelled from the context like any other event. The event is
 not the domain's envelope; only the hub (`EveryTopic`) and filters naming `w17`
@@ -412,14 +427,15 @@ receive it (I2.7).
 | I8.1 | The gateway tier (outgoing only) and the server tier (incoming) MUST produce the same metadata and labels. | `TestEventContextReaders_*` |
 | I8.2 | The transaction header and the storage routing token (`w17-tx-id`, `w17-conn-id`) MUST NOT ride an envelope; both literals are pinned against the constants of the packages that set them. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
 | I8.3 | An emit outside a labelled request MUST be unlabelled; invalidate events MUST take labels from incoming or outgoing metadata. | `TestEmitInvalidate_*` |
-| I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel. | `TestMetadataFromContext_DropsCredentials` |
-| I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` |
+| I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel; a name that holds a flagged word only as letters inside a segment (`x-keyboard-layout`) still travels. | `TestMetadataFromContext_DropsCredentials`, `TestMetadataFromContext_DropsCommonSecretHeaderShapes` |
+| I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last non-empty otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders`, `TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped` |
 | I8.6 | A delivery whose envelope metadata carries `w17-tx-id` or `w17-conn-id` (any letter case) MUST be refused on every transport before any handler runs, reported, and dead-lettered through the transport's normal failure path; the key as a value, in labels, or as part of a longer name MUST NOT be refused. | `TestEnvelopeGuard_Memory`, `TestEnvelopeGuard_NATS_Embedded`, `TestEnvelopeGuard_Redis_Embedded`, `TestEnvelopeGuard_RefusedEnvelopeIsDeadLettered_Redis`, `TestEnvelopeGuard_RefusedKeysAreStrippedOnEmit` |
+| I8.7 | A DPoP proof (`dpop`, any letter case, also behind `grpcgateway-`) MUST NOT ride `Event.Metadata` and MUST be a reserved key for the subscriber-side filter; a label with an empty value MUST NOT be extracted into `Event.Labels`. | `TestMetadataFromContext_DropsTheDPoPProof`, `TestLabelsFromContext_DropsEmptyValues` |
 
 **Deliberate limits.**
 - The delivery refusal reads field 50001 only. A hand-written envelope that keeps its metadata elsewhere is not checked.
 - An internal service that sends `w17-tx-id` straight to storage over gRPC is not an event; that caller is inside the service mesh, where trust between services applies, not this check.
-- The credential rule is a denylist, not an allowlist, because declared metadata propagation uses arbitrary header names. A credential under a name that matches neither an exact name nor a flagged segment travels with the event.
+- The credential rule is a denylist, not an allowlist, because declared metadata propagation uses arbitrary header names. A credential under a name that matches neither an exact name nor a flagged segment (`x-hubsig`, `x-signingkey`) travels with the event; a header that only looks like a credential (`x-idempotency-key`) does not.
 
 ---
 
@@ -441,8 +457,8 @@ by labels.
 | Per-write deadline | 30 s | — |
 
 **Audience rule.** With isolation, an unlabelled event reaches nobody; a labelled
-event reaches a client only if every event label is present with the same value in
-the principal's labels. A client whose principal cannot be resolved receives nothing.
+event reaches a client only if every event label is present (a missing key is not
+an empty value) with the same value in the principal's labels. A client whose principal cannot be resolved receives nothing.
 
 **Guarantees.**
 
@@ -453,10 +469,11 @@ the principal's labels. A client whose principal cannot be resolved receives not
 | I9.3 | Every replica MUST receive every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent`, `go/lib/restgw/w17events_replicas_test.go` |
 | I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `TestEventbusEventSource_FailedOpenDrainsWhatItOpened`, `TestEventbusEventSource_PartialOpenDrainsWithoutHoldingTheHubLock`, `TestEventbusEventSource_FailedOpenDrainIsBoundedAtTenSeconds` |
 | I9.5 | Streams MUST end on client disconnect or server drain. | `TestW17EventsEndsOnDrain`, `go/lib/restgw/w17events_drain_test.go` |
-| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter, and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeError`, `TestEventbusEventSource_TranscodeSkip` |
+| I9.6 | A transcode error MUST be logged with channel, topic and cause, reported to the error reporter (both at most once per topic per minute, the next one counting the suppressed failures), and the event dropped (skipped for that client set). | `TestEventbusEventSource_TranscodeErrorIsLogged`, `TestEventbusEventSource_TranscodeError`, `TestEventbusEventSource_TranscodeSkip`, `TestEventbusEventSource_TranscodeReportIsThrottledPerTopic` |
 | I9.7 | A slow client MUST lose only its own frames; other clients MUST be unaffected. | `TestEventbusEventSource_SlowClientLosesOnlyItsOwnFrames` |
 | I9.8 | A write to a stalled client MUST end within the write deadline. | `TestHandleW17Events_StalledClientEndsWithinTheWriteDeadline` |
 | I9.9 | The hub MUST resume delivery after the broker loses and recreates its consumer. | `TestEventbusEventSource_ResumesAfterTheBrokerRecreatesItsConsumer` |
+| I9.10 | An event label MUST be matched by presence: an empty-valued event label MUST NOT be granted to a principal that lacks the label. | `TestEntitled_ALabelMustBePresentNotMerelyEqualToTheZeroValue` |
 
 **Deliberate limits.**
 - Deliveries are always acked; nothing is retried.
@@ -470,10 +487,17 @@ the principal's labels. A client whose principal cannot be resolved receives not
 **Code.** `go/lib/principal/principal.go` — `UserID`, `Envelope`, `Scope`, `ScopeKey`, `Label`, `LabelKey`, `ErrNoPrincipal`; `go/lib/principal/device.go` — `DeviceID`, `DeviceMetadataKey`
 
 **Purpose.** Reads the gateway-verified caller from incoming gRPC metadata:
-`x-w17-user` (base64 of the auth response proto), `x-w17-scope-<name>` per declared
-scope, `w17-label-<name>` per broadcast label, and `x-w17-device`, the verified DPoP device
+`x-w17-user` (base64 of the auth response proto), `x-w17-scope-<name>` per scope of the
+auth response — the hint scopes the auth plugin reports (`org_permissions`,
+`org_product_roles`, read by `acllock.HeldInAnOrganization`, E4.7) included —
+`w17-label-<name>` per broadcast label, and `x-w17-device`, the verified DPoP device
 id (the RFC 7638 thumbprint of the key whose token-bound proof the gateway checked), which
 a gateway without DPoP, or a request with only an unbound proof, never carries.
+`DataScope` reads `x-w17-data-scope`, the range of rows an audience gateway allows:
+`owner` (every data scope of a model applies, the owner axis included), `org` (the
+organization axis only) or `all` (none; stamped only by the admin surface's gateway); a
+method declared with `(w17.widen_scope)` widens it, and the relay (I12) carries the
+widened value into every downstream call of the request.
 
 **Guarantees.**
 
@@ -485,6 +509,8 @@ a gateway without DPoP, or a request with only an unbound proof, never carries.
 | I10.4 | `Label` and `LabelKey` MUST report "not present" on absent or empty values. | `TestLabel_AbsentOrEmptyIsNotPresent` |
 | I10.5 | Only incoming metadata MUST be read; the first value of a multi-valued key wins. | `TestUserID_FromScope`, `TestReaders_IgnoreOutgoingMetadata`, `TestReaders_FirstValueWins` |
 | I10.6 | `DeviceID` MUST report a device only for exactly one non-empty incoming `x-w17-device` value; absent, empty, doubled or outgoing-only values MUST read as no device. | `TestDeviceID_ReadsTheStamp` |
+| I10.7 | `DataScope` MUST return `owner`, `org` or `all` for exactly one such value; an unknown value or several values MUST read as `owner`, the narrowest range; no value MUST read as "" (no audience gateway: every data scope applies). | `TestDataScope` |
+| I10.8 | `UserID` and `Envelope` MUST fail closed on an empty `x-w17-user` value as on an absent one, and `Envelope` MUST leave `dst` as the caller supplied it. | `TestEnvelope_FailsClosedOnAnEmptyValueAndLeavesDst`, `TestUserID_FailsClosed` |
 
 **Deliberate limits.**
 - The envelope is not signed. Its integrity rests on the gateway stripping
@@ -513,10 +539,11 @@ selector, deliberately outside the namespace.
 |---|---|---|
 | I11.1 | A scope or label the auth response omits MUST NOT be suppliable by the client. | `TestWithGatewayMD_SanitizesBothSides` |
 | I11.2 | Unauthenticated paths MUST be sanitised too. | `TestWithGatewayMD_UnauthenticatedPathAlsoSanitized` |
-| I11.3 | The incoming and outgoing copies MUST NOT alias. | `TestWithGatewayMD_SidesDoNotAlias` |
+| I11.3 | The incoming and outgoing copies MUST NOT alias each other or the caller's `md`. | `TestWithGatewayMD_SidesDoNotAlias`, `TestWithGatewayMD_TheCallersMapDoesNotAliasEitherSide` |
 | I11.4 | `IsGatewayOwnedKey` MUST classify exactly the two namespaces and the two transaction keys (whole name only), case-insensitively. | `TestIsGatewayOwnedKey`, `TestIsEdgeReservedKey` |
 | I11.5 | `SanitizeGatewayMD` MUST strip the transaction keys a client sends on the rpc gateway. | `TestSanitizeGatewayMD_StripsTransactionKeys` |
 | I11.6 | A client MUST NOT be able to supply `x-w17-device` on any spelling: it is stripped with the namespace, `SetDeviceID` stamps only the gateway's value and removes the key for an empty id; no REST surface forwards a client's copy to a backend. | `TestDeviceID_ClientCannotInject`, `TestEdge_ClientCannotSetReservedMetadataOnAnySurface` |
+| I11.7 | A client MUST NOT be able to supply `x-w17-data-scope`: it is stripped with the namespace on every gateway, so `all` reaches a tier only from the admin surface's gateway. | `TestDataScope_RelayedAndGatewayOwned` |
 
 ---
 
@@ -535,8 +562,18 @@ these keys, the verified principal wins: the outgoing copy of the whole relayed 
 is replaced, so an outgoing value for a relayed key is overwritten and a relayed key
 present only on the outgoing side is dropped. Every other outgoing key is kept.
 Paging, tracing, locale and transaction metadata are deliberately not relayed. A
-context with no incoming principal (the gateway, which stamps the outgoing side
-directly, or an unauthenticated call) is returned unchanged.
+context with no incoming relayed key (the gateway, which stamps the outgoing side
+directly, or an unauthenticated call) is returned unchanged. Any incoming relayed key
+triggers the replacement, not only the principal: a context carrying an incoming
+`x-w17-host` alone loses the outgoing principal stamps. `x-w17-host` selects among the
+caller's memberships; it never grants one.
+
+`ActAs(ctx, user, scopes)` (`go/lib/principal/actas.go`) is the explicit act below: it
+stamps `user` as the outgoing principal with `scopes` as its `x-w17-scope-*` and drops
+every relayed key from both sides, so a later `ForwardToOutgoing` cannot put the
+previous principal back. The data scope, device and audience context are dropped with
+them, which narrows a downstream call, never widens it. Who may act as whom is the
+caller's decision, made before it calls (a method behind a private surface, S23).
 
 **Guarantees.**
 
@@ -545,10 +582,11 @@ directly, or an unauthenticated call) is returned unchanged.
 | I12.1 | The principal, scopes and labels MUST survive any number of hops. | `TestForwardToOutgoing_RelaysPrincipal`, `TestForwardToOutgoing_RelaysBroadcastLabels`, `TestForwardToOutgoing_SecondHopKeepsTheLabel` |
 | I12.2 | Metadata outside the relayed set above MUST NOT be relayed. | `TestForwardToOutgoing_ExcludesNonPrincipal` |
 | I12.3 | With an incoming principal, the relayed set MUST replace the outgoing copy (overwritten values, outgoing-only relayed keys dropped) while other outgoing keys are kept; values MUST NOT be duplicated and the call MUST be idempotent. | `TestForwardToOutgoing_VerifiedPrincipalWins` |
-| I12.4 | A context without an incoming principal MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched` |
+| I12.4 | A context with no incoming relayed key MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written; any incoming relayed key (`x-w17-host` alone included) MUST trigger I12.3's replacement. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched`, `TestForwardToOutgoing_AnyIncomingRelayedKeyTriggersTheReplacement` |
 | I12.5 | The device id MUST be relayed on every path the principal takes — `ForwardToOutgoing`, the `grpcx.DialOpts` unary and stream interceptors over a real connection, and the in-process bridge at any depth — and a stale outgoing device MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysDevice`, `TestDialOpts_RelaysTheDeviceID`, `TestConn_NestedCall_RelaysTheDeviceID`, `TestConn_IncomingDeviceIsRelayed` |
 | I12.6 | A token mint's verified key (`x-w17-dpop-jkt`) MUST be relayed like the device id, with no principal on the request, so a facade over the auth plugin's mint hands it on; a stale outgoing copy MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysTheMintKey` |
 | I12.7 | The data scope and the audience context (`x-w17-audience`, `x-w17-membership-kinds`, `x-w17-org-from`, `x-w17-host`) MUST be relayed with the principal; I12.3's replacement applies to them as to every relayed key. | `TestForwardToOutgoing_RelaysTheAudienceContext`, `TestDataScope_RelayedAndGatewayOwned` |
+| I12.8 | `ActAs` MUST stamp exactly the named user and scopes and drop every relayed key on both sides; it MUST refuse an empty user id, an empty scope value, a scope name outside `[a-z0-9_]`, and a `user_id` scope that names another user than the envelope. | `TestActAs_TheCalleeSeesTheUserAndScopes`, `TestActAs_ReplacesEveryOtherPrincipal`, `TestActAs_RefusesAScopeThatDisagreesWithTheUserOrIsNotAName`, `go/lib/principal/actas_test.go` |
 
 **Deliberate limits.**
 - Calling a downstream tier as a different principal is an explicit act: drop the incoming
@@ -560,7 +598,7 @@ directly, or an unauthenticated call) is returned unchanged.
 
 ## I13. Permission lock and checks
 
-**Code.** `go/lib/acllock/lock.go`; `go/lib/acllock/allocator.go` — `Allocate`; `go/lib/acllock/bits.go` — `HasPermission`, `HasAnyPermission`, `HasAllPermissions`, `HasAllPermissionsStrict`, `GrantAll`, `IDByString`; `go/lib/acllock/permission_key.go` — `PermissionKey`
+**Code.** `go/lib/acllock/lock.go`; `go/lib/acllock/allocator.go` — `Allocate`; `go/lib/acllock/bits.go` — `HasPermission`, `HasAnyPermission`, `HasAllPermissions`, `HasAllPermissionsStrict`, `GrantAll`, `IDByString`; `go/lib/acllock/permission_key.go` — `PermissionKey`; `go/lib/acllock/orgheld.go` — `HeldInAnOrganization`, `OrgPermissionsOfProductRoles` (the organization-required answer, E4.7)
 
 **Purpose.** Model of a domain's permission allocation table, and the runtime
 check helpers. `IDByString` accepts the enum value name or the cascade code.
@@ -570,6 +608,7 @@ check helpers. `IDByString` accepts the enum value name or the cascade code.
 | Input | Behaviour |
 |---|---|
 | `HasPermission(ids, id)` with empty `ids` | false |
+| `HasPermission(ids, id)` with `id <= 0` | false, whatever `ids` holds: IDs are allocated from 1 |
 | `HasAnyPermission` with empty `wanted` | false |
 | `HasAllPermissions` with empty `wanted` | **true** (documented); use `HasAllPermissionsStrict`, which returns false |
 | nil lock | no IDs, not found |
@@ -578,10 +617,10 @@ check helpers. `IDByString` accepts the enum value name or the cascade code.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I13.1 | `Allocate` MUST keep existing IDs, give new permissions the smallest positive unused, unreserved ID, move removed IDs to `Reserved`, skip empty strings, and be deterministic for a given input order. | `TestAllocate_EmptyPrev`, `TestAllocate_PreservesExisting`, `TestAllocate_RemovedGoesToReserved`, `go/lib/acllock/allocator_internal_test.go` |
+| I13.1 | `Allocate` MUST keep existing IDs, give new permissions the smallest positive unused, unreserved ID, move removed IDs to `Reserved`, skip empty strings, and be deterministic for a given input order, whatever order the previous lock's map is walked in. | `TestAllocate_EmptyPrev`, `TestAllocate_PreservesExisting`, `TestAllocate_RemovedGoesToReserved`, `TestAllocate_IsDeterministic`, `go/lib/acllock/allocator_internal_test.go` |
 | I13.2 | A reserved ID MUST never be reused, across any number of generations. | `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
 | I13.3 | `Allocate` MUST NOT consume an ID without assigning or reserving it (for example on duplicate input entries). | `TestAllocate_DuplicateEntryConsumesNoID`, `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
-| I13.4 | Checks MUST deny by default and never grant on error; no helper returns an error. | `TestHasPermission`, `TestHasAllPermissions`, `go/lib/acllock/strict_test.go` |
+| I13.4 | Checks MUST deny by default and never grant on error; no helper returns an error; a check for an ID of 0 or below MUST deny even when `ids` carries it. | `TestHasPermission`, `TestHasAllPermissions`, `go/lib/acllock/strict_test.go`, `TestHasPermission_IDZeroOrBelowIsNeverGranted` |
 | I13.5 | `HasAnyPermission` with empty `wanted` MUST return false. | `TestHasAnyPermission` |
 | I13.6 | `GrantAll` MUST return every current, non-reserved ID. | `TestGrantAll` |
 | I13.7 | `IDByString` MUST resolve declared enum names and cascade codes. | `TestIDStringLookups`, `go/lib/acllock/permission_alphabet_test.go` |
@@ -604,12 +643,12 @@ params)` translates for the request's locale and substitutes `{name}` placeholde
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `RegisterCatalog(lang, po) error` | — | empty `lang` → no-op; returns syntax problems (with line numbers) and conflicting translations; a malformed `.po` is still registered best-effort |
-| `Register(lang, po)` | — | as `RegisterCatalog`, but logs the problems instead of returning them |
+| `Register(lang, po)` | — | as `RegisterCatalog`, but logs the problems instead of returning them (`TestRegisterAndSetDefaultLanguage_LogTheirProblems`) |
 | `RegisterFS(fs)` | — | language = file base name; returns the problems joined per file path, and `ErrNoCatalogs` for a tree with no `.po` file |
 | Same language registered twice | — | the catalogs are merged; a conflicting translation keeps the first one and is reported |
-| `SetDefaultLanguage` | `en` | empty ignored; a second, different value is logged and takes effect |
-| Catalog tag | — | matched regardless of case and `_`/`-` spelling, for catalogs and for the default language (`pt_BR.po` serves `pt-BR`) |
-| Locale | last `w17-language` value, incoming before outgoing, else default | parsed as Accept-Language: each tag, then its base language, else the default catalog |
+| `SetDefaultLanguage` | `en` | empty ignored; a second, different value (case and `_`/`-` aside) is logged and takes effect (`TestRegisterAndSetDefaultLanguage_LogTheirProblems`) |
+| Catalog tag | — | matched regardless of case and `_`/`-` spelling, for catalogs and for the default language (`pt_BR.po` serves `pt-BR`); a catalog under a non-canonical tag (`iw`) is registered under its canonical tag (`he`) as well |
+| Locale | last non-empty `w17-language` value, incoming before outgoing, else default | parsed as Accept-Language member by member (a member that does not parse is skipped, not the list), in q order: each tag, then its base language, else the default catalog. Only the first 512 bytes of the value are parsed, cut at a member boundary |
 
 **Lookup.** For each message `T` looks in the negotiated catalog, then in the
 default-language catalog, then returns the msgid. An empty `msgstr` counts as
@@ -622,20 +661,21 @@ untranslated. Substitution is one left-to-right pass over the translated text.
 | ID | Guarantee | Test |
 |---|---|---|
 | I14.1 | Translation and substitution MUST work; the default catalog MUST be the fallback; a missing locale MUST give the msgid. | `TestT_RegisteredLocale_TranslatesAndSubstitutes`, `TestT_DefaultLocaleFallback`, `TestT_RequestedLocaleMissing_FallsBackToDefault`, `TestT_NoCatalogForDefaultLanguage_ReturnsMsgid` |
-| I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing. | `TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31`, `TestT_AcceptLanguageRegion_FallsBackToBase_B31`, `TestLocaleFromContext_LastValueWins`, `TestLocaleFromContext_OutgoingMetadata`, `TestLocaleFromContext_IncomingBeatsOutgoing` |
+| I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing; an empty value MUST be skipped; a member that does not parse MUST NOT void the rest of the list, in the catalog and the format-locale negotiation alike. | `TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31`, `TestT_AcceptLanguageRegion_FallsBackToBase_B31`, `TestLocaleFromContext_LastValueWins`, `TestLocaleFromContext_OutgoingMetadata`, `TestLocaleFromContext_IncomingBeatsOutgoing`, `TestLocaleFromContext_SkipsEmptyValues`, `TestNegotiation_ABadMemberDoesNotVoidTheList` |
 | I14.3 | Unknown placeholders MUST survive verbatim; an empty msgid MUST return "" so the `.po` header never leaks. | `TestSubstitute_UnknownPlaceholderPassesThrough`, `TestT_EmptyMsgid_ReturnsEmpty` |
-| I14.4 | Concurrent use MUST be safe. | `go/lib/i18n/i18n_extra_test.go` |
+| I14.4 | Concurrent use MUST be safe. | `TestCatalogs_ConcurrentRegisterAndTranslate` (under `-race`) |
 | I14.5 | A msgid missing from the requested catalog, present with an empty `msgstr`, or marked `#, fuzzy`, MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | `TestT_FallbackIsPerMessage`, `TestT_EmptyMsgstrFallsThrough`, `TestFuzzyEntryIsNotServed` |
 | I14.6 | Substitution MUST be deterministic and MUST NOT expand placeholder tokens inside parameter values. | `TestSubstitute_DeterministicSinglePass`, `TestSubstitute_BraceEdges` |
-| I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`). | `TestCatalogTag_UnderscoreAndCaseInsensitive` |
-| I14.8 | A malformed catalog, an entry marked `#, fuzzy` (the header excepted), and a catalog tree without any `.po` file, MUST be reported at registration: `ValidatePO` and `RegisterCatalog` return the problems with line numbers, `RegisterFS` joins them per file path and adds `ErrNoCatalogs`. | `TestValidatePO`, `TestValidatePO_ReportsFuzzyEntries`, `TestRegisterFS_ReportsMalformedCatalog`, `TestRegisterFS_NoCatalogIsReported` |
+| I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`), and a catalog under a deprecated tag MUST serve the canonical one (`iw.po` serves `he` and `iw-IL`). | `TestCatalogTag_UnderscoreAndCaseInsensitive`, `TestRegisterCatalog_ServesTheCanonicalTag` |
+| I14.8 | A malformed catalog, an entry marked `#, fuzzy` (the header excepted), an entry with a `msgctxt` or plural forms (neither is served), an indexed `msgstr[N]` outside a plural entry, and a catalog tree without any `.po` file, MUST be reported at registration: `ValidatePO` and `RegisterCatalog` return the problems with line numbers, `RegisterFS` joins them per file path and adds `ErrNoCatalogs`. | `TestValidatePO`, `TestValidatePO_ReportsFuzzyEntries`, `TestRegisterFS_ReportsMalformedCatalog`, `TestRegisterFS_NoCatalogIsReported` |
 | I14.9 | Registering a language twice MUST merge the catalogs; a conflicting translation MUST keep the first one and be reported. | `TestRegisterCatalog_MergesAndReportsConflicts` |
+| I14.10 | A language value MUST NOT be parsed past its first 512 bytes: a megabyte Accept-Language does not make every `T` parse a megabyte. | `TestNegotiation_BoundsTheValueItParses` |
 
 ---
 
 ## I15. Number and date formatting
 
-**Code.** `go/lib/i18n/formats.go`, `go/lib/i18n/formatnum.go`, `go/lib/i18n/formatdate.go`, `go/lib/i18n/formatlocale.go` — `FormatLocaleFromContext`
+**Code.** `go/lib/i18n/formats.go` — `FormatTableJSON`, `HasFormatLocale`, `FormatKinds`; `go/lib/i18n/formatnum.go` — `DecimalString`; `go/lib/i18n/formatmoney.go` — `FormatMoney`; `go/lib/i18n/formatdate.go` — `RenderTimePattern`; `go/lib/i18n/formatlocale.go` — `FormatLocaleFromContext`
 
 **Purpose.** A frozen per-locale table embedded from `formats.json`, resolved locale
 → base language → `en` with case and `_` normalisation, with per-kind project
@@ -649,12 +689,16 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I15.1 | Numbers MUST use decimal-string arithmetic, round half-up away from zero, never print negative zero, and return non-decimal input unchanged. | `TestFormatGoldenVectors` |
-| I15.2 | Dates MUST render in UTC with a closed token vocabulary; unparseable input MUST be returned unchanged. | `TestFormatGoldenVectors` |
-| I15.3 | The table MUST be complete; the resolution chain and overrides MUST apply. | `go/lib/i18n/format_test.go` |
-| I15.4 | Format-locale fallback and negotiation MUST apply. | `go/lib/i18n/format_test.go` |
+| I15.1 | Numbers MUST use decimal-string arithmetic, round half-up away from zero, never print negative zero, drop leading integer zeros (keeping one), and return non-decimal input unchanged. | `TestFormatGoldenVectors` |
+| I15.2 | Dates MUST render in UTC with a closed token vocabulary — every token, the 12-hour `hh`/`h`, `A` and the second `ss` included, renders as documented (`RenderTimePattern`); unparseable input MUST be returned unchanged. | `TestFormatGoldenVectors` (the `pattern` vectors render every token) |
+| I15.3 | The table MUST be complete; the resolution chain and overrides MUST apply. | `TestFormatTableRowsAreComplete`, `TestFormatTablePatternsAreRenderable`, `TestResolveFormatsChain`, `TestResolveFormatsKindOverride` |
+| I15.4 | Format-locale fallback and negotiation MUST apply; an empty `w17-format-locale` value is skipped. | `TestFormatLocaleFromContext`, `TestFormatLocaleFromContextNegotiatesAcceptLanguage`, `TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped` |
 | I15.5 | An explicit format locale MUST be honoured on both incoming and outgoing metadata. | `TestFormatLocaleFromContext_OutgoingMetadata` |
 | I15.6 | A project override MUST apply to a regional request of its language, unless the regional tag has an override of its own, in Go and in the admin runtime alike. | `TestResolveFormatsKindOverride_RegionalRequest`, `ts/admin-runtime/src/valueformat.test.ts` ("applies a language's override to a regional request") |
+| I15.7 | `FormatMoney(value, scale, currency)` MUST read `value` as minor units at `scale` (a negative scale is 0), render at the currency's own decimals (rounded half-up, padded), place the currency's symbol per the locale (an unknown code renders as itself, a lowercase or padded code is normalised), lead with the sign, render zero (and an amount that rounds to zero) unsigned, render without a currency at the scale's decimals, and pass a non-numeric value through unchanged — in Go and in the admin runtime alike. | `TestFormatGoldenVectors` (the `money` vectors), `TestCurrencyTableDecimals`, `TestFormatMoneyEdges`, `ts/admin-runtime/src/valueformat.test.ts` |
+| I15.8 | `FormatTableJSON` MUST be the embedded `formats.json` byte for byte, a fresh copy on each call. | `TestFormatTableJSON_IsTheEmbeddedFileByteForByte` |
+| I15.9 | `DecimalString` MUST never render exponent notation, at either end of the float range: its output always parses as a decimal. | `TestDecimalString_NeverRendersAnExponent` |
+| I15.10 | `HasFormatLocale` MUST answer for exactly the locale asked, walking no fallback (`cs-CZ` has no row of its own); `FormatKinds` MUST be the closed set of six kinds. | `TestHasFormatLocale`, `TestFormatKinds` |
 
 ---
 
@@ -666,8 +710,9 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty; an entry marked `#, fuzzy` MUST keep its flag and its suggested `msgstr`, and `EntriesFromPO` MUST report it `Fuzzy` with no `msgstr`, so a catalog built from it does not serve it. | `go/lib/i18n/merge_untranslated_test.go`, `go/lib/i18n/extract_test.go`, `TestMergePO_KeepsTheFuzzyFlag` |
-| I16.2 | Extraction, scaffolding and enum-label harvesting MUST produce the catalogs the runtime reads. | `go/lib/i18n/extract_test.go`, `go/lib/i18n/extract_extra_test.go`, `go/lib/i18n/harvest_test.go`, `go/lib/i18n/harvest_extra_test.go` |
+| I16.1 | `MergePO` MUST keep translator edits, drop obsolete msgids, and keep untranslated entries empty; it MUST keep each kept entry's translator comments (`# …`) and the prior header fields it does not write itself (`Plural-Forms`, `Last-Translator`, `Language-Team`, `PO-Revision-Date`, …); an entry marked `#, fuzzy` MUST keep its flag and its suggested `msgstr`, and `EntriesFromPO` MUST report it `Fuzzy` with no `msgstr`, so a catalog built from it does not serve it. | `TestMergePO_PreservesTranslatorEdits`, `TestMergePO_DropsObsoleteMsgids`, `TestMergePO_LeavesAnUntranslatedEntryUntranslated`, `TestEntriesFromPO_ReportsAnUntranslatedEntryAsEmpty`, `TestMergePO_KeepsTheFuzzyFlag`, `TestMergePO_KeepsTheTranslatorsHeaderAndComments` |
+| I16.2 | Extraction, scaffolding and enum-label harvesting MUST produce the catalogs the runtime reads. | `TestMarshalPO_BasicShape`, `TestMarshalPO_RoundTripsThroughRegister`, `TestScaffoldPO_AllMsgstrEmpty`, `TestDefaultLocalePO_MsgstrMirrorsMsgid`, `TestEmitDomainCatalogs_PerLanguageOutput`, `TestEntriesFromPO_RoundTrip`, `TestMarshalJSON_SortedAndStable`, `TestHarvestEnumLabels_TopLevelEnum`, `TestHarvestEnumLabels_NestedMessageEnums` |
+| I16.3 | `MarshalJSON` MUST emit `{msgid: msgstr}` sorted by msgid with a stable indent, keep empty msgstrs, skip the empty msgid and refuse an empty language; `EntriesFromMsgids` MUST give the default language its baseline (msgstr = msgid) and every other language empty msgstrs. | `TestMarshalJSON_SortedAndStable`, `TestMarshalJSON_UnicodeAndQuotes`, `TestMarshalJSON_EmptyLangAndEmptyMsgid`, `TestEntriesFromMsgids_BaselineVsScaffold`, `TestEntriesFromMsgids_Empty` |
 
 ---
 
@@ -681,10 +726,10 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I17.1 | `ValidEmail` MUST require one `@`, a non-empty local part and a domain with an inner dot, and reject any byte `<= 0x20` or `0x7f`. | `TestValidEmail`, `TestValidEmail_RejectsControlChars` |
+| I17.1 | `ValidEmail` MUST require one `@`, a non-empty local part and a domain with an inner dot, and reject any byte `<= 0x20` or `0x7f` and any Unicode space or control character (no-break space, line and paragraph separators, C1 controls); non-ASCII letters pass. | `TestValidEmail`, `TestValidEmail_RejectsControlChars`, `TestValidEmail_RejectsUnicodeSpaceAndControl` |
 | I17.2 | `FitsDecimal(s, precision, scale)` MUST be value preserving, reject exponent and NaN, and accept empty input. | `TestFitsDecimal` |
 | I17.3 | `FitsDecimal` MUST agree with the database for every column shape the declaration validator admits (including scale greater than precision and negative scale). | `TestFitsDecimal_AgreesWithPostgresOnEveryScale` |
-| I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` MUST match their documented shapes. | `TestTypeRegexes_MatchTheirDocumentedShapes` |
+| I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` (six hex pairs, one separator throughout: all `:` or all `-`) MUST match their documented shapes. | `TestTypeRegexes_MatchTheirDocumentedShapes` |
 
 **Deliberate limits.**
 - These are shape checks. `URL` does no host check and accepts only a lower-case scheme. `ValidEmail` blocks control characters but not markup; output escaping is the renderer's job.
@@ -703,7 +748,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 | ID | Guarantee | Test |
 |---|---|---|
 | I18.1 | Output MUST be exactly `n` characters from the base64url alphabet, with no padding. | `TestToken_LengthInvariant`, `TestToken_CharsetInvariant`, `TestToken_NoPaddingInTruncated` |
-| I18.2 | Every character MUST be drawn from `crypto/rand`, never `math/rand`. | `TestToken_NonRepeating` |
+| I18.2 | Every character MUST be drawn from `crypto/rand`, never `math/rand`. | `TestToken_SourceUsesCryptoRandOnly` (the package's imports), `TestToken_NonRepeating` |
 | I18.3 | `n <= 0` MUST be an error. | `TestToken_RejectsNonPositive` |
 
 **Deliberate limits.**
@@ -722,6 +767,7 @@ batcher encodes the records into batches, one sender delivers each batch.
 | Setting | Default / effect |
 |---|---|
 | `Size`, `Encode`, `Sink`, `Fail` | required; `Size` runs on the request path, the rest in the background |
+| `EncodeFailed` | optional: encodes, for `Fail`, a record that never reached a batch (on the submitter's goroutine); default `Encode` |
 | `BatchBytes` | required (> 64): a batch's largest encoded size, the sink's limit |
 | `BatchItems` | 1000: a batch closes at this many records |
 | `BatchPeriod` | 10ms: a batch closes this long after its first record |
@@ -748,14 +794,14 @@ field 2 each record as `Encode` wrote it, so a consumer decodes it with its own 
 | I19.7 | A batch the sink refuses or panics on MUST go to `Fail` whole, with its id and records. | `TestPipeline_SinkErrorAndPanicFailTheBatch` |
 | I19.8 | `Close` MUST deliver everything queued; a record submitted after it MUST go to `Fail` with `ErrClosed`. | `TestPipeline_CloseDrainsThenRefuses` |
 | I19.9 | A `Close` whose context ends MUST return, failing what it still holds: every record is delivered or failed, none lost unreported. | `TestPipeline_CloseBoundedByItsContext`, `TestPipeline_SubmitRacingClose` |
-| I19.10 | `Submit` racing `Close` MUST NOT panic. | `TestPipeline_SubmitRacingClose` |
+| I19.10 | `Submit` racing `Close` MUST NOT panic; a `Submit` arriving once `Close` has begun MUST fail with `ErrClosed` at once, not wait behind a submitter that waits for room; submitters still waiting when `Close`'s context ends MUST give up with `ErrClosed`. | `TestPipeline_SubmitRacingClose`, `TestPipeline_SubmitDuringACloseThatWaitsFailsAtOnce` |
 | I19.11 | `Submit` with room MUST NOT allocate. | `TestPipeline_SubmitDoesNotAllocate` |
-| I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes`. | `TestNew_RequiresItsParts` |
+| I19.12 | `New` MUST refuse a configuration without `Size`, `Encode`, `Sink`, `Fail` or a usable `BatchBytes` (more than 64). | `TestNew_RequiresItsParts` (each part dropped in turn, `BatchBytes` 64 refused and 65 accepted) |
 | I19.13 | A batch MUST carry the distinct tags of its records (`Config.Tag`), at most `MaxBatchTags`, and say when there were more. | `TestPipeline_BatchCarriesItsDistinctTags` |
-| I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once. | `TestRecorder_DropDoesNotWait` |
+| I19.14 | `TrySubmit` MUST NOT wait: without room now the record goes to `Fail` with `ErrQueueFull` at once, without being encoded. | `TestRecorder_DropDoesNotWait`, `TestRecorder_ADroppedRecordIsNotEncoded` |
 | I19.15 | `SubmitWait` MUST return once its record's batch is stored, closing the batch at once rather than at the period. | `TestPipeline_SubmitWaitReturnsOnDelivery` |
 | I19.16 | `SubmitWait` MUST return the batch's failure when the sink keeps refusing it past `RetryFor`; a wait that ends with its context MUST leave the record in the pipeline, delivered later. | `TestPipeline_SubmitWaitLearnsTheFailure`, `TestPipeline_SubmitWaitEndsWithItsContext` |
-| I19.17 | A batch the sink refuses MUST be retried with backoff for `RetryFor` before it fails. | `TestPipeline_RetryDelivers`, `TestPipeline_SubmitWaitLearnsTheFailure` |
+| I19.17 | A batch the sink refuses MUST be retried with backoff for `RetryFor` before it fails; the window starts when the first attempt failed, so a first attempt that ran its whole publish timeout is still retried. | `TestPipeline_RetryDelivers`, `TestPipeline_SubmitWaitLearnsTheFailure` |
 
 **Deliberate limits.**
 - A sink MUST return once its context ends: `Close` past its deadline cancels it and waits for it.
@@ -783,37 +829,50 @@ it; the batcher builds the envelope: the request and response by their redaction
 | `RecordCeiling` | 64 KiB per record; the request and response share it |
 | `Stream` | the stream's limits when it creates it: 7 days, 10 GiB (halved, down to 64 MiB, while the server has no room for it, and logged), 1 replica, 2-minute duplicate window; an existing stream keeps its own |
 | `Fail` | default: each undelivered record as numbered log lines (base64, under 16 KiB a line), and a report at most once a second |
-| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection; a `redis://` / `rediss://` DSN stores the stream on Redis Streams instead (`{w17:requests}`) |
+| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection; a `redis://` / `rediss://` DSN stores the stream on Redis Streams instead (`{w17:requests}`), opened by `go/lib/redisdsn` (`cluster=true` → a cluster client). Every key of the request stream — the stream, its dead letters and the duplicate-window keys — carries the `{w17:requests}` hash tag, so the publish script and each consumer command stay on one slot |
 | `Redis` | instead of `JS` / `NC`: the Redis client the batches are stored through, for a project whose bus is Redis alone; the stream is bounded by `Stream.MaxAge` (trimmed on publish) — Redis has no byte cap of its own |
 
 **Guarantees.**
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I20.1 | A record MUST carry its meta (id, purposes, api, domain, method, route, status, code, start, duration, caller, consent, client, request id), the request without its planned-out fields, and the response only when the method opts in and the call succeeded. | `TestRecorder_WritesTheEnvelope`, `TestRecorder_ResponseOnlyWhenOptedInAndOK` |
+| I20.1 | A record MUST carry its meta (id, purposes, api, domain, method, route, status, code, start, duration, caller, membership kind, caller service, consent, client, request id, and on a stream `messages_sent` / `messages_received`), the request without its planned-out fields, and the response only when the method opts in and the call succeeded. | `TestRecorder_WritesTheEnvelope`, `TestRecorder_ResponseOnlyWhenOptedInAndOK`, `TestRecorder_MembershipKindFromTheDeclaredField`, `TestRecord_SetCallerServiceIsRecorded` |
 | I20.2 | Marketing MUST record signed-in requests only; audit MUST record every request, anonymous and refused ones included. | `TestRecorder_PurposesPerRequest` |
 | I20.3 | A record MUST fit its ceiling, and the cut fields' paths MUST be named, prefixed `request.` / `response.`; the client facts MUST be bounded as well — user agent, referrer and request id to `MaxClientField` (2 KiB) each, at most `MaxUTMParams` (8) UTM parameters (first by name) of `MaxUTMField` (256 B) per name and value — and a cut one named (`client.user_agent`, `client.referrer`, `client.utm`, `request_id`), so no header a client sends can push a record out of a batch; a client string that is not valid UTF-8 MUST be stored with the bad bytes replaced, not fail the record. | `TestRecorder_CutPathsArePrefixed`, `TestRecorder_ClientMetaIsBounded`, `TestRecorder_InvalidUTF8ClientIsStored` |
 | I20.4 | A marketing record set to drop MUST NOT wait for room. | `TestRecorder_DropDoesNotWait` |
-| I20.5 | The default failure path MUST write each undelivered record in numbered parts under the log driver's line limit, readable back into the record, and count those it has no encoding for. | `TestRecorder_FailureLogLines` |
-| I20.6 | Over JetStream, each surface's records MUST be stored on its subject, a batch's organizations on `W17-Orgs` and its id on `Nats-Msg-Id`. | `TestRecorder_OverJetStream`, `TestSubject` |
+| I20.5 | The default failure path MUST write each undelivered record in numbered parts under the log driver's line limit, readable back into the record, and count those it has no encoding for. A batch the sink stored but did not acknowledge in time is logged as undelivered too; a hand redelivery of it within the stream's duplicate window (2 min) is dropped as a duplicate, after it stored twice (consumers deduplicate on the record id). | `TestRecorder_FailureLogLines` |
+| I20.6 | Over JetStream, each surface's records MUST be stored on its subject, a batch's organizations on `W17-Orgs` and its id on `Nats-Msg-Id`. The organizations (`W17-Orgs`, the Redis entry's `orgs`) MUST be `*` whenever they cannot be named exactly: more than `MaxBatchTags`, an id holding `,` or `*`, or a list longer than 2 KiB. | `TestRecorder_OverJetStream`, `TestSubject`, `TestBatchOrgs_SaysStarWhenItCannotNameThemExactly`, `TestSinks_CarryTheBoundedOrgs` |
 | I20.7 | The NATS sink MUST count a batch delivered only once stored, store a re-sent batch once, honour its context, and create the stream when a publish finds none. | `TestNATSSink_StoresEachBatchOnce`, `TestNATSSink_UnstoredBatchFails`, `TestNATSSink_HonoursItsContext`, `TestNATSSink_CreatesTheStreamOnDemand` |
 | I20.8 | The HTTP middleware MUST finish the record the handler began, with the status, the client through the trusted proxies, the UTM parameters and the request id; the client and the request id MUST be in the record from the moment it begins (`Begin`, or the first recorded call through `Surface.Conn`), so a record finished inside the handler — a sync audit record — carries them too; a request without `Begin` MUST record nothing; the writer MUST keep `Flush` and `Hijack`. | `TestHTTPMiddleware_FinishesTheRecordTheHandlerBegan`, `TestHTTPMiddleware_SyncAuditThroughConnKeepsTheClient`, `TestHTTPMiddleware_SyncAuditFinishedInTheHandlerKeepsTheClient`, `TestHTTPMiddleware_OffSurfaceAndNoSlot`, `TestHTTPMiddleware_KeepsHijack` |
 | I20.9 | `Surface.Conn` MUST record a request's first call of a recorded method into the request's record and pass every other call through. | `TestConn_RecordsTheRequestsBackendCall` |
 | I20.10 | The caller MUST be read from the stamped metadata, outgoing or incoming, and an interceptor's untyped request and response MUST be recorded. | `TestRecord_SetCallerFromContext`, `TestRecord_InterceptorShape` |
-| I20.11 | `Open` MUST start with NATS not up yet, and `Close` MUST close the connection it owns. | `TestOpen_StartsBeforeNATSAndOwnsTheConnection` |
-| I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink` |
+| I20.11 | `Open` MUST start with NATS not up yet, and `Close` MUST close the connection it owns; `Open` and `Consumers.Serve` MUST NOT return the DSN's password in an error, a DSN that does not parse included. | `TestOpen_StartsBeforeNATSAndOwnsTheConnection`, `TestOpenAndServe_ABadDSNIsNotEchoedWithItsPassword` |
+| I20.12 | A sampled record MUST reach the telemetry sink as a log record joined to its span, its body the record without its planned-out fields; without a sink nothing MUST be rendered; a record refused before it reached a batch MUST NOT be rendered. | `TestTelemetrySink_EmitsTheRecordJoinedToItsSpan`, `TestTelemetrySink_OffWithoutASink`, `TestRecorder_ARefusedRecordIsNotRenderedToTelemetry` |
 | I20.13 | A sync audit record MUST hold its caller until its batch is stored; a later `Finish` MUST do nothing. | `TestRecorder_SyncAuditWaitsForTheAck` |
 | I20.14 | The sync wait MUST NOT outlast `SyncWait`; the record MUST still be delivered after the request went on. | `TestRecorder_SyncAuditWaitIsBounded` |
 | I20.15 | Marketing MUST never wait, whatever the method's mode. | `TestRecorder_SyncIsAuditOnly` |
-| I20.16 | Through `Surface.Conn`, a sync audit method's backend call MUST return to the handler only once its record is stored, and the record MUST be stored once; nothing MUST write to a finished record (`SetClient` and `SetRequestID` do nothing after `Finish`), so a record still queued after `SyncWait` is never written while the batcher reads it. | `TestConn_SyncAuditHoldsTheCall`, `TestHTTPMiddleware_LateSyncRecordIsNotWrittenAfterFinish` (under `-race`) |
-| I20.17 | `EnsureStream` MUST create a missing stream within the server's storage, halving its cap while it does not fit, and MUST leave an existing stream's limits as they are. | `TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone` |
-| I20.18 | The caller's marketing consent MUST be carried, never applied: a signed-in request on a marketing surface MUST be recorded whether its consent is yes, no or not kept, and the record's `marketing_consent` MUST be the principal's value, unset when the auth response does not declare the field. | `TestRecorder_ConsentIsCarriedNotApplied` |
+| I20.16 | Through `Surface.Conn`, a sync audit method's backend call MUST return to the handler only once its record is stored, and the record MUST be stored once; nothing MUST write to a finished record (every setter — `SetClient`, `SetRequestID`, `SetRequest`, `SetResult`, `SetCaller*`, `SetCallerService` — and `FinishUnary` / `FinishStream` do nothing after `Finish`), so a record still queued after `SyncWait` is never written while the batcher reads it. | `TestConn_SyncAuditHoldsTheCall`, `TestHTTPMiddleware_LateSyncRecordIsNotWrittenAfterFinish` (under `-race`), `TestRecord_NoSetterWritesAFinishedRecord` |
+| I20.17 | `EnsureStream` MUST create a missing stream within the server's storage, halving its cap while it does not fit and reporting the halving as an error (the cap stays until the stream is edited), and MUST leave an existing stream's limits as they are, logging every configured limit the existing stream does not have; a consumer process that creates the request stream MUST use its `RequestStream` limits. | `TestEnsureStream_FitsTheServerAndLeavesAnExistingStreamAlone`, `TestEnsureStream_AHalvedCapIsReported`, `TestEnsureStream_SaysWhenAnExistingStreamsLimitsDiffer`, `TestConsumers_CreateTheRequestStreamWithTheConfiguredLimits` |
+| I20.18 | The caller's marketing consent MUST be carried, never applied: a signed-in request on a marketing surface MUST be recorded whether its consent is yes, no or not kept, and the record's `marketing_consent` MUST be the principal's value, unset when the auth response does not declare the field. Read through a gateway's auth cache, it is at most `ConsentCacheCeiling` (5 min) stale: `CapAuthCacheTTL` keeps a shorter TTL and caps a longer one (logged); a stream's consent is the one at connect. | `TestRecorder_ConsentIsCarriedNotApplied`, `TestCapAuthCacheTTL_KeepsWhatFitsAndCapsTheRest` |
 | I20.19 | A record's organization MUST be the caller's `org_id` scope, from the stamped metadata or the auth response; no other scope MAY name one. | `TestRecorder_TheOrgScopeIsTheOrganization` |
 | I20.20 | On Redis, each surface's batch MUST be stored with its subject, its id and its organizations as entry fields, a re-sent batch MUST be stored once within the duplicate window, and entries past the max age MUST be trimmed on publish. | `TestRedisSink_StoresTheBatchWithItsSubjectAndOrgs`, `TestRedisSink_ARetriedBatchIsStoredOnce`, `TestRedisSink_TrimsPastMaxAge` |
+| I20.21 | A handler that panics after `Begin` MUST still be recorded, with the status written before the panic or 500, and the panic MUST go on unrecovered; a second `Begin` in one request MUST NOT drop the first record: every record begun is finished with the request's status. | `TestHTTPMiddleware_HandlerPanicAfterBeginIsStillRecorded`, `TestHTTPMiddleware_SecondBeginKeepsTheFirstRecord` |
+| I20.22 | A referrer MUST be recorded without its query and fragment; a method that takes its credential in the URL (`Method.URLCredential`) MUST record no referrer, and a later record of the same surface whose referrer is a page seen calling such a method MUST record none either. | `TestHTTPMiddleware_URLCredentialRouteRecordsNoReferrer`, `TestHTTPMiddleware_ReferrerKeepsNoQueryAndOrdinaryPagesKeepTheirPath` |
+| I20.23 | A recorder over NATS MUST bound its batches by the server's `max_payload` once the connection knows it, lowering the bound learnt at construction (NATS's default when it started before NATS) and never raising it. | `TestOpen_BatchesFollowTheServersMaxPayloadOnceConnected` |
+| I20.24 | A streaming call's record MUST count the messages sent and received (`CountStream`, `MessageSent`, `MessageReceived`, safe from two goroutines) and hold the first message the client sent as its request; `FinishStream` records the stream's gRPC code and no response. | `TestRecord_StreamCountsItsMessages`, `TestRecord_MessageCountsFromTwoGoroutines` |
+| I20.25 | A method without a redaction plan (or whose request or response fails to redact) MUST NOT be recorded at all, meta included: the record takes the failure path, without an encoding, and is reported. Fail closed: nothing of a request is stored that its plan does not cover. | `TestRecorder_ARequestWithoutARedactionPlanIsNotRecorded` |
+| I20.26 | The recorder's own connection lines (lost, reconnected) MUST name the server without the DSN's credential. | `TestOpen_ReconnectLogMasksTheCredential` |
+| I20.27 | A record MUST own the request it records (a copy taken at `SetRequest`): a streaming handler that reuses its receive buffer records the stream's first message, and a handler that edits what it decoded does not change the record. | `TestRecord_KeepsItsOwnCopyOfTheRequest` |
 
 **Deliberate limits.**
 - A request refused before its hook ran (a route that does not exist, a DPoP edge refusal) is not recorded; an admin request is recorded through its backend call, so an admin refusal before any call (no session) is not either — its sign-in is.
 - One record per request: a second recorded backend call in the same admin request is not recorded.
+- Capability-link pages are learned per surface and per process (the last 1024): a call made from such a page before it called its credential route, or served by another replica, records the page's path, credential included when the credential is in the path.
+- The failure log is a second store of what the records hold (the redacted request, the client, the caller): its retention and who may read it are the log driver's, not the stream's.
+- The consent a record carries is the caller's as of the auth verdict the request used: for a unary
+  request at most `ConsentCacheCeiling` old (I20.18); for a stream, the verdict at connect — the
+  re-auth watchdog (E17) re-probes the credential but does not refresh the record's caller, so a
+  withdrawal during a long stream is not in that stream's record.
 - Consent is not the recorder's to enforce: a marketing record is the project's usage data, and whether its caller may be sent marketing messages is for the consumer that sends them, which reads `marketing_consent`.
 
 ## I21. Request event consumers
@@ -839,6 +898,7 @@ previous one, so no batch waits in the process while its `AckWait` runs.
 | `AckWait` | 30s per Consume |
 | `Backoff` | 1s doubling to 1m between offers |
 | `Stream` | the dead letter stream's limits, as the recorder's but 1 GiB |
+| `RequestStream` | the `W17_REQUESTS` limits used when this process is the first to ensure the stream (consumers started before any recorder); zero → the recorder's defaults. Give it the recorders' `Stream`: the first binary to create the stream decides its limits |
 | `Redis` | instead of `JS`: consume `{w17:requests}`, one consumer group per registered consumer (named as the durable), dead letters on `{w17:requests}:dlq`; `ConsumerName` (default `<hostname>-<pid>`) names this process in each group, `ClaimInterval` (1s) how often a failed batch is looked at for its retry |
 
 **Guarantees.**
@@ -847,14 +907,51 @@ previous one, so no batch waits in the process while its `AckWait` runs.
 |---|---|---|
 | I21.1 | Each consumer MUST receive only the records of its purpose, the request and response decoded with the method's types. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
 | I21.2 | A consumer that fails MUST be offered the batch again after its backoff, without another consumer receiving it twice. | `TestConsumers_EachItsPurposeAndItsOwnProgress` |
-| I21.3 | A batch its consumer fails (or panics on) MaxDeliver times MUST go to the dead letter subject with the reason and the original subject, and be reported; several consumers dead-lettering one batch MUST each store their own dead letter (its `Nats-Msg-Id` is the batch id scoped to the consumer's dead letter subject). | `TestConsumers_DeadLetterAfterMaxDeliver`, `TestConsumers_TwoConsumersDeadLetterOneBatch` |
+| I21.3 | A batch its consumer fails (or panics on) MaxDeliver times MUST go to the dead letter subject with the reason and the original subject, and be reported; several consumers dead-lettering one batch MUST each store their own dead letter (its `Nats-Msg-Id` is the batch id scoped to the consumer's dead letter subject). A dead-letter publish that fails MUST leave the batch to be offered again after the backoff (the broker consumer has no delivery cap of its own; the SDK counts the attempts), and a batch offered past MaxDeliver MUST be dead-lettered without calling the consumer again. | `TestConsumers_DeadLetterAfterMaxDeliver`, `TestConsumers_TwoConsumersDeadLetterOneBatch`, `TestConsumers_AFailedDeadLetterAtTheCapIsRetried` |
 | I21.4 | Registration MUST refuse a bad name, a subject outside the stream and a duplicate of one purpose. | `TestConsumers_Registration` |
 | I21.5 | A record whose method the binary does not link MUST keep its bytes; a record without meta MUST NOT decode. | `TestDecodeBatch_UnlinkedTypesKeepTheirBytes` |
 | I21.6 | `Serve` MUST refuse an empty DSN and, with NATS down, wait for it until its context ends. | `TestConsumers_ServeNeedsADSNAndStopsWithItsContext` |
 | I21.7 | On Redis, I21.1–I21.3 MUST hold as on JetStream: each consumer its purpose and its own group, a failed batch offered again after its backoff without another consumer receiving it twice, MaxDeliver failures moved to the dead letter stream with the reason and subject and then acknowledged; a batch on a subject the consumer does not read MUST be acknowledged without calling it. | `TestRedisConsumers_EachItsPurposeAndItsOwnProgress`, `TestRedisConsumers_DeadLetterAfterMaxDeliver`, `TestRedisConsumers_AnotherSubjectIsNotOffered`, `TestSubjectMatches` |
 | I21.8 | `Open` and `Serve` MUST pick the backend by the DSN's scheme. | `TestRedisDSN_OpenAndServe` |
 | I21.9 | A batch MUST NOT be offered again, nor have its attempt count raised, because it waited behind a slow Consume: on JetStream, and on Redis across processes. | `TestConsumers_QueuedBatchesAreNotRedelivered`, `TestConsumers_QueuedBatchesAreNotRedelivered_Redis` |
+| I21.10 | On a cluster-mode Redis (`cluster=true`) the recorder MUST store through its publish script and a consumer's group MUST read the batches back, every key on the `{w17:requests}` slot. | `TestRedisDSN_Cluster_OpenAndServe` (live, CI's cluster job) |
+| I21.11 | On Redis the claim loop MUST page through the whole pending list, each page starting after the last entry of the previous one, so a due batch behind a page of entries that are not due is still offered again. | `TestRedisConsumers_AFailedBatchBehindAFullPageIsOfferedAgain` |
+| I21.12 | On Redis, a consumer group that went away under a running consumer (a Redis restarted without its data, a deleted key) MUST be created again by the consumer, which goes on reading; a batch still being served MUST NOT be offered again by the claim loop. | `TestRedisConsumers_AGroupThatWentAwayIsCreatedAgain`, `TestRedisConsumers_ABatchInFlightIsNotOfferedAgain` |
 
 **Deliberate limits.**
 - Delivery is at least once: a consumer deduplicates on the record id.
 - A batch is acknowledged as a whole: a consumer that handled part of it and failed is offered all of it again.
+- On Redis every consumer group reads every subject's batches whole and settles those outside its subjects; there is no per-subject read.
+
+---
+
+## I22. Plugin hooks
+
+**Code.** `go/lib/pluginhook/pluginhook.go` — `Conn`, `Lazy`, `Late`, `Conn.Set`, `Unary`, `ErrNotConnected`
+
+**Purpose.** How a plugin's code calls its project back: a hook the activation binds to
+a business method of the plugin's domain. The generated bundle hands the plugin one
+function per bound method, built with `Unary` over a `Conn`. The plugin runs in the
+storage tier and the hook's method in the business tier, so the connection is bound
+late and neither tier waits for the other at boot.
+
+**Configuration.**
+
+| Constructor | Behaviour |
+|---|---|
+| `Lazy(dial)` | a standalone storage bundle: dials on the first call, under the `Conn`'s lock, so concurrent first calls dial once; a failed dial is returned to that call and retried on the next |
+| `Late()` + `Set(cc)` | a composed binary: the in-process business tier is set once it is registered; a call before `Set` returns `ErrNotConnected` (a plain error, no gRPC status) |
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I22.1 | A `Late` connection MUST answer `ErrNotConnected` until `Set`, then carry every call over the connection set. | `TestUnary_LateConn` |
+| I22.2 | A `Lazy` connection MUST dial once, reuse the connection, and retry a failed dial on the next call. | `TestUnary_LazyConnDialsOnceAndRetriesAFailure` |
+| I22.3 | The verified caller MUST ride the hook call (`ForwardToOutgoing`, I12): the project's method sees the principal the plugin's handler was called with. | `TestUnary_LateConn` |
+
+**Deliberate limits.**
+- Unary methods only.
+- The call goes from the storage tier straight to the business tier of the same domain,
+  relaying the principal: it does not pass a gateway, so no gateway ACL runs on it. The
+  hook's method is the project's own code, trusted as every inter-tier call is (I10).

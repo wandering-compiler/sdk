@@ -67,14 +67,14 @@ func Run(
 	// COMMIT is deliberately NOT given the same treatment. If the caller is
 	// gone, refusing to commit is the safe answer; finishing a write nobody is
 	// waiting for is not something a helper should decide on its own.
-	rollbackCtx := context.WithoutCancel(ctx)
+	// [TxHandle.Rollback] detaches its call from ctx itself, and bounds it.
 
 	done := false
 	defer func() {
 		if done {
 			return
 		}
-		rerr := handle.Rollback(rollbackCtx)
+		rerr := handle.Rollback(ctx)
 		if p := recover(); p != nil {
 			// The rollback happened; the panic is still the caller's to see.
 			panic(p)
@@ -107,8 +107,16 @@ func Run(
 		// Not wrapped as "the function failed": it did not. Everything fn did
 		// is lost, and the message has to say which half went wrong or a
 		// reader will look in the wrong place.
-		done = true
-		return fmt.Errorf("distx.Run: commit: %w", cerr)
+		err = fmt.Errorf("distx.Run: commit: %w", cerr)
+		// A refusal that left the transaction open (a call inside it still
+		// held it past the finish wait) is the one commit failure after
+		// which a rollback is still owed: Run reports the failure, so it
+		// must not leave the transaction holding its locks until the
+		// orphan timeout. The deferred rollback runs; the server dooms the
+		// transaction at once and rolls it back when the holder releases.
+		// Every other answer already ended it.
+		done = !leftOpen(cerr)
+		return err
 	}
 	done = true
 	return nil

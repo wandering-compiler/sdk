@@ -62,7 +62,10 @@ func writeBrowserRedirect(w http.ResponseWriter, r *http.Request, target, fallba
 	if dest == "" {
 		dest = fallback
 	}
-	if !redirectTargetOK(dest, external) {
+	// The token owns the fragment: a target that already has one (a
+	// hash-routed `/#/app`) would get a second `#`, and the page's router
+	// would read the credential as part of its route.
+	if !redirectTargetOK(dest, external) || (token != "" && strings.Contains(dest, "#")) {
 		// The reason is about this gateway and its handler, so it is the
 		// operator's; the browser's user gets the code's catalog sentence.
 		ctx := r.Context()

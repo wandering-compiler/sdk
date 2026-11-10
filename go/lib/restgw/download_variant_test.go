@@ -39,8 +39,10 @@ func get(cfg restgw.DownloadConfig, url string) *httptest.ResponseRecorder {
 }
 
 // A declared variant is the image fitted into its box, served as the image
-// type it is, and stored beside the original: the second request reads the
-// stored copy (it still answers after the original is gone).
+// type it is, and stored beside the original. It lives and dies with the
+// original: once the original is deleted (by any writer — the business
+// tier's file server deletes the original alone) the variant answers 404,
+// and the stored copy is removed.
 func TestServeDownload_VariantIsRenderedOnceAndStored(t *testing.T) {
 	d, cfg := variantDownload(t)
 	rec := get(cfg, "/api/files/avatars/0123456789abcdef?variant=thumb")
@@ -63,8 +65,17 @@ func TestServeDownload_VariantIsRenderedOnceAndStored(t *testing.T) {
 	if err := d.Delete(context.Background(), "avatars/0123456789abcdef"); err != nil {
 		t.Fatal(err)
 	}
-	if rec := get(cfg, "/api/files/avatars/0123456789abcdef?variant=thumb"); rec.Code != http.StatusOK {
-		t.Errorf("the stored variant was not served once the original was gone: %d", rec.Code)
+	if _, err := d.Stat(context.Background(), "avatars/0123456789abcdef~thumb"); err != nil {
+		t.Fatalf("the variant was not stored beside the original: %v", err)
+	}
+	if err := d.Delete(context.Background(), "avatars/0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := get(cfg, "/api/files/avatars/0123456789abcdef?variant=thumb"); rec.Code != http.StatusNotFound {
+		t.Errorf("a variant of a deleted original answered %d, want 404", rec.Code)
+	}
+	if _, err := d.Stat(context.Background(), "avatars/0123456789abcdef~thumb"); err == nil {
+		t.Error("the orphaned variant is still stored")
 	}
 }
 

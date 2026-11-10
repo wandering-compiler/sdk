@@ -10,12 +10,40 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/wandering-compiler/sdk/go/core/observx"
 )
 
 // HeaderOrgs is the NATS header naming the organizations a batch's records
 // belong to ([Batch.Tags], comma-separated; "*" when there were more than
 // [MaxBatchTags]), so an organization's consumer skips a batch without decoding it.
 const HeaderOrgs = "W17-Orgs"
+
+// maxOrgsHeader bounds the organizations a batch names ([HeaderOrgs], the
+// Redis entry's orgs field): well inside natsHeaderRoom, beside the subject
+// and the message id.
+const maxOrgsHeader = 2 << 10
+
+// batchOrgs is what a batch says about its organizations: its tags joined
+// with ",", "" for none, and "*" — decode to know — when it cannot name them
+// exactly: more than MaxBatchTags, an id holding "," or "*", or a list longer
+// than maxOrgsHeader.
+func batchOrgs(b *Batch) string {
+	if b.TagsOverflow {
+		return "*"
+	}
+	n := 0
+	for _, t := range b.Tags {
+		if strings.ContainsAny(t, ",*") {
+			return "*"
+		}
+		n += len(t) + 1
+	}
+	if n-1 > maxOrgsHeader {
+		return "*"
+	}
+	return strings.Join(b.Tags, ",")
+}
 
 // natsHeaderRoom is what a batch leaves of the server's max_payload for the
 // headers (the message id, the organizations) and the subject.
@@ -50,11 +78,8 @@ func (s *NATSSink) Sink(ctx context.Context, b *Batch) error {
 	}
 	msg := &nats.Msg{Subject: s.Subject, Data: b.Wire, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, b.ID.String())
-	switch {
-	case b.TagsOverflow:
-		msg.Header.Set(HeaderOrgs, "*")
-	case len(b.Tags) > 0:
-		msg.Header.Set(HeaderOrgs, strings.Join(b.Tags, ","))
+	if orgs := batchOrgs(b); orgs != "" {
+		msg.Header.Set(HeaderOrgs, orgs)
 	}
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -103,7 +128,8 @@ const jsInsufficientResources = 10047
 // operator who changed its limits since, decided them, and a binary booting
 // with its defaults must not undo that.
 func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subjects []string, l StreamLimits) error {
-	if _, err := js.Stream(ctx, name); err == nil {
+	if st, err := js.Stream(ctx, name); err == nil {
+		sayDifferingLimits(name, st.CachedInfo().Config, l)
 		return nil
 	} else if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		return fmt.Errorf("eventlog: ensure stream %s: %w", name, err)
@@ -137,7 +163,10 @@ func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subj
 		switch {
 		case err == nil:
 			if l.MaxBytes < want {
-				log.Printf("eventlog: stream %s capped at %d MiB: the JetStream server has no room for the %d MiB asked — raise its storage (max_file_store) and the stream's max_bytes", name, l.MaxBytes>>20, want>>20)
+				// Reported, not only logged: the cap stays until the
+				// stream is edited (EnsureStream never changes an
+				// existing stream).
+				observx.ReportError(ctx, fmt.Errorf("eventlog: stream %s capped at %d MiB: the JetStream server has no room for the %d MiB asked — raise its storage (max_file_store) and the stream's max_bytes", name, l.MaxBytes>>20, want>>20))
 			}
 			return nil
 		case errors.Is(err, jetstream.ErrStreamNameAlreadyInUse):
@@ -147,5 +176,27 @@ func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subj
 		default:
 			return fmt.Errorf("eventlog: ensure stream %s (max_bytes %d MiB): %w", name, l.MaxBytes>>20, err)
 		}
+	}
+}
+
+// sayDifferingLimits logs the limits an existing stream keeps that differ
+// from the ones the caller set (a zero field asks for nothing), so an
+// operator learns that configuration did not take effect.
+func sayDifferingLimits(name string, have jetstream.StreamConfig, l StreamLimits) {
+	var diffs []string
+	if l.MaxAge > 0 && have.MaxAge != l.MaxAge {
+		diffs = append(diffs, fmt.Sprintf("max_age %v (configured %v)", have.MaxAge, l.MaxAge))
+	}
+	if l.MaxBytes > 0 && have.MaxBytes != l.MaxBytes {
+		diffs = append(diffs, fmt.Sprintf("max_bytes %d MiB (configured %d MiB)", have.MaxBytes>>20, l.MaxBytes>>20))
+	}
+	if l.Replicas > 0 && have.Replicas != l.Replicas {
+		diffs = append(diffs, fmt.Sprintf("replicas %d (configured %d)", have.Replicas, l.Replicas))
+	}
+	if l.Duplicates > 0 && have.Duplicates != l.Duplicates {
+		diffs = append(diffs, fmt.Sprintf("duplicates %v (configured %v)", have.Duplicates, l.Duplicates))
+	}
+	if len(diffs) > 0 {
+		log.Printf("eventlog: stream %s exists and keeps its own limits: %s — edit the stream to change them", name, strings.Join(diffs, ", "))
 	}
 }

@@ -106,19 +106,25 @@ impl<T, E: fmt::Display> HookOutput for Result<T, E> {
 }
 
 /// Run `work` once the transaction `ctx` belongs to commits; never if it
-/// rolls back; at once (spawned) outside a transaction or after its commit.
+/// rolls back; at once outside a transaction or after its commit.
 ///
-/// Inside a transaction the work is parked and runs in order after the root
-/// commit, before the commit returns; a failure then is reported, never
-/// returned into the commit (the transaction has landed). Inside a nested
-/// [`distx::run`] that JOINED an outer transaction, it waits for the OUTER
-/// commit. The hook the event middleware itself uses, offered for any side
-/// effect that must not outrun the write it describes (an e-mail, an
-/// external call). Go's twin is `distx.OnCommit`.
+/// Outside a transaction (or after its commit) the work runs now, before
+/// this returns, and its failure (an `Err`, or a panic) is returned — it is
+/// the caller's own code on the caller's own path, as in Go, Python and
+/// TypeScript. It runs to completion even if the caller is dropped meanwhile.
 ///
-/// The work outlives the request: build what it needs before
+/// Inside a transaction the work is parked and the result is
+/// `Ok(Outcome::Deferred)`; it runs in order after the root commit, before
+/// the commit returns, and a failure then is reported, never returned into
+/// the commit (the transaction has landed). Inside a nested [`distx::run`]
+/// that JOINED an outer transaction, it waits for the OUTER commit. The hook
+/// the event middleware itself uses, offered for any side effect that must
+/// not outrun the write it describes (an e-mail, an external call). Go's
+/// twin is `distx.OnCommit`.
+///
+/// Parked work outlives the request: build what it needs before
 /// (`ctx.without_cancel()` for a call it makes).
-pub fn on_commit<F>(ctx: &Ctx, work: F) -> Outcome
+pub async fn on_commit<F>(ctx: &Ctx, work: F) -> Result<Outcome, String>
 where
     F: Future + Send + 'static,
     F::Output: HookOutput,
@@ -129,17 +135,13 @@ where
             observability::report_error(
                 "distx: on_commit work dropped: it was registered after its transaction rolled back",
             );
-            Outcome::Discarded
+            Ok(Outcome::Discarded)
         }
         (out, Some(hook)) => {
-            txscope::spawn_tracked(async move {
-                if let Err(e) = txscope::run_hook(hook).await {
-                    observability::report_error(&format!("distx: on_commit work failed: {e}"));
-                }
-            });
-            out
+            txscope::shielded(txscope::run_hook(hook)).await??;
+            Ok(out)
         }
-        (out, None) => out,
+        (out, None) => Ok(out),
     }
 }
 

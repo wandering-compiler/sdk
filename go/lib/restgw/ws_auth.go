@@ -19,6 +19,7 @@ package restgw
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -181,7 +182,7 @@ func NewWSAuth(cfg WSAuthConfig) AuthFunc {
 	return func(ctx context.Context, r *http.Request) ([]byte, error) {
 		// A credential THIS wrapper promoted, on a re-auth of a stream it
 		// already authenticated. Honoured in every mode.
-		if r.Header.Get(promotedHeader) == promotedMarker && r.Header.Get("Authorization") != "" {
+		if markerMatches(r.Header.Get(promotedHeader), promotedMarker) && r.Header.Get("Authorization") != "" {
 			return cfg.Inner(ctx, r)
 		}
 		if acceptHeader && r.Header.Get("Authorization") != "" {
@@ -251,4 +252,12 @@ func randomMarker() string {
 	var buf [32]byte
 	_, _ = rand.Read(buf[:])
 	return hex.EncodeToString(buf[:])
+}
+
+// markerMatches compares a request's promotion marker with this process's
+// in constant time: the marker is a secret only the wrapper writes, and a
+// byte-by-byte comparison would let a caller that reaches the wrapper with
+// its own copy of the header (no edge scrub in front) probe it.
+func markerMatches(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }

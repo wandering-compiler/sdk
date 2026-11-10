@@ -124,3 +124,63 @@ func TestMetadataFromContext_RepeatedKeysMatchTheirReaders(t *testing.T) {
 		t.Errorf("Event.Metadata label = %q, Event.Labels label = %q; one envelope, two answers", got, want)
 	}
 }
+
+// The usual secret-bearing header shapes beyond the token/secret/password
+// words: webhook signatures, vendor access and signing keys, short password
+// spellings, one-time codes and bearer slots. Each is a whole segment, so
+// names that only contain the letters keep travelling.
+func TestMetadataFromContext_DropsCommonSecretHeaderShapes(t *testing.T) {
+	credentials := []string{
+		"x-hub-signature",
+		"x-hub-signature-256",
+		"x-access-key",
+		"x-signing-key",
+		"x-user-pass",
+		"x-user-pwd",
+		"x-otp",
+		"x-mfa-otp-code",
+		"x-bearer",
+	}
+	carried := []string{
+		"x-keyboard-layout", // "key" only as letters
+		"x-passenger-id",    // "pass" only as letters
+	}
+	var pairs []string
+	for _, k := range credentials {
+		pairs = append(pairs, k, "secret-value")
+	}
+	for _, k := range carried {
+		pairs = append(pairs, k, "v")
+	}
+	md := eventbus.MetadataFromContext(metadata.NewIncomingContext(context.Background(), metadata.Pairs(pairs...)))
+	for _, k := range credentials {
+		if v, ok := md[k]; ok {
+			t.Errorf("Event.Metadata carries credential header %q=%q", k, v)
+		}
+		if !eventbus.ReservedMetadataKey(k) {
+			t.Errorf("ReservedMetadataKey(%q) = false; dispatch would replay it into the subscriber", k)
+		}
+	}
+	for _, k := range carried {
+		if md[k] != "v" {
+			t.Errorf("Event.Metadata[%q] dropped; only whole segments are flagged", k)
+		}
+	}
+}
+
+// An empty value is no language on either side: the envelope keeps the last
+// non-empty value, so the subscriber resolves what the emitter did.
+func TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD{
+		"w17-language":      {"cs", ""},
+		"w17-format-locale": {"cs-CZ", " "},
+	})
+	md := eventbus.MetadataFromContext(ctx)
+	replayed := metadata.NewIncomingContext(context.Background(), metadata.New(md))
+	if got, want := i18n.LocaleFromContext(replayed), i18n.LocaleFromContext(ctx); got != want || want != "cs" {
+		t.Errorf("subscriber language = %q, emitter language = %q, want cs on both", got, want)
+	}
+	if got, want := i18n.FormatLocaleFromContext(replayed), i18n.FormatLocaleFromContext(ctx); got != want {
+		t.Errorf("subscriber format locale = %q, emitter format locale = %q", got, want)
+	}
+}

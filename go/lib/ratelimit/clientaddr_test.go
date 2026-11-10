@@ -30,6 +30,16 @@ func TestClientAddr_HTTPAndGRPC(t *testing.T) {
 	if got := HTTPClientAddr(r, trusted); got != "fe80::1" {
 		t.Errorf("zoned peer = %q", got)
 	}
+	// An IPv4 peer on a dual-stack listener is written as IPv4.
+	r.RemoteAddr = "[::ffff:192.0.2.1]:1234"
+	if got := HTTPClientAddr(r, trusted); got != "192.0.2.1" {
+		t.Errorf("mapped peer = %q", got)
+	}
+	// A peer that is no address (a unix socket, a test's "pipe") is none.
+	r.RemoteAddr = "@"
+	if got := HTTPClientAddr(r, trusted); got != "" {
+		t.Errorf("non-address peer = %q", got)
+	}
 
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 1}})
 	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-forwarded-for", "203.0.113.7"))

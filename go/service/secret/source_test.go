@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
@@ -23,6 +24,17 @@ func TestParseDotenv(t *testing.T) {
 	}
 	if _, ok := kv["X"]; ok {
 		t.Errorf("commented key X should be skipped: %v", kv)
+	}
+}
+
+// A line longer than any scanner buffer neither ends the parse nor loses
+// the keys after it: before, a value over 1 MiB stopped bufio.Scanner and
+// every later key silently resolved as absent, with no error at boot.
+func TestParseDotenv_ALongLineDoesNotDropTheKeysAfterIt(t *testing.T) {
+	big := strings.Repeat("x", 1024*1024+1)
+	kv := parseDotenv("FIRST=1\nBIG=" + big + "\nAFTER=present\n")
+	if kv["FIRST"] != "1" || kv["BIG"] != big || kv["AFTER"] != "present" {
+		t.Fatalf("parsed %d keys; FIRST=%q AFTER=%q len(BIG)=%d", len(kv), kv["FIRST"], kv["AFTER"], len(kv["BIG"]))
 	}
 }
 

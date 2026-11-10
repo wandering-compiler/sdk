@@ -25,12 +25,19 @@ import (
 // every entry ends with a translation; no msgid is defined twice in the
 // same context; no entry is marked `#, fuzzy` (a translator's unreviewed
 // guess, which the runtime does not serve — see [RegisterCatalog]; the
-// header entry is exempt). Other comment (`#…`) and blank lines are ignored.
+// header entry is exempt); no entry has a `msgctxt` or plural forms, which
+// the runtime does not serve either (such an entry would register as
+// nothing, silently). Other comment (`#…`) and blank lines are ignored.
 func ValidatePO(body []byte) error {
 	errs, entries := scanPO(body)
 	for _, e := range entries {
-		if e.fuzzy && e.id != "" {
+		switch {
+		case e.fuzzy && e.id != "":
 			errs = append(errs, fmt.Errorf("line %d: entry %q is marked fuzzy and is not served until the flag is removed", e.line, e.id))
+		case e.ctxt != "":
+			errs = append(errs, fmt.Errorf("line %d: entry %q has msgctxt %q; message contexts are not supported and the entry is not served", e.line, e.id, e.ctxt))
+		case e.plural:
+			errs = append(errs, fmt.Errorf("line %d: entry %q has plural forms; plurals are not supported and the entry is not served", e.line, e.id))
 		}
 	}
 	return errors.Join(errs...)
@@ -43,6 +50,7 @@ type poEntryPos struct {
 	ctxt, id string
 	line     int
 	fuzzy    bool
+	plural   bool // has msgid_plural
 }
 
 // fuzzyIDs is the set of msgids (with no msgctxt) of body's fuzzy entries,
@@ -93,6 +101,7 @@ func scanPO(body []byte) ([]error, []poEntryPos) {
 		entryLine                int
 		seen                     = map[string]int{}
 		pendingFuzzy, entryFuzzy bool
+		entryPlural              bool
 	)
 	fail := func(line int, format string, args ...any) {
 		errs = append(errs, fmt.Errorf("line %d: "+format, append([]any{line}, args...)...))
@@ -110,8 +119,8 @@ func scanPO(body []byte) ([]error, []poEntryPos) {
 		} else {
 			seen[key] = entryLine
 		}
-		entries = append(entries, poEntryPos{ctxt: ctxt, id: id, line: entryLine, fuzzy: entryFuzzy})
-		state, ctxt, id, entryFuzzy = stNone, "", "", false
+		entries = append(entries, poEntryPos{ctxt: ctxt, id: id, line: entryLine, fuzzy: entryFuzzy, plural: entryPlural})
+		state, ctxt, id, entryFuzzy, entryPlural = stNone, "", "", false, false
 	}
 	// open starts an entry at line n, taking the flags read since the last one.
 	open := func(n int) {
@@ -174,7 +183,7 @@ func scanPO(body []byte) ([]error, []poEntryPos) {
 				fail(n, "msgid_plural without a preceding msgid")
 				continue
 			}
-			state = stPlural
+			state, entryPlural = stPlural, true
 			quoted(n, strings.TrimPrefix(l, "msgid_plural"))
 
 		case strings.HasPrefix(l, "msgid"):
@@ -204,7 +213,7 @@ func scanPO(body []byte) ([]error, []poEntryPos) {
 				fail(n, "msgstr index %q is not a number", l[len("msgstr["):end])
 				continue
 			}
-			if state != stPlural && state != stStr {
+			if (state != stPlural && state != stStr) || !entryPlural {
 				fail(n, "indexed msgstr without msgid_plural")
 				continue
 			}

@@ -189,15 +189,47 @@ func TestAuth_MakeAuthFunc_HeadersForwarded(t *testing.T) {
 	if got.Value != "user-42" {
 		t.Errorf("AuthResp Value = %q, want user-42", got.Value)
 	}
-	// Captured headers carry every key the caller set.
-	if caller.captured["Authorization"] != "Bearer abc.def.ghi" {
-		t.Errorf("captured Authorization = %q", caller.captured["Authorization"])
+	// Captured headers carry every key the caller set, lower-cased as
+	// every other auth path (MCP, the rpc gateway) hands them over.
+	if caller.captured["authorization"] != "Bearer abc.def.ghi" {
+		t.Errorf("captured authorization = %q", caller.captured["authorization"])
 	}
-	if caller.captured["Cookie"] != "session=xyz" {
-		t.Errorf("captured Cookie = %q", caller.captured["Cookie"])
+	if caller.captured["cookie"] != "session=xyz" {
+		t.Errorf("captured cookie = %q", caller.captured["cookie"])
 	}
-	if caller.captured["X-Org-Id"] != "acme" {
-		t.Errorf("captured X-Org-Id = %q", caller.captured["X-Org-Id"])
+	if caller.captured["x-org-id"] != "acme" {
+		t.Errorf("captured x-org-id = %q", caller.captured["x-org-id"])
+	}
+}
+
+// The auth request carries what the CLIENT sent, never a gateway-owned key
+// a client forged (x-w17-*, w17-label-*, w17-tx-id, grpcgateway-*): the
+// auth method would read a forged principal or host as the gateway's. The
+// one gateway-owned key it keeps is the credential slot the gateway fills
+// from a URL credential (E7).
+func TestAuth_MakeAuthFunc_KeysAreLowerCaseAndReservedFree(t *testing.T) {
+	caller := &capturingCaller{resp: wrapperspb.String("u")}
+	fn := restgw.MakeAuthFunc(caller)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer t")
+	r.Header.Set("X-W17-User", "forged")
+	r.Header.Set("X-W17-Host", "evil.example")
+	r.Header.Set("W17-Label-Org_id", "other")
+	r.Header.Set("W17-Tx-Id", "tx")
+	r.Header.Set("Grpcgateway-Cookie", "c")
+	r.Header.Set("Grpc-Metadata-X-W17-User", "forged")
+	r.Header.Set(restgw.CredentialMetadataKey, "url-token")
+	if _, err := fn(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"authorization": "Bearer t", restgw.CredentialMetadataKey: "url-token"}
+	if len(caller.captured) != len(want) {
+		t.Fatalf("auth request headers = %v, want exactly %v", caller.captured, want)
+	}
+	for k, v := range want {
+		if caller.captured[k] != v {
+			t.Fatalf("auth request headers = %v, want %s=%q", caller.captured, k, v)
+		}
 	}
 }
 

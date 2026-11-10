@@ -82,3 +82,42 @@ func TestVerifyStamp_UnstampedAcceptedForeignTablesReported(t *testing.T) {
 		}
 	}
 }
+
+// Two appliers stamping one fresh database at once both succeed: the stamp
+// is written with INSERT OR IGNORE and read back, so the one that loses the
+// race reads the winner's stamp instead of failing on the primary key.
+func TestEnsureStamp_TwoWritersOnAFreshDatabaseBothSucceed(t *testing.T) {
+	Register()
+	ctx := context.Background()
+	for round := 0; round < 20; round++ {
+		path := filepath.Join(t.TempDir(), "stamp.db")
+		const writers = 6
+		var wg sync.WaitGroup
+		errs := make(chan error, writers)
+		start := make(chan struct{})
+		for w := 0; w < writers; w++ {
+			db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if err := db.PingContext(ctx); err != nil {
+				t.Fatal(err)
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs <- EnsureStamp(ctx, db)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: a concurrent EnsureStamp failed: %v", round, err)
+			}
+		}
+	}
+}

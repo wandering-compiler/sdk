@@ -145,6 +145,38 @@ func TestMustInit_FailureAfterSentryTearsItDown(t *testing.T) {
 	}
 }
 
+// A failed (re-)init leaves the settings it read unapplied: the process
+// configuration, the debug-event switch and the request-data mode stay what
+// the last successful init set. They used to be assigned before the steps
+// that can fail, so a failed re-init left the new mode and service name in
+// force over no providers.
+func TestMustInit_AFailedReinitLeavesTheSettingsUnapplied(t *testing.T) {
+	resetForTest(t)
+	if err := MustInit(Config{ServiceName: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	wantDebug, wantMode, wantSample := debugEvents, requestMode, requestSample
+	mu.Unlock()
+
+	t.Setenv("W17_OBSERVX_DEBUG", "1")
+	t.Setenv("W17_OBSERVX_REQUEST_DATA", "all")
+	if err := MustInit(Config{ServiceName: "second", SentryDSN: "://not-a-valid-dsn"}); err == nil {
+		t.Fatal("want an error for a malformed Sentry DSN")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if cfg.ServiceName != "first" {
+		t.Errorf("cfg.ServiceName = %q after a failed init, want the last successful one's", cfg.ServiceName)
+	}
+	if debugEvents != wantDebug {
+		t.Errorf("debugEvents = %v after a failed init, want %v", debugEvents, wantDebug)
+	}
+	if requestMode != wantMode || requestSample != wantSample {
+		t.Errorf("request data = %v/%v after a failed init, want %v/%v", requestMode, requestSample, wantMode, wantSample)
+	}
+}
+
 // Shutdown takes the Sentry client it installed off the global hub, as it
 // does the OTel providers: nothing keeps reporting after it.
 func TestShutdown_UnbindsTheSentryClient(t *testing.T) {

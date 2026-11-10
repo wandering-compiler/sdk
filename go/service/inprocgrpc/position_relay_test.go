@@ -56,3 +56,36 @@ func TestConn_Invoke_RelaysThePagePositionOfAForwardedCall(t *testing.T) {
 		t.Fatalf("the facade answered %v: want the forwarded List's position (next 3, total 9), not the sibling Count's", header)
 	}
 }
+
+// The Forward mark is the CALLER's: a method reached in-process with a
+// forwarded context serves under a context without it, so its own
+// (unforwarded) storage calls relay nothing onto its response — as over the
+// wire, where the mark is a context value and cannot cross. Without
+// paging.WithoutForward in the bridge, a sibling call's position would land
+// on the response the caller reads its page from.
+func TestConn_Invoke_AForwardedCallersMarkDoesNotReachTheHandler(t *testing.T) {
+	storage := inprocgrpc.New()
+	storage.RegisterService(unaryDesc("test.Counts", "Count", func(ctx context.Context, _ *wrapperspb.StringValue) (*wrapperspb.StringValue, error) {
+		paging.SetPosition(ctx, []*w17pb.KeysetValue{paging.FromInt64(99)}, nil, 99)
+		return wrapperspb.String("sibling"), nil
+	}), nil)
+	business := inprocgrpc.New()
+	business.RegisterService(unaryDesc("test.Facade", "Browse", func(ctx context.Context, _ *wrapperspb.StringValue) (*wrapperspb.StringValue, error) {
+		if paging.Forwarded(ctx) {
+			t.Error("the handler's context carries its caller's Forward mark")
+		}
+		if err := storage.Invoke(ctx, "/test.Counts/Count", wrapperspb.String(""), new(wrapperspb.StringValue)); err != nil {
+			return nil, err
+		}
+		return wrapperspb.String("page"), nil
+	}), nil)
+
+	caller := metadata.NewIncomingContext(context.Background(), metadata.Pairs(paging.LimitMDKey, "2"))
+	var header metadata.MD
+	if err := business.Invoke(paging.Forward(caller), "/test.Facade/Browse", wrapperspb.String(""), new(wrapperspb.StringValue), grpc.Header(&header)); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if pos, ok := paging.PositionFromHeader(header); ok {
+		t.Fatalf("the facade answered a position %+v its own unforwarded call reported", pos)
+	}
+}

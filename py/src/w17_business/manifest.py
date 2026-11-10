@@ -370,6 +370,22 @@ def _bool(d: dict, key: str, where: str) -> bool:
     return v
 
 
+def _number(d: dict, key: str, where: str) -> float | None:
+    """A JSON number; absent (or null) is None. true and "10" are not."""
+    v = d.get(key)
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ManifestError(f"manifest: {where}{key} must be a number, not {_show(v)}")
+    return float(v)
+
+
+def _positive_or(v: float | None, default: float) -> float:
+    """v when it is above zero, else default: an absent, null, zero or
+    negative timeout is the default, as in every SDK."""
+    return v if v is not None and v > 0 else default
+
+
 def _uint(d: dict, key: str, where: str, top: int) -> int:
     """A JSON integer from 0 to top; absent (or null) is 0. 1.0, "1" and -0 are not."""
     v = d.get(key)
@@ -505,13 +521,13 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
                     path=m.get("path") or f"/{s['name']}/{m['name']}",
                     input=m.get("input", ""),
                     output=m.get("output", ""),
-                    client_streaming=bool(m.get("client_streaming", False)),
-                    server_streaming=bool(m.get("server_streaming", False)),
+                    client_streaming=_bool(m, "client_streaming", "services[].methods[]."),
+                    server_streaming=_bool(m, "server_streaming", "services[].methods[]."),
                 )
-                for m in s.get("methods") or ()
+                for m in _objects(s, "methods", "services[].")
             ),
         )
-        for s in d.get("services") or ()
+        for s in _objects(d, "services", "")
     )
     config = tuple(
         ConfigKey(
@@ -519,11 +535,11 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
             env=c.get("env") or f"{prefix}_{c['name'].upper()}",
             type=c.get("type") or "string",
             default=_default_text(c.get("type") or "string", c.get("default")),
-            required=bool(c.get("required", False)),
-            secret=bool(c.get("secret", False)),
+            required=_bool(c, "required", "config[]."),
+            secret=_bool(c, "secret", "config[]."),
             description=c.get("description", ""),
         )
-        for c in d.get("config") or ()
+        for c in _objects(d, "config", "")
     )
     st = _obj(d, "storage", "")
     storage = None
@@ -556,10 +572,10 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
                         path=tuple(f.get("path") or ()),
                         value=f.get("value", ""),
                     )
-                    for f in e.get("fields") or ()
+                    for f in _objects(e, "fields", "events.emits[].")
                 ),
             )
-            for e in ev.get("emits") or ()
+            for e in _objects(ev, "emits", "events.")
         )
         for e in emits:
             if not e.envelope:
@@ -572,7 +588,7 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
                 group=i.get("group", ""),
                 entities=tuple(i.get("entities") or ()),
             )
-            for i in ev.get("invalidates") or ()
+            for i in _objects(ev, "invalidates", "events.")
         )
         events = Events(
             nats_dsn_env=nats.get("dsn_env", ""),
@@ -594,7 +610,7 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
             slot=h.get("slot", ""),
             methods=tuple(h.get("methods") or ()),
         )
-        for h in d.get("plugin_hooks") or ()
+        for h in _objects(d, "plugin_hooks", "")
     )
     return Manifest(
         format=fmt,
@@ -606,7 +622,7 @@ def from_dict(d: dict, base_dir: str = ".") -> Manifest:
         listen_env=listen.get("env") or f"{prefix}_LISTEN_ADDR",
         default_listen_addr=listen.get("default") or ":50051",
         reflection_env=d.get("reflection_env") or f"{prefix}_GRPC_REFLECTION",
-        shutdown_timeout=float(d.get("shutdown_timeout_seconds") or 10),
+        shutdown_timeout=_positive_or(_number(d, "shutdown_timeout_seconds", ""), 10.0),
         descriptor_set=descriptor_set,
         register=register,
         services=services,

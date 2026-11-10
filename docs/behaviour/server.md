@@ -6,7 +6,8 @@ health, internal-mesh TLS, observability bootstrap and the in-process gRPC bridg
 Packages: `go/service/bootstrap`, `go/service/runtime`, `go/service/internal/server`,
 `go/service/inprocgrpc`, `go/service/healthcheck`, `go/lib/grpcserver`,
 `go/lib/grpcclient` (internal-mesh TLS and dial defaults only), `go/core/lifecycle`,
-`go/core/healthz`, `go/core/observx`, `go/lib/redact`, `go/lib/privatesurface`.
+`go/core/healthz`, `go/core/observx`, `go/lib/redact`, `go/lib/privatesurface`,
+`go/service/bizcompanion` (its process shape only).
 
 ## Process shape
 
@@ -63,6 +64,7 @@ gRPC server options built by `runtime.GRPCComponent`, in order:
 | S21 | In-process gRPC bridge | `go/service/inprocgrpc/inprocgrpc.go` — `New`, `Conn`, `Invoke`, `NewStream` |
 | S22 | Redacted records | `go/lib/redact/redact.go` — `Register`, `Set.Append` |
 | S23 | Private surfaces | `go/lib/privatesurface/privatesurface.go` — `ServerTLS`, `ClientTLS`, `SelfTLS`, `ProxyID`, `Caller`, `Admit`, `Forwarded`, `ToBackend`, `Dial` |
+| S24 | Business companion process | `go/service/bizcompanion/main.go` — `Main`, `Component`, `ListenAddr`, `ServiceName` |
 
 ## S1. Component supervisor
 
@@ -99,6 +101,7 @@ every component's context.
 | S1.10 | On overrun, a component error reported before the deadline MUST be returned together with the deadline error. | `TestRun_ShutdownDeadlineKeepsTheComponentError` |
 | S1.11 | A deadline of `0` MUST remove the bound; an unparseable value MUST be logged and the default applied. | `TestRun_ShutdownDeadlineZeroIsUnbounded`, `TestShutdownDeadline_UnparseableIsLoggedAndDefaulted` |
 | S1.12 | The default deadline plus the 5s observability flush MUST end before a 30s orchestrator grace period. | `TestDefaultShutdownDeadline_FitsTheCommonGracePeriod` |
+| S1.13 | `bootstrap.TeardownDeadline(ctx)` MUST give a component the instant its supervisor gives up on the shutdown (the moment the shared context was cancelled plus the deadline), so the component can bound its own teardown by it; outside a supervisor, or with the deadline switched off, it reports none. | `TestGRPCComponent_ShutdownHooksEndBeforeTheSupervisorsDeadline` |
 
 **Deliberate limits.**
 - "First exit stops all": a component with nothing to do must block on `<-ctx.Done()` rather than return.
@@ -106,6 +109,7 @@ every component's context.
 - Every component must return once its context is cancelled; the supervisor waits for all of them until the shutdown deadline, and not after it.
 - After a deadline overrun, the stuck components keep running until the process exits; the caller of Run is expected to exit.
 - Each component's own drain bound (for a gRPC component, `runtime.Config.ShutdownTimeout`, default 10s) must be below the deadline, or the deadline cuts it short. Under a grace period shorter than 25s the deadline must be lowered.
+- The gRPC component's bounds do not fit the default deadline on their own: a graceful stop of up to `ShutdownTimeout` (10s), a forced stop waited as long again, a 5s handler grace, then up to 30s for after-commit work and 30s for the `Shutdowns` hooks. What keeps the hooks inside the 20s deadline is S5.15: they run on a context that ends 1s before it. A drain that already used the whole deadline leaves the hooks a context that is done at once; a hook that ignores its context is still cut by the process exit.
 
 ## S2. OS signal handling
 
@@ -200,7 +204,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | `UnaryInterceptors` | none | — |
 | `ServerOptions` | none; appended last | a singular `grpc.UnaryInterceptor` / `grpc.StreamInterceptor` → start-up error (S6) |
 | `RegisterServices` | required | nil → `server: RegisterServices is required`; its error closes the listener and is returned |
-| `Shutdowns` | none | each runs after the server stops, on one shared 30s context; nil entries skipped; an error is reported and the later hooks still run |
+| `Shutdowns` | none | each runs after the server stops, on one shared 30s context that also ends 1s before the supervisor's shutdown deadline (S5.15); nil entries skipped; an error is reported and the later hooks still run |
 | `W17_INTERNAL_TLS*` (environment) | off | read at start through `grpcserver.TLSServerOption` (S17); a misconfigured or unrecognised value → start-up error before listening |
 
 **Shares.** Observability globals (through `Serve`); one new `server.DefaultHealthServer()` per component.
@@ -223,6 +227,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | S5.12 | A misconfigured switch (on without certificate and key, or an unrecognised value) MUST fail the start with an error naming `W17_INTERNAL_TLS`. | `TestGRPCComponent_InternalTLSMisconfigurationFailsStart` |
 | S5.13 | `ShutdownTimeout` `0` MUST mean 10s and a negative value MUST mean unbounded, so the opt-out from S14 stays unbounded. | `TestShutdownTimeout_EnvOptOutStaysUnbounded` |
 | S5.14 | `Reflection`, `ReflectionAuth` and `ReflectionUnauthenticated` MUST reach the server, so an unguarded `Reflection: true` fails the component's start (S10.2). | `TestGRPCComponent_UnguardedReflectionIsRefused` |
+| S5.15 | Under a supervisor, the wait for after-commit work and the `Shutdowns` hooks MUST run on a context that ends 1s before the supervisor's shutdown deadline (S1.13) as well as at their own 30s bound, so a hook that honours its context returns, and its error is reported, before the supervisor gives up and the process exits under it. | `TestGRPCComponent_ShutdownHooksEndBeforeTheSupervisorsDeadline` |
 
 ## S6. Interceptor and server-option order
 
@@ -266,6 +271,11 @@ client settings are paired so pings are never rejected as `too_many_pings`.
 |---|---|---|
 | S7.1 | The client ping interval (30s) MUST be at least the server `MinTime` (10s). | `TestDefaultClientKeepalive_PairsWithServerEnforcement`, `TestGRPCComponent_PermitsTheClientsKeepalivePingsOnAnIdleConnection`, `TestDefaultClientKeepalive_MatchesTheLibraryClient` |
 | S7.2 | The server MUST ping idle clients every 30s and drop them after 10s without an ack. | `TestGRPCComponent_PingsAnIdleClientAndDropsItWithoutAnAck` |
+| S7.3 | A keepalive enforcement policy or server parameters in `ServerOptions` MUST replace the defaults (they are appended after them): the default policy answers pings sooner than 10s with GOAWAY `too_many_pings`, a caller's looser policy keeps the connection. | `TestGRPCComponent_ACallersEnforcementPolicyReplacesTheDefault`, `TestGRPCComponent_CallerKeepaliveOverridesTheDefault` |
+
+**Deliberate limits.**
+- An override is not checked against the w17 clients' 30s ping (`grpc.ServerOption` values cannot be inspected): a policy with `MinTime` above 30s, or without `PermitWithoutStream`, makes the server GOAWAY every w17 client's idle connection.
+- The live proof of S7.1 (`TestGRPCComponent_PermitsTheClientsKeepalivePingsOnAnIdleConnection`, a 33s ping cycle) is skipped under `go test -short`; the default run executes it.
 
 ## S8. gRPC panic recovery interceptors
 
@@ -319,7 +329,7 @@ wait for context or a serve error.
 | S9.9 | An option set grpc-go rejects (two singular interceptors) MUST close the listener and be returned as an error. | `TestRun_ConflictingInterceptorOptionsAreAnError` |
 
 **Deliberate limits.**
-- TCP only. No `MaxConcurrentStreams`, `MaxConnectionAge` or `MaxConnectionIdle` defaults; the receive size limit and handshake timeout are grpc-go defaults (4 MiB receive). All can be set through `ServerOptions`.
+- TCP only. No `MaxConcurrentStreams`, `MaxConnectionAge` or `MaxConnectionIdle` defaults (a per-connection stream cap would also queue the many streams a gateway multiplexes over one connection; the unauthenticated health `Watch` has its own cap, S11.6); the receive size limit and handshake timeout are grpc-go defaults (4 MiB receive). All can be set through `ServerOptions`.
 
 ## S10. Server reflection
 
@@ -357,6 +367,7 @@ The same three fields exist on `runtime.Config` (S5).
 **Code.** `go/service/internal/server/server.go` — `DefaultHealthServer`, `Run`
 
 **Purpose.** Registers `grpc.health.v1`, with the root service `""` set to SERVING at construction.
+`Run` registers it through a wrapper whose `Watch` is capped and ends when shutdown begins.
 
 **Guarantees.**
 
@@ -366,6 +377,8 @@ The same three fields exist on `runtime.Config` (S5).
 | S11.2 | Health is liveness, not readiness: it MUST NOT consult a dependency. | holds by construction; no test |
 | S11.3 | Health MUST report NOT_SERVING for every service once shutdown has begun, before the drain finishes. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
 | S11.4 | Health MUST be reachable without credentials. | `TestHealth_ReachableWithoutCredentialsPastCallerInterceptors`, `TestHealth_StaysInsideRecovery` |
+| S11.5 | An open `Watch` MUST NOT hold the graceful stop: once shutdown has begun the watcher is sent NOT_SERVING (if its last update was SERVING) and the stream ends with `Unavailable`, so a watcher that does not hang up neither delays the drain nor forces the hard stop on the RPCs still finishing. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
+| S11.6 | Health is answered ahead of authentication, so one server MUST hold at most 1000 `Watch` streams at once; past that a `Watch` is refused with `ResourceExhausted` while `Check` keeps answering. | `TestRun_HealthWatchesAreCapped` |
 
 ## S12. Bounded gRPC stop
 
@@ -476,7 +489,7 @@ loopback, and exits non-zero naming the failed ones.
 |---|---|---|
 | `argv[0] == "health"` | — | runs the check |
 | `--timeout` | 3s | `<= 0` → error |
-| `Options.Probes` | — | `HTTP` (GET `/healthz` must be 200), `GRPC` (health Check `""` must be SERVING, dialled with the mesh posture), `PublicGRPC` (always plaintext). Empty → error |
+| `Options.Probes` | — | `HTTP` (GET `/healthz` must be 200), `GRPC` (health Check `""` must be SERVING, dialled with the mesh posture), `PublicGRPC` (always plaintext), `PrivateGRPC` (a private listener, S23: mutual TLS on the private PKI whatever the mesh switch says, presenting this container's own private identity and accepting the listener only as that identity, `privatesurface.SelfTLS`). Empty → error |
 | `Options.Final` | false | true: `--help` prints usage and any other bare word is an error instead of starting the server |
 | `Options.Getenv` | `os.Getenv` | reads the internal-TLS variables |
 | listen address | — | wildcard (`""`, `0.0.0.0`, `::`) → `127.0.0.1`; an explicit host is kept; port `0` or empty → error |
@@ -489,14 +502,14 @@ leaf lacks it, the check fails before dialing with an error that names the cause
 
 | ID | Guarantee | Test |
 |---|---|---|
-| S16.1 | Every check MUST run concurrently under one overall timeout. | `TestRun_TimeoutBoundsAHungListener` |
+| S16.1 | Every check MUST run concurrently under one overall timeout, so hung listeners do not use up the time of a healthy one. | `TestRun_TimeoutBoundsAHungListener`, `TestRun_HungListenersDoNotStarveAHealthyOne` |
 | S16.2 | Exit MUST be OK only if every listener answered, and the failing ones are named. | `TestRun_AllListenersAnswer`, `TestRun_NamesOnlyTheFailingListener` |
 | S16.3 | HTTP without `/healthz` MUST fail. | `TestRun_HTTPWithoutHealthzFails` |
 | S16.4 | gRPC NOT_SERVING MUST fail. | `TestRun_GRPCNotServingFails` |
 | S16.5 | No configured checks MUST be an error, not success. | `TestRun_NoProbesIsAnError` |
 | S16.6 | Bad flags or extra arguments MUST give an error with usage. | `TestRun_FlagErrors` |
 | S16.7 | Address forms MUST be mapped as listed. | `TestRun_ListenAddressForms` |
-| S16.8 | Under internal TLS the gRPC check MUST verify the chain against the configured CA, naming the server by the leaf's first DNS SAN (else IP SAN), and MUST NOT skip verification. | `TestRun_GRPCUnderInternalTLS` |
+| S16.8 | Under internal TLS the gRPC check MUST verify the chain against the configured CA, naming the server by the leaf's first DNS SAN (else IP SAN), and MUST NOT skip verification. The `PrivateGRPC` check verifies by identity instead of host name: the chain against the private CA and the leaf's URI SAN equal to this container's own (S23.6), so a production identity with no DNS SAN is healthy and another identity of the same CA is not. | `TestRun_GRPCUnderInternalTLS`, `TestRun_PrivateGRPCAcceptsItsOwnURIIdentity`, `TestSelfTLS_AcceptsOnlyThisBundlesListener` |
 | S16.9 | `PublicGRPC` MUST be plaintext even with the switch on. | `TestRun_GRPCUnderInternalTLS` |
 | S16.10 | Under `terminated` the gRPC check MUST dial plaintext, as the listener does. | `TestRun_GRPCUnderTerminatedIsPlaintext` |
 | S16.11 | Under mutual TLS the check MUST present this node's leaf as its client certificate. | `TestRun_GRPCUnderMutualTLS` |
@@ -611,13 +624,13 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 | S19.2 | With no exporters, init MUST succeed and be cheap. | `TestMustInit_NoExporters_OK` |
 | S19.3 | The full stack MUST initialise with agreeing resource schema URLs. | `TestMustInit_FullStack` |
 | S19.4 | Environment overrides for service name and endpoint MUST apply with the documented precedence. | `TestMustInit_OTelServiceNameOverride`, `TestMustInit_OTelServiceNameEmptyKeepsConfig`, `TestMustInit_OTelEndpointFallback`, `TestMustInit_W17OTelEndpointWinsOverFallback` |
-| S19.5 | A failure part-way through init MUST tear down whatever was installed (all or nothing). | `TestMustInit_SentryInitError`, `TestMustInit_FailureAfterSentryTearsItDown`, `TestShutdown_UnbindsTheSentryClient` |
+| S19.5 | A failure part-way through init MUST tear down whatever was installed (all or nothing), and MUST leave the settings it read (the configuration, the debug-event switch, the request-data mode and sample) as the last successful init set them. | `TestMustInit_SentryInitError`, `TestMustInit_FailureAfterSentryTearsItDown`, `TestShutdown_UnbindsTheSentryClient`, `TestMustInit_AFailedReinitLeavesTheSettingsUnapplied` |
 | S19.6 | Re-init MUST shut down the previous providers first. | `TestMustInit_ReinitShutsDownThePreviousProviders` |
 | S19.7 | `Shutdown` MUST be safe with nothing initialised. | `TestShutdown_NilSafe` |
 | S19.8 | Secret config attributes MUST NOT be exported. | `TestConfigResourceAttrsExcludeSecrets` |
 | S19.9 | `Tracer()` MUST never return nil. | `TestTracer_ReturnsNonNil` |
 | S19.10 | After `Shutdown` or a failed init, the global tracer and meter providers MUST NOT point at shut-down instances: each is reset to a no-op provider when it is still the one observx installed. | `TestShutdown_ResetsGlobalProviders`, `TestMustInit_FailureResetsGlobalProviders` |
-| S19.11 | Telemetry export MUST follow the deployment's transport-security posture: TLS whenever the internal-mesh switch is on, plaintext only when the switch is off or the operator opts out explicitly. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut` |
+| S19.11 | Telemetry export MUST follow the deployment's transport-security posture: TLS whenever the internal-mesh switch is on, presenting the mesh's client pair to a collector that requires one, plaintext only when the switch is off or the operator opts out explicitly. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PresentsTheMeshClientPair`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut` |
 | S19.12 | `OTelTLS=on` MUST force TLS with the switch off; an explicit opt-out while the mesh is on MUST be logged; an unrecognised value MUST fail init with an error naming `W17_OTEL_TLS`. | `TestOTLPExport_FollowsInternalTLS`, `TestOTLPExport_PlaintextOnlyWhenOffOrOptedOut`, `TestMustInit_RejectsUnknownOTelTLS` |
 | S19.13 | Sampling MUST be parent-based: an incoming sampling decision is kept whatever the local rate. | `TestSampler_HonoursTheParentDecision` |
 | S19.14 | A `SampleRate` outside 0..1, or NaN, MUST fail init instead of being clamped or ignored. | `TestMustInit_RejectsSampleRateOutsideZeroToOne` |
@@ -636,7 +649,7 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 `WithRequestScope` gives a request its own error-tracker hub, so breadcrumbs stay with the
 request that recorded them. `WithRequest` records the request being served (a pointer,
 nothing encoded); a fault reported for it carries the request, redacted by its plan (S22)
-and cut to 16 KB: in the error tracker as a `request` context (method, type, the fields as
+and cut to 16 KB of wire form (its JSON rendering bounded at 64 KB): in the error tracker as a `request` context (method, type, the fields as
 JSON, the cut paths) with the tags `method`, `org_id`, `user_id` (from the scopes the
 gateway threads), on the failing span as an `observx.request` event, and on the stderr
 fallback line. The gRPC recovery interceptors (`service/runtime`, `core/grpcerr`) call it
@@ -663,7 +676,7 @@ at `Shutdown`.
 | S20.10 | A fault reported for a recorded request MUST carry its plain fields and MUST NOT carry a field its plan leaves out — in the error tracker, on the span and on the stderr line. | `TestReportError_CarriesTheRedactedRequest`, `TestReportError_SpanEventOnlyOnTheFailingSpan`, `TestReportError_WithoutSentryLogsTheRequest` |
 | S20.11 | The request data MUST go only on a failing span, never on one that did not report a fault. | `TestReportError_SpanEventOnlyOnTheFailingSpan` |
 | S20.12 | Modes `all` and `errors` MUST attach the request to a fault; mode `off` MUST attach nothing and `WithRequest` MUST store nothing. | `TestReportError_ModeErrorsStillCarriesIt_ModeOffDoesNot`, `TestWithRequest_OffStoresNothing` |
-| S20.13 | A request type without a plan MUST be omitted (the context says why), never written whole; a request over the size bound MUST be cut and its cut paths named. | `TestReportError_TypeWithoutPlanIsOmitted`, `TestReportError_LargeRequestIsCut` |
+| S20.13 | A request type without a plan MUST be omitted (the context says why), never written whole; a request over the size bound (16 KB of its wire form) MUST be cut and its cut paths named; a cut request whose JSON rendering — what the error tracker, the span and the log line carry — is still over 64 KB MUST be omitted, saying why. | `TestReportError_TypeWithoutPlanIsOmitted`, `TestReportError_LargeRequestIsCut`, `TestReportError_TheRenderedRequestIsBoundedToo` |
 | S20.14 | Both gRPC recovery interceptors MUST record the unary request, so a fault reported while serving it carries it. | `TestRecoverUnary_ErrorCarriesTheRequest` (`service/runtime`, `core/grpcerr`) |
 | S20.15 | `SampleRequestData` MUST be false outside mode `all` and with sample 0, true with sample 1, and hold the configured share otherwise. | `TestSampleRequestData` |
 | S20.16 | `SampleRequestTelemetry` MUST be false without a sink and outside mode `all`, so no record is rendered for nobody. | `TestSampleRequestTelemetry_NeedsASink` |
@@ -693,8 +706,12 @@ directly, with behaviour equivalent to a wire hop.
 - Unary `Invoke`: refuses a done context with the matching status before the method lookup;
   unknown method → `Unimplemented`; opens an internal span; recovers a panic into a generic
   `Internal`; rebuilds the context (detaches the transaction scope, relays the principal
-  stamps to outgoing, turns outgoing metadata into incoming, clears outgoing); deep-copies
-  request and reply; honours `grpc.Header` / `grpc.Trailer` call options and ignores others.
+  stamps to outgoing, drops the caller's `paging.Forward` mark, turns outgoing metadata into
+  incoming, clears outgoing); deep-copies request and reply; honours `grpc.Header` /
+  `grpc.Trailer` call options and ignores the others (they configure a wire call); for a call
+  made with a `paging.Forward` context, relays the page position the handler reported onto
+  the caller's own response headers, as `paging.RelayPositionUnaryInterceptor` does over the
+  wire (D9.15).
 - Streaming `NewStream`: the handler runs on its own goroutine; unbuffered channels give
   backpressure; a separate `finished` channel ends the stream; a panic becomes `Internal`;
   the server context is a child of the caller's and is cancelled on finish.
@@ -717,10 +734,11 @@ directly, with behaviour equivalent to a wire hop.
 | S21.12 | Caller cancellation MUST reach the handler. | `TestConn_Streaming_CallerCancel` |
 | S21.13 | A handler error MUST become the caller's final status. | `TestConn_Streaming_TrailerErrorPropagates`, `TestInvoke_HandlerError` |
 | S21.14 | Context errors on streams (`Header`, `SendMsg`, `RecvMsg` on both sides), and a bare context error returned by a unary or stream handler, MUST be delivered as gRPC status errors (`Canceled` / `DeadlineExceeded`), as on the wire. | `TestConn_Stream_ContextErrorsAreStatusErrors`, `TestInvoke_HandlerContextErrorIsStatusError` |
-| S21.15 | Messages MUST be deep-copied, so neither side can mutate the other's value. | no direct test; error paths covered by `TestCloneMsg_NonProto`, `TestCopyProto_Errors` |
+| S21.15 | Messages MUST be deep-copied, so neither side can mutate the other's value. | `TestConn_MessagesAreDeepCopiedBothWays`; error paths `TestCloneMsg_NonProto`, `TestCopyProto_Errors` |
 | S21.16 | A nested call MUST NOT be granted more than a wire hop. | covered by the S21.4 tests |
 | S21.17 | Registering a service twice, or an impl that does not satisfy the handler type, MUST panic instead of replacing or accepting it. | `TestConn_RegisterService_DuplicateIsRefused`, `TestConn_RegisterService_WrongImplIsRefused` |
 | S21.18 | Repeated interceptor options MUST append to one chain in option order; a later option MUST NOT drop an earlier one. | `TestConn_UnaryInterceptorOptionsAppend`, `TestConn_StreamInterceptorOptionsAppend` |
+| S21.19 | A unary call made with a `paging.Forward` context MUST relay the page position its handler reported (only when the call succeeded) onto the caller's response headers, and an unforwarded sibling call MUST relay nothing; the handler itself MUST serve under a context without its caller's mark (`paging.WithoutForward`), so its own unforwarded calls relay nothing onto the response the caller reads its page from. | `TestConn_Invoke_RelaysThePagePositionOfAForwardedCall`, `TestConn_Invoke_AForwardedCallersMarkDoesNotReachTheHandler` |
 
 **Deliberate limits.**
 - A stream goroutine stays alive until the caller cancels its context or reads to the end — the same contract as grpc-go.
@@ -757,7 +775,7 @@ list is not cut on its own.
 | S22.3 | With a ceiling, the record MUST fit it, decode, keep strings valid UTF-8 and lists as prefixes, cut the largest fields to one common level, leave smaller fields whole, and name the cut paths. | `TestAppend_CutsTheLargestFirst`, `TestAppend_CutsInsideNestedMessagesButNotInsideLists`, `TestAppend_PackedAndMapCut`, `TestAppend_ManyCeilings`, `TestWaterLevel` |
 | S22.4 | A record that cannot fit even with every variable-size field emptied MUST be an error (`ErrTooLarge`). | `TestAppend_TooLarge` |
 | S22.5 | A record without a map MUST be written without allocating. | `TestAppend_NoAllocations` |
-| S22.6 | `Register` MUST add to the plans already held and replace a re-registered name, safely beside concurrent `Append`. | `TestRegister_AddsAndReplaces` |
+| S22.6 | `Register` MUST add to the plans already held and replace a re-registered name, safely beside concurrent `Append`. | `TestRegister_AddsAndReplaces`, `TestRegister_IsSafeBesideConcurrentAppend` (a map written in place fails it, reliably under `-race`) |
 
 **Deliberate limits.**
 - Field order on the wire is declaration order, not number order; decoders accept either.
@@ -802,7 +820,7 @@ health probe dials its own listener with `SelfTLS`.
 | S23.1 | The gateway listener (`ServerTLS`) MUST require a client certificate verified against the private CA: a client with none, or with one from another CA, MUST NOT complete the handshake. | `TestCallerOnlyThroughTheProxy`, `TestServerTLS_RefusesAClientOutsideThePrivateCA` |
 | S23.2 | `Caller` MUST answer `Unauthenticated` unless the call came over verified TLS from a peer whose certificate carries the proxy identity (`ProxyID`, `W17_PRIVATE_PROXY_ID` when set) AND carries exactly one `x-w17-caller` value that parses as `spiffe://w17/<domain>/<bundle>`: no peer, a non-TLS or unverified peer, another identity (a caller dialling the gateway directly), no value, two values or a malformed one are all refused. | `TestCallerOnlyThroughTheProxy`, `TestCaller_RefusesAllButOneWellFormedCallerFromTheProxy`, `TestCaller_RefusesACallWithoutAVerifiedTLSPeer`, `TestAdmitAndParse` |
 | S23.3 | `Admit` MUST answer `PermissionDenied` for a caller whose domain is not in the surface's callers. | `TestAdmitAndParse` |
-| S23.4 | `Forwarded` MUST pass on only the `ForwardedKeys` (request facts a calling gateway states) and drop every other key, the identity stamps (`x-w17-user`, `x-w17-scope-*`, `w17-label-*`), `x-w17-caller-domain` and credentials among them; a product key naming any domain other than the caller's MUST be `PermissionDenied`. | `TestForwarded`, `TestForwarded_RefusesAnyForeignProductValue` |
+| S23.4 | `Forwarded` MUST pass on only the `ForwardedKeys` (request facts a calling gateway states) and drop every other key, the identity stamps (`x-w17-user`, `x-w17-scope-*`, `w17-label-*`), `x-w17-caller-domain` and credentials among them; a product key naming any domain other than the caller's MUST be `PermissionDenied`. | `TestForwarded`, `TestForwarded_RefusesAnyForeignProductValue`, `TestForwardedKeys_IsExactlyTheStatedFacts` (the exact `ForwardedKeys` set; the device id and the data scope never cross) |
 | S23.5 | `ToBackend` MUST stamp the admitted caller's domain as `x-w17-caller-domain` — written only by the private gateway — beside the forwarded facts. | `TestForwarded` |
 | S23.6 | `SelfTLS` MUST accept only this bundle's own listener: a chain verifying against the private CA AND a leaf carrying this bundle's URI SAN; a foreign CA's leaf with the same URI, or the private CA's leaf of another bundle, MUST be refused; a leaf with no URI SAN MUST be an error. No host name is checked (a production identity need carry no DNS SAN). | `TestSelfTLS_AcceptsOnlyThisBundlesListener` |
 | S23.7 | `ServerTLS`, `ClientTLS`, `SelfTLS` and `Dial` MUST refuse to build without the whole material: a missing variable, an unreadable CA, a CA without a PEM certificate, an unreadable key. | `TestMaterialIsRequired`, `TestMaterial_RefusesWhatIsMissingOrUnreadable` |
@@ -814,4 +832,34 @@ health probe dials its own listener with `SelfTLS`.
 - The proxy is trusted for the caller's identity: the gateway reads `x-w17-caller` from the proxy's connection and cannot re-verify the caller's certificate itself. That the proxy drops a client's own `x-w17-caller` and is the only route to the gateway is the proxy's and the deployment's guarantee, not this package's.
 - The trust level of each forwarded fact (`x-w17-host`, `x-w17-org-from`, audience keys) is what an admitted domain's gateway states; the surface does not check them beyond the product key.
 - No certificate revocation: a leaf of the private CA is valid until it expires.
+
+## S24. Business companion process
+
+**Code.** `go/service/bizcompanion/main.go` — `Main`, `Component`, `ListenAddr`, `ServiceName`, `ManifestEnv`, `ShutdownTimeout`
+
+**Purpose.** The whole `main` of the split business-companion bundle: the Go process that serves a
+non-Go business tier's egress clients and upload file stores (`W17Files`, D13) over gRPC, read from
+the business bundle's manifest. It is assembled from the same parts as a generated service process:
+the `health` subcommand (S16), the supervisor (S1) and the gRPC component (S5).
+
+**Configuration.**
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `W17_COMPANION_MANIFEST` (`ManifestEnv`) | required | empty → error naming it; a manifest without a `companion` section → error ("needs no companion") |
+| `<PREFIX>_BUSINESS_COMPANION_LISTEN_ADDR` (`ListenEnv`) | `:50051` | one function (`ListenAddr`) for the server and for `health`, so the probe asks the port the server bound |
+| telemetry | service name `<domain>-business-companion`; `W17_SERVICE_VERSION`, `W17_ENV`, `W17_SENTRY_DSN`, `W17_OTEL_ENDPOINT` read directly | `SampleRate`, `EnableMetrics` and `ConfigAttrs` are left at their defaults (every trace sampled, no metrics listener, no config attributes); the S19 environment fallbacks (`OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `W17_OTEL_TLS`) apply |
+| drain | `ShutdownTimeout` 10s | — |
+
+**Shares.** Everything S1, S5 and S19 share; the secret chain (D17) for the egress clients' DSNs.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| S24.1 | `<binary> health` MUST probe the companion's gRPC listener (S16, `Final: true`) without reading secrets or starting a server; otherwise the companion MUST serve under `bootstrap.Run` with `runtime.GRPCComponent` (internal TLS, health, recovery, the per-RPC span) until SIGINT/SIGTERM, closing what `Register` opened in its shutdown hook. | `TestMainServesAndProbes` |
+| S24.2 | A missing manifest variable, or a manifest whose business tier needs no companion, MUST be an error before anything is served. | `TestMainRefusals` |
+
+**Deliberate limits.**
+- Its telemetry surface is narrower than a generated main's (see the configuration table); a deployment that needs sampling or a metrics listener on the companion has no knob for it.
 

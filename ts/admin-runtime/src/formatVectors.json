@@ -1,7 +1,14 @@
 {
   "schema": 1,
-  "comment": "Shared golden vectors for locale-aware value formatting. Run by BOTH sdk/go/lib/i18n (format_vectors_test.go) and sdk/ts/admin-runtime (valueformat.test.ts) from this one file, mirrored by `make sync-i18n-formats`. It is what makes 'Go and TS format identically' a checked property instead of a hope, so a new formatting behaviour belongs here FIRST. `places` is ignored by kinds that take no argument; `scale` and `currency` are read by `money` alone; `value` is a string for the decimal-string path and a number for the float-adapter path.",
+  "comment": "Shared golden vectors for locale-aware value formatting. Run by BOTH sdk/go/lib/i18n (format_test.go, TestFormatGoldenVectors) and sdk/ts/admin-runtime (valueformat.test.ts) from this one file, mirrored by `make sync-i18n-formats`. It is what makes 'Go and TS format identically' a checked property instead of a hope, so a new formatting behaviour belongs here FIRST. `places` is ignored by kinds that take no argument; `scale` and `currency` are read by `money` alone; `pattern` by `pattern` alone (RenderTimePattern over the parsed value); `value` is a string for the decimal-string path and a number for the float-adapter path.",
   "cases": [
+    { "name": "number trims leading integer zeros", "locale": "en", "kind": "number", "value": "0001234", "want": "1,234" },
+    { "name": "number keeps one zero of an all-zero integer part", "locale": "en", "kind": "number", "value": "000.5", "want": "0.5" },
+    { "name": "decimal trims leading zeros of a negative", "locale": "en", "kind": "decimal", "places": 2, "value": "-007.5", "want": "-7.50" },
+
+    { "name": "pattern renders every token, the 12-hour and second ones included", "locale": "en", "kind": "pattern", "pattern": "YYYY-MM-DD HH:mm:ss | hh h A | M D", "value": "2026-07-26T14:03:09Z", "want": "2026-07-26 14:03:09 | 02 2 PM | 7 26" },
+    { "name": "pattern renders midnight as 12 on the 12-hour clock", "locale": "en", "kind": "pattern", "pattern": "hh:mm:ss A", "value": "2026-07-26T00:05:07Z", "want": "12:05:07 AM" },
+
     { "name": "cs decimal groups with a space and a comma", "locale": "cs", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1 234,50" },
     { "name": "en decimal groups with a comma and a dot", "locale": "en", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1,234.50" },
     { "name": "de decimal swaps both separators", "locale": "de", "kind": "decimal", "places": 2, "value": "1234.5", "want": "1.234,50" },

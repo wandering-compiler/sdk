@@ -65,7 +65,9 @@ var jsonBufPool = sync.Pool{New: func() any { b := make([]byte, 0, 512); return 
 
 // AppendJSONString appends s as a JSON string literal, escaping per the
 // JSON spec. Like protojson (and unlike encoding/json) it does NOT
-// HTML-escape <, >, & — those pass through verbatim.
+// HTML-escape <, >, & — those pass through verbatim. It does not check
+// UTF-8 (it stays a byte loop); [MarshalProtoAppend] validates a generated
+// marshaler's output and answers protojson's error for invalid UTF-8 (E2.6).
 func AppendJSONString(dst []byte, s string) []byte {
 	dst = append(dst, '"')
 	start := 0
@@ -144,7 +146,7 @@ func AppendJSONFloat64(dst []byte, v float64) []byte {
 	case math.IsInf(v, -1):
 		return append(dst, `"-Infinity"`...)
 	}
-	return strconv.AppendFloat(dst, v, 'g', -1, 64)
+	return appendJSONFloat(dst, v, 64)
 }
 
 // AppendJSONFloat32 appends a float as a JSON number, NaN/±Inf quoted.
@@ -157,7 +159,31 @@ func AppendJSONFloat32(dst []byte, v float32) []byte {
 	case math.IsInf(d, -1):
 		return append(dst, `"-Infinity"`...)
 	}
-	return strconv.AppendFloat(dst, float64(v), 'g', -1, 32)
+	return appendJSONFloat(dst, float64(v), 32)
+}
+
+// appendJSONFloat is protojson's number form, byte for byte: 'f' unless the
+// magnitude is below 1e-6 or at least 1e21, then 'e' with a negative
+// exponent's zero padding stripped (1e-07 → 1e-7). strconv's 'g' switches
+// to the exponent at 1e21 too, but already from 1e6 upwards (1e+06), so the
+// two paths of one endpoint would write the same value differently.
+func appendJSONFloat(dst []byte, v float64, bitSize int) []byte {
+	format := byte('f')
+	if abs := math.Abs(v); abs != 0 {
+		if bitSize == 64 && (abs < 1e-6 || abs >= 1e21) ||
+			bitSize == 32 && (float32(abs) < 1e-6 || float32(abs) >= 1e21) {
+			format = 'e'
+		}
+	}
+	dst = strconv.AppendFloat(dst, v, format, -1, bitSize)
+	if format == 'e' {
+		n := len(dst)
+		if n >= 4 && dst[n-4] == 'e' && dst[n-3] == '-' && dst[n-2] == '0' {
+			dst[n-2] = dst[n-1]
+			dst = dst[:n-1]
+		}
+	}
+	return dst
 }
 
 // AppendTimestampJSON appends a google.protobuf.Timestamp as the proto-JSON

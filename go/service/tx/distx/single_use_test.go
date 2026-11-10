@@ -119,10 +119,14 @@ func TestTxHandle_RefusedFinishCanBeRetried(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	client := distxpb.NewW17DistributedTransactionClient(conn)
 
-	h, _, err := distx.Begin(context.Background(), client, &distxpb.BeginRequest{ConnectionName: "main"})
+	h, txCtx, err := distx.Begin(context.Background(), client, &distxpb.BeginRequest{ConnectionName: "main"})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
+	// Work parked on the transaction survives the refused attempt: the
+	// transaction is still open, so it runs on the retry's commit.
+	hookRan := 0
+	distx.OnCommit(txCtx, func() { hookRan++ })
 	_, release, err := reg.LookupTx(context.Background(), h.TxID(), "main")
 	if err != nil {
 		t.Fatalf("LookupTx: %v", err)
@@ -135,6 +139,9 @@ func TestTxHandle_RefusedFinishCanBeRetried(t *testing.T) {
 	release()
 	if err := h.Commit(context.Background()); err != nil {
 		t.Fatalf("Commit retried on the same handle = %v, want it to commit", err)
+	}
+	if hookRan != 1 {
+		t.Errorf("the work parked on the transaction ran %d times after the retried commit, want once — the refused attempt discarded it", hookRan)
 	}
 	if reg.Active() != 0 {
 		t.Errorf("Active() = %d after the retried Commit, want 0", reg.Active())

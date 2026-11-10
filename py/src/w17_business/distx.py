@@ -342,6 +342,11 @@ async def begin(ctx: Context, client: TxClient, req: Any = None) -> tuple[TxHand
     Returns the handle and a context carrying ``w17-tx-id`` (and
     ``w17-conn-id`` when the proxy supplied one): pass that context to every
     storage call that belongs to the transaction."""
+    if ctx.value(_BIDI) is True:
+        raise GRPCError(
+            Status.FAILED_PRECONDITION,
+            "distx: a bidirectional-streaming method cannot run a transaction (as in Go): its messages "
+            "interleave with the caller's, and nothing would bound the transaction")
     req = req if req is not None else BeginRequest()
     root = _root_from(ctx)
     if root is not None and txscope.active(ctx):
@@ -351,6 +356,15 @@ async def begin(ctx: Context, client: TxClient, req: Any = None) -> tuple[TxHand
     conn_id = next((v for v in header.get_all(CONN_ID_HEADER) if v), "")
     h = TxHandle(client, resp.tx_id, conn_id, req.connection_name, req.isolation, scope)
     return h, h.attach(scoped.with_value(_ROOT, h))
+
+
+_BIDI = object()
+
+
+def _mark_bidi(ctx: Context) -> Context:
+    """The context a bidirectional-streaming method is served with (the
+    server sets it): begin refuses a transaction on it."""
+    return ctx.with_value(_BIDI, True)
 
 
 def _join(ctx: Context, root: TxHandle, req: Any) -> tuple[TxHandle, Context]:
@@ -403,11 +417,15 @@ async def run(
             ferr.add_note(f"distx.run: rollback also failed: {rerr!r}")
         raise
     if ctx.done():
+        # The refusal is what the caller acts on; a failed rollback is named
+        # in it, as Go's Run does — the transaction may be left open until
+        # the server times it out.
+        also = ""
         try:
             await asyncio.shield(handle.rollback(detached))
-        except Exception:  # noqa: BLE001 — the refusal below is what the caller acts on
-            pass
-        raise DistxError(f"distx.run: not committing, the caller's context is done: {ctx.err()}")
+        except Exception as rerr:  # noqa: BLE001
+            also = f" (rollback also failed: {rerr!r})"
+        raise DistxError(f"distx.run: not committing, the caller's context is done: {ctx.err()}{also}")
     try:
         await handle.commit(ctx)
     except Exception as cerr:

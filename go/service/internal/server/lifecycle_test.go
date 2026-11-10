@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -52,14 +54,18 @@ func dial(t *testing.T, addr string) *grpc.ClientConn {
 }
 
 // Once shutdown begins, a client watching health sees NOT_SERVING while the
-// drain is still running, instead of SERVING until the connection drops.
+// drain is still running, instead of SERVING until the connection drops; then
+// its Watch stream ends. A Watch has nothing to drain, so a watcher that does
+// not hang up must not hold the graceful stop for its whole bound and turn
+// every shutdown into a hard stop that aborts the RPCs still finishing.
 func TestRun_HealthReportsNotServingOnceDrainStarts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	const bound = 3 * time.Second
 	l, done := startRun(t, ctx, Config{
 		Addr:             "127.0.0.1:0",
 		HealthServer:     DefaultHealthServer(),
-		ShutdownTimeout:  3 * time.Second, // the open Watch holds the drain
+		ShutdownTimeout:  bound,
 		RegisterServices: func(*grpc.Server) error { return nil },
 	})
 
@@ -86,15 +92,62 @@ func TestRun_HealthReportsNotServingOnceDrainStarts(t *testing.T) {
 	if time.Since(start) > time.Second {
 		t.Errorf("NOT_SERVING arrived after %v — only at the hard stop, not when the drain began", time.Since(start))
 	}
-	watchCancel() // release the drain
+	// The watcher does not hang up: the server ends the stream itself.
+	if _, err := w.Recv(); status.Code(err) != codes.Unavailable {
+		t.Errorf("Watch after NOT_SERVING = %v, want the stream ended with Unavailable", err)
+	}
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Errorf("Run = %v, want nil", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(3 * bound):
 		t.Fatal("Run did not return")
 	}
+	if took := time.Since(start); took >= bound/2 {
+		t.Errorf("Run returned after %s with one idle health Watch open — the drain waited on the Watch instead of ending it", took)
+	}
+}
+
+// Health is served ahead of authentication, so the number of Watch streams
+// one server holds open is capped; past the cap a Watch is refused with
+// ResourceExhausted while Check keeps answering.
+func TestRun_HealthWatchesAreCapped(t *testing.T) {
+	prev := maxHealthWatches
+	maxHealthWatches = 2
+	t.Cleanup(func() { maxHealthWatches = prev })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l, done := startRun(t, ctx, Config{
+		Addr:             "127.0.0.1:0",
+		HealthServer:     DefaultHealthServer(),
+		ShutdownTimeout:  time.Second,
+		RegisterServices: func(*grpc.Server) error { return nil },
+	})
+	cli := grpc_health_v1.NewHealthClient(dial(t, l.Addr().String()))
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	defer watchCancel()
+	for i := 0; i < 2; i++ {
+		w, err := cli.Watch(watchCtx, &grpc_health_v1.HealthCheckRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Recv(); err != nil {
+			t.Fatalf("watch %d: %v", i, err)
+		}
+	}
+	w, err := cli.Watch(watchCtx, &grpc_health_v1.HealthCheckRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("third Watch = %v, want ResourceExhausted", err)
+	}
+	if r, err := cli.Check(context.Background(), &grpc_health_v1.HealthCheckRequest{}); err != nil || r.Status != grpc_health_v1.HealthCheckResponse_SERVING {
+		t.Errorf("Check past the Watch cap = %v / %v, want SERVING", r, err)
+	}
+	cancel()
+	<-done
 }
 
 // holdDesc is a server-streaming service whose handler blocks until its

@@ -73,6 +73,10 @@ type Config[T any] struct {
 	Size func(T) int
 	// Encode appends one record's wire form to dst (the redacted envelope).
 	Encode func(dst []byte, item T) ([]byte, error)
+	// EncodeFailed, when set, encodes an item that never reached a batch
+	// for Fail, on the submitter's goroutine; default Encode. A recorder
+	// uses it to skip what only a stored record does (telemetry).
+	EncodeFailed func(dst []byte, item T) ([]byte, error)
 	// Sink delivers a batch. The batch's buffer is reused once Sink returns:
 	// a sink must not keep it.
 	Sink func(ctx context.Context, b *Batch) error
@@ -179,13 +183,27 @@ type Pipeline[T any] struct {
 	out  chan *Batch
 	bufs sync.Pool
 
-	closeMu sync.RWMutex // Submit holds R while it may send on in
-	closed  bool
+	// A submitter that may send on in is active (enter/leave). Close marks
+	// the pipeline closed under closeMu — a short critical section, so a
+	// Submit arriving meanwhile fails with ErrClosed at once instead of
+	// queuing behind a submitter that waits for room — then waits until no
+	// submitter is active before it closes in. If its context ends first,
+	// stopWaits makes the waiting submitters give up.
+	closeMu   sync.Mutex
+	closed    bool
+	active    int
+	idle      chan struct{} // closed once closed and no submitter is active
+	stopCtx   context.Context
+	stopWaits context.CancelFunc
 
 	sinkCtx    context.Context
 	cancelSink context.CancelFunc
 	aborted    atomic.Bool
 	done       chan struct{}
+
+	// batchBytes is the batch bound in force: Config.BatchBytes, lowered
+	// by LowerBatchBytes.
+	batchBytes atomic.Int64
 
 	submitted, delivered, failed, batches, waited, panics atomic.Uint64
 	lastPanicReport                                       atomic.Int64
@@ -239,6 +257,9 @@ func New[T any](cfg Config[T]) (*Pipeline[T], error) {
 		out:  make(chan *Batch, cfg.SendQueue),
 		done: make(chan struct{}),
 	}
+	p.batchBytes.Store(int64(cfg.BatchBytes))
+	p.idle = make(chan struct{})
+	p.stopCtx, p.stopWaits = context.WithCancel(context.Background()) //nolint:gosec // G118: stopWaits is stored and called by Close.
 	p.bufs.New = func() any { b := make([]byte, 0, cfg.BatchBytes); return &b }
 	p.sinkCtx, p.cancelSink = context.WithCancel(context.Background()) //nolint:gosec // G118: cancelSink is stored and called by Close; not leaked.
 	go p.batcher()
@@ -260,25 +281,58 @@ func (p *Pipeline[T]) Submit(ctx context.Context, item T) error {
 		size = p.cfg.QueueBytes // one huge item takes the whole budget, not forever
 	}
 
-	p.closeMu.RLock()
-	if p.closed {
-		p.closeMu.RUnlock()
+	if !p.enter() {
 		return p.failItem(item, ErrClosed)
 	}
+	defer p.leave()
 	// Fast path: room now, no timer.
 	if p.sem.TryAcquire(size) {
 		select {
 		case p.in <- queued[T]{item: item, size: size}:
-			p.closeMu.RUnlock()
 			return nil
 		default:
 		}
 	} else {
 		size = -size // not acquired yet
 	}
-	err := p.submitSlow(ctx, item, size)
-	p.closeMu.RUnlock()
-	return err
+	return p.submitSlow(ctx, item, size)
+}
+
+// enter registers a submitter that may send on in; false once the pipeline
+// is closed.
+func (p *Pipeline[T]) enter() bool {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	if p.closed {
+		return false
+	}
+	p.active++
+	return true
+}
+
+func (p *Pipeline[T]) leave() {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	p.active--
+	if p.closed && p.active == 0 {
+		close(p.idle)
+	}
+}
+
+// waitCtx is ctx, also ended when Close stops the waits.
+func (p *Pipeline[T]) waitCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	wctx, cancel := context.WithCancel(ctx)
+	unhook := context.AfterFunc(p.stopCtx, cancel)
+	return wctx, func() { unhook(); cancel() }
+}
+
+// waitFailed is the reason a wait for room ended: ErrClosed when Close
+// stopped it, ErrQueueFull otherwise.
+func (p *Pipeline[T]) waitFailed() error {
+	if p.stopCtx.Err() != nil {
+		return ErrClosed
+	}
+	return ErrQueueFull
 }
 
 // SubmitWait queues item like Submit and then waits for its batch's outcome:
@@ -297,23 +351,25 @@ func (p *Pipeline[T]) SubmitWait(ctx context.Context, item T) error {
 		size = p.cfg.QueueBytes
 	}
 	done := make(chan error, 1)
-	p.closeMu.RLock()
-	if p.closed {
-		p.closeMu.RUnlock()
+	if !p.enter() {
 		return p.failItem(item, ErrClosed)
 	}
-	if err := p.sem.Acquire(ctx, size); err != nil {
-		p.closeMu.RUnlock()
-		return p.failItem(item, ErrQueueFull)
+	wctx, cancel := p.waitCtx(ctx)
+	if err := p.sem.Acquire(wctx, size); err != nil {
+		cancel()
+		p.leave()
+		return p.failItem(item, p.waitFailed())
 	}
 	select {
 	case p.in <- queued[T]{item: item, size: size, done: done}:
-	case <-ctx.Done():
+	case <-wctx.Done():
 		p.sem.Release(size)
-		p.closeMu.RUnlock()
-		return p.failItem(item, ErrQueueFull)
+		cancel()
+		p.leave()
+		return p.failItem(item, p.waitFailed())
 	}
-	p.closeMu.RUnlock()
+	cancel()
+	p.leave()
 	select {
 	case err := <-done:
 		return err
@@ -323,7 +379,8 @@ func (p *Pipeline[T]) SubmitWait(ctx context.Context, item T) error {
 }
 
 // TrySubmit queues item only if there is room now; otherwise it goes to
-// Fail with ErrQueueFull at once (a marketing record set to drop).
+// Fail with ErrQueueFull at once (a marketing record set to drop), without
+// its encoding: a drop costs the request path nothing more.
 func (p *Pipeline[T]) TrySubmit(item T) error {
 	p.submitted.Add(1)
 	size := int64(p.cfg.Size(item))
@@ -333,32 +390,33 @@ func (p *Pipeline[T]) TrySubmit(item T) error {
 	if size > p.cfg.QueueBytes {
 		size = p.cfg.QueueBytes
 	}
-	p.closeMu.RLock()
-	defer p.closeMu.RUnlock()
-	if p.closed {
-		return p.failItem(item, ErrClosed)
+	if !p.enter() {
+		return p.failBare(ErrClosed)
 	}
+	defer p.leave()
 	if !p.sem.TryAcquire(size) {
-		return p.failItem(item, ErrQueueFull)
+		return p.failBare(ErrQueueFull)
 	}
 	select {
 	case p.in <- queued[T]{item: item, size: size}:
 		return nil
 	default:
 		p.sem.Release(size)
-		return p.failItem(item, ErrQueueFull)
+		return p.failBare(ErrQueueFull)
 	}
 }
 
 // submitSlow waits for room; size < 0 means its bytes are not yet acquired.
 func (p *Pipeline[T]) submitSlow(ctx context.Context, item T, size int64) error {
 	p.waited.Add(1)
-	wctx, cancel := context.WithTimeout(ctx, p.cfg.BlockTimeout)
+	tctx, tcancel := context.WithTimeout(ctx, p.cfg.BlockTimeout)
+	defer tcancel()
+	wctx, cancel := p.waitCtx(tctx)
 	defer cancel()
 	if size < 0 {
 		size = -size
 		if err := p.sem.Acquire(wctx, size); err != nil {
-			return p.failItem(item, ErrQueueFull)
+			return p.failItem(item, p.waitFailed())
 		}
 	}
 	select {
@@ -366,14 +424,20 @@ func (p *Pipeline[T]) submitSlow(ctx context.Context, item T, size int64) error 
 		return nil
 	case <-wctx.Done():
 		p.sem.Release(size)
-		return p.failItem(item, ErrQueueFull)
+		return p.failItem(item, p.waitFailed())
 	}
+}
+
+// failBare fails one item without encoding it.
+func (p *Pipeline[T]) failBare(reason error) error {
+	p.fail(Failure{Err: reason, Count: 1})
+	return reason
 }
 
 // failItem encodes one item that never reached a batch and fails it.
 func (p *Pipeline[T]) failItem(item T, reason error) error {
 	var rec []byte
-	if b, err := p.encode(nil, item); err == nil {
+	if b, err := p.encodeFailed(item); err == nil {
 		rec = b
 	}
 	f := Failure{Err: reason, Count: 1}
@@ -382,6 +446,18 @@ func (p *Pipeline[T]) failItem(item T, reason error) error {
 	}
 	p.fail(f)
 	return reason
+}
+
+func (p *Pipeline[T]) encodeFailed(item T) (out []byte, err error) {
+	if p.cfg.EncodeFailed == nil {
+		return p.encode(nil, item)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = nil, p.recovered("EncodeFailed", r)
+		}
+	}()
+	return p.cfg.EncodeFailed(nil, item)
 }
 
 func (p *Pipeline[T]) encode(dst []byte, item T) (out []byte, err error) {
@@ -455,12 +531,13 @@ func (p *Pipeline[T]) batcher() {
 				continue
 			}
 			need := protowire.SizeTag(BatchFieldRecords) + protowire.SizeBytes(len(rec))
-			if b != nil && len(b.Wire)+need > p.cfg.BatchBytes {
+			limit := int(p.batchBytes.Load())
+			if b != nil && len(b.Wire)+need > limit {
 				flush()
 			}
 			if b == nil {
 				b = p.newBatch()
-				if len(b.Wire)+need > p.cfg.BatchBytes {
+				if len(b.Wire)+need > limit {
 					p.sem.Release(q.size)
 					p.fail(Failure{Err: ErrTooLarge, Records: [][]byte{rec}, Count: 1})
 					tell(q.done, ErrTooLarge)
@@ -589,11 +666,27 @@ func (p *Pipeline[T]) sink(b *Batch) (err error) {
 // must therefore return once its context ends). Safe to call more than once.
 func (p *Pipeline[T]) Close(ctx context.Context) error {
 	p.closeMu.Lock()
-	if !p.closed {
+	first := !p.closed
+	if first {
 		p.closed = true
-		close(p.in)
+		if p.active == 0 {
+			close(p.idle)
+		}
 	}
 	p.closeMu.Unlock()
+	if first {
+		// No send on in may follow its close: wait for the submitters
+		// still active (each bounded by its BlockTimeout or context), and
+		// stop their waits if ctx ends first.
+		select {
+		case <-p.idle:
+		case <-ctx.Done():
+			p.stopWaits()
+			<-p.idle
+		}
+		close(p.in)
+		p.stopWaits() // nothing waits any more; releases the hooks
+	}
 	select {
 	case <-p.done:
 		p.cancelSink()
@@ -603,6 +696,21 @@ func (p *Pipeline[T]) Close(ctx context.Context) error {
 		p.cancelSink()
 		<-p.done
 		return ctx.Err()
+	}
+}
+
+// LowerBatchBytes lowers the batch bound to n when n is smaller and still
+// usable (more than 64); it never raises it. A sink whose limit is learnt
+// only once connected (NATS's max_payload) calls it then.
+func (p *Pipeline[T]) LowerBatchBytes(n int) {
+	if n <= 64 {
+		return
+	}
+	for {
+		cur := p.batchBytes.Load()
+		if int64(n) >= cur || p.batchBytes.CompareAndSwap(cur, int64(n)) {
+			return
+		}
 	}
 }
 

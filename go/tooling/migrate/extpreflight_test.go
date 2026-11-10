@@ -268,3 +268,37 @@ func TestPreflightExtensions_SurvivesADecorator(t *testing.T) {
 		t.Errorf("an opaque decorator was probed on a guess: %v", err)
 	}
 }
+
+// scriptFake is extFake with the ScriptRunner capability, recording what
+// reached Apply and what reached RunScript apart.
+type scriptFake struct {
+	extFake
+	scripts []string
+}
+
+func (f *scriptFake) RunScript(_ context.Context, sql string) error {
+	f.scripts = append(f.scripts, sql)
+	return nil
+}
+
+// The extension preflight and the schema prep are the run's own probes, not
+// migrations: an applier that can run a script gets them through RunScript,
+// so its Apply (which may upgrade and lock the ledger) sees only migrations.
+func TestRun_PreparationStepsDoNotGoThroughApply(t *testing.T) {
+	fake := &scriptFake{}
+	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard, 0)
+	pending := []Pending{{Connection: "main", Migration: withManifest("m1", "main",
+		`{"required_extensions":["vector"],"required_schemas":["billing"]}`)}}
+	if err := preflightExtensions(context.Background(), ac, pending); err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if err := prepareSchemas(context.Background(), ac, pending); err != nil {
+		t.Fatalf("schema prep: %v", err)
+	}
+	if len(fake.ran) != 0 {
+		t.Fatalf("a preparation step reached Apply: %q", fake.ran)
+	}
+	if len(fake.scripts) != 2 || !strings.Contains(fake.scripts[0], "pg_extension") || !strings.Contains(fake.scripts[1], "CREATE SCHEMA IF NOT EXISTS") {
+		t.Fatalf("scripts run = %q, want the extension probe then the schema prep", fake.scripts)
+	}
+}

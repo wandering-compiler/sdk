@@ -57,3 +57,25 @@ func TestValidEmail_RejectsControlChars(t *testing.T) {
 		}
 	}
 }
+
+// Unicode whitespace and control characters are as invalid as their ASCII
+// kin: a no-break space, a line or paragraph separator, a C1 control or a
+// trailing space must not pass; a non-ASCII letter still does.
+func TestValidEmail_RejectsUnicodeSpaceAndControl(t *testing.T) {
+	bad := []string{
+		"user @example.com",      // NO-BREAK SPACE
+		"user@example.com x",     // LINE SEPARATOR
+		"user@exa mple.com",      // PARAGRAPH SEPARATOR
+		"user\u0085@example.com", // NEXT LINE (C1 control)
+		"user@example.com ",      // trailing space
+		"　user@example.com",      // IDEOGRAPHIC SPACE
+	}
+	for _, e := range bad {
+		if ValidEmail(e) {
+			t.Errorf("ValidEmail(%q) = true, want false", e)
+		}
+	}
+	if !ValidEmail("jiří@příklad.cz") {
+		t.Error("ValidEmail rejected non-ASCII letters")
+	}
+}

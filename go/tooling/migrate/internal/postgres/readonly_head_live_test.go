@@ -130,3 +130,56 @@ func TestAppliedHead_IsReadOnlyOnALegacyLedger_Live(t *testing.T) {
 		t.Fatal("apply did not add the post-transaction column to a legacy ledger")
 	}
 }
+
+// A ledger that already has the post-transaction column is not ALTERed by an
+// apply: ALTER TABLE takes ACCESS EXCLUSIVE even when IF NOT EXISTS makes it a
+// no-op, so it queued the apply behind any open writer of the ledger. And the
+// run's own probes (RunScript) never upgrade a legacy ledger.
+func TestApply_DoesNotAlterALedgerThatHasThePhaseColumn_Live(t *testing.T) {
+	dsn := liveDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	setup, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = setup.Close(context.Background()) }()
+	if _, err := setup.Exec(ctx, `CREATE TABLE w17_migrations (timestamp TIMESTAMPTZ PRIMARY KEY, content_sha256 TEXT NOT NULL);
+		INSERT INTO w17_migrations VALUES ('2026-01-01T00:00:00Z', 'aa')`); err != nil {
+		t.Fatalf("legacy ledger: %v", err)
+	}
+	a, err := postgres.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = a.Close() }()
+
+	if err := a.RunScript(ctx, `CREATE SCHEMA IF NOT EXISTS billing`); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if phaseColumnExists(t, ctx, setup) {
+		t.Fatal("a preparation script altered the legacy ledger")
+	}
+	if _, err := setup.Exec(ctx, `ALTER TABLE w17_migrations ADD COLUMN post_tx_complete BOOLEAN NOT NULL DEFAULT true`); err != nil {
+		t.Fatalf("add column: %v", err)
+	}
+
+	inflight, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = inflight.Close(context.Background()) }()
+	tx, err := inflight.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `LOCK TABLE w17_migrations IN ROW EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	probe, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelProbe()
+	if err := a.Apply(probe, &applyfetchpb.Migration{Id: "20260201T000000Z", UpSql: `CREATE TABLE t (id BIGINT)`}); err != nil {
+		t.Fatalf("Apply beside an open writer of the ledger = %v; a ledger that has the column must not be ALTERed", err)
+	}
+}

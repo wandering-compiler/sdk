@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -73,6 +74,17 @@ var errNotAnObject = errors.New("local_fs: key names a directory, not an object"
 // here — rename and remove act on a symlink, not on its target; the
 // read paths, which open it, follow it through [Driver.containedObject].
 func (d *Driver) containedPath(key string) (string, error) {
+	// The staging area holds in-flight uploads; it is not part of the key
+	// space, so no key — however it is spelled — names a file in it.
+	if first, _, _ := strings.Cut(path.Clean("/" + filepath.ToSlash(key))[1:], "/"); first == stagingDirName {
+		return "", errEscapesRoot
+	}
+	return d.containedAnyPath(key)
+}
+
+// containedAnyPath is containedPath without the staging-area refusal, for
+// the driver's own resolution of its staging directory.
+func (d *Driver) containedAnyPath(key string) (string, error) {
 	final := filepath.Join(d.root, filepath.FromSlash(key))
 	if filepath.Clean(final) == filepath.Clean(d.root) || !within(d.root, final) {
 		return "", errEscapesRoot
@@ -251,7 +263,7 @@ func (d *Driver) StagingDir() (string, error) {
 	if d.root == "" {
 		return "", errors.New("local_fs: driver not initialised (root is empty)")
 	}
-	dir, err := d.containedPath(stagingDirName + "/x")
+	dir, err := d.containedAnyPath(stagingDirName + "/x")
 	if err != nil {
 		return "", fmt.Errorf("local_fs: staging dir: %w", err)
 	}

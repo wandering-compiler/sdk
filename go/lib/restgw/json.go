@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -306,12 +307,26 @@ func MarshalProtoAppend(dst []byte, msg proto.Message) ([]byte, error) {
 	desc := msg.ProtoReflect().Descriptor()
 	if fn := lookupJSONMarshaler(desc); fn != nil {
 		if !hasAnyAlias(desc) {
-			return fn(dst, msg) // zero-alloc: append the collapsed dialect directly
+			// zero-alloc: append the collapsed dialect directly.
+			out, err := fn(dst, msg)
+			if err != nil {
+				return dst, err
+			}
+			if !utf8.Valid(out[len(dst):]) {
+				// The string leaves copy bytes verbatim; invalid UTF-8 is a
+				// marshal error on every path (E2.6), so the reflective
+				// path answers it with protojson's error.
+				return MarshalProtoReflective(dst, msg)
+			}
+			return out, nil
 		}
 		// Aliased + registered (rare): marshal in isolation, rewrite, append.
 		out, err := fn(nil, msg)
 		if err != nil {
 			return dst, err
+		}
+		if !utf8.Valid(out) {
+			return MarshalProtoReflective(dst, msg)
 		}
 		out, err = rewriteAliasesOnResponseJSON(out, desc)
 		if err != nil {

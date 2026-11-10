@@ -89,6 +89,7 @@ func TestRun_ComponentError_DrainsSiblingAndReturnsErr(t *testing.T) {
 // supervisor recovers it into a terminal error, cancels the shared
 // context so siblings drain, and Run returns the panic-as-error.
 func TestRun_ComponentPanic_RecoversDrainsSiblingAndReturnsErr(t *testing.T) {
+	reported := captureReports(t)
 	var siblingStopped atomic.Bool
 
 	panicking := bootstrap.Func(func(ctx context.Context) error {
@@ -112,11 +113,23 @@ func TestRun_ComponentPanic_RecoversDrainsSiblingAndReturnsErr(t *testing.T) {
 			!strings.Contains(err.Error(), "component blew up") {
 			t.Fatalf("Run error %q does not carry the panic value", err)
 		}
+		if !strings.Contains(err.Error(), "goroutine ") {
+			t.Errorf("Run error %q does not carry the stack", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after a component panicked (process likely crashed)")
 	}
 	if !siblingStopped.Load() {
 		t.Fatal("sibling component was not drained when the panicking one was recovered")
+	}
+	// Reported through observx with the value AND the panicking
+	// goroutine's stack — the stack is what locates the bug.
+	out := reported.String()
+	if !strings.Contains(out, "component panic: component blew up") {
+		t.Errorf("the panic was not reported through observx; reports = %q", out)
+	}
+	if !strings.Contains(out, "goroutine ") || !strings.Contains(out, "bootstrap_test.TestRun_ComponentPanic_RecoversDrainsSiblingAndReturnsErr") {
+		t.Errorf("the report carries no stack of the panicking component; reports = %q", out)
 	}
 }
 

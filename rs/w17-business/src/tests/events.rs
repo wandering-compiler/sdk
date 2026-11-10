@@ -25,6 +25,13 @@ fn credential_keys() {
         "x-auth-token",
         "session_id",
         "my.secret",
+        "x-hub-signature",
+        "x-access-key",
+        "x-signing-key",
+        "x-user-pass",
+        "x-user-pwd",
+        "x-otp",
+        "x-bearer",
     ] {
         assert!(is_credential_key(k), "{k}");
     }
@@ -34,6 +41,8 @@ fn credential_keys() {
         "x-custom",
         "w17-language",
         "apiary",
+        "x-keyboard-layout",
+        "x-passenger-id",
     ] {
         assert!(!is_credential_key(k), "{k}");
     }
@@ -50,6 +59,18 @@ fn channel_and_topic_names() {
     for bad in ["", "a..b", "a.*", "a.>", "a b"] {
         assert!(validate_topic(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn an_empty_last_value_is_skipped() {
+    let c = Ctx::background().with_incoming(Metadata::from_pairs([
+        ("w17-language", "cs"),
+        ("w17-language", ""),
+        ("x-a", " "),
+    ]));
+    let md = metadata_from_context(&c).unwrap();
+    assert_eq!(md["w17-language"], "cs");
+    assert_eq!(md["x-a"], " ", "only blank values: the last one");
 }
 
 #[test]

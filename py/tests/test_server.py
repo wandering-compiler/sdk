@@ -627,3 +627,56 @@ async def test_a_hanging_broker_is_bounded_by_the_publish_timeout(pool, msg, mon
     note = await asyncio.wait_for(reg.self("NoteService").CreateNote(Context(), msg("CreateNoteRequest")(text="x")), 2)
     assert note.text == "x"
     assert reported and "note.created" in reported[0], reported
+
+
+async def test_a_bidi_method_cannot_open_a_transaction(pool):
+    # As in Go and the Rust SDK: a bidirectional stream's messages interleave
+    # with the caller's and nothing would bound the transaction, so begin (and
+    # run) refuse FAILED_PRECONDITION before any coordinator call.
+    import grpclib.reflection.v1.reflection_pb2  # noqa: F401 — a bidi method in the default pool
+
+    class NeverCalled:
+        calls = 0
+
+        async def begin(self, ctx, req):
+            NeverCalled.calls += 1
+            raise AssertionError("begin reached the coordinator")
+
+    class Reflection:
+        async def ServerReflectionInfo(self, ctx, requests):
+            async for _ in requests:
+                await distx.begin(ctx, NeverCalled(), distx.begin_request("main"))
+                yield pool.message("grpc.reflection.v1.ServerReflectionResponse")()
+
+    reg = Registry(pool)
+    reg.register("grpc.reflection.v1.ServerReflection", Reflection())
+    srv = Server(reg.served)
+    await srv.start("127.0.0.1", 0)
+    conn = Conn(f"127.0.0.1:{srv._server.sockets[0].getsockname()[1]}", tls=False)
+    try:
+        client = ServiceClient(conn, "grpc.reflection.v1.ServerReflection", pool)
+        with pytest.raises(GRPCError) as ei:
+            async for _ in client.ServerReflectionInfo(
+                Context(), [pool.message("grpc.reflection.v1.ServerReflectionRequest")(host="x")]
+            ):
+                pass
+        assert ei.value.status == Status.FAILED_PRECONDITION
+        assert "bidirectional-streaming" in (ei.value.message or "")
+        assert NeverCalled.calls == 0
+    finally:
+        conn.close()
+        srv.close()
+        await srv.wait_closed()
+
+
+async def test_a_request_message_past_4_mib_is_refused_before_it_is_buffered(stack, msg):
+    # Go, grpc-js and tonic cap a received message at 4 MiB; grpclib has no
+    # such limit and would buffer any size. The served side reads the length
+    # prefix and refuses RESOURCE_EXHAUSTED (Go's text) before the body.
+    with pytest.raises(GRPCError) as ei:
+        await stack.client.CreateNote(Context(), msg("CreateNoteRequest")(text="x" * (5 * 1024 * 1024)))
+    assert ei.value.status == Status.RESOURCE_EXHAUSTED
+    assert "received message larger than max" in (ei.value.message or "")
+    assert stack.storage.rows == []
+    note = await stack.client.CreateNote(Context(), msg("CreateNoteRequest")(text="y" * (1024 * 1024)))
+    assert len(note.text) == 1024 * 1024

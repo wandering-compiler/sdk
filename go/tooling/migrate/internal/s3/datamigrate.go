@@ -85,6 +85,13 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 	}
 	parallel := datamigrate.EffectiveParallel(mig, a.parallelOverride)
 	cursorKey := dataCursorPrefix + m.GetId() + ".cursor.json"
+	// The other direction's cursor can only be stale here: this direction
+	// runs because the ledger says that one finished. Left in place it
+	// would make the next run in that direction skip every op.
+	otherKey := dataCursorPrefix + m.GetId() + ".rollback.cursor.json"
+	if err := a.deleteCursor(ctx, cli, otherKey); err != nil {
+		return fmt.Errorf("s3 applyYAMLDataMigration: stale cursor delete: %w", err)
+	}
 	cursor, err := a.loadCursor(ctx, cli, cursorKey)
 	if err != nil {
 		return fmt.Errorf("s3 applyYAMLDataMigration: cursor read: %w", err)
@@ -108,8 +115,10 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 	if err := a.recordMigrationApplied(ctx, cli, m); err != nil {
 		return fmt.Errorf("s3 applyYAMLDataMigration: bookkeeping: %w", err)
 	}
-	if err := a.deleteCursor(ctx, cli, cursorKey); err != nil {
-		return fmt.Errorf("s3 applyYAMLDataMigration: cursor delete: %w", err)
+	for _, k := range []string{cursorKey, otherKey} {
+		if err := a.deleteCursor(ctx, cli, k); err != nil {
+			return fmt.Errorf("s3 applyYAMLDataMigration: cursor delete: %w", err)
+		}
 	}
 	return nil
 }
@@ -145,6 +154,13 @@ func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb
 	}
 	parallel := datamigrate.EffectiveParallel(mig, a.parallelOverride)
 	cursorKey := dataCursorPrefix + m.GetId() + ".rollback.cursor.json"
+	// The other direction's cursor can only be stale here: this direction
+	// runs because the ledger says that one finished. Left in place it
+	// would make the next run in that direction skip every op.
+	otherKey := dataCursorPrefix + m.GetId() + ".cursor.json"
+	if err := a.deleteCursor(ctx, cli, otherKey); err != nil {
+		return fmt.Errorf("s3 rollbackYAMLDataMigration: stale cursor delete: %w", err)
+	}
 	cursor, err := a.loadCursor(ctx, cli, cursorKey)
 	if err != nil {
 		return fmt.Errorf("s3 rollbackYAMLDataMigration: cursor read: %w", err)
@@ -168,8 +184,10 @@ func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb
 	if err := a.recordMigrationRolledBack(ctx, cli, m); err != nil {
 		return fmt.Errorf("s3 rollbackYAMLDataMigration: bookkeeping: %w", err)
 	}
-	if err := a.deleteCursor(ctx, cli, cursorKey); err != nil {
-		return fmt.Errorf("s3 rollbackYAMLDataMigration: cursor delete: %w", err)
+	for _, k := range []string{cursorKey, otherKey} {
+		if err := a.deleteCursor(ctx, cli, k); err != nil {
+			return fmt.Errorf("s3 rollbackYAMLDataMigration: cursor delete: %w", err)
+		}
 	}
 	return nil
 }

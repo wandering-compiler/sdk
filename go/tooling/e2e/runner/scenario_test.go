@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -129,5 +130,50 @@ func TestRunScenario_MissingAuthToken(t *testing.T) {
 	}
 	if err := RunScenario(context.Background(), steps, callers); err == nil {
 		t.Error("expected failure: auth-required step with no captured token")
+	}
+}
+
+// TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields — a
+// unary step with no expect, expect_error, expect_transport_error, await or
+// download asserted only "status < 400": a response of any shape passed.
+// It now passes only on a response with no fields (`expect: {}` for a method
+// whose response is empty, which codegen bakes as no Expect); a response
+// carrying fields is refused naming them, as a stream step asserting nothing
+// is.
+func TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields(t *testing.T) {
+	srv, _ := projectServer(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	empty := httptest.NewServer(mux)
+	t.Cleanup(empty.Close)
+
+	callers := map[string]Caller{"rest": NewRESTCaller(srv.URL, srv.Client())}
+	err := RunScenario(context.Background(), []Step{{
+		Endpoint: ep("forge.P.CreateProject", "POST", "/projects", false),
+		Input:    map[string]any{"name": "demo"},
+	}}, callers)
+	if err == nil || !strings.Contains(err.Error(), "asserts nothing") || !strings.Contains(err.Error(), "id") {
+		t.Fatalf("a unary step asserting nothing over a response with fields: %v", err)
+	}
+
+	// `expect: {}` written by the case is an assertion — "the call answers" —
+	// and codegen bakes it as an empty, non-nil Expect: it passes over a
+	// response with fields too.
+	callers = map[string]Caller{"rest": NewRESTCaller(srv.URL, srv.Client())}
+	if err := RunScenario(context.Background(), []Step{{
+		Endpoint: ep("forge.P.CreateProject", "POST", "/projects", false),
+		Input:    map[string]any{"name": "demo"},
+		Expect:   map[string]any{},
+	}}, callers); err != nil {
+		t.Fatalf("a step with `expect: {}` over a response with fields: %v", err)
+	}
+
+	callers = map[string]Caller{"rest": NewRESTCaller(empty.URL, empty.Client())}
+	if err := RunScenario(context.Background(), []Step{{
+		Endpoint: ep("forge.Auth.Logout", "POST", "/logout", false),
+	}}, callers); err != nil {
+		t.Fatalf("a step with no expect over an empty response: %v", err)
 	}
 }

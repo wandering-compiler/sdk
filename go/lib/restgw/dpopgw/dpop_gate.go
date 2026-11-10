@@ -171,22 +171,21 @@ func (g *Gate) Verify(r *http.Request) (Verified, error) {
 	case !isDPoP && len(authz) > 0:
 		return Verified{}, fmt.Errorf("%w: a proof next to a non-DPoP Authorization scheme", dpop.ErrMalformed)
 	}
-	binding := ""
+	var lookup func(context.Context) (string, error)
 	if isDPoP {
 		if len(proofs) == 0 {
 			return Verified{}, dpop.ErrMissingProof
 		}
-		var err error
-		if binding, err = g.lookupBinding(ctx, token); err != nil {
-			return Verified{}, err
-		}
+		// Asked only once the proof verified: a junk proof costs the gate
+		// its own checks, never an auth-backend round trip.
+		lookup = func(ctx context.Context) (string, error) { return g.lookupBinding(ctx, token) }
 	}
 	res, err := g.v.VerifyResult(ctx, dpop.Request{
-		Method:      r.Method,
-		Path:        r.URL.EscapedPath(),
-		Proofs:      proofs,
-		AccessToken: token,
-		Binding:     binding,
+		Method:        r.Method,
+		Path:          r.URL.EscapedPath(),
+		Proofs:        proofs,
+		AccessToken:   token,
+		BindingLookup: lookup,
 	})
 	if err != nil {
 		return Verified{}, err

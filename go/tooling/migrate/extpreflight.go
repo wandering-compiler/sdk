@@ -227,7 +227,7 @@ func preflightExtensions(ctx context.Context, ac *runApplierCache, pending []Pen
 			Connection: conn,
 			UpSql:      extensionPreflightSQL(exts),
 		}
-		if err := applier.Apply(ctx, probe); err != nil {
+		if err := runScript(ctx, applier, probe); err != nil {
 			return fmt.Errorf(
 				"apply %s: this database is missing an extension the schema declares (%s): %w\n"+
 					"  Migrations deliberately do not CREATE EXTENSION — provisioning is the deploying\n"+

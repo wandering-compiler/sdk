@@ -57,14 +57,14 @@ use http_body::{Body as HttpBody, Frame};
 use http_body_util::{BodyExt, Full, StreamBody};
 use prost_reflect::DescriptorPool;
 use tokio::sync::Notify;
-use tokio_util::sync::{CancellationToken, DropGuard};
+use tokio_util::sync::CancellationToken;
 use tonic::{Status, body::Body, server::NamedService, service::Routes};
 use tower::ServiceExt as _;
 
 use crate::{
     BootError,
     channel::{BoxError, set_metadata},
-    ctx::{Ctx, HeaderSink},
+    ctx::{CancelClock, CancelOnDrop, Ctx, HeaderSink},
     errors::finish_for_user,
     events::{self, Dispatcher, EnvelopeBuilder},
     manifest::{Emit, Invalidate},
@@ -359,6 +359,40 @@ pub(crate) fn frame_message(mut b: Bytes) -> Result<Bytes, String> {
     Ok(b.split_to(len))
 }
 
+/// The largest request body an emitting method's middleware reads: one gRPC
+/// frame of the codec's 4 MiB message limit (tonic's default, as Go's).
+pub(crate) const MAX_EMITTING_REQUEST: usize = 4 * 1024 * 1024 + 5;
+
+/// The status for a request body that could not be read whole: past the
+/// limit (RESOURCE_EXHAUSTED, grpc-go's words), or the body's own error.
+pub(crate) fn limited_body_status(e: Box<dyn std::error::Error + Send + Sync>) -> Status {
+    if e.downcast_ref::<http_body_util::LengthLimitError>()
+        .is_some()
+    {
+        return Status::resource_exhausted(format!(
+            "grpc: received message larger than max (more than {} bytes)",
+            MAX_EMITTING_REQUEST - 5
+        ));
+    }
+    match e.downcast::<Status>() {
+        Ok(st) => *st,
+        Err(e) => Status::internal(e.to_string()),
+    }
+}
+
+/// The request and response messages an event is built from, or why they
+/// cannot be read (a compressed or truncated frame).
+pub(crate) fn event_frames(
+    req: Option<Result<Bytes, String>>,
+    resp: Bytes,
+) -> Result<(Bytes, Bytes), String> {
+    let req = req
+        .ok_or_else(|| "the request was not kept".to_string())?
+        .map_err(|e| format!("request: {e}"))?;
+    let resp = frame_message(resp).map_err(|e| format!("response: {e}"))?;
+    Ok((req, resp))
+}
+
 pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {
         (*s).to_string()
@@ -373,7 +407,7 @@ pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
 /// cancellation (cancelled when the call ends or the caller goes away), the
 /// in-flight count, the server span.
 struct CallGuards {
-    _cancel: Option<DropGuard>,
+    _cancel: Option<CancelOnDrop>,
     _inflight: Option<InflightGuard>,
     span: Option<ServerSpan>,
 }
@@ -559,17 +593,19 @@ impl Served {
             let timeout = req.headers().get("grpc-timeout").and_then(parse_timeout);
             deadline = timeout.map(|t| Instant::now() + t);
             let token = CancellationToken::new();
+            let clock = CancelClock::default();
             let s: HeaderSink = Arc::new(Mutex::new(Metadata::new()));
             sink = Some(s.clone());
             let ctx = Ctx::served(
                 Metadata::from_headers(req.headers()),
                 deadline,
                 token.clone(),
+                clock.clone(),
                 &path,
                 Some(s),
                 method.client_streaming && method.server_streaming,
             );
-            guards._cancel = Some(token.drop_guard());
+            guards._cancel = Some(CancelOnDrop::new(token, clock));
             guards._inflight = Some(InflightGuard::enter(&shared));
             let (ctx, span) = observability::start_server_span(ctx, req.headers(), &path);
             guards.span = Some(span);
@@ -609,16 +645,18 @@ impl Served {
         // Reading it is part of the call, bound as the handler is.
         let mut req_msg = None;
         if method.emits() {
+            // Bound by the codec's limit, as the generated server would bound
+            // it: a larger request is refused before it is held in memory.
             let (parts, body) = req.into_parts();
             let collected = tokio::select! {
-                r = body.collect() => r,
+                r = http_body_util::Limited::new(body, MAX_EMITTING_REQUEST).collect() => r,
                 st = &mut cut_off => return st.into_http(),
             };
             let bytes = match collected {
                 Ok(b) => b.to_bytes(),
-                Err(e) => return e.into_http(),
+                Err(e) => return limited_body_status(e).into_http(),
             };
-            req_msg = frame_message(bytes.clone()).ok();
+            req_msg = Some(frame_message(bytes.clone()));
             req = http::Request::from_parts(parts, Body::new(Full::new(bytes)));
         }
 
@@ -665,8 +703,16 @@ impl Served {
                 .and_then(|t| t.get("grpc-status"))
                 .map(|v| v.as_bytes() == b"0")
                 .unwrap_or(false);
-            if ok && let (Some(req_msg), Ok(resp_msg)) = (req_msg, frame_message(data.clone())) {
-                emit(&ctx, &shared, &path, method, req_msg, resp_msg).await;
+            if ok {
+                match event_frames(req_msg, data.clone()) {
+                    Ok((req_msg, resp_msg)) => {
+                        emit(&ctx, &shared, &path, method, req_msg, resp_msg).await;
+                    }
+                    // Never silent: the call succeeded and its event is lost.
+                    Err(why) => observability::report_error(&format!(
+                        "eventbus: the event of {path} was not published: {why}"
+                    )),
+                }
             }
             let mut frames: Vec<Result<Frame<Bytes>, Status>> = vec![Ok(Frame::data(data))];
             if let Some(t) = trailers {

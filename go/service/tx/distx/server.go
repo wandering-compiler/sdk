@@ -18,6 +18,7 @@ import (
 	"errors"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -186,7 +187,7 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 			// that a failed call inside it triggered the auto-rollback.
 			// Formatting the id here instead would throw that away and
 			// leave the caller with a symptom.
-			return nil, status.Errorf(codes.NotFound, "commit: %v", err)
+			return nil, s.unknownTx("commit", req.GetTxId(), err)
 		}
 		if errors.Is(err, txregistry.ErrTxDoomed) {
 			// A call inside the transaction failed and its rollback is
@@ -217,13 +218,14 @@ func (s *Server) Commit(ctx context.Context, req *distxpb.CommitRequest) (*distx
 }
 
 // Rollback discards the tx for tx_id. NotFound when the id
-// doesn't resolve. When an adopted handler is still running on it
+// doesn't resolve (with the ended detail when the registry remembers how it
+// ended). When an adopted handler is still running on it
 // the rollback is deferred to that handler's release and the call
 // succeeds: the transaction is already doomed and cannot commit.
 func (s *Server) Rollback(ctx context.Context, req *distxpb.RollbackRequest) (*distxpb.RollbackResponse, error) {
 	if err := s.registry.Rollback(ctx, req.GetTxId()); err != nil {
 		if errors.Is(err, txregistry.ErrUnknownTxID) {
-			return nil, status.Errorf(codes.NotFound, "rollback: %v", err)
+			return nil, s.unknownTx("rollback", req.GetTxId(), err)
 		}
 		if errors.Is(err, txregistry.ErrTxDoomed) {
 			// The rollback is decided and runs the moment the handler
@@ -237,4 +239,52 @@ func (s *Server) Rollback(ctx context.Context, req *distxpb.RollbackRequest) (*d
 		return nil, status.Errorf(codes.Internal, "rollback: %v", err)
 	}
 	return &distxpb.RollbackResponse{}, nil
+}
+
+// EndedDomain and EndedReason identify the [errdetails.ErrorInfo] a NotFound
+// Commit / Rollback carries when the registry remembers how the id ended;
+// its metadata key [EndedKey] holds "committed" or "not_committed". A client
+// whose Commit call failed in transport reads it to settle the outcome (see
+// [TxHandle.Commit]); a NotFound without it means the coordinator cannot say.
+const (
+	EndedDomain = "w17.distx"
+	EndedReason = "W17_TX_ENDED"
+	EndedKey    = "ended"
+)
+
+// unknownTx maps a registry ErrUnknownTxID onto NotFound, with the ended
+// detail when the registry's tombstone says how the transaction ended.
+func (s *Server) unknownTx(op, txID string, err error) error {
+	st := status.Newf(codes.NotFound, "%s: %v", op, err)
+	if ended := s.registry.EndedAs(txID); ended != txregistry.EndedUnknown {
+		if d, derr := st.WithDetails(&errdetails.ErrorInfo{
+			Domain: EndedDomain, Reason: EndedReason,
+			Metadata: map[string]string{EndedKey: ended.String()},
+		}); derr == nil {
+			st = d
+		}
+	}
+	return st.Err()
+}
+
+// endedFrom reads the ended detail off a coordinator's NotFound;
+// [txregistry.EndedUnknown] for any other error or a NotFound without it.
+func endedFrom(err error) txregistry.Ended {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.NotFound {
+		return txregistry.EndedUnknown
+	}
+	for _, d := range st.Details() {
+		info, ok := d.(*errdetails.ErrorInfo)
+		if !ok || info.GetDomain() != EndedDomain || info.GetReason() != EndedReason {
+			continue
+		}
+		switch info.GetMetadata()[EndedKey] {
+		case txregistry.EndedCommitted.String():
+			return txregistry.EndedCommitted
+		case txregistry.EndedNotCommitted.String():
+			return txregistry.EndedNotCommitted
+		}
+	}
+	return txregistry.EndedUnknown
 }

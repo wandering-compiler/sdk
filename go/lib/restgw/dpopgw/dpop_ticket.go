@@ -115,7 +115,7 @@ func NewWSAuth(cfg WSAuthConfig) *WSAuth {
 // after its AuthFunc accepted r: only a token-bound proof or a bound ticket
 // binds a stream. A value a client sent is never returned.
 func (a *WSAuth) Thumbprint(r *http.Request) (string, bool) {
-	if r.Header.Get(promotedHeader) != a.marker {
+	if !a.promoted(r) {
 		return "", false
 	}
 	t := r.Header.Get(thumbprintHeader)
@@ -140,7 +140,7 @@ func (a *WSAuth) Verified(r *http.Request) (Verified, bool) {
 // AuthFunc returns the decorated AuthFunc.
 func (a *WSAuth) AuthFunc() restgw.AuthFunc {
 	return func(ctx context.Context, r *http.Request) ([]byte, error) {
-		if r.Header.Get(promotedHeader) == a.marker {
+		if a.promoted(r) {
 			// A request this wrapper already accepted: a stream's re-auth.
 			return a.cfg.Inner(ctx, r)
 		}
@@ -239,6 +239,12 @@ func (a *WSAuth) innerThenMark(ctx context.Context, r *http.Request, thumb strin
 	}
 	r.Header.Set(promotedHeader, a.marker)
 	return data, nil
+}
+
+// promoted reports whether r carries this wrapper's marker, compared in
+// constant time (the marker is a per-instance secret).
+func (a *WSAuth) promoted(r *http.Request) bool {
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get(promotedHeader)), []byte(a.marker)) == 1
 }
 
 // promotedHeader carries this wrapper's per-instance marker, written only by
