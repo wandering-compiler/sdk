@@ -243,6 +243,19 @@ func NewRecorder(ctx context.Context, cfg RecorderConfig) (*Recorder, error) {
 			sf = (&NATSSink{JS: cfg.JS, Subject: Subject(cfg.Domain, api), Ensure: ensure}).Sink
 		}
 		s := &Surface{r: r, api: api, purposes: purposes}
+		if cfg.Sink == nil && cfg.Redis == nil {
+			// The server's max_payload is 0 until the connection is up
+			// (a recorder opened before NATS): learn it on each publish
+			// and lower the batch bound to it, so the batches after the
+			// first fit a server whose limit is below NATS's default.
+			inner, nc := sf, cfg.NC
+			sf = func(ctx context.Context, b *Batch) error {
+				if s.pipe != nil {
+					s.pipe.LowerBatchBytes(NATSBatchBytes(nc))
+				}
+				return inner(ctx, b)
+			}
+		}
 		p, err := New(Config[*Record]{
 			Size:         recordSize,
 			Encode:       r.encode,

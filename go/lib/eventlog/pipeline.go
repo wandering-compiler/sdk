@@ -201,6 +201,10 @@ type Pipeline[T any] struct {
 	aborted    atomic.Bool
 	done       chan struct{}
 
+	// batchBytes is the batch bound in force: Config.BatchBytes, lowered
+	// by LowerBatchBytes.
+	batchBytes atomic.Int64
+
 	submitted, delivered, failed, batches, waited, panics atomic.Uint64
 	lastPanicReport                                       atomic.Int64
 }
@@ -253,6 +257,7 @@ func New[T any](cfg Config[T]) (*Pipeline[T], error) {
 		out:  make(chan *Batch, cfg.SendQueue),
 		done: make(chan struct{}),
 	}
+	p.batchBytes.Store(int64(cfg.BatchBytes))
 	p.idle = make(chan struct{})
 	p.stopCtx, p.stopWaits = context.WithCancel(context.Background()) //nolint:gosec // G118: stopWaits is stored and called by Close.
 	p.bufs.New = func() any { b := make([]byte, 0, cfg.BatchBytes); return &b }
@@ -526,12 +531,13 @@ func (p *Pipeline[T]) batcher() {
 				continue
 			}
 			need := protowire.SizeTag(BatchFieldRecords) + protowire.SizeBytes(len(rec))
-			if b != nil && len(b.Wire)+need > p.cfg.BatchBytes {
+			limit := int(p.batchBytes.Load())
+			if b != nil && len(b.Wire)+need > limit {
 				flush()
 			}
 			if b == nil {
 				b = p.newBatch()
-				if len(b.Wire)+need > p.cfg.BatchBytes {
+				if len(b.Wire)+need > limit {
 					p.sem.Release(q.size)
 					p.fail(Failure{Err: ErrTooLarge, Records: [][]byte{rec}, Count: 1})
 					tell(q.done, ErrTooLarge)
@@ -690,6 +696,21 @@ func (p *Pipeline[T]) Close(ctx context.Context) error {
 		p.cancelSink()
 		<-p.done
 		return ctx.Err()
+	}
+}
+
+// LowerBatchBytes lowers the batch bound to n when n is smaller and still
+// usable (more than 64); it never raises it. A sink whose limit is learnt
+// only once connected (NATS's max_payload) calls it then.
+func (p *Pipeline[T]) LowerBatchBytes(n int) {
+	if n <= 64 {
+		return
+	}
+	for {
+		cur := p.batchBytes.Load()
+		if int64(n) >= cur || p.batchBytes.CompareAndSwap(cur, int64(n)) {
+			return
+		}
 	}
 }
 
