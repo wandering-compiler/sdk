@@ -222,8 +222,13 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 			FilterSubjects: r.subjects,
 			AckPolicy:      jetstream.AckExplicitPolicy,
 			AckWait:        cfg.AckWait,
-			MaxDeliver:     cfg.MaxDeliver,
-			DeliverPolicy:  jetstream.DeliverAllPolicy,
+			// No cap of the broker's own: handleMessage counts the
+			// attempts and dead-letters at cfg.MaxDeliver. A broker cap
+			// equal to it stranded a batch whose dead-letter publish
+			// failed on the last attempt — Nak'd at the cap, never
+			// offered again, never dead-lettered.
+			MaxDeliver:    -1,
+			DeliverPolicy: jetstream.DeliverAllPolicy,
 		})
 		if err != nil {
 			return fmt.Errorf("eventlog: consumer %s: %w", durable, err)
@@ -276,14 +281,24 @@ func consumeLoop(ctx context.Context, cons jetstream.Consumer, r registered, cfg
 }
 
 func handleMessage(ctx context.Context, msg jetstream.Msg, r registered, cfg ConsumerConfig, dlq string) {
+	attempt := 1
+	if md, err := msg.Metadata(); err == nil {
+		attempt = int(md.NumDelivered)
+	}
 	b, err := DecodeBatch(msg.Subject(), msg.Data(), r.purpose)
 	if err != nil {
 		// A batch that does not decode never will: dead-letter it now.
-		deadLetter(ctx, msg, cfg, dlq, r.name, err)
+		deadLetter(ctx, msg, cfg, dlq, r.name, attempt, err)
 		return
 	}
 	if len(b.Records) == 0 {
 		_ = msg.Ack()
+		return
+	}
+	if attempt > cfg.MaxDeliver {
+		// Every attempt was spent; only the dead-letter publish failed
+		// (deadLetter Nak'd it). Dead-letter it without another call.
+		deadLetter(ctx, msg, cfg, dlq, r.name, attempt, errPastMaxDeliver)
 		return
 	}
 	cerr := callConsumer(ctx, r, b, cfg.AckWait)
@@ -291,16 +306,16 @@ func handleMessage(ctx context.Context, msg jetstream.Msg, r registered, cfg Con
 		_ = msg.Ack()
 		return
 	}
-	attempt := 1
-	if md, err := msg.Metadata(); err == nil {
-		attempt = int(md.NumDelivered)
-	}
 	if attempt >= cfg.MaxDeliver {
-		deadLetter(ctx, msg, cfg, dlq, r.name, cerr)
+		deadLetter(ctx, msg, cfg, dlq, r.name, attempt, cerr)
 		return
 	}
 	_ = msg.NakWithDelay(cfg.Backoff(attempt))
 }
+
+// errPastMaxDeliver is the dead-letter reason of a batch offered again only
+// because its dead-letter publish failed.
+var errPastMaxDeliver = errors.New("eventlog: every attempt failed; an earlier dead-letter publish did not land")
 
 // callConsumer runs one Consume, bounded by the ack wait; a panic is an
 // error like any other.
@@ -315,7 +330,7 @@ func callConsumer(ctx context.Context, r registered, b *ConsumedBatch, wait time
 	return r.consume(cctx, b)
 }
 
-func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq, name string, cause error) {
+func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq, name string, attempt int, cause error) {
 	out := &nats.Msg{Subject: dlq, Data: msg.Data(), Header: nats.Header{}}
 	for k, v := range msg.Headers() {
 		out.Header[k] = v
@@ -335,8 +350,10 @@ func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq,
 	defer cancel()
 	ack, err := cfg.JS.PublishMsg(pctx, out)
 	if err != nil {
-		// Not stored: leave it to be offered again rather than lose it.
-		_ = msg.Nak()
+		// Not stored: leave it to be offered again, after the backoff,
+		// rather than lose it. The broker consumer has no cap (Run), so
+		// it is offered until the dead letter stream takes it.
+		_ = msg.NakWithDelay(cfg.Backoff(attempt))
 		observx.ReportError(ctx, fmt.Errorf("eventlog: consumer %s: dead-lettering a batch failed (%w) after: %w", name, err, cause))
 		return
 	}

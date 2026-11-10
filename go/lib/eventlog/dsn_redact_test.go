@@ -27,4 +27,3 @@ func TestOpenAndServe_ABadDSNIsNotEchoedWithItsPassword(t *testing.T) {
 		t.Fatalf("the password is in the Serve error: %v", err)
 	}
 }
-
