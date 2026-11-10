@@ -27,6 +27,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -290,6 +291,14 @@ func (s *server) conn(name, handle string) (Conn, error) {
 	}
 	if handle == "" {
 		return Conn{}, badRequest("the handle is empty")
+	}
+	// A handle is what Put returned: hex segments. A dot-segment (`.`,
+	// `..`, the local driver's `.w17-staging`) names no stored file, and
+	// would reach another request's in-flight upload.
+	for _, seg := range strings.Split(handle, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return Conn{}, badRequest("the handle is not one Put returned")
+		}
 	}
 	return conn, nil
 }

@@ -220,6 +220,12 @@ func (d *Driver) OpenSeekable(ctx context.Context, key string) (io.ReadSeekClose
 	return &rangeReader{ctx: ctx, d: d, key: key, size: info.Size}, nil
 }
 
+// OpenSeekableSized is OpenSeekable without the HEAD, for a caller that
+// has the size from Stat already (kvfs.SizedSeekableOpener).
+func (d *Driver) OpenSeekableSized(ctx context.Context, key string, size int64) (io.ReadSeekCloser, error) {
+	return &rangeReader{ctx: ctx, d: d, key: key, size: size}, nil
+}
+
 // PutFromTempFile uploads tmpPath as key in one PutObject and removes the file
 // once the store has it. On failure the file is left for the caller.
 func (d *Driver) PutFromTempFile(ctx context.Context, key, tmpPath string) (string, error) {
@@ -282,19 +288,40 @@ func isNotFound(err error) bool {
 }
 
 // rangeReader reads one object through ranged GETs, opened lazily from the
-// current offset and dropped on every seek that moves it.
+// current offset. A seek only moves the offset; the open body is dropped at
+// the next read when that read does not continue where the body is. The
+// first rangeHeadCap bytes of a body opened at the start are kept, so the
+// common sniff-then-rewind (read the head, Seek(0), serve the whole object)
+// replays them instead of fetching the object a second time.
 type rangeReader struct {
 	ctx  context.Context
 	d    *Driver
 	key  string
 	size int64
 	off  int64
-	body io.ReadCloser
+
+	body      io.ReadCloser
+	bodyStart int64  // offset the open body was requested from
+	bodyPos   int64  // offset of the next byte the open body yields
+	head      []byte // bytes [0, len(head)) of a body opened at 0
 }
+
+// rangeHeadCap bounds the replayed head: what a content-type sniff reads.
+const rangeHeadCap = 512
 
 func (r *rangeReader) Read(p []byte) (int, error) {
 	if r.off >= r.size {
 		return 0, io.EOF
+	}
+	if r.body != nil && r.off != r.bodyPos {
+		if r.bodyStart == 0 && r.off < r.bodyPos && r.bodyPos <= int64(len(r.head)) {
+			// Everything between here and the body is in the head.
+			n := copy(p, r.head[r.off:r.bodyPos])
+			r.off += int64(n)
+			return n, nil
+		}
+		_ = r.body.Close()
+		r.body = nil
 	}
 	if r.body == nil {
 		out, err := r.d.cli.GetObject(r.ctx, &awss3.GetObjectInput{
@@ -304,9 +331,17 @@ func (r *rangeReader) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, r.d.wrap("read", r.key, err)
 		}
-		r.body = out.Body
+		r.body, r.bodyStart, r.bodyPos, r.head = out.Body, r.off, r.off, nil
 	}
 	n, err := r.body.Read(p)
+	if r.bodyStart == 0 && r.bodyPos == int64(len(r.head)) && r.bodyPos < rangeHeadCap {
+		keep := n
+		if room := rangeHeadCap - int(r.bodyPos); keep > room {
+			keep = room
+		}
+		r.head = append(r.head, p[:keep]...)
+	}
+	r.bodyPos += int64(n)
 	r.off += int64(n)
 	if errors.Is(err, io.EOF) && r.off < r.size {
 		// The object shrank under us, or the store cut the body short.
@@ -329,10 +364,6 @@ func (r *rangeReader) Seek(offset int64, whence int) (int64, error) {
 	}
 	if next < 0 {
 		return r.off, errors.New("kvfs s3: seek before the start")
-	}
-	if next != r.off && r.body != nil {
-		_ = r.body.Close()
-		r.body = nil
 	}
 	r.off = next
 	return next, nil

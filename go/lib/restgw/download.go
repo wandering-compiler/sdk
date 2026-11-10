@@ -169,7 +169,7 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 		WriteInternal(ctx, w, "download: stat: "+err.Error())
 		return
 	}
-	body, err := field.Driver.OpenSeekable(ctx, key)
+	body, err := kvfs.OpenSeekableSized(ctx, field.Driver, key, info.Size)
 	if err != nil {
 		if errors.Is(err, kvfs.ErrNotFound) {
 			notFound()
@@ -368,6 +368,21 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 		return
 	}
 	vkey := VariantKey(key, name)
+	// A variant lives and dies with its original. Only the upload rollback
+	// knows the variant names; a writer that deletes the original alone (the
+	// business tier's file server) leaves the stored variants behind, and
+	// serving one would keep a deleted image public. So the original is
+	// asked first: gone means 404, and the orphan is removed (best effort;
+	// object keys carry a random suffix, so the name is never reused).
+	if _, err := field.Driver.Stat(ctx, key); err != nil {
+		if errors.Is(err, kvfs.ErrNotFound) {
+			_ = field.Driver.Delete(ctx, vkey)
+			writeRefusalStatus(ctx, w, http.StatusNotFound, codes.NotFound, "")
+			return
+		}
+		WriteInternal(ctx, w, "download variant: stat original: "+err.Error())
+		return
+	}
 	info, err := field.Driver.Stat(ctx, vkey)
 	if errors.Is(err, kvfs.ErrNotFound) {
 		if status, rerr := renderVariantShared(ctx, field.Driver, key, vkey, spec, true); rerr != nil {
@@ -395,7 +410,7 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 		WriteInternal(ctx, w, "download variant: stat: "+err.Error())
 		return
 	}
-	body, err := field.Driver.OpenSeekable(ctx, vkey)
+	body, err := kvfs.OpenSeekableSized(ctx, field.Driver, vkey, info.Size)
 	if err != nil {
 		WriteInternal(ctx, w, "download variant: open: "+err.Error())
 		return

@@ -27,11 +27,12 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 | D10 | Admin column sort selector | `go/lib/listsort/metadata.go` |
 | D11 | Bounded app-side materialization | `go/lib/materialize/guard.go` — `Guard`; `go/lib/materialize/batch.go` — `FetchBatches` |
 | D12 | SQLite Unicode collation and stamp | `go/lib/sqlitecollate/sqlitecollate.go` — `Register`; `stamp.go` — `EnsureStamp`, `VerifyStamp` |
-| D13 | Blob store for uploads | `go/lib/kvfs/kvfs.go` — `BuildKey`; `go/lib/kvfs/local_fs/local_fs.go`; `go/lib/kvfs/memory` |
+| D13 | Blob store for uploads | `go/lib/kvfs/kvfs.go` — `BuildKey`, `OpenSeekableSized`; `go/lib/kvfs/local_fs/local_fs.go`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3`; `go/lib/kvfs/store` — `Open` |
 | D14 | Redis HASH entity codec | `go/lib/kvhash/kvhash.go` |
 | D15 | Redis eviction check | `go/lib/kvposture/kvposture.go` |
 | D16 | Column encryption (`CRYPTED_SECRET`) | `go/lib/fieldcrypt/fieldcrypt.go`, `shared.go` — `Init` |
 | D17 | Secret values and sources | `go/service/secret/secret.go` — `Secret`; `source.go` — `Resolver`; `go/service/secret/sopsenv` |
+| D18 | Business companion file server | `go/lib/kvfs/kvfsgrpc` — `NewServer`, `Conn`, `Placement` |
 
 ## D1. Per-dialect session pins
 
@@ -416,7 +417,7 @@ Stamp table: `w17_collation`.
 
 ## D13. Blob store for uploads
 
-**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`.
+**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`, `SizedSeekableOpener`, `OpenSeekableSized`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3/s3.go` — `New`, `ParseDSN`, `EnsureBucket`; `go/lib/kvfs/store/store.go` — `Open`.
 
 **Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys.
 
@@ -425,7 +426,9 @@ Stamp table: `w17_collation`.
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `BuildKey(bucketPath, objectKey, expectedObjects, maxPerBucket)` | `<bucket>/<hh>/<hh>/…/<objectKey>`; depth `ceil(log256(expected/maxPerBucket))`, `0` when flat | capped at 16 |
-| `local_fs.New(root)`, `EnsureRoot(root)` | root created with mode 0755; published objects 0644; staging under `<root>/.w17-staging` | — |
+| `local_fs.New(root)`, `EnsureRoot(root)` | root created with mode 0755; published objects 0644; staging under `<root>/.w17-staging` | A key under `.w17-staging` is not an object key (D13.12) |
+| `store.Open(ctx, url, ensure)` | — | `file:///<abs path>` or a plain absolute path → `local_fs`; `s3://…` → the S3 driver; empty, a relative path, a `file://host/…` URL or another scheme → error. `ensure` is the writer's flag: it creates a missing directory or bucket; a reader (`false`) is refused a store that is not there |
+| S3 DSN (`s3.ParseDSN`) | default AWS credential chain, region `us-east-1` | `s3://[<key id>:<key>@]<bucket>[/<prefix>]?endpoint=…&region=…&profile=…&path_style=…`; half a key pair, no bucket, another scheme or a `path_style` that is not a boolean → error. An `endpoint` (a non-AWS store) implies path-style addressing unless `path_style=false` |
 
 **Guarantees.**
 
@@ -442,11 +445,16 @@ Stamp table: `w17_collation`.
 | D13.9 | A connection has ONE writer: the gateway for an upload connection, the business tier for one whose fields declare `upload.writer: BUSINESS`. Every other holder MUST receive only the `Reader` half. | `TestReader_CarriesNoWriteMethod` (the interface; the generated business `ClientSet` is not covered here) |
 | D13.10 | `Put` MUST store the body under `BuildKey(placement.BucketPath, ObjectKey(sha256), …)` — the key an upload of the same field gets — and return that handle; two puts of one body MUST be two objects. | `TestPut_PlacesUnderTheFieldsLayoutAndReadsBack`, `TestPut_IdenticalBodiesAreDistinctObjects` |
 | D13.11 | A body past `MaxSizeBytes`, or a failing driver, MUST store nothing and leave no staging file. | `TestPut_TooLargeStoresNothing`, `TestPut_DriverErrorCleansUp` |
+| D13.12 | A `local_fs` key naming a file under the staging area (`.w17-staging/…`, however spelled) MUST be refused like a key outside the root: reads report `ErrNotFound`, Delete errors and removes nothing. | `TestLocalFS_StagingAreaIsNotAnObjectKey` |
+| D13.13 | `store.Open` MUST pick the driver by the URL, create the directory only for the writer (`ensure`), refuse a reader a missing store, and refuse a relative path, an unknown scheme and a malformed file URL; no refusal MUST repeat the URL's credential. | `TestOpen_PicksTheDriverByURL`, `TestOpen_Refuses` |
+| D13.14 | The S3 DSN MUST carry the bucket, the key prefix, the endpoint, the region, the profile and an optional key pair (percent-encoded), with path-style addressing on for an endpoint unless turned off; a half key pair MUST be refused, and no refusal MUST echo the secret. | `TestParseDSN`, `TestParseDSN_Refuses` |
+| D13.15 | `OpenSeekableSized` MUST hand the size the caller already has to a driver that needs one (S3 opens without a second HEAD) and fall back to `OpenSeekable` for any other; the S3 reader MUST fetch lazily from the current offset and replay the first 512 bytes after a rewind instead of fetching them again. | `TestServeDownload_AnS3ImageIsOneHeadAndOneGet`, `TestServeDownload_S3RangesAreExact` (through the download handler, against a counting S3 endpoint) |
 
 **Deliberate limits.**
 - No `fsync` before or after rename; durability across power loss is not guaranteed.
 - `local_fs` ignores the context (file I/O is not cancellable).
 - The memory driver reads whole files into memory (test and development use).
+- The S3 driver's live tests run only against a reachable S3-compatible store (`W17_S3_ENDPOINT`); without one they skip unless `W17_REQUIRE_LIVE_S3=1`.
 
 ## D14. Redis HASH entity codec
 
@@ -560,3 +568,30 @@ Precedence: environment, then age file, then plain file.
 - Plain dotenv values are taken literally: no quote stripping, inline comments or `export` prefix (`KEY="x"` yields `"x"` with the quotes).
 - `Resolver.Lookup` returns a plain `string`; wrapping it in `Secret` is the caller's job.
 - The value is held behind a pointer, so `==` on two `Secret`s compares identity, not content; compare `Reveal()` results where content equality is meant.
+
+## D18. Business companion file server
+
+**Code.** `go/lib/kvfs/kvfsgrpc/kvfsgrpc.go` — `NewServer`, `Conn`, `Placement`, `Reason*`, `Domain`.
+
+**Purpose.** Serves a business tier's upload connections over gRPC (`w17.common.files.W17Files`:
+Put, Open, Stat, Delete), mapped one to one onto the kvfs calls a Go business tier makes in-process,
+so a business tier in another language stores and reads files exactly as a Go one does.
+
+**Configuration.** None from the environment. `NewServer(conns, placements)`: the opened stores by
+connection name (`Writable` for a connection the business tier writes) and the placement of every
+field it writes files for. Put chunks are at most `MaxChunkBytes` (1 MiB).
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| D18.1 | A Put MUST store the body only after its end marker, under the field's placement (`kvfs.Put`), and return the handle `kvfs.Put` returned; a stream that half-closes without the end, or is cancelled after the half-close, MUST store nothing. | `TestRoundTrip`, `TestPutStoresOnlyAfterTheEnd`, `TestCancelAfterHalfCloseStoresNothing`, `TestCancelledPutStoresNothing` |
+| D18.2 | A read-only connection MUST read and MUST refuse Delete and Put with `FAILED_PRECONDITION` `READ_ONLY_CONNECTION`, removing nothing. | `TestOpenStatDeleteRefusals` |
+| D18.3 | A driver's error text MUST NOT reach the caller: the status carries the reason and the connection only, the text goes to the error sink. | `TestStoreErrorsDoNotLeakTheDriverText` |
+| D18.4 | A handle with a dot-segment (`.`, `..`, the local driver's `.w17-staging`) MUST be refused `INVALID_ARGUMENT` `BAD_REQUEST` before the driver is asked: no call reads or deletes another request's in-flight upload. | `TestDotSegmentHandlesAreRefused` |
+
+**Deliberate limits.**
+- No idle timeout: a stalled Put holds the call and its staging file until the caller's deadline or
+  cancellation, as `kvfs.Put` on a stalled reader does in a Go tier.
+- Delete removes the original alone; its stored image variants go when they are next requested
+  (E21.11).

@@ -788,7 +788,7 @@ random 128-bit suffix), and rolls back on a later failure.
 | `FormName`, `Driver` | — | Required |
 | `TmpDir` | driver's staging dir, else `os.TempDir()` | — |
 | `BucketPath`, `ExpectedObjects`, `MaxPerBucket` | — | — |
-| `MaxSizeBytes` | — | `0` = unlimited (generated code never uses 0) |
+| `MaxSizeBytes` | — | `0` = unlimited (generated code never uses 0); `>= math.MaxInt64` cannot be an `int64` limit and is no cap either (the whole body is stored, never an empty object) |
 | `AllowedExtensions` | — | `*` = any; empty = reject all |
 
 **Shares.** `go/lib/kvfs` (`BuildKey`, drivers); E21 (downloads read the same keys). The
@@ -798,7 +798,7 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E20.1 | A part over `MaxSizeBytes` MUST be refused with `ErrUploadTooLarge` and its staging file removed | `TestProcessFilePart_TooLarge` |
+| E20.1 | A part over `MaxSizeBytes` MUST be refused with `ErrUploadTooLarge` and its staging file removed | `TestProcessFilePart_TooLarge`, `TestProcessFilePart_TooLargeLeavesNoStagingFile` |
 | E20.2 | A missing part MUST give `ErrFilePartMissing`; a wrong or absent extension `ErrUploadBadExt` | `TestProcessFilePart_MissingPart`, `TestProcessFilePart_BadExtension`, `TestProcessFilePart_NoExtensionRejected` |
 | E20.3 | Every upload MUST be stored under its own object key, `<sha256>-<random 128-bit suffix>`; identical bodies MUST get distinct objects | `TestProcessFilePart_IdenticalBodiesGetDistinctObjects` |
 | E20.4 | The staging file MUST be removed after a copy-style publish | `TestProcessFilePart_RemovesTempFileOnCopyDriver` |
@@ -807,6 +807,7 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 | E20.7 | An unbounded request body MUST NOT be spilled to disk (relies on the generated `MaxBytesReader`) | no test |
 | E20.8 | Rollback MUST NOT delete an object another request references, including one with identical bytes that committed earlier or is still in flight | `TestRollbackUploads_KeepsAnotherRequestsIdenticalObject`, `TestRollbackUploads_ConcurrentIdenticalUploads` |
 | E20.9 | Upload refusals MUST NOT show developer prose or configuration to the client: each sentinel answers one of the upload msgids (`MsgidUploadMissing`, `MsgidUploadTooLarge`, `MsgidUploadBadType`), and the allowlist and size limit go to the operator channel | `TestWriteUploadErrorCtx_RefusalsAreCatalogSentences`, `TestVocabulary_CarriesTheUploadSentences` |
+| E20.10 | A `MaxSizeBytes` at or past `math.MaxInt64` MUST be no cap: the whole body is stored | `TestProcessFilePart_MaxSizeAtTheInt64CeilingIsNoCap` |
 
 **Deliberate limits.**
 - Content is not sniffed; only the filename extension is checked.
@@ -830,6 +831,7 @@ disableRange)`.
 | `SetMaxConcurrentVariantRenders(n)` | `DefaultMaxConcurrentVariantRenders` = 2 per process | `n <= 0` restores the default. Bounds the renders download requests run at once; the background workers are bounded by their own count |
 | Render slot wait | 10 s | Fixed; past it the request is answered 503 `UNAVAILABLE` with `Retry-After: 1` |
 | `<PREFIX>_VARIANT_WORKERS` (`VariantWorkersFromEnv`) | 2 | `0` turns background rendering off; not a whole number `>= 0` → error |
+| Variant queue | 1024 jobs | Fixed. A full queue drops the job instead of blocking the request that queued it; `Dropped()` counts the drops and is the only signal (nothing is reported); a dropped variant is rendered on its first request |
 
 **Guarantees.**
 
@@ -838,13 +840,16 @@ disableRange)`.
 | E21.1 | Any `.` or `..` segment (either slash) MUST answer 404 | `TestServeDownload_PathTraversal404`, `TestServeDownload_BackslashTraversal404` |
 | E21.2 | An unknown bucket and a missing object MUST both answer 404 | `TestServeDownload_UnknownBucket_404`, `TestServeDownload_NotFound` |
 | E21.3 | Responses MUST be `Content-Type: application/octet-stream` with `nosniff`, except an image field's original and its variants whose bytes sniff as PNG, JPEG, GIF or WebP, which carry that type (never SVG or HTML); `nosniff` always | `TestServeDownload_NoContentSniffXSS`, `TestServeDownload_AnImageFieldsOriginalCarriesItsRasterType` |
-| E21.4 | Driver errors MUST become a generic, logged 500 | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors` |
+| E21.4 | Driver errors MUST become a generic 500 envelope, the driver's text reported to the operator as a fault | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors`, `TestServeDownload_ErrorsAreTheEnvelope` (driver failure) |
 | E21.5 | URLs from `BuildDownloadURL` MUST resolve through `ServeDownload` | `TestDownloadURLRoundTrip` |
 | E21.6 | Only GET and HEAD MUST be served | `TestServeDownload_DELETE_405`, `TestServeDownload_HEAD` |
 | E21.7 | Every refusal, 404 included, MUST be the JSON error envelope; the detail goes to observability | `TestServeDownload_ErrorsAreTheEnvelope` |
 | E21.8 | Only declared variant names MUST be served (400 otherwise); a variant MUST be rendered once and stored under `<key>~<name>`; a missing original → 404, a non-image or an oversized source → 415 | `TestServeDownload_VariantIsRenderedOnceAndStored`, `TestServeDownload_VariantRefusals` |
 | E21.9 | Concurrent first requests of one variant in a process MUST render it once and share the outcome | `TestServeDownload_ConcurrentRequestsOfOneVariantRenderOnce` |
 | E21.10 | Renders for download requests MUST NOT run more than the process bound at once (each decodes a whole original, up to ~200 MB); a request that gets no slot within the wait MUST be answered 503 with `Retry-After`, not queued without bound | `TestServeDownload_ConcurrentVariantRendersAreBounded`, `TestServeDownload_VariantRenderBusyIs503` |
+| E21.11 | A variant MUST live and die with its original: when the original is gone (deleted by any writer, the business tier's file server included) a variant request MUST answer 404 and the stored variant MUST be removed | `TestServeDownload_VariantIsRenderedOnceAndStored` |
+| E21.12 | A store that must ask for an object's size before it can seek (S3) MUST NOT be asked twice per download, and the bytes read to sniff an image's type MUST NOT be fetched again after the rewind: one HEAD and one GET per download of an original; ranges stay exact | `TestServeDownload_AnS3ImageIsOneHeadAndOneGet`, `TestServeDownload_S3RangesAreExact` |
+| E21.13 | Variants MUST be queued for the background workers only after the request succeeded, rendered by them into the store, and a full queue MUST drop rather than block; an upload rollback MUST delete the object's `<handle>~<name>` variants with it | `TestVariantWorkers_RenderWhatASucceededRequestQueued`, `TestVariantWorkers_AFullQueueDropsRatherThanBlocks`, `TestRollbackUploads_DeletesTheVariantsToo` |
 
 **Deliberate limits.**
 - Authorization is per endpoint, not per object.
@@ -852,6 +857,8 @@ disableRange)`.
   times, and the store's atomic put keeps one copy.
 - A busy refusal (503) is not reported to observability: it is the bound working, and a burst would
   be a burst of reports.
+- A variant of a deleted original stays stored until it is next requested (E21.11): only the upload
+  rollback knows the variant names, the business tier's file server deletes the original alone.
 
 ---
 
