@@ -392,8 +392,8 @@ publisher outside the SDK.
 Credential rule: `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and
 `x-w17-credential` by exact name (also behind grpc-gateway's `grpcgateway-` prefix),
 plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
-`apikey`, `api`+`key`, `cookie`, `credential(s)`, `jwt`, `passwd`, `password`,
-`secret`, `session`, `token`. The gateway-owned namespaces (`x-w17-*`,
+`apikey`, `api`+`key`, `bearer`, `cookie`, `credential(s)`, `jwt`, `key`, `otp`,
+`pass`, `passwd`, `password`, `pwd`, `secret`, `session`, `signature`, `token`. The gateway-owned namespaces (`x-w17-*`,
 `w17-label-*`) are exempt from the segment rule.
 
 Repeated keys collapse to one value, chosen as the key's reader on the subscriber
@@ -412,14 +412,14 @@ receive it (I2.7).
 | I8.1 | The gateway tier (outgoing only) and the server tier (incoming) MUST produce the same metadata and labels. | `TestEventContextReaders_*` |
 | I8.2 | The transaction header and the storage routing token (`w17-tx-id`, `w17-conn-id`) MUST NOT ride an envelope; both literals are pinned against the constants of the packages that set them. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
 | I8.3 | An emit outside a labelled request MUST be unlabelled; invalidate events MUST take labels from incoming or outgoing metadata. | `TestEmitInvalidate_*` |
-| I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel. | `TestMetadataFromContext_DropsCredentials` |
+| I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel; a name that holds a flagged word only as letters inside a segment (`x-keyboard-layout`) still travels. | `TestMetadataFromContext_DropsCredentials`, `TestMetadataFromContext_DropsCommonSecretHeaderShapes` |
 | I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` |
 | I8.6 | A delivery whose envelope metadata carries `w17-tx-id` or `w17-conn-id` (any letter case) MUST be refused on every transport before any handler runs, reported, and dead-lettered through the transport's normal failure path; the key as a value, in labels, or as part of a longer name MUST NOT be refused. | `TestEnvelopeGuard_Memory`, `TestEnvelopeGuard_NATS_Embedded`, `TestEnvelopeGuard_Redis_Embedded`, `TestEnvelopeGuard_RefusedEnvelopeIsDeadLettered_Redis`, `TestEnvelopeGuard_RefusedKeysAreStrippedOnEmit` |
 
 **Deliberate limits.**
 - The delivery refusal reads field 50001 only. A hand-written envelope that keeps its metadata elsewhere is not checked.
 - An internal service that sends `w17-tx-id` straight to storage over gRPC is not an event; that caller is inside the service mesh, where trust between services applies, not this check.
-- The credential rule is a denylist, not an allowlist, because declared metadata propagation uses arbitrary header names. A credential under a name that matches neither an exact name nor a flagged segment travels with the event.
+- The credential rule is a denylist, not an allowlist, because declared metadata propagation uses arbitrary header names. A credential under a name that matches neither an exact name nor a flagged segment (`x-hubsig`, `x-signingkey`) travels with the event; a header that only looks like a credential (`x-idempotency-key`) does not.
 
 ---
 

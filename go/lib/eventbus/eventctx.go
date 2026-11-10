@@ -157,20 +157,29 @@ var credentialHeaders = map[string]bool{
 // credentialNameSegments flag a header as credential-bearing when any
 // `-`/`_`-separated segment of its name is one of them: `x-api-key`,
 // `x-auth-token`, `x-amz-security-token`, `x-session-id`, `x-csrf-token`,
-// `x-client-secret`. Whole segments, not substrings, so ordinary names that
-// merely contain the letters (`x-author-id`) keep travelling.
+// `x-client-secret`, and the usual webhook and vendor shapes:
+// `x-hub-signature`, `x-access-key`, `x-signing-key`, `x-user-pass`,
+// `x-otp`, `x-bearer`. Whole segments, not substrings, so ordinary names
+// that merely contain the letters (`x-author-id`, `x-keyboard-layout`) keep
+// travelling.
 var credentialNameSegments = map[string]bool{
 	"auth":          true,
 	"authorization": true,
 	"apikey":        true,
+	"bearer":        true,
 	"cookie":        true,
 	"credential":    true,
 	"credentials":   true,
 	"jwt":           true,
+	"key":           true,
+	"otp":           true,
+	"pass":          true,
 	"passwd":        true,
 	"password":      true,
+	"pwd":           true,
 	"secret":        true,
 	"session":       true,
+	"signature":     true,
 	"token":         true,
 }
 
