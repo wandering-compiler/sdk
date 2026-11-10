@@ -24,8 +24,11 @@ import (
 // It mirrors lib/grpcclient.DefaultServiceConfig: a dropped backend is
 // reconnected transparently by gRPC, but an RPC landing in the window
 // before the reconnect completes returns `UNAVAILABLE`; this policy
-// retries ONLY that code (the request never reached the server, so
-// replay is safe even for mutations) and throttles retries channel-wide
+// retries ONLY that code, and only a Trailers-Only one (grpc-go's rule):
+// a transport failure that reached no handler. An `UNAVAILABLE` a w17
+// server's handler returned carries the grpcerr.AnsweredHeader header and
+// is not replayed, since the handler may already have written; see
+// lib/grpcclient.DefaultServiceConfig. Retries are throttled channel-wide
 // so a backend outage can't snowball into a retry storm.
 const defaultServiceConfig = `{
   "methodConfig": [{

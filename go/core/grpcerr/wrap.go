@@ -480,9 +480,12 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		return forCaller(ctx, codes.DeadlineExceeded, method, "deadline exceeded", CodeTimeout, UserMsgid(codes.DeadlineExceeded), nil)
 	}
 	// The database could not be reached at all: the connection was never
-	// established, so nothing this call sent ran. That is UNAVAILABLE — the
-	// one code the w17 clients retry by themselves, because it proves the
-	// work did not happen. It used to be Internal plus an error report per
+	// established, so nothing this call sent ran. That is UNAVAILABLE, marked
+	// ReplaySafe — the one handler answer the w17 clients retry by
+	// themselves, because it proves the work did not happen (a handler that
+	// returns it after it changed something else must not keep the mark: it
+	// forwards the status, not this error, and the server marks it
+	// answered). It used to be Internal plus an error report per
 	// request, so a database outage flooded the error tracker with one
 	// event for every call made while it lasted. It is reported once a
 	// minute instead.
@@ -492,7 +495,7 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// internal path below, reported and never retried for the caller.
 	if isConnectFailure(err) {
 		reportOutage(ctx, method, err)
-		return forCaller(ctx, codes.Unavailable, method, "database unavailable", CodeDatabaseUnavailable, UserMsgid(codes.Unavailable), nil)
+		return ReplaySafe(forCaller(ctx, codes.Unavailable, method, "database unavailable", CodeDatabaseUnavailable, UserMsgid(codes.Unavailable), nil))
 	}
 	// SQL "data exception" class — a value the CALLER supplied that the
 	// column cannot hold. It is not a constraint violation (no constraint

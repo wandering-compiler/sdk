@@ -205,6 +205,8 @@ impl W17Files for Biz {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 0
             }
+            // The handler's own UNAVAILABLE, after work it may have done.
+            "unavailable" => return Err(Status::unavailable("the upstream went away")),
             "ctx" => {
                 i64::from(ctx.deadline().is_some()) + 10 * i64::from(ctx.incoming().has("x-custom"))
             }
@@ -417,6 +419,45 @@ fn stat(handle: &str) -> Request<StatRequest> {
     r
 }
 
+/// One unary call sent as raw HTTP/2: the response headers and trailers as
+/// the server wrote them (a tonic client folds them into one status).
+async fn raw_unary<M: prost::Message>(
+    port: u16,
+    path: &str,
+    req: Request<M>,
+) -> (http::HeaderMap, http::HeaderMap) {
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+    let msg = req.into_inner().encode_to_vec();
+    let mut framed = vec![0u8];
+    framed.extend_from_slice(&u32::try_from(msg.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(&msg);
+    let ch = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let http_req = http::Request::builder()
+        .method("POST")
+        .uri(format!("http://127.0.0.1:{port}{path}"))
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .body(tonic::body::Body::new(http_body_util::Full::new(
+            bytes::Bytes::from(framed),
+        )))
+        .unwrap();
+    let resp = ch.oneshot(http_req).await.unwrap();
+    let (parts, body) = resp.into_parts();
+    let trailers = body
+        .collect()
+        .await
+        .unwrap()
+        .trailers()
+        .cloned()
+        .unwrap_or_default();
+    (parts.headers, trailers)
+}
+
 fn delete(handle: &str) -> Request<DeleteRequest> {
     Request::new(DeleteRequest {
         connection: String::new(),
@@ -451,6 +492,29 @@ async fn the_tier_over_the_wire() {
             Code::Internal,
             "/w17.common.files.W17Files/Stat: internal error"
         )
+    );
+    // A handler's own UNAVAILABLE goes out after response headers carrying
+    // `w17-answered`, so a w17 client (which replays a trailers-only
+    // UNAVAILABLE) does not run the handler again.
+    let (headers, trailers) = raw_unary(
+        t.port,
+        "/w17.common.files.W17Files/Stat",
+        stat("unavailable"),
+    )
+    .await;
+    assert!(
+        headers.get("grpc-status").is_none(),
+        "trailers-only: {headers:?}"
+    );
+    assert_eq!(
+        headers.get("w17-answered").map(|v| v.as_bytes()),
+        Some(&b"1"[..]),
+        "{headers:?}"
+    );
+    assert_eq!(
+        trailers.get("grpc-status").map(|v| v.as_bytes()),
+        Some(&b"14"[..]),
+        "{trailers:?}"
     );
     // for_user leaves prefixed with the method, the detail kept.
     let e = c.stat(stat("user")).await.unwrap_err();

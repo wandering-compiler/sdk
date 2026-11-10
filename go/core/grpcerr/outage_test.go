@@ -96,6 +96,11 @@ func TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce(t *testing.T) {
 		if status.Code(got) != codes.Unavailable || detailCode(got) != CodeDatabaseUnavailable {
 			t.Errorf("%T %v -> %v (%s), want Unavailable / %s", e, e, status.Code(got), detailCode(got), CodeDatabaseUnavailable)
 		}
+		// Nothing ran, so the w17 clients may send the call again: no
+		// AnsweredHeader goes out with it.
+		if !IsReplaySafe(got) {
+			t.Errorf("%T %v -> not replay-safe; the database was never reached", e, e)
+		}
 	}
 	if n := strings.Count(buf.String(), "the database is unreachable"); n != 1 {
 		t.Errorf("an outage across %d calls was reported %d times, want once; log: %q", len(failures), n, buf.String())

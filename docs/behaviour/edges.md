@@ -1049,7 +1049,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 | `W17_INTERNAL_TLS` | plaintext h2c | `on/true/1/yes` → TLS; `terminated` → TLS against system roots; `off/false/0/no` → plaintext; any other value → error at dial construction |
 | `W17_INTERNAL_TLS_CA` | system roots | Unreadable or no PEM → error; ignored in `terminated` mode, with a warning naming it |
 | `W17_INTERNAL_TLS_CERT` + `_KEY` | none | Only one set → error; ignored in `terminated` mode, with a warning naming them |
-| Retry | 3 attempts, 0.1 s → 1 s backoff, `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | — |
+| Retry | 3 attempts, 0.1 s → 1 s backoff, Trailers-Only `UNAVAILABLE` only; throttling 100 tokens, ratio 0.1 | A w17 handler's own `UNAVAILABLE` is not retried (S18.12) |
 | Keepalive | 30 s / 10 s, permit without stream | — |
 | Caller `opts` | appended last | Override earlier options |
 | Per-call deadline | none | — |
@@ -1058,7 +1058,7 @@ retry of `UNAVAILABLE`, keepalive. Full TLS detail is in [server.md](server.md).
 
 | ID | Guarantee | Test |
 |---|---|---|
-| E30.1 | Only `UNAVAILABLE` MUST be retried, with throttling | `TestDefaultServiceConfig_RetriesOnlyUnavailable`, `TestDefaultServiceConfig_HasRetryThrottling` |
+| E30.1 | Only `UNAVAILABLE` MUST be retried, with throttling, and only when no w17 handler answered it (S18.12) | `TestDefaultServiceConfig_RetriesOnlyUnavailable`, `TestDefaultServiceConfig_HasRetryThrottling`, `TestDial_AHandlersUnavailableIsNotReplayed`, `TestDial_AReplaySafeOrTransportUnavailableIsRetried` |
 | E30.2 | Misconfigured TLS environment MUST fail at dial construction, not at the first RPC | `TestTLSDialOption_MissingCAFile_Errors`, `TestTLSDialOption_HalfMTLS_Errors` |
 | E30.3 | TLS MUST verify the server; mTLS MUST present the client leaf | `handshake_test.go` (all four) |
 | E30.4 | Dial MUST be non-blocking | `TestDial_NonBlocking` |
@@ -1089,7 +1089,7 @@ E30, and are ignored the same way in `terminated` mode.
 | ID | Guarantee | Test |
 |---|---|---|
 | E31.1 | Principal stamps MUST be relayed through `principal.ForwardToOutgoing` and other metadata MUST NOT be; when the incoming side carries a principal, the relayed set replaces any outgoing copy of it (I12) | `TestForwardPrincipalUnaryInterceptor`, `TestForwardToOutgoing_VerifiedPrincipalWins`, `TestDialOpts_StreamRelaysThePrincipalOnly` |
-| E31.2 | The retry config MUST parse and retry only `UNAVAILABLE` | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable` |
+| E31.2 | The retry config MUST parse and retry only `UNAVAILABLE`, and never one a w17 handler returned (S18.12) | `TestDefaultServiceConfig_ParsesAndRetriesOnlyUnavailable`, `TestGRPCComponent_AHandlersUnavailableIsNotReplayed` |
 | E31.3 | An unrecognised `W17_INTERNAL_TLS` value MUST make `InternalTLSEnabled` answer true (dial TLS), never plaintext | `TestInternalTLSEnabled_UnrecognisedValueFailsClosed` |
 | E31.4 | In `terminated` mode `DialOpts` MUST verify against the system roots only, ignoring a private CA | `TestClientTLSConfig_TerminatedIgnoresPrivateCA` |
 
@@ -1154,7 +1154,7 @@ statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message
 | E33.6 | Panic recovery (`RecoverPanic`, the interceptors, `RecoverPump`) MUST return a generic Internal and report the stack | `recover_test.go`, `recover_interceptor_test.go` |
 | E33.7 | `Wrap` MUST NOT retry on its own; Aborted is the caller's signal | holds by construction (`Wrap` takes an error, not an operation it could run again); no test |
 | E33.8 | Constraint and table names MUST NOT reach a client on any surface | `TestConstraintFailure_NamesNoConstraintOrTableToTheClient` (REST and the MCP reading; the generated rpc surface is not covered here) |
-| E33.9 | A database the call never reached (the dial failed or the connection was refused) MUST answer Unavailable, the code w17 clients retry, and an outage MUST be reported at most once a minute rather than once per call; a connection that broke mid-call, or a server that answered (an authentication failure), MUST stay Internal and be reported | `TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce`, `TestWrap_AnOngoingOutageIsReportedAgainAfterTheWindow`, `TestWrap_ABrokenConnectionOrAnAnsweringServerIsNotUnavailable` |
+| E33.9 | A database the call never reached (the dial failed or the connection was refused) MUST answer Unavailable marked `ReplaySafe` (the one handler answer w17 clients retry, S18.12), and an outage MUST be reported at most once a minute rather than once per call; a connection that broke mid-call, or a server that answered (an authentication failure), MUST stay Internal and be reported | `TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce`, `TestWrap_AnOngoingOutageIsReportedAgainAfterTheWindow`, `TestWrap_ABrokenConnectionOrAnAnsweringServerIsNotUnavailable` |
 
 **Deliberate limits.**
 - `RecoverPump` blocks if its error channel is unbuffered and nobody reads it.

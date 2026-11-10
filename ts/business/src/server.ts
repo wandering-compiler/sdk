@@ -397,6 +397,7 @@ interface AnyCall {
   metadata: GrpcMetadata;
   getDeadline(): Date | number;
   on(ev: "cancelled", fn: () => void): unknown;
+  sendMetadata(md: GrpcMetadata): void;
 }
 
 function contextFor(call: AnyCall, path: string): Context {
@@ -477,10 +478,31 @@ async function guarded(
     span?.end();
   } catch (e) {
     span?.end(e);
-    fail(toServiceError(e, path, ctx));
+    const se = toServiceError(e, path, ctx);
+    markAnswered(call, se);
+    fail(se);
   } finally {
     reg.leave();
   }
+}
+
+/** The response header a served method's own UNAVAILABLE goes out with (Go: `grpcerr.AnsweredHeader`). */
+export const ANSWERED_HEADER = "w17-answered";
+
+/**
+ * Send response headers carrying {@link ANSWERED_HEADER} before an
+ * UNAVAILABLE the method answered, so the status leaves in the trailers. A
+ * w17 client replays a trailers-only UNAVAILABLE — the shape of a transport
+ * failure that reached no handler; a method that ran may have done work
+ * first (a write committed, an upstream called), so answered this way the
+ * client returns the status to its caller instead of running it again.
+ * grpc-js ignores it when headers already went out.
+ */
+function markAnswered(call: AnyCall, se: Partial<ServiceError>): void {
+  if (se.code !== Status.UNAVAILABLE) return;
+  const md = new GrpcMetadata();
+  md.set(ANSWERED_HEADER, "1");
+  call.sendMetadata(md);
 }
 
 async function writeAll(

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 )
 
@@ -53,7 +54,12 @@ func recoveryUnaryInterceptor(
 	if m, ok := req.(proto.Message); ok {
 		ctx = observx.WithRequest(ctx, info.FullMethod, m)
 	}
-	return handler(ctx, req)
+	resp, err = handler(ctx, req)
+	// An UNAVAILABLE the handler (or an interceptor) returned is its
+	// answer, not a transport failure: the response carries a header so
+	// a w17 client does not run the call again.
+	grpcerr.MarkAnswered(ctx, err)
+	return resp, err
 }
 
 // recoveryStreamInterceptor is the streaming counterpart of
@@ -79,7 +85,9 @@ func recoveryStreamInterceptor(
 	if ok, err := serveHealthStream(srv, ss, info); ok {
 		return err
 	}
-	return handler(srv, ss)
+	err = handler(srv, ss)
+	grpcerr.MarkAnsweredStream(ss, err)
+	return err
 }
 
 // scopedStream is a grpc.ServerStream whose context carries the request's

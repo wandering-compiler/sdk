@@ -20,7 +20,9 @@ import (
 // routes value+stack through observx (Sentry + OTel; a panic is
 // always "not noise"), and returns a generic Internal — the panic
 // value never reaches the client. Harmless on grpcgen handlers
-// (their inner defer recovers first).
+// (their inner defer recovers first). An UNAVAILABLE the chain
+// returns is marked answered ([MarkAnswered]), so a w17 client does
+// not run the call again.
 func RecoverUnaryInterceptor(
 	ctx context.Context,
 	req any,
@@ -37,7 +39,9 @@ func RecoverUnaryInterceptor(
 			err = status.Errorf(codes.Internal, "%s: internal error", info.FullMethod)
 		}
 	}()
-	return handler(ctx, req)
+	resp, err = handler(ctx, req)
+	MarkAnswered(ctx, err)
+	return resp, err
 }
 
 // RecoverStreamInterceptor is the streaming counterpart of
@@ -56,7 +60,9 @@ func RecoverStreamInterceptor(
 			err = status.Errorf(codes.Internal, "%s: internal error", info.FullMethod)
 		}
 	}()
-	return handler(srv, ss)
+	err = handler(srv, ss)
+	MarkAnsweredStream(ss, err)
+	return err
 }
 
 // RecoverPump is the deferred recovery for a bidi-stream relay

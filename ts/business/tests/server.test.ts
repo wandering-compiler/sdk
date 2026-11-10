@@ -16,7 +16,8 @@ import type { Emit } from "../src/manifest.ts";
 import * as observability from "../src/observability.ts";
 import * as paging from "../src/paging.ts";
 import * as principal from "../src/principal.ts";
-import { RegistrationError, Registry, requests, toServiceError } from "../src/server.ts";
+import { RegistrationError, Registry, methodDefinition, requests, toServiceError } from "../src/server.ts";
+import { serializer } from "../src/client.ts";
 import * as txscope from "../src/txscope.ts";
 import { msg, pool, settled, sleep } from "./helpers.ts";
 
@@ -44,15 +45,12 @@ class FakeStorage {
   rows: string[] = [];
   staged = new Map<string, string[]>();
   seen: [string, Context][] = [];
-  unavailable = 0;
+  /** Answered UNAVAILABLE by the handler, after its write. */
+  handlerUnavailable = 0;
   n = 0;
 
   async InsertNote(ctx: Context, req: AnyMessage) {
     this.seen.push(["InsertNote", ctx]);
-    if (this.unavailable) {
-      this.unavailable--;
-      throw new StatusError(Status.UNAVAILABLE, "try again");
-    }
     this.n++;
     const note = msg("Note")({ id: BigInt(this.n), text: req.text });
     const tx = ctx.incoming.first("w17-tx-id");
@@ -61,6 +59,10 @@ class FakeStorage {
       l.push(note.text);
       this.staged.set(tx, l);
     } else this.rows.push(note.text);
+    if (this.handlerUnavailable) {
+      this.handlerUnavailable--;
+      throw new StatusError(Status.UNAVAILABLE, "the upstream went away after the write");
+    }
     return note;
   }
 
@@ -381,14 +383,60 @@ describe("over the wire", () => {
     expect(plain.header.getAll(paging.NEXT_MD_KEY)).toEqual([]);
   });
 
-  it("the client retries UNAVAILABLE, three attempts", async () => {
+  it("the client retries a trailers-only UNAVAILABLE, three attempts", async () => {
+    // A server that answers UNAVAILABLE before any header, as a transport
+    // refusal reads (no w17 handler ran).
+    let refuse = 0;
+    const info = new ServiceClient(stack.conn, "conformance.v1.NoteStorage", pool()).methodInfo("InsertNote");
+    const raw = new Server();
+    raw.addService({ InsertNote: methodDefinition(info) }, {
+      InsertNote: (call: { request: AnyMessage }, cb: (e: Partial<ServiceError> | null, v?: unknown) => void) => {
+        if (refuse > 0) {
+          refuse--;
+          cb({ code: Status.UNAVAILABLE, details: "try again" });
+          return;
+        }
+        cb(null, msg("Note")({ text: call.request.text }));
+      },
+    });
+    const port = await new Promise<number>((res, rej) =>
+      raw.bindAsync("127.0.0.1:0", ServerCredentials.createInsecure(), (e, p) => (e ? rej(e) : res(p))),
+    );
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      const storage = new ServiceClient(conn, "conformance.v1.NoteStorage", pool());
+      refuse = 2;
+      expect((await storage.InsertNote(new Context(), msg("InsertNoteRequest")({ text: "r" }))).text).toBe("r");
+      refuse = 3;
+      const st = await statusOf(storage.InsertNote(new Context(), msg("InsertNoteRequest")({ text: "r" })));
+      expect(st.code).toBe(Status.UNAVAILABLE);
+      expect(refuse).toBe(0); // exactly three attempts
+    } finally {
+      conn.close();
+      await stop(raw);
+    }
+  });
+
+  it("a handler's UNAVAILABLE is answered after headers and not replayed", async () => {
     const storage = new ServiceClient(stack.conn, "conformance.v1.NoteStorage", pool());
-    stack.storage.unavailable = 2;
-    expect((await storage.InsertNote(new Context(), msg("InsertNoteRequest")({ text: "r" }))).text).toBe("r");
-    stack.storage.unavailable = 3;
-    const st = await statusOf(storage.InsertNote(new Context(), msg("InsertNoteRequest")({ text: "r" })));
+    stack.storage.handlerUnavailable = 1;
+    const st = await statusOf(storage.InsertNote(new Context(), msg("InsertNoteRequest")({ text: "once" })));
     expect(st.code).toBe(Status.UNAVAILABLE);
-    expect(stack.storage.unavailable).toBe(0); // exactly three attempts
+    expect(stack.storage.rows).toEqual(["once"]); // one write, no replay
+    // On the wire: response headers carrying w17-answered, then the status.
+    const m = storage.methodInfo("InsertNote");
+    const c = new Client(stack.conn.addr, credentials.createInsecure());
+    try {
+      stack.storage.handlerUnavailable = 1;
+      const md = await new Promise<GrpcMetadata>((res) => {
+        const call = c.makeUnaryRequest(m.path, serializer(m.input) as (v: unknown) => Buffer, (b: Buffer) => b,
+          msg("InsertNoteRequest")({ text: "raw" }), new GrpcMetadata(), () => {});
+        call.on("metadata", res);
+      });
+      expect(md.get("w17-answered")).toEqual(["1"]);
+    } finally {
+      c.close();
+    }
   });
 
   it("the client refuses a done context", async () => {
