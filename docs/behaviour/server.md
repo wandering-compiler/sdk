@@ -319,7 +319,7 @@ wait for context or a serve error.
 | S9.9 | An option set grpc-go rejects (two singular interceptors) MUST close the listener and be returned as an error. | `TestRun_ConflictingInterceptorOptionsAreAnError` |
 
 **Deliberate limits.**
-- TCP only. No `MaxConcurrentStreams`, `MaxConnectionAge` or `MaxConnectionIdle` defaults; the receive size limit and handshake timeout are grpc-go defaults (4 MiB receive). All can be set through `ServerOptions`.
+- TCP only. No `MaxConcurrentStreams`, `MaxConnectionAge` or `MaxConnectionIdle` defaults (a per-connection stream cap would also queue the many streams a gateway multiplexes over one connection; the unauthenticated health `Watch` has its own cap, S11.6); the receive size limit and handshake timeout are grpc-go defaults (4 MiB receive). All can be set through `ServerOptions`.
 
 ## S10. Server reflection
 
@@ -357,6 +357,7 @@ The same three fields exist on `runtime.Config` (S5).
 **Code.** `go/service/internal/server/server.go` — `DefaultHealthServer`, `Run`
 
 **Purpose.** Registers `grpc.health.v1`, with the root service `""` set to SERVING at construction.
+`Run` registers it through a wrapper whose `Watch` is capped and ends when shutdown begins.
 
 **Guarantees.**
 
@@ -366,6 +367,8 @@ The same three fields exist on `runtime.Config` (S5).
 | S11.2 | Health is liveness, not readiness: it MUST NOT consult a dependency. | holds by construction; no test |
 | S11.3 | Health MUST report NOT_SERVING for every service once shutdown has begun, before the drain finishes. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
 | S11.4 | Health MUST be reachable without credentials. | `TestHealth_ReachableWithoutCredentialsPastCallerInterceptors`, `TestHealth_StaysInsideRecovery` |
+| S11.5 | An open `Watch` MUST NOT hold the graceful stop: once shutdown has begun the watcher is sent NOT_SERVING (if its last update was SERVING) and the stream ends with `Unavailable`, so a watcher that does not hang up neither delays the drain nor forces the hard stop on the RPCs still finishing. | `TestRun_HealthReportsNotServingOnceDrainStarts` |
+| S11.6 | Health is answered ahead of authentication, so one server MUST hold at most 1000 `Watch` streams at once; past that a `Watch` is refused with `ResourceExhausted` while `Check` keeps answering. | `TestRun_HealthWatchesAreCapped` |
 
 ## S12. Bounded gRPC stop
 
