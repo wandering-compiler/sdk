@@ -258,44 +258,26 @@ func TestEventbusEventSource_TranscodeError(t *testing.T) {
 // and the source derives + matches labels. An event scoped to
 // {project_id: alpha} reaches the alpha principal but not beta.
 func TestEventbusEventSource_LabelFiltering(t *testing.T) {
-	bus := eventbus.NewMemoryBus()
-	// Every event is tagged {project_id: "alpha"}.
-	transcode := func(topic string, envelope []byte) ([]byte, map[string]string, bool, error) {
-		return envelope, map[string]string{"project_id": "alpha"}, false, nil
-	}
-	// Principal labels = {project_id: <userData string>}.
+	// Every p.evt is tagged {project_id: "alpha"}; principal labels =
+	// {project_id: <userData string>}.
 	principal := func(userData []byte) map[string]string {
 		if len(userData) == 0 {
 			return nil
 		}
 		return map[string]string{"project_id": string(userData)}
 	}
-	source := restgw.NewEventbusEventSource(bus, []string{"default"}, transcode, principal)
+	hub := newIsolationHub(t, map[string]string{"project_id": "alpha"}, principal)
+	alpha := hub.openClient(t, "alpha")
+	beta := hub.openClient(t, "beta")
+	hub.dispatch(t, "p.evt")
+	hub.dispatch(t, controlTopic("alpha"))
+	hub.dispatch(t, controlTopic("beta"))
 
-	run := func(principalID string) string {
-		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-		defer cancel()
-		authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
-			return []byte(principalID), nil
-		})
-		handler := restgw.RequireAuth(authFn, func(w http.ResponseWriter, r *http.Request) {
-			restgw.HandleW17Events(w, r, source, 1*time.Hour)
-		})
-		req := httptest.NewRequest(http.MethodGet, "/v1/w17-events?topics=p.evt", nil).WithContext(ctx)
-		rec := httptest.NewRecorder()
-		done := make(chan struct{})
-		go func() { handler(rec, req); close(done) }()
-		time.Sleep(30 * time.Millisecond)
-		_ = bus.Dispatch(context.Background(), "default", "p.evt", wrapperspb.String("x"))
-		<-done
-		return rec.Body.String()
+	if !receivedBeforeControl(t, alpha, "alpha") {
+		t.Error("entitled principal (project_id=alpha) should receive the event")
 	}
-
-	if body := run("alpha"); !strings.Contains(body, "event: p.evt\n") {
-		t.Errorf("entitled principal (project_id=alpha) should receive the event; body:\n%s", body)
-	}
-	if body := run("beta"); strings.Contains(body, "event: p.evt\n") {
-		t.Errorf("unentitled principal (project_id=beta) must NOT receive the alpha-scoped event; body:\n%s", body)
+	if receivedBeforeControl(t, beta, "beta") {
+		t.Error("unentitled principal (project_id=beta) must NOT receive the alpha-scoped event")
 	}
 }
 
@@ -306,47 +288,31 @@ func TestEventbusEventSource_LabelFiltering(t *testing.T) {
 // across organizations (e.g. the unlabelled w17.invalidate carrying entity
 // IDs). It still reaches a no-label principal.
 func TestEventbusEventSource_UnlabelledEventNoCrossOrg(t *testing.T) {
-	bus := eventbus.NewMemoryBus()
-	// Events carry NO labels.
-	transcode := func(topic string, envelope []byte) ([]byte, map[string]string, bool, error) {
-		return envelope, nil, false, nil
-	}
 	principal := func(userData []byte) map[string]string {
 		if len(userData) == 0 {
 			return nil // no-label / anonymous principal
 		}
 		return map[string]string{"project_id": string(userData)}
 	}
-	source := restgw.NewEventbusEventSource(bus, []string{"default"}, transcode, principal)
+	// p.evt carries NO labels.
+	hub := newIsolationHub(t, nil, principal)
+	alpha := hub.openClient(t, "alpha")
+	labelless := hub.openClient(t, "")
+	hub.dispatch(t, "p.evt")
+	hub.dispatch(t, controlTopic("alpha"))
 
-	run := func(principalID string) string {
-		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-		defer cancel()
-		authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
-			return []byte(principalID), nil
-		})
-		handler := restgw.RequireAuth(authFn, func(w http.ResponseWriter, r *http.Request) {
-			restgw.HandleW17Events(w, r, source, 1*time.Hour)
-		})
-		req := httptest.NewRequest(http.MethodGet, "/v1/w17-events?topics=p.evt", nil).WithContext(ctx)
-		rec := httptest.NewRecorder()
-		done := make(chan struct{})
-		go func() { handler(rec, req); close(done) }()
-		time.Sleep(30 * time.Millisecond)
-		_ = bus.Dispatch(context.Background(), "default", "p.evt", wrapperspb.String("x"))
-		<-done
-		return rec.Body.String()
-	}
-
-	// Organization principal must NOT receive the unlabelled event.
-	if body := run("alpha"); strings.Contains(body, "event: p.evt\n") {
-		t.Errorf("org principal received an unlabelled event (cross-organization leak); body:\n%s", body)
+	// Organization principal must NOT receive the unlabelled event; its
+	// own control after it proves the event was fanned out meanwhile.
+	if receivedBeforeControl(t, alpha, "alpha") {
+		t.Error("org principal received an unlabelled event (cross-organization leak)")
 	}
 	// Neither does a LABEL-LESS principal — see
 	// TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal
-	// for why that half is not "the broadcast bucket".
-	if body := run(""); strings.Contains(body, "event: p.evt\n") {
-		t.Errorf("label-less principal received an unlabelled event under isolation; body:\n%s", body)
+	// for why that half is not "the broadcast bucket". It can receive no
+	// control of its own; alpha's control above was fanned out after p.evt,
+	// so a leaked frame would already be queued for it.
+	if arrivesWithin(labelless, 300*time.Millisecond) {
+		t.Error("label-less principal received an unlabelled event under isolation")
 	}
 }
 
@@ -365,35 +331,27 @@ func TestEventbusEventSource_UnlabelledEventNoCrossOrg(t *testing.T) {
 // deployment's own events must carry the label they are partitioned by; the
 // reserved `w17.invalidate` topic does this via InvalidateEvent.labels.
 func TestEventbusEventSource_UnlabelledEventDeniedToUnresolvedPrincipal(t *testing.T) {
-	bus := eventbus.NewMemoryBus()
-	transcode := func(topic string, envelope []byte) ([]byte, map[string]string, bool, error) {
-		return envelope, nil, false, nil // unlabelled event
+	// An isolating surface: the deriver is configured, and the unresolved
+	// principal's organization did not resolve, so it carries NO labels (the
+	// fail-closed branch stamps neither scope nor label). The resolved
+	// "alpha" principal is the control that proves delivery happened.
+	principal := func(userData []byte) map[string]string {
+		if string(userData) == "alpha" {
+			return map[string]string{"project_id": "alpha"}
+		}
+		return nil
 	}
-	// An isolating surface: the deriver is configured, and this principal's
-	// organization did not resolve, so it carries NO labels (the fail-closed
-	// branch stamps neither scope nor label).
-	principal := func(userData []byte) map[string]string { return nil }
-	source := restgw.NewEventbusEventSource(bus, []string{"default"}, transcode, principal)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-	authFn := restgw.AuthFunc(func(context.Context, *http.Request) ([]byte, error) {
-		return []byte("unresolved-principal"), nil
-	})
-	handler := restgw.RequireAuth(authFn, func(w http.ResponseWriter, r *http.Request) {
-		restgw.HandleW17Events(w, r, source, 1*time.Hour)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/v1/w17-events?topics=p.evt", nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() { handler(rec, req); close(done) }()
-	time.Sleep(30 * time.Millisecond)
-	_ = bus.Dispatch(context.Background(), "default", "p.evt", wrapperspb.String("x"))
-	<-done
-
-	if body := rec.Body.String(); strings.Contains(body, "event: p.evt\n") {
-		t.Errorf("a principal whose scope did not resolve received an unlabelled event —\n"+
-			"failing to resolve must not widen delivery; body:\n%s", body)
+	hub := newIsolationHub(t, nil, principal) // p.evt is unlabelled
+	unresolved := hub.openClient(t, "unresolved-principal")
+	alpha := hub.openClient(t, "alpha")
+	hub.dispatch(t, "p.evt")
+	hub.dispatch(t, controlTopic("alpha"))
+	if receivedBeforeControl(t, alpha, "alpha") {
+		t.Error("the resolved principal received an unlabelled event under isolation")
+	}
+	if arrivesWithin(unresolved, 300*time.Millisecond) {
+		t.Error("a principal whose scope did not resolve received an unlabelled event —\n" +
+			"failing to resolve must not widen delivery")
 	}
 }
 
