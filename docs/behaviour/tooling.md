@@ -575,6 +575,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | `TestRunLock_CheckReportsALostLockSession_Live` |
 | T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
 | T15.16 | A MySQL body that fails MUST NOT hand its connection back to the pool (a `FOREIGN_KEY_CHECKS` it turned off, or a transaction it left open, would reach the next borrower). A body that succeeds after turning the checks off around one `ADD … FOREIGN KEY` (save, off, add, restore — the planner's shape for a key over existing rows) MUST leave its session with the checks on. | `TestApply_AFailedBodyDoesNotReturnItsSessionToThePool`, `TestApply_FKChecksRestoredAfterASuccessfulBody` (live) |
+| T15.17 | A Postgres migration body that fails between its own `BEGIN` and `COMMIT` MUST NOT leave the applier's session in an aborted transaction: the applier issues `ROLLBACK` on a fresh context, so the next migration, a rollback or a ledger read on that connection works. | `TestApply_AFailedBodyLeavesNoTransactionOpen_Live` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.
@@ -816,6 +817,7 @@ is `{}`.
 | T23.4 | Input that cannot be encoded for the method (such as a nested object on GET or DELETE) MUST be an error, never silently dropped. | `TestResolveREST_NestedInputOnBodylessVerbIsRefused` |
 | T23.5 | Multipart MUST NOT repeat path and query bindings as form fields and MUST honour `body_field`. | `TestCall_MultipartSendsOnlyBodyFields` |
 | T23.6 | Numbers routed into a path or query MUST render without exponent. | `TestResolveREST_NumbersRenderWithoutExponent` |
+| T23.7 | A download step (`Download`) MUST fetch the object by the PATH of the rendered URL from its route prefix on (an absolute URL's host and any proxy prefix are dropped), under the route it names or the URL's own route (longest prefix), with `variant` as the only query; it MUST carry the session token only when that route is `AuthRequired` (an `anonymous` step sends none), and MUST refuse an empty URL, a URL with a query or fragment, a URL under no download route and an unknown `Route`. An unexpected refusal of the route fails the step. | `TestDownloadStep_RoundTripsAGeneratedImage`, `TestDownloadStep_FailsWhenTheRouteRefuses`, `TestResolveDownload` |
 
 ## T24. E2E MCP caller
 
@@ -825,7 +827,8 @@ is `{}`.
 with the bearer; JSON or SSE-framed responses; `structuredContent` preferred, else the first text
 block as JSON. A JSON-RPC error carrying `rpc error: code = X desc = Y` becomes a `CallError`
 with a `SCREAMING_SNAKE` code; anything else (HTTP ≥ 400, `isError: true`) is a transport error.
-Multipart is refused; static headers are ignored.
+Multipart is refused; static headers are ignored. An `isError` result that names a status code is
+the surface answering (T24.4).
 
 **Guarantees.**
 
@@ -833,10 +836,12 @@ Multipart is refused; static headers are ignored.
 |---|---|---|
 | T24.1 | MCP calls and status mapping MUST behave as described. | `TestMCPCall_*`, `TestGrpcStatusFromMCPError*` |
 | T24.2 | A non-status error MUST stay a transport failure. | `TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures` |
+| T24.3 | With `WithOAuth`, an MCP call MUST present an access token the surface's authorization server issued for the resource its protected-resource metadata names, never the REST session: the caller registers one client per caller (redirect URI fixed at `http://127.0.0.1/callback`), starts an authorization with PKCE (S256) without following its redirect, approves it on the consent RPCs with the step's session (the first organization offered when `Get` is set), and redeems the code. One token per session is kept for the caller's lifetime; a step with no session gets no token and is refused by the surface. | `TestMCPCaller_OAuthExchange` |
+| T24.4 | An `isError` tool result whose first text line is `<Code>: <message>` MUST become a `CallError` with that code in `SCREAMING_SNAKE` form (so `expect_error` matches it); any other `isError` result stays a transport failure. | `TestMCPCaller_OAuthExchange` |
 
 **Deliberate limits.**
-- An MCP refusal delivered as HTTP 401/403 or as `isError` can be asserted only with
-  `expect_transport_error`, not `expect_error`.
+- An MCP refusal delivered as HTTP 401/403, or as an `isError` result that names no status code,
+  can be asserted only with `expect_transport_error`, not `expect_error`.
 
 ## T25. E2E streams and events
 
