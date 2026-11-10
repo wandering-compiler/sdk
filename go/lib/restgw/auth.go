@@ -45,6 +45,8 @@ import (
 
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // AuthFunc authenticates an HTTP request and returns the
@@ -77,11 +79,21 @@ func MakeAuthFunc(caller AuthCaller) AuthFunc {
 		// shape only carries one. Multi-valued headers
 		// (e.g. comma-joined Cookie) are the auth method's
 		// concern to split.
+		//
+		// Keys are lower-cased, as every other auth path hands them over,
+		// and a gateway-owned key is never the client's to send: only the
+		// credential slot the gateway itself fills from a URL credential
+		// (E7) passes.
 		headers := make(map[string]string, len(r.Header))
 		for k, v := range r.Header {
-			if len(v) > 0 {
-				headers[k] = v[0]
+			if len(v) == 0 {
+				continue
 			}
+			k = strings.ToLower(k)
+			if k != CredentialMetadataKey && principal.IsEdgeReservedKey(k) {
+				continue
+			}
+			headers[k] = v[0]
 		}
 		resp, err := caller.CallAuth(ctx, headers)
 		if err != nil {

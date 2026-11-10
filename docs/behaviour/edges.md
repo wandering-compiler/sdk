@@ -255,7 +255,7 @@ auth response in outgoing metadata (`x-w17-user`, base64) and on the request con
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `MakeAuthFunc(caller)` | — | Forwards the first value of every header, keyed by canonical name |
+| `MakeAuthFunc(caller)` | — | Forwards the first value of every header, keyed by lower-case name; gateway-owned keys (`principal.IsEdgeReservedKey`) are dropped except the URL-credential slot `x-w17-credential` (E7) |
 | `NoAuth()` | — | Always succeeds with nil user data |
 | `ClassifyAuthScheme(r)` | `""` | `Bearer` / `Basic`, case-insensitive |
 | `RequireAuth(authFn, next)` | — | Gate for routes mounted outside per-RPC handlers (SSE, WS) |
@@ -282,6 +282,7 @@ re-auth (E17), `w17-events` label filtering (E18), and `go/lib/principal`, which
 | E5.9 | The recorded host MUST be the first `X-Forwarded-Host` only when the peer is a trusted proxy, else `Host`, normalised (lower case, no port, no trailing dot); an untrusted peer's `X-Forwarded-Host` MUST be ignored | `TestClientAddrMiddleware_RecordsTheHost` |
 | E5.10 | `AudienceContextMiddleware` MUST put the gateway's stamps — and, inside `ClientAddrMiddleware` with `withHost`, the recorded host under `principal.HostKey` — on the outgoing metadata of every request, auth-excluded ones included, whatever the client sent | `TestAudienceContextMiddleware` |
 | E5.11 | `WithAuthMethod` MUST round-trip the method through the context | `TestAuthMethod_RoundTrips` |
+| E5.12 | `MakeAuthFunc` MUST hand the auth caller lower-case keys and no gateway-owned key a client sent (`x-w17-*`, `w17-label-*`, `w17-tx-id`, `w17-conn-id`, `grpcgateway-*`, the `Grpc-Metadata-` form), keeping only the URL-credential slot | `TestAuth_MakeAuthFunc_KeysAreLowerCaseAndReservedFree`, `TestAuth_MakeAuthFunc_HeadersForwarded` |
 
 **Deliberate limits.**
 - `RequireAuth`'s non-ticket errors use the context-free writer (source locale).
