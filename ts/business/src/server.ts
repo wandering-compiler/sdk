@@ -18,8 +18,12 @@
  *
  * `registry.register("notes.v1.NoteService", new NoteService(...))` checks
  * every RPC of the service against the object and refuses
- * (`RegistrationError`, which stops the boot) when one is missing or is not
- * an `async` function (an `async *` generator for a server-streaming one).
+ * (`RegistrationError`, which stops the boot) when one is missing or is a
+ * function of the wrong kind (an `async *` generator where an `async`
+ * function is wanted, or the reverse for a server-streaming one). A plain
+ * function — a decorator's or proxy's wrapper — is accepted, and what each
+ * call returns is checked instead: a promise (an async iterable for a
+ * server-streaming method), or the call answers INTERNAL.
  *
  * Every unary method runs through the same chain, over the wire AND through
  * `registry.self(...)`:
@@ -83,6 +87,28 @@ type Fn = (...args: any[]) => any;
 const tag = (fn: unknown) => Object.prototype.toString.call(fn);
 const isAsyncFunction = (fn: unknown) => tag(fn) === "[object AsyncFunction]";
 const isAsyncGeneratorFunction = (fn: unknown) => tag(fn) === "[object AsyncGeneratorFunction]";
+const isPlainFunction = (fn: unknown) => tag(fn) === "[object Function]";
+
+/**
+ * A plain function served as a method: what each call returns has to be the
+ * shape an async function or async generator would return — a promise, or an
+ * async iterable for a server-streaming method — or the call answers INTERNAL.
+ */
+function checkedResult(info: MethodInfo, fn: Fn): Fn {
+  return ((...args: unknown[]) => {
+    const out = (fn as (...a: unknown[]) => unknown)(...args);
+    if (info.serverStreaming) {
+      if (out === null || typeof out !== "object" || typeof (out as Record<symbol, unknown>)[Symbol.asyncIterator] !== "function") {
+        throw new StatusError(Status.INTERNAL, `${info.path}: handler returned no async iterable — want an async generator (async *)`);
+      }
+      return out;
+    }
+    if (out === null || (typeof out !== "object" && typeof out !== "function") || typeof (out as { then?: unknown }).then !== "function") {
+      return Promise.reject(new StatusError(Status.INTERNAL, `${info.path}: handler returned no promise — want an async function`));
+    }
+    return out;
+  }) as Fn;
+}
 
 /** One served RPC: the author's bound method plus the middleware. */
 class MethodImpl {
@@ -267,7 +293,10 @@ export class Registry {
         missing.push(info.name);
         continue;
       }
-      const ok = info.serverStreaming ? isAsyncGeneratorFunction(fn) : isAsyncFunction(fn);
+      // A declared function of the wrong kind is refused here; a plain
+      // function (a decorator's or proxy's wrapper, whose tag says nothing
+      // about what it returns) is accepted and its result checked per call.
+      const ok = isPlainFunction(fn) || (info.serverStreaming ? isAsyncGeneratorFunction(fn) : isAsyncFunction(fn));
       if (!ok) {
         notAsync.push(`${info.name} (want ${info.serverStreaming ? "an async generator (async *)" : "an async function"})`);
         continue;
@@ -277,7 +306,8 @@ export class Registry {
       if ((emit !== undefined || invs.length) && (info.clientStreaming || info.serverStreaming)) {
         throw new RegistrationError(`registry: ${info.path} is streaming and cannot emit an event`);
       }
-      methods.set(info.name, new MethodImpl(info, (fn as Fn).bind(impl), emit, invs, this));
+      const bound = (fn as Fn).bind(impl);
+      methods.set(info.name, new MethodImpl(info, isPlainFunction(fn) ? checkedResult(info, bound) : bound, emit, invs, this));
     }
     const cls = impl.constructor?.name ?? "the handler";
     if (missing.length) {
