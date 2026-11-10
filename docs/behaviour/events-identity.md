@@ -137,7 +137,7 @@ segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 **Deliberate limits.**
 - A restarted process gets a new fan-out identity starting at "new"; events emitted while it was down are not seen.
 - Fan-out Redis groups of a process killed without `Close` remain (stream metadata only).
-- An event hub (I9) needs fan-out; queue mode would split its audience between replicas. The generated main selects fan-out.
+- An event hub (I9) needs fan-out; queue mode would split its audience between replicas. `Delivery` is per bus and nothing in the SDK refuses a mismatch: a surface that needs both modes (a hub and a queue subscriber) builds two buses. The generated main builds the hub's bus in fan-out.
 
 ---
 
@@ -315,7 +315,8 @@ a timeout, before returning. Each append trims its stream to the retention limit
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `DSN` | required | `redis://…`, parsed by `ParseURL` |
+| `DSN` | required | `redis://…` / `rediss://…`, opened by `go/lib/redisdsn`: with `cluster=true` a cluster client that follows the slots from the DSN's host and any `addr=`, else a single-server client. A single-server DSN at a cluster fails on the first key another shard holds with an error that says to add `cluster=true` |
+| Server | Redis ≥ 7.0 | the claim loop relies on `XCLAIM` of an entry the stream has trimmed returning nothing and removing it from the pending list; Redis 6 keeps such a row, and the claim loop would offer it again on every tick |
 | `GroupPrefix` | required | — |
 | `Domain` | empty | as I5: set → every entry carries field `domain`, an entry stamped with another domain is acknowledged without calling the handler |
 | `Delivery`, `InstanceID` | see I3 | — |
@@ -346,6 +347,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.12 | I5.18 MUST hold on Redis. | `TestDomainIsolation_Redis_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
 | I6.13 | An entry without a `topic` field (not an event envelope) MUST NOT reach any handler, the catch-all `**` included; it MUST be acknowledged and reported through `OnDeliverFailure`. | `TestRedisBus_EntryWithoutTopicIsSettledUnhandled_Embedded` |
 | I6.14 | I5.20 MUST hold on Redis, a backoff counting from the failed attempt; entries not yet due MUST NOT hide due entries behind them from the claim loop. | `TestRedisBus_TopicRetry_Embedded`, `TestRedisBus_BackoffCountsFromTheFailure_Embedded`, `TestRedisBus_BackoffDoesNotHideDueEntries_Embedded` |
+| I6.15 | With `cluster=true` every channel MUST be delivered and claimed again after a failure whichever shard holds its stream; every bus command names one key, so a channel's stream and its `<channel>.dlq` MAY live on different shards. A single-server DSN at a cluster MUST fail naming `cluster=true`. | `TestRedisBus_Cluster_EveryChannelOnEveryShard`, `TestRedisBus_Cluster_ASingleServerDSNSaysToAddCluster` (live, CI's cluster job), `TestOpen_PicksTheClientTheDSNNames`, `TestHint_SaysToAddClusterOnMOVEDOnly` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.
@@ -794,7 +796,7 @@ it; the batcher builds the envelope: the request and response by their redaction
 | `RecordCeiling` | 64 KiB per record; the request and response share it |
 | `Stream` | the stream's limits when it creates it: 7 days, 10 GiB (halved, down to 64 MiB, while the server has no room for it, and logged), 1 replica, 2-minute duplicate window; an existing stream keeps its own |
 | `Fail` | default: each undelivered record as numbered log lines (base64, under 16 KiB a line), and a report at most once a second |
-| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection; a `redis://` / `rediss://` DSN stores the stream on Redis Streams instead (`{w17:requests}`) |
+| `Open(dsn)` | dials NATS (retries forever, logs every drop and return) and owns the connection; a `redis://` / `rediss://` DSN stores the stream on Redis Streams instead (`{w17:requests}`), opened by `go/lib/redisdsn` (`cluster=true` → a cluster client). Every key of the request stream — the stream, its dead letters and the duplicate-window keys — carries the `{w17:requests}` hash tag, so the publish script and each consumer command stay on one slot |
 | `Redis` | instead of `JS` / `NC`: the Redis client the batches are stored through, for a project whose bus is Redis alone; the stream is bounded by `Stream.MaxAge` (trimmed on publish) — Redis has no byte cap of its own |
 
 **Guarantees.**
@@ -865,6 +867,7 @@ previous one, so no batch waits in the process while its `AckWait` runs.
 | I21.7 | On Redis, I21.1–I21.3 MUST hold as on JetStream: each consumer its purpose and its own group, a failed batch offered again after its backoff without another consumer receiving it twice, MaxDeliver failures moved to the dead letter stream with the reason and subject and then acknowledged; a batch on a subject the consumer does not read MUST be acknowledged without calling it. | `TestRedisConsumers_EachItsPurposeAndItsOwnProgress`, `TestRedisConsumers_DeadLetterAfterMaxDeliver`, `TestRedisConsumers_AnotherSubjectIsNotOffered`, `TestSubjectMatches` |
 | I21.8 | `Open` and `Serve` MUST pick the backend by the DSN's scheme. | `TestRedisDSN_OpenAndServe` |
 | I21.9 | A batch MUST NOT be offered again, nor have its attempt count raised, because it waited behind a slow Consume: on JetStream, and on Redis across processes. | `TestConsumers_QueuedBatchesAreNotRedelivered`, `TestConsumers_QueuedBatchesAreNotRedelivered_Redis` |
+| I21.10 | On a cluster-mode Redis (`cluster=true`) the recorder MUST store through its publish script and a consumer's group MUST read the batches back, every key on the `{w17:requests}` slot. | `TestRedisDSN_Cluster_OpenAndServe` (live, CI's cluster job) |
 
 **Deliberate limits.**
 - Delivery is at least once: a consumer deduplicates on the record id.
