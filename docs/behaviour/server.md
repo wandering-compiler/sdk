@@ -271,6 +271,11 @@ client settings are paired so pings are never rejected as `too_many_pings`.
 |---|---|---|
 | S7.1 | The client ping interval (30s) MUST be at least the server `MinTime` (10s). | `TestDefaultClientKeepalive_PairsWithServerEnforcement`, `TestGRPCComponent_PermitsTheClientsKeepalivePingsOnAnIdleConnection`, `TestDefaultClientKeepalive_MatchesTheLibraryClient` |
 | S7.2 | The server MUST ping idle clients every 30s and drop them after 10s without an ack. | `TestGRPCComponent_PingsAnIdleClientAndDropsItWithoutAnAck` |
+| S7.3 | A keepalive enforcement policy or server parameters in `ServerOptions` MUST replace the defaults (they are appended after them): the default policy answers pings sooner than 10s with GOAWAY `too_many_pings`, a caller's looser policy keeps the connection. | `TestGRPCComponent_ACallersEnforcementPolicyReplacesTheDefault`, `TestGRPCComponent_CallerKeepaliveOverridesTheDefault` |
+
+**Deliberate limits.**
+- An override is not checked against the w17 clients' 30s ping (`grpc.ServerOption` values cannot be inspected): a policy with `MinTime` above 30s, or without `PermitWithoutStream`, makes the server GOAWAY every w17 client's idle connection.
+- The live proof of S7.1 (`TestGRPCComponent_PermitsTheClientsKeepalivePingsOnAnIdleConnection`, a 33s ping cycle) is skipped under `go test -short`; the default run executes it.
 
 ## S8. gRPC panic recovery interceptors
 
