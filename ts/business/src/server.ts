@@ -58,7 +58,7 @@ import { deserializer, fromGrpcMetadata, serializer, toGrpcMetadata } from "./cl
 import { ConfigError } from "./config.js";
 import { Context, cancelCall } from "./context.js";
 import type { AnyMessage, MethodInfo, Pool } from "./descriptors.js";
-import { DistxError } from "./distx.js";
+import { DistxError, markBidi } from "./distx.js";
 import { STATUS_DETAILS_KEY, Status, StatusError, UserError, encodeRpcStatus, pack } from "./errors.js";
 import * as events from "./events.js";
 import type { Emit, Invalidate } from "./manifest.js";
@@ -646,7 +646,8 @@ function handler(m: MethodImpl, reg: Registry): UntypedHandleCall {
       call,
       reg,
       path,
-      async (ctx) => {
+      async (served) => {
+        const ctx = markBidi(served);
         await writeAll(call, ctx, m.fn(ctx, requests(call, ctx)) as AsyncIterable<unknown>);
         call.end();
       },

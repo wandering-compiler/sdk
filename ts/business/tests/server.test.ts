@@ -617,6 +617,53 @@ describe("streams", () => {
     expect(() => new Registry(p).register("test.stream.Streamer", new NotAGenerator())).toThrow(/Count.*async generator/);
   });
 
+  it("a bidi method cannot open a transaction", async () => {
+    // As in Go and the Rust SDK: a bidirectional stream's messages interleave
+    // with the caller's and nothing would bound the transaction, so begin (and
+    // run) refuse FAILED_PRECONDITION before any coordinator call.
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    let begun = 0;
+    const tx: distx.TxClient = {
+      begin: async () => {
+        begun++;
+        throw new Error("begin reached the coordinator");
+      },
+      commit: async () => undefined,
+      rollback: async () => undefined,
+    };
+    class TxChat extends Streamer {
+      override async *Chat(ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        for await (const r of reqs) {
+          await distx.begin(ctx, tx, distx.beginRequest("main"));
+          yield Ping({ n: r.n });
+        }
+      }
+    }
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new TxChat());
+    const [srv, port] = await listen(reg);
+    const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
+    try {
+      const c = new ServiceClient(conn, "test.stream.Streamer", p);
+      const e = await (async () => {
+        try {
+          for await (const _ of c.Chat(new Context(), [Ping({ n: 1 })])) void _;
+        } catch (err) {
+          return err;
+        }
+        return undefined;
+      })();
+      expect((e as StatusError).code).toBe(Status.FAILED_PRECONDITION);
+      expect(String((e as Error).message)).toMatch(/bidirectional-streaming/);
+      expect(begun).toBe(0);
+    } finally {
+      conn.close();
+      await stop(srv);
+    }
+  });
+
   it("a request stream that fails once the caller is gone reads as the cancel, not a panic", async () => {
     const logged: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));

@@ -358,7 +358,24 @@ function outcomeUnknown(e: unknown): boolean {
  * when the proxy supplied one): pass that context to every storage call that
  * belongs to the transaction.
  */
+const BIDI = Symbol("w17.distx.bidi");
+
+/**
+ * @internal The context a bidirectional-streaming method is served with (the
+ * server sets it): begin refuses a transaction on it.
+ */
+export function markBidi(ctx: Context): Context {
+  return ctx.withValue(BIDI, true);
+}
+
 export async function begin(ctx: Context, client: TxClient, req?: Message): Promise<[TxHandle, Context]> {
+  if (ctx.value(BIDI) === true) {
+    throw new StatusError(
+      Status.FAILED_PRECONDITION,
+      "distx: a bidirectional-streaming method cannot run a transaction (as in Go): its messages " +
+        "interleave with the caller's, and nothing would bound the transaction",
+    );
+  }
   const r = (req ?? beginRequest()) as AnyMessage;
   const root = rootFrom(ctx);
   if (root !== undefined && txscope.active(ctx)) return join(ctx, root, r);

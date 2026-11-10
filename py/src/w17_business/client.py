@@ -225,7 +225,11 @@ class Conn:
             async with self.channel.request(
                 m.path, Cardinality.STREAM_STREAM, m.request, m.response, deadline=deadline, metadata=pairs
             ) as stream:
-                sender = asyncio.ensure_future(_send_all(stream, reqs))
+                # The request goes out before the first read: grpclib refuses a
+                # recv on a stream whose request was not sent yet, and the
+                # sender task below has not run when the loop starts reading.
+                await stream.send_request()
+                sender = asyncio.ensure_future(_send_all(stream, reqs, request_sent=True))
                 try:
                     async for reply in stream:
                         yield reply
@@ -316,8 +320,9 @@ class CompanionConn(Conn):
             raise _as_status(e) from e
 
 
-async def _send_all(stream, reqs) -> None:
-    await stream.send_request()
+async def _send_all(stream, reqs, *, request_sent: bool = False) -> None:
+    if not request_sent:
+        await stream.send_request()
     if hasattr(reqs, "__aiter__"):
         async for r in reqs:
             await stream.send_message(r)

@@ -48,7 +48,7 @@ import grpclib.const
 from grpclib.const import Cardinality, Status
 from grpclib.exceptions import GRPCError, ProtocolError
 
-from . import events, observability, paging, txscope
+from . import distx, events, observability, paging, txscope
 from .config import ConfigError
 from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool
@@ -424,6 +424,7 @@ def _handler(m: _Method, served: Served) -> grpclib.const.Handler:
 
     async def stream_stream(stream) -> None:
         async def body(ctx: Context) -> None:
+            ctx = distx._mark_bidi(ctx)
             async for resp in m.fn(ctx, requests(stream)):
                 await stream.send_message(resp)
 
