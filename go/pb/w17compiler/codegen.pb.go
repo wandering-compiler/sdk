@@ -1631,8 +1631,8 @@ func (*LockEditIntent_RemoveBusinessBundle) isLockEditIntent_Intent() {}
 func (*LockEditIntent_SetCodegenVersion) isLockEditIntent_Intent() {}
 
 // SetCodegenVersionIntent sets (or clears) `lock.codegen_version` — the codegen
-// engine the project generates with (docs/specs/console/codegen-versions-
-// side-by-side.md §3).
+// engine the project generates with. A console routes each run to the engine
+// the pin resolves to, among the engines it carries.
 //
 // Two shapes, validated server-side like the SDK pin:
 //   - a release channel, `vMAJOR.MINOR` (`v0.1`): the newest patch of that
@@ -4703,8 +4703,8 @@ type PlaceGenerateStart struct {
 	// Which generating RPC the run is. Zero is GenerateProject, so a client that
 	// predates the field places what it always placed.
 	Op PlacementOp `protobuf:"varint,3,opt,name=op,proto3,enum=w17.storage.codegen.PlacementOp" json:"op,omitempty"`
-	// The handshake (docs/specs/console/codegen-versions-side-by-side.md §4).
-	// Every field below is additive: a client that predates them sends none,
+	// The codegen version handshake: the one place the console decides which
+	// engine runs the project. Every field below is additive: a client that predates them sends none,
 	// and the console then answers as for a project with no pin on a client
 	// speaking stream protocol 1.
 	//
