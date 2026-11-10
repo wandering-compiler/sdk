@@ -29,6 +29,7 @@
 package restgw
 
 import (
+	"container/heap"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -143,7 +144,7 @@ func WithMaxTicketsPerAddress(n int) MemoryTicketStoreOption {
 // clients, while refusing only delays new ones until the TTL frees room.
 func NewMemoryTicketStore(opts ...MemoryTicketStoreOption) *MemoryTicketStore {
 	s := &MemoryTicketStore{
-		entries:    make(map[string]memoryTicket),
+		entries:    make(map[string]*memoryTicket),
 		byAddr:     make(map[string][]string),
 		stop:       make(chan struct{}),
 		maxEntries: DefaultMaxTickets,
@@ -162,8 +163,11 @@ func NewMemoryTicketStore(opts ...MemoryTicketStoreOption) *MemoryTicketStore {
 // so single-replica main.go can construct + Close it
 // explicitly.
 type MemoryTicketStore struct {
-	mu         sync.Mutex
-	entries    map[string]memoryTicket
+	mu      sync.Mutex
+	entries map[string]*memoryTicket
+	// expiry orders the entries by expiresAt (a min-heap), so a sweep
+	// removes what expired without walking the live tickets.
+	expiry     ticketExpiry
 	bytes      int64
 	maxEntries int
 	maxBytes   int64
@@ -177,10 +181,38 @@ type MemoryTicketStore struct {
 }
 
 type memoryTicket struct {
+	ticket    string
 	labels    map[string]string
 	expiresAt time.Time
 	size      int64
 	addr      string
+	index     int // position in MemoryTicketStore.expiry
+}
+
+// ticketExpiry is a min-heap of the outstanding tickets by expiry
+// (container/heap); each entry knows its index so a redeemed ticket is
+// removed from it in O(log n).
+type ticketExpiry []*memoryTicket
+
+func (h ticketExpiry) Len() int           { return len(h) }
+func (h ticketExpiry) Less(i, j int) bool { return h[i].expiresAt.Before(h[j].expiresAt) }
+func (h ticketExpiry) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+func (h *ticketExpiry) Push(x any) {
+	e := x.(*memoryTicket)
+	e.index = len(*h)
+	*h = append(*h, e)
+}
+func (h *ticketExpiry) Pop() any {
+	old := *h
+	n := len(old)
+	e := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return e
 }
 
 // Issue mints a 32-byte URL-safe random ticket, stores it +
@@ -230,7 +262,9 @@ func (s *MemoryTicketStore) Issue(ctx context.Context, labels map[string]string,
 			return "", ErrTicketStoreFull
 		}
 	}
-	s.entries[ticket] = memoryTicket{labels: copied, expiresAt: now.Add(ttl), size: size, addr: addr}
+	e := &memoryTicket{ticket: ticket, labels: copied, expiresAt: now.Add(ttl), size: size, addr: addr}
+	s.entries[ticket] = e
+	heap.Push(&s.expiry, e)
 	s.bytes += size
 	if addr != "" {
 		s.byAddr[addr] = append(s.byAddr[addr], ticket)
@@ -257,7 +291,7 @@ func (s *MemoryTicketStore) Redeem(_ context.Context, ticket string) (map[string
 	if !ok {
 		return nil, ErrTicketInvalid
 	}
-	s.deleteLocked(ticket, entry)
+	s.deleteLocked(entry)
 	if s.now().After(entry.expiresAt) {
 		return nil, ErrTicketInvalid
 	}
@@ -266,8 +300,10 @@ func (s *MemoryTicketStore) Redeem(_ context.Context, ticket string) (map[string
 
 // deleteLocked removes one entry and releases its bytes and its address's
 // slot. Caller holds s.mu.
-func (s *MemoryTicketStore) deleteLocked(ticket string, e memoryTicket) {
+func (s *MemoryTicketStore) deleteLocked(e *memoryTicket) {
+	ticket := e.ticket
 	delete(s.entries, ticket)
+	heap.Remove(&s.expiry, e.index)
 	s.bytes -= e.size
 	if e.addr == "" {
 		return
@@ -290,7 +326,7 @@ func (s *MemoryTicketStore) deleteLocked(ticket string, e memoryTicket) {
 func (s *MemoryTicketStore) reapAddrLocked(addr string, now time.Time) {
 	for _, t := range append([]string(nil), s.byAddr[addr]...) {
 		if e, ok := s.entries[t]; ok && now.After(e.expiresAt) {
-			s.deleteLocked(t, e)
+			s.deleteLocked(e)
 		}
 	}
 }
@@ -320,12 +356,12 @@ func (s *MemoryTicketStore) reapExpired(now time.Time) {
 	s.reapExpiredLocked(now)
 }
 
-// reapExpiredLocked drops every expired entry. Caller holds s.mu.
+// reapExpiredLocked drops every expired entry, earliest first, and stops at
+// the first live one: its cost is what it removes, so a full store of live
+// tickets refuses in O(1). Caller holds s.mu.
 func (s *MemoryTicketStore) reapExpiredLocked(now time.Time) {
-	for k, e := range s.entries {
-		if now.After(e.expiresAt) {
-			s.deleteLocked(k, e)
-		}
+	for len(s.expiry) > 0 && now.After(s.expiry[0].expiresAt) {
+		s.deleteLocked(s.expiry[0])
 	}
 }
 

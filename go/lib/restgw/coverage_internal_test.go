@@ -49,19 +49,15 @@ func TestWithAuthUserData_EmptyIsNoOp(t *testing.T) {
 // Drives the janitor's eviction body directly (the timer-driven
 // caller fires once a minute, too slow for a unit test).
 func TestReapExpired_DropsExpiredKeepsLive(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
 	s := NewMemoryTicketStore()
 	defer s.Close()
+	s.now = func() time.Time { return now }
 	live, _ := s.Issue(context.Background(), map[string]string{"k": "live"}, time.Hour)
-	dead, _ := s.Issue(context.Background(), map[string]string{"k": "dead"}, time.Hour)
+	dead, _ := s.Issue(context.Background(), map[string]string{"k": "dead"}, time.Second)
 
-	// Force `dead` into the past, then reap as of now.
-	s.mu.Lock()
-	e := s.entries[dead]
-	e.expiresAt = time.Now().Add(-time.Minute)
-	s.entries[dead] = e
-	s.mu.Unlock()
-
-	s.reapExpired(time.Now())
+	// Reap as of a moment `dead` has passed its TTL and `live` has not.
+	s.reapExpired(now.Add(time.Minute))
 
 	s.mu.Lock()
 	_, deadStillThere := s.entries[dead]
