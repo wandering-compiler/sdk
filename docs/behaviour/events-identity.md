@@ -93,7 +93,8 @@ cannot decode; the server-sent-events hub, which forwards them, subscribes with
 
 **Configuration.** Glob syntax for `topicFilter`: `*` is one segment, `**` is zero
 or more segments, a literal matches exactly; an empty filter matches only an
-empty topic. A reserved `w17.*` topic is matched only by a filter whose first
+empty topic. The empty topic has no segment, so only the empty filter, `**` and
+`EveryTopic` match it; a filter with a `*` never does. A reserved `w17.*` topic is matched only by a filter whose first
 segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 
 **Guarantees.**
@@ -335,6 +336,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | `TestRedisBus_PublishTimeoutBoundsAHangingBroker` |
 | I6.11 | An entry queued behind a slow handler in one read MUST NOT be taken over by another replica's claim loop before it starts. | `TestRedisBus_QueuedEntryIsNotTakenOverByAnotherReplica` |
 | I6.12 | I5.18 MUST hold on Redis. | `TestDomainIsolation_Redis_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
+| I6.13 | An entry without a `topic` field (not an event envelope) MUST NOT reach any handler, the catch-all `**` included; it MUST be acknowledged and reported through `OnDeliverFailure`. | `TestRedisBus_EntryWithoutTopicIsSettledUnhandled_Embedded` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.

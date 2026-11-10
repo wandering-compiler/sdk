@@ -267,6 +267,11 @@ func MatchGlob(filter, topic string) bool {
 	if !strings.ContainsRune(filter, '*') {
 		return filter == topic
 	}
+	// The empty topic has no segment for a `*` to consume; split, it
+	// would read as one empty segment and `*` would match it.
+	if topic == "" {
+		return false
+	}
 	return matchSegments(strings.Split(filter, "."), strings.Split(topic, "."))
 }
 
