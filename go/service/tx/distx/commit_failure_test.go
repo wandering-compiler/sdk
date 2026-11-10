@@ -7,12 +7,14 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -109,5 +111,50 @@ func TestServer_Commit_ASerializationFailureAtCommitIsAborted(t *testing.T) {
 				t.Fatalf("second commit = %v, want NotFound", err)
 			}
 		})
+	}
+}
+
+// The Commit reply does not wait for after-commit work past the caller's
+// deadline: a registry hook slower than the deadline (N deferred emits ×
+// the bus PublishTimeout during a broker outage) used to push the reply past
+// it, and the caller reported a COMMITTED transaction as
+// ErrCommitOutcomeUnknown. The hook still runs, after the commit, to its end.
+func TestServer_Commit_ASlowAfterCommitHookDoesNotDelayTheReply(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	cl, reg := newServerOn(t, db)
+	ran := make(chan struct{}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = distx.Run(ctx, cl, &distxpb.BeginRequest{ConnectionName: "main"}, func(txCtx context.Context) error {
+		md, _ := metadata.FromOutgoingContext(txCtx)
+		id := ""
+		if v := md.Get(txregistry.HeaderName); len(v) > 0 {
+			id = v[0]
+		}
+		if !reg.OnCommit(id, func() { time.Sleep(900 * time.Millisecond); ran <- struct{}{} }) {
+			t.Fatalf("OnCommit refused for %q", id)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("the transaction committed; Run = %v", err)
+	}
+	if d := time.Since(start); d > 300*time.Millisecond {
+		t.Fatalf("Run took %s, past the caller's deadline", d)
+	}
+	select {
+	case <-ran:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the after-commit hook never ran")
+	}
+	wctx, wcancel := context.WithTimeout(context.Background(), time.Second)
+	defer wcancel()
+	if err := txregistry.WaitAfterCommit(wctx); err != nil {
+		t.Fatalf("WaitAfterCommit: %v", err)
 	}
 }

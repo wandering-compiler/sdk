@@ -20,7 +20,7 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 | D3 | Transaction lifecycle (`distx.Run`) | `go/service/tx/distx/run.go` — `Run` |
 | D4 | Nested transactions | `go/service/tx/distx/client.go` — `Begin`, `TxHandle`; `go/service/tx/txscope/txscope.go` |
 | D5 | Transaction registry and coordinator server | `go/service/tx/txregistry/memory.go` — `Memory`; `go/service/tx/txregistry/txregistry.go` — `AdoptTx`, `AdoptTxIsolated`; `go/service/tx/distx/server.go` — `Server` |
-| D6 | After-commit work (emit deferral) | `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txscope/txscope.go` |
+| D6 | After-commit work (emit deferral) | `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`, `WaitAfterCommit`; `go/service/tx/txscope/txscope.go` |
 | D7 | Auto-rollback interceptor | `go/service/tx/grpcrollback/grpcrollback.go` — `Interceptor` |
 | D8 | Runtime SQL shape and binding helpers | `go/lib/dqlbind/dqlbind.go` |
 | D9 | Cursor (keyset) paging, limit, totals | `go/lib/paging/cursor.go`, `keyset.go`, `metadata.go` |
@@ -206,7 +206,7 @@ its own per-method transaction when no header is present.
 
 ## D6. After-commit work (emit deferral)
 
-**Code.** `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`; `go/service/tx/txscope/txscope.go`.
+**Code.** `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`, `WaitAfterCommit`; `go/service/tx/txscope/txscope.go`; `go/service/runtime/runtime.go` — `GRPCComponent`.
 
 **Purpose.** Work such as event emission runs only after the write it announces has committed.
 
@@ -219,9 +219,12 @@ its own per-method transaction when no header is present.
 | D6.3 | A panic in a registry after-commit hook MUST be recovered under its own recover and reported; the later hooks still run and `Commit` returns success for the committed transaction. | `TestCommit_APanickingHookIsRecoveredAndTheRestRun` |
 | D6.4 | Nothing MUST be announced for a rolled-back or cancelled root, or for a commit the server refused. | `TestEmit_NothingIsAnnouncedForARolledBackTransaction`, `TestEmit_ACancelledRootAnnouncesNothing`, `TestEmit_ACommitTheServerRefusesDropsTheParkedWork` |
 | D6.5 | In the Rust business SDK, a panic in a piece of after-commit work (`on_commit`, the event middleware's publish) MUST be caught per piece and reported: the pieces after it still run, the call answers the committed outcome, and the panic text never reaches the caller. Work run at once outside a transaction is caught the same way. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the `panic-hook` case) |
+| D6.6 | The coordinator's Commit MUST NOT hold its reply past the caller's deadline for the registry's after-commit work: the work starts after the database commit, in registration order, and the reply waits for it only until a margin before the deadline (a fifth of the time left, between 20 ms and 1 s; without a deadline, until the work ends or the caller cancels). Work still running then finishes after the reply, so a committed transaction is never answered as an unknown outcome because its work is slow. | `TestServer_Commit_ASlowAfterCommitHookDoesNotDelayTheReply` |
+| D6.7 | A gRPC server built by `runtime.GRPCComponent` MUST wait (bounded by the 30 s teardown) for after-commit work that outlived its Commit reply before it runs the shutdown hooks that close what the work uses; `txregistry.WaitAfterCommit` is that wait for any other host. | `TestGRPCComponent_ShutdownWaitsForAfterCommitWork` |
 
 **Deliberate limits.**
 - Publication after commit is at-most-once: there is no transactional outbox, so a crash between the database commit and the publish loses the event. A commit whose outcome is unknown (D3.11) runs none of its parked work.
+- After-commit work of different transactions runs in commit order only while each finishes within its Commit's reply budget (D6.6); work that outlives it overlaps the next transaction's, so their events may publish out of commit order.
 
 ## D7. Auto-rollback interceptor
 
