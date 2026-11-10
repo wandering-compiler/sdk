@@ -22,7 +22,7 @@ p{margin:0}
 .muted{color:var(--muted);font-size:13px}
 .error{color:var(--danger);font-size:13px}
 .code{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;user-select:all;-webkit-user-select:all;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
-.row{display:flex;align-items:center;gap:12px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 button{font:600 14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:10px 18px;cursor:pointer}
 button:hover{filter:brightness(1.08)}
 button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
@@ -35,14 +35,17 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 // the person's own copy takes it.
 const copyScript = `
 (function(){
-  var b=document.getElementById("copy"),c=document.getElementById("code"),s=document.getElementById("copied");
+  var b=document.getElementById("copy"),c=document.getElementById("code"),s=document.getElementById("copied"),timer;
   if(!b||!c||!s)return;
   function select(){var r=document.createRange();r.selectNodeContents(c);var sel=window.getSelection();sel.removeAllRanges();sel.addRange(r)}
+  // say clears the status first, so a second click is announced again, and
+  // clears it a moment later, so "Copied" never describes an older click.
+  function say(m){clearTimeout(timer);s.textContent="";setTimeout(function(){s.textContent=m},50);timer=setTimeout(function(){s.textContent=""},4000)}
   b.addEventListener("click",function(){
     var t=c.textContent;
     if(navigator.clipboard&&navigator.clipboard.writeText){
-      navigator.clipboard.writeText(t).then(function(){s.textContent="Copied"},function(){select();s.textContent="Selected: press Ctrl+C or Cmd+C"});
-    }else{select();s.textContent="Selected: press Ctrl+C or Cmd+C"}
+      navigator.clipboard.writeText(t).then(function(){say("Copied")},function(){select();say("Selected: press Ctrl+C or Cmd+C")});
+    }else{select();say("Selected: press Ctrl+C or Cmd+C")}
   });
 })();
 `
