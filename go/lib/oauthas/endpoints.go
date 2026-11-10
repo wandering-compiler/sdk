@@ -139,15 +139,9 @@ func (s *server) redirectError(w http.ResponseWriter, r *http.Request, req Autho
 
 // errorPage shows an authorization error to the user.
 func errorPage(w http.ResponseWriter, oe *Error) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-	w.WriteHeader(http.StatusBadRequest)
-	_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>Sign-in request refused</title>` +
-		`<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">` +
-		`<h1 style="font-size:1.25rem">This sign-in request cannot be completed</h1><p>` +
-		html.EscapeString(oe.Description) + `</p><p style="color:dimgray">Error: ` + html.EscapeString(oe.Code) +
-		`</p><p>Close this window and start again from the application.</p></body>`))
+	writePage(w, http.StatusBadRequest, "This sign-in request cannot be completed",
+		`<p>`+html.EscapeString(oe.Description)+`</p><p class="error">Error: `+html.EscapeString(oe.Code)+
+			`</p><p>Close this window and start again from the application.</p>`, false)
 }
 
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
