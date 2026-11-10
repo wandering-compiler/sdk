@@ -38,7 +38,7 @@ func TestTypeRegexes_MatchTheirDocumentedShapes(t *testing.T) {
 			[]string{"", "http://", "https://", "ftp://x", "example.com", " https://x", "HTTP://x"}},
 		{"MAC", MAC,
 			[]string{"aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF", "01:23:45:67:89:ab"},
-			[]string{"", "aabbccddeeff", "aa:bb:cc:dd:ee", "aa:bb:cc:dd:ee:ff:00", "gg:bb:cc:dd:ee:ff", "aa.bb.cc.dd.ee.ff", "a:bb:cc:dd:ee:ff"}},
+			[]string{"", "aabbccddeeff", "aa:bb:cc:dd:ee", "aa:bb:cc:dd:ee:ff:00", "gg:bb:cc:dd:ee:ff", "aa.bb.cc.dd.ee.ff", "a:bb:cc:dd:ee:ff", "aa:bb-cc:dd-ee:ff", "aa-bb-cc-dd-ee:ff"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

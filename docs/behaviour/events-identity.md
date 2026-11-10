@@ -718,10 +718,10 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I17.1 | `ValidEmail` MUST require one `@`, a non-empty local part and a domain with an inner dot, and reject any byte `<= 0x20` or `0x7f`. | `TestValidEmail`, `TestValidEmail_RejectsControlChars` |
+| I17.1 | `ValidEmail` MUST require one `@`, a non-empty local part and a domain with an inner dot, and reject any byte `<= 0x20` or `0x7f` and any Unicode space or control character (no-break space, line and paragraph separators, C1 controls); non-ASCII letters pass. | `TestValidEmail`, `TestValidEmail_RejectsControlChars`, `TestValidEmail_RejectsUnicodeSpaceAndControl` |
 | I17.2 | `FitsDecimal(s, precision, scale)` MUST be value preserving, reject exponent and NaN, and accept empty input. | `TestFitsDecimal` |
 | I17.3 | `FitsDecimal` MUST agree with the database for every column shape the declaration validator admits (including scale greater than precision and negative scale). | `TestFitsDecimal_AgreesWithPostgresOnEveryScale` |
-| I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` MUST match their documented shapes. | `TestTypeRegexes_MatchTheirDocumentedShapes` |
+| I17.4 | `UUID` (8-4-4-4-12 hex, any version, case-insensitive), `Slug`, `URL` (`^https?://.+$`) and `MAC` (six hex pairs, one separator throughout: all `:` or all `-`) MUST match their documented shapes. | `TestTypeRegexes_MatchTheirDocumentedShapes` |
 
 **Deliberate limits.**
 - These are shape checks. `URL` does no host check and accepts only a lower-case scheme. `ValidEmail` blocks control characters but not markup; output escaping is the renderer's job.
