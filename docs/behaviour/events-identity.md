@@ -174,6 +174,7 @@ sees only what the envelope carries.
 | I4.8 | `Subscribe` after Drain MUST return `ErrSubscriberDraining`, checked under the same lock as the registration. | `TestMemoryBus_SubscribeAfterDrainIsRefused` |
 | I4.9 | Drain of any subscriber MUST apply to the whole bus: after it, `Dispatch` on every channel, including channels the drained subscriber never served, is refused with `ErrBusDraining`. | `TestMemoryBus_DispatchAfterDrainIsRefused` |
 | I4.10 | A handler MUST run with its subscription's context and MUST NOT see the emitter's context values or its incoming or outgoing metadata (transaction id, principal, scopes). | `TestMemoryBus_HandlerContextIsNotTheEmitters` |
+| I4.11 | A dispatch that matches no subscribed handler MUST fire `OnDrop(no_handler)`; the default Observer MUST log it once per channel and topic, not report every emit. | `TestMemoryBus_DispatchWithNoMatchingHandlerIsADrop`, `TestDefaultObserver_NoHandlerDropIsLoggedOncePerTopic` |
 
 **Deliberate limits.**
 - No ordering between events: each delivery is an independent goroutine.

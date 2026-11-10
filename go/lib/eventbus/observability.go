@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
@@ -114,6 +115,10 @@ const (
 	// because the PEL delivery counter exceeded MaxDeliver
 	// (RedisBus claim-loop path).
 	DropReasonMaxDeliverExceeded = "max_deliver_exceeded"
+
+	// DropReasonNoHandler — an in-process (MemoryBus) dispatch
+	// matched no subscribed handler, so the event reached nobody.
+	DropReasonNoHandler = "no_handler"
 )
 
 // DefaultObserver is what a bus wires when the caller's Options
@@ -152,6 +157,15 @@ func (DefaultObserver) OnDeliverFailure(channel, topic string, err error) {
 // "eventbus drop failed" read as a second fault when the drop was the
 // outcome itself.
 func (DefaultObserver) OnDrop(channel, topic, reason string) {
+	if reason == DropReasonNoHandler {
+		// A deployment shape (nothing in this process subscribes to the
+		// topic), not a fault per event: one log line per channel and
+		// topic, not an error report on every emit.
+		if _, seen := noHandlerSeen.LoadOrStore(channel+"\x00"+topic, struct{}{}); !seen {
+			log.Printf("eventbus: no in-process handler for channel=%s topic=%s; the event reached nobody (logged once)", channel, topic)
+		}
+		return
+	}
 	what := reason
 	switch reason {
 	case DropReasonMaxDeliverExceeded:
@@ -161,6 +175,10 @@ func (DefaultObserver) OnDrop(channel, topic, reason string) {
 	}
 	reportBusEvent(fmt.Errorf("eventbus dropped a message: channel=%s topic=%s: %s", channel, topic, what))
 }
+
+// noHandlerSeen holds the channel and topic pairs DefaultObserver has
+// already logged a no-handler drop for.
+var noHandlerSeen sync.Map
 
 // reportBusFailure writes the one line an operator needs to identify
 // WHICH event was lost — the channel and topic, not just that
