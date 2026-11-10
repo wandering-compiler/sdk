@@ -65,7 +65,7 @@ logged, naming the dialect, the parameter and the pinned value, never the DSN.
 | D1.4 | PostgreSQL: a parameter the operator named MUST keep the operator's value, in URL and keyword form, including a `search_path` set through `options`. | `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplyPGDSNParams_SearchPathInOptionsIsKept` |
 | D1.5 | The applier MUST recognise an operator parameter by its name, not by matching text elsewhere in the DSN (a password, a database name). | `TestApply_NameInsideAPasswordDoesNotSuppressThePin`, `TestApplyMySQLDSNParams_QuestionMarkInPasswordDoesNotStartTheQuery` |
 | D1.6 | SQLite: on a DSN that does not set them, foreign keys MUST be enforced, LIKE MUST be case-sensitive, and `time.Time` MUST be stored in a format SQLite date functions parse. | `TestApplySQLitePragmas_LiveConnection`, `TestApplySQLitePragmas_PinsABareDSN` |
-| D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | `TestMySQLPins_LiveServer`, `TestURLToDriverDSN_CollationPinAndOperatorChoice` |
+| D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | `TestMySQLPins_LiveServer`, `TestURLToDriverDSN_CollationPinAndOperatorChoice` (`go/tooling/migrate/internal/mysql`) |
 | D1.8 | PostgreSQL: single-quote-doubling escaping MUST stay correct and bare table names MUST resolve in `public`. | `TestPGPins_LiveServer` |
 | D1.9 | The helpers MUST NOT log the DSN. A kept operator value that differs from the pin MUST be logged once per process and parameter, naming the parameter only. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` |
 | D1.10 | SQLite: a pragma the operator set MUST keep the operator's value on the live connection, whatever its spelling; an equal value spelled differently is not a difference. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged`, `TestApplySQLitePragmas_LiveConnection` |
@@ -305,7 +305,7 @@ the registry dooms the transaction before waiting (D5.12).
 
 ## D9. Cursor (keyset) paging, limit, totals
 
-**Code.** `go/lib/paging/cursor.go` — `EncodeCursor`, `DecodeCursor`, `PageCursor`; `go/lib/paging/keyset.go` — `ClampLimit`; `go/lib/paging/metadata.go`.
+**Code.** `go/lib/paging/cursor.go` — `EncodeCursor`, `DecodeCursor`, `PageCursor`; `go/lib/paging/keyset.go` — `ClampLimit`; `go/lib/paging/metadata.go`; `go/lib/paging/forward.go` — `Forward`, `Forwarded`, `WithoutForward`; `go/lib/paging/position.go` — `SetPosition`, `PositionFromHeader`, `RelayPosition`, `RelayPositionUnaryInterceptor`.
 
 **Purpose.** Opaque, tamper-proof page cursors at the REST boundary, plus the metadata that carries boundaries, limit and the cached total from the gateway to storage.
 
@@ -319,6 +319,7 @@ the registry dooms the transaction before waiting (D5.12).
 | `MaxLimit` | 10000 | the largest page any paged query returns; an endpoint declaring a larger maximum gets pages of `MaxLimit` rows and its cursors walk the rest |
 | `LimitFromIncomingMD` | absent, malformed or `0` → absent | above `MaxLimit` → `MaxLimit` |
 | metadata keys | `x-w17-paging-boundaries`, `x-w17-paging-limit`, `x-w17-paging-total` | — |
+| position response headers | `NextMDKey`, `PrevMDKey`, `TotalMDKey`: the boundary a forward cursor resumes after (the page's last row), the one a backward cursor resumes before (its first row), the total | set by the storage handler of a paged query (`SetPosition`); read by the gateway (`PositionFromHeader`) |
 
 **Wire format.** `base64url(PageCursor) "." base64url(HMAC-SHA256)`. `PageCursor` carries the
 serialized request, boundary values, total, direction, schema version and sort selector.
@@ -328,23 +329,27 @@ serialized request, boundary values, total, direction, schema version and sort s
 | ID | Guarantee | Test |
 |---|---|---|
 | D9.1 | A forged or tampered cursor MUST be rejected by a constant-time MAC check before any of its bytes reach the request. | `TestDecodeCursor_RejectsForgedCursor`, `TestDecodeCursor_RejectsTamperedPayload` |
-| D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `TestSchemaVersion_Rejection`; the schema version hashes the endpoint's request message, so another endpoint's cursor is a version mismatch |
+| D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `TestSchemaVersion_Rejection` (the version check); the version itself is computed by generated code from the endpoint's request message, so two endpoints over one request type share a version — that half is not covered in the SDK |
 | D9.3 | On resume the request MUST be replaced by the minted one; filters cannot change mid-session and the cursor's sort selector is authoritative. | `TestDecodeCursor_ResumeReplacesTheRequest`, `TestEncodeDecode_SortSelectorRoundtrip` |
 | D9.4 | An empty boundary oneof MUST be rejected as malformed on both the cursor and metadata paths, without panicking. | `metadata_test.go`, `TestScalarOf_*` |
 | D9.5 | `uint64` keys above `MaxInt64` MUST round-trip without sign wrap. | `keyset_uint64_test.go` |
-| D9.6 | COUNT(*) MUST run on the first page only; resumed pages reuse the total cached in the signed cursor. | `metadata_test.go` |
+| D9.6 | COUNT(*) MUST run on the first page only; resumed pages reuse the total cached in the signed cursor. | `TestEncodeTotalMD_AndDecodeRoundtrip`, `TestEncodeDecode_Roundtrip` (the total's carriage); skipping the COUNT on a resumed page is the generated query's — not covered in the SDK |
 | D9.7 | Empty boundaries MUST produce an empty token (no next/previous link). | `cursor_test.go` |
 | D9.8 | Paging metadata MUST NOT be forwarded hop-to-hop by the principal relay. | `TestForwardToOutgoing_ExcludesNonPrincipal` in `go/lib/principal` |
 | D9.9 | The limit MUST be clamped to the configured maximum, and never above `MaxLimit` even when the endpoint declares no maximum. | `TestClampLimit` |
 | D9.10 | Each resumed page MUST re-apply authorization and data scopes from the caller's verified identity, never from request fields carried in the cursor. | no test |
 | D9.11 | No caller MUST receive an unbounded result set: the storage side clamps the `x-w17-paging-limit` header to `MaxLimit` and treats `0` as absent, whoever sent it. | `TestLimitFromIncomingMD_ClampsToMaxLimit`, `TestClampLimit` |
-| D9.12 | Keyset pages MUST stay stable under concurrent inserts (requires a unique ORDER BY tiebreak, emitted by the generator). | no test |
+| D9.12 | Keyset pages MUST stay stable under concurrent inserts (requires a unique ORDER BY tiebreak, emitted by the generator). | no test in the SDK: the tiebreak is generated code |
 | D9.13 | The cursor secret MUST be read from the environment. | `TestCursorKeyFromEnv` |
 | D9.14 | A cursor encoded under `CallerKey(key, parts…)` MUST decode only under the same key and caller parts; for any other caller it fails as `ErrCursorMalformed`. | `TestCallerKey_ACursorDoesNotDecodeForAnotherCaller` |
+| D9.15 | `Forward(ctx)` MUST copy the incoming paging keys (boundaries, limit, total) onto the outgoing side as one set — dropping all three outgoing copies first, so a first-page request does not go out with stale boundaries; keeping every other outgoing key; not writing through to the parent context — and mark the context; with no incoming paging key it returns ctx unchanged. | `TestForward_CopiesIncomingPagingOntoOutgoing`, `TestForward_ReplacesStaleOutgoingPagingAsASet`, `TestForward_NothingWhenIncomingCarriesNoPaging`, `TestForward_DoesNotWriteThroughToTheParentsOutgoingMetadata` |
+| D9.16 | `RelayPositionUnaryInterceptor` (and the in-process bridge, S21.19) MUST relay the page position a call made with a forwarded context answered with onto the calling method's response headers, only when the call succeeded; a call without the mark relays nothing. Position headers MUST round-trip through `PositionMD` / `PositionFromHeader`; `SetPosition` without a server transport is a no-op. | `TestRelayPositionUnaryInterceptor`, `TestPosition_RoundTrip`, `TestSetPosition_WithoutTransportIsANoop`, `TestConn_Invoke_RelaysThePagePositionOfAForwardedCall` |
 
 **Deliberate limits.**
 - Cursors are integrity-protected, not confidential: list request fields are visible to anyone who sees the URL.
 - Cursors carry no expiry; they stay valid until the key or schema changes, and the cached total can be stale.
+- A relayed position is set with `grpc.SetHeader`: once the calling method's response headers went out (it sent a header or a stream message), the relay is silently lost and the gateway builds no next/previous cursor. Two forwarded calls in one method both set the keys; `PositionFromHeader` takes the LAST value, so which page wins is the order the calls finished — forward the one call that serves the page.
+- `Forward` is not refused on a direct call to the method's own served methods (`s.self`): the callee gets the marked context as it is, and its storage calls relay their positions onto the caller's response. Documented on `Forward`; nothing enforces it.
 - The SDK binds a cursor to a caller only when the code that encodes and decodes it passes `CallerKey`; generated gateway code must use it for D9.14 to hold. Binding is a second line: D9.10 still requires authorization and scopes from the verified identity on every page.
 
 ## D10. Admin column sort selector

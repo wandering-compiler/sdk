@@ -701,8 +701,12 @@ directly, with behaviour equivalent to a wire hop.
 - Unary `Invoke`: refuses a done context with the matching status before the method lookup;
   unknown method → `Unimplemented`; opens an internal span; recovers a panic into a generic
   `Internal`; rebuilds the context (detaches the transaction scope, relays the principal
-  stamps to outgoing, turns outgoing metadata into incoming, clears outgoing); deep-copies
-  request and reply; honours `grpc.Header` / `grpc.Trailer` call options and ignores others.
+  stamps to outgoing, drops the caller's `paging.Forward` mark, turns outgoing metadata into
+  incoming, clears outgoing); deep-copies request and reply; honours `grpc.Header` /
+  `grpc.Trailer` call options and ignores the others (they configure a wire call); for a call
+  made with a `paging.Forward` context, relays the page position the handler reported onto
+  the caller's own response headers, as `paging.RelayPositionUnaryInterceptor` does over the
+  wire (D9.15).
 - Streaming `NewStream`: the handler runs on its own goroutine; unbuffered channels give
   backpressure; a separate `finished` channel ends the stream; a panic becomes `Internal`;
   the server context is a child of the caller's and is cancelled on finish.
@@ -729,6 +733,7 @@ directly, with behaviour equivalent to a wire hop.
 | S21.16 | A nested call MUST NOT be granted more than a wire hop. | covered by the S21.4 tests |
 | S21.17 | Registering a service twice, or an impl that does not satisfy the handler type, MUST panic instead of replacing or accepting it. | `TestConn_RegisterService_DuplicateIsRefused`, `TestConn_RegisterService_WrongImplIsRefused` |
 | S21.18 | Repeated interceptor options MUST append to one chain in option order; a later option MUST NOT drop an earlier one. | `TestConn_UnaryInterceptorOptionsAppend`, `TestConn_StreamInterceptorOptionsAppend` |
+| S21.19 | A unary call made with a `paging.Forward` context MUST relay the page position its handler reported (only when the call succeeded) onto the caller's response headers, and an unforwarded sibling call MUST relay nothing; the handler itself MUST serve under a context without its caller's mark (`paging.WithoutForward`), so its own unforwarded calls relay nothing onto the response the caller reads its page from. | `TestConn_Invoke_RelaysThePagePositionOfAForwardedCall`, `TestConn_Invoke_AForwardedCallersMarkDoesNotReachTheHandler` |
 
 **Deliberate limits.**
 - A stream goroutine stays alive until the caller cancels its context or reads to the end — the same contract as grpc-go.
