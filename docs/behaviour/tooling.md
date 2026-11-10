@@ -853,12 +853,18 @@ topics and times out after 5 s by default.
 |---|---|---|
 | T25.1 | Stream frames MUST match in order, and the close and error rules MUST hold. | `TestExpectStream_*` |
 | T25.2 | Event awaits MUST honour topic, timeout and error frames. | `TestAwaitEvent_*` |
-| T25.3 | An awaited event MUST be attributable to this step's call, not an earlier step's. | `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent`, `TestSSESubscription_IgnoresFramesBeforeTheMark` |
+| T25.3 | An awaited event MUST be one the subscription delivered after this step's call started: every frame the reader parsed before the mark set just before the call is skipped, so an earlier step's event that already arrived is never taken. | `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent`, `TestSSESubscription_IgnoresFramesBeforeTheMark` |
 | T25.4 | A suite MUST be able to assert that an event is not delivered (for example to another organization). | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_AbsentCannotCapture` |
 | T25.5 | A frame whose `data:` is not JSON MUST fail the step, not yield empty data. | `TestAwaitEvent_NonJSONDataFailsTheStep`, `TestExpectStream_NonJSONFrameFailsTheStep` |
 
 **Deliberate limits.**
 - Client-streaming and bidirectional (WebSocket) streams are not supported.
+- An await cannot attribute an event to the call: frames carry no server-side time or sequence,
+  and the mark is compared with the time the reader parsed a frame. An earlier step's event that
+  the server emits late, or that the reader parses only after the mark, passes an await whose
+  `match` it satisfies — an empty `match` takes the first frame on the topic. A step that awaits
+  a topic an earlier step also emits needs a `match` that tells the two events apart (an id the
+  step's own call captured).
 
 ## T26. Stress
 
