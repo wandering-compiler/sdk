@@ -139,10 +139,12 @@ func TestDecrypt_ARetiredKeyVersionNamesItself(t *testing.T) {
 }
 
 // A column converted from plaintext still holds unencrypted rows. Saying which
-// problem that is beats returning gibberish or an authentication failure.
+// problem that is beats returning gibberish or an authentication failure. A
+// value without the full four-part envelope is one of them; one WITH it is
+// ours, and a broken one is ErrMalformed (see the tampered-value test).
 func TestDecrypt_PlaintextIsReportedAsNotEncrypted(t *testing.T) {
 	kr := ring(t, "1:"+key(1))
-	for _, stored := range []string{"", "plain-old-secret", "w17c.1.d.not-base64!!", "w17c.1.x.AAAA"} {
+	for _, stored := range []string{"", "plain-old-secret", "w17c", "w17c.1.d", "example.w17c.1.d"} {
 		if _, err := kr.Decrypt(stored); !errors.Is(err, fieldcrypt.ErrNotEncrypted) {
 			t.Errorf("Decrypt(%q) = %v, want ErrNotEncrypted", stored, err)
 		}
@@ -171,6 +173,64 @@ func TestDecrypt_ATamperedValueIsDistinguishedFromPlaintext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does not authenticate") {
 		t.Errorf("err = %v, want it to name the authentication failure", err)
+	}
+
+	// A value that carries this package's envelope but whose envelope is
+	// broken is ours too: ErrMalformed, never ErrNotEncrypted (whose remedy,
+	// "run the plaintext data migration", is the wrong one for it).
+	parts := strings.SplitN(stored, ".", 4)
+	for name, bad := range map[string]string{
+		"invalid base64 in the body":  stored + "!",
+		"body shorter than the nonce": strings.Join(parts[:3], ".") + "." + base64.RawURLEncoding.EncodeToString([]byte("ab")),
+		"unknown mode letter":         parts[0] + "." + parts[1] + ".z." + parts[3],
+		"non-numeric key version":     parts[0] + ".x." + parts[2] + "." + parts[3],
+	} {
+		_, err := kr.Decrypt(bad)
+		if errors.Is(err, fieldcrypt.ErrNotEncrypted) || !errors.Is(err, fieldcrypt.ErrMalformed) {
+			t.Errorf("%s: err = %v, want ErrMalformed (the value is ours but unreadable)", name, err)
+		}
+	}
+}
+
+// No decryption error carries the stored value, the plaintext or key
+// material: they reach logs and error reports, and the column is encrypted
+// precisely so that its content stays out of them.
+func TestDecryptErrors_CarryNoStoredBytesPlaintextOrKey(t *testing.T) {
+	const plain = "very-secret-plaintext"
+	k1 := key(1)
+	kr := ring(t, "1:"+k1)
+	stored, err := kr.EncryptRandomised(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.SplitN(stored, ".", 4)
+	mid := len(stored) - 8
+	other := key(200)
+	for name, c := range map[string]struct {
+		kr     *fieldcrypt.Keyring
+		stored string
+	}{
+		"tampered":            {kr, stored[:mid] + string(flip(stored[mid])) + stored[mid+1:]},
+		"wrong key":           {ring(t, "1:"+other), stored},
+		"unknown key version": {ring(t, "2:"+other), stored},
+		"malformed":           {kr, parts[0] + "." + parts[1] + ".z." + parts[3]},
+		"not encrypted":       {kr, plain},
+	} {
+		_, err := c.kr.Decrypt(c.stored)
+		if err == nil {
+			t.Fatalf("%s: decrypted", name)
+		}
+		msg := err.Error()
+		for what, secret := range map[string]string{
+			"the stored body": parts[3][:16],
+			"the plaintext":   plain,
+			"the key":         k1[:16],
+			"the other key":   other[:16],
+		} {
+			if strings.Contains(msg, secret) {
+				t.Errorf("%s: the error carries %s: %q", name, what, msg)
+			}
+		}
 	}
 }
 

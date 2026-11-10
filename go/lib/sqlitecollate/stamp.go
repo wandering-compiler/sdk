@@ -34,16 +34,20 @@ func EnsureStamp(ctx context.Context, db *sql.DB) error {
 		)`); err != nil {
 		return fmt.Errorf("collation stamp: ensure %s: %w", StampTable, err)
 	}
+	// Write first, then read back: a fresh database gets this build's stamp,
+	// and an applier racing another one on it reads whichever stamp won
+	// instead of failing on the primary key (a read-then-INSERT left that
+	// window open). A stamp already there is left alone and judged below.
+	if _, err := db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO `+StampTable+` (id, fingerprint) VALUES (1, ?)`, Fingerprint()); err != nil {
+		return fmt.Errorf("collation stamp: write: %w", err)
+	}
 	stored, ok, err := readStamp(ctx, db)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		if _, err := db.ExecContext(ctx,
-			`INSERT INTO `+StampTable+` (id, fingerprint) VALUES (1, ?)`, Fingerprint()); err != nil {
-			return fmt.Errorf("collation stamp: write: %w", err)
-		}
-		return nil
+		return fmt.Errorf("collation stamp: %s holds no row after writing one", StampTable)
 	}
 	if stored == legacyFingerprint() {
 		return upgradeStamp(ctx, db)

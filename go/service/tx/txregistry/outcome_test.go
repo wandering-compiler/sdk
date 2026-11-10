@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wandering-compiler/sdk/go/service/tx/txregistry"
 )
@@ -135,6 +136,78 @@ func TestMemory_Outcome_BoundedByCap(t *testing.T) {
 	}
 	if got := reg.Active(); got != 0 {
 		t.Errorf("Active = %d, want 0 — the test leaked transactions", got)
+	}
+}
+
+// EndedAs is the machine-readable half of a tombstone: what a coordinator
+// settling an ambiguous Commit branches on. A live id, an id never held and
+// an evicted one are all "unknown" — the registry cannot say.
+func TestMemory_EndedAs_PerDrainPath(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		drain func(*testing.T, *txregistry.Memory, string)
+		want  txregistry.Ended
+	}{
+		{"still open", func(*testing.T, *txregistry.Memory, string) {}, txregistry.EndedUnknown},
+		{"committed", func(t *testing.T, reg *txregistry.Memory, id string) {
+			mustNil(t, reg.Commit(context.Background(), id))
+		}, txregistry.EndedCommitted},
+		{"rolled back", func(t *testing.T, reg *txregistry.Memory, id string) {
+			mustNil(t, reg.Rollback(context.Background(), id))
+		}, txregistry.EndedNotCommitted},
+		{"rolled back by a failed participant", func(t *testing.T, reg *txregistry.Memory, id string) {
+			mustNil(t, reg.RollbackCaused(context.Background(), id, "a call inside it failed"))
+		}, txregistry.EndedNotCommitted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := singleConnRegistry(t)
+			id, err := reg.Begin(context.Background(), txregistry.BeginOptions{ConnectionName: "main"})
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			tc.drain(t, reg, id)
+			if got := reg.EndedAs(id); got != tc.want {
+				t.Errorf("EndedAs = %v, want %v", got, tc.want)
+			}
+			if tc.want == txregistry.EndedUnknown {
+				mustNil(t, reg.Rollback(context.Background(), id))
+			}
+		})
+	}
+	reg := singleConnRegistry(t)
+	if got := reg.EndedAs("never-existed"); got != txregistry.EndedUnknown {
+		t.Errorf("EndedAs(never held) = %v, want unknown", got)
+	}
+}
+
+// The commit's own after-commit work already sees the transaction as
+// committed, and a transaction the orphan watcher reclaimed did not commit.
+func TestMemory_EndedAs_CommittedBeforeTheHooksAndTimedOutIsNotCommitted(t *testing.T) {
+	reg := singleConnRegistry(t)
+	id, err := reg.Begin(context.Background(), txregistry.BeginOptions{ConnectionName: "main"})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	var inHook txregistry.Ended
+	reg.OnCommit(id, func() { inHook = reg.EndedAs(id) })
+	mustNil(t, reg.Commit(context.Background(), id))
+	if err := txregistry.WaitAfterCommit(context.Background()); err != nil {
+		t.Fatalf("WaitAfterCommit: %v", err)
+	}
+	if inHook != txregistry.EndedCommitted {
+		t.Errorf("EndedAs inside the after-commit hook = %v, want committed", inHook)
+	}
+
+	id2, err := reg.Begin(context.Background(), txregistry.BeginOptions{ConnectionName: "main", Timeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for reg.Active() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := reg.EndedAs(id2); got != txregistry.EndedNotCommitted {
+		t.Errorf("EndedAs after the orphan watcher = %v, want not_committed", got)
 	}
 }
 

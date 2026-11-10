@@ -9,7 +9,7 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 `go/service/tx/txregistry`, `go/service/tx/txscope`, `go/service/tx/grpcrollback`,
 `go/lib/dqlbind`, `go/lib/paging`, `go/lib/listsort`, `go/lib/materialize`,
 `go/lib/sqlitecollate`, `go/lib/kvfs`, `go/lib/kvhash`, `go/lib/kvposture`,
-`go/lib/fieldcrypt`, `go/service/secret`.
+`go/lib/fieldcrypt`, `go/service/secret`, `go/lib/secretseal`.
 
 ## Features
 
@@ -31,7 +31,7 @@ Packages: `go/lib/dbsession`, `go/lib/dbwait`, `go/service/tx/distx`,
 | D14 | Redis HASH entity codec | `go/lib/kvhash/kvhash.go` |
 | D15 | Redis eviction check | `go/lib/kvposture/kvposture.go` |
 | D16 | Column encryption (`CRYPTED_SECRET`) | `go/lib/fieldcrypt/fieldcrypt.go`, `shared.go` — `Init` |
-| D17 | Secret values and sources | `go/service/secret/secret.go` — `Secret`; `source.go` — `Resolver`; `go/service/secret/sopsenv` |
+| D17 | Secret values and sources | `go/service/secret/secret.go` — `Secret`; `source.go` — `Resolver`; `sealed.go` — `Seal`, `OpenSealed`; `go/service/secret/sopsenv`; `go/lib/secretseal` |
 
 ## D1. Per-dialect session pins
 
@@ -65,7 +65,7 @@ logged, naming the dialect, the parameter and the pinned value, never the DSN.
 | D1.4 | PostgreSQL: a parameter the operator named MUST keep the operator's value, in URL and keyword form, including a `search_path` set through `options`. | `TestApplyPGDSNParams_KeepsAnOperatorParameter`, `TestApplyPGDSNParams_SearchPathInOptionsIsKept` |
 | D1.5 | The applier MUST recognise an operator parameter by its name, not by matching text elsewhere in the DSN (a password, a database name). | `TestApply_NameInsideAPasswordDoesNotSuppressThePin`, `TestApplyMySQLDSNParams_QuestionMarkInPasswordDoesNotStartTheQuery` |
 | D1.6 | SQLite: on a DSN that does not set them, foreign keys MUST be enforced, LIKE MUST be case-sensitive, and `time.Time` MUST be stored in a format SQLite date functions parse. | `TestApplySQLitePragmas_LiveConnection`, `TestApplySQLitePragmas_PinsABareDSN` |
-| D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | `TestMySQLPins_LiveServer`, `TestURLToDriverDSN_CollationPinAndOperatorChoice` |
+| D1.7 | MySQL: backslash doubling MUST stay correct, DATETIME MUST scan into `time.Time`, and literal comparisons MUST be case- and accent-sensitive. | `TestMySQLPins_LiveServer`, `TestURLToDriverDSN_CollationPinAndOperatorChoice` (`go/tooling/migrate/internal/mysql`) |
 | D1.8 | PostgreSQL: single-quote-doubling escaping MUST stay correct and bare table names MUST resolve in `public`. | `TestPGPins_LiveServer` |
 | D1.9 | The helpers MUST NOT log the DSN. A kept operator value that differs from the pin MUST be logged once per process and parameter, naming the parameter only. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged` |
 | D1.10 | SQLite: a pragma the operator set MUST keep the operator's value on the live connection, whatever its spelling; an equal value spelled differently is not a difference. | `TestApplySQLitePragmas_OperatorPragmaWinsAndIsLogged`, `TestApplySQLitePragmas_LiveConnection` |
@@ -116,22 +116,28 @@ its own per-method transaction when no header is present.
 |---|---|---|
 | D3.1 | MUST commit when the function returns nil and roll back when it returns an error. | `TestRunCommitsWhenTheFunctionSucceeds`, `TestRunRollsBackWhenTheFunctionFails` |
 | D3.2 | MUST roll back on panic and then re-panic; the panic is never swallowed. | `TestRunRollsBackOnPanicAndKeepsPanicking` |
-| D3.3 | Rollback MUST run on a context detached from cancellation, so a caller that hung up still releases its transaction. | `TestRunRollsBackEvenWhenTheCallersContextIsDead` |
+| D3.3 | Rollback MUST run on a context detached from cancellation, so a caller that hung up still releases its transaction, and MUST still be bounded (30 s, `txregistry.DefaultFinishWait`): detaching drops the caller's deadline, and a coordinator that accepted the call and stalls must not hold the caller's goroutine forever. This holds for `TxHandle.Rollback`, the rollback-only Commit (D4.2) and `Run`'s rollback. | `TestRunRollsBackEvenWhenTheCallersContextIsDead`, `TestRollback_TheDetachedRollbackIsBounded` |
 | D3.4 | MUST NOT commit when the caller's context is already done (it rolls back instead), identically on network and in-process transports. | `TestRunDoesNotCommitOnBehalfOfAVanishedCaller` |
 | D3.5 | A commit error MUST be returned and labelled as a commit failure. | `TestRunReturnsTheCommitError` |
 | D3.6 | When both the function and the rollback fail, the function's error MUST stay the `errors.Is` target and the rollback failure MUST be appended as text. | `TestRunKeepsTheFunctionErrorAndNamesAFailedRollback` |
 | D3.7 | A nil client or nil function MUST be an error. | `TestRunRefusesNils` |
 | D3.8 | The function MUST NOT be called when Begin fails. | `TestRunDoesNotCallTheFunctionWhenBeginFails` |
-| D3.9 | A root `TxHandle` MUST be single use: after a successful Commit or Rollback, a further call returns `ErrHandleFinished` naming how the transaction ended, without an RPC. A failed attempt does not use the handle up. | `TestTxHandle_SecondFinishSaysTheTransactionAlreadyEnded`, `TestTxHandle_RefusedFinishCanBeRetried` |
+| D3.9 | A root `TxHandle` MUST be single use: after a successful Commit or Rollback, a further call returns `ErrHandleFinished` naming how the transaction ended, without an RPC. A failed attempt does not use the handle up. A Commit the coordinator refused because a call still holds the transaction (`FailedPrecondition`, D5.3) leaves the transaction open AND its parked after-commit work intact, so the retried Commit runs that work; every other failed Commit drops it. | `TestTxHandle_SecondFinishSaysTheTransactionAlreadyEnded`, `TestTxHandle_RefusedFinishCanBeRetried` |
 | D3.10 | A Commit that fails in transport (Unavailable, DeadlineExceeded, Canceled) MUST be settled with a Rollback on a detached context. When the Rollback succeeds, the caller gets an ordinary failure saying the transaction was rolled back. | `TestCommit_ATransportFailureBeforeTheCommitIsSettledByRollingBack` |
-| D3.11 | When that Rollback fails too, Commit MUST return `ErrCommitOutcomeUnknown` wrapping the transport error (its status code kept), MUST NOT run the parked after-commit work, and MUST report the ambiguity through `observx` with the transaction id and the amount of work not run. | `TestCommit_AnUnsettledTransportFailureIsReportedAsUnknown` |
+| D3.11 | When that Rollback fails too and the coordinator cannot say how the transaction ended (D3.16), Commit MUST return `ErrCommitOutcomeUnknown` wrapping the transport error (its status code kept), MUST NOT run the parked after-commit work, and MUST report the ambiguity through `observx` with the transaction id and the amount of work not run. | `TestCommit_AnUnsettledTransportFailureIsReportedAsUnknown` |
 | D3.12 | Any other commit failure (a coordinator answer such as Aborted or NotFound, or a non-status error) MUST NOT be settled by a Rollback or reported as unknown; it is an ordinary commit failure. | `TestCommit_ARefusalIsNotSettled` |
 | D3.13 | The Rust business SDK's `distx::run` MUST roll back, detached, a root transaction whose future is dropped before it ended (the caller's deadline passed or the caller hung up mid-handler); the work parked on it never runs. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the `hang` case) |
 | D3.14 | The Rust business SDK's storage channel MUST send a Commit again only when it was answered with a trailers-only `UNAVAILABLE` (at most three attempts), and never once the server's response headers arrived: a status in the trailers is settled as an unknown outcome after exactly one Commit. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the two `COMMIT_UNAVAILABLE` cases) |
 
+| D3.15 | `Run` MUST roll back (detached and bounded, D3.3) a transaction whose Commit the coordinator refused as busy (`FailedPrecondition`: a call inside it still held it past the finish wait), and return the commit error; the coordinator dooms it at once and rolls it back when the holder releases, so it does not keep its locks until the orphan timeout, and its parked work never runs. Every other commit failure already ended the transaction and gets no rollback (D3.5, D3.12). | `TestRun_ABusyCommitRollsTheTransactionBack`, `TestRun_ABusyCommitIsFollowedByARollback` |
+| D3.16 | When the settling Rollback (D3.10) answers `NotFound` with the coordinator's ended detail (D5.17), Commit MUST settle on it: `committed` → Commit succeeds and the parked work runs (only the reply was lost); `not_committed` → an ordinary failure saying the transaction did not commit, the parked work dropped. Only a `NotFound` without the detail leaves the outcome unknown (D3.11). | `TestCommit_ALostReplyOfALandedCommitIsSettledAsCommitted`, `TestCommit_ALostReplyOfAnEndedTransactionIsSettledAsNotCommitted` |
+| D3.17 | `TxHandle.Rollback` MUST treat a `NotFound` whose ended detail says `not_committed` as success (the transaction already ended the way the rollback asked — the auto-rollback interceptor discarded it after a failed call, or its orphan bound ran out), so `Run` does not report "rollback also failed" for it; `committed` is an error saying so; a `NotFound` without the detail stays an error (the transaction may be open on another replica). | `TestRun_ARollbackOfAnAlreadyRolledBackTransactionIsNotAFailure`, `TestRollback_AnIDTheCoordinatorDoesNotKnowIsStillAFailure` |
+
 **Deliberate limits.**
 - No automatic retry on serialization failures or deadlocks; such errors surface to the caller, and inside a distributed transaction they discard it (D7).
-- No outcome-query RPC. When a commit's outcome cannot be settled (`ErrCommitOutcomeUnknown`), the write may or may not have landed; the caller decides whether to re-read or retry, and the after-commit work for it is not run (at-most-once).
+- No outcome-query RPC. A lost Commit reply is settled from the coordinator's record of the id (D3.16), which it keeps for its last 256 drained ids and loses on restart; a commit still running when the settling Rollback arrives is not settled either. Then the outcome is unknown (`ErrCommitOutcomeUnknown`): the write may or may not have landed, the caller decides whether to re-read or retry, and the after-commit work for it is not run (at-most-once).
+- The ended detail (D5.17) is read by the Go client only; the Python, TypeScript and Rust business SDKs still settle a lost Commit reply as unknown when the transaction is gone.
+- `TxHandle.Commit` itself does not roll back a transaction the coordinator refused as busy (D3.9): the handle stays retryable. A hand-driven handle that gives up must call Rollback; `Run` does (D3.15).
 
 ## D4. Nested transactions
 
@@ -191,6 +197,8 @@ its own per-method transaction when no header is present.
 | D5.6 | With a timeout, a watcher MUST drain and roll back the entry when the deadline fires, even under a held lease. | `TestTimeoutWatcher_DrainsUnderALease`, `TestMemory_Begin_TxTimeout_*`, `TestServer_Begin_DefaultTxTimeout_OrphanCleanup`, `TestServer_Begin_DefaultTxTimeout_OptOut`, `TestServer_Begin_CallerTimeoutOverridesDefault` |
 | D5.7 | A failed Commit MUST roll back to release the connection and drop the deferred work. | `outcome_test.go` |
 | D5.8 | Recently drained ids (last 256) MUST remember why they are gone, so a later NotFound names the cause. | `outcome_test.go` |
+| D5.17 | The remembered outcome MUST also record whether the transaction committed (`txregistry.Memory.EndedAs`): `committed` only once the database commit returned success (before the after-commit work runs), `not_committed` for every rollback, doom, orphan-watcher drain or failed database commit, `unknown` for an id it holds, never held or evicted, and while the database commit is still running. The coordinator's `NotFound` for Commit and Rollback MUST carry it as an `ErrorInfo` (domain `w17.distx`, reason `W17_TX_ENDED`, metadata `ended`) when it is not `unknown`. | `TestMemory_EndedAs_PerDrainPath`, `TestMemory_EndedAs_CommittedBeforeTheHooksAndTimedOutIsNotCommitted`, `TestCommit_ALostReplyOfALandedCommitIsSettledAsCommitted` |
+| D5.18 | A COMMIT that fails on a deferred key a statement of the transaction left broken (`(w17.db.column).deferrable`; a foreign key, unique, check, not-null or exclusion violation raised at COMMIT) MUST be answered as the same violation at a statement is: `InvalidArgument` with the detail code `CONSTRAINT_AT_COMMIT` (`grpcerr.CommitConstraint`), not `Internal`; the transaction did not commit. | `TestServer_Commit_AConstraintBrokenAtCommitIsInvalidArgument`, `TestCommit_ADeferredKeyStillBrokenIsAConstraintViolation_Live` (PostgreSQL) |
 | D5.9 | `AdoptTxIsolated` MUST refuse a transaction whose isolation is weaker than, or unknown relative to, the method's declared level (`ErrIsolationTooWeak`). | `TestAdoptTxIsolated_RefusesWeakerOrUnknownLevels`, `TestAdoptTxIsolated_RegistryThatCannotReportRefuses`, `TestAdoptTxIsolated_MemoryReportsTheOpenedLevel`, `TestAdoptTxIsolated_NoTransactionIdOpensFresh` |
 | D5.10 | Isolation levels MUST be honoured on PostgreSQL and MySQL. | `TestBegin_IsolationIsHonoured_Live` |
 | D5.11 | A transaction id MUST be adoptable only by trusted internal callers; the storage gRPC port is an internal endpoint. | `TestSanitizeGatewayMD_StripsTransactionKeys`, `TestHeaderName_IsGatewayOwned`, `TestConnIDHeader_IsGatewayOwned` (no edge forwards a client's transaction id; keeping the storage port internal is deployment and not covered) |
@@ -208,7 +216,7 @@ its own per-method transaction when no header is present.
 
 ## D6. After-commit work (emit deferral)
 
-**Code.** `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`, `WaitAfterCommit`; `go/service/tx/txscope/txscope.go`; `go/service/runtime/runtime.go` — `GRPCComponent`.
+**Code.** `go/service/tx/txregistry/txregistry.go` — `DeferUntilCommit`; `go/service/tx/txregistry/memory.go` — `Memory.Commit`, `WaitAfterCommit`; `go/service/tx/txscope/txscope.go`; `go/service/tx/distx/oncommit.go` — `OnCommit`; `go/service/runtime/runtime.go` — `GRPCComponent`.
 
 **Purpose.** Work such as event emission runs only after the write it announces has committed.
 
@@ -223,8 +231,10 @@ its own per-method transaction when no header is present.
 | D6.5 | In the Rust business SDK, a panic in a piece of after-commit work (`on_commit`, the event middleware's publish) MUST be caught per piece and reported: the pieces after it still run, the call answers the committed outcome, and the panic text never reaches the caller. Work run at once outside a transaction is caught the same way. | `rs/w17-business/src/tests/wire.rs` — `the_tier_over_the_wire` (the `panic-hook` case) |
 | D6.6 | The coordinator's Commit MUST NOT hold its reply past the caller's deadline for the registry's after-commit work: the work starts after the database commit, in registration order, and the reply waits for it only until a margin before the deadline (a fifth of the time left, between 20 ms and 1 s; without a deadline, until the work ends or the caller cancels). Work still running then finishes after the reply, so a committed transaction is never answered as an unknown outcome because its work is slow. | `TestServer_Commit_ASlowAfterCommitHookDoesNotDelayTheReply` |
 | D6.7 | A gRPC server built by `runtime.GRPCComponent` MUST wait (bounded by the 30 s teardown) for after-commit work that outlived its Commit reply before it runs the shutdown hooks that close what the work uses; `txregistry.WaitAfterCommit` is that wait for any other host. | `TestGRPCComponent_ShutdownWaitsForAfterCommitWork` |
+| D6.8 | `distx.OnCommit(ctx, fn)` MUST run `fn` at once on the calling goroutine outside a transaction (and on a context a hop to another method handed its callee, in-process or over the wire: the callee is not inside its caller's transaction); inside one, once after the ROOT commits (a joined nested `Run` waits for the outer commit), in registration order; never after a rollback, a refused or failed commit, a caller that hung up before the commit, or a commit whose outcome is unknown; registered after the transaction ended, it runs at once when it committed and is dropped with an `observx` report when it rolled back. | `TestOnCommit_OutsideATransactionRunsAtOnce`, `TestOnCommit_WaitsForTheCommit`, `TestOnCommit_InANestedRunWaitsForTheOuterCommit`, `TestOnCommit_DroppedOnRollback`, `TestOnCommit_DroppedWhenTheCommitFails`, `TestOnCommit_DroppedForACallerThatHungUp`, `TestOnCommit_NotRunWhenTheOutcomeIsUnknown`, `TestOnCommit_AfterTheTransactionEndedIsNotParked`, `TestOnCommit_ACalleeAcrossAnInProcessHopIsOutsideTheCallersTransaction` |
 
 **Deliberate limits.**
+- `OnCommit`'s `fn` has no error return: a side effect that fails after the commit is the caller's to report (the write it describes has landed either way).
 - Publication after commit is at-most-once: there is no transactional outbox, so a crash between the database commit and the publish loses the event. A commit whose outcome is unknown (D3.11) runs none of its parked work.
 - After-commit work of different transactions runs in commit order only while each finishes within its Commit's reply budget (D6.6); work that outlives it overlaps the next transaction's, so their events may publish out of commit order.
 
@@ -295,7 +305,7 @@ the registry dooms the transaction before waiting (D5.12).
 
 ## D9. Cursor (keyset) paging, limit, totals
 
-**Code.** `go/lib/paging/cursor.go` — `EncodeCursor`, `DecodeCursor`, `PageCursor`; `go/lib/paging/keyset.go` — `ClampLimit`; `go/lib/paging/metadata.go`.
+**Code.** `go/lib/paging/cursor.go` — `EncodeCursor`, `DecodeCursor`, `PageCursor`; `go/lib/paging/keyset.go` — `ClampLimit`; `go/lib/paging/metadata.go`; `go/lib/paging/forward.go` — `Forward`, `Forwarded`, `WithoutForward`; `go/lib/paging/position.go` — `SetPosition`, `PositionFromHeader`, `RelayPosition`, `RelayPositionUnaryInterceptor`.
 
 **Purpose.** Opaque, tamper-proof page cursors at the REST boundary, plus the metadata that carries boundaries, limit and the cached total from the gateway to storage.
 
@@ -309,6 +319,7 @@ the registry dooms the transaction before waiting (D5.12).
 | `MaxLimit` | 10000 | the largest page any paged query returns; an endpoint declaring a larger maximum gets pages of `MaxLimit` rows and its cursors walk the rest |
 | `LimitFromIncomingMD` | absent, malformed or `0` → absent | above `MaxLimit` → `MaxLimit` |
 | metadata keys | `x-w17-paging-boundaries`, `x-w17-paging-limit`, `x-w17-paging-total` | — |
+| position response headers | `NextMDKey`, `PrevMDKey`, `TotalMDKey`: the boundary a forward cursor resumes after (the page's last row), the one a backward cursor resumes before (its first row), the total | set by the storage handler of a paged query (`SetPosition`); read by the gateway (`PositionFromHeader`) |
 
 **Wire format.** `base64url(PageCursor) "." base64url(HMAC-SHA256)`. `PageCursor` carries the
 serialized request, boundary values, total, direction, schema version and sort selector.
@@ -318,23 +329,27 @@ serialized request, boundary values, total, direction, schema version and sort s
 | ID | Guarantee | Test |
 |---|---|---|
 | D9.1 | A forged or tampered cursor MUST be rejected by a constant-time MAC check before any of its bytes reach the request. | `TestDecodeCursor_RejectsForgedCursor`, `TestDecodeCursor_RejectsTamperedPayload` |
-| D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `TestSchemaVersion_Rejection`; the schema version hashes the endpoint's request message, so another endpoint's cursor is a version mismatch |
+| D9.2 | A cursor from another build or another endpoint MUST fail with `ErrCursorExpired`. | `TestSchemaVersion_Rejection` (the version check); the version itself is computed by generated code from the endpoint's request message, so two endpoints over one request type share a version — that half is not covered in the SDK |
 | D9.3 | On resume the request MUST be replaced by the minted one; filters cannot change mid-session and the cursor's sort selector is authoritative. | `TestDecodeCursor_ResumeReplacesTheRequest`, `TestEncodeDecode_SortSelectorRoundtrip` |
 | D9.4 | An empty boundary oneof MUST be rejected as malformed on both the cursor and metadata paths, without panicking. | `metadata_test.go`, `TestScalarOf_*` |
 | D9.5 | `uint64` keys above `MaxInt64` MUST round-trip without sign wrap. | `keyset_uint64_test.go` |
-| D9.6 | COUNT(*) MUST run on the first page only; resumed pages reuse the total cached in the signed cursor. | `metadata_test.go` |
+| D9.6 | COUNT(*) MUST run on the first page only; resumed pages reuse the total cached in the signed cursor. | `TestEncodeTotalMD_AndDecodeRoundtrip`, `TestEncodeDecode_Roundtrip` (the total's carriage); skipping the COUNT on a resumed page is the generated query's — not covered in the SDK |
 | D9.7 | Empty boundaries MUST produce an empty token (no next/previous link). | `cursor_test.go` |
 | D9.8 | Paging metadata MUST NOT be forwarded hop-to-hop by the principal relay. | `TestForwardToOutgoing_ExcludesNonPrincipal` in `go/lib/principal` |
 | D9.9 | The limit MUST be clamped to the configured maximum, and never above `MaxLimit` even when the endpoint declares no maximum. | `TestClampLimit` |
 | D9.10 | Each resumed page MUST re-apply authorization and data scopes from the caller's verified identity, never from request fields carried in the cursor. | no test |
 | D9.11 | No caller MUST receive an unbounded result set: the storage side clamps the `x-w17-paging-limit` header to `MaxLimit` and treats `0` as absent, whoever sent it. | `TestLimitFromIncomingMD_ClampsToMaxLimit`, `TestClampLimit` |
-| D9.12 | Keyset pages MUST stay stable under concurrent inserts (requires a unique ORDER BY tiebreak, emitted by the generator). | no test |
+| D9.12 | Keyset pages MUST stay stable under concurrent inserts (requires a unique ORDER BY tiebreak, emitted by the generator). | no test in the SDK: the tiebreak is generated code |
 | D9.13 | The cursor secret MUST be read from the environment. | `TestCursorKeyFromEnv` |
 | D9.14 | A cursor encoded under `CallerKey(key, parts…)` MUST decode only under the same key and caller parts; for any other caller it fails as `ErrCursorMalformed`. | `TestCallerKey_ACursorDoesNotDecodeForAnotherCaller` |
+| D9.15 | `Forward(ctx)` MUST copy the incoming paging keys (boundaries, limit, total) onto the outgoing side as one set — dropping all three outgoing copies first, so a first-page request does not go out with stale boundaries; keeping every other outgoing key; not writing through to the parent context — and mark the context; with no incoming paging key it returns ctx unchanged. | `TestForward_CopiesIncomingPagingOntoOutgoing`, `TestForward_ReplacesStaleOutgoingPagingAsASet`, `TestForward_NothingWhenIncomingCarriesNoPaging`, `TestForward_DoesNotWriteThroughToTheParentsOutgoingMetadata` |
+| D9.16 | `RelayPositionUnaryInterceptor` (and the in-process bridge, S21.19) MUST relay the page position a call made with a forwarded context answered with onto the calling method's response headers, only when the call succeeded; a call without the mark relays nothing. Position headers MUST round-trip through `PositionMD` / `PositionFromHeader`; `SetPosition` without a server transport is a no-op. | `TestRelayPositionUnaryInterceptor`, `TestPosition_RoundTrip`, `TestSetPosition_WithoutTransportIsANoop`, `TestConn_Invoke_RelaysThePagePositionOfAForwardedCall` |
 
 **Deliberate limits.**
 - Cursors are integrity-protected, not confidential: list request fields are visible to anyone who sees the URL.
 - Cursors carry no expiry; they stay valid until the key or schema changes, and the cached total can be stale.
+- A relayed position is set with `grpc.SetHeader`: once the calling method's response headers went out (it sent a header or a stream message), the relay is silently lost and the gateway builds no next/previous cursor. Two forwarded calls in one method both set the keys; `PositionFromHeader` takes the LAST value, so which page wins is the order the calls finished — forward the one call that serves the page.
+- `Forward` is not refused on a direct call to the method's own served methods (`s.self`): the callee gets the marked context as it is, and its storage calls relay their positions onto the caller's response. Documented on `Forward`; nothing enforces it.
 - The SDK binds a cursor to a caller only when the code that encodes and decodes it passes `CallerKey`; generated gateway code must use it for D9.14 to hold. Binding is a second line: D9.10 still requires authorization and scopes from the verified identity on every page.
 
 ## D10. Admin column sort selector
@@ -408,17 +423,18 @@ Stamp table: `w17_collation`.
 | D12.4 | The fingerprint MUST derive from behaviour, not from a module version. | `TestFingerprint_StableAndOrderingDerived` |
 | D12.5 | Equality and UNIQUE behaviour for canonically equivalent (NFC/NFD) strings and for strings differing only in ignorable characters MUST match PostgreSQL's deterministic collations: ties under UCA are broken by bytes. | `TestCompare_EqualityIsDeterministic` |
 | D12.6 | `EnsureStamp` MUST recognise a database stamped by the comparison without the byte tie-break (same Unicode tables), rebuild every index using the collation and restamp it in one transaction; `VerifyStamp` MUST report such a database as a mismatch until then. | `TestEnsureStamp_UpgradesAPlainUCADatabase`, `TestLegacyFingerprint_IsThePlainUCABuildsStamp` |
+| D12.7 | `EnsureStamp` MUST stamp a fresh database with `INSERT OR IGNORE` and judge the stamp it reads back, so appliers racing on one fresh database all succeed (the losers read the winner's stamp) instead of failing on the stamp row's primary key. | `TestEnsureStamp_TwoWritersOnAFreshDatabaseBothSucceed` |
 
 **Deliberate limits.**
 - SQLite does not order like PostgreSQL, which follows the database locale.
 - MySQL `utf8mb4_0900_as_cs` still treats canonically equivalent and ignorable-character look-alikes as equal; D12.5 aligns SQLite with PostgreSQL, not with MySQL.
-- `EnsureStamp` is check-then-insert without a transaction; two appliers on a fresh database at once can collide on the stamp row.
+- `VerifyStamp` has no caller in the SDK: the generated runtime calls it at connect, so its read-side refusal is proven here only as a function (D12.3, D12.6).
 
 ## D13. Blob store for uploads
 
-**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`.
+**Code.** `go/lib/kvfs/kvfs.go` — `BuildKey`, `Reader`; `go/lib/kvfs/put.go` — `Put`, `Placement`, `ObjectKey`, `StageTempFile`; `go/lib/kvfs/local_fs/local_fs.go` — `New`, `EnsureRoot`, `PutFromTempFile`; `go/lib/kvfs/memory`; `go/lib/kvfs/s3/s3.go` — `ParseDSN`, `New`, `Driver`; `go/lib/kvfs/store/store.go` — `Open`; `go/lib/kvfs/kvfsgrpc/kvfsgrpc.go` — `W17Files` server.
 
-**Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys.
+**Purpose.** Driver interface for uploaded files: atomic publish from a temp file, streaming and seekable reads, stat, delete, hash-sharded keys. `store.Open` picks the driver (a directory or an S3-compatible bucket) from one URL; `kvfsgrpc` serves a business tier's stores over the `w17.common.files.W17Files` service for the non-Go business SDKs.
 
 **Configuration.**
 
@@ -426,6 +442,8 @@ Stamp table: `w17_collation`.
 |---|---|---|
 | `BuildKey(bucketPath, objectKey, expectedObjects, maxPerBucket)` | `<bucket>/<hh>/<hh>/…/<objectKey>`; depth `ceil(log256(expected/maxPerBucket))`, `0` when flat | capped at 16 |
 | `local_fs.New(root)`, `EnsureRoot(root)` | root created with mode 0755; published objects 0644; staging under `<root>/.w17-staging` | — |
+| `store.Open(ctx, url, ensure)` | `file:///<dir>` or an absolute path → `local_fs`; `s3://[<key-id>:<key>@]<bucket>[/<prefix>][?endpoint=…&region=…&profile=…&path_style=…]` → `kvfs/s3` (path-style whenever `endpoint` is set); `ensure` (the writer) creates a missing directory or bucket | empty, relative, `file://host/…`, another scheme, half a key pair, a non-boolean `path_style` → error |
+| `kvfsgrpc` chunks | Open sends 64 KiB chunks; a Put chunk is at most 1 MiB (`MaxChunkBytes`) | larger → `InvalidArgument` / `BAD_REQUEST` |
 
 **Guarantees.**
 
@@ -442,11 +460,19 @@ Stamp table: `w17_collation`.
 | D13.9 | A connection has ONE writer: the gateway for an upload connection, the business tier for one whose fields declare `upload.writer: BUSINESS`. Every other holder MUST receive only the `Reader` half. | `TestReader_CarriesNoWriteMethod` (the interface; the generated business `ClientSet` is not covered here) |
 | D13.10 | `Put` MUST store the body under `BuildKey(placement.BucketPath, ObjectKey(sha256), …)` — the key an upload of the same field gets — and return that handle; two puts of one body MUST be two objects. | `TestPut_PlacesUnderTheFieldsLayoutAndReadsBack`, `TestPut_IdenticalBodiesAreDistinctObjects` |
 | D13.11 | A body past `MaxSizeBytes`, or a failing driver, MUST store nothing and leave no staging file. | `TestPut_TooLargeStoresNothing`, `TestPut_DriverErrorCleansUp` |
+| D13.12 | `Put`'s commit MUST be its own: a context that ends before it stores nothing, and once it returned a handle the object is stored whatever happens to the caller's distributed transaction afterwards (see the limits). | `TestPut_CancelledBeforeCommitStoresNothing` |
+| D13.13 | `store.Open` MUST pick the driver from the URL alone and refuse anything else; a reader (`ensure` false) is refused a directory that does not exist rather than creating an empty one; no error repeats the URL's credentials. | `TestOpen_PicksTheDriverByURL`, `TestOpen_Refuses`, `TestParseDSN`, `TestParseDSN_Refuses` |
+| D13.14 | The S3 driver's `PutFromTempFile` MUST be one PutObject and remove the staging file only after the store accepted it; a failed put leaves the staging file for the caller; a staging file that cannot be removed after a successful put is reported through `observx` and the put succeeds (the object is stored). | `TestLive_PutOpenStatDelete`, `TestLive_FailedPutKeepsTheStagingFile`, `TestPutFromTempFile_AStagingFileThatCannotBeRemovedIsNotAFailedPut` |
+| D13.15 | The S3 driver MUST map a missing object to `ErrNotFound` — `NoSuchKey` on any call, a 404 without a body only on a HEAD (`Stat`, the bucket check) — and any other 404 (a wrong endpoint or path) to a store error, so a misconfigured store is not reported as a missing file and a Delete through it does not report success. | `TestLive_MissingIsErrNotFound`, `TestNotFound_ABare404IsMissingOnlyForAHead` |
+| D13.16 | The `W17Files` server MUST store a Put through `kvfs.Put` with the field's placement, so the handle and layout are a Go tier's byte for byte, and MUST store only after the end marker whose size matches the chunks: a stream that closes or is cancelled before it, even after half-close, stores nothing. | `TestRoundTrip`, `TestPutChunkingDoesNotChangeTheBody`, `TestPutEmptyBodyStoresAnEmptyObject`, `TestPutStoresOnlyAfterTheEnd`, `TestCancelledPutStoresNothing`, `TestCancelAfterHalfCloseStoresNothing` |
+| D13.17 | The `W17Files` server MUST refuse a Put or Delete on a connection the business tier does not write (`FailedPrecondition`, `READ_ONLY_CONNECTION`), an unknown field or connection (`InvalidArgument`), a malformed stream or a chunk over 1 MiB (`BAD_REQUEST`), and a body past the placement's `MaxSizeBytes` (`FILE_TOO_LARGE`); every refusal carries an `ErrorInfo` in domain `w17.files`. | `TestPutRefusals`, `TestPutPlacementOnAMissingConnection`, `TestOpenStatDeleteRefusals`, `TestPutTooLarge`, `TestPutNoCap` |
+| D13.18 | No `W17Files` status MUST carry a driver's own error text (a store root, a bucket URL, a credential); it goes to the process's error sink, the caller gets `STORE_ERROR`. | `TestStoreErrorsDoNotLeakTheDriverText`, `TestOpenReadFailureMidStream` |
 
 **Deliberate limits.**
 - No `fsync` before or after rename; durability across power loss is not guaranteed.
 - `local_fs` ignores the context (file I/O is not cancellable).
 - The memory driver reads whole files into memory (test and development use).
+- A file a business method stores with `kvfs.Put` is not part of its distributed transaction: when the transaction rolls back afterwards, the object stays, referenced by no row, and nothing collects it. Storing it from `distx.OnCommit` instead inverts the risk (the row commits, the store can still fail). Which order a method needs is its own decision; the upload path's `RollbackUploads` has no business-tier counterpart.
 
 ## D14. Redis HASH entity codec
 
@@ -509,11 +535,11 @@ nonce from an HMAC of the plaintext, truncated to 96 bits. Stored form: `w17c.<v
 | ID | Guarantee | Test |
 |---|---|---|
 | D16.1 | Randomised and deterministic values MUST round-trip, including the empty string; decryption is mode-agnostic. | `TestRandomised_*`, `TestDeterministic_*`, `TestDecrypt_IsModeAgnostic`, `TestRoundTrip_TheEmptyStringIsAValue` |
-| D16.2 | A plaintext row MUST yield `ErrNotEncrypted`, distinct from a tampered or wrong-key value (authentication error). | `TestDecrypt_ATamperedValueIsDistinguishedFromPlaintext`, `TestDecrypt_AWrongKeyDoesNotSilentlyProduceGarbage` |
+| D16.2 | A plaintext row (a value without the four-part `w17c.<version>.<mode>.<body>` envelope) MUST yield `ErrNotEncrypted`, distinct from a tampered or wrong-key value (authentication error) and from a value that carries the envelope but cannot be read as one — a non-numeric version, an unknown mode, a body that is not base64 or is shorter than the nonce — which MUST yield `ErrMalformed`. | `TestDecrypt_PlaintextIsReportedAsNotEncrypted`, `TestDecrypt_ATamperedValueIsDistinguishedFromPlaintext`, `TestDecrypt_AWrongKeyDoesNotSilentlyProduceGarbage` |
 | D16.3 | An unknown key version MUST yield `ErrUnknownKeyVersion` naming the versions held. | `fieldcrypt_test.go` |
 | D16.4 | After rotation, old versions MUST stay decryptable and new randomised writes MUST use the newest key. | `TestRotation_OldValuesStayReadableAndNewOnesUseTheNewestKey`, `TestDeterministic_StableAcrossRotation` |
 | D16.5 | Deterministic values MUST be written under the lowest key version, so adding a key (in any listing order) leaves the ciphertext of a plaintext unchanged and equality lookups and UNIQUE enforcement keep working. | `TestDeterministic_StableAcrossRotation` |
-| D16.6 | Error messages MUST NOT include plaintext or key material. | `TestDecrypt_*` |
+| D16.6 | Error messages MUST NOT include plaintext, the stored value or key material, for every decryption failure (tampered, wrong key, unknown version, malformed, not encrypted). | `TestDecryptErrors_CarryNoStoredBytesPlaintextOrKey` |
 | D16.7 | A missing or malformed keyring MUST fail the boot, not the first query. | `TestParse_*`, `shared_test.go` |
 | D16.8 | `DevKeys` MUST be refused outside development: `FromEnv` and `Init` return `ErrDevKeys` unless `W17_ENV=dev`. | `TestInit_RefusesTheDevelopmentKeyOutsideDev` |
 | D16.9 | Dropping the lowest key MUST move deterministic writes to the next lowest version, which `DeterministicVersion` names so a re-encryption can target it. | `TestDeterministic_DroppingTheLowestKeyMovesToTheNext` |
@@ -527,9 +553,9 @@ nonce from an HMAC of the plaintext, truncated to 96 bits. Stored form: `w17c.<v
 
 ## D17. Secret values and sources
 
-**Code.** `go/service/secret/secret.go` — `Secret`, `New`; `go/service/secret/source.go` — `Resolver`, `NewResolver`; `go/service/secret/sopsenv/sopsenv.go` — `Rekey`.
+**Code.** `go/service/secret/secret.go` — `Secret`, `New`; `go/service/secret/source.go` — `Resolver`, `NewResolver`; `go/service/secret/sopsenv/sopsenv.go` — `Rekey`; `go/service/secret/sealed.go` — `Seal`, `OpenSealed`, `CheckRecipient`; `go/lib/secretseal/secretseal.go` — `Seal`, `Open`, `ErrOpen`.
 
-**Purpose.** `Secret[T]` makes accidental printing of a secret redact; `Resolver` loads declared secrets from the environment, an age-encrypted file or a plain dotenv file.
+**Purpose.** `Secret[T]` makes accidental printing of a secret redact; `Resolver` loads declared secrets from the environment, an age-encrypted file or a plain dotenv file. `secret.Seal` puts a credential on an event as ciphertext to one age recipient; `secretseal` seals one environment value to a short-lived write grant's HPKE key (DHKEM(X25519), HKDF-SHA256, AES-256-GCM), bound to its address.
 
 **Configuration.**
 
@@ -555,6 +581,9 @@ Precedence: environment, then age file, then plain file.
 | D17.7 | `sopsenv` MUST be byte-compatible with the sops dotenv format, bind each value to its key name as associated data, and verify the whole-file MAC before returning values. | `TestRoundTrip`, `TestDecrypt_RefusesTampering` |
 | D17.8 | `Rekey` MUST refuse a tampered file and open the result for the new key only. | `TestRekey_KeepsValuesOpensForTheNewKeyOnly` |
 | D17.9 | `Reveal`, `IsZero` and the unmarshalling methods MUST return the held value regardless of how it is stored. | `TestPointerRepresentationKeepsSemantics` |
+| D17.10 | The plain and age file sources MUST parse every line of the file whatever its length: a value longer than a line buffer neither ends the parse nor makes the keys after it resolve as absent. | `TestParseDotenv_ALongLineDoesNotDropTheKeysAfterIt` |
+| D17.11 | `secret.Seal` MUST produce randomised base64 ciphertext to one age X25519 recipient that carries no part of the credential; `OpenSealed` MUST open it with the recipient's identity (a key file's content, comments and several identities included) and refuse another identity, an altered or non-base64 value, and a plaintext over 64 KiB. `CheckRecipient` refuses anything but an `age1…` recipient, so a configured recipient fails the boot rather than the first seal. | `TestSealOpen`, `TestOpenSealed_RefusesAValueOverTheCap`, `TestCheckRecipient` |
+| D17.12 | `secretseal.Seal` MUST bind each value to its address — the grant id, the service and the key, with a version prefix, as the HPKE info — so it opens only with the grant's private key for the same address; every failure to open (wrong key, another address or grant, a tampered ciphertext) is the one `ErrOpen`. Two seals of one value differ, and a malformed public key is refused. | `TestSeal_OpensOnlyWithTheGrantAndTheAddress`, `TestSeal_IsRandomized`, `TestSeal_RefusesABadPublicKey` |
 
 **Deliberate limits.**
 - Plain dotenv values are taken literally: no quote stripping, inline comments or `export` prefix (`KEY="x"` yields `"x"` with the quotes).

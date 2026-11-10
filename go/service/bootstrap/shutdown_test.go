@@ -2,18 +2,49 @@ package bootstrap_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/wandering-compiler/sdk/go/service/bootstrap"
 )
+
+// reports captures what observx reports (it logs every report) for the
+// rest of the test; safe to read while goroutines still write.
+type reports struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (r *reports) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Write(p)
+}
+
+func (r *reports) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
+func captureReports(t *testing.T) *reports {
+	t.Helper()
+	r := &reports{}
+	prev := log.Writer()
+	log.SetOutput(r)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return r
+}
 
 // stuck is a component that ignores its context until release is closed —
 // a transport whose drain hangs.
@@ -28,6 +59,7 @@ func stuck(release <-chan struct{}) bootstrap.Component {
 // observes the cancel no longer keeps the process alive.
 func TestRun_ShutdownDeadlineBoundsAStuckComponent(t *testing.T) {
 	t.Setenv("W17_SHUTDOWN_DEADLINE_SECONDS", "1")
+	reported := captureReports(t)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 
@@ -48,6 +80,11 @@ func TestRun_ShutdownDeadlineBoundsAStuckComponent(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run waited for a component that never stops")
+	}
+	// The overrun is reported, not only returned: the caller of Run exits
+	// next, and the report is what an operator sees of it.
+	if out := reported.String(); !strings.Contains(out, "shutdown did not finish") || !strings.Contains(out, "W17_SHUTDOWN_DEADLINE_SECONDS") {
+		t.Errorf("the deadline overrun was not reported through observx; reports = %q", out)
 	}
 }
 

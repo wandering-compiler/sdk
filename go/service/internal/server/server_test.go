@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,8 +41,12 @@ func TestRun_ListenError(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 	cfg := Config{Addr: l.Addr().String(), RegisterServices: func(*grpc.Server) error { return nil }}
-	if err := Run(context.Background(), cfg); err == nil {
-		t.Error("want listen error for an already-bound address")
+	err = Run(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("want listen error for an already-bound address")
+	}
+	if !strings.Contains(err.Error(), l.Addr().String()) {
+		t.Errorf("listen error %q does not name the address", err)
 	}
 }
 
@@ -51,10 +56,25 @@ func TestRun_RegisterError(t *testing.T) {
 		Addr:             "127.0.0.1:0",
 		RegisterServices: func(*grpc.Server) error { return wantErr },
 	}
-	err := Run(context.Background(), cfg)
+	// A fixed address, so the test can bind it again afterwards.
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Addr = free.Addr().String()
+	_ = free.Close()
+	err = Run(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("want error when RegisterServices fails")
 	}
+	// The listener Run opened is closed on that error: the address binds
+	// again at once. A leaked listener would hold the port for the life of
+	// the process (a supervisor restarting the component could never bind).
+	again, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		t.Fatalf("the address is still bound after Run returned the register error: %v", err)
+	}
+	_ = again.Close()
 }
 
 func TestRun_GracefulShutdown(t *testing.T) {

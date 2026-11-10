@@ -37,6 +37,12 @@ var commitFailures = map[string]error{
 	"pg-40P01":    &pgconn.PgError{Code: "40P01", Severity: "ERROR", Message: "deadlock detected"},
 	"mysql-1213":  &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"},
 	"pg-other-xx": &pgconn.PgError{Code: "XX000", Severity: "ERROR", Message: "internal error"},
+	// A deferred key a statement of the transaction left broken, raised at
+	// COMMIT ((w17.db.column).deferrable).
+	"pg-23503": &pgconn.PgError{Code: "23503", Severity: "ERROR", Message: "insert or update on table \"line\" violates foreign key constraint \"line_order_fk\"",
+		ConstraintName: "line_order_fk", TableName: "line"},
+	"pg-23505": &pgconn.PgError{Code: "23505", Severity: "ERROR", Message: "duplicate key value violates unique constraint \"order_no_key\"",
+		ConstraintName: "order_no_key", TableName: "order"},
 }
 
 func (commitFailDriver) Open(dsn string) (driver.Conn, error) {
@@ -109,6 +115,45 @@ func TestServer_Commit_ASerializationFailureAtCommitIsAborted(t *testing.T) {
 			_, err = cl.Commit(context.Background(), &distxpb.CommitRequest{TxId: b.GetTxId()})
 			if status.Code(err) != codes.NotFound {
 				t.Fatalf("second commit = %v, want NotFound", err)
+			}
+		})
+	}
+}
+
+// A deferred key a statement of the transaction left broken fails at
+// COMMIT, and is answered as the same violation at a statement is:
+// InvalidArgument with CONSTRAINT_AT_COMMIT, not Internal; the transaction
+// did not commit. The live test proves the database half on PostgreSQL;
+// this one the mapping, with no database.
+func TestServer_Commit_AConstraintBrokenAtCommitIsInvalidArgument(t *testing.T) {
+	for _, dsn := range []string{"pg-23503", "pg-23505"} {
+		t.Run(dsn, func(t *testing.T) {
+			db, err := sql.Open("distx-commit-fail", dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			cl, _ := newServerOn(t, db)
+			b, err := cl.Begin(context.Background(), &distxpb.BeginRequest{ConnectionName: "main"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = cl.Commit(context.Background(), &distxpb.CommitRequest{TxId: b.GetTxId()})
+			st, _ := status.FromError(err)
+			if st.Code() != codes.InvalidArgument {
+				t.Fatalf("COMMIT failing with %s answered %v %q, want InvalidArgument", dsn, st.Code(), st.Message())
+			}
+			var code string
+			for _, d := range st.Details() {
+				if ed, ok := d.(*w17pb.ErrorDetail); ok {
+					code = ed.GetCode()
+				}
+			}
+			if code != grpcerr.CodeConstraintAtCommit {
+				t.Errorf("detail code = %q, want %q", code, grpcerr.CodeConstraintAtCommit)
+			}
+			if _, err := cl.Commit(context.Background(), &distxpb.CommitRequest{TxId: b.GetTxId()}); status.Code(err) != codes.NotFound {
+				t.Errorf("second commit = %v, want NotFound (the transaction did not commit and is gone)", err)
 			}
 		})
 	}

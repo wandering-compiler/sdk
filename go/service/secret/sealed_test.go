@@ -67,3 +67,26 @@ func TestCheckRecipient(t *testing.T) {
 		}
 	}
 }
+
+// A sealed value carries one short credential: OpenSealed reads at most
+// 64 KiB of plaintext and refuses a larger one rather than buffering it.
+func TestOpenSealed_RefusesAValueOverTheCap(t *testing.T) {
+	id, rec, err := GenerateAgeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	atCap, err := Seal(rec, strings.Repeat("x", maxSealedBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := OpenSealed(id, atCap); err != nil || len(got) != maxSealedBytes {
+		t.Fatalf("a value of exactly the cap: len %d, %v", len(got), err)
+	}
+	over, err := Seal(rec, strings.Repeat("x", maxSealedBytes+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenSealed(id, over); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("a value over the cap = %v, want it refused", err)
+	}
+}

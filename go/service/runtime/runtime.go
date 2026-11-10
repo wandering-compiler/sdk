@@ -188,8 +188,10 @@ func GRPCComponent(cfg Config) bootstrap.Component {
 					bootstrap.HoldResources(ctx, reason)
 					return
 				}
-				waitAfterCommit()
-				runShutdowns(cfg.Shutdowns)
+				teardown, cancel := teardownContext(ctx)
+				defer cancel()
+				waitAfterCommit(teardown)
+				runShutdowns(teardown, cfg.Shutdowns)
 			},
 		})
 	})
@@ -274,8 +276,8 @@ func effectiveShutdownTimeout(d time.Duration) time.Duration {
 // its caller's deadline, so that work may still be running once the server
 // stopped. Bounded like the hooks; what is still running after the bound is
 // reported and left to the process exit.
-func waitAfterCommit() {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownDrainTimeout)
+func waitAfterCommit(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, shutdownDrainTimeout)
 	defer cancel()
 	if err := txregistry.WaitAfterCommit(ctx); err != nil {
 		observx.ReportError(ctx, fmt.Errorf("runtime: after-commit work still running after %s; shutting down without it: %w", shutdownDrainTimeout, err))
@@ -285,15 +287,38 @@ func waitAfterCommit() {
 // shutdownDrainTimeout bounds the whole cfg.Shutdowns phase.
 const shutdownDrainTimeout = 30 * time.Second
 
+// teardownMargin is how long before the supervisor's shutdown deadline the
+// teardown context ends, so the hooks see their context end and return (and
+// their errors are reported) before the supervisor gives up and the process
+// exits under them.
+const teardownMargin = time.Second
+
+// teardownContext is the context the post-stop teardown (the wait for
+// after-commit work, then the Shutdowns hooks) runs on: detached from the
+// component's cancelled ctx, and ending teardownMargin before the
+// supervisor's deadline when ctx belongs to one (bootstrap.TeardownDeadline).
+// The component's own bounds — ShutdownTimeout (10 s) for the graceful stop,
+// as long again for the forced stop, the handler grace (5 s), 30 s for the
+// after-commit work and 30 s for the hooks — add up past the supervisor's
+// default 20 s, so without it a slow drain left the hooks to be cut by the
+// process exit.
+func teardownContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if dl, ok := bootstrap.TeardownDeadline(ctx); ok {
+		return context.WithDeadline(base, dl.Add(-teardownMargin))
+	}
+	return context.WithCancel(base)
+}
+
 // runShutdowns runs every hook in order on one bounded context, skipping
 // nil entries. A failing hook does not stop the rest; its error is
 // reported, because a failed pool close or bus flush (lost messages) is
 // exactly what an operator needs to see.
-func runShutdowns(hooks []func(context.Context) error) {
+func runShutdowns(parent context.Context, hooks []func(context.Context) error) {
 	if len(hooks) == 0 {
 		return
 	}
-	drainCtx, cancel := context.WithTimeout(context.Background(), shutdownDrainTimeout)
+	drainCtx, cancel := context.WithTimeout(parent, shutdownDrainTimeout)
 	defer cancel()
 	for i, fn := range hooks {
 		if fn == nil {

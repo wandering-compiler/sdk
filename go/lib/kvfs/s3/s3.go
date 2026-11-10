@@ -41,6 +41,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 
+	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
 )
 
@@ -157,7 +158,7 @@ func (d *Driver) EnsureBucket(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
-	if !isNotFound(err) && !isNoSuchBucket(err) {
+	if !isNotFound(err, true) && !isNoSuchBucket(err) {
 		return fmt.Errorf("kvfs s3: bucket %s: %w", d.bucket, err)
 	}
 	if _, err := d.cli.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(d.bucket)}); err != nil {
@@ -220,8 +221,15 @@ func (d *Driver) OpenSeekable(ctx context.Context, key string) (io.ReadSeekClose
 	return &rangeReader{ctx: ctx, d: d, key: key, size: info.Size}, nil
 }
 
+// removeStaging removes the staging file after a successful put (a seam for
+// the test that makes it fail).
+var removeStaging = os.Remove
+
 // PutFromTempFile uploads tmpPath as key in one PutObject and removes the file
-// once the store has it. On failure the file is left for the caller.
+// once the store has it. On failure the file is left for the caller. A
+// staging file that cannot be removed after the store accepted the object is
+// reported through observx and the put still succeeds: the object IS stored,
+// and an error would make the caller treat it as missing.
 func (d *Driver) PutFromTempFile(ctx context.Context, key, tmpPath string) (string, error) {
 	f, err := os.Open(tmpPath) // #nosec G304 -- the caller's own staging file
 	if err != nil {
@@ -240,8 +248,8 @@ func (d *Driver) PutFromTempFile(ctx context.Context, key, tmpPath string) (stri
 	if err != nil {
 		return "", d.wrap("put", key, err)
 	}
-	if err := os.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("kvfs s3: put %s: stored, but the staging file stays: %w", key, err)
+	if err := removeStaging(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		observx.ReportError(context.WithoutCancel(ctx), fmt.Errorf("kvfs s3: put %s: stored, but the staging file %s stays: %w", key, tmpPath, err))
 	}
 	return key, nil
 }
@@ -250,7 +258,7 @@ func (d *Driver) PutFromTempFile(ctx context.Context, key, tmpPath string) (stri
 // DeleteObject answers success for it).
 func (d *Driver) Delete(ctx context.Context, key string) error {
 	if _, err := d.cli.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: aws.String(d.bucket), Key: aws.String(d.objectKey(key))}); err != nil {
-		if isNotFound(err) {
+		if isNotFound(err, false) {
 			return nil
 		}
 		return d.wrap("delete", key, err)
@@ -259,22 +267,34 @@ func (d *Driver) Delete(ctx context.Context, key string) error {
 }
 
 func (d *Driver) wrap(op, key string, err error) error {
-	if isNotFound(err) {
+	if isNotFound(err, op == "stat") {
 		return kvfs.ErrNotFound
 	}
 	return fmt.Errorf("kvfs s3: %s %s in bucket %s: %w", op, key, d.bucket, err)
 }
 
 // isNotFound recognises a missing object across the shapes S3 and compatible
-// stores answer with: NoSuchKey on GET, a bare 404 (no body) on HEAD.
-func isNotFound(err error) bool {
+// stores answer with: NoSuchKey on GET, a bare 404 (no body) on HEAD. bareOK
+// says the call was a HEAD: on any other operation a bare 404 names a wrong
+// endpoint or path, not a missing object.
+func isNotFound(err error, bareOK bool) bool {
 	var nsk *types.NoSuchKey
-	var nf *types.NotFound
-	if errors.As(err, &nsk) || errors.As(err, &nf) {
+	if errors.As(err, &nsk) {
 		return true
 	}
 	var api smithy.APIError
-	if errors.As(err, &api) && (api.ErrorCode() == "NoSuchKey" || api.ErrorCode() == "NotFound") {
+	if errors.As(err, &api) && api.ErrorCode() == "NoSuchKey" {
+		return true
+	}
+	if !bareOK {
+		// "NotFound" is no S3 error code: the SDK derives it from the
+		// status line of a 404 without a body (types.NotFound is HEAD's
+		// model of the same), which is what a wrong endpoint or path
+		// answers any request with.
+		return false
+	}
+	var nf *types.NotFound
+	if errors.As(err, &nf) || (errors.As(err, &api) && api.ErrorCode() == "NotFound") {
 		return true
 	}
 	var resp *awshttp.ResponseError

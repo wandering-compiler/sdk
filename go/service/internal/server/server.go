@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -97,7 +98,8 @@ type Config struct {
 // own) returns an error. When shutdown begins the health server, if
 // any, reports NOT_SERVING for every service before the drain starts,
 // so a client watching health sees the stop coming instead of SERVING
-// until the connection drops. On every path that reaches OnShutdown
+// until the connection drops, and then every open health Watch stream ends
+// (Unavailable) instead of holding the drain. On every path that reaches OnShutdown
 // the server has been stopped first, so no handler is still running
 // on a connection when the hooks close the resources it uses.
 func Run(ctx context.Context, cfg Config) error {
@@ -135,8 +137,12 @@ func Run(ctx context.Context, cfg Config) error {
 			reflection.Register(guardedRegistrar{srv: srv, auth: cfg.ReflectionAuth})
 		}
 	}
+	// drained ends every open health Watch once shutdown begins (see
+	// drainingHealth); it is cancelled together with markNotServing.
+	drained, endWatches := context.WithCancel(context.Background())
+	defer endWatches()
 	if cfg.HealthServer != nil {
-		grpc_health_v1.RegisterHealthServer(srv, cfg.HealthServer)
+		grpc_health_v1.RegisterHealthServer(srv, &drainingHealth{Server: cfg.HealthServer, drained: drained})
 	}
 
 	serveErr := make(chan error, 1)
@@ -152,12 +158,14 @@ func Run(ctx context.Context, cfg Config) error {
 		// it already accepted keep running handlers until the server is
 		// stopped, so stop it before OnShutdown closes what they use.
 		markNotServing(cfg.HealthServer)
+		endWatches()
 		srv.Stop()
 		if err != nil {
 			err = fmt.Errorf("server: serve on %s: %w", cfg.Addr, err)
 		}
 	case <-ctx.Done():
 		markNotServing(cfg.HealthServer)
+		endWatches()
 		gracefulStop(srv, cfg.ShutdownTimeout)
 		err = nil
 	}
@@ -191,6 +199,71 @@ func markNotServing(hs *health.Server) {
 	if hs != nil {
 		hs.Shutdown()
 	}
+}
+
+// maxHealthWatches caps the health Watch streams one server holds open at
+// once. Health is answered ahead of authentication (probes carry no
+// credentials), so without a cap anyone who reaches the port could hold an
+// unbounded number of streams; probes use Check, a watcher needs one stream.
+var maxHealthWatches int64 = 1000
+
+// drainingHealth is the registered health service: the caller's
+// health.Server, whose Watch is capped (maxHealthWatches) and ends once
+// shutdown has begun.
+//
+// grpc-go's Watch loops until its stream's context ends, and GracefulStop
+// waits for every open stream, so a watcher that does not hang up held the
+// drain for its whole bound and every shutdown ended in a hard stop that
+// aborted the RPCs still finishing inside it. A Watch has nothing to
+// drain: when drained is cancelled the watcher has been told NOT_SERVING
+// and the stream ends with Unavailable.
+type drainingHealth struct {
+	*health.Server
+	drained context.Context
+	open    atomic.Int64
+}
+
+// Watch serves the caller's Watch on a stream whose context also ends when
+// shutdown begins.
+func (h *drainingHealth) Watch(in *grpc_health_v1.HealthCheckRequest, stream grpc.ServerStreamingServer[grpc_health_v1.HealthCheckResponse]) error {
+	if h.open.Add(1) > maxHealthWatches {
+		h.open.Add(-1)
+		return status.Errorf(codes.ResourceExhausted, "health: more than %d Watch streams open", maxHealthWatches)
+	}
+	defer h.open.Add(-1)
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+	stop := context.AfterFunc(h.drained, cancel)
+	defer stop()
+	ws := &watchStream{ServerStreamingServer: stream, ctx: ctx, last: -1}
+	err := h.Server.Watch(in, ws)
+	if h.drained.Err() == nil || stream.Context().Err() != nil {
+		return err
+	}
+	// Shutdown ended the stream. The NOT_SERVING update and the end race
+	// inside Watch, so make sure the watcher saw the stop coming.
+	if ws.last == grpc_health_v1.HealthCheckResponse_SERVING {
+		_ = stream.Send(&grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_NOT_SERVING})
+	}
+	return status.Error(codes.Unavailable, "health: server is shutting down")
+}
+
+// watchStream is a Watch stream with its own context that records the last
+// status sent. Watch sends from one goroutine only.
+type watchStream struct {
+	grpc.ServerStreamingServer[grpc_health_v1.HealthCheckResponse]
+	ctx  context.Context
+	last grpc_health_v1.HealthCheckResponse_ServingStatus
+}
+
+func (w *watchStream) Context() context.Context { return w.ctx }
+
+func (w *watchStream) Send(r *grpc_health_v1.HealthCheckResponse) error {
+	if err := w.ServerStreamingServer.Send(r); err != nil {
+		return err
+	}
+	w.last = r.GetStatus()
+	return nil
 }
 
 // gracefulStop attempts a graceful shutdown within timeout; zero

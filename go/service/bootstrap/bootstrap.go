@@ -139,7 +139,7 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	notifySignals(sigCh)
 	defer signal.Stop(sigCh)
 	go watchSignals(sigCh, cancel, finished)
-	gate := &teardownGate{}
+	gate := &teardownGate{deadline: deadline}
 	ctx = context.WithValue(ctx, teardownGateKey{}, gate)
 
 	var wg sync.WaitGroup
@@ -220,6 +220,7 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	select {
 	case <-done:
 	case <-ctx.Done():
+		gate.startShutdown()
 		if err := awaitShutdown(done, deadline); err != nil {
 			teardownCancel()
 			observx.ReportError(context.Background(), err)
@@ -336,10 +337,38 @@ func HoldResources(ctx context.Context, reason string) {
 	}
 }
 
-// teardownGate collects the HoldResources calls of one RunGraceful.
+// TeardownDeadline reports the instant the supervisor running ctx's
+// component gives up on the shutdown (the moment shutdown began plus
+// [EnvShutdownDeadline]), so a component can bound its own teardown by it
+// instead of being cut by the process exit. ok is false outside a
+// supervisor, or when the deadline is switched off. Meaningful once ctx is
+// done.
+func TeardownDeadline(ctx context.Context) (time.Time, bool) {
+	g, ok := ctx.Value(teardownGateKey{}).(*teardownGate)
+	if !ok || g.deadline <= 0 {
+		return time.Time{}, false
+	}
+	return g.startShutdown().Add(g.deadline), true
+}
+
+// teardownGate collects the HoldResources calls of one RunGraceful, and
+// carries its shutdown deadline.
 type teardownGate struct {
-	mu   sync.Mutex
-	held []string
+	mu       sync.Mutex
+	held     []string
+	deadline time.Duration
+	started  time.Time
+}
+
+// startShutdown records when shutdown began (the first call wins: the
+// supervisor's, the moment the shared context is cancelled) and returns it.
+func (g *teardownGate) startShutdown() time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.started.IsZero() {
+		g.started = time.Now()
+	}
+	return g.started
 }
 
 type teardownGateKey struct{}

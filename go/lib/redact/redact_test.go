@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -392,6 +393,45 @@ func BenchmarkAppend(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		buf, _, _ = s.Append(buf[:0], req, 64<<10)
+	}
+}
+
+// Register runs beside Append (a late-registered plan while requests are
+// being recorded): every Append sees a whole plan map, before or after the
+// registration, never one being written. Run under -race; a Register that
+// wrote the held map in place fails it there.
+func TestRegister_IsSafeBesideConcurrentAppend(t *testing.T) {
+	d := descs(t)
+	s := &Set{}
+	s.Register(map[string]Plan{"redacttest.Item": {}})
+	it := dynamicpb.NewMessage(d.item)
+	set(it, "secret", protoreflect.ValueOfString("DECOY"))
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, _, err := s.Append(nil, it, 0); err != nil {
+					t.Errorf("Append beside Register: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	for i := range 200 {
+		s.Register(map[string]Plan{"redacttest.Extra" + itoa(i): {}})
+	}
+	close(stop)
+	wg.Wait()
+	if _, _, err := s.Append(nil, dynamicpb.NewMessage(d.profile), 0); !errors.Is(err, ErrNoPlan) {
+		t.Errorf("an unregistered type: err = %v", err)
 	}
 }
 
