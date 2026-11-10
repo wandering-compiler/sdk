@@ -99,6 +99,7 @@ every component's context.
 | S1.10 | On overrun, a component error reported before the deadline MUST be returned together with the deadline error. | `TestRun_ShutdownDeadlineKeepsTheComponentError` |
 | S1.11 | A deadline of `0` MUST remove the bound; an unparseable value MUST be logged and the default applied. | `TestRun_ShutdownDeadlineZeroIsUnbounded`, `TestShutdownDeadline_UnparseableIsLoggedAndDefaulted` |
 | S1.12 | The default deadline plus the 5s observability flush MUST end before a 30s orchestrator grace period. | `TestDefaultShutdownDeadline_FitsTheCommonGracePeriod` |
+| S1.13 | `bootstrap.TeardownDeadline(ctx)` MUST give a component the instant its supervisor gives up on the shutdown (the moment the shared context was cancelled plus the deadline), so the component can bound its own teardown by it; outside a supervisor, or with the deadline switched off, it reports none. | `TestGRPCComponent_ShutdownHooksEndBeforeTheSupervisorsDeadline` |
 
 **Deliberate limits.**
 - "First exit stops all": a component with nothing to do must block on `<-ctx.Done()` rather than return.
@@ -106,6 +107,7 @@ every component's context.
 - Every component must return once its context is cancelled; the supervisor waits for all of them until the shutdown deadline, and not after it.
 - After a deadline overrun, the stuck components keep running until the process exits; the caller of Run is expected to exit.
 - Each component's own drain bound (for a gRPC component, `runtime.Config.ShutdownTimeout`, default 10s) must be below the deadline, or the deadline cuts it short. Under a grace period shorter than 25s the deadline must be lowered.
+- The gRPC component's bounds do not fit the default deadline on their own: a graceful stop of up to `ShutdownTimeout` (10s), a forced stop waited as long again, a 5s handler grace, then up to 30s for after-commit work and 30s for the `Shutdowns` hooks. What keeps the hooks inside the 20s deadline is S5.15: they run on a context that ends 1s before it. A drain that already used the whole deadline leaves the hooks a context that is done at once; a hook that ignores its context is still cut by the process exit.
 
 ## S2. OS signal handling
 
@@ -200,7 +202,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | `UnaryInterceptors` | none | — |
 | `ServerOptions` | none; appended last | a singular `grpc.UnaryInterceptor` / `grpc.StreamInterceptor` → start-up error (S6) |
 | `RegisterServices` | required | nil → `server: RegisterServices is required`; its error closes the listener and is returned |
-| `Shutdowns` | none | each runs after the server stops, on one shared 30s context; nil entries skipped; an error is reported and the later hooks still run |
+| `Shutdowns` | none | each runs after the server stops, on one shared 30s context that also ends 1s before the supervisor's shutdown deadline (S5.15); nil entries skipped; an error is reported and the later hooks still run |
 | `W17_INTERNAL_TLS*` (environment) | off | read at start through `grpcserver.TLSServerOption` (S17); a misconfigured or unrecognised value → start-up error before listening |
 
 **Shares.** Observability globals (through `Serve`); one new `server.DefaultHealthServer()` per component.
@@ -223,6 +225,7 @@ recovery, caller interceptors, listen/serve, bounded stop, then shutdown hooks.
 | S5.12 | A misconfigured switch (on without certificate and key, or an unrecognised value) MUST fail the start with an error naming `W17_INTERNAL_TLS`. | `TestGRPCComponent_InternalTLSMisconfigurationFailsStart` |
 | S5.13 | `ShutdownTimeout` `0` MUST mean 10s and a negative value MUST mean unbounded, so the opt-out from S14 stays unbounded. | `TestShutdownTimeout_EnvOptOutStaysUnbounded` |
 | S5.14 | `Reflection`, `ReflectionAuth` and `ReflectionUnauthenticated` MUST reach the server, so an unguarded `Reflection: true` fails the component's start (S10.2). | `TestGRPCComponent_UnguardedReflectionIsRefused` |
+| S5.15 | Under a supervisor, the wait for after-commit work and the `Shutdowns` hooks MUST run on a context that ends 1s before the supervisor's shutdown deadline (S1.13) as well as at their own 30s bound, so a hook that honours its context returns, and its error is reported, before the supervisor gives up and the process exits under it. | `TestGRPCComponent_ShutdownHooksEndBeforeTheSupervisorsDeadline` |
 
 ## S6. Interceptor and server-option order
 
