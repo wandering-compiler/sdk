@@ -350,7 +350,7 @@ normal auth path by copying the URL value into a reserved header slot that clien
 | E7.1 | Any inbound `X-W17-Credential`, in any case variant, MUST be removed before the next handler runs, without mutating the caller's header map | `TestStripReservedHeadersMiddleware_ForgedCredentialNeverReachesHandler`, `..._CanonicalisationVariants`, `..._DoesNotMutateCallersHeaders` |
 | E7.2 | An empty URL credential MUST count as absent and answer 401, not 400 | `TestHasURLCredential_EmptyValueIsNotACredential`, `TestMissingURLCredentialIsUnauthenticated` |
 | E7.3 | Injection MUST return a clone and leave the original request unchanged | `TestWithURLCredential_RoundTrip` |
-| E7.4 | `StripReservedHeadersMiddleware` MUST be mounted outside every header reader (caller contract) | no test at chain level |
+| E7.4 | `StripReservedHeadersMiddleware` MUST be mounted outside every header reader (caller contract); in that chain a forged `X-W17-Credential` (any case) MUST NOT reach the URL_TOKEN method from an ordinary route, and on a capability route the method sees the URL's value | `TestURLCredential_ForgedSlotNeverReachesTheURLTokenMethod` (the SDK chain: scrub → `WithURLCredential` → auth; the mount order in a gateway is generated) |
 | E7.5 | A URL credential MUST NOT reach the trace or a panic report: once injected, the span's `url.path` and the reported path name it `{credential}` | `TestURLCredential_NeverReachesTheTrace`, `TestURLCredential_NeverReachesAPanicReport` |
 | E7.6 | A next-page link MUST keep the capability path and query, and a browser redirect MUST NOT copy them into `Location` | `TestURLCredential_NextPageLinkKeepsIt`, `TestURLCredential_NeverReachesARedirect` |
 
