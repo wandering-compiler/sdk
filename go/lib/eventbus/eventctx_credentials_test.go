@@ -167,3 +167,20 @@ func TestMetadataFromContext_DropsCommonSecretHeaderShapes(t *testing.T) {
 		}
 	}
 }
+
+// An empty value is no language on either side: the envelope keeps the last
+// non-empty value, so the subscriber resolves what the emitter did.
+func TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD{
+		"w17-language":      {"cs", ""},
+		"w17-format-locale": {"cs-CZ", " "},
+	})
+	md := eventbus.MetadataFromContext(ctx)
+	replayed := metadata.NewIncomingContext(context.Background(), metadata.New(md))
+	if got, want := i18n.LocaleFromContext(replayed), i18n.LocaleFromContext(ctx); got != want || want != "cs" {
+		t.Errorf("subscriber language = %q, emitter language = %q, want cs on both", got, want)
+	}
+	if got, want := i18n.FormatLocaleFromContext(replayed), i18n.FormatLocaleFromContext(ctx); got != want {
+		t.Errorf("subscriber format locale = %q, emitter format locale = %q", got, want)
+	}
+}

@@ -106,10 +106,21 @@ func MetadataFromContext(ctx context.Context) map[string]string {
 		if principal.IsGatewayOwnedKey(k) {
 			flat[k] = vs[0]
 		} else {
-			flat[k] = vs[len(vs)-1]
+			flat[k] = lastNonEmpty(vs)
 		}
 	}
 	return flat
+}
+
+// lastNonEmpty is the last value that is not blank, else the last value:
+// the locale readers skip an empty value the same way.
+func lastNonEmpty(vs []string) string {
+	for i := len(vs) - 1; i >= 0; i-- {
+		if strings.TrimSpace(vs[i]) != "" {
+			return vs[i]
+		}
+	}
+	return vs[len(vs)-1]
 }
 
 // reservedMetadataKeys are transport-internal headers that must never ride an

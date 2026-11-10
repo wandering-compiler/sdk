@@ -412,7 +412,7 @@ plus any key with a whole `-`/`_`/`.` segment among `auth`, `authorization`,
 
 Repeated keys collapse to one value, chosen as the key's reader on the subscriber
 side chooses: the first value for the gateway-owned namespaces, the last value for
-every other key (the metadata-binding convention the locale readers follow). `LabelsFromContext`
+every other key, skipping an empty one (the metadata-binding convention the locale readers follow). `LabelsFromContext`
 extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
 `EmitInvalidate` dispatches an `InvalidateEvent` on the reserved topic
 `w17.invalidate`, labelled from the context like any other event. The event is
@@ -427,7 +427,7 @@ receive it (I2.7).
 | I8.2 | The transaction header and the storage routing token (`w17-tx-id`, `w17-conn-id`) MUST NOT ride an envelope; both literals are pinned against the constants of the packages that set them. | `TestMetadataFromContext_DropsTheTransactionHeader`, `TestHeaderName_IsTheStrippedEnvelopeKey`, `TestConnIDHeader_IsTheStrippedEnvelopeKey` |
 | I8.3 | An emit outside a labelled request MUST be unlabelled; invalidate events MUST take labels from incoming or outgoing metadata. | `TestEmitInvalidate_*` |
 | I8.4 | `Event.Metadata` MUST NOT carry a key matching the credential rule above, while principal, scope, label, locale, trace and custom keys still travel; a name that holds a flagged word only as letters inside a segment (`x-keyboard-layout`) still travels. | `TestMetadataFromContext_DropsCredentials`, `TestMetadataFromContext_DropsCommonSecretHeaderShapes` |
-| I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders` |
+| I8.5 | Repeated keys MUST collapse as their subscriber-side readers pick (first for `x-w17-*` / `w17-label-*`, last non-empty otherwise), so a subscriber resolves the same language and format locale as the emitter. | `TestMetadataFromContext_RepeatedKeysMatchTheirReaders`, `TestMetadataFromContext_AnEmptyLastLocaleValueIsSkipped` |
 | I8.6 | A delivery whose envelope metadata carries `w17-tx-id` or `w17-conn-id` (any letter case) MUST be refused on every transport before any handler runs, reported, and dead-lettered through the transport's normal failure path; the key as a value, in labels, or as part of a longer name MUST NOT be refused. | `TestEnvelopeGuard_Memory`, `TestEnvelopeGuard_NATS_Embedded`, `TestEnvelopeGuard_Redis_Embedded`, `TestEnvelopeGuard_RefusedEnvelopeIsDeadLettered_Redis`, `TestEnvelopeGuard_RefusedKeysAreStrippedOnEmit` |
 
 **Deliberate limits.**
@@ -640,12 +640,12 @@ params)` translates for the request's locale and substitutes `{name}` placeholde
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `RegisterCatalog(lang, po) error` | — | empty `lang` → no-op; returns syntax problems (with line numbers) and conflicting translations; a malformed `.po` is still registered best-effort |
-| `Register(lang, po)` | — | as `RegisterCatalog`, but logs the problems instead of returning them |
+| `Register(lang, po)` | — | as `RegisterCatalog`, but logs the problems instead of returning them (`TestRegisterAndSetDefaultLanguage_LogTheirProblems`) |
 | `RegisterFS(fs)` | — | language = file base name; returns the problems joined per file path, and `ErrNoCatalogs` for a tree with no `.po` file |
 | Same language registered twice | — | the catalogs are merged; a conflicting translation keeps the first one and is reported |
-| `SetDefaultLanguage` | `en` | empty ignored; a second, different value is logged and takes effect |
-| Catalog tag | — | matched regardless of case and `_`/`-` spelling, for catalogs and for the default language (`pt_BR.po` serves `pt-BR`) |
-| Locale | last `w17-language` value, incoming before outgoing, else default | parsed as Accept-Language: each tag, then its base language, else the default catalog |
+| `SetDefaultLanguage` | `en` | empty ignored; a second, different value (case and `_`/`-` aside) is logged and takes effect (`TestRegisterAndSetDefaultLanguage_LogTheirProblems`) |
+| Catalog tag | — | matched regardless of case and `_`/`-` spelling, for catalogs and for the default language (`pt_BR.po` serves `pt-BR`); a catalog under a non-canonical tag (`iw`) is registered under its canonical tag (`he`) as well |
+| Locale | last non-empty `w17-language` value, incoming before outgoing, else default | parsed as Accept-Language member by member (a member that does not parse is skipped, not the list), in q order: each tag, then its base language, else the default catalog. Only the first 512 bytes of the value are parsed, cut at a member boundary |
 
 **Lookup.** For each message `T` looks in the negotiated catalog, then in the
 default-language catalog, then returns the msgid. An empty `msgstr` counts as
@@ -658,14 +658,15 @@ untranslated. Substitution is one left-to-right pass over the translated text.
 | ID | Guarantee | Test |
 |---|---|---|
 | I14.1 | Translation and substitution MUST work; the default catalog MUST be the fallback; a missing locale MUST give the msgid. | `TestT_RegisteredLocale_TranslatesAndSubstitutes`, `TestT_DefaultLocaleFallback`, `TestT_RequestedLocaleMissing_FallsBackToDefault`, `TestT_NoCatalogForDefaultLanguage_ReturnsMsgid` |
-| I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing. | `TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31`, `TestT_AcceptLanguageRegion_FallsBackToBase_B31`, `TestLocaleFromContext_LastValueWins`, `TestLocaleFromContext_OutgoingMetadata`, `TestLocaleFromContext_IncomingBeatsOutgoing` |
+| I14.2 | Negotiation MUST handle multi-value Accept-Language, region to base language, last value wins, incoming before outgoing; an empty value MUST be skipped; a member that does not parse MUST NOT void the rest of the list, in the catalog and the format-locale negotiation alike. | `TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31`, `TestT_AcceptLanguageRegion_FallsBackToBase_B31`, `TestLocaleFromContext_LastValueWins`, `TestLocaleFromContext_OutgoingMetadata`, `TestLocaleFromContext_IncomingBeatsOutgoing`, `TestLocaleFromContext_SkipsEmptyValues`, `TestNegotiation_ABadMemberDoesNotVoidTheList` |
 | I14.3 | Unknown placeholders MUST survive verbatim; an empty msgid MUST return "" so the `.po` header never leaks. | `TestSubstitute_UnknownPlaceholderPassesThrough`, `TestT_EmptyMsgid_ReturnsEmpty` |
-| I14.4 | Concurrent use MUST be safe. | `go/lib/i18n/i18n_extra_test.go` |
+| I14.4 | Concurrent use MUST be safe. | `TestCatalogs_ConcurrentRegisterAndTranslate` (under `-race`) |
 | I14.5 | A msgid missing from the requested catalog, present with an empty `msgstr`, or marked `#, fuzzy`, MUST fall back to the default-language catalog, then to the msgid (per message, not per catalog). | `TestT_FallbackIsPerMessage`, `TestT_EmptyMsgstrFallsThrough`, `TestFuzzyEntryIsNotServed` |
 | I14.6 | Substitution MUST be deterministic and MUST NOT expand placeholder tokens inside parameter values. | `TestSubstitute_DeterministicSinglePass`, `TestSubstitute_BraceEdges` |
-| I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`). | `TestCatalogTag_UnderscoreAndCaseInsensitive` |
+| I14.7 | Catalog names MUST be matched regardless of `_`/`-` spelling and case (`pt_BR.po` serves `pt-BR`), and a catalog under a deprecated tag MUST serve the canonical one (`iw.po` serves `he` and `iw-IL`). | `TestCatalogTag_UnderscoreAndCaseInsensitive`, `TestRegisterCatalog_ServesTheCanonicalTag` |
 | I14.8 | A malformed catalog, an entry marked `#, fuzzy` (the header excepted), and a catalog tree without any `.po` file, MUST be reported at registration: `ValidatePO` and `RegisterCatalog` return the problems with line numbers, `RegisterFS` joins them per file path and adds `ErrNoCatalogs`. | `TestValidatePO`, `TestValidatePO_ReportsFuzzyEntries`, `TestRegisterFS_ReportsMalformedCatalog`, `TestRegisterFS_NoCatalogIsReported` |
 | I14.9 | Registering a language twice MUST merge the catalogs; a conflicting translation MUST keep the first one and be reported. | `TestRegisterCatalog_MergesAndReportsConflicts` |
+| I14.10 | A language value MUST NOT be parsed past its first 512 bytes: a megabyte Accept-Language does not make every `T` parse a megabyte. | `TestNegotiation_BoundsTheValueItParses` |
 
 ---
 

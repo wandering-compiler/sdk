@@ -37,8 +37,9 @@ const FormatLocaleMetadataKey = "w17-format-locale"
 // its own messages in lives on the outgoing side it is about to send.
 func FormatLocaleFromContext(ctx context.Context) string {
 	for _, md := range []metadata.MD{incomingMD(ctx), outgoingMD(ctx)} {
-		if vals := md.Get(FormatLocaleMetadataKey); len(vals) > 0 {
-			if v := strings.TrimSpace(vals[len(vals)-1]); v != "" {
+		vals := md.Get(FormatLocaleMetadataKey)
+		for i := len(vals) - 1; i >= 0; i-- {
+			if v := strings.TrimSpace(vals[i]); v != "" {
 				return negotiateFormatLocale(v)
 			}
 		}
@@ -58,8 +59,8 @@ func negotiateFormatLocale(raw string) string {
 	if !strings.ContainsAny(raw, ",;") {
 		return raw
 	}
-	tags, _, err := language.ParseAcceptLanguage(raw)
-	if err != nil {
+	tags := acceptLanguageTags(raw)
+	if len(tags) == 0 {
 		return raw
 	}
 	for _, t := range tags {
