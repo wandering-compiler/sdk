@@ -21,9 +21,9 @@ and NATS tests use embedded servers.
      ├─ artefacts: --migrations DIR  |  --fetch (gRPC, held in memory)
      └─ migrate.Run / RunRollback / Plan
           Plan: load *.json → recompute content hash → walk chain back from pinned target
-                → applied-head cutoff → squash-adopt decision
+                → replaced / off-chain head refusals → applied-head cutoff → squash-adopt decision
           Run:  extension preflight → schema prep → per migration:
-                take run lock → re-read head under lock
+                take run lock → re-read head under lock (moved forward → plan the connection again)
                 → fake | adopt | drift gate → apply (or resume post-tx on Postgres)
 
 generated e2e test → runner.RunScenario(steps, callers, opts)
@@ -39,13 +39,13 @@ generated e2e test → runner.RunScenario(steps, callers, opts)
 | T1 | Command dispatch of built-in roots | `go/tooling/migrate/migratecli/migratecli.go` — `Dispatch`; `go/tooling/migrate/binroots/binroots.go` — `Reserved` |
 | T2 | `migrate apply` (CLI) | `go/tooling/migrate/migratecli/migratecli.go` — `Main`, `parseFlags`, `warnUnpinned`, `dsnSpecs`; `go/tooling/migrate/lockview.go` — `LoadLockView`, `TargetEnvVar` |
 | T3 | `migrate status` | `go/tooling/migrate/migratecli/migratecli.go` — `reportStatus` |
-| T4 | Artefact fetch (`migrate fetch`, `--fetch`) | `go/tooling/migrate/migratecli/fetch.go` — `fetchMigrations`, `transportFor`, `consoleTLSConfig`, `bearerCreds`; `go/tooling/migrate/lockview.go` — `MigrationSetFS`; `go/tooling/migrate/orchestrator.go` — `WriteMigration` |
+| T4 | Artefact fetch (`migrate fetch`, `--fetch`) | `go/tooling/migrate/migratecli/fetch.go` — `fetchMigrations`, `fetchMigrationsReporting`, `appliedHeads`, `databaseID`, `transportFor`, `consoleTLSConfig`, `bearerCreds`; `go/tooling/migrate/migratecli/migratecli.go` — `runFetch`, `fetchHeads`; `go/tooling/migrate/lockview.go` — `MigrationSetFS`; `go/tooling/migrate/orchestrator.go` — `WriteMigration`; `go/tooling/migrate/replaced.go` — `WriteReplaced` |
 | T5 | `migrate rollback` (CLI) | `go/tooling/migrate/migratecli/migratecli.go` |
 | T6 | `fixtures apply` | `go/tooling/migrate/migratecli/fixtures.go` — `Fixtures`, `refuseStaleRender`; `go/tooling/migrate/fixtureseed.go` |
 | T7 | Content hash | `go/tooling/migrate/content_hash.go` — `ContentHash`, `ContentHashWithPreflight`, `ContentHashMatches` |
 | T8 | Chain selection | `go/tooling/migrate/orchestrator.go` — `chainFromTarget` |
 | T9 | Artefact sources | `go/tooling/migrate/orchestrator.go` — `migrationsFSOf` |
-| T10 | Plan and squash adopt | `go/tooling/migrate/orchestrator.go` — `Plan` |
+| T10 | Plan, squash adopt and replaced heads | `go/tooling/migrate/orchestrator.go` — `Plan`, `planConnection`, `refuseReplacedHead`, `refuseHeadOffChain`; `go/tooling/migrate/replaced.go` — `ReadReplaced` |
 | T11 | Apply run: ordering of side effects | `go/tooling/migrate/orchestrator.go` — `Run`, `runApplierCache`, `applyOrResume`; `go/tooling/migrate/extpreflight.go`; `go/tooling/migrate/schemaprep.go` |
 | T12 | Fake apply | `go/tooling/migrate/orchestrator.go` — `applyFake`; `go/tooling/migrate/content_hash.go` — `preflightBound` |
 | T13 | Drift gate | `go/tooling/migrate/pre_fingerprint.go` — `checkPreFingerprint` |
@@ -106,7 +106,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `--lock` | `w17/lock.yaml` | — |
-| `--migrations` | `w17/migrations` | — |
+| `--migrations` | `w17/migrations` | `apply` and `status` read the replaced list beside the connection directories (`w17-replaced.json`, written by `migrate fetch`, see T4.10); a pinned connection it does not cover is named in a warning, an unreadable one is refused (T2.17) |
 | `--fetch` | off | see T4 |
 | `--console ADDR` | `W17_CONSOLE_ADDR` | flag overrides the variable |
 | `--dry-run` | off | refused together with `--fake` |
@@ -140,6 +140,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | T2.14 | A check MUST be bound by the migration's content hash (the loader refuses an artifact carrying unbound checks; `--checks` asks again before one runs), MUST be a single SELECT built only from the words and functions the planner's probe templates use (an allowlist, tokenized per dialect; any identifier, quoted or not, before a `(` is a call) or a call or parenthesized group the same migration's up body contains token for token outside its strings and comments (an expression index's probe repeats the author's expression; a `;` and unbalanced parentheses stay refused; the body is tokenized as its server reads it — non-ASCII dollar tags, MySQL `/*! */`/`/*+ */` as comments, SQLite `[…]` identifiers — or admits nothing), and MUST run on its own connection — never the run lock's, which is asked again after the checks — read-only with a statement timeout, reporting a failure by error code only. | `TestChecks_AreBoundByTheDigest`, `TestContentHash_BindsEveryCheckField`, `TestValidateCheckSQL`, `TestValidateMigrationCheckSQL`, `TestValidateMigrationCheckSQL_BodyReadAsTheServerReadsIt`, `TestRunCheck_WithoutTheTempFileLimitPrivilege_Live`, `TestRunCheck_CountsAndCannotWrite_Live` (Postgres, MySQL), `TestRunCheck_CountsAndCannotWrite` (SQLite) |
 | T2.15 | On Postgres a check MUST run in one process (`max_parallel_workers_per_gather = 0`) with `work_mem` lowered to at most 64MB, for any role; as a role that may set `temp_file_limit` (a superuser, or one granted `SET` on it) it MUST run under `temp_file_limit = 1GB`, and a probe spilling past it MUST fail with SQLSTATE 53400, reported by that code alone. A role that may not set it MUST still run its checks, under the `temp_file_limit` a superuser set for the role or database (if any) and the statement timeout. | `TestRunCheck_TempFileLimitBoundsASuperuser_Live`, `TestRunCheck_ANonSuperuserIsBoundByItsRoleLimit_Live`, `TestRunCheck_WithoutTheTempFileLimitPrivilege_Live` |
 | T2.16 | A check of severity `WARN` that counts rows MUST NOT refuse its migration: the count, the rationale and the probe MUST be printed and the migration applied. It MUST still be validated, run and refused-when-it-cannot-run as T2.13–T2.14 say, a `REFUSE` check beside it MUST still refuse, and the severity MUST be bound by the content hash — written only when `WARN`, so a check minted without it keeps its digest, and flipping it either way breaks the digest. The planner gives this severity to the orphan probe of a foreign key added to a table that already exists, which the migration adds without failing on its orphans. `migrate fetch` / `apply --fetch` MUST send `understands_check_severity`; the console refuses a payload with a WARN check to a request without it, naming `w17ctl update --all`. | `TestRun_WarnCheckReportsAndApplies`, `TestRun_WarnCheckDoesNotWeakenOtherChecks`, `TestChecks_SeverityIsBoundByTheDigest` |
+| T2.17 | `apply` and `status` with `--migrations` MUST judge the set by the replaced list it carries (T10.4). A pinned connection the list does not cover (a directory fetched by an older binary, or assembled by hand) MUST still apply, after a warning naming the directory, `w17-replaced.json`, the connections and `migrate fetch`; a list that is present but cannot be parsed, or has an unknown version, MUST refuse the run, as it would otherwise read as "nothing replaced". | `TestApplyMigrations_DirWithoutAReplacedListWarns`, `TestPlan_RefusesAnUnreadableReplacedList`, `TestFetchThenApply_RefusesAHeadTheConsoleReplaced` |
 
 **Deliberate limits.**
 - Unpinned connections are warned about, not refused: a KV connection can stay unpinned for good.
@@ -179,7 +180,9 @@ and the column is added only on the apply path.
 **Code.** `go/tooling/migrate/migratecli/fetch.go` — `fetchMigrations`, `fetchRefusal`, `transportFor`, `consoleTLSConfig`, `caPool`, `bearerCreds`; `go/tooling/migrate/migratecli/dpop.go` — `fetchCredentials`, `fetchAuth`, `loadDeviceKey`, `dpopOrigin`, `dpopCreds`; `go/tooling/migrate/migratecli/fixtures.go` — `fetchSeeds`; `go/tooling/migrate/lockview.go` — `MigrationSetFS`; `go/tooling/migrate/orchestrator.go` — `WriteMigration`
 
 **Purpose.** Download migration artefacts from the console. `migrate fetch` writes them under
-`--migrations`; `apply --fetch` keeps them in memory.
+`--migrations`, with the console's replaced list beside them; `apply --fetch` keeps both in
+memory. Every fetch that can read a target database reports its applied head, for the console's
+refusal to replace a migration some database applied (`w17ctl migrate replace`).
 
 **Configuration.**
 
@@ -197,6 +200,19 @@ and the column is added only on the apply path.
 Unpinned connections are not requested; when every connection is unpinned the console is not
 contacted. `fixtures apply --fetch` dials the same way.
 
+Applied heads (`FetchMigrationsRequest.applied_heads`) are read from each pinned connection's
+database before the request: by `apply --fetch` and `status --fetch` for every connection, by
+`migrate fetch` for the connections whose `W17_TARGET_<CONN>` this environment holds (a
+workstation holds none and reports nothing; the read is bounded to 30 seconds). Each report
+carries a database id: the first 16 bytes, hex, of SHA-256 over the DSN's lower-cased scheme
+(`postgresql` → `postgres`) and host plus its path, without credentials or query string. A
+database that cannot be read is skipped without a message; an empty head is sent only with an id.
+
+The replaced list (`FetchMigrationsResponse.replaced`: connection → replaced id → its
+replacement) goes to Plan as `Config.Replaced` on `--fetch`; `migrate fetch` writes it to
+`<--migrations>/w17-replaced.json` (`{"version": 1, "connections": {…}}`), outside every
+connection directory because the loader parses every `*.json` there as a migration.
+
 A console whose auth binds devices issues a deployment's machine-account token for the public
 half of a key the deployment holds: `W17_DPOP_KEY=<file> w17ctl key public` makes the key and
 prints that half. `W17_DPOP_KEY` and `W17_CONSOLE_DPOP_ORIGIN` mean what they mean to w17ctl.
@@ -213,6 +229,16 @@ prints that half. `W17_DPOP_KEY` and `W17_CONSOLE_DPOP_ORIGIN` mean what they me
 | T4.4 | Fetched artefacts MUST be written only under `--migrations`: a connection name or migration id that is not one plain path segment (no separator, `:`, `.`/`..` or control character) MUST be refused before anything is written, and every write MUST pass the path guard (T28). | `TestWriteMigration_RefusesPathShapedNames`, `TestWriteMigration_PlainNamesLandUnderRoot` |
 | T4.6 | An in-memory fetch (`--fetch`) MUST apply the same segment rule to connection names and ids as a fetch to disk. | `TestWriteMigration_RefusesPathShapedNames` |
 | T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | `TestFetch_KeepsOnlyRequestedConnections`, `TestFetch_RefusesADuplicateMigration`, `TestMigrationSetFS_RefusesADuplicate` |
+| T4.9 | `apply --fetch`, `status --fetch` and `migrate fetch` (for connections whose DSN it holds) MUST send each readable pinned database's applied head with its database id; the id MUST NOT depend on credentials or query parameters; an unreadable database MUST be skipped, not fail the fetch; an empty head without an id MUST NOT be sent; a fetch without a DSN MUST send no head and still write the artefacts. | `TestAppliedHeads_ReportsWhatEachDatabaseApplied`, `TestAppliedHeads_AnEmptyHeadWithoutAnIdIsNotSent`, `TestDatabaseID_IsTheLocationWithoutCredentials`, `TestFetch_SendsTheAppliedHeadsAndReturnsWhatWasReplaced`, `TestFetchThenApply_RefusesAHeadTheConsoleReplaced`, `TestFetch_WithoutADSNReportsNoHeadAndStillWrites` |
+| T4.10 | `migrate fetch` MUST write the console's replaced list to `w17-replaced.json` beside the connection directories, recording every fetched connection (with no entries when nothing on it was replaced) and keeping the entries of connections it did not fetch, so a later `apply --migrations` refuses a replaced head exactly as `apply --fetch` does. | `TestFetchThenApply_RefusesAHeadTheConsoleReplaced`, `TestWriteReplaced_KeepsOtherConnectionsAndRecordsEmptyOnes` |
+
+**Deliberate limits.**
+- The applied-head report is best effort and is the console's first guard, never the only one:
+  two databases reached by the same URL in different networks share a database id, and a later
+  report from one can lift the other's block; `migrate apply` refuses a replaced head on its own
+  (T10.4).
+- The replaced list on disk is not bound by the lock or any content hash. It can only add
+  refusals; whoever can delete it can delete the artefacts too.
 
 ## T5. `migrate rollback` (CLI)
 
@@ -369,13 +395,19 @@ filled from the directory only when the artefact leaves it empty.
 |---|---|---|
 | T9.1 | Two sources at once MUST be refused. | `TestMigrationsFS_RefusesTwoSources` |
 
-## T10. Plan and squash adopt
+## T10. Plan, squash adopt and replaced heads
 
-**Code.** `go/tooling/migrate/orchestrator.go` — `Plan`
+**Code.** `go/tooling/migrate/orchestrator.go` — `Plan`, `planConnection`, `refuseReplacedHead`, `refuseHeadOffChain`; `go/tooling/migrate/replaced.go` — `ReadReplaced`
 
 **Purpose.** Per connection (in lexical order, unpinned skipped), read the applied head and
 compute the pending chain entries (`id > head`). A baseline whose `supersedes` contains the head
-is adopted (recorded through `adopt_sql`, no DDL).
+is adopted (recorded through `adopt_sql`, no DDL). A database whose head was replaced in the
+console (`w17ctl migrate replace`) is refused before anything runs: the replacement was planned
+from the schema before the replaced migration and would run on top of it.
+
+**Configuration.** `Config.Replaced` (connection → replaced id → replacement) is the list the
+console returned with a `--fetch`; when it is nil, Plan reads the list the migration set carries
+(`w17-replaced.json` at its root). A set with neither is judged by the ids alone.
 
 **Guarantees.**
 
@@ -384,6 +416,13 @@ is adopted (recorded through `adopt_sql`, no DDL).
 | T10.1 | Adoption MUST happen only when the head is the last superseded id; a mid-range head MUST be refused. | `TestPlan_RefusesAdoptFromAMidRangeHead` |
 | T10.2 | A baseline the database already satisfies MUST be adopted without running its DDL. | `TestRun_AdoptsBaselineTheDatabaseAlreadySatisfies` |
 | T10.3 | A baseline without `adopt_sql` MUST NOT be adopted. | `TestRun_BaselineWithoutAdoptSQLRefuses` |
+| T10.4 | A head the replaced list names, with chain work above it and not itself on the chain, MUST be refused before any applier runs, naming the replacement and the rollback target — also when the replaced migration was the first on its connection (its replacement roots the chain), and also on the `--migrations` path (the list on disk). A head the list does not name keeps the rules it had. | `TestPlan_RefusesAReplacedHeadBelowTheWholeChain`, `TestPlan_RefusesAReplacedHeadInsideTheChainNamingItsReplacement`, `TestPlan_ReadsTheReplacedListBesideTheArtefacts`, `TestFetchThenApply_RefusesAHeadTheConsoleReplaced` |
+| T10.5 | Without a list, a head with chain migrations on both sides that is not on the chain, and is not superseded by the next one, MUST be refused; a fresh head, a head on the chain, at the target or above it MUST NOT be. | `TestPlan_RefusesAHeadTheHistoryReplaced`, `TestPlan_HeadOffChainGuardLeavesOrdinaryHeadsAlone` |
+
+**Deliberate limits.**
+- Without the replaced list a replaced FIRST migration cannot be told from an unknown past (a
+  database brought under management, or restored from elsewhere), which gets the work for real;
+  `apply`/`status --migrations` warn when the list is missing (T2.17).
 
 ## T11. Apply run: ordering of side effects
 
@@ -397,7 +436,8 @@ is adopted (recorded through `adopt_sql`, no DDL).
    `--fake`).
 4. Per migration: the applier is cached per connection and the run lock taken at first open;
    the head is re-read under the lock once per connection, and ids at or below it are skipped as
-   applied by a concurrent run. A run lock that can report whether it is still held
+   applied by a concurrent run. A head that moved forward re-plans the connection against it
+   (T10's refusals and adopt decision, from the same replaced list). A run lock that can report whether it is still held
    (`migrate.CheckedRunLock`) is checked before every migration, in apply and in rollback; a lost
    lock stops the run with an error wrapping `migrate.ErrLockLost` that names the connection.
 5. `--fake` → fake apply (T12); adopt → `adopt_sql`; otherwise drift gate (T13), then apply or
@@ -424,6 +464,7 @@ is adopted (recorded through `adopt_sql`, no DDL).
 | T11.9 | The run MUST NOT report success for work not done; the closing count MUST include only migrations this run applied, and report adopted, fake-recorded and skipped migrations separately. | `TestRun_ClosingLineCountsOnlyWhatThisRunApplied` |
 | T11.10 | Losing the run lock during a run MUST fail the run before the next migration, in apply and in rollback, with an error wrapping `ErrLockLost`. | `TestRun_LostRunLockStopsBeforeTheNextMigration`, `TestRunRollback_LostRunLockStopsBeforeTheNextMigration` |
 | T11.11 | A release that finds the run lock lost MUST fail the run; any other release failure MUST stay a warning. | `TestRun_ReleaseOfALostLockFailsTheRun`, `TestRun_OrdinaryReleaseFailureStaysAWarning` |
+| T11.12 | A head that moved forward while the run waited for the lock MUST be judged again under the lock: a replaced or off-chain head MUST be refused before any body runs (T10.4, T10.5), a squash baseline planned as DDL for a fresh database MUST be adopted when the head is now the end of its range and refused when it is mid-range (T10.1). | `TestRun_RefusesAReplacedHeadThatAppearedWhileWaitingForTheLock`, `TestRun_RefusesAnOffChainHeadThatAppearedWhileWaitingForTheLock`, `TestRun_AdoptsABaselineWhenTheHeadReachedItsRangeWhileWaiting`, `TestRun_RefusesABaselineWhenTheHeadStoppedMidRangeWhileWaiting` |
 
 ## T12. Fake apply
 
