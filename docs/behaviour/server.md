@@ -534,7 +534,7 @@ variables with S16 and S18.
 | S17.1 | Switch off → no option. | `TestSwitchOffNoTLS`, `TestExplicitOff` |
 | S17.2 | Switch on without certificate and key → error. | `TestSwitchOnRequiresCertKey` |
 | S17.3 | Switch on → server-authenticated TLS. | `TestServerAuthTLSEnabled` |
-| S17.4 | A client CA set → mutual TLS; a client without a certificate is rejected in a real handshake. | `TestMutualTLSWithClientCA`, `TestBackendDial_MTLSRejectsClientWithoutCert` |
+| S17.4 | A client CA set → mutual TLS: a listener built from the option MUST refuse, in a real handshake, a client without a certificate and one whose certificate another CA issued, and serve a leaf of the client CA. | `TestTLSServerOption_MutualTLSRefusesAClientWithoutAValidCertificate`, `TestMutualTLSWithClientCA` |
 | S17.5 | A bad client CA → error. | `TestBadClientCAErrors` |
 | S17.6 | `terminated` → plaintext listener. | `TestTLSServerOption_TerminatedListensPlain` |
 | S17.7 | A listener MUST NOT serve plaintext when TLS was requested. | `TestGRPCComponent_ServesInternalTLS` |
