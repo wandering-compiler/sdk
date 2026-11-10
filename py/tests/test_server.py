@@ -667,3 +667,16 @@ async def test_a_bidi_method_cannot_open_a_transaction(pool):
         conn.close()
         srv.close()
         await srv.wait_closed()
+
+
+async def test_a_request_message_past_4_mib_is_refused_before_it_is_buffered(stack, msg):
+    # Go, grpc-js and tonic cap a received message at 4 MiB; grpclib has no
+    # such limit and would buffer any size. The served side reads the length
+    # prefix and refuses RESOURCE_EXHAUSTED (Go's text) before the body.
+    with pytest.raises(GRPCError) as ei:
+        await stack.client.CreateNote(Context(), msg("CreateNoteRequest")(text="x" * (5 * 1024 * 1024)))
+    assert ei.value.status == Status.RESOURCE_EXHAUSTED
+    assert "received message larger than max" in (ei.value.message or "")
+    assert stack.storage.rows == []
+    note = await stack.client.CreateNote(Context(), msg("CreateNoteRequest")(text="y" * (1024 * 1024)))
+    assert len(note.text) == 1024 * 1024

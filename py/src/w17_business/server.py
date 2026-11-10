@@ -48,7 +48,7 @@ import grpclib.const
 from grpclib.const import Cardinality, Status
 from grpclib.exceptions import GRPCError, ProtocolError
 
-from . import distx, events, observability, paging, txscope
+from . import _grpclib, distx, events, observability, paging, txscope
 from .config import ConfigError
 from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool
@@ -351,6 +351,7 @@ def _handler(m: _Method, served: Served) -> grpclib.const.Handler:
             # Shutting down: refuse new work with the one code a client retries
             # elsewhere, rather than starting what the drain may cut off.
             raise GRPCError(Status.UNAVAILABLE, "server is shutting down")
+        _grpclib.bound_received(stream)
         ctx = _context_for(stream, path)
         reg._enter()
         span = _span(ctx, path)
