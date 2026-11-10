@@ -116,6 +116,22 @@ async def test_a_done_context_refuses_to_commit():
     assert tx.seq() == "begin,rollback"
 
 
+async def test_a_done_context_names_a_failed_rollback():
+    # Go's Run appends "(rollback also failed: ...)": a transaction may be
+    # left open until the server times it out, and the refusal must say so.
+    tx = ScriptedTx(rollback_err=GRPCError(Status.UNAVAILABLE, "storage unreachable"))
+    ctx = Context().with_cancel()
+
+    async def fn(c):
+        ctx.cancel()
+        return None
+
+    with pytest.raises(distx.DistxError, match="not committing") as ei:
+        await distx.run(ctx, tx, None, fn)
+    assert "rollback also failed" in str(ei.value) and "storage unreachable" in str(ei.value)
+    assert tx.seq() == "begin,rollback"
+
+
 async def test_commit_failure_is_raised_and_not_rolled_back():
     tx = ScriptedTx(commit_err=GRPCError(Status.ABORTED, "serialization failure"))
 

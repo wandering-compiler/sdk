@@ -308,27 +308,10 @@ fn obj<'a>(d: &'a Obj, key: &str, w: &str) -> Result<Option<&'a Obj>, ManifestEr
     }
 }
 
-fn list(v: Option<&Value>) -> Vec<&Obj> {
-    match v {
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_object).collect(),
-        _ => Vec::new(),
-    }
-}
-
 fn strs(v: Option<&Value>) -> Vec<String> {
     match v {
         Some(Value::Array(a)) => a.iter().map(text).collect(),
         _ => Vec::new(),
-    }
-}
-
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64() != Some(0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(_) => true,
     }
 }
 
@@ -644,10 +627,10 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
         package,
     };
     let mut services = Vec::new();
-    for s in list(d.get("services")) {
+    for s in &objects(d, "services", "")? {
         let name = req(s, "name", "services[].")?;
         let mut methods = Vec::new();
-        for m in list(s.get("methods")) {
+        for m in &objects(s, "methods", "services[].")? {
             let mname = req(m, "name", "services[].methods[].")?;
             methods.push(MethodSpec {
                 path: Some(str_or(m, "path", ""))
@@ -655,15 +638,15 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
                     .unwrap_or_else(|| format!("/{name}/{mname}")),
                 input: str_or(m, "input", ""),
                 output: str_or(m, "output", ""),
-                client_streaming: truthy(m.get("client_streaming")),
-                server_streaming: truthy(m.get("server_streaming")),
+                client_streaming: cbool(m, "client_streaming", "services[].methods[].")?,
+                server_streaming: cbool(m, "server_streaming", "services[].methods[].")?,
                 name: mname,
             });
         }
         services.push(ServiceSpec { name, methods });
     }
     let mut config = Vec::new();
-    for c in list(d.get("config")) {
+    for c in &objects(d, "config", "")? {
         let name = req(c, "name", "config[].")?;
         config.push(ConfigKey {
             env: Some(str_or(c, "env", ""))
@@ -673,8 +656,8 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| "string".into()),
             default: default_text(c.get("default")),
-            required: truthy(c.get("required")),
-            secret: truthy(c.get("secret")),
+            required: cbool(c, "required", "config[].")?,
+            secret: cbool(c, "secret", "config[].")?,
             description: str_or(c, "description", ""),
             name,
         });
@@ -701,10 +684,10 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
                 .and_then(Value::as_object)
                 .unwrap_or(&empty);
             let mut emits = Vec::new();
-            for e in list(ev.get("emits")) {
+            for e in &objects(ev, "emits", "events.")? {
                 let w = "events.emits[].";
                 let mut fields = Vec::new();
-                for f in list(e.get("fields")) {
+                for f in &objects(e, "fields", "events.emits[].")? {
                     fields.push(PayloadBinding {
                         field: req(f, "field", "events.emits[].fields[].")?,
                         source: Some(str_or(f, "source", ""))
@@ -734,7 +717,7 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
                 emits.push(emit);
             }
             let mut invalidates = Vec::new();
-            for i in list(ev.get("invalidates")) {
+            for i in &objects(ev, "invalidates", "events.")? {
                 let w = "events.invalidates[].";
                 invalidates.push(Invalidate {
                     method: req(i, "method", w)?,
@@ -764,8 +747,8 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
             "manifest: format {fmt} has no companion section; a manifest with one is format 2"
         ));
     }
-    let plugin_hooks = list(d.get("plugin_hooks"))
-        .into_iter()
+    let plugin_hooks = objects(d, "plugin_hooks", "")?
+        .iter()
         .map(|h| PluginHook {
             plugin: str_or(h, "plugin", ""),
             registered_as: str_or(h, "registered_as", ""),
@@ -773,11 +756,16 @@ pub fn from_value(v: &Value, base_dir: &Path) -> Result<Manifest, ManifestError>
             methods: strs(h.get("methods")),
         })
         .collect();
-    let timeout = d
-        .get("shutdown_timeout_seconds")
-        .and_then(Value::as_f64)
-        .filter(|t| *t > 0.0)
-        .unwrap_or(10.0);
+    let timeout = match d.get("shutdown_timeout_seconds") {
+        None | Some(Value::Null) => 10.0,
+        Some(Value::Number(n)) => n.as_f64().filter(|t| *t > 0.0).unwrap_or(10.0),
+        Some(v) => {
+            return err(format!(
+                "manifest: shutdown_timeout_seconds must be a number, not {}",
+                show(v)
+            ));
+        }
+    };
     Ok(Manifest {
         format: fmt,
         bundle,

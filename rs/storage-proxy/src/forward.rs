@@ -21,7 +21,7 @@ use hyper_util::rt::TokioExecutor;
 
 use crate::config::BackendTls;
 use crate::otel::{self, Metrics, MetricsExt, ProxyTracer};
-use crate::router::{Route, Router, CONN_ID_HEADER};
+use crate::router::{Class, Route, Router, CONN_ID_HEADER};
 
 /// gRPC status codes used on the proxy's own outcomes.
 const GRPC_OK: i32 = 0;
@@ -139,7 +139,14 @@ pub async fn handle(
                     telemetry
                         .metrics
                         .forward_duration(class, elapsed_ms(started));
-                    let resp = apply_stamp(resp, stamp_conn_id);
+                    let stamp = match stamp_conn_id {
+                        Some(id) if class == Class::Begin => {
+                            crate::router::settle_begin(&router.affinity, &id, Some(resp.headers()))
+                                .then_some(id)
+                        }
+                        other => other,
+                    };
+                    let resp = apply_stamp(resp, stamp);
                     if let Some(id) = evict {
                         if finished(&resp) {
                             router.affinity.evict(&id);
@@ -151,6 +158,9 @@ pub async fn handle(
                     Ok(resp)
                 }
                 Err(e) => {
+                    if let (Class::Begin, Some(id)) = (class, &stamp_conn_id) {
+                        crate::router::settle_begin(&router.affinity, id, None);
+                    }
                     telemetry
                         .metrics
                         .forward_duration(class, elapsed_ms(started));
@@ -178,6 +188,7 @@ fn reject_reason(grpc_status: i32) -> &'static str {
     match grpc_status {
         GRPC_FAILED_PRECONDITION => "unknown_conn",
         GRPC_UNAVAILABLE => "upstream_unavailable",
+        crate::router::GRPC_RESOURCE_EXHAUSTED => "affinity_full",
         _ => "unknown_conn",
     }
 }

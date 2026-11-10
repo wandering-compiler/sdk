@@ -126,6 +126,17 @@ describe("distx.run", () => {
     expect(tx.seq()).toBe("begin,rollback");
   });
 
+  it("a done context names a failed rollback", async () => {
+    // Go's Run appends "(rollback also failed: ...)": a transaction may be
+    // left open until the server times it out, and the refusal must say so.
+    const tx = new ScriptedTx({ rollbackErr: new StatusError(Status.UNAVAILABLE, "storage unreachable") });
+    const ctx = new Context().withCancel();
+    const e = await caught(distx.run(ctx, tx, null, () => void ctx.cancel()));
+    expect(e).toBeInstanceOf(distx.DistxError);
+    expect(String((e as Error).message)).toMatch(/not committing.*rollback also failed.*storage unreachable/);
+    expect(tx.seq()).toBe("begin,rollback");
+  });
+
   it("a commit failure is thrown and not rolled back", async () => {
     const tx = new ScriptedTx({ commitErr: new StatusError(Status.ABORTED, "serialization failure") });
     const e = await caught(distx.run(new Context(), tx, null, () => 1));

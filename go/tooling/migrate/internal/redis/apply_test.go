@@ -92,14 +92,15 @@ operations:
 
 // TestApply_YAMLReachesCursorThenFails pins the YAML dispatch
 // path: parse + codec + transform-VM build all succeed, then the
-// first cursor read (HEXISTS) hits the dead server.
+// first cursor call (the DEL of the other direction's stale cursor)
+// hits the dead server.
 func TestApply_YAMLReachesCursorThenFails(t *testing.T) {
 	err := deadApplier(t).Apply(boundedCtx(t), &applyfetchpb.Migration{
 		Id:    "ts-yaml",
 		UpSql: yamlAddBody,
 	})
-	if err == nil || !strings.Contains(err.Error(), "cursor read") {
-		t.Errorf("expected cursor-read connection error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "stale cursor clear") {
+		t.Errorf("expected a cursor connection error, got %v", err)
 	}
 }
 
@@ -199,8 +200,8 @@ operations:
 		UpSql:   yamlAddBody,
 		DownSql: down,
 	})
-	if err == nil || !strings.Contains(err.Error(), "cursor read") {
-		t.Errorf("expected rollback cursor-read error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "rollbackYAMLDataMigration: stale cursor clear") {
+		t.Errorf("expected a rollback cursor connection error, got %v", err)
 	}
 }
 

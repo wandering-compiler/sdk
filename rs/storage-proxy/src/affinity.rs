@@ -43,9 +43,15 @@ struct Entry {
 /// Thread-safe affinity map. Lookups lazily drop expired entries.
 pub struct AffinityMap {
     ttl: Duration,
+    max_entries: usize,
     clock: Box<dyn Clock>,
     inner: Mutex<HashMap<String, Entry>>,
 }
+
+/// How many transactions one proxy pins at once. A Begin past it is refused
+/// (RESOURCE_EXHAUSTED) rather than growing the map without bound; live
+/// entries are open transactions, so this is far above any real load.
+pub const MAX_ENTRIES: usize = 100_000;
 
 impl AffinityMap {
     pub fn new(ttl: Duration) -> AffinityMap {
@@ -55,9 +61,16 @@ impl AffinityMap {
     pub fn with_clock(ttl: Duration, clock: Box<dyn Clock>) -> AffinityMap {
         AffinityMap {
             ttl,
+            max_entries: MAX_ENTRIES,
             clock,
             inner: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The same map holding at most `n` entries.
+    pub fn with_max_entries(mut self, n: usize) -> AffinityMap {
+        self.max_entries = n;
+        self
     }
 
     /// Acquire the map guard, tolerating lock poisoning. This is the
@@ -75,17 +88,26 @@ impl AffinityMap {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Pin `conn_id` to `replica`, (re)setting its TTL.
-    pub fn insert(&self, conn_id: String, replica: usize) {
-        let expires_at = self.clock.now() + self.ttl;
+    /// Pin `conn_id` to `replica`, (re)setting its TTL. False — and nothing
+    /// pinned — when the map is full of live entries (expired ones are
+    /// dropped first).
+    pub fn insert(&self, conn_id: String, replica: usize) -> bool {
+        let now = self.clock.now();
         let mut map = self.guard();
+        if map.len() >= self.max_entries && !map.contains_key(&conn_id) {
+            map.retain(|_, e| e.expires_at > now);
+            if map.len() >= self.max_entries {
+                return false;
+            }
+        }
         map.insert(
             conn_id,
             Entry {
                 replica,
-                expires_at,
+                expires_at: now + self.ttl,
             },
         );
+        true
     }
 
     /// Look up the replica for `conn_id` and start its TTL again (the
@@ -214,6 +236,23 @@ mod tests {
         m.insert("c1".into(), 3);
         clock.store(999, Ordering::SeqCst);
         assert_eq!(m.lookup("c1"), Some(3));
+    }
+
+    #[test]
+    fn a_full_map_refuses_until_an_entry_expires() {
+        let (m, clock) = map_with_clock(1000);
+        let m = m.with_max_entries(2);
+        assert!(m.insert("c1".into(), 0));
+        assert!(m.insert("c2".into(), 0));
+        assert!(!m.insert("c3".into(), 0), "full of live entries");
+        assert!(
+            m.insert("c2".into(), 1),
+            "re-pinning a live entry is not growth"
+        );
+        assert_eq!(m.lookup("c3"), None);
+        clock.fetch_add(1001, Ordering::SeqCst);
+        assert!(m.insert("c3".into(), 0), "expired entries make room");
+        assert_eq!(m.len(), 1);
     }
 
     #[test]

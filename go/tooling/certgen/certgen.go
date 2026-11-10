@@ -374,10 +374,7 @@ func randSerialFrom(r io.Reader) (*big.Int, error) {
 
 func writeCertPEM(path string, der []byte) error {
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	if err := os.WriteFile(path, pemBytes, 0o644); err != nil {
-		return fmt.Errorf("certgen: write %q: %w", path, err)
-	}
-	return nil
+	return writeFileAtomic(path, pemBytes, 0o644)
 }
 
 func writeKeyPEM(path string, key *ecdsa.PrivateKey) error {
@@ -386,7 +383,36 @@ func writeKeyPEM(path string, key *ecdsa.PrivateKey) error {
 		return fmt.Errorf("certgen: marshal key: %w", err)
 	}
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+	return writeFileAtomic(path, pemBytes, 0o600)
+}
+
+// writeFileAtomic writes data to a temporary file beside path with exactly
+// perm, then renames it over path. os.WriteFile applies its mode only when it
+// creates the file, so a key re-minted over a file that was 0644 stayed
+// world-readable; and a reader never sees a half-written PEM.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("certgen: write %q: %w", path, err)
+	}
+	name := tmp.Name()
+	fail := func(err error) error {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return fmt.Errorf("certgen: write %q: %w", path, err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return fail(err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return fmt.Errorf("certgen: write %q: %w", path, err)
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
 		return fmt.Errorf("certgen: write %q: %w", path, err)
 	}
 	return nil

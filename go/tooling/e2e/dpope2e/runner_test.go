@@ -541,10 +541,11 @@ func headerRecorder(t *testing.T) (*httptest.Server, func() []http.Header) {
 func TestDPoP_OffModeWireIsUnchanged(t *testing.T) {
 	srv, seen := headerRecorder(t)
 	scope := runtime.NewRun().NewScope()
+	answered := map[string]any{"token": map[string]any{"matcher": "not_empty"}}
 	steps := []runner.Step{
 		dpopSignIn("alice", map[string]any{"token": map[string]any{"capture": "auth.token"}}),
-		{Label: "me", Endpoint: runner.Endpoint{Ref: "me.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/me", AuthRequired: true}},
-		{Label: "cred", Endpoint: runner.Endpoint{Ref: "me.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/me", AuthRequired: true}, Credential: "DPoP raw"},
+		{Label: "me", Endpoint: runner.Endpoint{Ref: "me.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/me", AuthRequired: true}, Expect: answered},
+		{Label: "cred", Endpoint: runner.Endpoint{Ref: "me.Get", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/me", AuthRequired: true}, Credential: "DPoP raw", Expect: answered},
 		{
 			Label:        "watch",
 			Endpoint:     runner.Endpoint{Ref: "feed.Watch", Transport: "rest", HTTPMethod: "GET", PathTemplate: "/stream", AuthRequired: true, Stream: true},

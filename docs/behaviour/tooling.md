@@ -458,13 +458,14 @@ console returned with a `--fetch`; when it is nil, Plan reads the list the migra
 | T11.3 | Schema names MUST be quoted with embedded quotes doubled. | `TestSchemaPrepSQL_QuotesEachName` |
 | T11.4 | Work applied by a concurrent run while this one queued MUST be skipped. | `TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued` |
 | T11.5 | A head that moved backward under the lock MUST be refused. | `TestApply_RefusesWhenTheHeadMovedBACKWARD` |
-| T11.6 | A second run against a store with a run lock MUST fail fast with "run-lock held", never wait. | `TestRun_LockHeldAbortsFailFast` |
+| T11.6 | A second run against a store whose run lock another run holds MUST wait for it for at most `--lock-wait` (`Config.LockWait`, default 5 m, T15.15) and then abort naming the wait; with `--lock-wait 0` (`LockWait` < 0) it MUST fail at once with "run-lock held", never wait. | `TestRun_LockHeldAbortsFailFast`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
 | T11.7 | On Postgres, a migration whose in-transaction half committed but whose post-transaction half did not MUST resume only the post-transaction half. | `TestRun_ResumesPendingSkirt`, `TestPreFingerprint_DoesNotWedgeAResume` |
 | T11.8 | A migration MUST NOT be applied twice within one run. | `TestRun_RefusesAConnectionListedTwice`, `TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued` |
 | T11.9 | The run MUST NOT report success for work not done; the closing count MUST include only migrations this run applied, and report adopted, fake-recorded and skipped migrations separately. | `TestRun_ClosingLineCountsOnlyWhatThisRunApplied` |
-| T11.10 | Losing the run lock during a run MUST fail the run before the next migration, in apply and in rollback, with an error wrapping `ErrLockLost`. | `TestRun_LostRunLockStopsBeforeTheNextMigration`, `TestRunRollback_LostRunLockStopsBeforeTheNextMigration` |
+| T11.10 | Losing the run lock during a run MUST fail the run before the next migration, in apply and in rollback, with an error wrapping `ErrLockLost`. | `TestRun_LostRunLockStopsBeforeTheNextMigration`, `TestRunRollback_LostRunLockStopsBeforeTheNextMigration`; a lock lost during the `--checks` probes: `TestRun_LostRunLockDuringAChecksStopsTheBody`, `TestRunRollback_LostRunLockDuringAChecksStopsTheBody` |
 | T11.11 | A release that finds the run lock lost MUST fail the run; any other release failure MUST stay a warning. | `TestRun_ReleaseOfALostLockFailsTheRun`, `TestRun_OrdinaryReleaseFailureStaysAWarning` |
 | T11.12 | A head that moved forward while the run waited for the lock MUST be judged again under the lock: a replaced or off-chain head MUST be refused before any body runs (T10.4, T10.5), a squash baseline planned as DDL for a fresh database MUST be adopted when the head is now the end of its range and refused when it is mid-range (T10.1). | `TestRun_RefusesAReplacedHeadThatAppearedWhileWaitingForTheLock`, `TestRun_RefusesAnOffChainHeadThatAppearedWhileWaitingForTheLock`, `TestRun_AdoptsABaselineWhenTheHeadReachedItsRangeWhileWaiting`, `TestRun_RefusesABaselineWhenTheHeadStoppedMidRangeWhileWaiting` |
+| T11.13 | The extension preflight and the schema prep MUST NOT write or lock the ledger: they reach an applier that implements `migrate.ScriptRunner` (Postgres) through `RunScript`, never `Apply`, so a legacy ledger is not upgraded by a probe. An apply MUST NOT `ALTER` a ledger that already carries the post-transaction column (the catalogue is asked first), so it neither takes the ledger's ACCESS EXCLUSIVE lock behind an open writer nor needs the table's owner. | `TestRun_PreparationStepsDoNotGoThroughApply`, `TestApply_DoesNotAlterALedgerThatHasThePhaseColumn_Live` |
 
 ## T12. Fake apply
 
@@ -574,6 +575,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | `TestRunLock_CheckReportsALostLockSession_Live` |
 | T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
 | T15.16 | A MySQL body that fails MUST NOT hand its connection back to the pool (a `FOREIGN_KEY_CHECKS` it turned off, or a transaction it left open, would reach the next borrower). A body that succeeds after turning the checks off around one `ADD … FOREIGN KEY` (save, off, add, restore — the planner's shape for a key over existing rows) MUST leave its session with the checks on. | `TestApply_AFailedBodyDoesNotReturnItsSessionToThePool`, `TestApply_FKChecksRestoredAfterASuccessfulBody` (live) |
+| T15.17 | A Postgres migration body that fails between its own `BEGIN` and `COMMIT` MUST NOT leave the applier's session in an aborted transaction: the applier issues `ROLLBACK` on a fresh context, so the next migration, a rollback or a ledger read on that connection works. | `TestApply_AFailedBodyLeavesNoTransactionOpen_Live` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.
@@ -615,11 +617,16 @@ values: `ADD_FIELD_DEFAULT`, `REMOVE_FIELD`, `RENAME_FIELD`, `TRANSFORM_FIELD` (
 | T16.10 | Running into the apply timeout MUST leave a state that a later run can resume or refuse with a clear remedy. | `TestApply_YAMLApplyTimeoutLeavesAResumableState_Live`, `TestApply_YAMLApplyTimeoutLeavesAResumableState` |
 | T16.11 | A stored JSON `null` MUST be treated like an empty value: every op is a no-op on it and none panics. | `TestJSONApplyOp_NullValueIsANoOp` |
 | T16.12 | A data migration body MUST be exactly one YAML document; a body with more is refused. | `TestUnmarshal_MoreThanOneDocumentIsRefused` |
+| T16.13 | A run in one direction MUST first delete the other direction's cursor (it can only be stale: this direction runs because the ledger says that one finished), and MUST delete both cursors after its ledger write, so a crash between a ledger write and its cursor delete cannot make a later apply or rollback skip every op and record success over data it never touched (Redis and S3). | `TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared_Live` (Redis, in-process server), `TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared` (S3) |
 
 **Deliberate limits.**
 - Values are rewritten per key with GET then SET, not compare-and-set; run a data migration while
   no application writes that keyspace.
 - NATS has no data-migration path.
+- The once-per-key guarantee of `TRANSFORM_FIELD` (T16.8) keeps every key the op has handed out
+  in an in-process set for the whole op, so the applier's memory grows with the keyspace (key
+  bytes plus map overhead per key). A keyspace too large for that has to be split across
+  several operations with narrower `keyspace` patterns.
 - An irreversible data migration has no override flag; the way past it is a rollback target
   that keeps it applied.
 
@@ -676,9 +683,12 @@ foreign-key closure, digested by the console) differs from what it was rendered 
 **Purpose.** Run codegen-baked steps in order with one capture scope; the first failure aborts.
 `Repeat` runs a step N times. Output is a text checklist or NDJSON, always to stdout.
 
-**Configuration.** Each step carries exactly one of `expect`, `expect_error`,
-`expect_transport_error`, `expect_stream` (with `expect_error` for a refused stream). The spec
-parser enforces this; streams are checked again at run time.
+**Configuration.** A step carries at most one of `expect`, `expect_error`,
+`expect_transport_error`, `expect_stream` (with `expect_error` for a refused stream); the spec
+parser enforces the mutual exclusion, not that one is present. The runner checks the shape again:
+a stream step must assert its frames or its refusal (T19.2), and a unary step with no
+expectation, no awaited event and no download passes only on a response with no fields — an
+`expect: {}` names a method whose response is empty, and codegen bakes it as no `Expect` (T19.3).
 
 **Guarantees.**
 
@@ -686,6 +696,7 @@ parser enforces this; streams are checked again at run time.
 |---|---|---|
 | T19.1 | The first failing step MUST abort the scenario. | `TestRunScenario_FailAborts` |
 | T19.2 | A stream step with an invalid expectation shape MUST be refused at run time. | `TestExpectStream_AStreamStepAssertingNothingFails`, `TestExpectStream_ACredentialIsRefused`, `TestExpectStream_ATransportErrorExpectationIsRefused` |
+| T19.3 | A unary step that asserts nothing (no `expect` fields, no `expect_error` or `expect_transport_error`, no awaited event, no download) MUST fail when the response carries any field other than the synthetic `w17_wire`, naming the fields; on a response with no fields it passes. | `TestRunScenario_AUnaryStepAssertingNothingFailsOnAResponseWithFields` |
 
 ## T20. E2E auth token threading
 
@@ -806,6 +817,7 @@ is `{}`.
 | T23.4 | Input that cannot be encoded for the method (such as a nested object on GET or DELETE) MUST be an error, never silently dropped. | `TestResolveREST_NestedInputOnBodylessVerbIsRefused` |
 | T23.5 | Multipart MUST NOT repeat path and query bindings as form fields and MUST honour `body_field`. | `TestCall_MultipartSendsOnlyBodyFields` |
 | T23.6 | Numbers routed into a path or query MUST render without exponent. | `TestResolveREST_NumbersRenderWithoutExponent` |
+| T23.7 | A download step (`Download`) MUST fetch the object by the PATH of the rendered URL from its route prefix on (an absolute URL's host and any proxy prefix are dropped), under the route it names or the URL's own route (longest prefix), with `variant` as the only query; it MUST carry the session token only when that route is `AuthRequired` (an `anonymous` step sends none), and MUST refuse an empty URL, a URL with a query or fragment, a URL under no download route and an unknown `Route`. An unexpected refusal of the route fails the step. | `TestDownloadStep_RoundTripsAGeneratedImage`, `TestDownloadStep_FailsWhenTheRouteRefuses`, `TestResolveDownload` |
 
 ## T24. E2E MCP caller
 
@@ -815,7 +827,8 @@ is `{}`.
 with the bearer; JSON or SSE-framed responses; `structuredContent` preferred, else the first text
 block as JSON. A JSON-RPC error carrying `rpc error: code = X desc = Y` becomes a `CallError`
 with a `SCREAMING_SNAKE` code; anything else (HTTP ≥ 400, `isError: true`) is a transport error.
-Multipart is refused; static headers are ignored.
+Multipart is refused; static headers are ignored. An `isError` result that names a status code is
+the surface answering (T24.4).
 
 **Guarantees.**
 
@@ -823,10 +836,12 @@ Multipart is refused; static headers are ignored.
 |---|---|---|
 | T24.1 | MCP calls and status mapping MUST behave as described. | `TestMCPCall_*`, `TestGrpcStatusFromMCPError*` |
 | T24.2 | A non-status error MUST stay a transport failure. | `TestGrpcStatusFromMCPError_NonStatusErrorsStayTransportFailures` |
+| T24.3 | With `WithOAuth`, an MCP call MUST present an access token the surface's authorization server issued for the resource its protected-resource metadata names, never the REST session: the caller registers one client per caller (redirect URI fixed at `http://127.0.0.1/callback`), starts an authorization with PKCE (S256) without following its redirect, approves it on the consent RPCs with the step's session (the first organization offered when `Get` is set), and redeems the code. One token per session is kept for the caller's lifetime; a step with no session gets no token and is refused by the surface. | `TestMCPCaller_OAuthExchange` |
+| T24.4 | An `isError` tool result whose first text line is `<Code>: <message>` MUST become a `CallError` with that code in `SCREAMING_SNAKE` form (so `expect_error` matches it); any other `isError` result stays a transport failure. | `TestMCPCaller_OAuthExchange` |
 
 **Deliberate limits.**
-- An MCP refusal delivered as HTTP 401/403 or as `isError` can be asserted only with
-  `expect_transport_error`, not `expect_error`.
+- An MCP refusal delivered as HTTP 401/403, or as an `isError` result that names no status code,
+  can be asserted only with `expect_transport_error`, not `expect_error`.
 
 ## T25. E2E streams and events
 
@@ -843,12 +858,18 @@ topics and times out after 5 s by default.
 |---|---|---|
 | T25.1 | Stream frames MUST match in order, and the close and error rules MUST hold. | `TestExpectStream_*` |
 | T25.2 | Event awaits MUST honour topic, timeout and error frames. | `TestAwaitEvent_*` |
-| T25.3 | An awaited event MUST be attributable to this step's call, not an earlier step's. | `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent`, `TestSSESubscription_IgnoresFramesBeforeTheMark` |
+| T25.3 | An awaited event MUST be one the subscription delivered after this step's call started: every frame the reader parsed before the mark set just before the call is skipped, so an earlier step's event that already arrived is never taken. | `TestAwaitEvent_ALateEventFromAnEarlierStepIsNotThisStepsEvent`, `TestSSESubscription_IgnoresFramesBeforeTheMark` |
 | T25.4 | A suite MUST be able to assert that an event is not delivered (for example to another organization). | `TestAwaitEvent_AbsentAssertsNonDelivery`, `TestAwaitEvent_AbsentCannotCapture` |
 | T25.5 | A frame whose `data:` is not JSON MUST fail the step, not yield empty data. | `TestAwaitEvent_NonJSONDataFailsTheStep`, `TestExpectStream_NonJSONFrameFailsTheStep` |
 
 **Deliberate limits.**
 - Client-streaming and bidirectional (WebSocket) streams are not supported.
+- An await cannot attribute an event to the call: frames carry no server-side time or sequence,
+  and the mark is compared with the time the reader parsed a frame. An earlier step's event that
+  the server emits late, or that the reader parses only after the mark, passes an await whose
+  `match` it satisfies — an empty `match` takes the first frame on the topic. A step that awaits
+  a topic an earlier step also emits needs a `match` that tells the two events apart (an id the
+  step's own call captured).
 
 ## T26. Stress
 
@@ -901,6 +922,7 @@ directory `0700` with a `.gitignore` ignoring everything.
 | T27.5 | Serials MUST never be zero. | `TestRandSerialFrom_NeverZero` |
 | T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window, does not match its key, or lacks ServerAuth or ClientAuth extended key usage. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired`, `TestEnsureLeaf_ReMintedWithoutClientAuth`, `TestEnsureLeaf_ReMintedWithoutServerAuth`, `TestEnsureLeaf_ReMintedWhenTheKeyDoesNotMatch` |
 | T27.7 | An unreadable leaf MUST be refused, not overwritten. | `TestEnsureLeaf_UnreadableIsRefused` |
+| T27.8 | Every private key written, a re-minted one included, MUST be mode 0600 whatever mode the file it replaces had; certificates and keys MUST be written to a temporary file beside their path and renamed over it, so no reader sees a half-written PEM and no temporary file is left behind. | `TestEnsureLeaf_ReMintedKeyIsOwnerOnly` |
 
 **Deliberate limits.**
 - Development only; no scheduled renewal (a leaf is re-minted only when `EnsureCerts` runs). Permissions of an existing directory are not tightened. The lock

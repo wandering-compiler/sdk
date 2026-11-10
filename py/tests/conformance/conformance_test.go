@@ -377,6 +377,37 @@ func TestRollbackDropsWritesEventsAndOnCommit(t *testing.T) {
 	}
 }
 
+// A caller whose deadline ends the call while its transaction is open: the
+// tier rolls the transaction back although the caller is gone (the rollback
+// is detached from the caller's cancellation), so nothing it wrote lands,
+// no event leaves, and the storage tier holds no open transaction.
+func TestACallerDeadlineInsideATransactionRollsItBack(t *testing.T) {
+	mark := env.eventCount()
+	before := len(env.rows(t))
+	short, cancel := timeout(gatewayCtx(t), 300*time.Millisecond)
+	defer cancel()
+	_, err := env.call(short, "CreateNotes",
+		set(env.msg("CreateNotesRequest"), map[string]any{"texts": []string{"late"}, "pause_ms": int32(1500)}),
+		"CreateNotesResponse")
+	if st := statusOf(t, err); st.Code() != codes.DeadlineExceeded {
+		t.Errorf("code = %s (%s), want DeadlineExceeded", st.Code(), st.Message())
+	}
+	until := time.Now().Add(10 * time.Second)
+	for env.reg.Active() != 0 && time.Now().Before(until) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := env.reg.Active(); n != 0 {
+		t.Fatalf("%d transaction(s) still open after the caller's deadline: the rollback did not reach storage", n)
+	}
+	if rows := env.rows(t); len(rows) != before {
+		t.Errorf("writes of a transaction the caller abandoned landed: %v", rows[before:])
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := noteCreated(t, env.eventsSince(mark)); len(got) != 0 {
+		t.Errorf("events of a rolled-back transaction: %v", got)
+	}
+}
+
 func TestOnCommitRunsAfterCommit(t *testing.T) {
 	before := len(env.rows(t))
 	ctx, cancel := timeout(gatewayCtx(t), 10*time.Second)

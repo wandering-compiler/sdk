@@ -308,3 +308,21 @@ async fn a_dead_pinned_replica_is_unavailable_never_rebalanced() {
     }
     assert!(other.hits().is_empty(), "re-balanced: {:?}", other.hits());
 }
+
+/// A Begin the replica refuses opened no transaction: the refusal is relayed
+/// with no conn-id stamped, and its route is not kept for the TTL.
+#[tokio::test]
+async fn a_refused_begin_is_relayed_without_a_conn_id() {
+    let r = Replica::start(Arc::new(|p: &str| {
+        if p.ends_with("/Begin") {
+            Reply::TrailersOnly("3")
+        } else {
+            Reply::TrailersOnly("0")
+        }
+    }))
+    .await;
+    let proxy = proxy_in_front_of(vec![r.addr.clone()], Duration::from_secs(300)).await;
+    let a = call(&proxy, BEGIN, None).await;
+    assert_eq!(a.grpc_status.as_deref(), Some("3"));
+    assert_eq!(a.conn_id, None, "a refused Begin names no transaction");
+}

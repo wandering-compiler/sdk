@@ -279,10 +279,6 @@ function obj(d: Obj, key: string, where: string): Obj | null {
   return v;
 }
 
-function list(v: unknown): Obj[] {
-  return Array.isArray(v) ? (v as Obj[]) : [];
-}
-
 function strs(v: unknown): string[] {
   return Array.isArray(v) ? v.map(text) : [];
 }
@@ -307,6 +303,19 @@ function bool(d: Obj, key: string, where: string): boolean {
   if (v === undefined || v === null) return false;
   if (typeof v !== "boolean") throw new ManifestError(`manifest: ${where}${key} must be true or false, not ${show(v)}`);
   return v;
+}
+
+/**
+ * A JSON number; absent (or null) is 0 (the caller's default). true and "10"
+ * are not; a Number object is how parseJSON keeps `10.0`.
+ */
+function num(d: Obj, key: string, where: string): number {
+  const v = d[key];
+  if (v === undefined || v === null) return 0;
+  if (typeof v === "number") return v;
+  if (v instanceof Number) return v.valueOf();
+  if (typeof v === "bigint") return Number(v);
+  throw new ManifestError(`manifest: ${where}${key} must be a number, not ${show(v)}`);
 }
 
 /** Refuses a value listed twice. */
@@ -520,32 +529,32 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
     module: str(reg.module) || "w17.ts",
     function: str(reg.function) || "registerBusiness",
   };
-  const services: ServiceSpec[] = list(d.services).map((s) => {
+  const services: ServiceSpec[] = objects(d, "services", "").map((s) => {
     const name = req(s, "name", "services[].");
     return {
       name,
-      methods: list(s.methods).map((m) => {
+      methods: objects(s, "methods", "services[].").map((m) => {
         const mname = req(m, "name", "services[].methods[].");
         return {
           name: mname,
           path: str(m.path) || `/${name}/${mname}`,
           input: str(m.input),
           output: str(m.output),
-          clientStreaming: Boolean(m.client_streaming),
-          serverStreaming: Boolean(m.server_streaming),
+          clientStreaming: bool(m, "client_streaming", "services[].methods[]."),
+          serverStreaming: bool(m, "server_streaming", "services[].methods[]."),
         };
       }),
     };
   });
-  const config: ConfigKey[] = list(d.config).map((c) => {
+  const config: ConfigKey[] = objects(d, "config", "").map((c) => {
     const name = req(c, "name", "config[].");
     return {
       name,
       env: str(c.env) || `${prefix}_${name.toUpperCase()}`,
       type: str(c.type) || "string",
       default: defaultText(c.default),
-      required: Boolean(c.required),
-      secret: Boolean(c.secret),
+      required: bool(c, "required", "config[]."),
+      secret: bool(c, "secret", "config[]."),
       description: str(c.description),
     };
   });
@@ -566,14 +575,14 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
     const envelope = str(ev.envelope);
     const nats = isObj(ev.nats) ? ev.nats : {};
     const redis = isObj(ev.redis_streams) ? ev.redis_streams : {};
-    const emits: Emit[] = list(ev.emits).map((e) => ({
+    const emits: Emit[] = objects(ev, "emits", "events.").map((e) => ({
       method: req(e, "method", "events.emits[]."),
       event: req(e, "event", "events.emits[]."),
       envelope: str(e.envelope) || envelope,
       envelopeField: req(e, "envelope_field", "events.emits[]."),
       channel: req(e, "channel", "events.emits[]."),
       topic: req(e, "topic", "events.emits[]."),
-      fields: list(e.fields).map((f) => ({
+      fields: objects(e, "fields", "events.emits[].").map((f) => ({
         field: req(f, "field", "events.emits[].fields[]."),
         source: str(f.source) || "literal",
         path: strs(f.path),
@@ -583,7 +592,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
     for (const e of emits) {
       if (!e.envelope) throw new ManifestError(`manifest: events.envelope is required for the emit of ${e.method}`);
     }
-    const invalidates: Invalidate[] = list(ev.invalidates).map((i) => ({
+    const invalidates: Invalidate[] = objects(ev, "invalidates", "events.").map((i) => ({
       method: req(i, "method", "events.invalidates[]."),
       channel: req(i, "channel", "events.invalidates[]."),
       topic: str(i.topic) || "w17.invalidate",
@@ -605,7 +614,7 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
   if (companion !== null && fmt < 2) {
     throw new ManifestError(`manifest: format ${fmt} has no companion section; a manifest with one is format 2`);
   }
-  const pluginHooks: PluginHook[] = list(d.plugin_hooks).map((h) => ({
+  const pluginHooks: PluginHook[] = objects(d, "plugin_hooks", "").map((h) => ({
     plugin: str(h.plugin),
     registeredAs: str(h.registered_as),
     slot: str(h.slot),
@@ -613,7 +622,9 @@ export function fromObject(d: Obj, baseDir = "."): Manifest {
   }));
   const extra: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(d)) if (!TOP.has(k)) extra[k] = v;
-  const timeout = Number(d.shutdown_timeout_seconds) || 10;
+  const t = num(d, "shutdown_timeout_seconds", "");
+  // An absent, null, zero or negative timeout is the default, as in every SDK.
+  const timeout = t > 0 ? t : 10;
   return {
     format: fmt,
     domain,

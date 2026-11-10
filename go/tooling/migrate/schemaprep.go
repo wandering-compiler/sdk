@@ -148,7 +148,7 @@ func prepareSchemas(ctx context.Context, ac *runApplierCache, pending []Pending)
 			continue
 		}
 		prep := &applyfetchpb.Migration{Id: "schema-prepare", Connection: conn, UpSql: schemaPrepSQL(schemas)}
-		if err := applier.Apply(ctx, prep); err != nil {
+		if err := runScript(ctx, applier, prep); err != nil {
 			return fmt.Errorf("apply %s: creating the schema(s) its tables live in (%s): %w\n"+
 				"  The role the DSN connects as needs CREATE on the database. Nothing was migrated.",
 				conn, strings.Join(schemas, ", "), err)

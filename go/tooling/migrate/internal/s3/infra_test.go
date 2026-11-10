@@ -877,3 +877,50 @@ func TestSetParallelOverride(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 }
+
+// TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared — a run that wrote
+// its ledger change but died before deleting its cursor leaves that
+// direction's cursor listing every op complete. The next run in the OTHER
+// direction deletes it at its start, so a later run in the first direction
+// runs its ops instead of skipping them all and recording success.
+func TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared(t *testing.T) {
+	f := newFakeS3()
+	const id = "ts-stale"
+	down := "version: 1\nencoding: json\noperations:\n  - op: REMOVE_FIELD\n    keyspace: users/\n    field: active\n"
+	m := &applyfetchpb.Migration{Id: id, UpSql: yamlAdd, DownSql: down}
+	a := newApplier(t, f)
+
+	// Applied; the forward cursor survived the crash.
+	f.objects["users/1"] = []byte(`{"id":1,"active":true}`)
+	f.objects["w17-migrations/"+id+".json"] = []byte("{}")
+	f.objects["w17-data-migrations/"+id+".cursor.json"] = []byte(`{"completed_ops":[0]}`)
+	if err := a.Rollback(ctx(t), m); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if _, ok := f.objects["w17-data-migrations/"+id+".cursor.json"]; ok {
+		t.Fatal("the rollback left the stale forward cursor behind")
+	}
+	if err := a.Apply(ctx(t), m); err != nil {
+		t.Fatalf("re-Apply: %v", err)
+	}
+	if !strings.Contains(string(f.objects["users/1"]), `"active":true`) {
+		t.Fatalf("the re-apply skipped its ops on a stale cursor: %s", f.objects["users/1"])
+	}
+
+	// Rolled back; the rollback cursor survived the crash.
+	delete(f.objects, "w17-migrations/"+id+".json")
+	f.objects["w17-data-migrations/"+id+".rollback.cursor.json"] = []byte(`{"completed_ops":[0]}`)
+	f.objects["users/1"] = []byte(`{"id":1}`)
+	if err := a.Apply(ctx(t), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, ok := f.objects["w17-data-migrations/"+id+".rollback.cursor.json"]; ok {
+		t.Fatal("the apply left the stale rollback cursor behind")
+	}
+	if err := a.Rollback(ctx(t), m); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if strings.Contains(string(f.objects["users/1"]), "active") {
+		t.Fatalf("the rollback skipped its ops on a stale cursor: %s", f.objects["users/1"])
+	}
+}

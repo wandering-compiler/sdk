@@ -92,6 +92,13 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 	}
 	parallel := datamigrate.EffectiveParallel(mig, a.parallelOverride)
 	cursorKey := dataMigrationCursorPrefix + m.GetId()
+	// The other direction's cursor can only be stale here: this direction
+	// runs because the ledger says that one finished. Left in place it
+	// would make the next run in that direction skip every op.
+	otherKey := dataRollbackCursorPrefix + m.GetId()
+	if err := a.clearCursor(ctx, otherKey); err != nil {
+		return fmt.Errorf("redis applyYAMLDataMigration: stale cursor clear: %w", err)
+	}
 	for i, op := range mig.Operations {
 		done, err := a.opAlreadyComplete(ctx, cursorKey, i)
 		if err != nil {
@@ -114,7 +121,7 @@ func (a *Applier) applyYAMLDataMigration(ctx context.Context, m *applyfetchpb.Mi
 	if err := a.recordMigrationApplied(ctx, m); err != nil {
 		return fmt.Errorf("redis applyYAMLDataMigration: bookkeeping: %w", err)
 	}
-	if err := a.clearCursor(ctx, cursorKey); err != nil {
+	if err := a.clearCursor(ctx, cursorKey, otherKey); err != nil {
 		return fmt.Errorf("redis applyYAMLDataMigration: cursor clear: %w", err)
 	}
 	return nil
@@ -162,6 +169,13 @@ func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb
 	}
 	parallel := datamigrate.EffectiveParallel(mig, a.parallelOverride)
 	cursorKey := dataRollbackCursorPrefix + m.GetId()
+	// The other direction's cursor can only be stale here: this direction
+	// runs because the ledger says that one finished. Left in place it
+	// would make the next run in that direction skip every op.
+	otherKey := dataMigrationCursorPrefix + m.GetId()
+	if err := a.clearCursor(ctx, otherKey); err != nil {
+		return fmt.Errorf("redis rollbackYAMLDataMigration: stale cursor clear: %w", err)
+	}
 	for i, op := range mig.Operations {
 		done, err := a.opAlreadyComplete(ctx, cursorKey, i)
 		if err != nil {
@@ -184,7 +198,7 @@ func (a *Applier) rollbackYAMLDataMigration(ctx context.Context, m *applyfetchpb
 	if err := a.recordMigrationRolledBack(ctx, m); err != nil {
 		return fmt.Errorf("redis rollbackYAMLDataMigration: bookkeeping: %w", err)
 	}
-	if err := a.clearCursor(ctx, cursorKey); err != nil {
+	if err := a.clearCursor(ctx, cursorKey, otherKey); err != nil {
 		return fmt.Errorf("redis rollbackYAMLDataMigration: cursor clear: %w", err)
 	}
 	return nil
@@ -382,12 +396,23 @@ func (a *Applier) guardTransformResume(ctx context.Context, cursorKey string, in
 	return nil
 }
 
-// clearCursor deletes the per-migration cursor hash. Called
-// after the bookkeeping write completes — no point keeping the
-// cursor around for a fully-recorded migration. Idempotent:
+// clearCursor deletes per-migration cursor hashes: both directions'
+// after the bookkeeping write completes (no point keeping a cursor
+// around for a fully-recorded migration), and the other direction's
+// stale one before a run starts. Idempotent:
 // DEL on a missing key returns 0 + nil err.
-func (a *Applier) clearCursor(ctx context.Context, cursorKey string) error {
-	return a.client.Del(ctx, cursorKey).Err()
+func (a *Applier) clearCursor(ctx context.Context, cursorKeys ...string) error {
+	if err := a.stillHeld(); err != nil {
+		return err
+	}
+	// One DEL per key: the two directions' keys hash to different cluster
+	// slots, and a multi-key DEL across slots is refused (CROSSSLOT).
+	for _, k := range cursorKeys {
+		if err := a.client.Del(ctx, k).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // recordMigrationApplied writes one row to the w17:migrations

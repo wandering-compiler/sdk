@@ -82,6 +82,41 @@ async fn deadlines_cancellation_and_without_cancel() {
     );
 }
 
+/// Go keeps the first cause: a cancel before the deadline stays a cancel
+/// after it passes — through Ctx::cancel and through the server ending a
+/// call — and a deadline that had passed when the context was cancelled is
+/// the reason.
+#[tokio::test]
+async fn a_cancel_before_the_deadline_stays_a_cancel_after_it_passes() {
+    let ctx = Ctx::background().with_timeout(Duration::from_millis(10));
+    ctx.cancel();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(ctx.err(), Some(CtxError::Canceled));
+
+    let parent = Ctx::background().with_timeout(Duration::from_millis(5));
+    let child = parent.with_cancel();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    parent.cancel();
+    assert_eq!(child.err(), Some(CtxError::DeadlineExceeded));
+
+    // A served call: the server cancels its context when the call ends or
+    // the caller goes away (here before its 10 ms deadline).
+    let token = tokio_util::sync::CancellationToken::new();
+    let clock = crate::ctx::CancelClock::default();
+    let served = Ctx::served(
+        Metadata::new(),
+        Some(std::time::Instant::now() + Duration::from_millis(10)),
+        token.clone(),
+        clock.clone(),
+        "/a.S/M",
+        None,
+        false,
+    );
+    drop(crate::ctx::CancelOnDrop::new(token, clock));
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(served.err(), Some(CtxError::Canceled));
+}
+
 #[test]
 fn a_request_carries_its_context() {
     let c = with_incoming(&[("x-a", "1")]);

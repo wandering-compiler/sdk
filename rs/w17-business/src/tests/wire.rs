@@ -255,6 +255,22 @@ impl W17Files for Biz {
     ) -> Result<Response<DeleteResponse>, Status> {
         let ctx = crate::ctx(&req)?;
         let handle = req.into_inner().handle;
+        if handle == "done" {
+            // fn succeeds, but the caller's context is done by then: run
+            // refuses to commit and rolls back, detached.
+            let c = ctx.with_cancel();
+            let r = distx::run(
+                &c,
+                &self.tx,
+                distx::begin_request("main"),
+                async |_t: Ctx| {
+                    c.cancel();
+                    Ok::<_, distx::Error>(())
+                },
+            )
+            .await;
+            return Err(Status::aborted(r.unwrap_err().to_string()));
+        }
         distx::run(
             &ctx,
             &self.tx,
@@ -276,11 +292,15 @@ impl W17Files for Biz {
                         if !loud.is_empty() {
                             panic!("author hook panicked: secret detail");
                         }
-                    });
+                    })
+                    .await
+                    .map_err(Status::internal)?;
                 }
                 on_commit(&tx_ctx, async {
                     HOOK_RAN.fetch_add(1, Ordering::SeqCst);
-                });
+                })
+                .await
+                .map_err(Status::internal)?;
                 match handle.as_str() {
                     // The handler never returns: only its caller's deadline
                     // ends the call, by dropping this future.
@@ -682,6 +702,15 @@ async fn the_tier_over_the_wire() {
         hooks + 1,
         "work parked on an unknown outcome does not run"
     );
+    // A caller whose context is done gets no commit; a rollback that fails
+    // then is named in the refusal, as Go's Run names it.
+    COMMIT_UNAVAILABLE.store(true, Ordering::SeqCst);
+    let e = c.delete(delete("done")).await.unwrap_err();
+    COMMIT_UNAVAILABLE.store(false, Ordering::SeqCst);
+    assert!(
+        e.message().contains("not committing") && e.message().contains("rollback also failed"),
+        "{e:?}"
+    );
     // The same UNAVAILABLE after response headers: the server answered, so
     // the commit is never sent again (gRPC A6) — one commit, then the probe.
     CALLS.lock().unwrap().clear();
@@ -869,4 +898,87 @@ async fn an_emitting_methods_request_body_is_bound_by_the_deadline() {
         .expect("the deadline ends the read of the request");
     let st = Status::from_header_map(resp.headers()).unwrap();
     assert_eq!(st.code(), Code::DeadlineExceeded, "{st:?}");
+}
+
+/// An emitting method's middleware reads the request whole (its event is
+/// built from it), so it bounds the read by the codec's 4 MiB message limit
+/// and refuses past it, as the generated server would.
+#[tokio::test]
+async fn an_emitting_methods_request_past_the_message_limit_is_refused() {
+    let pool =
+        prost_reflect::DescriptorPool::decode(&include_bytes!("../sdk_descriptors.binpb")[..])
+            .unwrap();
+    let inv = crate::manifest::Invalidate {
+        method: "/w17.common.files.W17Files/Stat".into(),
+        channel: "c".into(),
+        topic: "w17.invalidate".into(),
+        group: "g".into(),
+        entities: vec!["e".into()],
+    };
+    let mut r = Registry::new(
+        pool,
+        &["w17.common.files.W17Files".to_string()],
+        &[],
+        &[inv],
+    );
+    r.register(W17FilesServer::new(Idle)).unwrap();
+    let served = r.finish(None, |routes| routes);
+    // 5 MiB of a message that claims more, then a body that never ends: a
+    // read with no bound would wait (and hold) forever; the bound refuses
+    // once the limit is passed.
+    let mut head = vec![0u8];
+    head.extend_from_slice(&u32::MAX.to_be_bytes());
+    let chunks = std::iter::once(bytes::Bytes::from(head))
+        .chain(std::iter::repeat_n(
+            bytes::Bytes::from(vec![0u8; 1024 * 1024]),
+            5,
+        ))
+        .map(|b| Ok::<_, std::convert::Infallible>(http_body::Frame::data(b)));
+    let body = http_body_util::StreamBody::new(
+        futures::stream::iter(chunks).chain(futures::stream::pending()),
+    );
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/w17.common.files.W17Files/Stat")
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .body(body)
+        .unwrap();
+    let resp = tokio::time::timeout(Duration::from_secs(5), served.serve_wire(req))
+        .await
+        .expect("the limit ends the read of the request");
+    let st = Status::from_header_map(resp.headers()).unwrap();
+    assert_eq!(st.code(), Code::ResourceExhausted, "{st:?}");
+}
+
+/// Outside a transaction on_commit runs the work before it returns and hands
+/// back its failure, as Go, Python and TypeScript do; a panic is a failure.
+#[tokio::test]
+async fn on_commit_outside_a_transaction_runs_now_and_returns_its_failure() {
+    let ran = std::sync::Arc::new(AtomicBool::new(false));
+    let r = ran.clone();
+    let out = on_commit(&Ctx::background(), async move {
+        r.store(true, Ordering::SeqCst);
+    })
+    .await;
+    assert_eq!(out, Ok(crate::Outcome::NoScope));
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the work had not run when on_commit returned"
+    );
+    let failed = on_commit(&Ctx::background(), async {
+        Err::<(), _>("mail server down")
+    })
+    .await;
+    assert_eq!(failed, Err("mail server down".to_string()));
+    let panicked = on_commit(&Ctx::background(), async {
+        if true {
+            panic!("boom");
+        }
+    })
+    .await;
+    assert!(
+        matches!(&panicked, Err(e) if e.contains("panicked")),
+        "{panicked:?}"
+    );
 }

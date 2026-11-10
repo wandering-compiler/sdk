@@ -144,7 +144,9 @@ impl NoteService for Notes {
                             .clone()
                             .insert_note(detached.request(insert(text)))
                             .await
-                    });
+                    })
+                    .await
+                    .map_err(Status::internal)?;
                 }
                 if r.pause_ms > 0 {
                     tokio::time::sleep(Duration::from_millis(r.pause_ms as u64)).await;
@@ -268,7 +270,9 @@ impl NoteService for Notes {
                             .clone()
                             .insert_note(detached.request(insert("after-outcome-unknown")))
                             .await
-                    });
+                    })
+                    .await
+                    .map_err(|e| distx::Error::Rpc(Status::internal(e)))?;
                     h.commit(&ctx).await
                 }
                 "mismatch" => {

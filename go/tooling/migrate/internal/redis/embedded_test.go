@@ -415,3 +415,52 @@ operations:
 		t.Error("rollback cursor should be cleared on clean run")
 	}
 }
+
+// A forward apply whose ledger write landed but whose cursor DEL did not
+// leaves a forward cursor listing every op complete. A rollback then a
+// re-apply must run the ops again: the rollback clears the forward
+// cursor at its start, and the apply would otherwise skip every op and
+// record the migration applied over unmigrated data. The mirror case — a
+// stale rollback cursor before a re-rollback — is cleared by the apply.
+func TestApply_YAMLStaleCursorOfTheOtherDirectionIsCleared_Live(t *testing.T) {
+	a, mr := liveApplier(t)
+	ctx := liveCtx(t)
+	const id = "20260501T000009Z"
+	down := "version: 1\nencoding: json\noperations:\n  - op: REMOVE_FIELD\n    keyspace: users:*\n    field: active\n"
+	m := &applyfetchpb.Migration{Id: id, UpSql: yamlAddActive, DownSql: down}
+
+	// Applied, then the process died before the forward cursor was cleared.
+	_ = mr.Set("users:1", `{"name":"a","active":true}`)
+	mr.HSet("w17:migrations", id, "feed")
+	mr.HSet("w17:data-migrations:"+id, "0", "complete")
+	if err := a.Rollback(ctx, m); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if mr.Exists("w17:data-migrations:" + id) {
+		t.Fatal("the rollback left the stale forward cursor behind")
+	}
+	if err := a.Apply(ctx, m); err != nil {
+		t.Fatalf("re-Apply: %v", err)
+	}
+	if got, _ := mr.Get("users:1"); !strings.Contains(got, "active") {
+		t.Fatalf("the re-apply skipped its ops on a stale cursor: %q", got)
+	}
+
+	// Rolled back, then the process died before the rollback cursor was
+	// cleared: the next apply clears it, so the next rollback runs its ops.
+	mr.HDel("w17:migrations", id)
+	mr.HSet("w17:data-rollbacks:"+id, "0", "complete")
+	_ = mr.Set("users:1", `{"name":"a"}`)
+	if err := a.Apply(ctx, m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if mr.Exists("w17:data-rollbacks:" + id) {
+		t.Fatal("the apply left the stale rollback cursor behind")
+	}
+	if err := a.Rollback(ctx, m); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if got, _ := mr.Get("users:1"); strings.Contains(got, "active") {
+		t.Fatalf("the rollback skipped its ops on a stale cursor: %q", got)
+	}
+}
