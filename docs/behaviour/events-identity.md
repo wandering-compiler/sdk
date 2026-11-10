@@ -524,8 +524,12 @@ selector, deliberately outside the namespace.
 
 **Code.** `go/lib/principal/principal.go` — `ForwardToOutgoing`
 
-**Purpose.** Relays exactly `x-w17-user`, `x-w17-device`, `x-w17-scope-*` and `w17-label-*` from
-incoming to outgoing metadata for the next gRPC hop. It is installed on every
+**Purpose.** Relays exactly the verified caller's set from incoming to outgoing
+metadata for the next gRPC hop: the principal (`x-w17-user`, `x-w17-scope-*`,
+`w17-label-*`), the device (`x-w17-device`), a token mint's verified key
+(`x-w17-dpop-jkt`), the data scope (`x-w17-data-scope`), and the audience context the
+gateway stamps (`x-w17-audience`, `x-w17-membership-kinds`, `x-w17-org-from`,
+`x-w17-host`). It is installed on every
 inter-tier dial and on the in-process path. When the incoming side carries any of
 these keys, the verified principal wins: the outgoing copy of the whole relayed set
 is replaced, so an outgoing value for a relayed key is overwritten and a relayed key
@@ -539,11 +543,12 @@ directly, or an unauthenticated call) is returned unchanged.
 | ID | Guarantee | Test |
 |---|---|---|
 | I12.1 | The principal, scopes and labels MUST survive any number of hops. | `TestForwardToOutgoing_RelaysPrincipal`, `TestForwardToOutgoing_RelaysBroadcastLabels`, `TestForwardToOutgoing_SecondHopKeepsTheLabel` |
-| I12.2 | Non-principal metadata MUST NOT be relayed. | `TestForwardToOutgoing_ExcludesNonPrincipal` |
+| I12.2 | Metadata outside the relayed set above MUST NOT be relayed. | `TestForwardToOutgoing_ExcludesNonPrincipal` |
 | I12.3 | With an incoming principal, the relayed set MUST replace the outgoing copy (overwritten values, outgoing-only relayed keys dropped) while other outgoing keys are kept; values MUST NOT be duplicated and the call MUST be idempotent. | `TestForwardToOutgoing_VerifiedPrincipalWins` |
 | I12.4 | A context without an incoming principal MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched` |
 | I12.5 | The device id MUST be relayed on every path the principal takes — `ForwardToOutgoing`, the `grpcx.DialOpts` unary and stream interceptors over a real connection, and the in-process bridge at any depth — and a stale outgoing device MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysDevice`, `TestDialOpts_RelaysTheDeviceID`, `TestConn_NestedCall_RelaysTheDeviceID`, `TestConn_IncomingDeviceIsRelayed` |
 | I12.6 | A token mint's verified key (`x-w17-dpop-jkt`) MUST be relayed like the device id, with no principal on the request, so a facade over the auth plugin's mint hands it on; a stale outgoing copy MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysTheMintKey` |
+| I12.7 | The data scope and the audience context (`x-w17-audience`, `x-w17-membership-kinds`, `x-w17-org-from`, `x-w17-host`) MUST be relayed with the principal; I12.3's replacement applies to them as to every relayed key. | `TestForwardToOutgoing_RelaysTheAudienceContext`, `TestDataScope_RelayedAndGatewayOwned` |
 
 **Deliberate limits.**
 - Calling a downstream tier as a different principal is an explicit act: drop the incoming
