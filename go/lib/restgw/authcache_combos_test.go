@@ -43,7 +43,15 @@ func TestCachedAuth_DistinctCapabilityTokensNeverShareASlot(t *testing.T) {
 // full auth call every time: the answer depends on more than the
 // credential, so the cache must not serve it.
 func TestCachedAuth_OrgScopedAndPromotedRequestsBypassTheCache(t *testing.T) {
-	for name, header := range map[string]string{"W17-Org": "org-7", "X-W17-Ticket-Promoted": "marker"} {
+	// Every marker a stream-auth wrapper writes after promoting a credential
+	// (restgw's ticket marker, dpopgw's marker and bound thumbprint): a
+	// promoted re-auth must reach the inner auth, never a cached verdict.
+	for name, header := range map[string]string{
+		"W17-Org":               "org-7",
+		"X-W17-Ticket-Promoted": "marker",
+		"X-W17-Dpop-Promoted":   "marker",
+		"X-W17-Dpop-Jkt":        "thumbprint",
+	} {
 		t.Run(name, func(t *testing.T) {
 			var calls atomic.Int32
 			auth := restgw.CachedAuthFunc(countingAuth(&calls), time.Minute)
