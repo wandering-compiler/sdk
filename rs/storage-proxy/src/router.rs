@@ -53,8 +53,9 @@ pub enum Route {
         stamp_conn_id: Option<String>,
         evict: Option<String>,
     },
-    /// Do not forward: reply with a gRPC `FAILED_PRECONDITION` (status 9).
-    /// Used when an in-tx/finish RPC names an unknown/expired conn_id.
+    /// Do not forward: reply with `grpc_status` — `FAILED_PRECONDITION`
+    /// (9) when an in-tx/finish RPC names an unknown/expired conn_id,
+    /// `RESOURCE_EXHAUSTED` (8) for a Begin while the affinity map is full.
     Reject {
         class: Class,
         grpc_status: i32,
@@ -74,6 +75,8 @@ impl Route {
 
 /// gRPC status code FAILED_PRECONDITION.
 pub const GRPC_FAILED_PRECONDITION: i32 = 9;
+/// gRPC `RESOURCE_EXHAUSTED`: a Begin refused because the map is full.
+pub const GRPC_RESOURCE_EXHAUSTED: i32 = 8;
 
 /// Minimal injectable "minter" so the Begin path can be tested with a
 /// deterministic conn_id. Production uses [`UuidMinter`].
@@ -122,7 +125,13 @@ pub fn decide(
         Class::Begin => {
             let replica = lb.pick();
             let id = minter.mint();
-            affinity.insert(id.clone(), replica);
+            if !affinity.insert(id.clone(), replica) {
+                return Route::Reject {
+                    class: Class::Begin,
+                    grpc_status: GRPC_RESOURCE_EXHAUSTED,
+                    message: "storage proxy: too many open transactions pinned; retry later".into(),
+                };
+            }
             Route::Forward {
                 replica,
                 class: Class::Begin,
@@ -163,6 +172,23 @@ pub fn decide(
         // classify never returns these, but keep decide total.
         Class::UnknownConn => reject_unknown(conn_id.unwrap_or("")),
     }
+}
+
+/// After a Begin was forwarded: whether the minted conn-id `id` still names
+/// a transaction. A Begin that failed in transport (`answered` is None) or
+/// that the replica refused (a trailers-only non-OK `grpc-status`) opened
+/// nothing, so its route is dropped at once rather than held until the TTL,
+/// and the answer carries no conn-id.
+pub fn settle_begin(affinity: &AffinityMap, id: &str, answered: Option<&http::HeaderMap>) -> bool {
+    let opened = answered.is_some_and(|h| {
+        h.get("grpc-status")
+            .map(|v| v.as_bytes() == b"0")
+            .unwrap_or(true)
+    });
+    if !opened {
+        affinity.evict(id);
+    }
+    opened
 }
 
 fn reject_unknown(id: &str) -> Route {
@@ -287,6 +313,44 @@ mod tests {
         }
         // Affinity now pins conn-abc -> 0.
         assert_eq!(m.lookup("conn-abc"), Some(0));
+    }
+
+    #[test]
+    fn a_begin_past_the_cap_is_refused_resource_exhausted() {
+        let m = map().with_max_entries(1);
+        let lb = RoundRobin::new(1);
+        assert!(matches!(
+            decide(&begin_path(), None, &m, &lb, &FixedMinter("a".into())),
+            Route::Forward { .. }
+        ));
+        match decide(&begin_path(), None, &m, &lb, &FixedMinter("b".into())) {
+            Route::Reject { grpc_status, .. } => assert_eq!(grpc_status, GRPC_RESOURCE_EXHAUSTED),
+            other => panic!("expected Reject, got {other:?}"),
+        }
+        assert_eq!(m.lookup("b"), None);
+    }
+
+    #[test]
+    fn a_failed_begin_drops_its_route() {
+        let m = map();
+        let lb = RoundRobin::new(1);
+        for answered in [None, Some(trailers_only("3")), Some(trailers_only("14"))] {
+            decide(&begin_path(), None, &m, &lb, &FixedMinter("x".into()));
+            assert!(!settle_begin(&m, "x", answered.as_ref()), "{answered:?}");
+            assert_eq!(m.lookup("x"), None, "{answered:?}");
+        }
+        // An OK (trailers-only or with a body to come) keeps it.
+        for answered in [trailers_only("0"), http::HeaderMap::new()] {
+            decide(&begin_path(), None, &m, &lb, &FixedMinter("y".into()));
+            assert!(settle_begin(&m, "y", Some(&answered)));
+            assert_eq!(m.lookup("y"), Some(0));
+        }
+    }
+
+    fn trailers_only(code: &'static str) -> http::HeaderMap {
+        let mut h = http::HeaderMap::new();
+        h.insert("grpc-status", http::HeaderValue::from_static(code));
+        h
     }
 
     #[test]

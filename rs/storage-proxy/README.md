@@ -32,7 +32,7 @@ plus a round-robin balancer over the replica set. Classification is by
 
 | Class | Recognised by | Action |
 |---|---|---|
-| **Begin** | `:path` ends with `…/W17DistributedTransaction/Begin` | round-robin a replica; **mint** a fresh `conn_id`; pin `conn_id -> replica` (with TTL); forward; **inject `w17-conn-id` into the response headers** (body untouched). |
+| **Begin** | `:path` ends with `…/W17DistributedTransaction/Begin` | round-robin a replica; **mint** a fresh `conn_id`; pin `conn_id -> replica` (with TTL); forward; **inject `w17-conn-id` into the response headers** (body untouched). A Begin the replica refuses (a trailers-only non-OK status) or that fails in transport opened nothing: its entry is dropped at once and no `w17-conn-id` is stamped. While the map holds 100 000 live entries a Begin is refused `RESOURCE_EXHAUSTED` (status 8), no upstream call. |
 | **In-tx RPC** | request carries `w17-conn-id` (any other path) | look up the pinned replica and forward. Unknown / expired id → gRPC `FAILED_PRECONDITION` (status 9), no upstream call. |
 | **Commit / Rollback** | `:path` ends with `…/Commit` or `…/Rollback`, with `w17-conn-id` | route to the pinned replica, forward, then **evict** the affinity entry — unless the replica answered a trailers-only `UNAVAILABLE` (it refused the call before running it, so the transaction is still open there and the caller's retry or settle Rollback must still reach it). A transport failure to the replica keeps the entry too. |
 | **Other** | no `w17-conn-id` | free round-robin load-balance. |
@@ -95,7 +95,7 @@ Metrics (low cardinality by design):
 | Metric | Type | Attributes | Meaning |
 |---|---|---|---|
 | `w17.proxy.routed_total` | counter | `class` (`begin` / `in_tx` / `finish` / `load_balanced` / `unknown_conn`) | RPCs routed, per request class. |
-| `w17.proxy.route_errors_total` | counter | `reason` (`unknown_conn` / `upstream_unavailable`) | routing failures, per reason. |
+| `w17.proxy.route_errors_total` | counter | `reason` (`unknown_conn` / `upstream_unavailable` / `affinity_full`) | routing failures, per reason. |
 | `w17.proxy.forward_duration_ms` | histogram (ms) | `class` | upstream forward latency. |
 | `w17.proxy.affinity_map_size` | observable gauge | — | live `conn_id → replica` affinity entries. |
 | `w17.proxy.replicas` | observable gauge | — | configured replica count. |
