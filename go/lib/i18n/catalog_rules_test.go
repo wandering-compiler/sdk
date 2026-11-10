@@ -145,15 +145,6 @@ func TestRegisterCatalog_MergesAndReportsConflicts(t *testing.T) {
 
 func TestValidatePO(t *testing.T) {
 	good := minimalPO("cs", "a", "b") + `
-msgctxt "menu"
-msgid "a"
-msgstr "c"
-
-msgid "one"
-msgid_plural "many"
-msgstr[0] "jeden"
-msgstr[1] "více"
-
 # comment
 #~ msgid "obsolete"
 msgid ""
@@ -187,6 +178,11 @@ msgstr ""
 		"index no plural":  "msgid \"a\"\nmsgstr[0] \"b\"\n",
 		"double msgid":     "msgid \"a\"\nmsgid \"b\"\nmsgstr \"c\"\n",
 		"orphan string":    "\"x\"\n",
+		// The runtime serves neither message contexts nor plural forms:
+		// such an entry would register as nothing, silently.
+		"msgctxt entry":        "msgctxt \"menu\"\nmsgid \"a\"\nmsgstr \"c\"\n",
+		"plural entry":         "msgid \"one\"\nmsgid_plural \"many\"\nmsgstr[0] \"jeden\"\nmsgstr[1] \"více\"\n",
+		"index after a msgstr": "msgid \"a\"\nmsgstr \"b\"\nmsgstr[1] \"c\"\n",
 	}
 	for name, body := range bad {
 		if err := i18n.ValidatePO([]byte(body)); err == nil {
