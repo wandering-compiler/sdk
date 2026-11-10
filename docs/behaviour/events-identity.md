@@ -5,7 +5,7 @@ between tiers, how permissions are checked, and how messages are translated and
 formatted. Includes the eventbus-backed server-sent-events hub, because it is the
 eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 (event hub only), `go/lib/principal`, `go/lib/acllock`, `go/lib/i18n`,
-`go/lib/typere`, `go/lib/randstr`, `go/lib/eventlog`.
+`go/lib/typere`, `go/lib/randstr`, `go/lib/eventlog`, `go/lib/pluginhook`.
 
 ## Features
 
@@ -32,6 +32,7 @@ eventbus's live fan-out consumer. Packages: `go/lib/eventbus`, `go/lib/restgw`
 | I19 | Request event pipeline | `go/lib/eventlog/pipeline.go` — `New`, `Pipeline.Submit`, `Pipeline.Close`, `Batch` |
 | I20 | Request event recorder | `go/lib/eventlog/recorder.go` — `Open`, `NewRecorder`, `Surface`, `Record`; `http.go` — `HTTPMiddleware`, `Begin`; `conn.go` — `Surface.Conn`; `natssink.go` — `NATSSink`, `EnsureStream`; `redisstream.go` — `RedisSink`; `otel.go` |
 | I21 | Request event consumers | `go/lib/eventlog/consumer.go` — `MarketingConsumer`, `AuditConsumer`, `Consumers`, `DecodeBatch` |
+| I22 | Plugin hooks | `go/lib/pluginhook/pluginhook.go` — `Conn`, `Lazy`, `Late`, `Unary`, `ErrNotConnected` |
 
 ---
 
@@ -483,10 +484,17 @@ the principal's labels. A client whose principal cannot be resolved receives not
 **Code.** `go/lib/principal/principal.go` — `UserID`, `Envelope`, `Scope`, `ScopeKey`, `Label`, `LabelKey`, `ErrNoPrincipal`; `go/lib/principal/device.go` — `DeviceID`, `DeviceMetadataKey`
 
 **Purpose.** Reads the gateway-verified caller from incoming gRPC metadata:
-`x-w17-user` (base64 of the auth response proto), `x-w17-scope-<name>` per declared
-scope, `w17-label-<name>` per broadcast label, and `x-w17-device`, the verified DPoP device
+`x-w17-user` (base64 of the auth response proto), `x-w17-scope-<name>` per scope of the
+auth response — the hint scopes the auth plugin reports (`org_permissions`,
+`org_product_roles`, read by `acllock.HeldInAnOrganization`, E4.7) included —
+`w17-label-<name>` per broadcast label, and `x-w17-device`, the verified DPoP device
 id (the RFC 7638 thumbprint of the key whose token-bound proof the gateway checked), which
 a gateway without DPoP, or a request with only an unbound proof, never carries.
+`DataScope` reads `x-w17-data-scope`, the range of rows an audience gateway allows:
+`owner` (every data scope of a model applies, the owner axis included), `org` (the
+organization axis only) or `all` (none; stamped only by the admin surface's gateway); a
+method declared with `(w17.widen_scope)` widens it, and the relay (I12) carries the
+widened value into every downstream call of the request.
 
 **Guarantees.**
 
@@ -498,6 +506,8 @@ a gateway without DPoP, or a request with only an unbound proof, never carries.
 | I10.4 | `Label` and `LabelKey` MUST report "not present" on absent or empty values. | `TestLabel_AbsentOrEmptyIsNotPresent` |
 | I10.5 | Only incoming metadata MUST be read; the first value of a multi-valued key wins. | `TestUserID_FromScope`, `TestReaders_IgnoreOutgoingMetadata`, `TestReaders_FirstValueWins` |
 | I10.6 | `DeviceID` MUST report a device only for exactly one non-empty incoming `x-w17-device` value; absent, empty, doubled or outgoing-only values MUST read as no device. | `TestDeviceID_ReadsTheStamp` |
+| I10.7 | `DataScope` MUST return `owner`, `org` or `all` for exactly one such value; an unknown value or several values MUST read as `owner`, the narrowest range; no value MUST read as "" (no audience gateway: every data scope applies). | `TestDataScope` |
+| I10.8 | `UserID` and `Envelope` MUST fail closed on an empty `x-w17-user` value as on an absent one, and `Envelope` MUST leave `dst` as the caller supplied it. | `TestEnvelope_FailsClosedOnAnEmptyValueAndLeavesDst`, `TestUserID_FailsClosed` |
 
 **Deliberate limits.**
 - The envelope is not signed. Its integrity rests on the gateway stripping
@@ -526,10 +536,11 @@ selector, deliberately outside the namespace.
 |---|---|---|
 | I11.1 | A scope or label the auth response omits MUST NOT be suppliable by the client. | `TestWithGatewayMD_SanitizesBothSides` |
 | I11.2 | Unauthenticated paths MUST be sanitised too. | `TestWithGatewayMD_UnauthenticatedPathAlsoSanitized` |
-| I11.3 | The incoming and outgoing copies MUST NOT alias. | `TestWithGatewayMD_SidesDoNotAlias` |
+| I11.3 | The incoming and outgoing copies MUST NOT alias each other or the caller's `md`. | `TestWithGatewayMD_SidesDoNotAlias`, `TestWithGatewayMD_TheCallersMapDoesNotAliasEitherSide` |
 | I11.4 | `IsGatewayOwnedKey` MUST classify exactly the two namespaces and the two transaction keys (whole name only), case-insensitively. | `TestIsGatewayOwnedKey`, `TestIsEdgeReservedKey` |
 | I11.5 | `SanitizeGatewayMD` MUST strip the transaction keys a client sends on the rpc gateway. | `TestSanitizeGatewayMD_StripsTransactionKeys` |
 | I11.6 | A client MUST NOT be able to supply `x-w17-device` on any spelling: it is stripped with the namespace, `SetDeviceID` stamps only the gateway's value and removes the key for an empty id; no REST surface forwards a client's copy to a backend. | `TestDeviceID_ClientCannotInject`, `TestEdge_ClientCannotSetReservedMetadataOnAnySurface` |
+| I11.7 | A client MUST NOT be able to supply `x-w17-data-scope`: it is stripped with the namespace on every gateway, so `all` reaches a tier only from the admin surface's gateway. | `TestDataScope_RelayedAndGatewayOwned` |
 
 ---
 
@@ -548,8 +559,18 @@ these keys, the verified principal wins: the outgoing copy of the whole relayed 
 is replaced, so an outgoing value for a relayed key is overwritten and a relayed key
 present only on the outgoing side is dropped. Every other outgoing key is kept.
 Paging, tracing, locale and transaction metadata are deliberately not relayed. A
-context with no incoming principal (the gateway, which stamps the outgoing side
-directly, or an unauthenticated call) is returned unchanged.
+context with no incoming relayed key (the gateway, which stamps the outgoing side
+directly, or an unauthenticated call) is returned unchanged. Any incoming relayed key
+triggers the replacement, not only the principal: a context carrying an incoming
+`x-w17-host` alone loses the outgoing principal stamps. `x-w17-host` selects among the
+caller's memberships; it never grants one.
+
+`ActAs(ctx, user, scopes)` (`go/lib/principal/actas.go`) is the explicit act below: it
+stamps `user` as the outgoing principal with `scopes` as its `x-w17-scope-*` and drops
+every relayed key from both sides, so a later `ForwardToOutgoing` cannot put the
+previous principal back. The data scope, device and audience context are dropped with
+them, which narrows a downstream call, never widens it. Who may act as whom is the
+caller's decision, made before it calls (a method behind a private surface, S23).
 
 **Guarantees.**
 
@@ -558,10 +579,11 @@ directly, or an unauthenticated call) is returned unchanged.
 | I12.1 | The principal, scopes and labels MUST survive any number of hops. | `TestForwardToOutgoing_RelaysPrincipal`, `TestForwardToOutgoing_RelaysBroadcastLabels`, `TestForwardToOutgoing_SecondHopKeepsTheLabel` |
 | I12.2 | Metadata outside the relayed set above MUST NOT be relayed. | `TestForwardToOutgoing_ExcludesNonPrincipal` |
 | I12.3 | With an incoming principal, the relayed set MUST replace the outgoing copy (overwritten values, outgoing-only relayed keys dropped) while other outgoing keys are kept; values MUST NOT be duplicated and the call MUST be idempotent. | `TestForwardToOutgoing_VerifiedPrincipalWins` |
-| I12.4 | A context without an incoming principal MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched` |
+| I12.4 | A context with no incoming relayed key MUST be returned unchanged, so the stamps the gateway wrote on the outgoing side travel as written; any incoming relayed key (`x-w17-host` alone included) MUST trigger I12.3's replacement. | `TestForwardToOutgoing_NoIncomingIsNoop`, `TestForwardToOutgoing_GatewayStampsUntouched`, `TestForwardToOutgoing_AnyIncomingRelayedKeyTriggersTheReplacement` |
 | I12.5 | The device id MUST be relayed on every path the principal takes — `ForwardToOutgoing`, the `grpcx.DialOpts` unary and stream interceptors over a real connection, and the in-process bridge at any depth — and a stale outgoing device MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysDevice`, `TestDialOpts_RelaysTheDeviceID`, `TestConn_NestedCall_RelaysTheDeviceID`, `TestConn_IncomingDeviceIsRelayed` |
 | I12.6 | A token mint's verified key (`x-w17-dpop-jkt`) MUST be relayed like the device id, with no principal on the request, so a facade over the auth plugin's mint hands it on; a stale outgoing copy MUST be dropped when the verified caller carries none. | `TestForwardToOutgoing_RelaysTheMintKey` |
 | I12.7 | The data scope and the audience context (`x-w17-audience`, `x-w17-membership-kinds`, `x-w17-org-from`, `x-w17-host`) MUST be relayed with the principal; I12.3's replacement applies to them as to every relayed key. | `TestForwardToOutgoing_RelaysTheAudienceContext`, `TestDataScope_RelayedAndGatewayOwned` |
+| I12.8 | `ActAs` MUST stamp exactly the named user and scopes and drop every relayed key on both sides; it MUST refuse an empty user id, an empty scope value, a scope name outside `[a-z0-9_]`, and a `user_id` scope that names another user than the envelope. | `TestActAs_TheCalleeSeesTheUserAndScopes`, `TestActAs_ReplacesEveryOtherPrincipal`, `TestActAs_RefusesAScopeThatDisagreesWithTheUserOrIsNotAName`, `go/lib/principal/actas_test.go` |
 
 **Deliberate limits.**
 - Calling a downstream tier as a different principal is an explicit act: drop the incoming
@@ -573,7 +595,7 @@ directly, or an unauthenticated call) is returned unchanged.
 
 ## I13. Permission lock and checks
 
-**Code.** `go/lib/acllock/lock.go`; `go/lib/acllock/allocator.go` — `Allocate`; `go/lib/acllock/bits.go` — `HasPermission`, `HasAnyPermission`, `HasAllPermissions`, `HasAllPermissionsStrict`, `GrantAll`, `IDByString`; `go/lib/acllock/permission_key.go` — `PermissionKey`
+**Code.** `go/lib/acllock/lock.go`; `go/lib/acllock/allocator.go` — `Allocate`; `go/lib/acllock/bits.go` — `HasPermission`, `HasAnyPermission`, `HasAllPermissions`, `HasAllPermissionsStrict`, `GrantAll`, `IDByString`; `go/lib/acllock/permission_key.go` — `PermissionKey`; `go/lib/acllock/orgheld.go` — `HeldInAnOrganization`, `OrgPermissionsOfProductRoles` (the organization-required answer, E4.7)
 
 **Purpose.** Model of a domain's permission allocation table, and the runtime
 check helpers. `IDByString` accepts the enum value name or the cascade code.
@@ -583,6 +605,7 @@ check helpers. `IDByString` accepts the enum value name or the cascade code.
 | Input | Behaviour |
 |---|---|
 | `HasPermission(ids, id)` with empty `ids` | false |
+| `HasPermission(ids, id)` with `id <= 0` | false, whatever `ids` holds: IDs are allocated from 1 |
 | `HasAnyPermission` with empty `wanted` | false |
 | `HasAllPermissions` with empty `wanted` | **true** (documented); use `HasAllPermissionsStrict`, which returns false |
 | nil lock | no IDs, not found |
@@ -591,10 +614,10 @@ check helpers. `IDByString` accepts the enum value name or the cascade code.
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I13.1 | `Allocate` MUST keep existing IDs, give new permissions the smallest positive unused, unreserved ID, move removed IDs to `Reserved`, skip empty strings, and be deterministic for a given input order. | `TestAllocate_EmptyPrev`, `TestAllocate_PreservesExisting`, `TestAllocate_RemovedGoesToReserved`, `go/lib/acllock/allocator_internal_test.go` |
+| I13.1 | `Allocate` MUST keep existing IDs, give new permissions the smallest positive unused, unreserved ID, move removed IDs to `Reserved`, skip empty strings, and be deterministic for a given input order, whatever order the previous lock's map is walked in. | `TestAllocate_EmptyPrev`, `TestAllocate_PreservesExisting`, `TestAllocate_RemovedGoesToReserved`, `TestAllocate_IsDeterministic`, `go/lib/acllock/allocator_internal_test.go` |
 | I13.2 | A reserved ID MUST never be reused, across any number of generations. | `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
 | I13.3 | `Allocate` MUST NOT consume an ID without assigning or reserving it (for example on duplicate input entries). | `TestAllocate_DuplicateEntryConsumesNoID`, `TestAllocate_GenerationsKeepEveryIDAccountedFor` |
-| I13.4 | Checks MUST deny by default and never grant on error; no helper returns an error. | `TestHasPermission`, `TestHasAllPermissions`, `go/lib/acllock/strict_test.go` |
+| I13.4 | Checks MUST deny by default and never grant on error; no helper returns an error; a check for an ID of 0 or below MUST deny even when `ids` carries it. | `TestHasPermission`, `TestHasAllPermissions`, `go/lib/acllock/strict_test.go`, `TestHasPermission_IDZeroOrBelowIsNeverGranted` |
 | I13.5 | `HasAnyPermission` with empty `wanted` MUST return false. | `TestHasAnyPermission` |
 | I13.6 | `GrantAll` MUST return every current, non-reserved ID. | `TestGrantAll` |
 | I13.7 | `IDByString` MUST resolve declared enum names and cascade codes. | `TestIDStringLookups`, `go/lib/acllock/permission_alphabet_test.go` |
@@ -872,3 +895,36 @@ previous one, so no batch waits in the process while its `AckWait` runs.
 **Deliberate limits.**
 - Delivery is at least once: a consumer deduplicates on the record id.
 - A batch is acknowledged as a whole: a consumer that handled part of it and failed is offered all of it again.
+
+---
+
+## I22. Plugin hooks
+
+**Code.** `go/lib/pluginhook/pluginhook.go` — `Conn`, `Lazy`, `Late`, `Conn.Set`, `Unary`, `ErrNotConnected`
+
+**Purpose.** How a plugin's code calls its project back: a hook the activation binds to
+a business method of the plugin's domain. The generated bundle hands the plugin one
+function per bound method, built with `Unary` over a `Conn`. The plugin runs in the
+storage tier and the hook's method in the business tier, so the connection is bound
+late and neither tier waits for the other at boot.
+
+**Configuration.**
+
+| Constructor | Behaviour |
+|---|---|
+| `Lazy(dial)` | a standalone storage bundle: dials on the first call, under the `Conn`'s lock, so concurrent first calls dial once; a failed dial is returned to that call and retried on the next |
+| `Late()` + `Set(cc)` | a composed binary: the in-process business tier is set once it is registered; a call before `Set` returns `ErrNotConnected` (a plain error, no gRPC status) |
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| I22.1 | A `Late` connection MUST answer `ErrNotConnected` until `Set`, then carry every call over the connection set. | `TestUnary_LateConn` |
+| I22.2 | A `Lazy` connection MUST dial once, reuse the connection, and retry a failed dial on the next call. | `TestUnary_LazyConnDialsOnceAndRetriesAFailure` |
+| I22.3 | The verified caller MUST ride the hook call (`ForwardToOutgoing`, I12): the project's method sees the principal the plugin's handler was called with. | `TestUnary_LateConn` |
+
+**Deliberate limits.**
+- Unary methods only.
+- The call goes from the storage tier straight to the business tier of the same domain,
+  relaying the principal: it does not pass a gateway, so no gateway ACL runs on it. The
+  hook's method is the project's own code, trusted as every inter-tier call is (I10).

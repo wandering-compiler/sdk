@@ -66,8 +66,14 @@ func ActAs(ctx context.Context, user UserIDMessage, scopes map[string]string) (c
 	}
 	stamps := metadata.MD{userMetadataKey: {base64.StdEncoding.EncodeToString(raw)}}
 	for name, v := range scopes {
-		if name == "" || v == "" || strings.TrimSpace(name) != name {
+		if !isScopeName(name) || v == "" {
 			return ctx, fmt.Errorf("principal: ActAs: scope %q=%q is not a scope", name, v)
+		}
+		// One principal: UserID reads the user_id scope before the
+		// envelope, so a scope naming another user would make the callee
+		// see two different callers.
+		if name == "user_id" && v != user.GetUserId() {
+			return ctx, fmt.Errorf("principal: ActAs: scope user_id=%q disagrees with the envelope's user %q", v, user.GetUserId())
 		}
 		stamps[ScopeKey(name)] = []string{v}
 	}
@@ -93,4 +99,19 @@ func withoutRelayed(md metadata.MD) metadata.MD {
 		next[k] = append([]string(nil), v...)
 	}
 	return next
+}
+
+// isScopeName reports whether name is a scope name: a declared field name,
+// lowercase letters, digits and `_`. Anything else would not survive the
+// wire as the same metadata key, or would name no declared scope.
+func isScopeName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
