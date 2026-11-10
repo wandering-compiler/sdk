@@ -1547,6 +1547,11 @@ message LockView {
   // files carrying the generated-code marker are ever pruned.
   repeated string prune_paths = 24;
 
+  // codegen_version is the lock's codegen engine pin, read so the client can
+  // send it typed in the codegen handshake (PlaceGenerateStart). Empty for a
+  // lock without one.
+  string codegen_version = 28;
+
   // 18 was a `gen_dir` projection, added and withdrawn on 2026-09-15. It went
   // out in one SDK snapshot and one console deploy before being reverted: no
   // released client ever read it, but the number is burned rather than reused.

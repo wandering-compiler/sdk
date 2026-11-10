@@ -5916,9 +5916,13 @@ type LockView struct {
 	// wholesale, because people keep their own files there: `deploy/` holds the
 	// sealed `.env.enc` files and certificates beside the generated stack. Only
 	// files carrying the generated-code marker are ever pruned.
-	PrunePaths    []string `protobuf:"bytes,24,rep,name=prune_paths,json=prunePaths,proto3" json:"prune_paths,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PrunePaths []string `protobuf:"bytes,24,rep,name=prune_paths,json=prunePaths,proto3" json:"prune_paths,omitempty"`
+	// codegen_version is the lock's codegen engine pin, read so the client can
+	// send it typed in the codegen handshake (PlaceGenerateStart). Empty for a
+	// lock without one.
+	CodegenVersion string `protobuf:"bytes,28,opt,name=codegen_version,json=codegenVersion,proto3" json:"codegen_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *LockView) Reset() {
@@ -6124,6 +6128,13 @@ func (x *LockView) GetPrunePaths() []string {
 		return x.PrunePaths
 	}
 	return nil
+}
+
+func (x *LockView) GetCodegenVersion() string {
+	if x != nil {
+		return x.CodegenVersion
+	}
+	return ""
 }
 
 // LockReplica projects one generated_code.replicas[] entry for
@@ -13146,7 +13157,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x12want_compiler_pins\x18\x02 \x01(\bR\x10wantCompilerPins\x12\x14\n" +
 	"\x05infra\x18\x03 \x01(\fR\x05infra\x120\n" +
 	"\x14want_infra_effective\x18\x04 \x01(\bR\x12wantInfraEffective\x12.\n" +
-	"\x13infra_effective_env\x18\x05 \x01(\tR\x11infraEffectiveEnv\"\x85\t\n" +
+	"\x13infra_effective_env\x18\x05 \x01(\tR\x11infraEffectiveEnv\"\xae\t\n" +
 	"\bLockView\x12E\n" +
 	"\vconnections\x18\x01 \x03(\v2#.w17.storage.codegen.LockConnectionR\vconnections\x12-\n" +
 	"\x12default_connection\x18\x02 \x01(\tR\x11defaultConnection\x12\x1b\n" +
@@ -13175,7 +13186,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\finfra_source\x18\x1a \x01(\tR\vinfraSource\x12'\n" +
 	"\x0finfra_effective\x18\x1b \x01(\tR\x0einfraEffective\x12\x1f\n" +
 	"\vprune_paths\x18\x18 \x03(\tR\n" +
-	"prunePathsJ\x04\b\x12\x10\x13\"=\n" +
+	"prunePaths\x12'\n" +
+	"\x0fcodegen_version\x18\x1c \x01(\tR\x0ecodegenVersionJ\x04\b\x12\x10\x13\"=\n" +
 	"\vLockReplica\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\"M\n" +
