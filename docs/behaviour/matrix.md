@@ -2,7 +2,7 @@
 
 Every pair of features whose combination changes behaviour, the behaviour the combination must have, and the test that proves it. Feature IDs refer to the area files ([server.md](server.md), [edges.md](edges.md), [data.md](data.md), [events-identity.md](events-identity.md), [tooling.md](tooling.md)); a feature without an ID is named descriptively. A pair is listed once, under the pair of areas it spans. **no test** means no test covers the combination; a test followed by a note covers only the part the note names.
 
-141 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
+153 interactions; 9 have no test (all owned by generated code or the deployment), 7 more are covered only in part.
 
 ## Server × Server
 
