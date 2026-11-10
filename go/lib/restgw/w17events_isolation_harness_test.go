@@ -77,7 +77,7 @@ func (h *isolationHub) openClient(t *testing.T, principal string) <-chan string 
 	}
 	events := make(chan string, 16)
 	go func() {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		sc := bufio.NewScanner(resp.Body)
 		for sc.Scan() {
 			if name, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
