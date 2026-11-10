@@ -1351,7 +1351,7 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
 | E35.10 | Replicas sharing the nonce key MUST accept each other's nonces with no shared state; a replica with another key MUST NOT | `TestHMACNonces_SharedKeyAcrossReplicas` |
 | E35.11 | With nonces on, `iat` MUST NOT be checked (client clock skew is irrelevant); with nonces off, `iat` MUST lie within ±`IATWindow` | `TestVerify_ClockSkewIrrelevantWithNonces`, `TestVerify_IATWindowWithoutNonces` |
 | E35.12 | A jti MUST NOT be accepted twice for different proofs, and MUST be remembered for as long as its proof could be accepted (the nonce lifetime, or twice the iat window) | `TestVerify_ReplayRefused`, `TestMemoryJTIStore_RecordAndExpiry` |
-| E35.13 | The same proof MUST be accepted again while its reuse window lasts and refused after it; with reuse off every repeat MUST be a replay | `TestVerify_ReuseWindow`, `TestVerify_ReplayRefused` |
+| E35.13 | The same proof MUST be accepted again while its reuse window lasts and refused after it, an unbound (mint) proof exactly as a bound one; with reuse off every repeat MUST be a replay | `TestVerify_ReuseWindow`, `TestVerify_ReplayRefused`, `TestVerify_AMintProofHasTheBoundProofsReuseWindow` |
 | E35.14 | A reused proof MUST still pass the nonce and target checks: only the signature result is cached | `TestVerify_ReuseStillChecksNonceAndTarget` |
 | E35.15 | The signature cache MUST be keyed by the hash of the whole proof: altered claims under a cached proof's signature MUST be verified afresh and refused | `TestVerify_SignatureCacheKeyedByProofHash` |
 | E35.16 | Concurrent presentations of one proof with reuse off MUST yield exactly one acceptance | `TestVerify_ConcurrentSameProofOneWinnerWithoutReuse` |
@@ -1386,6 +1386,11 @@ shares the nonce space by construction; a `JTIStore` shared between replicas is 
   Device rows are written, events are emitted. `MintFullRefuse` is the default and the
   recommended setting; use `MintFullAcceptUnrecorded` only behind per-address limits on the
   mint endpoints, with an alert on `Result.MintUnrecorded`.
+- The reuse window applies to mint proofs too (E35.13): the byte-identical unbound proof is accepted
+  again for 30 s by default, and each acceptance re-runs the mint handler. It stays because a
+  transport retry (the gRPC retry of `UNAVAILABLE` replays the same metadata) must not turn into a
+  replay refusal on sign-in; a replay inside the window is bounded by the per-address limit in front
+  of the mint endpoints (E19, E26), and a deployment that wants none sets a negative `ReuseWindow`.
 - The verifier does not answer the request; the caller sets the challenge with `SetChallenge` or
   `ChallengeMetadata` and writes its own status and body.
 - `Request.Path` is compared as given; percent-encoding case is not normalised.
