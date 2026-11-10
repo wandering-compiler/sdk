@@ -73,6 +73,12 @@ const (
 // Sentry's event limit and an OTel attribute's practical size.
 const requestDataCeiling = 16 << 10
 
+// requestDataRenderedCeiling bounds the JSON rendering of that request,
+// which is what travels: four times the wire ceiling, room for any ordinary
+// rendering (base64 bytes, field names, escapes), while a string of control
+// characters that would render six bytes each is omitted instead.
+const requestDataRenderedCeiling = 4 * requestDataCeiling
+
 var (
 	requestMode   = RequestDataAll
 	requestSample = 1.0
@@ -218,6 +224,10 @@ func requestReportOf(ctx context.Context) *requestReport {
 	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(view)
 	if err != nil {
 		r.omitted = "redacted record did not render: " + err.Error()
+		return r
+	}
+	if len(data) > requestDataRenderedCeiling {
+		r.omitted = fmt.Sprintf("the rendered request is larger than %d bytes", requestDataRenderedCeiling)
 		return r
 	}
 	r.data, r.cut = data, cut

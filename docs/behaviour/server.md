@@ -617,7 +617,7 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 | S19.2 | With no exporters, init MUST succeed and be cheap. | `TestMustInit_NoExporters_OK` |
 | S19.3 | The full stack MUST initialise with agreeing resource schema URLs. | `TestMustInit_FullStack` |
 | S19.4 | Environment overrides for service name and endpoint MUST apply with the documented precedence. | `TestMustInit_OTelServiceNameOverride`, `TestMustInit_OTelServiceNameEmptyKeepsConfig`, `TestMustInit_OTelEndpointFallback`, `TestMustInit_W17OTelEndpointWinsOverFallback` |
-| S19.5 | A failure part-way through init MUST tear down whatever was installed (all or nothing). | `TestMustInit_SentryInitError`, `TestMustInit_FailureAfterSentryTearsItDown`, `TestShutdown_UnbindsTheSentryClient` |
+| S19.5 | A failure part-way through init MUST tear down whatever was installed (all or nothing), and MUST leave the settings it read (the configuration, the debug-event switch, the request-data mode and sample) as the last successful init set them. | `TestMustInit_SentryInitError`, `TestMustInit_FailureAfterSentryTearsItDown`, `TestShutdown_UnbindsTheSentryClient`, `TestMustInit_AFailedReinitLeavesTheSettingsUnapplied` |
 | S19.6 | Re-init MUST shut down the previous providers first. | `TestMustInit_ReinitShutsDownThePreviousProviders` |
 | S19.7 | `Shutdown` MUST be safe with nothing initialised. | `TestShutdown_NilSafe` |
 | S19.8 | Secret config attributes MUST NOT be exported. | `TestConfigResourceAttrsExcludeSecrets` |
@@ -642,7 +642,7 @@ The export transport reads the internal-mesh variables through `grpcclient.Clien
 `WithRequestScope` gives a request its own error-tracker hub, so breadcrumbs stay with the
 request that recorded them. `WithRequest` records the request being served (a pointer,
 nothing encoded); a fault reported for it carries the request, redacted by its plan (S22)
-and cut to 16 KB: in the error tracker as a `request` context (method, type, the fields as
+and cut to 16 KB of wire form (its JSON rendering bounded at 64 KB): in the error tracker as a `request` context (method, type, the fields as
 JSON, the cut paths) with the tags `method`, `org_id`, `user_id` (from the scopes the
 gateway threads), on the failing span as an `observx.request` event, and on the stderr
 fallback line. The gRPC recovery interceptors (`service/runtime`, `core/grpcerr`) call it
@@ -669,7 +669,7 @@ at `Shutdown`.
 | S20.10 | A fault reported for a recorded request MUST carry its plain fields and MUST NOT carry a field its plan leaves out — in the error tracker, on the span and on the stderr line. | `TestReportError_CarriesTheRedactedRequest`, `TestReportError_SpanEventOnlyOnTheFailingSpan`, `TestReportError_WithoutSentryLogsTheRequest` |
 | S20.11 | The request data MUST go only on a failing span, never on one that did not report a fault. | `TestReportError_SpanEventOnlyOnTheFailingSpan` |
 | S20.12 | Modes `all` and `errors` MUST attach the request to a fault; mode `off` MUST attach nothing and `WithRequest` MUST store nothing. | `TestReportError_ModeErrorsStillCarriesIt_ModeOffDoesNot`, `TestWithRequest_OffStoresNothing` |
-| S20.13 | A request type without a plan MUST be omitted (the context says why), never written whole; a request over the size bound MUST be cut and its cut paths named. | `TestReportError_TypeWithoutPlanIsOmitted`, `TestReportError_LargeRequestIsCut` |
+| S20.13 | A request type without a plan MUST be omitted (the context says why), never written whole; a request over the size bound (16 KB of its wire form) MUST be cut and its cut paths named; a cut request whose JSON rendering — what the error tracker, the span and the log line carry — is still over 64 KB MUST be omitted, saying why. | `TestReportError_TypeWithoutPlanIsOmitted`, `TestReportError_LargeRequestIsCut`, `TestReportError_TheRenderedRequestIsBoundedToo` |
 | S20.14 | Both gRPC recovery interceptors MUST record the unary request, so a fault reported while serving it carries it. | `TestRecoverUnary_ErrorCarriesTheRequest` (`service/runtime`, `core/grpcerr`) |
 | S20.15 | `SampleRequestData` MUST be false outside mode `all` and with sample 0, true with sample 1, and hold the configured share otherwise. | `TestSampleRequestData` |
 | S20.16 | `SampleRequestTelemetry` MUST be false without a sink and outside mode `all`, so no record is rendered for nobody. | `TestSampleRequestTelemetry_NeedsASink` |

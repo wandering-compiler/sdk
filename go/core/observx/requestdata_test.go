@@ -164,6 +164,29 @@ func TestReportError_LargeRequestIsCut(t *testing.T) {
 	}
 }
 
+// The ceiling bounds the request's wire form; its JSON rendering is what
+// travels (the Sentry context, the span attribute, the log line), and a
+// string of control characters renders six bytes for each one. The rendered
+// form is bounded too: past it the data is omitted, saying why.
+func TestReportError_TheRenderedRequestIsBoundedToo(t *testing.T) {
+	events := captureSentry(t)
+	silenceLog(t)
+	req := sampleRequest()
+	req.Name = proto.String(strings.Repeat("\x01", 100_000))
+	ReportError(WithRequest(context.Background(), "/m", req), errors.New("x"))
+	rc := events()[0].Contexts["request"]
+	if data, ok := rc["data"]; ok {
+		b, _ := json.Marshal(data)
+		if len(b) > requestDataRenderedCeiling {
+			t.Fatalf("the rendered request carries %d bytes, past the %d-byte bound", len(b), requestDataRenderedCeiling)
+		}
+		return
+	}
+	if o, _ := rc["omitted"].(string); !strings.Contains(o, "larger than") {
+		t.Fatalf("request context = %v, want the data within the bound or omitted saying why", rc)
+	}
+}
+
 func TestRequestDataEnv(t *testing.T) {
 	for _, c := range []struct {
 		mode, sample string

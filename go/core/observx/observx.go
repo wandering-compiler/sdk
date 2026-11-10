@@ -360,17 +360,18 @@ func initLocked(c Config) error {
 		return fmt.Errorf("observx: SampleRate %v is outside 0..1 (0 means sample every trace)", c.SampleRate)
 	}
 
-	cfg = c
+	// cfg, debugEvents and the request-data mode are staged here and
+	// assigned only once every step below succeeded: a failed (re-)init
+	// must not leave settings in force that it never finished applying.
 
 	// W17_OBSERVX_DEBUG turns on the non-exception [ReportEvent]
 	// channel (off by default — see ReportEvent). Off-by-default
 	// feature, so presence of a truthy value enables it, matching
 	// the env posture documented on Config.
+	debug := false
 	switch strings.ToLower(os.Getenv("W17_OBSERVX_DEBUG")) {
 	case "1", "true", "yes", "on":
-		debugEvents = true
-	default:
-		debugEvents = false
+		debug = true
 	}
 
 	// W17_OBSERVX_REQUEST_DATA / _SAMPLE — how far request data travels
@@ -380,7 +381,6 @@ func initLocked(c Config) error {
 	if err != nil {
 		return err
 	}
-	requestMode, requestSample = mode, sample
 
 	// Sentry init.
 	if c.SentryDSN != "" {
@@ -472,7 +472,7 @@ func initLocked(c Config) error {
 	// request's record goes to the backend as a log record carrying its
 	// trace and span ids, so the backend joins it to the span. Same endpoint
 	// and transport as the traces.
-	if c.OTelEndpoint != "" && requestMode == RequestDataAll && requestSample > 0 {
+	if c.OTelEndpoint != "" && mode == RequestDataAll && sample > 0 {
 		tlsCfg, err := otlpTLS(c.OTelTLS, os.Getenv)
 		if err != nil {
 			return err
@@ -511,6 +511,9 @@ func initLocked(c Config) error {
 		)
 		otel.SetMeterProvider(meterProvider)
 	}
+	cfg = c
+	debugEvents = debug
+	requestMode, requestSample = mode, sample
 	success = true
 	return nil
 }
