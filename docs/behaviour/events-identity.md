@@ -204,6 +204,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | `DSN` | required | must start with `nats://` or `tls://` |
 | `ConnectWait` | 0 → 30 s (`DefaultConnectWait`) | how long `NewNatsBus` retries a broker it cannot reach; negative → one attempt; a broker that answers and refuses fails at once |
 | `DurablePrefix` | required | prefixes every consumer name; letters, digits, `_` and `-` only, refused at construction otherwise |
+| `Domain` | empty → no stamp, no filtering | letters, digits, `_` and `-` only, refused at construction otherwise; set → every emit carries header `W17-Domain`, and a delivery stamped with another domain is acked without calling the handler (logged once per channel and domain). The business runtimes (TypeScript, Python, Rust) stamp the manifest's domain the same way on every publish |
 | `Delivery`, `InstanceID` | see I3 | — |
 | `DefaultMaxDeliver` | 0 → 3 | negative passed to JetStream unchanged |
 | `DefaultAckWait` | 0 → 30 s | negative passed to JetStream unchanged |
@@ -262,6 +263,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.15 | During a broker outage one `Dispatch` MUST fail within `PublishTimeout` rather than hold the committing goroutine for the client's own timeout. | `TestNatsBus_PublishTimeoutBoundsOutage_Embedded` |
 | I5.16 | A subscription's consumer MUST be delivered only the subjects its topic filter can match, never the whole channel for a filter with an exact subject form. | `TestNatsBus_NarrowFilterReadsOnlyItsSubjects_Embedded`, `TestNatsFilterSubjects` |
 | I5.17 | A message delivered to the client MUST NOT age past `AckWait` before its handler starts: one slow handler MUST NOT cause the messages after it to be redelivered. | `TestNatsBus_QueuedDeliveriesDoNotOverrunAckWait_Embedded` |
+| I5.18 | With `Domain` set, a subscriber MUST NOT hand its handler a message stamped with another domain, and MUST deliver an unstamped one; without `Domain` nothing is stamped or filtered. | `TestDomainIsolation_Nats_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
@@ -272,6 +274,11 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
   means. Set `MaxAge: -1` for no age limit.
 - Retention removes messages regardless of whether a consumer has read them; a consumer that is
   down longer than `MaxAge` loses the older backlog.
+- Stream names are not namespaced: two domains (or projects) on one broker that declare the same
+  channel name share its stream and dead-letter stream, and each process ensuring the stream
+  rewrites its retention. `Domain` keeps their envelopes apart at delivery (each subscriber reads
+  and settles the other's messages unhandled); it does not separate storage, retention or
+  backlog. Renaming the streams would strand every existing deployment's backlog and consumers.
 
 ---
 
@@ -280,7 +287,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 **Code.** `go/lib/eventbus/redis.go` — `RedisBus`, `NewRedisBus`, `RedisBusOptions`
 
 **Purpose.** Broker transport on Redis Streams. Channel → stream key `<channel>`;
-each entry `{topic, payload}`; DLQ stream `<channel>.dlq`. A consume loop reads
+each entry `{topic, payload}`, plus `domain` from a bus with a `Domain`; DLQ stream `<channel>.dlq`. A consume loop reads
 batches with `XREADGROUP` (block 1 s) and `XACK`s on success; failures stay pending.
 While a read of several entries is served, the entries not yet started are
 re-claimed to the reader (`XCLAIM … 0 … RETRYCOUNT 1 JUSTID`) every third of
@@ -302,6 +309,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 |---|---|---|
 | `DSN` | required | `redis://…`, parsed by `ParseURL` |
 | `GroupPrefix` | required | — |
+| `Domain` | empty | as I5: set → every entry carries field `domain`, an entry stamped with another domain is acknowledged without calling the handler |
 | `Delivery`, `InstanceID` | see I3 | — |
 | `ConsumerName` | hostname | must be unique per process within a prefix |
 | `DefaultMaxDeliver` | 0 → 3 | — |
@@ -326,6 +334,7 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.9 | Each append MUST trim the stream to the configured age and count limits, or to the default age when none are configured. | `TestRedisBus_StreamRetention_Embedded`, `TestRedisBus_DLQRetention_Embedded` |
 | I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | `TestRedisBus_PublishTimeoutBoundsAHangingBroker` |
 | I6.11 | An entry queued behind a slow handler in one read MUST NOT be taken over by another replica's claim loop before it starts. | `TestRedisBus_QueuedEntryIsNotTakenOverByAnotherReplica` |
+| I6.12 | I5.18 MUST hold on Redis. | `TestDomainIsolation_Redis_Embedded`, `TestDomainOption_RefusesAnInvalidName` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.

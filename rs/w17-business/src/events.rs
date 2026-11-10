@@ -17,6 +17,13 @@
 //! - Redis Streams: `XADD <channel> MINID ~ <now-7d>-0 * topic <topic>
 //!   payload <envelope bytes>`.
 //!
+//! Each publish is stamped with the business domain (the manifest's
+//! `domain`), as a Go bus with a `Domain` stamps it: NATS header
+//! `W17-Domain: <domain>`, Redis entry field `domain <domain>` after the
+//! payload. Two domains that declare the same channel name share one stream
+//! on a project's broker; a Go subscriber with a domain settles unread a
+//! message stamped with another one. An empty domain stamps nothing.
+//!
 //! Emits are fire-and-forget: a failure is reported, never returned into
 //! the RPC, and bounded by the publish timeout (2 s).
 
@@ -504,11 +511,44 @@ pub fn nats_connect_options(dsn: &str) -> Result<NatsConnectOptions, String> {
     Ok(out)
 }
 
+/// The NATS header carrying the emitting domain (eventbus.DomainHeader).
+pub const DOMAIN_HEADER: &str = "W17-Domain";
+
+/// The headers a NATS publish carries for `domain`: the domain stamp, or
+/// none for an empty domain (the wire before the stamp existed).
+pub fn nats_domain_headers(domain: &str) -> Option<async_nats::HeaderMap> {
+    if domain.is_empty() {
+        return None;
+    }
+    let mut h = async_nats::HeaderMap::new();
+    h.insert(DOMAIN_HEADER, domain);
+    Some(h)
+}
+
+/// The XADD eventbus.RedisBus.Dispatch writes: trimmed to `min_id`, fields
+/// `topic`, `payload` and, for a non-empty domain, `domain`.
+pub fn redis_xadd_cmd(
+    channel: &str,
+    topic: &str,
+    payload: Vec<u8>,
+    domain: &str,
+    min_id: &str,
+) -> redis::Cmd {
+    let mut cmd = redis::cmd("XADD");
+    cmd.arg(channel).arg("MINID").arg("~").arg(min_id).arg("*");
+    cmd.arg("topic").arg(topic).arg("payload").arg(payload);
+    if !domain.is_empty() {
+        cmd.arg("domain").arg(domain);
+    }
+    cmd
+}
+
 /// Publishes to NATS JetStream as eventbus.NatsBus.Dispatch does.
 pub struct NatsPublisher {
     client: async_nats::Client,
     js: async_nats::jetstream::Context,
     streams: Mutex<HashSet<String>>,
+    domain: String,
 }
 
 impl NatsPublisher {
@@ -541,6 +581,7 @@ impl NatsPublisher {
                         client,
                         js,
                         streams: Mutex::new(HashSet::new()),
+                        domain: String::new(),
                     });
                 }
                 Err(e) if tokio::time::Instant::now() >= deadline => {
@@ -549,6 +590,12 @@ impl NatsPublisher {
                 Err(_) => tokio::time::sleep(Duration::from_millis(500)).await,
             }
         }
+    }
+
+    /// Stamp every publish with `domain` (see the module doc).
+    pub fn with_domain(mut self, domain: &str) -> Self {
+        self.domain = domain.to_string();
+        self
     }
 
     async fn ensure_stream(&self, channel: &str) -> Result<(), String> {
@@ -585,11 +632,15 @@ impl NatsPublisher {
         subject: &str,
         payload: Vec<u8>,
     ) -> Result<(), async_nats::jetstream::context::PublishError> {
-        self.js
-            .publish(subject.to_string(), payload.into())
-            .await?
-            .await
-            .map(|_| ())
+        let ack = match nats_domain_headers(&self.domain) {
+            Some(h) => {
+                self.js
+                    .publish_with_headers(subject.to_string(), h, payload.into())
+                    .await?
+            }
+            None => self.js.publish(subject.to_string(), payload.into()).await?,
+        };
+        ack.await.map(|_| ())
     }
 }
 
@@ -649,6 +700,7 @@ enum RedisConn {
 /// Appends to Redis Streams as eventbus.RedisBus.Dispatch does.
 pub struct RedisPublisher {
     conn: RedisConn,
+    domain: String,
 }
 
 impl RedisPublisher {
@@ -707,12 +759,21 @@ impl RedisPublisher {
                     .map_err(|e| format!("redis connect: {e}"))?,
             )
         };
-        let p = Self { conn };
+        let p = Self {
+            conn,
+            domain: String::new(),
+        };
         let ping = redis::cmd("PING");
         tokio::time::timeout(Duration::from_secs(5), p.query::<String>(ping))
             .await
             .map_err(|_| "redis ping: timed out after 5000ms".to_string())??;
         Ok(p)
+    }
+
+    /// Stamp every entry with `domain` (see the module doc).
+    pub fn with_domain(mut self, domain: &str) -> Self {
+        self.domain = domain.to_string();
+        self
     }
 
     async fn query<T: redis::FromRedisValue>(&self, cmd: redis::Cmd) -> Result<T, String> {
@@ -743,13 +804,7 @@ impl Dispatcher for RedisPublisher {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default();
             let min = now.saturating_sub(DEFAULT_STREAM_MAX_AGE).as_millis();
-            let mut cmd = redis::cmd("XADD");
-            cmd.arg(channel)
-                .arg("MINID")
-                .arg("~")
-                .arg(format!("{min}-0"))
-                .arg("*");
-            cmd.arg("topic").arg(topic).arg("payload").arg(payload);
+            let cmd = redis_xadd_cmd(channel, topic, payload, &self.domain, &format!("{min}-0"));
             self.query::<redis::Value>(cmd)
                 .await
                 .map(|_| ())

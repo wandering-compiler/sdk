@@ -161,6 +161,7 @@ class FakeJS:
     def __init__(self, lose_stream=False):
         self.streams = {}
         self.published = []
+        self.headers = []
         self.lose_stream = lose_stream
 
     async def update_stream(self, cfg):
@@ -173,13 +174,14 @@ class FakeJS:
     async def add_stream(self, cfg):
         self.streams[cfg.name] = cfg
 
-    async def publish(self, subject, payload, timeout=None):
+    async def publish(self, subject, payload, timeout=None, headers=None):
         from nats.js.errors import NoStreamResponseError
 
         if self.lose_stream:
             self.lose_stream = False
             raise NoStreamResponseError()
         self.published.append((subject, payload))
+        self.headers.append(headers)
 
 
 class FakeNC:
@@ -207,6 +209,31 @@ async def test_nats_publisher_recreates_a_lost_stream():
     pub = events.NatsPublisher(FakeNC(), js)
     await pub.dispatch(Context(), "notes", "t", empty_pb2.Empty())
     assert js.published == [("notes.t", b"")]
+
+
+async def test_nats_publisher_stamps_its_domain():
+    # Two domains that declare one channel name share its stream on one
+    # broker; the W17-Domain header lets a Go subscriber with a Domain settle
+    # another domain's message unread (eventbus.DomainHeader).
+    from google.protobuf import empty_pb2
+
+    js = FakeJS()
+    await events.NatsPublisher(FakeNC(), js, domain="notes-domain").dispatch(Context(), "notes", "t", empty_pb2.Empty())
+    assert js.headers == [{"W17-Domain": "notes-domain"}]
+    js = FakeJS()
+    await events.NatsPublisher(FakeNC(), js).dispatch(Context(), "notes", "t", empty_pb2.Empty())
+    assert js.headers == [None]
+
+
+async def test_redis_publisher_stamps_its_domain():
+    from google.protobuf import empty_pb2
+
+    r = FakeRedis()
+    await events.RedisPublisher(r, domain="notes-domain").dispatch(Context(), "notes", "t", empty_pb2.Empty())
+    assert list(r.calls[0][2].items()) == [("topic", "t"), ("payload", b""), ("domain", "notes-domain")]
+    r = FakeRedis()
+    await events.RedisPublisher(r).dispatch(Context(), "notes", "t", empty_pb2.Empty())
+    assert "domain" not in r.calls[0][2]
 
 
 async def test_fire_never_raises():

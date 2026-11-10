@@ -34,6 +34,11 @@ type RedisBusOptions struct {
 	// suffix). Required.
 	GroupPrefix string
 
+	// Domain — as [NatsBusOptions.Domain]: stamped on every entry as the
+	// `domain` field, and an entry stamped with another domain is
+	// acknowledged without calling the handler.
+	Domain string
+
 	// Delivery selects competing-consumer (default) vs fan-out semantics for
 	// every subscriber this bus hands out — see [DeliveryMode]. It also
 	// decides where a freshly created group starts reading, because the two
@@ -242,6 +247,10 @@ func newRedisBus(opts RedisBusOptions) (*RedisBus, error) {
 		_ = client.Close()
 		return nil, err
 	}
+	if err := validateDomain("RedisBusOptions", opts.Domain); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
 	if opts.PublishTimeout <= 0 {
 		opts.PublishTimeout = DefaultPublishTimeout
 	}
@@ -326,10 +335,14 @@ func (b *RedisBus) Dispatch(ctx context.Context, channel, topic string, envelope
 	// Bounded by PublishTimeout: the emit runs on the committing goroutine.
 	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.opts.PublishTimeout)
 	defer cancel()
-	if err := b.xadd(pubCtx, channel, map[string]any{
+	values := map[string]any{
 		redisFieldTopic:   topic,
 		redisFieldPayload: string(raw),
-	}, b.opts.Retention, DefaultStreamMaxAge); err != nil {
+	}
+	if b.opts.Domain != "" {
+		values[redisFieldDomain] = b.opts.Domain
+	}
+	if err := b.xadd(pubCtx, channel, values, b.opts.Retention, DefaultStreamMaxAge); err != nil {
 		b.opts.Observer.OnEmitFailure(channel, topic, err)
 		return err
 	}
@@ -1117,6 +1130,13 @@ func (s *redisSubscription) processMessage(
 		// Outside this subscription's filter: settle it unhandled. The
 		// group is per filter (subscriptionGroup), so no sibling
 		// subscription loses the entry by this acknowledgement.
+		_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
+		return
+	}
+	// Another domain's entry on a channel name both declare (see domain.go):
+	// acknowledged unread, as an entry outside the filter is.
+	if stamped, _ := values[redisFieldDomain].(string); foreignDomain(s.bus.opts.Domain, stamped) {
+		noteForeignDomain(s.bus.opts.Domain, s.channel, stamped)
 		_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
 		return
 	}

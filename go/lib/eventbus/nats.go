@@ -38,6 +38,16 @@ type NatsBusOptions struct {
 	// Empty rejects.
 	DurablePrefix string
 
+	// Domain names the domain this bus emits and subscribes for. Set, every
+	// Dispatch carries it in the [DomainHeader] header, and every subscriber
+	// settles, without calling its handler, a message stamped with another
+	// domain — two domains that declare the same channel name on one broker
+	// share its stream and would otherwise read each other's envelopes. A
+	// message without the header is delivered. Empty -> no stamp, no
+	// filtering (the behaviour before the option). Letters, digits, '_' and
+	// '-' only.
+	Domain string
+
 	// Delivery selects competing-consumer (default) vs fan-out semantics for
 	// every subscriber this bus hands out — see [DeliveryMode]. It also
 	// decides the consumer's start position, because the two questions have
@@ -200,6 +210,9 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 		}
 	}
 	if err := validateChannelKeys("NatsBusOptions.ChannelRetries", opts.ChannelRetries); err != nil {
+		return nil, err
+	}
+	if err := validateDomain("NatsBusOptions", opts.Domain); err != nil {
 		return nil, err
 	}
 	if opts.PublishTimeout <= 0 {
@@ -382,7 +395,11 @@ func (b *NatsBus) Dispatch(ctx context.Context, channel, topic string, envelope 
 		return err
 	}
 	subject := natsSubject(channel, topic)
-	_, err = b.js.Publish(pubCtx, subject, raw)
+	msg := &natsgo.Msg{Subject: subject, Data: raw}
+	if b.opts.Domain != "" {
+		msg.Header = natsgo.Header{DomainHeader: []string{b.opts.Domain}}
+	}
+	_, err = b.js.PublishMsg(pubCtx, msg)
 	if err != nil && natsStreamMissing(err) {
 		// The stream cache says the stream exists, but no stream answered:
 		// the broker lost it (recreated without persistent storage, or the
@@ -391,7 +408,7 @@ func (b *NatsBus) Dispatch(ctx context.Context, channel, topic string, envelope 
 		// re-create the stream and publish once more.
 		b.forgetStream(channel)
 		if err = b.ensureStream(pubCtx, channel); err == nil {
-			_, err = b.js.Publish(pubCtx, subject, raw)
+			_, err = b.js.PublishMsg(pubCtx, msg)
 		}
 	}
 	if err != nil {
@@ -923,6 +940,13 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		// subscription's consumer has its own copy.
 		topic := strings.TrimPrefix(msg.Subject(), prefix)
 		if !MatchGlob(topicFilter, topic) {
+			_ = msg.Ack()
+			return
+		}
+		// Another domain's message on a channel name both declare (see
+		// domain.go): settled unread, as a message outside the filter is.
+		if stamped := msg.Headers().Get(DomainHeader); foreignDomain(s.bus.opts.Domain, stamped) {
+			noteForeignDomain(s.bus.opts.Domain, s.channel, stamped)
 			_ = msg.Ack()
 			return
 		}

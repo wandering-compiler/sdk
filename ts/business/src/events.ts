@@ -13,9 +13,16 @@
  * - NATS JetStream: stream `<channel>` over subjects `<channel>.>` (limits
  *   retention, discard old, max age 7 days, no count limit — created or
  *   updated on first use, as Go's `ensureStream`), subject
- *   `<channel>.<topic>`, payload the marshalled envelope;
+ *   `<channel>.<topic>`, payload the marshalled envelope, header
+ *   `W17-Domain: <domain>` (the manifest's domain);
  * - Redis Streams: `XADD <channel> MINID ~ <now-7d>-0 * topic <topic> payload
- *   <envelope bytes>`.
+ *   <envelope bytes> domain <domain>`.
+ *
+ * The domain stamp is Go's `NatsBusOptions.Domain` / `RedisBusOptions.Domain`:
+ * two domains that declare the same channel name share its stream on one
+ * broker, and a Go subscriber with a Domain settles unread a message stamped
+ * with another domain. An empty domain stamps nothing (the wire before the
+ * stamp existed).
  *
  * Emits are fire-and-forget: a failure is logged and reported, never thrown
  * into the RPC, and bounded by the publish timeout (2s).
@@ -38,6 +45,8 @@ export const DEFAULT_STREAM_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 export const DEFAULT_PUBLISH_TIMEOUT_MS = 2000;
 export const MAX_CHANNEL_LEN = 200;
 export const W17_INVALIDATE_TOPIC = "w17.invalidate";
+/** eventbus.DomainHeader: the NATS header naming the emitting domain. */
+export const DOMAIN_HEADER = "W17-Domain";
 
 /** Tunables tests may lower. */
 export const settings = { publishTimeoutMs: DEFAULT_PUBLISH_TIMEOUT_MS };
@@ -301,7 +310,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 export interface JetStreamLike {
   updateStream(cfg: StreamSpec): Promise<void>;
   addStream(cfg: StreamSpec): Promise<void>;
-  publish(subject: string, payload: Uint8Array, timeoutMs: number): Promise<void>;
+  /** `headers` (when given) ride the message as NATS headers. */
+  publish(subject: string, payload: Uint8Array, timeoutMs: number, headers?: Record<string, string>): Promise<void>;
   isClosed(): boolean;
   close(): Promise<void>;
 }
@@ -328,8 +338,12 @@ export class NatsPublisher implements Dispatcher {
   readonly #streams = new Set<string>();
   readonly js: JetStreamLike;
 
-  constructor(js: JetStreamLike, opts: { publishTimeoutMs?: number; maxAgeMs?: number; maxMsgs?: number } = {}) {
+  /** The emitting domain, stamped as the `W17-Domain` header; "" stamps nothing. */
+  readonly domain: string;
+
+  constructor(js: JetStreamLike, opts: { publishTimeoutMs?: number; maxAgeMs?: number; maxMsgs?: number; domain?: string } = {}) {
     this.js = js;
+    this.domain = opts.domain ?? "";
     this.publishTimeoutMs = opts.publishTimeoutMs ?? DEFAULT_PUBLISH_TIMEOUT_MS;
     this.maxAgeMs = opts.maxAgeMs ?? DEFAULT_STREAM_MAX_AGE_MS;
     this.maxMsgs = opts.maxMsgs ?? -1;
@@ -342,7 +356,7 @@ export class NatsPublisher implements Dispatcher {
    * Connect, retrying an unreachable broker for connectWaitMs
    * (eventbus.DefaultConnectWait: a broker started in the same deploy).
    */
-  static async connect(dsn: string, opts: { connectWaitMs?: number; publishTimeoutMs?: number } = {}): Promise<NatsPublisher> {
+  static async connect(dsn: string, opts: { connectWaitMs?: number; publishTimeoutMs?: number; domain?: string } = {}): Promise<NatsPublisher> {
     const o = natsConnectOptions(dsn);
     return new NatsPublisher(await natsJetStream(o, opts.connectWaitMs ?? 30_000), opts);
   }
@@ -372,17 +386,18 @@ export class NatsPublisher implements Dispatcher {
     validateTopic(topic);
     if (this.js.isClosed()) throw new Error("eventbus nats: connection is closed");
     const subject = `${channel}.${topic}`;
+    const headers = this.domain ? { [DOMAIN_HEADER]: this.domain } : undefined;
     const go = async () => {
       await this.#ensureStream(channel);
       try {
-        await this.js.publish(subject, payload, this.publishTimeoutMs);
+        await this.js.publish(subject, payload, this.publishTimeoutMs, headers);
       } catch (e) {
         if (!(e instanceof StreamMissingError)) throw e;
         // The broker lost the stream (recreated without persistence):
         // forget it, re-create it, publish once more.
         this.#streams.delete(channel);
         await this.#ensureStream(channel);
-        await this.js.publish(subject, payload, this.publishTimeoutMs);
+        await this.js.publish(subject, payload, this.publishTimeoutMs, headers);
       }
     };
     await withTimeout(go(), this.publishTimeoutMs, `eventbus nats: publish ${subject}`);
@@ -456,7 +471,7 @@ function redactNats(s: string): string {
 
 /** The real JetStream, behind {@link JetStreamLike}. */
 async function natsJetStream(o: NatsConnectOptions, connectWaitMs: number): Promise<JetStreamLike> {
-  const { connect } = await import("@nats-io/transport-node");
+  const { connect, headers: natsHeaders } = await import("@nats-io/transport-node");
   const jsmod = await import("@nats-io/jetstream");
   const deadline = Date.now() + connectWaitMs;
   let nc: Awaited<ReturnType<typeof connect>>;
@@ -507,9 +522,14 @@ async function natsJetStream(o: NatsConnectOptions, connectWaitMs: number): Prom
     async addStream(s) {
       await jsm.streams.add(toCfg(s));
     },
-    async publish(subject, payload, timeoutMs) {
+    async publish(subject, payload, timeoutMs, headers) {
       try {
-        await js.publish(subject, payload, { timeout: timeoutMs });
+        let h: ReturnType<typeof natsHeaders> | undefined;
+        if (headers !== undefined) {
+          h = natsHeaders();
+          for (const [k, v] of Object.entries(headers)) h.set(k, v);
+        }
+        await js.publish(subject, payload, { timeout: timeoutMs, ...(h !== undefined && { headers: h }) });
       } catch (e) {
         if (isMissing(e)) throw new StreamMissingError(String(e), { cause: e });
         throw e;
@@ -536,12 +556,15 @@ export class RedisPublisher implements Dispatcher {
   readonly maxMsgs: number;
   readonly #clock: () => number;
   readonly client: RedisLike;
+  /** The emitting domain, stamped as the entry's `domain` field; "" stamps nothing. */
+  readonly domain: string;
 
   constructor(
     client: RedisLike,
-    opts: { publishTimeoutMs?: number; maxAgeMs?: number; maxMsgs?: number; clock?: () => number } = {},
+    opts: { publishTimeoutMs?: number; maxAgeMs?: number; maxMsgs?: number; clock?: () => number; domain?: string } = {},
   ) {
     this.client = client;
+    this.domain = opts.domain ?? "";
     this.publishTimeoutMs = opts.publishTimeoutMs ?? DEFAULT_PUBLISH_TIMEOUT_MS;
     this.maxAgeMs = opts.maxAgeMs ?? DEFAULT_STREAM_MAX_AGE_MS;
     this.maxMsgs = opts.maxMsgs ?? 0;
@@ -549,7 +572,7 @@ export class RedisPublisher implements Dispatcher {
   }
 
   /** `redis://` / `rediss://`; `cluster=true` selects a cluster client (lib/redisdsn). */
-  static async connect(dsn: string, opts: { publishTimeoutMs?: number } = {}): Promise<RedisPublisher> {
+  static async connect(dsn: string, opts: { publishTimeoutMs?: number; domain?: string } = {}): Promise<RedisPublisher> {
     const u = new URL(dsn);
     if (u.protocol !== "redis:" && u.protocol !== "rediss:") {
       throw new RangeError(`redis DSN: scheme ${JSON.stringify(u.protocol.replace(/:$/, ""))}, want redis or rediss`);
@@ -589,6 +612,7 @@ export class RedisPublisher implements Dispatcher {
     if (this.maxAgeMs > 0) args.push("MINID", "~", `${Math.trunc(this.#clock() - this.maxAgeMs)}-0`);
     else if (this.maxMsgs > 0) args.push("MAXLEN", "~", this.maxMsgs);
     args.push("*", "topic", topic, "payload", Buffer.from(payload));
+    if (this.domain) args.push("domain", this.domain);
     const go = async () => {
       await this.client.xadd(...args);
       if (this.maxAgeMs > 0 && this.maxMsgs > 0) {

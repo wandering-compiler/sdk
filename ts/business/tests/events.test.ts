@@ -155,6 +155,16 @@ describe("redis", () => {
     expect(r.calls[0]!.slice(0, 5)).toEqual(["xadd", "notes", "MAXLEN", "~", 10]);
   });
 
+  it("a domain is stamped after topic and payload, and only when set", async () => {
+    const r = new FakeRedis();
+    const raw = new Uint8Array([1]);
+    await new events.RedisPublisher(r, { maxAgeMs: -1, domain: "billing" }).dispatch(new Context(), "notes", "t", raw);
+    expect(r.calls[0]).toEqual(["xadd", "notes", "*", "topic", "t", "payload", Buffer.from(raw), "domain", "billing"]);
+    const r2 = new FakeRedis();
+    await new events.RedisPublisher(r2, { maxAgeMs: -1, domain: "" }).dispatch(new Context(), "notes", "t", raw);
+    expect(r2.calls[0]).toEqual(["xadd", "notes", "*", "topic", "t", "payload", Buffer.from(raw)]);
+  });
+
   it("the DSN is validated", async () => {
     await expect(events.RedisPublisher.connect("http://x")).rejects.toThrow(/scheme/);
     await expect(events.RedisPublisher.connect("redis://h:6379/3?cluster=true")).rejects.toThrow(/database 0/);
@@ -164,6 +174,7 @@ describe("redis", () => {
 class FakeJS implements events.JetStreamLike {
   streams = new Map<string, events.StreamSpec>();
   published: [string, Uint8Array][] = [];
+  headers: (Record<string, string> | undefined)[] = [];
   loseStream: boolean;
   constructor(loseStream = false) {
     this.loseStream = loseStream;
@@ -175,12 +186,13 @@ class FakeJS implements events.JetStreamLike {
   async addStream(cfg: events.StreamSpec) {
     this.streams.set(cfg.name, cfg);
   }
-  async publish(subject: string, payload: Uint8Array) {
+  async publish(subject: string, payload: Uint8Array, _timeoutMs: number, headers?: Record<string, string>) {
     if (this.loseStream) {
       this.loseStream = false;
       throw new events.StreamMissingError("no responders");
     }
     this.published.push([subject, payload]);
+    this.headers.push(headers);
   }
   isClosed() {
     return false;
@@ -196,6 +208,15 @@ describe("nats", () => {
       name: "notes", subjects: ["notes.>"], retention: "limits", discard: "old", maxAgeMs: 7 * 24 * 3600 * 1000, maxMsgs: -1,
     });
     expect(js.published).toEqual([["notes.note.created", EMPTY]]);
+  });
+
+  it("a domain rides the W17-Domain header, and only when set", async () => {
+    const js = new FakeJS(true);
+    await new events.NatsPublisher(js, { domain: "billing" }).dispatch(new Context(), "notes", "t", EMPTY);
+    expect(js.headers).toEqual([{ "W17-Domain": "billing" }]);
+    const plain = new FakeJS();
+    await new events.NatsPublisher(plain).dispatch(new Context(), "notes", "t", EMPTY);
+    expect(plain.headers).toEqual([undefined]);
   });
 
   it("a lost stream is re-created", async () => {
