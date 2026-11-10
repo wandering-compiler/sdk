@@ -586,7 +586,7 @@ field it writes files for. Put chunks are at most `MaxChunkBytes` (1 MiB).
 | ID | Guarantee | Test |
 |---|---|---|
 | D18.1 | A Put MUST store the body only after its end marker, under the field's placement (`kvfs.Put`), and return the handle `kvfs.Put` returned; a stream that half-closes without the end, or is cancelled after the half-close, MUST store nothing. | `TestRoundTrip`, `TestPutStoresOnlyAfterTheEnd`, `TestCancelAfterHalfCloseStoresNothing`, `TestCancelledPutStoresNothing` |
-| D18.2 | A read-only connection MUST read and MUST refuse Delete and Put with `FAILED_PRECONDITION` `READ_ONLY_CONNECTION`, removing nothing. | `TestOpenStatDeleteRefusals` |
+| D18.2 | A read-only connection MUST read and MUST refuse Delete and Put with `FAILED_PRECONDITION` `READ_ONLY_CONNECTION`, removing nothing. | `TestOpenStatDeleteRefusals`, `TestPutRefusals` |
 | D18.3 | A driver's error text MUST NOT reach the caller: the status carries the reason and the connection only, the text goes to the error sink. | `TestStoreErrorsDoNotLeakTheDriverText` |
 | D18.4 | A handle with a dot-segment (`.`, `..`, the local driver's `.w17-staging`) MUST be refused `INVALID_ARGUMENT` `BAD_REQUEST` before the driver is asked: no call reads or deletes another request's in-flight upload. | `TestDotSegmentHandlesAreRefused` |
 
