@@ -68,7 +68,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E18 | The reserved `w17-events` channel | `go/lib/restgw/w17events.go`, `w17events_eventbus.go` — `HandleW17Events`, `EventbusEventSource` |
 | E19 | Public-method rate-limit adapters | `go/lib/restgw/publiclimit.go` — `AdmitPublic`, `AdmitPublicStream` |
 | E20 | Multipart uploads | `go/lib/restgw/upload.go` — `ProcessFilePart`, `RollbackUploads` |
-| E21 | Downloads | `go/lib/restgw/download.go` — `ServeDownload`, `BuildDownloadURL` |
+| E21 | Downloads | `go/lib/restgw/download.go` — `ServeDownload`, `BuildDownloadURL`; `variant_render.go`, `variant_queue.go` — image variants |
 | E22 | Browser redirects | `go/lib/restgw/browserredirect.go` — `WriteBrowserRedirect` |
 | E23 | Pagination links | `go/lib/restgw/pagination.go` |
 | E24 | Query-string enum parsing | `go/lib/restgw/queryenum.go` — `SetEnumField` |
@@ -782,13 +782,20 @@ request-wide body cap is the generated prelude's `http.MaxBytesReader`, not this
 
 ## E21. Downloads
 
-**Code.** `go/lib/restgw/download.go` — `NewDownloadConfig`, `ServeDownload`, `BuildDownloadURL`.
+**Code.** `go/lib/restgw/download.go` — `NewDownloadConfig`, `ServeDownload`, `BuildDownloadURL`, `VariantKey`; `go/lib/restgw/variant_render.go` — `SetMaxConcurrentVariantRenders`; `go/lib/restgw/variant_queue.go` — `StartVariantWorkers`, `VariantWorkersFromEnv`.
 
 **Purpose.** Serves stored objects by URL with longest-prefix bucket matching, ETag, ranges and a
-forced non-renderable content type.
+forced non-renderable content type; serves an image field's declared variants
+(`?variant=<name>`), rendering one on its first request and storing it beside the original.
 
 **Configuration.** `NewDownloadConfig(prefix, fields, cacheControl, asAttachment, disableETag,
 disableRange)`.
+
+| Setting | Default | Invalid or edge values |
+|---|---|---|
+| `SetMaxConcurrentVariantRenders(n)` | `DefaultMaxConcurrentVariantRenders` = 2 per process | `n <= 0` restores the default. Bounds the renders download requests run at once; the background workers are bounded by their own count |
+| Render slot wait | 10 s | Fixed; past it the request is answered 503 `UNAVAILABLE` with `Retry-After: 1` |
+| `<PREFIX>_VARIANT_WORKERS` (`VariantWorkersFromEnv`) | 2 | `0` turns background rendering off; not a whole number `>= 0` → error |
 
 **Guarantees.**
 
@@ -796,14 +803,21 @@ disableRange)`.
 |---|---|---|
 | E21.1 | Any `.` or `..` segment (either slash) MUST answer 404 | `TestServeDownload_PathTraversal404`, `TestServeDownload_BackslashTraversal404` |
 | E21.2 | An unknown bucket and a missing object MUST both answer 404 | `TestServeDownload_UnknownBucket_404`, `TestServeDownload_NotFound` |
-| E21.3 | Responses MUST always be `Content-Type: application/octet-stream` with `nosniff` | `TestServeDownload_NoContentSniffXSS` |
+| E21.3 | Responses MUST be `Content-Type: application/octet-stream` with `nosniff`, except an image field's original and its variants whose bytes sniff as PNG, JPEG, GIF or WebP, which carry that type (never SVG or HTML); `nosniff` always | `TestServeDownload_NoContentSniffXSS`, `TestServeDownload_AnImageFieldsOriginalCarriesItsRasterType` |
 | E21.4 | Driver errors MUST become a generic, logged 500 | `TestServeDownload_StatError500`, `TestServeDownload_OpenErrors` |
 | E21.5 | URLs from `BuildDownloadURL` MUST resolve through `ServeDownload` | `TestDownloadURLRoundTrip` |
 | E21.6 | Only GET and HEAD MUST be served | `TestServeDownload_DELETE_405`, `TestServeDownload_HEAD` |
 | E21.7 | Every refusal, 404 included, MUST be the JSON error envelope; the detail goes to observability | `TestServeDownload_ErrorsAreTheEnvelope` |
+| E21.8 | Only declared variant names MUST be served (400 otherwise); a variant MUST be rendered once and stored under `<key>~<name>`; a missing original → 404, a non-image or an oversized source → 415 | `TestServeDownload_VariantIsRenderedOnceAndStored`, `TestServeDownload_VariantRefusals` |
+| E21.9 | Concurrent first requests of one variant in a process MUST render it once and share the outcome | `TestServeDownload_ConcurrentRequestsOfOneVariantRenderOnce` |
+| E21.10 | Renders for download requests MUST NOT run more than the process bound at once (each decodes a whole original, up to ~200 MB); a request that gets no slot within the wait MUST be answered 503 with `Retry-After`, not queued without bound | `TestServeDownload_ConcurrentVariantRendersAreBounded`, `TestServeDownload_VariantRenderBusyIs503` |
 
 **Deliberate limits.**
 - Authorization is per endpoint, not per object.
+- The render bound and the sharing are per process: N replicas may render the same variant N
+  times, and the store's atomic put keeps one copy.
+- A busy refusal (503) is not reported to observability: it is the bound working, and a burst would
+  be a burst of reports.
 
 ---
 

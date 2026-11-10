@@ -15,3 +15,10 @@ func SetW17EventsWriteTimeoutForTest(d time.Duration) func() {
 	prev := w17EventsWriteTimeoutOverride.Swap(int64(d))
 	return func() { w17EventsWriteTimeoutOverride.Store(prev) }
 }
+
+// SetVariantRenderWaitForTest shortens how long an on-request variant render
+// waits for a slot and returns a function restoring the default.
+func SetVariantRenderWaitForTest(d time.Duration) func() {
+	prev := variantRenderWait.Swap(int64(d))
+	return func() { variantRenderWait.Store(prev) }
+}
