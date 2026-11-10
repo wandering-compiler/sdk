@@ -195,19 +195,37 @@ func ResolveFormats(locale string) Formats {
 
 // ResolveFormatsKind is [ResolveFormats] with the project's override map
 // applied first: a hit on (language, kind) replaces the locale before the
-// chain runs. An override naming a locale with no row falls through to the
-// ordinary chain rather than failing — the lock parser is what rejects a bad
-// override, and a runtime must not break on data that got past it.
+// chain runs. The override is looked up along the same chain as the table
+// row — the tag, then its base language — because the lock keys overrides by
+// declared language (`cs`) while a browser reports a regional tag (`cs-CZ`).
+// An override naming a locale with no row falls through to the ordinary chain
+// rather than failing — the lock parser is what rejects a bad override, and a
+// runtime must not break on data that got past it.
 func ResolveFormatsKind(locale string, kind FormatKind, over Overrides) Formats {
 	l := normalizeFormatLocale(locale)
-	if byKind, ok := over[l]; ok {
-		if target := normalizeFormatLocale(byKind[kind]); target != "" {
-			if row, ok := formatTable[target]; ok {
-				return row
-			}
+	if row, ok := overrideRow(over, l, kind); ok {
+		return row
+	}
+	if base, _, cut := strings.Cut(l, "-"); cut {
+		if row, ok := overrideRow(over, base, kind); ok {
+			return row
 		}
 	}
 	return ResolveFormats(l)
+}
+
+// overrideRow is the table row the override of (lang, kind) names, if any.
+func overrideRow(over Overrides, lang string, kind FormatKind) (Formats, bool) {
+	byKind, ok := over[lang]
+	if !ok {
+		return Formats{}, false
+	}
+	target := normalizeFormatLocale(byKind[kind])
+	if target == "" {
+		return Formats{}, false
+	}
+	row, ok := formatTable[target]
+	return row, ok
 }
 
 // normalizeFormatLocale lowercases and switches `_` to `-` so a tag written

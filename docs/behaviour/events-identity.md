@@ -625,7 +625,10 @@ untranslated. Substitution is one left-to-right pass over the translated text.
 
 **Purpose.** A frozen per-locale table embedded from `formats.json`, resolved locale
 → base language → `en` with case and `_` normalisation, with per-kind project
-overrides. `FormatLocaleFromContext` uses the last `w17-format-locale` value, incoming
+overrides looked up along the same chain (the tag's own override, then its base
+language's), so a regional request (`cs-CZ`) gets the override declared for its
+language (`cs`). The admin runtime's `resolveFormatsKind`
+(`ts/admin-runtime/src/valueFormat.ts`) resolves the same way. `FormatLocaleFromContext` uses the last `w17-format-locale` value, incoming
 before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 
 **Guarantees.**
@@ -637,6 +640,7 @@ before outgoing, else `LocaleFromContext`; Accept-Language lists are negotiated.
 | I15.3 | The table MUST be complete; the resolution chain and overrides MUST apply. | `go/lib/i18n/format_test.go` |
 | I15.4 | Format-locale fallback and negotiation MUST apply. | `go/lib/i18n/format_test.go` |
 | I15.5 | An explicit format locale MUST be honoured on both incoming and outgoing metadata. | `TestFormatLocaleFromContext_OutgoingMetadata` |
+| I15.6 | A project override MUST apply to a regional request of its language, unless the regional tag has an override of its own, in Go and in the admin runtime alike. | `TestResolveFormatsKindOverride_RegionalRequest`, `ts/admin-runtime/src/valueformat.test.ts` ("applies a language's override to a regional request") |
 
 ---
 

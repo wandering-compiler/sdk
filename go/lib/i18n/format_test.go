@@ -234,6 +234,28 @@ func TestResolveFormatsKindOverride(t *testing.T) {
 	}
 }
 
+// A regional request reaches its language's override. The lock keys
+// overrides by declared language (`cs`), browsers report a regional tag
+// (`cs-CZ`, `en-US`), and the override was looked up by the exact tag only:
+// the table row walked to the base language, the override never did, so the
+// feature was inert for nearly every browser.
+func TestResolveFormatsKindOverride_RegionalRequest(t *testing.T) {
+	over := Overrides{"cs": {KindNumber: "en"}}
+	for _, tag := range []string{"cs-CZ", "cs_CZ", "CS-cz"} {
+		if got := ResolveFormatsKind(tag, KindNumber, over).ThousandSeparator; got != "," {
+			t.Errorf("%s/number thousand separator = %q, want the cs override's en comma", tag, got)
+		}
+		if got := ResolveFormatsKind(tag, KindDate, over).DateFormat; got != "DD.MM.YYYY" {
+			t.Errorf("%s/date format = %q, want the cs row", tag, got)
+		}
+	}
+	// An override of the regional tag itself still wins over its language's.
+	both := Overrides{"cs": {KindNumber: "en"}, "cs-cz": {KindNumber: "de"}}
+	if got := ResolveFormatsKind("cs-CZ", KindNumber, both).ThousandSeparator; got != "." {
+		t.Errorf("cs-CZ/number with its own override = %q, want the de dot", got)
+	}
+}
+
 // INVARIANT: the format locale is its own metadata key, and it DEFAULTS to the
 // UI language rather than to a global constant.
 func TestFormatLocaleFromContext(t *testing.T) {
