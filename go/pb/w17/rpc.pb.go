@@ -119,7 +119,17 @@ type RpcApi struct {
 	// says nothing here: a method public on REST is still authenticated
 	// over gRPC unless it is listed. The gateway's own auth methods are
 	// exempt on every surface without being listed.
-	ExcludeAuth   []string `protobuf:"bytes,10,rep,name=exclude_auth,json=excludeAuth,proto3" json:"exclude_auth,omitempty"`
+	ExcludeAuth []string `protobuf:"bytes,10,rep,name=exclude_auth,json=excludeAuth,proto3" json:"exclude_auth,omitempty"`
+	// How the per-address rate limit treats a method listed in
+	// `exclude_auth`, by the same ref: the gRPC twin of
+	// `RestEndpoint.public_limit` and `public_rate`, with the same rules —
+	// each limited method has its own bucket per address, a method not listed
+	// here is not limited, and codegen refuses a listed method it sees a
+	// reason to limit (a secret in its request; a method whose storage method
+	// is not read-only, or that has none) until it is declared here. A ref
+	// that is not in `exclude_auth` is refused. The gateway's own auth
+	// methods are FAILED_ONLY without being listed.
+	PublicLimits  []*RpcPublicLimit `protobuf:"bytes,11,rep,name=public_limits,json=publicLimits,proto3" json:"public_limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -224,6 +234,77 @@ func (x *RpcApi) GetExcludeAuth() []string {
 	return nil
 }
 
+func (x *RpcApi) GetPublicLimits() []*RpcPublicLimit {
+	if x != nil {
+		return x.PublicLimits
+	}
+	return nil
+}
+
+// RpcPublicLimit is one entry of `RpcApi.public_limits`.
+type RpcPublicLimit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The method, as `exclude_auth` names it.
+	Ref string `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	// FAILED_ONLY, EVERY_REQUEST or NONE (UNSPECIFIED is refused).
+	Limit PublicLimit `protobuf:"varint,2,opt,name=limit,proto3,enum=w17.PublicLimit" json:"limit,omitempty"`
+	// Its own threshold; unset = the surface's default. Not with NONE.
+	Rate          *PublicRate `protobuf:"bytes,3,opt,name=rate,proto3" json:"rate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RpcPublicLimit) Reset() {
+	*x = RpcPublicLimit{}
+	mi := &file_w17_rpc_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RpcPublicLimit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RpcPublicLimit) ProtoMessage() {}
+
+func (x *RpcPublicLimit) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rpc_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RpcPublicLimit.ProtoReflect.Descriptor instead.
+func (*RpcPublicLimit) Descriptor() ([]byte, []int) {
+	return file_w17_rpc_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RpcPublicLimit) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *RpcPublicLimit) GetLimit() PublicLimit {
+	if x != nil {
+		return x.Limit
+	}
+	return PublicLimit_PUBLIC_LIMIT_UNSPECIFIED
+}
+
+func (x *RpcPublicLimit) GetRate() *PublicRate {
+	if x != nil {
+		return x.Rate
+	}
+	return nil
+}
+
 // RpcGroup buckets backend methods under one public gRPC service
 // — the gRPC sibling of `RestGroup`. Where REST groups
 // surface as a URL sub-prefix + OpenAPI tag, an rpc group's
@@ -293,7 +374,7 @@ type RpcGroup struct {
 
 func (x *RpcGroup) Reset() {
 	*x = RpcGroup{}
-	mi := &file_w17_rpc_proto_msgTypes[1]
+	mi := &file_w17_rpc_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -305,7 +386,7 @@ func (x *RpcGroup) String() string {
 func (*RpcGroup) ProtoMessage() {}
 
 func (x *RpcGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_w17_rpc_proto_msgTypes[1]
+	mi := &file_w17_rpc_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -318,7 +399,7 @@ func (x *RpcGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RpcGroup.ProtoReflect.Descriptor instead.
 func (*RpcGroup) Descriptor() ([]byte, []int) {
-	return file_w17_rpc_proto_rawDescGZIP(), []int{1}
+	return file_w17_rpc_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RpcGroup) GetName() string {
@@ -428,7 +509,7 @@ var File_w17_rpc_proto protoreflect.FileDescriptor
 
 const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\x86\x03\n" +
+	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xc0\x03\n" +
 	"\x06RpcApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -442,7 +523,12 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\x12(\n" +
 	"\x0funauthenticated\x18\t \x01(\bR\x0funauthenticated\x12!\n" +
 	"\fexclude_auth\x18\n" +
-	" \x03(\tR\vexcludeAuth\"s\n" +
+	" \x03(\tR\vexcludeAuth\x128\n" +
+	"\rpublic_limits\x18\v \x03(\v2\x13.w17.RpcPublicLimitR\fpublicLimits\"o\n" +
+	"\x0eRpcPublicLimit\x12\x10\n" +
+	"\x03ref\x18\x01 \x01(\tR\x03ref\x12&\n" +
+	"\x05limit\x18\x02 \x01(\x0e2\x10.w17.PublicLimitR\x05limit\x12#\n" +
+	"\x04rate\x18\x03 \x01(\v2\x0f.w17.PublicRateR\x04rate\"s\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
@@ -466,30 +552,36 @@ func file_w17_rpc_proto_rawDescGZIP() []byte {
 	return file_w17_rpc_proto_rawDescData
 }
 
-var file_w17_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_w17_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_w17_rpc_proto_goTypes = []any{
 	(*RpcApi)(nil),                     // 0: w17.RpcApi
-	(*RpcGroup)(nil),                   // 1: w17.RpcGroup
-	(*AuthMethod)(nil),                 // 2: w17.AuthMethod
-	(*RequestEvents)(nil),              // 3: w17.RequestEvents
-	(*Audience)(nil),                   // 4: w17.Audience
-	(*descriptorpb.MethodOptions)(nil), // 5: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 6: google.protobuf.FileOptions
+	(*RpcPublicLimit)(nil),             // 1: w17.RpcPublicLimit
+	(*RpcGroup)(nil),                   // 2: w17.RpcGroup
+	(*AuthMethod)(nil),                 // 3: w17.AuthMethod
+	(*RequestEvents)(nil),              // 4: w17.RequestEvents
+	(*Audience)(nil),                   // 5: w17.Audience
+	(PublicLimit)(0),                   // 6: w17.PublicLimit
+	(*PublicRate)(nil),                 // 7: w17.PublicRate
+	(*descriptorpb.MethodOptions)(nil), // 8: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 9: google.protobuf.FileOptions
 }
 var file_w17_rpc_proto_depIdxs = []int32{
-	2, // 0: w17.RpcApi.auth_methods:type_name -> w17.AuthMethod
-	1, // 1: w17.RpcApi.groups:type_name -> w17.RpcGroup
-	3, // 2: w17.RpcApi.request_events:type_name -> w17.RequestEvents
-	4, // 3: w17.RpcApi.audience:type_name -> w17.Audience
-	5, // 4: w17.rpc:extendee -> google.protobuf.MethodOptions
-	5, // 5: w17.rpc_service:extendee -> google.protobuf.MethodOptions
-	6, // 6: w17.rpc_api:extendee -> google.protobuf.FileOptions
-	0, // 7: w17.rpc_api:type_name -> w17.RpcApi
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	7, // [7:8] is the sub-list for extension type_name
-	4, // [4:7] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	3,  // 0: w17.RpcApi.auth_methods:type_name -> w17.AuthMethod
+	2,  // 1: w17.RpcApi.groups:type_name -> w17.RpcGroup
+	4,  // 2: w17.RpcApi.request_events:type_name -> w17.RequestEvents
+	5,  // 3: w17.RpcApi.audience:type_name -> w17.Audience
+	1,  // 4: w17.RpcApi.public_limits:type_name -> w17.RpcPublicLimit
+	6,  // 5: w17.RpcPublicLimit.limit:type_name -> w17.PublicLimit
+	7,  // 6: w17.RpcPublicLimit.rate:type_name -> w17.PublicRate
+	8,  // 7: w17.rpc:extendee -> google.protobuf.MethodOptions
+	8,  // 8: w17.rpc_service:extendee -> google.protobuf.MethodOptions
+	9,  // 9: w17.rpc_api:extendee -> google.protobuf.FileOptions
+	0,  // 10: w17.rpc_api:type_name -> w17.RpcApi
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	10, // [10:11] is the sub-list for extension type_name
+	7,  // [7:10] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_w17_rpc_proto_init() }
@@ -506,7 +598,7 @@ func file_w17_rpc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rpc_proto_rawDesc), len(file_w17_rpc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 3,
 			NumServices:   0,
 		},

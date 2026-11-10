@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
+	"github.com/wandering-compiler/sdk/go/lib/dpop"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
 
@@ -23,7 +24,8 @@ import (
 // Taking the token before the handler runs is what bounds requests that are
 // in flight together: each holds a token, so concurrency cannot multiply the
 // budget. A handler that wrote nothing at all (it panicked, say) is charged.
-// A nil limiter admits everything.
+// A DPoP nonce challenge is not ([NonceChallenge]). A nil limiter admits
+// everything.
 func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (http.ResponseWriter, func(), bool) {
 	allowed, settle := l.ReserveRequest(r)
 	if !allowed {
@@ -32,8 +34,18 @@ func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (
 	}
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	return rec, func() {
-		settle(!rec.wroteHeader || rec.status >= http.StatusBadRequest)
+		settle(!rec.wroteHeader || (rec.status >= http.StatusBadRequest && !NonceChallenge(rec.status, rec.Header())))
 	}, true
+}
+
+// NonceChallenge reports whether a response is a DPoP nonce challenge: 401
+// with `WWW-Authenticate: DPoP error="use_dpop_nonce"`. A client with a fresh
+// key is sent one on its first request and repeats the request with the
+// nonce; nothing was checked, so it is not a failed attempt, and a limit that
+// charges only failures must not count it — or every first sign-in of a new
+// device would spend a token of the address's guess budget.
+func NonceChallenge(status int, h http.Header) bool {
+	return status == http.StatusUnauthorized && dpop.IsUseNonceChallenge(h.Values(dpop.HeaderWWWAuthenticate))
 }
 
 // AdmitPublicStream is AdmitPublic for a streaming method (SSE, WebSocket):
@@ -47,6 +59,26 @@ func AdmitPublic(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) (
 // site needs nothing more.
 func AdmitPublicStream(l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) bool {
 	open, release := l.OpenStream(r)
+	if !open {
+		WriteTooManyRequestsCtx(r.Context(), w)
+		return false
+	}
+	if !l.AllowRequest(r) {
+		release()
+		WriteTooManyRequestsCtx(r.Context(), w)
+		return false
+	}
+	context.AfterFunc(r.Context(), release)
+	return true
+}
+
+// AdmitPublicStreamOf is AdmitPublicStream for a surface whose public methods
+// each have their own limiter ([ratelimit.Methods]): streams caps the streams
+// one client holds open across the transport, and l — the method's own
+// limiter, nil when the method is not limited — is charged one token per
+// opened stream. Both nil admit everything.
+func AdmitPublicStreamOf(streams, l *ratelimit.Limiter, w http.ResponseWriter, r *http.Request) bool {
+	open, release := streams.OpenStream(r)
 	if !open {
 		WriteTooManyRequestsCtx(r.Context(), w)
 		return false
