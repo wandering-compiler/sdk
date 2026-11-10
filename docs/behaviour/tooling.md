@@ -922,6 +922,7 @@ directory `0700` with a `.gitignore` ignoring everything.
 | T27.5 | Serials MUST never be zero. | `TestRandSerialFrom_NeverZero` |
 | T27.6 | An existing leaf MUST be re-signed when it is not signed by the current CA, misses a requested SAN, is outside its validity window, does not match its key, or lacks ServerAuth or ClientAuth extended key usage. | `TestEnsureLeaf_ReMintedAfterCAReMint`, `TestEnsureLeaf_ReMintedForANewSAN`, `TestEnsureLeaf_ReMintedWhenExpired`, `TestEnsureLeaf_ReMintedWithoutClientAuth`, `TestEnsureLeaf_ReMintedWithoutServerAuth`, `TestEnsureLeaf_ReMintedWhenTheKeyDoesNotMatch` |
 | T27.7 | An unreadable leaf MUST be refused, not overwritten. | `TestEnsureLeaf_UnreadableIsRefused` |
+| T27.8 | Every private key written, a re-minted one included, MUST be mode 0600 whatever mode the file it replaces had; certificates and keys MUST be written to a temporary file beside their path and renamed over it, so no reader sees a half-written PEM and no temporary file is left behind. | `TestEnsureLeaf_ReMintedKeyIsOwnerOnly` |
 
 **Deliberate limits.**
 - Development only; no scheduled renewal (a leaf is re-minted only when `EnsureCerts` runs). Permissions of an existing directory are not tightened. The lock

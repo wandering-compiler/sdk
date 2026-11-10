@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,4 +105,39 @@ func parsePEMCert(t *testing.T, path string) *x509.Certificate {
 		t.Fatalf("%s: parse: %v", path, err)
 	}
 	return cert
+}
+
+// A re-minted leaf's key is owner-only whatever mode the file it replaces
+// had: os.WriteFile applies its mode only when it creates the file, so a
+// key re-written over a 0644 file stayed world-readable.
+func TestEnsureLeaf_ReMintedKeyIsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := EnsureCerts(dir, []string{"a.local"}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, serverKeyFile)
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(keyPath)
+	if _, err := EnsureCerts(dir, []string{"a.local", "b.local"}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(keyPath)
+	if string(before) == string(after) {
+		t.Fatal("the leaf was not re-minted for the new SAN")
+	}
+	st, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("the re-minted key is mode %o, want 600", st.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("a temporary file was left behind: %s", e.Name())
+		}
+	}
 }
