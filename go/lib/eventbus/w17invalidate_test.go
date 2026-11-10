@@ -68,7 +68,7 @@ func TestEmitInvalidate_EndToEndAgainstMemoryBus(t *testing.T) {
 		gotEnvelope []byte
 	)
 	done := make(chan struct{})
-	err = sub.Subscribe(context.Background(), "**", func(_ context.Context, topic string, envelope []byte) error {
+	err = sub.Subscribe(context.Background(), eventbus.EveryTopic, func(_ context.Context, topic string, envelope []byte) error {
 		mu.Lock()
 		defer mu.Unlock()
 		gotTopic = topic

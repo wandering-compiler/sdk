@@ -85,9 +85,16 @@ the emit after the database commit.
 waits for in-flight handlers. The generated dispatcher subscribes with `**` and
 re-applies each subscription's glob itself.
 
+The topics whose first segment is `w17` are reserved for the platform's own
+messages (`w17.invalidate`), which are not the domain's envelope. A wildcard
+never matches them, so a domain subscriber on `**` never receives a message it
+cannot decode; the server-sent-events hub, which forwards them, subscribes with
+`EveryTopic`.
+
 **Configuration.** Glob syntax for `topicFilter`: `*` is one segment, `**` is zero
 or more segments, a literal matches exactly; an empty filter matches only an
-empty topic.
+empty topic. A reserved `w17.*` topic is matched only by a filter whose first
+segment is literally `w17`, or by `EveryTopic` (`>`), which matches every topic.
 
 **Guarantees.**
 
@@ -99,6 +106,7 @@ empty topic.
 | I2.4 | `Subscribe()` after `Drain` MUST return `ErrSubscriberDraining`, checked atomically with registration. | `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused` |
 | I2.5 | A handler panic MUST become a delivery error (retry or dead-letter on brokers) and be reported; it MUST NOT crash the process. | `TestRecoverHandler_PanicBecomesError` |
 | I2.6 | A panic in loop plumbing MUST be recovered. | `TestRecoverLoopTick_RecoversPanic` |
+| I2.7 | A reserved `w17.*` topic MUST NOT reach a subscription whose filter reaches it only through a wildcard (`**`, `*`), on every transport; a filter naming `w17` literally, and `EveryTopic`, MUST receive it. | `TestReservedTopic_Memory`, `TestReservedTopic_Nats_Embedded`, `TestReservedTopic_Redis_Embedded`, `TestMatchGlob_ReservedTopic` |
 
 ---
 
@@ -366,7 +374,9 @@ side chooses: the first value for the gateway-owned namespaces, the last value f
 every other key (the metadata-binding convention the locale readers follow). `LabelsFromContext`
 extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
 `EmitInvalidate` dispatches an `InvalidateEvent` on the reserved topic
-`w17.invalidate`, labelled from the context like any other event.
+`w17.invalidate`, labelled from the context like any other event. The event is
+not the domain's envelope; only the hub (`EveryTopic`) and filters naming `w17`
+receive it (I2.7).
 
 **Guarantees.**
 
@@ -391,7 +401,8 @@ extracts `w17-label-<name>` entries into `Event.Labels`, the event's audience.
 **Code.** `go/lib/restgw/w17events_eventbus.go` — `EventbusEventSource`, `entitled`, `handleDelivery`; `go/lib/restgw/w17events.go` — `HandleW17Events`
 
 **Purpose.** One bus subscriber per configured channel, opened lazily on the first
-client with `**`, fanned out to every connected client, filtered by exact topic and
+client with `EveryTopic` (the domain's events and the reserved `w17.invalidate`),
+fanned out to every connected client, filtered by exact topic and
 by labels.
 
 **Configuration.**
@@ -410,7 +421,7 @@ the principal's labels. A client whose principal cannot be resolved receives not
 
 | ID | Guarantee | Test |
 |---|---|---|
-| I9.1 | Events MUST be forwarded by topic across one or several channels, through a single shared subscriber per channel. | `go/lib/restgw/w17events_eventbus_test.go` |
+| I9.1 | Events MUST be forwarded by topic across one or several channels, through a single shared subscriber per channel, the reserved `w17.invalidate` included. | `TestEventbusEventSource_ForwardsTheReservedInvalidate`, `go/lib/restgw/w17events_eventbus_test.go` |
 | I9.2 | The audience rule MUST hold: label filtering, unlabelled denied, unresolved principal denied, broadcast without isolation. | `TestEventbusEventSource_LabelFiltering`, `TestEventbusEventSource_UnlabelledEvent*`, `go/lib/restgw/w17events_eventbus_test.go` |
 | I9.3 | Every replica MUST receive every event. | `TestEventbusEventSource_EveryReplicaReceivesEveryEvent`, `go/lib/restgw/w17events_replicas_test.go` |
 | I9.4 | A failed open MUST drain what it opened, bounded by 10 s, without holding the client lock. | `TestEventbusEventSource_FailedOpenDrainsWhatItOpened`, `TestEventbusEventSource_PartialOpenDrainsWithoutHoldingTheHubLock`, `TestEventbusEventSource_FailedOpenDrainIsBoundedAtTenSeconds` |

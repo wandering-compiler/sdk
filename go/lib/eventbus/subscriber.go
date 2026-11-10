@@ -193,7 +193,9 @@ type HandlerFunc func(ctx context.Context, topic string, envelope []byte) error
 // per-channel Subscribe count at one even when multiple
 // subscriptions on the same channel use different filters.
 // Transport adapters may push the catch-all down (NATS subject
-// glob, Redis stream key) without affecting correctness.
+// glob, Redis stream key) without affecting correctness. `**` does not
+// include the reserved `w17.*` topics (see [MatchGlob]); the
+// /w17-events hub, which forwards them, subscribes with [EveryTopic].
 type Subscriber interface {
 	Subscribe(ctx context.Context, topicFilter string, handler HandlerFunc) error
 	Drain(ctx context.Context) error
@@ -232,9 +234,22 @@ type SubscriberFactory interface {
 // Empty filter matches empty topic only; empty topic matches
 // `**` or empty filter.
 //
+// **Reserved topics.** A topic whose first segment is `w17` (the
+// platform's own, such as [W17InvalidateTopic]) is matched only by a
+// filter whose first segment is literally `w17`, or by [EveryTopic]. A
+// wildcard never reaches it: those topics carry platform messages, not
+// the domain's envelope, and a catch-all domain subscriber that decodes
+// every delivery into its envelope cannot read them.
+//
 // The matcher is recursive over filter segments; `**` does
 // backtracking over the topic-segment split-points.
 func MatchGlob(filter, topic string) bool {
+	if filter == EveryTopic {
+		return true
+	}
+	if isReservedTopic(topic) && !isReservedTopic(filter) {
+		return false
+	}
 	if filter == "" {
 		return topic == ""
 	}
@@ -253,6 +268,24 @@ func MatchGlob(filter, topic string) bool {
 		return filter == topic
 	}
 	return matchSegments(strings.Split(filter, "."), strings.Split(topic, "."))
+}
+
+// EveryTopic is the topic filter that matches every topic on a channel,
+// the reserved `w17.*` topics included. Only a subscriber that reads the
+// platform's messages as well as the domain's — the gateway's /w17-events
+// hub — subscribes with it; a domain subscriber uses `**`, which leaves
+// the reserved topics out (see [MatchGlob]). `>` cannot be an emitted
+// topic ([ValidateTopic] refuses it), so the filter is never mistaken for
+// a literal.
+const EveryTopic = ">"
+
+// reservedTopicSegment is the first segment of every platform topic.
+const reservedTopicSegment = "w17"
+
+// isReservedTopic reports whether a topic (or a filter) starts with the
+// reserved `w17` segment.
+func isReservedTopic(s string) bool {
+	return s == reservedTopicSegment || strings.HasPrefix(s, reservedTopicSegment+".")
 }
 
 // matchSegments is MatchGlob's recursive worker. `**` at the

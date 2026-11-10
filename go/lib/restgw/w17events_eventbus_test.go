@@ -536,3 +536,40 @@ func TestEventbusEventSource_PartialOpenDrainsWithoutHoldingTheHubLock(t *testin
 		t.Fatal("Subscribe never returned after the drain completed")
 	}
 }
+
+// TestEventbusEventSource_ForwardsTheReservedInvalidate — the hub reads the
+// reserved `w17.invalidate` topic alongside the domain's events. A domain
+// subscriber's `**` leaves the reserved topics out (they are not the domain's
+// envelope), so the hub has to subscribe with eventbus.EveryTopic; with `**`
+// cache invalidation would never reach a browser.
+func TestEventbusEventSource_ForwardsTheReservedInvalidate(t *testing.T) {
+	bus := eventbus.NewMemoryBus()
+	source := restgw.NewEventbusEventSource(bus, []string{"default"}, rawTranscode, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/w17-events?topics=w17.invalidate,user.created", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		restgw.HandleW17Events(rec, req, source, 1*time.Hour)
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	if err := eventbus.EmitInvalidate(context.Background(), bus, "default", "accounts", "Account", nil); err != nil {
+		t.Fatalf("EmitInvalidate: %v", err)
+	}
+	if err := bus.Dispatch(context.Background(), "default", "user.created", wrapperspb.String(`{"id":"u-1"}`)); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	<-done
+
+	body := rec.Body.String()
+	for _, want := range []string{"event: w17.invalidate\n", "event: user.created\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q\n--- body ---\n%s", want, body)
+		}
+	}
+}
