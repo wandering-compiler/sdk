@@ -133,7 +133,7 @@ where
         }
         (out, Some(hook)) => {
             txscope::spawn_tracked(async move {
-                if let Err(e) = hook.await {
+                if let Err(e) = txscope::run_hook(hook).await {
                     observability::report_error(&format!("distx: on_commit work failed: {e}"));
                 }
             });

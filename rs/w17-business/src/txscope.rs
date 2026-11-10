@@ -15,11 +15,13 @@
 
 use std::{
     future::Future,
+    panic::AssertUnwindSafe,
     pin::Pin,
     sync::{LazyLock, Mutex},
     time::Duration,
 };
 
+use futures::FutureExt as _;
 use tokio_util::task::TaskTracker;
 
 use crate::{ctx::Ctx, observability};
@@ -95,8 +97,8 @@ impl Scope {
     }
 
     /// End the scope as committed and run the parked work in order. An error
-    /// in one piece does not stop the rest and does not escape: the
-    /// transaction has committed. What failed is returned for the caller to
+    /// or a panic in one piece does not stop the rest and does not escape:
+    /// the transaction has committed. What failed is returned for the caller to
     /// report.
     pub(crate) async fn run_committed(&self) -> Vec<String> {
         let hooks = {
@@ -110,7 +112,7 @@ impl Scope {
         };
         let mut failures = Vec::new();
         for h in hooks {
-            if let Err(e) = h.await {
+            if let Err(e) = run_hook(h).await {
                 failures.push(e);
             }
         }
@@ -122,6 +124,20 @@ impl Scope {
         let mut st = self.lock();
         st.ended = true;
         st.hooks.clear();
+    }
+}
+
+/// Run one piece of parked work to its end: its `Err`, or the text of a
+/// panic it raised, is returned for the caller to report — a panic never
+/// unwinds into the code that runs the work (a commit that landed, the
+/// rest of the hooks).
+pub(crate) async fn run_hook(hook: Hook) -> Result<(), String> {
+    match AssertUnwindSafe(hook).catch_unwind().await {
+        Ok(r) => r,
+        Err(p) => Err(format!(
+            "panicked: {}",
+            crate::server::panic_text(p.as_ref())
+        )),
     }
 }
 
