@@ -283,7 +283,11 @@ func (rc *redisConsumer) readLoop(ctx context.Context) error {
 	for ctx.Err() == nil {
 		res, err := rc.cfg.Redis.XReadGroup(ctx, &goredis.XReadGroupArgs{
 			Group: rc.group, Consumer: rc.consumer, Streams: []string{RedisStreamKey, ">"},
-			Count: 16, Block: time.Second,
+			// One entry per read: every entry a read returns is pending,
+			// and ages, from that read, so entries queued behind a slow
+			// Consume reached AckWait unstarted and another process's
+			// claimLoop took them over — consumed twice, never failed.
+			Count: 1, Block: time.Second,
 		}).Result()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -312,8 +316,7 @@ func (rc *redisConsumer) readLoop(ctx context.Context) error {
 			sleepCtx(ctx, time.Second)
 			continue
 		}
-		// The whole read is in flight at once: the entries after the first
-		// sit pending, idle, while the ones before them are served.
+		// The read is in flight until it is served.
 		for _, s := range res {
 			for _, m := range s.Messages {
 				rc.markInflight(m.ID)

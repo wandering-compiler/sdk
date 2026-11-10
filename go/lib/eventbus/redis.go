@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -746,12 +747,74 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 					done()
 				}
 			}()
+			var batch []goredis.XMessage
 			for _, stream := range streams {
-				for _, msg := range stream.Messages {
-					s.processMessage(bgCtx, h, msg.ID, msg.Values, 0)
-				}
+				batch = append(batch, stream.Messages...)
+			}
+			// The marks above are process-local: another replica's claim
+			// loop cannot see them, and every entry of the read ages from
+			// the read. Keep the idle time of the entries still queued
+			// fresh while the batch is served, so none of them looks
+			// abandoned to another replica before it has even started.
+			var started atomic.Int64
+			stopFresh := s.keepQueuedFresh(ctx, batch, &started)
+			defer stopFresh()
+			for i, msg := range batch {
+				started.Store(int64(i + 1))
+				s.processMessage(bgCtx, h, msg.ID, msg.Values, 0)
 			}
 		}()
+	}
+}
+
+// keepQueuedFresh re-claims, to this consumer, the entries of batch that
+// have not started yet (index >= *started), every third of the channel's
+// AckWait until the returned stop is called. XCLAIM with a zero min-idle
+// resets an entry's idle time without moving it, so an entry waiting its
+// turn behind a slow handler never reaches the AckWait another replica's
+// claim loop takes over at. RETRYCOUNT 1 keeps the delivery count of a
+// fresh read (the reader's own entries, read once) on every server; JUSTID
+// skips returning the payloads. A single-entry batch has nothing queued and
+// starts nothing.
+func (s *redisSubscription) keepQueuedFresh(ctx context.Context, batch []goredis.XMessage, started *atomic.Int64) func() {
+	if len(batch) < 2 {
+		return func() {}
+	}
+	_, ackWait := s.bus.retryFor(s.channel)
+	every := ackWait / 3
+	if every <= 0 {
+		every = time.Millisecond
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer recoverLoopTick(ctx, "eventbus redis keepQueuedFresh")
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			from := int(started.Load())
+			if from >= len(batch) {
+				return
+			}
+			args := []any{"XCLAIM", s.channel, s.group, s.bus.opts.ConsumerName, 0}
+			for _, m := range batch[from:] {
+				args = append(args, m.ID)
+			}
+			args = append(args, "RETRYCOUNT", 1, "JUSTID")
+			_ = s.bus.client.Do(ctx, args...).Err()
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
 	}
 }
 

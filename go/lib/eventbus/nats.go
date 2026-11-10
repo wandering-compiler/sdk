@@ -115,7 +115,8 @@ const DefaultConnectWait = 30 * time.Second
 // `<channel>.>` subject filter on first use). Topic → subject
 // suffix (emit on channel `default` with topic `user.created`
 // publishes to subject `default.user.created`). Subscriber
-// uses subject filter `<channel>.>` (catch-all) and applies the
+// filters on the subjects its topic filter can match (`<channel>.>`
+// for the catch-all, see natsFilterSubjects) and applies the
 // subscription's topic filter with MatchGlob before invoking the
 // handler. The generated subscribers register `**`, so they run
 // one consumer per channel and filter per event in dispatch.
@@ -753,12 +754,19 @@ const natsFanOutInactiveThreshold = 5 * time.Minute
 //     and replaying a channel's history into a browser presents stale events
 //     as if they had just happened. It also matches Redis's `$`, so the two
 //     adapters no longer answer this question differently.
-func natsConsumerConfig(mode DeliveryMode, name, channel string, maxDeliver int, ackWait time.Duration) jetstream.ConsumerConfig {
+//
+// The consumer reads only the subjects its topic filter can match
+// (natsFilterSubjects); MatchGlob still decides each delivery.
+func natsConsumerConfig(mode DeliveryMode, name, channel, topicFilter string, maxDeliver int, ackWait time.Duration) jetstream.ConsumerConfig {
 	cfg := jetstream.ConsumerConfig{
-		FilterSubject: channel + ".>",
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    maxDeliver,
-		AckWait:       ackWait,
+		AckPolicy:  jetstream.AckExplicitPolicy,
+		MaxDeliver: maxDeliver,
+		AckWait:    ackWait,
+	}
+	if subjects := natsFilterSubjects(channel, topicFilter); len(subjects) == 1 {
+		cfg.FilterSubject = subjects[0]
+	} else {
+		cfg.FilterSubjects = subjects
 	}
 	if mode == DeliveryFanOut {
 		cfg.Name = name
@@ -769,6 +777,55 @@ func natsConsumerConfig(mode DeliveryMode, name, channel string, maxDeliver int,
 	cfg.Durable = name
 	cfg.DeliverPolicy = jetstream.DeliverAllPolicy
 	return cfg
+}
+
+// natsFilterSubjects is the set of subjects a consumer for topicFilter on
+// channel reads, pushed down to the broker so a narrow subscription is not
+// delivered — and made to settle one by one — every message of the channel.
+//
+// A filter maps segment by segment: a literal stays, `*` stays (one token on
+// both sides), and a trailing `**` — zero or more segments — becomes the
+// prefix itself plus `<prefix>.>`. Anything the subject syntax cannot say
+// exactly (`**` before the last segment, a segment that is not a legal
+// subject token, the catch-alls `**` and EveryTopic, an empty filter) reads
+// the whole channel, `<channel>.>`, as before. The result is a superset of
+// what MatchGlob accepts, never a subset: the consume callback still applies
+// MatchGlob to every delivery, which is what keeps the reserved `w17.*`
+// topics away from a wildcard filter.
+func natsFilterSubjects(channel, topicFilter string) []string {
+	whole := []string{channel + ".>"}
+	if topicFilter == "" || topicFilter == "**" || topicFilter == EveryTopic {
+		return whole
+	}
+	segs := strings.Split(topicFilter, ".")
+	for i, seg := range segs {
+		switch {
+		case seg == "**" && i == len(segs)-1:
+			if i == 0 {
+				return whole
+			}
+			prefix := channel + "." + strings.Join(segs[:i], ".")
+			return []string{prefix, prefix + ".>"}
+		case seg == "*":
+		case !natsLiteralToken(seg):
+			return whole
+		}
+	}
+	return []string{channel + "." + topicFilter}
+}
+
+// natsLiteralToken reports whether seg is a non-empty subject token with no
+// wildcard, whitespace or control character.
+func natsLiteralToken(seg string) bool {
+	if seg == "" {
+		return false
+	}
+	for _, r := range seg {
+		if r == '*' || r == '>' || r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // natsConsumeHandle bundles the per-Subscribe state owned by
@@ -814,7 +871,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 
 	maxDeliver, ackWait := resolveChannelRetry(s.bus.opts.ChannelRetries, s.channel, s.bus.opts.DefaultMaxDeliver, s.bus.opts.DefaultAckWait)
 
-	consumerCfg := natsConsumerConfig(s.bus.opts.Delivery, consumerName, s.channel, maxDeliver, ackWait)
+	consumerCfg := natsConsumerConfig(s.bus.opts.Delivery, consumerName, s.channel, topicFilter, maxDeliver, ackWait)
 
 	// A dedicated DLQ stream receives poison messages past MaxDeliver so
 	// they're never silently dropped (parity with the Redis adapter's
@@ -856,12 +913,14 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		s.mu.Unlock()
 		defer s.wg.Done()
 
-		// The consumer reads the whole channel (`<channel>.>`), so the
-		// subscription's own topic filter is applied here, with the same
-		// MatchGlob the memory bus uses: a handler subscribed to `user.*`
-		// must not be handed `order.created`. The consumer is per filter
-		// (see consumerName), so a message outside it is simply settled —
-		// another subscription's consumer has its own copy.
+		// The consumer reads the subjects the filter can match
+		// (natsFilterSubjects), a superset when the filter has no exact
+		// subject form, so the subscription's own topic filter is applied
+		// here, with the same MatchGlob the memory bus uses: a handler
+		// subscribed to `user.*` must not be handed `order.created`, nor one
+		// on `**` a reserved `w17.*` topic. The consumer is per filter (see
+		// consumerName), so a message outside it is simply settled — another
+		// subscription's consumer has its own copy.
 		topic := strings.TrimPrefix(msg.Subject(), prefix)
 		if !MatchGlob(topicFilter, topic) {
 			_ = msg.Ack()
@@ -993,7 +1052,15 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		if err != nil {
 			return nil, fmt.Errorf("nats consumer %q: %w", consumerName, err)
 		}
-		cctx, err := consumer.Consume(onMsg, errHandler)
+		// One delivery in the client at a time. JetStream starts a message's
+		// AckWait when it hands the message to the client, and the callback
+		// runs the handlers one after another; with a prefetch buffer every
+		// message queued behind a slow handler aged past AckWait without
+		// ever being started, was redelivered, and ran twice although it
+		// never failed. With one message per pull, the next is requested
+		// only after the previous callback returned, so no delivery waits
+		// in the client: AckWait measures the handler's own attempt.
+		cctx, err := consumer.Consume(onMsg, errHandler, jetstream.PullMaxMessages(natsPullBatch))
 		if err != nil {
 			return nil, fmt.Errorf("nats consume: %w", err)
 		}
@@ -1047,6 +1114,11 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 	s.mu.Unlock()
 	return nil
 }
+
+// natsPullBatch is how many messages one pull asks for: one, so no message
+// sits in the client's buffer while its AckWait runs (see startConsume). The
+// cost is one broker round trip per message.
+const natsPullBatch = 1
 
 // natsConsumerMaybeLost reports whether a consume-loop error can mean the
 // broker no longer has this consumer: deleted with its stream, unknown to

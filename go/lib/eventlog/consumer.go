@@ -246,9 +246,16 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	return errors.Join(all...)
 }
 
+// consumeLoop fetches and consumes one batch at a time. JetStream starts a
+// message's AckWait when it delivers the message, so a fetch of several
+// made every batch queued behind a slow Consume age past AckWait without
+// being started: it was redelivered although it never failed, consumed
+// twice, and its delivery count — read as the attempt number — grew, so a
+// later single failure could dead-letter it early. With one message per
+// fetch the next is asked for only once the previous one is settled.
 func consumeLoop(ctx context.Context, cons jetstream.Consumer, r registered, cfg ConsumerConfig, dlq string) error {
 	for ctx.Err() == nil {
-		batch, err := cons.Fetch(16, jetstream.FetchMaxWait(time.Second))
+		batch, err := cons.Fetch(1, jetstream.FetchMaxWait(time.Second))
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

@@ -189,6 +189,10 @@ sees only what the envelope carries.
 **Purpose.** Broker transport with at-least-once delivery and a dead-letter
 stream. Channel → stream `<channel>` with subjects `<channel>.>`; topic → subject
 `<channel>.<topic>`; consumer name `<DurablePrefix>-<channel>[-<filter>][-<InstanceID>]`.
+A consumer reads only the subjects its topic filter can match: a literal or `*`
+segment maps to itself, a trailing `**` to `<prefix>` plus `<prefix>.>`; a filter
+the subject syntax cannot express exactly (`**`, `EveryTopic`, `**` before the last
+segment) reads `<channel>.>`.
 In the filter part letters and digits are kept, `.` becomes `_`, and every other
 byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other byte →
 `-xHH`), so distinct filters always get distinct consumers.
@@ -198,6 +202,7 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
 | `DSN` | required | must start with `nats://` or `tls://` |
+| `ConnectWait` | 0 → 30 s (`DefaultConnectWait`) | how long `NewNatsBus` retries a broker it cannot reach; negative → one attempt; a broker that answers and refuses fails at once |
 | `DurablePrefix` | required | prefixes every consumer name; letters, digits, `_` and `-` only, refused at construction otherwise |
 | `Delivery`, `InstanceID` | see I3 | — |
 | `DefaultMaxDeliver` | 0 → 3 | negative passed to JetStream unchanged |
@@ -210,6 +215,9 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 
 **Behaviour.**
 - Handler success → `Ack`; error → `Nak` → redelivery until `MaxDeliver`.
+- Each pull asks for one message, and the next pull goes out only after the
+  callback for the previous one returned, so no message waits in the client while
+  its `AckWait` runs: `AckWait` bounds the handler's own attempt.
 - On the final attempt a failed message is dead-lettered to stream `<channel>_dlq`
   (subjects `_dlq.<channel>[.<topic>]`) after claiming its terminal outcome in a
   broker-side KV bucket (`w17_eventbus_dlq_claims`, TTL 1 h), then acked.
@@ -245,17 +253,20 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 | I5.6 | `Close` MUST drain all subscribers, then close the connection; it MUST be idempotent and MUST NOT produce error-level callbacks for its own close. | `TestNatsBus_CloseAtShutdownIsNotAnError`, `TestNatsBus_CloseIdempotent_Embedded` |
 | I5.7 | A broker outage MUST be logged. | `TestNatsBus_ABrokerOutageIsStillHeard` |
 | I5.8 | Consume-loop errors MUST be logged. | `TestNatsConsumeFailureIsLogged` |
-| I5.9 | `NewNatsBus` MUST fail when the broker is unreachable at start. | `TestNewNatsBus_UnreachableBrokerFails` |
+| I5.9 | `NewNatsBus` MUST retry a broker it cannot reach for `ConnectWait` and then fail; a broker that refuses MUST fail at once. | `TestNewNatsBus_UnreachableBrokerFails` (`ConnectWait: -1`), `TestNewNatsBus_GivesUpAfterConnectWait_WithoutTheToken` |
 | I5.10 | After a stream or consumer is lost under a live bus (stream deleted, broker recreated without its JetStream state), emit and consume MUST recover without a process restart. | `TestNatsBus_RecoversFromStreamLoss_Embedded`, `TestNatsBus_EmitOnlyProcessRecreatesALostStream_Embedded`, `TestNatsBus_RecoversFromBrokerRecreated_Embedded` |
 | I5.11 | After the client stops reconnecting, the bus MUST log a "closed for good" line, report an error, and fail every later `Dispatch` at once through `OnEmitFailure`. | `TestNatsBus_ClosedForGoodIsSaidAndFailsDispatchAtOnce` |
 | I5.12 | Channel and topic names MUST be valid on every transport or be refused before use; `DurablePrefix` and the keys of `ChannelRetries` MUST be checked at construction. | `TestChannelNameRefusedOnEveryTransport`, `TestDispatch_EmptyTopicRefusedOnEveryTransport`, `TestBusConstruction_RefusesInvalidNames` |
 | I5.13 | Distinct topic filters on one channel MUST map to distinct consumer names; a plain dotted filter keeps its name. | `TestSanitizeDurableSuffix_Injective`, `TestSanitizeDurableSuffix`, `TestTopicFilter_Nats_Embedded` |
 | I5.14 | Every channel stream and dead-letter stream the bus ensures MUST carry the configured retention limits, or the defaults when none are configured. | `TestNatsBus_StreamRetention_Embedded` |
 | I5.15 | During a broker outage one `Dispatch` MUST fail within `PublishTimeout` rather than hold the committing goroutine for the client's own timeout. | `TestNatsBus_PublishTimeoutBoundsOutage_Embedded` |
+| I5.16 | A subscription's consumer MUST be delivered only the subjects its topic filter can match, never the whole channel for a filter with an exact subject form. | `TestNatsBus_NarrowFilterReadsOnlyItsSubjects_Embedded`, `TestNatsFilterSubjects` |
+| I5.17 | A message delivered to the client MUST NOT age past `AckWait` before its handler starts: one slow handler MUST NOT cause the messages after it to be redelivered. | `TestNatsBus_QueuedDeliveriesDoNotOverrunAckWait_Embedded` |
 
 **Deliberate limits.**
 - No ordering under retry: a Nak'd message is redelivered after later ones. First deliveries within one process arrive in stream order; across queue-mode replicas there is no ordering.
 - No `InProgress` heartbeat: a handler that runs past `AckWait` can execute concurrently with its redelivery. Handlers must be idempotent.
+- One message per pull costs one broker round trip per message; throughput per consumer is bounded by it.
 - Retention is set by the SDK, not by the operator: every time the bus ensures a stream it
   writes the configured limits (or the defaults), replacing limits set on the broker by other
   means. Set `MaxAge: -1` for no age limit.
@@ -271,8 +282,12 @@ byte is escaped behind `-` (`*` → `-s`, `_` → `-u`, `-` → `-d`, any other 
 **Purpose.** Broker transport on Redis Streams. Channel → stream key `<channel>`;
 each entry `{topic, payload}`; DLQ stream `<channel>.dlq`. A consume loop reads
 batches with `XREADGROUP` (block 1 s) and `XACK`s on success; failures stay pending.
+While a read of several entries is served, the entries not yet started are
+re-claimed to the reader (`XCLAIM … 0 … RETRYCOUNT 1 JUSTID`) every third of
+`AckWait`, so their idle time never reaches `AckWait` while they wait their turn.
 A claim loop runs every `AckWait`, re-claims pending entries idle at least
-`AckWait` (up to 100 per page), and either re-runs the handler or, at
+`AckWait` (pages of 100, up to 10 pages per tick, each page starting after the
+last entry of the previous one), and either re-runs the handler or, at
 `MaxDeliver`, copies to the DLQ and acks. Each subscription's topic filter is applied with
 `MatchGlob`; a non-matching entry is acknowledged without invoking the handler. The catch-all
 filter (`**` or empty) reads through the channel's group; a narrower filter reads through a group
@@ -306,14 +321,17 @@ a timeout, before returning. Each append trims its stream to the retention limit
 | I6.4 | Drain of one subscriber MUST leave others running; `Close` MUST be idempotent. | `TestRedisBus_DrainOneOfTwoSubscribers_Embedded`, `TestRedisBus_CloseIdempotent_Embedded` |
 | I6.5 | `NewRedisBus` MUST fail when the broker is unreachable at construction, with any DSN password redacted from the error. | `TestNewRedisBus_UnreachableBrokerFails` |
 | I6.6 | Consume-loop and pending-scan errors MUST be logged and reported once per outage, and the recovery logged. | `TestRedisSubscriber_LoopFailuresAreReported` |
-| I6.7 | `ReadBatch` and pending pages larger than 100 entries MUST be handled without loss. | `TestRedisBus_ReadBatchAbove100LosesNothing`; pending pages: holds by construction (every claim tick re-reads the pending list from its start); no test |
+| I6.7 | `ReadBatch` and pending lists larger than one page MUST be handled without loss: a claim tick pages on past entries that are not due yet. | `TestRedisBus_ReadBatchAbove100LosesNothing`, `TestRedisBus_BackoffDoesNotHideDueEntries_Embedded` |
 | I6.8 | A narrower topic filter MUST read through its own consumer group, so an entry it skips still reaches a sibling subscription on the same channel whose filter matches it. | `TestTopicFilter_Redis_Embedded` |
 | I6.9 | Each append MUST trim the stream to the configured age and count limits, or to the default age when none are configured. | `TestRedisBus_StreamRetention_Embedded`, `TestRedisBus_DLQRetention_Embedded` |
 | I6.10 | One `Dispatch` MUST fail within `PublishTimeout` when the broker does not answer. | `TestRedisBus_PublishTimeoutBoundsAHangingBroker` |
+| I6.11 | An entry queued behind a slow handler in one read MUST NOT be taken over by another replica's claim loop before it starts. | `TestRedisBus_QueuedEntryIsNotTakenOverByAnotherReplica` |
 
 **Deliberate limits.**
 - Ordering is sequential within one consume loop; retries come later from the claim loop, out of order.
 - A failed read backs off 200 ms.
+- Redis has no subject filter: every subscription's group reads the whole stream and settles the entries outside its filter.
+- The queued-entry refresh is a re-claim to this reader: an entry another replica took over in a refresh tick that came late is taken back.
 - Trimming is approximate and happens on append: a stream can hold somewhat more than its limits,
   and an idle stream keeps entries past their age until the next append. With both an age and a
   count limit, the count trim is a best-effort second command.
@@ -788,7 +806,9 @@ it; the batcher builds the envelope: the request and response by their redaction
 event stream through. A purpose is a method, so a consumer cannot be registered for the
 wrong one by mistake. Each registered consumer reads from its own durable consumer on the
 `W17_REQUESTS` stream and receives only the records of its purpose, decoded with the
-method's own types when the binary links them.
+method's own types when the binary links them. Each consumer fetches (JetStream) or
+reads (Redis) one batch at a time and asks for the next only once it settled the
+previous one, so no batch waits in the process while its `AckWait` runs.
 
 **Configuration.**
 
@@ -815,6 +835,7 @@ method's own types when the binary links them.
 | I21.6 | `Serve` MUST refuse an empty DSN and, with NATS down, wait for it until its context ends. | `TestConsumers_ServeNeedsADSNAndStopsWithItsContext` |
 | I21.7 | On Redis, I21.1–I21.3 MUST hold as on JetStream: each consumer its purpose and its own group, a failed batch offered again after its backoff without another consumer receiving it twice, MaxDeliver failures moved to the dead letter stream with the reason and subject and then acknowledged; a batch on a subject the consumer does not read MUST be acknowledged without calling it. | `TestRedisConsumers_EachItsPurposeAndItsOwnProgress`, `TestRedisConsumers_DeadLetterAfterMaxDeliver`, `TestRedisConsumers_AnotherSubjectIsNotOffered`, `TestSubjectMatches` |
 | I21.8 | `Open` and `Serve` MUST pick the backend by the DSN's scheme. | `TestRedisDSN_OpenAndServe` |
+| I21.9 | A batch MUST NOT be offered again, nor have its attempt count raised, because it waited behind a slow Consume: on JetStream, and on Redis across processes. | `TestConsumers_QueuedBatchesAreNotRedelivered`, `TestConsumers_QueuedBatchesAreNotRedelivered_Redis` |
 
 **Deliberate limits.**
 - Delivery is at least once: a consumer deduplicates on the record id.
