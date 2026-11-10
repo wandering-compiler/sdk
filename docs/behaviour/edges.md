@@ -572,7 +572,7 @@ close detection for write-only sockets.
 
 ## E16. Browser stream auth: tickets
 
-**Code.** `go/lib/restgw/ws_auth.go` — `NewWSAuth`, `WSAuthConfig`, `WSAuthTicketPrincipal`, `MaxTicketAuthorizationBytes`; `go/lib/restgw/ticket.go` — `MemoryTicketStore`, `NewMemoryTicketStore`, `WithMaxTickets`, `WithMaxTicketBytes`, `ErrTicketStoreFull`, `NewTicketIssuer`, `TicketIssuerConfig`.
+**Code.** `go/lib/restgw/ws_auth.go` — `NewWSAuth`, `WSAuthConfig`, `WSAuthTicketPrincipal`, `MaxTicketAuthorizationBytes`; `go/lib/restgw/ticket.go` — `MemoryTicketStore`, `NewMemoryTicketStore`, `WithMaxTickets`, `WithMaxTicketBytes`, `WithMaxTicketsPerAddress`, `ErrTicketStoreFull`, `ErrTicketAddressFull`, `NewTicketIssuer`, `TicketIssuerConfig`.
 
 **Purpose.** Browsers cannot set `Authorization` on `EventSource` or `WebSocket`; they trade it
 for a one-shot ticket and pass `?ticket=`.
@@ -587,9 +587,10 @@ for a one-shot ticket and pass `?ticket=`.
 | `MemoryTicketStore` janitor | every 60 s | A store at a limit also sweeps expired tickets itself before refusing |
 | `WithMaxTickets(n)` | `DefaultMaxTickets` = 10 000 outstanding tickets | `n <= 0` keeps the default |
 | `WithMaxTicketBytes(n)` | `DefaultMaxTicketBytes` = 16 MiB (ticket id, label keys and values, plus a fixed per-entry overhead) | `n <= 0` keeps the default |
+| `WithMaxTicketsPerAddress(n)` | `DefaultMaxTicketsPerAddress` = 64 outstanding tickets per client address | `n <= 0` keeps the default. The address is `ClientAddrFrom` of `Issue`'s context: the one `ClientAddrMiddleware` resolved behind the trusted proxies, else the connection's peer (the issuer puts it there). `Issue` with no address in its context is bounded by the store limits only |
 | `MaxTicketAuthorizationBytes` | 8 KiB, fixed | A longer `Authorization` value is refused by `WSAuthTicketPrincipal` with `ErrWSAuthTicketHeaderTooLarge` |
 | Issuer method | POST | Anything else → 405 with `Allow`, code `UNIMPLEMENTED` |
-| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431 with code `INVALID_ARGUMENT`; full store → 503 with `Retry-After: 1`; any other store failure → 500. Every refusal is the JSON error envelope (E3) |
+| Issuer statuses | 200 with the ticket | Principal failure → 401; oversized `Authorization` → 431 with code `INVALID_ARGUMENT`; address at its cap → 429 `RESOURCE_EXHAUSTED` with `Retry-After: 1`; full store → 503 with `Retry-After: 1`; any other store failure → 500. Every refusal is the JSON error envelope (E3) |
 
 **Shares.** E5 (`RequireAuth`), E17 (the promoted header keeps re-auth working), E6 (the
 promotion marker header forces a cache bypass on probes).
@@ -608,13 +609,16 @@ promotion marker header forces a cache bypass on probes).
 | E16.8 | A full store MUST refuse a new ticket with `ErrTicketStoreFull`, answered by the issuer as 503 with `Retry-After`; it MUST NOT evict a ticket already handed out | `TestTicketIssuer_FloodIsBounded`, `TestTicketStore_RedeemFreesCapacity` |
 | E16.9 | An `Authorization` value longer than `MaxTicketAuthorizationBytes` MUST be answered 431 and store nothing; a value at the limit is accepted | `TestTicketIssuer_OversizedAuthorization` |
 | E16.10 | Every issuer refusal MUST be the JSON error envelope with a catalog sentence; the detail goes to observability | `TestTicketIssuer_ErrorsAreTheEnvelope` |
+| E16.11 | One client address MUST NOT be able to fill the default store: it holds at most `DefaultMaxTicketsPerAddress` outstanding tickets, the next is refused 429 with `Retry-After` while other addresses keep getting tickets, and a redeemed or expired ticket gives its slot back. The address is the resolved client behind trusted proxies; an untrusted peer cannot choose one by `X-Forwarded-For`. A refusal at the cap looks at that address's own tickets only, never sweeps the store | `TestTicketIssuer_OneAddressCannotFillTheStore`, `TestTicketIssuer_PerAddressCapUsesTheResolvedClient` |
 
 **Deliberate limits.**
 - `MemoryTicketStore` is per process: issuer and redeemer must be the same replica.
 - `WSAuthTicketPrincipal` records only `Authorization`; cookie-only sessions cannot obtain
   tickets.
 - The issuer does not validate the credential (redeem does), so tickets are minted for any
-  request that carries one; the store limits, not validation, bound what that costs.
+  request that carries one; the store limits, not validation, bound what that costs, and the
+  per-address share (E16.11) keeps one address from spending them all. Many addresses together
+  can still fill the store until the TTL frees it.
 - A full store delays new tickets until redeems or the TTL free room; it does not make room by
   evicting.
 

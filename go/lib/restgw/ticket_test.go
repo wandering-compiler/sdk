@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -185,6 +187,9 @@ func TestTicketIssuer_FloodIsBounded(t *testing.T) {
 		rec := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
 		r.Header.Set("Authorization", "Bearer not-validated")
+		// Many addresses: one address alone stops at its own cap
+		// (TestTicketIssuer_OneAddressCannotFillTheStore).
+		r.RemoteAddr = fmt.Sprintf("198.51.100.%d:1234", i)
 		issuer.ServeHTTP(rec, r)
 		switch rec.Code {
 		case http.StatusOK:
@@ -263,5 +268,105 @@ func TestTicketIssuer_OversizedAuthorization(t *testing.T) {
 	ok.Header.Set("Authorization", strings.Repeat("x", restgw.MaxTicketAuthorizationBytes))
 	if _, err := restgw.WSAuthTicketPrincipal(ok); err != nil {
 		t.Fatalf("Authorization at the limit refused: %v", err)
+	}
+}
+
+// One address MUST NOT be able to fill the store: the issuer mints before the
+// credential is checked, so without a per-address cap one unauthenticated
+// client flooding the issuer would leave every other browser on the replica
+// without a ticket (503) for as long as it kept going. Each address holds at
+// most DefaultMaxTicketsPerAddress outstanding tickets; the next is refused
+// with 429 and Retry-After, another address is unaffected, and a redeemed
+// ticket gives the address its slot back.
+func TestTicketIssuer_OneAddressCannotFillTheStore(t *testing.T) {
+	store := restgw.NewMemoryTicketStore()
+	defer store.Close()
+	issuer := restgw.NewTicketIssuer(restgw.TicketIssuerConfig{
+		Principal: restgw.WSAuthTicketPrincipal,
+		Store:     store,
+	})
+	post := func(addr, auth string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
+		r.Header.Set("Authorization", auth)
+		r.RemoteAddr = addr
+		issuer.ServeHTTP(rec, r)
+		return rec
+	}
+	var first string
+	issued, limited := 0, 0
+	for i := 0; i < restgw.DefaultMaxTickets+5; i++ {
+		rec := post("203.0.113.66:1234", "x")
+		switch rec.Code {
+		case http.StatusOK:
+			issued++
+			if first == "" {
+				var body struct{ Ticket string }
+				_ = json.Unmarshal(rec.Body.Bytes(), &body)
+				first = body.Ticket
+			}
+		case http.StatusTooManyRequests:
+			limited++
+			if rec.Header().Get("Retry-After") == "" {
+				t.Fatal("429 without Retry-After")
+			}
+		default:
+			t.Fatalf("flood request %d: status %d", i, rec.Code)
+		}
+	}
+	if issued != restgw.DefaultMaxTicketsPerAddress {
+		t.Fatalf("one address got %d tickets, want its cap %d", issued, restgw.DefaultMaxTicketsPerAddress)
+	}
+	if rec := post("198.51.100.7:5555", "Bearer a-real-session"); rec.Code != http.StatusOK {
+		t.Fatalf("another address after the flood: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if _, err := store.Redeem(context.Background(), first); err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if rec := post("203.0.113.66:1234", "x"); rec.Code != http.StatusOK {
+		t.Fatalf("after a redeem the flooding address got %d, want its freed slot", rec.Code)
+	}
+	if rec := post("203.0.113.66:1234", "x"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the freed slot was given twice: %d", rec.Code)
+	}
+}
+
+// Behind a trusted proxy the issuer counts the address ClientAddrMiddleware
+// resolved, not the proxy's: clients behind one terminator do not share a
+// cap, and a client cannot pick its own address by sending X-Forwarded-For to
+// a peer that is not trusted.
+func TestTicketIssuer_PerAddressCapUsesTheResolvedClient(t *testing.T) {
+	store := restgw.NewMemoryTicketStore(restgw.WithMaxTicketsPerAddress(1))
+	defer store.Close()
+	proxy := netip.MustParsePrefix("10.0.0.0/8")
+	h := restgw.ClientAddrMiddleware([]netip.Prefix{proxy})(restgw.NewTicketIssuer(restgw.TicketIssuerConfig{
+		Principal: restgw.WSAuthTicketPrincipal,
+		Store:     store,
+	}))
+	post := func(peer, xff string) int {
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/ws/ticket", nil)
+		r.Header.Set("Authorization", "x")
+		r.RemoteAddr = peer
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	if c := post("10.1.1.1:1", "203.0.113.1"); c != http.StatusOK {
+		t.Fatalf("client A: %d", c)
+	}
+	if c := post("10.1.1.1:1", "203.0.113.2"); c != http.StatusOK {
+		t.Fatalf("client B behind the same proxy shares A's cap: %d", c)
+	}
+	if c := post("10.1.1.1:1", "203.0.113.1"); c != http.StatusTooManyRequests {
+		t.Fatalf("client A's second ticket: %d, want 429", c)
+	}
+	if c := post("192.0.2.9:1", "203.0.113.50"); c != http.StatusOK {
+		t.Fatalf("untrusted peer: %d", c)
+	}
+	if c := post("192.0.2.9:1", "203.0.113.51"); c != http.StatusTooManyRequests {
+		t.Fatalf("an untrusted peer chose a new address by X-Forwarded-For: %d", c)
 	}
 }

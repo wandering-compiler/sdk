@@ -40,6 +40,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"google.golang.org/grpc/codes"
+
+	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 )
 
 // ErrTicketInvalid is returned when the ticket is unknown,
@@ -62,6 +64,11 @@ type TicketStore interface {
 // 503 with Retry-After: tickets live for seconds, so capacity returns quickly.
 var ErrTicketStoreFull = errors.New("restgw: ticket store full")
 
+// ErrTicketAddressFull is returned by Issue when the client address the
+// ticket is asked for (ClientAddrFrom of Issue's context) already holds its
+// share of outstanding tickets. The issuer answers 429 with Retry-After.
+var ErrTicketAddressFull = errors.New("restgw: too many outstanding tickets for this address")
+
 // Default limits of the in-memory store. The issuer mints a ticket for any
 // request that carries a credential, before that credential is validated
 // (validation happens at redeem time), so the store must not trust its
@@ -74,6 +81,12 @@ const (
 	// tickets: ticket id + label keys and values + a fixed per-entry
 	// overhead (ticketEntryOverhead).
 	DefaultMaxTicketBytes = 16 << 20
+	// DefaultMaxTicketsPerAddress bounds the outstanding tickets of one
+	// client address, so no single address can fill the store and starve
+	// every other browser on the replica. A browser redeems a ticket within
+	// moments of getting it, so a legitimate address rarely holds more than
+	// a handful; the cap leaves room for many clients behind one NAT.
+	DefaultMaxTicketsPerAddress = 64
 )
 
 // ticketEntryOverhead approximates the per-entry cost that is not label
@@ -103,22 +116,39 @@ func WithMaxTicketBytes(n int64) MemoryTicketStoreOption {
 	}
 }
 
+// WithMaxTicketsPerAddress sets how many outstanding tickets one client
+// address may hold. n <= 0 keeps the default.
+func WithMaxTicketsPerAddress(n int) MemoryTicketStoreOption {
+	return func(s *MemoryTicketStore) {
+		if n > 0 {
+			s.maxPerAddr = n
+		}
+	}
+}
+
 // NewMemoryTicketStore builds the in-process default. Background
 // janitor evicts expired entries every minute; Issue also sweeps
 // expired entries itself when the store is at a limit. Call Close on
 // shutdown to stop the janitor (optional — usable without).
 //
 // Limits: at most DefaultMaxTickets outstanding tickets holding at most
-// DefaultMaxTicketBytes (override with WithMaxTickets / WithMaxTicketBytes).
+// DefaultMaxTicketBytes (override with WithMaxTickets / WithMaxTicketBytes),
+// and at most DefaultMaxTicketsPerAddress of them for one client address
+// (WithMaxTicketsPerAddress). The address is ClientAddrFrom of Issue's
+// context — NewTicketIssuer always puts one there — and a ticket stops
+// counting against it once it is redeemed or expired. Issue with no address
+// in its context (a programmatic caller) is bounded by the store limits only.
 // When full, Issue refuses with ErrTicketStoreFull rather than evicting:
 // evicting would let new requests cancel tickets already handed to other
 // clients, while refusing only delays new ones until the TTL frees room.
 func NewMemoryTicketStore(opts ...MemoryTicketStoreOption) *MemoryTicketStore {
 	s := &MemoryTicketStore{
 		entries:    make(map[string]memoryTicket),
+		byAddr:     make(map[string][]string),
 		stop:       make(chan struct{}),
 		maxEntries: DefaultMaxTickets,
 		maxBytes:   DefaultMaxTicketBytes,
+		maxPerAddr: DefaultMaxTicketsPerAddress,
 		now:        time.Now,
 	}
 	for _, o := range opts {
@@ -137,6 +167,10 @@ type MemoryTicketStore struct {
 	bytes      int64
 	maxEntries int
 	maxBytes   int64
+	// byAddr lists the outstanding tickets of each client address, at most
+	// maxPerAddr long; an address with none has no key.
+	byAddr     map[string][]string
+	maxPerAddr int
 	now        func() time.Time
 	stop       chan struct{}
 	stopOnce   sync.Once
@@ -146,6 +180,7 @@ type memoryTicket struct {
 	labels    map[string]string
 	expiresAt time.Time
 	size      int64
+	addr      string
 }
 
 // Issue mints a 32-byte URL-safe random ticket, stores it +
@@ -153,8 +188,10 @@ type memoryTicket struct {
 // fetch → WS-connect round-trip is comfortably under).
 //
 // Returns ErrTicketStoreFull when storing the ticket would exceed the
-// entry or byte limit even after expired tickets are swept.
-func (s *MemoryTicketStore) Issue(_ context.Context, labels map[string]string, ttl time.Duration) (string, error) {
+// entry or byte limit even after expired tickets are swept, and
+// ErrTicketAddressFull when the client address in ctx (ClientAddrFrom)
+// already holds its cap of unexpired tickets.
+func (s *MemoryTicketStore) Issue(ctx context.Context, labels map[string]string, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		ttl = 30 * time.Second
 	}
@@ -175,17 +212,29 @@ func (s *MemoryTicketStore) Issue(_ context.Context, labels map[string]string, t
 			size += int64(len(k) + len(v))
 		}
 	}
+	addr := ClientAddrFrom(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
+	if addr != "" && len(s.byAddr[addr]) >= s.maxPerAddr {
+		// Only this address's own tickets are looked at: a flooding
+		// address costs O(its cap) per refusal, never a sweep of the store.
+		s.reapAddrLocked(addr, now)
+		if len(s.byAddr[addr]) >= s.maxPerAddr {
+			return "", ErrTicketAddressFull
+		}
+	}
 	if !s.fitsLocked(size) {
 		s.reapExpiredLocked(now)
 		if !s.fitsLocked(size) {
 			return "", ErrTicketStoreFull
 		}
 	}
-	s.entries[ticket] = memoryTicket{labels: copied, expiresAt: now.Add(ttl), size: size}
+	s.entries[ticket] = memoryTicket{labels: copied, expiresAt: now.Add(ttl), size: size, addr: addr}
 	s.bytes += size
+	if addr != "" {
+		s.byAddr[addr] = append(s.byAddr[addr], ticket)
+	}
 	return ticket, nil
 }
 
@@ -215,10 +264,35 @@ func (s *MemoryTicketStore) Redeem(_ context.Context, ticket string) (map[string
 	return entry.labels, nil
 }
 
-// deleteLocked removes one entry and releases its bytes. Caller holds s.mu.
+// deleteLocked removes one entry and releases its bytes and its address's
+// slot. Caller holds s.mu.
 func (s *MemoryTicketStore) deleteLocked(ticket string, e memoryTicket) {
 	delete(s.entries, ticket)
 	s.bytes -= e.size
+	if e.addr == "" {
+		return
+	}
+	list := s.byAddr[e.addr]
+	for i, t := range list {
+		if t == ticket {
+			list = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	if len(list) == 0 {
+		delete(s.byAddr, e.addr)
+	} else {
+		s.byAddr[e.addr] = list
+	}
+}
+
+// reapAddrLocked drops the expired tickets of one address. Caller holds s.mu.
+func (s *MemoryTicketStore) reapAddrLocked(addr string, now time.Time) {
+	for _, t := range append([]string(nil), s.byAddr[addr]...) {
+		if e, ok := s.entries[t]; ok && now.After(e.expiresAt) {
+			s.deleteLocked(t, e)
+		}
+	}
 }
 
 // Close stops the background janitor. Idempotent; safe to
@@ -276,9 +350,17 @@ type TicketIssuerConfig struct {
 // NewTicketIssuer returns the http.Handler the issuer mounts
 // at the configured path. Accepts only POST (other verbs →
 // 405 with Allow header). Principal failure → 401 (431 for
-// ErrWSAuthTicketHeaderTooLarge); a full store
+// ErrWSAuthTicketHeaderTooLarge); an address at its cap
+// (ErrTicketAddressFull) → 429 with Retry-After; a full store
 // (ErrTicketStoreFull) → 503 with Retry-After; other Store
 // failures → 500.
+//
+// The store is asked with the caller's address in the context
+// ([ClientAddrFrom]): the one [ClientAddrMiddleware] resolved behind the
+// trusted proxies when it runs in front, else the connection's peer. The
+// issuer mints before the credential is checked (redeem checks it), so this
+// per-address share is what keeps one unauthenticated client from filling
+// the store and denying tickets to every other browser.
 func NewTicketIssuer(cfg TicketIssuerConfig) http.Handler {
 	if cfg.Principal == nil {
 		panic("restgw: TicketIssuerConfig.Principal is required")
@@ -298,6 +380,9 @@ func NewTicketIssuer(cfg TicketIssuerConfig) http.Handler {
 		// Every refusal below is the standard JSON error envelope, like
 		// any other answer from this gateway, so a client that parses
 		// errors one way keeps working on this route.
+		if ClientAddrFrom(r.Context()) == "" {
+			r = r.WithContext(context.WithValue(r.Context(), clientAddrCtxKey{}, ratelimit.HTTPClientAddr(r, nil)))
+		}
 		labels, err := cfg.Principal(r)
 		if err != nil {
 			if errors.Is(err, ErrWSAuthTicketHeaderTooLarge) {
@@ -309,6 +394,11 @@ func NewTicketIssuer(cfg TicketIssuerConfig) http.Handler {
 		}
 		ticket, err := cfg.Store.Issue(r.Context(), labels, cfg.TTL)
 		if err != nil {
+			if errors.Is(err, ErrTicketAddressFull) {
+				w.Header().Set("Retry-After", "1")
+				WriteRefusal(r.Context(), w, codes.ResourceExhausted, "ticket issuer: "+err.Error())
+				return
+			}
 			if errors.Is(err, ErrTicketStoreFull) {
 				w.Header().Set("Retry-After", "1")
 				WriteRefusal(r.Context(), w, codes.Unavailable, "ticket issuer: "+err.Error())
