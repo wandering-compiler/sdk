@@ -28,9 +28,10 @@ describe("credentials and reserved keys", () => {
     "authorization", "Authorization", "cookie", "set-cookie", "proxy-authorization", "x-w17-credential",
     "x-api-key", "x-auth-token", "x-amz-security-token", "x-session-id", "x-csrf-token", "x-client-secret",
     "grpcgateway-cookie", "grpcgateway-authorization", "my.jwt", "x-apikey",
+    "x-hub-signature", "x-access-key", "x-signing-key", "x-user-pass", "x-user-pwd", "x-otp", "x-bearer",
   ])("%s is stripped", (k) => expect(events.reservedMetadataKey(k)).toBe(true));
 
-  it.each(["x-author-id", "x-w17-scope-session_id", "x-w17-user", "w17-label-token_kind", "traceparent", "w17-language"])(
+  it.each(["x-author-id", "x-w17-scope-session_id", "x-w17-user", "w17-label-token_kind", "traceparent", "w17-language", "x-keyboard-layout", "x-passenger-id"])(
     "%s travels",
     (k) => expect(events.reservedMetadataKey(k)).toBe(false),
   );
@@ -53,6 +54,11 @@ describe("context data", () => {
     });
     expect(events.metadataFromContext(ctx)).toEqual({ "x-w17-user": "first", "w17-label-t": "a", "w17-language": "cs" });
     expect(events.labelsFromContext(ctx)).toEqual({ t: "a" });
+  });
+
+  it("an empty last value is skipped", () => {
+    const ctx = new Context({ incoming: [["w17-language", "cs"], ["w17-language", ""], ["x-a", " "]] });
+    expect(events.metadataFromContext(ctx)).toEqual({ "w17-language": "cs", "x-a": " " });
   });
 
   it("incoming first, outgoing second, never merged", () => {

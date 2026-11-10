@@ -23,6 +23,7 @@ EMIT = Emit(
     "authorization", "Authorization", "cookie", "set-cookie", "proxy-authorization", "x-w17-credential",
     "x-api-key", "x-auth-token", "x-amz-security-token", "x-session-id", "x-csrf-token", "x-client-secret",
     "grpcgateway-cookie", "grpcgateway-authorization", "my.jwt", "x-apikey",
+    "x-hub-signature", "x-access-key", "x-signing-key", "x-user-pass", "x-user-pwd", "x-otp", "x-bearer",
 ])
 def test_credentials_are_stripped(key):
     assert events.reserved_metadata_key(key)
@@ -30,6 +31,7 @@ def test_credentials_are_stripped(key):
 
 @pytest.mark.parametrize("key", [
     "x-author-id", "x-w17-scope-session_id", "x-w17-user", "w17-label-token_kind", "traceparent", "w17-language",
+    "x-keyboard-layout", "x-passenger-id",
 ])
 def test_ordinary_and_gateway_owned_keys_travel(key):
     assert not events.reserved_metadata_key(key)
@@ -50,6 +52,11 @@ def test_metadata_first_for_gateway_owned_last_for_others():
     md = events.metadata_from_context(ctx)
     assert md == {"x-w17-user": "first", "w17-label-t": "a", "w17-language": "cs"}
     assert events.labels_from_context(ctx) == {"t": "a"}
+
+
+def test_an_empty_last_value_is_skipped():
+    ctx = Context(incoming=[("w17-language", "cs"), ("w17-language", ""), ("x-a", " ")])
+    assert events.metadata_from_context(ctx) == {"w17-language": "cs", "x-a": " "}
 
 
 def test_incoming_first_outgoing_second_never_merged():
