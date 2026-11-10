@@ -25,6 +25,8 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 | Observability bootstrap (S19) | Panic containment and recovery (S3, S8, S21) | A panic is reported with its stack; the client sees only a generic message. | `TestRecoveryUnaryInterceptor_ReportsTheStackAndTellsTheClientNothing`, `TestRecoveryUnaryInterceptor_RecoversPanic`, `TestConn_UnaryPanicBecomesInternalAndTheProcessSurvives` |
 | Error and event reporting (S20) | Concurrent requests | Each reported event carries only its own request's context and breadcrumbs: the recovery interceptors, the HTTP panic middleware and MCP tool calls give each request its own scope, and without a scope no breadcrumb is recorded. | `TestReportError_DoesNotCarryAnotherRequestsBreadcrumbs`, `TestRequestScope_KeepsBreadcrumbsPerRequest`, `TestRecoveryInterceptors_GiveEachRequestItsOwnScope` |
 | Observability bootstrap (S19) | Several supervisors in one process (tests, composed binaries) | One init per process; a second supervisor with the same configuration shares it and one with a different configuration is refused (`ErrHeld`), so state is never swapped under running components. | `TestRun_SecondSupervisorDoesNotSwapObservability`, `TestAcquire_HeldStateIsNotReplaced`, `TestAcquire_SameConfigSharesUntilLastRelease` |
+| In-process gRPC bridge (S21) | Client dial retry (S18.12) | A handler's own `UNAVAILABLE` runs the handler once in a composed binary (no retry layer) and once across a real hop (marked answered, not replayed): the two topologies agree. | `TestConn_AHandlersUnavailableRunsOnce`, `TestGRPCComponent_AHandlersUnavailableIsNotReplayed` |
+| Private surfaces (S23) | Internal-mesh TLS switch (S16, S17, S18) | The private hop is mutual TLS on its own PKI whatever the mesh switch says; switching the mesh off does not make a private surface plaintext or its client certificate optional. | `TestMTLSWhateverTheMeshSwitchSays` |
 
 ## Server × Edges
 
@@ -55,11 +57,11 @@ Every pair of features whose combination changes behaviour, the behaviour the co
 
 | Feature A | Feature B | Expected behaviour | Test |
 |---|---|---|---|
-| In-process gRPC bridge (S21) | Client dial retry (S18.12) | A handler's own `UNAVAILABLE` runs the handler once in a composed binary (no retry layer) and once across a real hop (marked answered, not replayed): the two topologies agree. | `TestConn_AHandlersUnavailableRunsOnce`, `TestGRPCComponent_AHandlersUnavailableIsNotReplayed` |
 | In-process gRPC bridge (S21) | Principal propagation | The gateway stamps (user, scopes, labels) are relayed as on the wire, nothing more. | `TestConn_UnauthenticatedCaller_StaysUnauthenticated`, metadata isolation tests in `go/service/inprocgrpc` |
 | In-process gRPC bridge (S21) | i18n language metadata | `w17-language` set as outgoing by the caller reaches the handler as incoming; a language present only on the caller's incoming side is not relayed, as on the wire. | `TestConn_CallerWithNoOutgoingMetadata_DoesNotLeakItsIncoming` |
 | Process shutdown | Bus subscribers (I2, I4–I6) | `Close` drains every subscriber on every transport; registrations after close or drain are refused. | `TestNatsBus_SubscriberAfterCloseRefused_Embedded`, `TestRedisBus_SubscriberAfterCloseRefused_Embedded`, `TestNatsSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestRedisSubscriber_SubscribeAfterDrainRefused_Embedded`, `TestMemoryBus_SubscribeAfterDrainIsRefused`, `TestMemoryBus_DispatchAfterDrainIsRefused` |
 | Internal-mesh TLS | Principal read side (I10) | Backend tiers that trust the principal metadata are reachable only from authenticated tiers. | no test in the SDK: which tiers can reach which is deployment |
+| Private surfaces (S23) | Principal relay (I12) | A business tier's `Dial` relays every gateway stamp of the person's request; the private gateway keeps only the `ForwardedKeys` of an admitted caller and drops the identity stamps (`x-w17-user`, `x-w17-scope-*`, labels), which are stamped from an auth answer, never stated by another domain. | `TestDialRelaysTheGatewaysStamps`, `TestForwarded` |
 
 ## Server × Tooling
 
