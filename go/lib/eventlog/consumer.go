@@ -153,6 +153,11 @@ type ConsumerConfig struct {
 	// MaxBytes [DeadLetterMaxBytes]: it holds what consumers failed on, not
 	// the traffic.
 	Stream StreamLimits
+	// RequestStream bounds the W17_REQUESTS stream when this process is the
+	// first to ensure it (consumers started before any recorder): give it
+	// the limits the recorders are configured with (RecorderConfig.Stream),
+	// since the first binary to create the stream decides them.
+	RequestStream StreamLimits
 }
 
 // DeadLetterPrefix is where a batch goes after MaxDeliver failed offers:
@@ -198,7 +203,7 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	if cfg.Redis != nil {
 		return cs.runRedis(ctx, cfg, list)
 	}
-	if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, StreamLimits{}); err != nil {
+	if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, cfg.RequestStream); err != nil {
 		return err
 	}
 	dl := cfg.Stream
