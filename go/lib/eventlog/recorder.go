@@ -515,7 +515,7 @@ func (rec *Record) SetRequestID(id string) {
 // SetRequest records the decoded request — as soon as it is decoded, so a
 // request refused after decoding still carries it.
 func (rec *Record) SetRequest(req proto.Message) {
-	if rec != nil {
+	if rec != nil && !rec.finished {
 		rec.req = req
 	}
 }
@@ -535,7 +535,7 @@ func (rec *Record) setResultAny(resp any, err error) {
 // FinishUnary is SetResult and Finish for a gRPC interceptor: its untyped
 // response and error, no HTTP status.
 func (rec *Record) FinishUnary(ctx context.Context, resp any, err error) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	rec.setResultAny(resp, err)
@@ -569,7 +569,7 @@ func (rec *Record) CountStream(ss grpc.ServerStream) grpc.ServerStream {
 // FinishStream is Finish for a streaming RPC: its error (the gRPC code), no
 // response (a stream has many) and no HTTP status.
 func (rec *Record) FinishStream(ctx context.Context, err error) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	rec.grpcCode = int32(status.Code(err))
@@ -600,7 +600,7 @@ func (s *countedStream) RecvMsg(m any) error {
 // SetResult records the call's outcome: its error (the gRPC code) and,
 // when the method opts in and the call succeeded, its response.
 func (rec *Record) SetResult(resp proto.Message, err error) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	rec.grpcCode = int32(status.Code(err))
@@ -613,7 +613,7 @@ func (rec *Record) SetResult(resp proto.Message, err error) {
 // stamped (`x-w17-user`, the organization's `x-w17-scope-*`): the outgoing
 // metadata it sends the backend, or the incoming metadata on the rpc surface.
 func (rec *Record) SetCaller(md metadata.MD) {
-	if rec != nil {
+	if rec != nil && !rec.finished {
 		rec.readCaller(md)
 	}
 }
@@ -621,7 +621,7 @@ func (rec *Record) SetCaller(md metadata.MD) {
 // SetCallerService records the calling service on a private surface: its
 // verified identity (`spiffe://w17/<domain>/<bundle>`).
 func (rec *Record) SetCallerService(identity string) {
-	if rec != nil {
+	if rec != nil && !rec.finished {
 		rec.callerService = identity
 	}
 }
@@ -629,7 +629,7 @@ func (rec *Record) SetCallerService(identity string) {
 // SetCallerOutgoing records the caller from the metadata ctx carries out —
 // what an HTTP gateway stamped for the backend call.
 func (rec *Record) SetCallerOutgoing(ctx context.Context) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	if md, ok := metadata.FromOutgoingContext(ctx); ok {
@@ -640,7 +640,7 @@ func (rec *Record) SetCallerOutgoing(ctx context.Context) {
 // SetCallerIncoming records the caller from the metadata ctx carries in —
 // the rpc gateway's, after it stamped the verified principal.
 func (rec *Record) SetCallerIncoming(ctx context.Context) {
-	if rec == nil {
+	if rec == nil || rec.finished {
 		return
 	}
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
