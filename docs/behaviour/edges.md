@@ -137,9 +137,13 @@ writers.
 | E1.8 | A JSON key rewrite hook MUST NOT be called for protobuf or empty bodies | `TestDecodeRequestRewrite` |
 | E1.9 | Decode errors MUST NOT reach the client as decoder prose; callers route them through `WriteInvalidRequest` (E4) | `TestWriteInvalidRequest_KeepsDecoderProseFromTheClient` |
 | E1.10 | A negotiated response (a request passed to `WriteResponse`) MUST carry `Vary: Accept`, whichever format won, so a shared cache never serves one format to a request for the other | `TestWriteResponse_NegotiatedResponseVariesOnAccept` |
+| E1.11 | An `application/x-www-form-urlencoded` body MUST decode as the JSON object of its fields: each value a JSON string (a string, an integer or an enum name field takes it), a key given more than once a list, an undeclared key dropped as an unknown JSON key; a body `url.ParseQuery` refuses MUST be a decode error (`invalid form body`), never decoded as something else | `TestDecodeRequest_FormBody`, `TestDecodeRequest_FormBodyRepeatedKey`, `TestDecodeRequest_FormBodyMalformed` |
 
 **Deliberate limits.**
 - The protobuf input path skips alias and oneof normalisation (binary keys on field numbers).
+- A form body cannot express a bool or a message field. The decoder reads no cookie and does not
+  guard against cross-site form posts: the SDK treats no cookie as a credential, and an auth method
+  that accepted one would make a cross-site form POST act as the user.
 
 ---
 
