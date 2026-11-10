@@ -33,6 +33,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/netip"
 	"os"
@@ -64,8 +65,9 @@ const (
 )
 
 // TrustPrivateRanges is the value of `<...>_RATELIMIT_TRUSTED_PROXIES` that
-// trusts the loopback ranges and the RFC 1918 private IPv4 ranges
-// (127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16). It may be
+// trusts the loopback ranges, the RFC 1918 private IPv4 ranges and the IPv6
+// unique local range (127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12,
+// 192.168.0.0/16, fc00::/7). It may be
 // combined with CIDRs: `private,192.0.2.0/24`.
 //
 // It is opt-in because it is only correct when EVERY hop that can reach the
@@ -76,8 +78,11 @@ const (
 // each request by whatever address the client wrote there.
 const TrustPrivateRanges = "private"
 
-// privateRanges is what [TrustPrivateRanges] expands to.
-var privateRanges = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+// privateRanges is what [TrustPrivateRanges] expands to: the loopback, RFC
+// 1918 and the IPv6 unique local range — exactly what [isPrivate] calls
+// private, so the warning that tells an operator to set `private` names a
+// keyword that trusts the peer it warned about.
+var privateRanges = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"}
 
 // Config is the resolved limiter configuration. PerMinute <= 0 disables the
 // limiter entirely.
@@ -215,10 +220,12 @@ func parseTrustedProxies(raw, from string) []netip.Prefix {
 
 // parsePerMinute and parseBurst are the one parse of each value, whichever
 // variable it came from; ok is false for an empty or malformed value, which
-// leaves the previous one standing.
+// leaves the previous one standing. ParseFloat accepts NaN and infinities;
+// they are malformed here: NaN fails every `<= 0` test, so it would report
+// the limiter on while its bucket never empties.
 func parsePerMinute(v string) (float64, bool) {
 	f, err := strconv.ParseFloat(v, 64)
-	return f, err == nil
+	return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
 }
 
 func parseBurst(v string) (int, bool) {

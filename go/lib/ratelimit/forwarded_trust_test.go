@@ -46,7 +46,7 @@ func TestTrustedProxiesPrivateKeywordIsOptIn(t *testing.T) {
 	t.Setenv("KW_RATELIMIT_TRUSTED_PROXIES", "private, 192.0.2.0/24")
 	cfg := FromEnv("KW")
 	l := New(cfg)
-	for _, peer := range []string{"127.0.0.1:1", "10.1.2.3:1", "172.17.0.1:1", "192.168.0.9:1", "192.0.2.7:1", "[::1]:1"} {
+	for _, peer := range []string{"127.0.0.1:1", "10.1.2.3:1", "172.17.0.1:1", "192.168.0.9:1", "192.0.2.7:1", "[::1]:1", "[fd00::1]:1", "[fc12:3456::9]:1"} {
 		if got := l.RequestKey(reqFrom(peer, "203.0.113.9")); got != "203.0.113.9" {
 			t.Errorf("peer %s with private trust: key = %q, want the forwarded client", peer, got)
 		}
