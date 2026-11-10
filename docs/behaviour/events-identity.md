@@ -892,10 +892,12 @@ previous one, so no batch waits in the process while its `AckWait` runs.
 | I21.8 | `Open` and `Serve` MUST pick the backend by the DSN's scheme. | `TestRedisDSN_OpenAndServe` |
 | I21.9 | A batch MUST NOT be offered again, nor have its attempt count raised, because it waited behind a slow Consume: on JetStream, and on Redis across processes. | `TestConsumers_QueuedBatchesAreNotRedelivered`, `TestConsumers_QueuedBatchesAreNotRedelivered_Redis` |
 | I21.10 | On a cluster-mode Redis (`cluster=true`) the recorder MUST store through its publish script and a consumer's group MUST read the batches back, every key on the `{w17:requests}` slot. | `TestRedisDSN_Cluster_OpenAndServe` (live, CI's cluster job) |
+| I21.11 | On Redis the claim loop MUST page through the whole pending list, each page starting after the last entry of the previous one, so a due batch behind a page of entries that are not due is still offered again. | `TestRedisConsumers_AFailedBatchBehindAFullPageIsOfferedAgain` |
 
 **Deliberate limits.**
 - Delivery is at least once: a consumer deduplicates on the record id.
 - A batch is acknowledged as a whole: a consumer that handled part of it and failed is offered all of it again.
+- On Redis every consumer group reads every subject's batches whole and settles those outside its subjects; there is no per-subject read.
 
 ---
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -340,50 +341,99 @@ func (rc *redisConsumer) claimLoop(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
+		rc.claimDue(ctx)
+	}
+	return nil
+}
+
+// claimPage is how many pending entries one XPENDING reads.
+const claimPage = 64
+
+// claimDue walks the group's whole pending list a page at a time, each page
+// starting after the last entry of the previous one, and offers again every
+// entry that is due. Reading only the first page left a due entry behind a
+// page of entries that were not (another process's, inside AckWait)
+// waiting until those were settled.
+func (rc *redisConsumer) claimDue(ctx context.Context) {
+	start := "-"
+	for ctx.Err() == nil {
 		pending, err := rc.cfg.Redis.XPendingExt(ctx, &goredis.XPendingExtArgs{
-			Stream: RedisStreamKey, Group: rc.group, Start: "-", End: "+", Count: 64,
+			Stream: RedisStreamKey, Group: rc.group, Start: start, End: "+", Count: claimPage,
 		}).Result()
 		if err != nil {
 			if !errors.Is(err, goredis.Nil) && ctx.Err() == nil {
 				log.Printf("eventlog: consumer %s: pending: %v", rc.r.name, err)
 			}
+			return
+		}
+		rc.claimPending(ctx, pending)
+		if len(pending) < claimPage {
+			return
+		}
+		next, ok := nextRedisID(pending[len(pending)-1].ID)
+		if !ok {
+			return
+		}
+		start = next
+	}
+}
+
+// nextRedisID is the smallest stream id after id ("<ms>-<seq>"): the start
+// of the next XPENDING page (an exclusive "(" range needs Redis 6.2).
+func nextRedisID(id string) (string, bool) {
+	ms, seq, ok := strings.Cut(id, "-")
+	if !ok {
+		return "", false
+	}
+	n, err := strconv.ParseUint(seq, 10, 64)
+	if err != nil {
+		return "", false
+	}
+	if n == math.MaxUint64 {
+		m, err := strconv.ParseUint(ms, 10, 64)
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatUint(m+1, 10) + "-0", true
+	}
+	return ms + "-" + strconv.FormatUint(n+1, 10), true
+}
+
+// claimPending offers again the entries of one pending page that are due.
+func (rc *redisConsumer) claimPending(ctx context.Context, pending []goredis.XPendingExt) {
+	for _, p := range pending {
+		// An entry this process is still serving is pending but not
+		// failed: offering it again would run it twice, side by side.
+		if rc.isInflight(p.ID) {
 			continue
 		}
-		for _, p := range pending {
-			// An entry this process is still serving is pending but not
-			// failed: offering it again would run it twice, side by side.
-			if rc.isInflight(p.ID) {
-				continue
+		wait := rc.cfg.Backoff(int(p.RetryCount))
+		if p.Consumer != rc.consumer {
+			// Another process's entry may be in flight there: take it
+			// over only once a Consume would have timed out (AckWait), as
+			// JetStream redelivers an unacknowledged message.
+			wait = max(wait, rc.cfg.AckWait)
+		}
+		if p.Idle < wait {
+			continue
+		}
+		// MinIdle makes the claim conditional: another replica that
+		// claimed the entry meanwhile reset its idle time.
+		msgs, err := rc.cfg.Redis.XClaim(ctx, &goredis.XClaimArgs{
+			Stream: RedisStreamKey, Group: rc.group, Consumer: rc.consumer,
+			MinIdle: wait, Messages: []string{p.ID},
+		}).Result()
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("eventlog: consumer %s: claim %s: %v", rc.r.name, p.ID, err)
 			}
-			wait := rc.cfg.Backoff(int(p.RetryCount))
-			if p.Consumer != rc.consumer {
-				// Another process's entry may be in flight there: take it
-				// over only once a Consume would have timed out (AckWait), as
-				// JetStream redelivers an unacknowledged message.
-				wait = max(wait, rc.cfg.AckWait)
-			}
-			if p.Idle < wait {
-				continue
-			}
-			// MinIdle makes the claim conditional: another replica that
-			// claimed the entry meanwhile reset its idle time.
-			msgs, err := rc.cfg.Redis.XClaim(ctx, &goredis.XClaimArgs{
-				Stream: RedisStreamKey, Group: rc.group, Consumer: rc.consumer,
-				MinIdle: wait, Messages: []string{p.ID},
-			}).Result()
-			if err != nil {
-				if ctx.Err() == nil {
-					log.Printf("eventlog: consumer %s: claim %s: %v", rc.r.name, p.ID, err)
-				}
-				continue
-			}
-			for _, m := range msgs {
-				rc.markInflight(m.ID)
-				rc.offer(ctx, m, int(p.RetryCount)+1)
-			}
+			continue
+		}
+		for _, m := range msgs {
+			rc.markInflight(m.ID)
+			rc.offer(ctx, m, int(p.RetryCount)+1)
 		}
 	}
-	return nil
 }
 
 func (rc *redisConsumer) handle(ctx context.Context, m goredis.XMessage, attempt int) {
