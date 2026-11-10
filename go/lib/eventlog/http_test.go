@@ -81,9 +81,43 @@ func TestHTTPMiddleware_URLCredentialRouteRecordsNoReferrer(t *testing.T) {
 	if cl := got[link.FullName]; cl.GetReferrer() != "" || cl.GetUserAgent() != "test-agent" {
 		t.Errorf("credential route client %v: want no referrer, the rest kept", cl)
 	}
-	// The decoy: the same request on an ordinary route keeps its referrer.
-	if cl := got[testMethod.FullName]; cl.GetReferrer() != "https://app.example.com/invoice/tok-123" {
-		t.Errorf("ordinary route client %v: want the referrer", cl)
+	// An ordinary route called from the same capability-link page: its
+	// referrer carries the same credential, so it records none either.
+	if cl := got[testMethod.FullName]; cl.GetReferrer() != "" || cl.GetUserAgent() != "test-agent" {
+		t.Errorf("ordinary route from the capability page, client %v: want no referrer, the rest kept", cl)
+	}
+}
+
+// A referrer is kept without its query and fragment, where pages most often
+// carry a token; an ordinary page's path stays, so the record still says
+// where the request came from.
+func TestHTTPMiddleware_ReferrerKeepsNoQueryAndOrdinaryPagesKeepTheirPath(t *testing.T) {
+	r, c := newTestRecorder(t, map[w17pb.RequestApi]Purposes{w17pb.RequestApi_REQUEST_API_REST: {Audit: true}})
+	s := r.Surface(w17pb.RequestApi_REQUEST_API_REST)
+	link := &Method{FullName: "/acme.docs.DocService/GetPublic", Route: "/public/docs/{token}", RequestTag: reqTag, URLCredential: true}
+	mw := s.HTTPMiddleware(nil, nil)
+	call := func(m *Method, referrer string) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			Begin(req.Context(), s, m).SetRequest(sampleReq())
+			w.WriteHeader(http.StatusOK)
+		})
+		req := httptest.NewRequest("GET", "/x", nil)
+		req.Header.Set("Referer", referrer)
+		mw(handler).ServeHTTP(httptest.NewRecorder(), req)
+	}
+	call(link, "https://app.example.com/invoice/tok-123")
+	call(testMethod, "https://app.example.com/tasks?token=secret#access_token=also")
+	call(testMethod, "https://app.example.com/invoice/tok-123?ref=mail")
+	closeRecorder(t, r)
+
+	var refs []string
+	for _, raw := range c.records(w17pb.RequestApi_REQUEST_API_REST) {
+		if m := decodeEnvelope(t, raw).meta; m.GetMethod() == testMethod.FullName {
+			refs = append(refs, m.GetClient().GetReferrer())
+		}
+	}
+	if len(refs) != 2 || refs[0] != "https://app.example.com/tasks" || refs[1] != "" {
+		t.Fatalf("referrers = %q, want the ordinary page without its query, and none for the capability page", refs)
 	}
 }
 

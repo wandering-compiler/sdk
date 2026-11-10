@@ -496,6 +496,26 @@ func TestNew_RequiresItsParts(t *testing.T) {
 	if _, err := New(cfg); err == nil {
 		t.Fatal("no batch bound accepted")
 	}
+	for name, drop := range map[string]func(*Config[*rec]){
+		"Size":          func(c *Config[*rec]) { c.Size = nil },
+		"Encode":        func(c *Config[*rec]) { c.Encode = nil },
+		"Fail":          func(c *Config[*rec]) { c.Fail = nil },
+		"BatchBytes=64": func(c *Config[*rec]) { c.BatchBytes = 64 },
+		"BatchBytes=-1": func(c *Config[*rec]) { c.BatchBytes = -1 },
+	} {
+		cfg = h.config()
+		drop(&cfg)
+		if _, err := New(cfg); err == nil {
+			t.Errorf("New accepted a configuration without %s", name)
+		}
+	}
+	cfg = h.config()
+	cfg.BatchBytes = 65
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New refused BatchBytes 65, the smallest usable bound: %v", err)
+	}
+	_ = p.Close(context.Background())
 }
 
 func BenchmarkSubmit(b *testing.B) {

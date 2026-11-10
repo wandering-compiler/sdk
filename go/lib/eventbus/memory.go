@@ -228,10 +228,12 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 	m.observer.OnEmitSuccess(channel, topic)
 
 	sem := m.semaphoreFor(channel)
+	matched := 0
 	for _, h := range snapshot {
 		if !MatchGlob(h.topicFilter, topic) {
 			continue
 		}
+		matched++
 		if sem == nil {
 			// Unbounded fan-out — legacy behaviour, no
 			// backpressure. Spawn directly.
@@ -286,6 +288,11 @@ func (m *MemoryBus) Dispatch(ctx context.Context, channel, topic string, envelop
 			m.recordDrop(channel)
 			m.observer.OnDrop(channel, topic, DropReasonBufferFull)
 		}
+	}
+	if matched == 0 {
+		// Nothing in this process subscribes to the topic: the event
+		// reached nobody. Not an emit failure, but not untraced either.
+		m.observer.OnDrop(channel, topic, DropReasonNoHandler)
 	}
 	return nil
 }

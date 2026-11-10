@@ -291,7 +291,7 @@ func NewNatsBus(opts NatsBusOptions) (*NatsBus, error) {
 	if err != nil {
 		// The DSN carries the broker's credential (a bare userinfo is the
 		// whole token), and this error goes to the log.
-		return nil, fmt.Errorf("nats connect %s: %w", dsnredact.String(opts.DSN), err)
+		return nil, fmt.Errorf("nats connect %s: %w", dsnredact.String(opts.DSN), dsnredact.Err(err))
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {
@@ -348,16 +348,14 @@ func (b *NatsBus) Close(ctx context.Context) error {
 	conn := b.conn
 	b.mu.Unlock()
 
-	for _, s := range subs {
-		_ = s.Drain(ctx)
-	}
+	drainErr := drainAll(ctx, "nats", subs, func(s *natsSubscriber) string { return s.channel })
 	if conn != nil {
 		conn.Close()
 		// Said here, by the closer: the connection's own handlers stay silent
 		// for a close this process asked for (NoCallbacksAfterClientClose).
 		log.Print("eventbus nats: connection closed (shutdown)")
 	}
-	return nil
+	return drainErr
 }
 
 // Dispatch publishes one envelope to JetStream on the
@@ -858,6 +856,20 @@ func natsLiteralToken(seg string) bool {
 type natsConsumeHandle struct {
 	cctx        jetstream.ConsumeContext
 	advisorySub *natsgo.Subscription
+	// registered is closed once Subscribe has decided the handle's fate:
+	// registered with its first pull loop, or refused. A recovery that
+	// re-created the consumer before then waits for it, because only a
+	// registered handle can take the new loop.
+	registered     chan struct{}
+	registeredOnce sync.Once
+}
+
+func newNatsConsumeHandle() *natsConsumeHandle {
+	return &natsConsumeHandle{registered: make(chan struct{})}
+}
+
+func (h *natsConsumeHandle) markRegistered() {
+	h.registeredOnce.Do(func() { close(h.registered) })
 }
 
 // Subscribe creates (or updates) a JetStream consumer with a
@@ -904,7 +916,10 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		return err
 	}
 
-	handle := &natsConsumeHandle{}
+	handle := newNatsConsumeHandle()
+	// Every return below decides the handle's fate; a recovery waiting
+	// on it (recoverConsumer) learns it here.
+	defer handle.markRegistered()
 
 	prefix := s.channel + "."
 	bgCtx := context.WithoutCancel(ctx)
@@ -1201,6 +1216,10 @@ func (s *natsSubscriber) recoverConsumer(ctx context.Context, handle *natsConsum
 			reportBusFailure("consumer recreate", s.channel, consumerName, err)
 			continue
 		}
+		// The consume loop can report a lost consumer before Subscribe
+		// has registered the handle; the swap below needs the registered
+		// handle, so wait for Subscribe to decide.
+		<-handle.registered
 		s.mu.Lock()
 		if s.draining || handle.cctx == nil {
 			// Drain has begun (or the handle was never registered): the new

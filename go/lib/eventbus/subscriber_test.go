@@ -47,6 +47,10 @@ func TestMatchGlob(t *testing.T) {
 		{"", "", true, "both empty"},
 		{"", "anything", false, "empty filter rejects non-empty topic"},
 		{"**", "", true, "** matches empty topic"},
+		{"*", "", false, "* needs a segment; the empty topic has none"},
+		{"*.**", "", false, "* needs a segment before **"},
+		{"**.*", "", false, "* needs a segment after **"},
+		{eventbus.EveryTopic, "", true, "EveryTopic matches every topic"},
 
 		// Defensive cases.
 		{"a.b.c", "a.b", false, "filter longer than topic without **"},

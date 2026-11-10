@@ -114,6 +114,8 @@ func parseDecimal(s string) (decimalParts, bool) {
 		// "5." — a trailing dot with no digits is not a decimal we emit.
 		return decimalParts{}, false
 	}
+	// Leading zeros carry no value: "0001234" is 1234, "000.5" is 0.5.
+	ip = strings.TrimLeft(ip, "0")
 	if ip == "" {
 		ip = "0" // ".5" → 0.5
 	}

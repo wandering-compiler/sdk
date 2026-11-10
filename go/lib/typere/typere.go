@@ -30,6 +30,8 @@ package typere
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // UUID matches the RFC 4122 canonical 8-4-4-4-12 hex shape.
@@ -47,7 +49,8 @@ var UUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 //   - exactly one `@`, with a non-empty local part before it;
 //   - a non-empty domain after it that contains a `.` and does
 //     not start or end with one;
-//   - no spaces or control characters anywhere.
+//   - no spaces or control characters anywhere, ASCII or Unicode
+//     (no-break space, line separator, C1 controls).
 //
 // Replaces the earlier `net/mail.ParseAddress` check (perf
 // sweep). ParseAddress allocated a throwaway *mail.Address on
@@ -84,6 +87,16 @@ func ValidEmail(s string) bool {
 			return false
 		}
 	}
+	// Their Unicode kin too: a no-break space, a line or paragraph
+	// separator, a C1 control. The ASCII scan above stays the fast
+	// path; only a value with a non-ASCII byte pays for the rune walk.
+	if !isASCII(s) {
+		for _, r := range s {
+			if unicode.IsSpace(r) || unicode.IsControl(r) {
+				return false
+			}
+		}
+	}
 	domain := s[at+1:]
 	if strings.IndexByte(domain, '@') >= 0 {
 		return false // more than one '@'
@@ -108,10 +121,11 @@ var Slug = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var URL = regexp.MustCompile(`^https?://.+$`)
 
 // MAC matches IEEE 802 MAC addresses in colon-or-dash-separated
-// canonical form (`aa:bb:cc:dd:ee:ff` / `AA-BB-CC-DD-EE-FF`).
+// canonical form (`aa:bb:cc:dd:ee:ff` / `AA-BB-CC-DD-EE-FF`), one
+// separator throughout: `aa:bb-cc:dd-ee:ff` is not a MAC address.
 // `(w17.field).type = MAC_ADDRESS` request fields validate
 // against this before the downstream INSERT / UPDATE.
-var MAC = regexp.MustCompile(`^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$`)
+var MAC = regexp.MustCompile(`^(?:[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5})$`)
 
 // FitsDecimal reports whether the decimal literal `s` is stored EXACTLY by a
 // `NUMERIC(precision, scale)` column — the request-side enforcement of
@@ -216,4 +230,13 @@ func FitsDecimal(s string, precision, scale int32) bool {
 	}
 	p, sc := int64(precision), int64(scale)
 	return place(last) >= -sc && place(first) < p-sc
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }

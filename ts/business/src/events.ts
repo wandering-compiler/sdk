@@ -105,7 +105,7 @@ function contextMd(ctx: Context): Metadata | undefined {
 /**
  * eventbus.MetadataFromContext: the request's metadata flattened for
  * `Event.metadata` — gateway-owned keys keep their FIRST value, every other
- * key its LAST; transaction keys and credentials are dropped.
+ * key its LAST non-empty one; transaction keys and credentials are dropped.
  */
 export function metadataFromContext(ctx: Context): Record<string, string> | undefined {
   const md = contextMd(ctx);
@@ -113,9 +113,17 @@ export function metadataFromContext(ctx: Context): Record<string, string> | unde
   const flat: Record<string, string> = {};
   for (const [k, vs] of md) {
     if (!vs.length || reservedMetadataKey(k)) continue;
-    flat[k] = isGatewayOwnedKey(k) ? vs[0]! : vs[vs.length - 1]!;
+    flat[k] = isGatewayOwnedKey(k) ? vs[0]! : lastNonEmpty(vs);
   }
   return flat;
+}
+
+/** The last value that is not blank, else the last value. */
+function lastNonEmpty(vs: readonly string[]): string {
+  for (let i = vs.length - 1; i >= 0; i--) {
+    if (vs[i]!.trim() !== "") return vs[i]!;
+  }
+  return vs[vs.length - 1]!;
 }
 
 /**

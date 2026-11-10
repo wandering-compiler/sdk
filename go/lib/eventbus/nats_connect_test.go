@@ -100,3 +100,17 @@ func TestNewNatsBus_RefusedTokenFailsAtOnce(t *testing.T) {
 		t.Errorf("the token is in the error: %v", err)
 	}
 }
+
+// A DSN that does not parse must not come back in the error with its
+// password: the url.Error the client returns quotes the whole input.
+func TestNewNatsBus_ABadDSNIsNotEchoedWithItsPassword(t *testing.T) {
+	_, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{
+		DSN: "nats://user:p%zzsecret@localhost:1", DurablePrefix: "x", ConnectWait: -1,
+	})
+	if err == nil {
+		t.Fatal("NewNatsBus accepted a DSN that does not parse")
+	}
+	if strings.Contains(err.Error(), "zzsecret") {
+		t.Fatalf("the password is in the error: %v", err)
+	}
+}

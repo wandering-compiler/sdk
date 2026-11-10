@@ -298,9 +298,7 @@ func (b *RedisBus) Close(ctx context.Context) error {
 	client := b.client
 	b.mu.Unlock()
 
-	for _, s := range subs {
-		_ = s.Drain(ctx)
-	}
+	drainErr := drainAll(ctx, "redis", subs, func(s *redisSubscriber) string { return s.channel })
 	if client != nil {
 		// Every subscriber is drained, so nothing in this process still reads
 		// through these groups — and no OTHER process ever did, that being what
@@ -308,9 +306,9 @@ func (b *RedisBus) Close(ctx context.Context) error {
 		for _, g := range groups {
 			_ = client.XGroupDestroy(ctx, g.channel, g.group).Err()
 		}
-		return client.Close()
+		return errors.Join(drainErr, client.Close())
 	}
-	return nil
+	return drainErr
 }
 
 // Dispatch XADDs one envelope to the channel's stream as
@@ -1100,6 +1098,9 @@ func (b *RedisBus) retryFor(channel string) (int, time.Duration) {
 	return resolveChannelRetry(b.opts.ChannelRetries, channel, b.opts.DefaultMaxDeliver, b.opts.DefaultAckWait)
 }
 
+// errEntryWithoutTopic reports a stream entry that has no `topic` field.
+var errEntryWithoutTopic = errors.New("eventbus: redis entry has no topic field; settled without a handler")
+
 // processMessage extracts (topic, payload), invokes the
 // handler, and ACKs on success. On error the entry stays in
 // PEL for the claim loop to pick up.
@@ -1125,7 +1126,16 @@ func (s *redisSubscription) processMessage(
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	topic, _ := values[redisFieldTopic].(string)
+	topic, hasTopic := values[redisFieldTopic].(string)
+	if !hasTopic {
+		// Not an event envelope (another writer's entry): even the
+		// catch-all `**`, which matches the empty topic, must not hand
+		// it to the handler. Settled, so the claim loop does not
+		// re-run it, and reported, so it is not gone without a trace.
+		s.bus.opts.Observer.OnDeliverFailure(s.channel, "", errEntryWithoutTopic)
+		_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
+		return
+	}
 	if !MatchGlob(s.filter, topic) {
 		// Outside this subscription's filter: settle it unhandled. The
 		// group is per filter (subscriptionGroup), so no sibling

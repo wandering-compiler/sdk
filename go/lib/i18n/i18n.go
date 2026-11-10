@@ -174,22 +174,33 @@ func RegisterCatalog(lang string, poContents []byte) error {
 		}
 	}
 
-	key := normalizeTag(lang)
+	// The catalog is registered under its own tag and, when that is not
+	// canonical (a deprecated code such as iw), under the canonical one
+	// too: negotiation canonicalises the request's tags (iw-IL → he-IL),
+	// so the raw key alone was found only by an exact request.
+	keys := []string{normalizeTag(lang)}
+	if t, err := language.Parse(lang); err == nil {
+		if canon := normalizeTag(t.String()); canon != keys[0] {
+			keys = append(keys, canon)
+		}
+	}
 	var conflicts []string
 	catalogsMu.Lock()
-	cat, ok := catalogs[key]
-	if !ok {
-		cat = make(map[string]string, len(entries))
-		catalogs[key] = cat
-	}
-	for id, s := range entries {
-		if prev, ok := cat[id]; ok {
-			if prev != s {
-				conflicts = append(conflicts, id)
-			}
-			continue
+	for i, key := range keys {
+		cat, ok := catalogs[key]
+		if !ok {
+			cat = make(map[string]string, len(entries))
+			catalogs[key] = cat
 		}
-		cat[id] = s
+		for id, s := range entries {
+			if prev, ok := cat[id]; ok {
+				if prev != s && i == 0 {
+					conflicts = append(conflicts, id)
+				}
+				continue
+			}
+			cat[id] = s
+		}
 	}
 	catalogsMu.Unlock()
 
@@ -337,22 +348,61 @@ func lookup(lang, msgid string) string {
 //
 // Caller holds catalogsMu (read).
 func negotiateCatalog(lang string) map[string]string {
-	if cat, ok := catalogs[normalizeTag(lang)]; ok {
-		return cat
+	if len(lang) <= maxLanguageValue {
+		if cat, ok := catalogs[normalizeTag(lang)]; ok {
+			return cat
+		}
 	}
-	if tags, _, err := language.ParseAcceptLanguage(lang); err == nil {
-		for _, t := range tags {
-			if cat, ok := catalogs[normalizeTag(t.String())]; ok {
+	for _, t := range acceptLanguageTags(lang) {
+		if cat, ok := catalogs[normalizeTag(t.String())]; ok {
+			return cat
+		}
+		if base, conf := t.Base(); conf != language.No {
+			if cat, ok := catalogs[normalizeTag(base.String())]; ok {
 				return cat
-			}
-			if base, conf := t.Base(); conf != language.No {
-				if cat, ok := catalogs[normalizeTag(base.String())]; ok {
-					return cat
-				}
 			}
 		}
 	}
 	return nil
+}
+
+// maxLanguageValue bounds the part of a language value (an Accept-Language
+// list) that is parsed: the client sends it, and T parses it on every call.
+const maxLanguageValue = 512
+
+// acceptLanguageTags parses an Accept-Language list member by member, so a
+// member that does not parse (an invalid tag, a bad q) is skipped instead of
+// voiding the whole list, and returns the tags with q > 0 in q order (stable).
+// Only the first maxLanguageValue bytes are considered, cut at a member
+// boundary.
+func acceptLanguageTags(v string) []language.Tag {
+	if len(v) > maxLanguageValue {
+		v = v[:maxLanguageValue]
+		if i := strings.LastIndexByte(v, ','); i > 0 {
+			v = v[:i]
+		}
+	}
+	type member struct {
+		tag language.Tag
+		q   float32
+	}
+	var ms []member
+	for _, m := range strings.Split(v, ",") {
+		if m = strings.TrimSpace(m); m == "" {
+			continue
+		}
+		tags, qs, err := language.ParseAcceptLanguage(m)
+		if err != nil || len(tags) == 0 || qs[0] <= 0 {
+			continue
+		}
+		ms = append(ms, member{tags[0], qs[0]})
+	}
+	sort.SliceStable(ms, func(i, j int) bool { return ms[i].q > ms[j].q })
+	out := make([]language.Tag, len(ms))
+	for i, m := range ms {
+		out[i] = m.tag
+	}
+	return out
 }
 
 // normalizeTag folds the spellings a language tag is written in — gettext
@@ -417,7 +467,14 @@ func LocaleFromContext(ctx context.Context) string {
 			// reader disagreeing with FormatLocaleFromContext, restgw's
 			// package doc and the comment the gateway emits into its own
 			// handlers. One convention, and this is it.
-			return vals[len(vals)-1]
+			//
+			// An empty value says no language: it is skipped, and with
+			// no other value the default applies, not "".
+			for i := len(vals) - 1; i >= 0; i-- {
+				if strings.TrimSpace(vals[i]) != "" {
+					return vals[i]
+				}
+			}
 		}
 	}
 	return DefaultLanguage()

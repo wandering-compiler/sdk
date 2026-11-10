@@ -117,8 +117,9 @@ _CREDENTIAL_HEADERS = frozenset(
 )
 _CREDENTIAL_SEGMENTS = frozenset(
     {
-        "auth", "authorization", "apikey", "cookie", "credential", "credentials",
-        "jwt", "passwd", "password", "secret", "session", "token",
+        "auth", "authorization", "apikey", "bearer", "cookie", "credential", "credentials",
+        "jwt", "key", "otp", "pass", "passwd", "password", "pwd", "secret", "session",
+        "signature", "token",
     }
 )
 _GRPC_GATEWAY_PREFIX = "grpcgateway-"
@@ -169,7 +170,7 @@ def _context_md(ctx: Context) -> Metadata | None:
 def metadata_from_context(ctx: Context) -> dict[str, str] | None:
     """eventbus.MetadataFromContext: the request's metadata flattened for
     ``Event.metadata`` — gateway-owned keys keep their FIRST value, every other
-    key its LAST; transaction keys and credentials are dropped."""
+    key its LAST non-empty one; transaction keys and credentials are dropped."""
     md = _context_md(ctx)
     if md is None:
         return None
@@ -177,8 +178,16 @@ def metadata_from_context(ctx: Context) -> dict[str, str] | None:
     for k, vs in md.items():
         if not vs or reserved_metadata_key(k):
             continue
-        flat[k] = vs[0] if principal.is_gateway_owned_key(k) else vs[-1]
+        flat[k] = vs[0] if principal.is_gateway_owned_key(k) else _last_non_empty(vs)
     return flat
+
+
+def _last_non_empty(vs: list[str]) -> str:
+    """The last value that is not blank, else the last value."""
+    for v in reversed(vs):
+        if v.strip():
+            return v
+    return vs[-1]
 
 
 def labels_from_context(ctx: Context) -> dict[str, str] | None:

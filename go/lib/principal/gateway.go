@@ -84,9 +84,9 @@ func SanitizeGatewayMD(ctx context.Context) metadata.MD {
 // write performed by a trusted intermediary on forged input. The backend
 // forward call was never the exposed part; the event path was.
 //
-// The two sides get independent copies so a later Set through one handle
-// cannot rewrite the other.
+// The two sides get independent copies, and neither is the caller's md, so
+// a later Set through any handle cannot rewrite another.
 func WithGatewayMD(ctx context.Context, md metadata.MD) context.Context {
 	ctx = metadata.NewIncomingContext(ctx, md.Copy())
-	return metadata.NewOutgoingContext(ctx, md)
+	return metadata.NewOutgoingContext(ctx, md.Copy())
 }
