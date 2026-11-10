@@ -23,24 +23,28 @@ assembles this chain; the SDK does not.
 
 ```
 http.Server
- └─ RecoverPanicMiddleware
-     └─ ClientAddrMiddleware                  client address + host behind the trusted proxies
-         └─ StripReservedHeadersMiddleware    drops X-W17-Credential
-             └─ ObservabilityMiddleware           otelhttp span + request id
-                 └─ CORSMiddleware                preflight answered here (204)
-                     └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
-                         └─ chi router
-                             ├─ per-RPC handler: [AdmitPublic (Methods.For)] → [WithURLCredential / WithOrgFromPath]
-                             │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
-                             │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
-                             │        [+ SetDeviceMetadata] → scopes
-                             │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
-                             │      → WriteResponse / WriteGRPCErrorCtx
-                             ├─ SSE / WS handlers: [AdmitPublicStreamOf] → auth → WatchStreamAuth
-                             │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
-                             ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
-                             ├─ ticket issuer (POST): NewTicketIssuer (per-address share, E16.11)
-                             └─ downloads: auth → ServeDownload
+ └─ secheaders.Middleware                     security response headers on every answer (E45)
+     ├─ /healthz: HealthHandler                outside the API chain
+     ├─ OAuth authorization-server wire        outside the API chain (E43)
+     └─ RecoverPanicMiddleware
+         └─ ClientAddrMiddleware              client address + host behind the trusted proxies
+             └─ AudienceContextMiddleware     gateway stamps on outgoing metadata (outside the scrub)
+                 └─ StripReservedHeadersMiddleware    drops X-W17-Credential
+                     └─ CORSMiddleware                preflight answered here (204)
+                         └─ ObservabilityMiddleware   otelhttp span + request id
+                             └─ MetadataPropagation → MetadataRename → MetadataDefaultStamp
+                                 └─ chi router
+                                     ├─ per-RPC handler: [AdmitPublic (Methods.For)] → [WithURLCredential / WithOrgFromPath]
+                                     │      → [dpopgw.Gate.Middleware] → AuthFunc (optionally CachedAuthFunc,
+                                     │        or dpopgw.CachedAuthFunc behind the gate) → SetUserMetadata
+                                     │        [+ SetDeviceMetadata] → scopes
+                                     │      → DecodeRequest → backend gRPC (grpcclient.Dial conn)
+                                     │      → WriteResponse / WriteGRPCErrorCtx
+                                     ├─ SSE / WS handlers: [AdmitPublicStreamOf] → auth → WatchStreamAuth
+                                     │      (DPoP: dpopgw.NewWSAuth → dpopgw.WatchStreamBinding)
+                                     ├─ /w17-events: RequireAuth(NewWSAuth(...)) → WatchStreamAuth → HandleW17Events
+                                     ├─ ticket issuer (POST): NewTicketIssuer (per-address share, E16.11)
+                                     └─ downloads: auth → ServeDownload
 ```
 
 Outgoing: `grpcclient.Dial` (gateway → backend) and `grpcx.DialOpts` + `grpcx.Pool` (business
@@ -94,6 +98,7 @@ tier → storage or other domains; adds the principal relay interceptors).
 | E42 | Raw responses | `go/lib/restgw/rawresponse.go` — `WriteRawResponse` |
 | E43 | OAuth 2.1 authorization-server wire | `go/lib/oauthas` — `Mount`, `Config`, `Backend`, `Error`, `CodePath` |
 | E44 | Egress client runtime | `go/lib/egress` — `Register`, `RegisterFromEnv`, `ParseDSN`, `BeforeRequest`, `AfterResponse` |
+| E45 | Security response headers | `go/lib/secheaders` — `Middleware`, `Defaults` |
 
 ---
 
@@ -541,7 +546,7 @@ error frames carrying the same envelope as unary responses, per-write deadlines.
 | E14.1 | Headers MUST be flushed before the first event; a writer without `http.Flusher` is reported (false) | `TestWriteSSEHeaders_AndEvent`, `TestWriteSSEHeaders_NoFlusher` |
 | E14.2 | Each event MUST be exactly one `data: <single-line json>\n\n` frame | `TestWriteSSEEvent_MultipleFrames` |
 | E14.3 | A backend status mid-stream MUST become `event: error` with the E3 envelope including `details[]`; a non-status error MUST become a generic INTERNAL frame | `TestWriteSSEGRPCErrorCtx_ForwardsDetails`, `TestWriteSSEGRPCError_NonStatusInternal` |
-| E14.4 | With a timeout, each write MUST have a deadline that is cleared afterwards; writers without deadline support fall back to none | `streaming_timeout_test.go` (all), `TestWriteSSEEventWithTimeout_DeadlineInstalled` |
+| E14.4 | With a timeout, each write MUST have a deadline that is cleared afterwards; writers without deadline support fall back to none. The deadline MUST reach the connection through the wrappers the generated chain puts in front of a stream (security headers, CORS, observability, panic recovery) | `streaming_timeout_test.go` (all), `TestWriteSSEEventWithTimeout_DeadlineInstalled`, `TestWriteSSEEventWithTimeout_StalledClientEndsTheStreamThroughTheGeneratedChain` |
 | E14.5 | A half-open client MUST NOT pin a goroutine when the `WithTimeout` variants are used: a write to a client that stopped reading MUST fail within the deadline and the handler return | `TestWriteSSEEventWithTimeout_StalledClientEndsTheStream` |
 
 **Deliberate limits.**
@@ -1858,3 +1863,37 @@ in-process connection it is registered on (no gRPC retry policy there).
 - A call is not part of a storage transaction: a rollback does not undo what an upstream did.
 - An `UNAVAILABLE` a business handler passes on to its own caller over a real hop is subject to that
   hop's retry policy (S18), which does not know whether the upstream already acted.
+
+---
+
+## E45. Security response headers
+
+**Code.** `go/lib/secheaders/secheaders.go` — `Middleware`, `Defaults`.
+
+**Purpose.** Every listener a generated binary publishes (the REST gateway with its API, `/healthz`
+and the OAuth server; the admin; the MCP endpoint) sends the browser-facing security headers itself,
+because not every deployment target has an edge that adds them.
+
+**Configuration.** None. `Defaults`:
+
+| Header | Value |
+|---|---|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (no `preload`; ignored by browsers over http) |
+| `X-Content-Type-Options` | `nosniff` |
+| `Content-Security-Policy` | `frame-ancestors 'none'` (framing only; a page's script policy is its handler's) |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+
+**Shares.** Mounted outermost by the generated `main.go` (Request path above), so it covers every
+early return of the chain inside it: a CORS preflight, a 404, a recovered panic, `/healthz`.
+
+**Guarantees.**
+
+| ID | Guarantee | Test |
+|---|---|---|
+| E45.1 | Every response MUST carry each default exactly once, an early return (a bare 404) included | `TestMiddleware_SetsEveryDefault` |
+| E45.2 | A header the handler sets itself MUST replace the default (a stricter `Referrer-Policy`, a page's own `Content-Security-Policy`), and the other defaults MUST stay | `TestMiddleware_HandlerValueWins` |
+
+**Deliberate limits.**
+- The defaults are fixed; a handler overrides one per response, nothing configures them per listener.
+- Mounting it outermost is the generated `main.go`'s; a listener built by hand without it sends none.
