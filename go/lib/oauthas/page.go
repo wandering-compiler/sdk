@@ -10,9 +10,11 @@ import (
 // pageStyle is the look of the pages this server shows a person: the code
 // page and the error page. It follows the console's dark theme (the same
 // background, panel, line, text, muted and accent colours, radius 10), so a
-// sign-in started from the console ends on a page that looks like it.
+// sign-in started from the console ends on a page that looks like it. A
+// button fills with the console's accentFill, not the accent: white text on
+// the accent is 3.2:1, on the fill 5.4:1 (WCAG AA).
 const pageStyle = `
-:root{color-scheme:dark;--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e9ef;--muted:#8b93a5;--accent:#4f8cff;--danger:#ff6b6b}
+:root{color-scheme:dark;--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e9ef;--muted:#8b93a5;--accent:#4f8cff;--accent-fill:#2b64d6;--accent-fill-pressed:#2457c0;--danger:#ff6b6b}
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text)}
 body{font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center;padding:64px 16px}
@@ -23,8 +25,9 @@ p{margin:0}
 .error{color:var(--danger);font-size:13px}
 .code{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;user-select:all;-webkit-user-select:all;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
-button{font:600 14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:10px 18px;cursor:pointer}
+button{font:600 14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#fff;background:var(--accent-fill);border:0;border-radius:10px;height:40px;padding:0 18px;cursor:pointer}
 button:hover{filter:brightness(1.08)}
+button:active{background:var(--accent-fill-pressed)}
 button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 #copied{color:var(--muted);font-size:13px}
 @media (max-width:480px){body{padding:24px 16px}main{padding:20px}}
