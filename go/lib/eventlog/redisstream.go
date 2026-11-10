@@ -111,13 +111,7 @@ func (s *RedisSink) Sink(ctx context.Context, b *Batch) error {
 	if l.MaxAge > 0 {
 		minID = strconv.FormatInt(now().Add(-l.MaxAge).UnixMilli(), 10)
 	}
-	orgs := ""
-	switch {
-	case b.TagsOverflow:
-		orgs = "*"
-	case len(b.Tags) > 0:
-		orgs = strings.Join(b.Tags, ",")
-	}
+	orgs := batchOrgs(b)
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := redisPublish.Run(pctx, s.Client,

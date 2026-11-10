@@ -19,6 +19,32 @@ import (
 // [MaxBatchTags]), so an organization's consumer skips a batch without decoding it.
 const HeaderOrgs = "W17-Orgs"
 
+// maxOrgsHeader bounds the organizations a batch names ([HeaderOrgs], the
+// Redis entry's orgs field): well inside natsHeaderRoom, beside the subject
+// and the message id.
+const maxOrgsHeader = 2 << 10
+
+// batchOrgs is what a batch says about its organizations: its tags joined
+// with ",", "" for none, and "*" — decode to know — when it cannot name them
+// exactly: more than MaxBatchTags, an id holding "," or "*", or a list longer
+// than maxOrgsHeader.
+func batchOrgs(b *Batch) string {
+	if b.TagsOverflow {
+		return "*"
+	}
+	n := 0
+	for _, t := range b.Tags {
+		if strings.ContainsAny(t, ",*") {
+			return "*"
+		}
+		n += len(t) + 1
+	}
+	if n-1 > maxOrgsHeader {
+		return "*"
+	}
+	return strings.Join(b.Tags, ",")
+}
+
 // natsHeaderRoom is what a batch leaves of the server's max_payload for the
 // headers (the message id, the organizations) and the subject.
 const natsHeaderRoom = 4 << 10
@@ -52,11 +78,8 @@ func (s *NATSSink) Sink(ctx context.Context, b *Batch) error {
 	}
 	msg := &nats.Msg{Subject: s.Subject, Data: b.Wire, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, b.ID.String())
-	switch {
-	case b.TagsOverflow:
-		msg.Header.Set(HeaderOrgs, "*")
-	case len(b.Tags) > 0:
-		msg.Header.Set(HeaderOrgs, strings.Join(b.Tags, ","))
+	if orgs := batchOrgs(b); orgs != "" {
+		msg.Header.Set(HeaderOrgs, orgs)
 	}
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
