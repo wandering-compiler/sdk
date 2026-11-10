@@ -29,6 +29,9 @@ type slotKey struct{}
 
 type slot struct {
 	rec *Record
+	// earlier holds the records of earlier Begin calls in this request; the
+	// middleware finishes them with the request's status, as it does rec.
+	earlier []*Record
 
 	// What the request says about its client, read before the handler ran.
 	ip, userAgent, referrer string
@@ -40,6 +43,9 @@ type slot struct {
 // request id, read from ctx — the handler's, so a request id set by any
 // middleware between this one and the handler is seen.
 func (sl *slot) begin(ctx context.Context, rec *Record) {
+	if sl.rec != nil {
+		sl.earlier = append(sl.earlier, sl.rec)
+	}
 	sl.rec = rec
 	rec.SetClient(sl.ip, sl.userAgent, sl.referrer, sl.utm)
 	if sl.requestID != nil {
@@ -68,16 +74,28 @@ func (s *Surface) HTTPMiddleware(trustedProxies []netip.Prefix, requestID func(c
 			}
 			sw := &statusWriter{ResponseWriter: w}
 			ctx := context.WithValue(r.Context(), slotKey{}, sl)
+			// A handler that panics after Begin is still recorded: the
+			// deferred finish runs while the panic unwinds through here,
+			// and the panic goes on unrecovered to whatever answers it.
+			returned := false
+			defer func() {
+				st := sw.status
+				switch {
+				case st != 0:
+				case returned:
+					st = http.StatusOK
+				default:
+					st = http.StatusInternalServerError
+				}
+				for _, rec := range sl.earlier {
+					rec.Finish(ctx, st)
+				}
+				if sl.rec != nil { // nil: no recorded method served it
+					sl.rec.Finish(ctx, st)
+				}
+			}()
 			next.ServeHTTP(sw, r.WithContext(ctx))
-			rec := sl.rec
-			if rec == nil {
-				return // no recorded method served it
-			}
-			st := sw.status
-			if st == 0 {
-				st = http.StatusOK
-			}
-			rec.Finish(ctx, st)
+			returned = true
 		})
 	}
 }
