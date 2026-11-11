@@ -150,7 +150,8 @@ func (OrgSource) EnumDescriptor() ([]byte, []int) {
 type Audience struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// snake_case identifier, `[a-z][a-z0-9_]*`. Matches the registry file's
-	// suffix (`rest_org.proto` → "org"). Reserved: "admin" (the admin
+	// suffix (`rest_org.proto` → "org"), except on the primary audience, whose
+	// files carry none. Reserved: "admin" (the admin
 	// surface is its own, at most one per project), "rpc" and "mcp" (they
 	// name transports in env and file names), and the leading words of the
 	// gateway's process env (`public`, `storage`, `business`, `bus`, `dpop`,

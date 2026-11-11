@@ -101,7 +101,8 @@ type McpApi struct {
 	// the auth method checks (or, with `unauthenticated`, no auth at all).
 	Oauth *McpOAuth `protobuf:"bytes,7,opt,name=oauth,proto3" json:"oauth,omitempty"`
 	// The audience this surface is for, when its domain publishes more than
-	// one (`mcp_<audience>.proto`): see `w17/audience.proto`. Unset on a
+	// one (`mcp_<audience>.proto`, or `mcp.proto` for the domain's primary
+	// audience): see `w17/audience.proto`. Unset on a
 	// domain with a single audience, which keeps `mcp.proto` and the
 	// gateway, env names and permission ids it has always had.
 	Audience *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`

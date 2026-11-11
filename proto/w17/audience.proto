@@ -24,6 +24,14 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // binary absorbs every audience gateway, each keeping its own listeners and
 // env prefix.
 //
+// The PRIMARY audience: the suffix-less `rest.proto` / `mcp.proto` /
+// `rpc.proto` may declare an audience too — at most one per domain, the same
+// in each. Its gateway keeps every name of a domain without audiences —
+// `<domain>-gateway`, `<DOMAIN>_GATEWAY_*`, the gRPC package
+// `w17lock.<domain>.rpc`, the base ports — and the named audiences follow it.
+// That is how a domain already serving clients adds a second audience: the
+// first one becomes primary, and nothing those clients dial is renamed.
+//
 // The rule for when to add one: a new audience when the default data range
 // differs, a new role when only the allowed actions differ.
 
@@ -32,7 +40,8 @@ option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
 // registries) carries the same value; codegen refuses a disagreement.
 message Audience {
   // snake_case identifier, `[a-z][a-z0-9_]*`. Matches the registry file's
-  // suffix (`rest_org.proto` → "org"). Reserved: "admin" (the admin
+  // suffix (`rest_org.proto` → "org"), except on the primary audience, whose
+  // files carry none. Reserved: "admin" (the admin
   // surface is its own, at most one per project), "rpc" and "mcp" (they
   // name transports in env and file names), and the leading words of the
   // gateway's process env (`public`, `storage`, `business`, `bus`, `dpop`,

@@ -683,7 +683,8 @@ type RestApi struct {
 	// which purposes its records serve. Absent = no records.
 	RequestEvents *RequestEvents `protobuf:"bytes,10,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
 	// The audience this surface is for, when its domain publishes more than
-	// one (`rest_<audience>.proto`): see `w17/audience.proto`. Unset on a
+	// one (`rest_<audience>.proto`, or `rest.proto` for the domain's primary
+	// audience): see `w17/audience.proto`. Unset on a
 	// domain with a single audience, which keeps `rest.proto` and the
 	// gateway, env names and permission ids it has always had.
 	Audience *Audience `protobuf:"bytes,11,opt,name=audience,proto3" json:"audience,omitempty"`

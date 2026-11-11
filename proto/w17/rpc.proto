@@ -174,7 +174,8 @@ message RpcApi {
   RequestEvents request_events = 7;
 
   // The audience this surface is for, when its domain publishes more than
-  // one (`rpc_<audience>.proto`): see `w17/audience.proto`. Unset on a
+  // one (`rpc_<audience>.proto`, or `rpc.proto` for the domain's primary
+  // audience): see `w17/audience.proto`. Unset on a
   // domain with a single audience, which keeps `rpc.proto` and the
   // gateway, env names and permission ids it has always had.
   Audience audience = 8;
