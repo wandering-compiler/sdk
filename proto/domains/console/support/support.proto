@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+// Console — issue reports wire contract (client side).
+//
+// Plain-protobuf mirror of the messages of the console's IssueReports service,
+// wire-compatible with the server (same package, message names and field
+// numbers). The client is consolegrpcapipb.IssueReportsClient
+// (go/pb/consoleapi/rpc). `w17ctl report` files a report — a security issue,
+// a bug, a docs gap, a feature request — lists its organization's, shows one
+// and withdraws its own. The console keeps and triages them; what only its
+// operator sees (the fix's commit, internal notes, duplicate links) is in
+// none of these messages.
+package console.support;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/consoleapi/support;supportpb";
+
+import "google/protobuf/timestamp.proto";
+
+// IssueReport carries the enums a report is described by; the client never
+// holds the row itself.
+message IssueReport {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    SECURITY = 1;
+    BUG      = 2;
+    DOCS     = 3;
+    FEATURE  = 4;
+  }
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    OPEN      = 1;
+    TRIAGED   = 2;
+    RESOLVED  = 3;
+    RELEASED  = 4;
+    CLOSED    = 5;
+    WITHDRAWN = 6;
+  }
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    CRITICAL = 1;
+    HIGH     = 2;
+    MEDIUM   = 3;
+    LOW      = 4;
+  }
+  enum Horizon {
+    HORIZON_UNSPECIFIED = 0;
+    SHORT_TERM = 1;
+    MID_TERM   = 2;
+    LONG_TERM  = 3;
+  }
+  enum Resolution {
+    RESOLUTION_UNSPECIFIED = 0;
+    FALSE_POSITIVE   = 1;
+    WONT_DO          = 2;
+    CANNOT_REPRODUCE = 3;
+    INSUFFICIENT     = 4;
+  }
+}
+
+// SubmitIssueReportReq files a report. At most 16 a day per account and 64
+// per organization (UTC); the body is Markdown of at most 256 KiB.
+message SubmitIssueReportReq {
+  IssueReport.Kind kind = 1;
+  string title = 2;
+  string body = 3;
+  string diagnostics = 4;
+  // A bug that blocks the reporter. Refused on any other kind.
+  bool critical = 5;
+  // Do not mail the reporter about this report.
+  bool no_notify = 6;
+}
+
+message SubmitIssueReportResp {
+  string id = 1;
+  google.protobuf.Timestamp created_at = 2;
+  int32 remaining_today = 3;
+}
+
+message ListOrgIssueReportsReq {}
+
+// IssueReportRow is a report as its organization lists it.
+message IssueReportRow {
+  string id = 1;
+  IssueReport.Kind kind = 2;
+  string title = 3;
+  IssueReport.Status status = 4;
+  IssueReport.Severity severity = 5;
+  IssueReport.Horizon horizon = 6;
+  IssueReport.Resolution resolution = 7;
+  bool critical = 8;
+  string author_id = 9;
+  string author_email = 10;
+  string released_in = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  reserved 14;
+}
+
+message ListOrgIssueReportsResp {
+  repeated IssueReportRow items = 1;
+  reserved 2;
+}
+
+message GetOrgIssueReportReq {
+  string id = 1;
+}
+
+// OrgIssueReport is one report as its organization reads it.
+message OrgIssueReport {
+  string id = 1;
+  IssueReport.Kind kind = 2;
+  string title = 3;
+  string body = 4;
+  string diagnostics = 5;
+  IssueReport.Status status = 6;
+  IssueReport.Severity severity = 7;
+  IssueReport.Horizon horizon = 8;
+  IssueReport.Resolution resolution = 9;
+  bool critical = 10;
+  bool notify = 11;
+  // What triage told the reporter.
+  string public_note = 12;
+  string author_id = 13;
+  string author_email = 14;
+  string released_in = 15;
+  reserved 16;
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
+  google.protobuf.Timestamp closed_at = 19;
+  google.protobuf.Timestamp released_at = 20;
+  google.protobuf.Timestamp withdrawn_at = 21;
+}
+
+message WithdrawReportReq {
+  string id = 1;
+}
+
+message WithdrawReportResp {
+  string id = 1;
+}
