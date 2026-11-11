@@ -191,7 +191,8 @@ message RestApi {
   RequestEvents request_events = 10;
 
   // The audience this surface is for, when its domain publishes more than
-  // one (`rest_<audience>.proto`): see `w17/audience.proto`. Unset on a
+  // one (`rest_<audience>.proto`, or `rest.proto` for the domain's primary
+  // audience): see `w17/audience.proto`. Unset on a
   // domain with a single audience, which keeps `rest.proto` and the
   // gateway, env names and permission ids it has always had.
   Audience audience = 11;

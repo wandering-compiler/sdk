@@ -169,7 +169,8 @@ message McpApi {
   McpOAuth oauth = 7;
 
   // The audience this surface is for, when its domain publishes more than
-  // one (`mcp_<audience>.proto`): see `w17/audience.proto`. Unset on a
+  // one (`mcp_<audience>.proto`, or `mcp.proto` for the domain's primary
+  // audience): see `w17/audience.proto`. Unset on a
   // domain with a single audience, which keeps `mcp.proto` and the
   // gateway, env names and permission ids it has always had.
   Audience audience = 8;

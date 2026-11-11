@@ -95,7 +95,8 @@ type RpcApi struct {
 	// which purposes its records serve. Absent = no records.
 	RequestEvents *RequestEvents `protobuf:"bytes,7,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
 	// The audience this surface is for, when its domain publishes more than
-	// one (`rpc_<audience>.proto`): see `w17/audience.proto`. Unset on a
+	// one (`rpc_<audience>.proto`, or `rpc.proto` for the domain's primary
+	// audience): see `w17/audience.proto`. Unset on a
 	// domain with a single audience, which keeps `rpc.proto` and the
 	// gateway, env names and permission ids it has always had.
 	Audience *Audience `protobuf:"bytes,8,opt,name=audience,proto3" json:"audience,omitempty"`
