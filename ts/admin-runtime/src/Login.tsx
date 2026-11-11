@@ -15,6 +15,11 @@
 // (oauth.ts): the link gains a `code_challenge` and the browser comes back
 // with a one-time code instead of a session.
 //
+// With a second factor (`auth.mfa_verify_endpoint`) a password sign-in may be
+// answered with a challenge instead of a session: the form then asks for the
+// code — from the authenticator, or the one sent by e-mail — and the verify
+// call answers the session.
+//
 // With device identity on (`auth.dpop`) the password sign-in is a mint call
 // (an unbound DPoP proof, no token) and the screen offers "This is a public
 // computer": the session then gets the plugin's short public lifetime, its
@@ -49,8 +54,15 @@ import type { AdminSpec } from "./types";
 import { useT } from "./i18n";
 
 interface LoginResp {
-  token: string;
+  token?: string;
   public_computer?: boolean;
+  // A sign-in the realm challenges answers these instead of a token.
+  mfa_required?: boolean;
+  challenge_id?: string;
+  // With mfa_required: the account has no authenticator yet and no code was
+  // sent — it must set one up first (EnrollTotpAtSignIn), which this page
+  // does not offer.
+  enrolment_required?: boolean;
 }
 
 export interface LoginProps {
@@ -65,6 +77,10 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // The second step: the challenge the password sign-in answered, and the
+  // code typed for it.
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const options = spec.auth.sign_in_options ?? [];
   // Absent means TRUE. A spec written before this field existed
   // describes a password admin, and reading the missing value as false
@@ -118,22 +134,72 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
         undefined,
         dpop ? { mint: true, resign: true } : undefined,
       );
-      if (!resp.token) {
-        setError("login response missing 'token' field");
+      if (resp.mfa_required && resp.challenge_id) {
+        if (!spec.auth.mfa_verify_endpoint) {
+          setError(t("This account signs in with a second factor, which this admin cannot ask for."));
+          return;
+        }
+        // No code exists to type: asking for one would leave the person on
+        // a screen no answer gets past.
+        if (resp.enrolment_required) {
+          setError(t("This account has to set up an authenticator before it signs in, which this admin cannot do."));
+          return;
+        }
+        setPassword("");
+        setChallengeId(resp.challenge_id);
         return;
       }
-      // The operator's own choice counts even when the answer cannot echo it
-      // (a sign-in method without the field): a public computer must never
-      // leave a token in the profile's storage.
-      setToken(resp.token, {
-        publicComputer: resp.public_computer === true || (dpop && publicComputer),
-      });
-      onLogin();
+      signedIn(resp);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // signedIn keeps the session a sign-in step answered.
+  function signedIn(resp: LoginResp) {
+    if (!resp.token) {
+      setError("login response missing 'token' field");
+      return;
+    }
+    // The operator's own choice counts even when the answer cannot echo it
+    // (a sign-in method without the field): a public computer must never
+    // leave a token in the profile's storage.
+    setToken(resp.token, {
+      publicComputer: resp.public_computer === true || (dpop && publicComputer),
+    });
+    onLogin();
+  }
+
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (!challengeId || !spec.auth.mfa_verify_endpoint) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      // A mint like the sign-in, on the SAME key: the challenge belongs to
+      // the key that passed the password, so it is never re-sent on a fresh
+      // one.
+      const resp = await apiPost<LoginResp>(
+        spec.auth.mfa_verify_endpoint,
+        { challenge_id: challengeId, code: code.replace(/\s+/g, "") },
+        undefined,
+        dpop ? { mint: true } : undefined,
+      );
+      signedIn(resp);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // startOver drops the challenge: a new sign-in raises a new one.
+  function startOver() {
+    setChallengeId(null);
+    setCode("");
+    setError(null);
   }
 
   return (
@@ -159,7 +225,7 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
                   {notice}
                 </Alert>
               )}
-              {options.length > 0 && (
+              {options.length > 0 && !challengeId && (
                 <Stack gap="sm">
                   {options.map((o) =>
                     pkce ? (
@@ -198,10 +264,45 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
                   )}
                 </Stack>
               )}
-              {options.length > 0 && passwordSignIn && (
+              {options.length > 0 && passwordSignIn && !challengeId && (
                 <Divider label={t("or")} labelPosition="center" />
               )}
-              {passwordSignIn && (
+              {challengeId && (
+                <form onSubmit={handleVerify}>
+                  <Stack>
+                    <Text fz="sm">
+                      {t("Enter the code from your authenticator app, or the one we sent to your e-mail.")}
+                    </Text>
+                    <TextInput
+                      label={t("Code")}
+                      autoFocus
+                      required
+                      size="md"
+                      autoComplete="one-time-code"
+                      inputMode="numeric"
+                      value={code}
+                      onChange={(e) => setCode(e.currentTarget.value)}
+                    />
+                    {error && (
+                      <Alert
+                        color="red"
+                        variant="light"
+                        icon={<IconAlertTriangle size={18} />}
+                        title={t("Sign-in failed")}
+                      >
+                        {error}
+                      </Alert>
+                    )}
+                    <Button type="submit" loading={submitting} fullWidth size="md" mt="xs">
+                      {t("Verify")}
+                    </Button>
+                    <Button variant="subtle" onClick={startOver} disabled={submitting}>
+                      {t("Start over")}
+                    </Button>
+                  </Stack>
+                </form>
+              )}
+              {passwordSignIn && !challengeId && (
                 <form onSubmit={handleSubmit}>
                   <Stack>
                     <TextInput
@@ -235,7 +336,7 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
                   </Stack>
                 </form>
               )}
-              {dpop && (
+              {dpop && !challengeId && (
                 <Checkbox
                   label={t("This is a public computer")}
                   description={t("Keep me signed in only until the browser closes.")}

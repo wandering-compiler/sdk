@@ -267,6 +267,14 @@ export interface AdminAuthSpec {
    * a `#token=` fragment is read, as before (Bearer admins only).
    */
   oauth_exchange_endpoint?: string;
+  /**
+   * Where a password sign-in the login method answered with a challenge
+   * (`mfa_required` + `challenge_id`, the auth plugin's two_factor) is
+   * completed with the second factor's code (`POST …/api/authenticate/verify`,
+   * the plugin's VerifyMfa). Set, the login page asks for the code; absent,
+   * the realm signs in without a second factor.
+   */
+  mfa_verify_endpoint?: string;
 }
 
 /** One federated entry point on the login page. */
