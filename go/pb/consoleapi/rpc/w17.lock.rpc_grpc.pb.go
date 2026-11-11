@@ -22,6 +22,7 @@ import (
 	initiatives "github.com/wandering-compiler/sdk/go/pb/consoleapi/initiatives"
 	review "github.com/wandering-compiler/sdk/go/pb/consoleapi/review"
 	secrets "github.com/wandering-compiler/sdk/go/pb/consoleapi/secrets"
+	support "github.com/wandering-compiler/sdk/go/pb/consoleapi/support"
 	w17compiler "github.com/wandering-compiler/sdk/go/pb/w17compiler"
 	w17registry "github.com/wandering-compiler/sdk/go/pb/w17registry"
 	grpc "google.golang.org/grpc"
@@ -3849,6 +3850,240 @@ var EnvironmentSecrets_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReadSealedSecrets",
 			Handler:    _EnvironmentSecrets_ReadSealedSecrets_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "domains/console/w17.lock.rpc.proto",
+}
+
+const (
+	IssueReports_ListIssueReports_FullMethodName    = "/w17lock.console.rpc.IssueReports/ListIssueReports"
+	IssueReports_GetIssueReport_FullMethodName      = "/w17lock.console.rpc.IssueReports/GetIssueReport"
+	IssueReports_WithdrawIssueReport_FullMethodName = "/w17lock.console.rpc.IssueReports/WithdrawIssueReport"
+	IssueReports_SubmitIssueReport_FullMethodName   = "/w17lock.console.rpc.IssueReports/SubmitIssueReport"
+)
+
+// IssueReportsClient is the client API for IssueReports service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type IssueReportsClient interface {
+	// ListIssueReports — the organization's reports, newest first, with who
+	// filed each.
+	ListIssueReports(ctx context.Context, in *support.ListOrgIssueReportsReq, opts ...grpc.CallOption) (*support.ListOrgIssueReportsResp, error)
+	// GetIssueReport — one of the organization's reports, with its body and
+	// what triage told its reporter.
+	GetIssueReport(ctx context.Context, in *support.GetOrgIssueReportReq, opts ...grpc.CallOption) (*support.OrgIssueReport, error)
+	// WithdrawIssueReport — take back one's own report while it is open or
+	// triaged.
+	WithdrawIssueReport(ctx context.Context, in *support.WithdrawReportReq, opts ...grpc.CallOption) (*support.WithdrawReportResp, error)
+	// SubmitIssueReport — file a report. At most 16 a day per account and 64
+	// per organization (UTC days), a security report included; the 17th is
+	// refused with ResourceExhausted. The body is Markdown, at most 256 KiB.
+	SubmitIssueReport(ctx context.Context, in *support.SubmitIssueReportReq, opts ...grpc.CallOption) (*support.SubmitIssueReportResp, error)
+}
+
+type issueReportsClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewIssueReportsClient(cc grpc.ClientConnInterface) IssueReportsClient {
+	return &issueReportsClient{cc}
+}
+
+func (c *issueReportsClient) ListIssueReports(ctx context.Context, in *support.ListOrgIssueReportsReq, opts ...grpc.CallOption) (*support.ListOrgIssueReportsResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(support.ListOrgIssueReportsResp)
+	err := c.cc.Invoke(ctx, IssueReports_ListIssueReports_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *issueReportsClient) GetIssueReport(ctx context.Context, in *support.GetOrgIssueReportReq, opts ...grpc.CallOption) (*support.OrgIssueReport, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(support.OrgIssueReport)
+	err := c.cc.Invoke(ctx, IssueReports_GetIssueReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *issueReportsClient) WithdrawIssueReport(ctx context.Context, in *support.WithdrawReportReq, opts ...grpc.CallOption) (*support.WithdrawReportResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(support.WithdrawReportResp)
+	err := c.cc.Invoke(ctx, IssueReports_WithdrawIssueReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *issueReportsClient) SubmitIssueReport(ctx context.Context, in *support.SubmitIssueReportReq, opts ...grpc.CallOption) (*support.SubmitIssueReportResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(support.SubmitIssueReportResp)
+	err := c.cc.Invoke(ctx, IssueReports_SubmitIssueReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// IssueReportsServer is the server API for IssueReports service.
+// All implementations must embed UnimplementedIssueReportsServer
+// for forward compatibility.
+type IssueReportsServer interface {
+	// ListIssueReports — the organization's reports, newest first, with who
+	// filed each.
+	ListIssueReports(context.Context, *support.ListOrgIssueReportsReq) (*support.ListOrgIssueReportsResp, error)
+	// GetIssueReport — one of the organization's reports, with its body and
+	// what triage told its reporter.
+	GetIssueReport(context.Context, *support.GetOrgIssueReportReq) (*support.OrgIssueReport, error)
+	// WithdrawIssueReport — take back one's own report while it is open or
+	// triaged.
+	WithdrawIssueReport(context.Context, *support.WithdrawReportReq) (*support.WithdrawReportResp, error)
+	// SubmitIssueReport — file a report. At most 16 a day per account and 64
+	// per organization (UTC days), a security report included; the 17th is
+	// refused with ResourceExhausted. The body is Markdown, at most 256 KiB.
+	SubmitIssueReport(context.Context, *support.SubmitIssueReportReq) (*support.SubmitIssueReportResp, error)
+	mustEmbedUnimplementedIssueReportsServer()
+}
+
+// UnimplementedIssueReportsServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedIssueReportsServer struct{}
+
+func (UnimplementedIssueReportsServer) ListIssueReports(context.Context, *support.ListOrgIssueReportsReq) (*support.ListOrgIssueReportsResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListIssueReports not implemented")
+}
+func (UnimplementedIssueReportsServer) GetIssueReport(context.Context, *support.GetOrgIssueReportReq) (*support.OrgIssueReport, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetIssueReport not implemented")
+}
+func (UnimplementedIssueReportsServer) WithdrawIssueReport(context.Context, *support.WithdrawReportReq) (*support.WithdrawReportResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method WithdrawIssueReport not implemented")
+}
+func (UnimplementedIssueReportsServer) SubmitIssueReport(context.Context, *support.SubmitIssueReportReq) (*support.SubmitIssueReportResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitIssueReport not implemented")
+}
+func (UnimplementedIssueReportsServer) mustEmbedUnimplementedIssueReportsServer() {}
+func (UnimplementedIssueReportsServer) testEmbeddedByValue()                      {}
+
+// UnsafeIssueReportsServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to IssueReportsServer will
+// result in compilation errors.
+type UnsafeIssueReportsServer interface {
+	mustEmbedUnimplementedIssueReportsServer()
+}
+
+func RegisterIssueReportsServer(s grpc.ServiceRegistrar, srv IssueReportsServer) {
+	// If the following call panics, it indicates UnimplementedIssueReportsServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&IssueReports_ServiceDesc, srv)
+}
+
+func _IssueReports_ListIssueReports_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(support.ListOrgIssueReportsReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IssueReportsServer).ListIssueReports(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IssueReports_ListIssueReports_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IssueReportsServer).ListIssueReports(ctx, req.(*support.ListOrgIssueReportsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IssueReports_GetIssueReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(support.GetOrgIssueReportReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IssueReportsServer).GetIssueReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IssueReports_GetIssueReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IssueReportsServer).GetIssueReport(ctx, req.(*support.GetOrgIssueReportReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IssueReports_WithdrawIssueReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(support.WithdrawReportReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IssueReportsServer).WithdrawIssueReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IssueReports_WithdrawIssueReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IssueReportsServer).WithdrawIssueReport(ctx, req.(*support.WithdrawReportReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IssueReports_SubmitIssueReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(support.SubmitIssueReportReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IssueReportsServer).SubmitIssueReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IssueReports_SubmitIssueReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IssueReportsServer).SubmitIssueReport(ctx, req.(*support.SubmitIssueReportReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// IssueReports_ServiceDesc is the grpc.ServiceDesc for IssueReports service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var IssueReports_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "w17lock.console.rpc.IssueReports",
+	HandlerType: (*IssueReportsServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListIssueReports",
+			Handler:    _IssueReports_ListIssueReports_Handler,
+		},
+		{
+			MethodName: "GetIssueReport",
+			Handler:    _IssueReports_GetIssueReport_Handler,
+		},
+		{
+			MethodName: "WithdrawIssueReport",
+			Handler:    _IssueReports_WithdrawIssueReport_Handler,
+		},
+		{
+			MethodName: "SubmitIssueReport",
+			Handler:    _IssueReports_SubmitIssueReport_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

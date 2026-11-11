@@ -34,6 +34,7 @@ pb: protoc-image
 	$(PROTOC_GRPC) common/distx/distributed_tx.proto
 	$(PROTOC_GRPC) common/files/files.proto
 	$(PROTOC) domains/console/secrets/secrets.proto
+	$(PROTOC) domains/console/support/support.proto
 	$(PROTOC_GRPC) \
 		domains/console/initiatives/initiatives.proto \
 		domains/console/review/review.proto \
