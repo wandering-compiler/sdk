@@ -114,7 +114,10 @@ describe("a challenged sign-in", () => {
     expect(onLogin).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: /start over/i }));
-    expect(document.querySelector('input[type="password"]'), "back to the password form").toBeTruthy();
+    expect(
+      document.querySelector('input[type="password"]'),
+      "back to the password form",
+    ).toBeTruthy();
   });
 
   // An admin generated without the second step cannot finish the sign-in, and

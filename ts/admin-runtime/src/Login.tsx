@@ -136,13 +136,19 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
       );
       if (resp.mfa_required && resp.challenge_id) {
         if (!spec.auth.mfa_verify_endpoint) {
-          setError(t("This account signs in with a second factor, which this admin cannot ask for."));
+          setError(
+            t("This account signs in with a second factor, which this admin cannot ask for."),
+          );
           return;
         }
         // No code exists to type: asking for one would leave the person on
         // a screen no answer gets past.
         if (resp.enrolment_required) {
-          setError(t("This account has to set up an authenticator before it signs in, which this admin cannot do."));
+          setError(
+            t(
+              "This account has to set up an authenticator before it signs in, which this admin cannot do.",
+            ),
+          );
           return;
         }
         setPassword("");
@@ -271,7 +277,9 @@ export function Login({ spec, onLogin, notice }: LoginProps) {
                 <form onSubmit={handleVerify}>
                   <Stack>
                     <Text fz="sm">
-                      {t("Enter the code from your authenticator app, or the one we sent to your e-mail.")}
+                      {t(
+                        "Enter the code from your authenticator app, or the one we sent to your e-mail.",
+                      )}
                     </Text>
                     <TextInput
                       label={t("Code")}
