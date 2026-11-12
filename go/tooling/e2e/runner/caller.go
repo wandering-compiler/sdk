@@ -472,9 +472,12 @@ type CallErrorDetail struct {
 	Message string
 }
 
+// Error names the refusal with its details: the envelope's message is often
+// the code's generic sentence ("The request could not be accepted as sent."),
+// and which field, under which rule, is in details[] alone.
 func (e *CallError) Error() string {
 	if e.Code != "" {
-		return fmt.Sprintf("%s: status %d: %s: %s", e.Op, e.Status, e.Code, e.Message)
+		return fmt.Sprintf("%s: status %d: %s: %s%s", e.Op, e.Status, e.Code, e.Message, detailsSuffix(e))
 	}
 	return fmt.Sprintf("%s: status %d: %s", e.Op, e.Status, e.Raw)
 }
