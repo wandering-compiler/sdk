@@ -97,6 +97,22 @@ func TestNewCallError_DecodesTheCanonicalEnvelope(t *testing.T) {
 	}
 }
 
+// A step that fails on a refusal names what the surface objected to: the
+// envelope's message is the code's generic sentence, and the field and the
+// rule are in details[] alone.
+func TestCallError_ErrorCarriesTheDetails(t *testing.T) {
+	e := newCallError("rest POST /admin/api/detail/OrgMemberships", 400, []byte(`{"error":{"code":"INVALID_ARGUMENT","message":"The request could not be accepted as sent.","details":[{"field":"user_id","code":"INVALID_VALUE","message":"referenced record does not exist"}]}}`))
+	got := e.Error()
+	for _, want := range []string{"INVALID_ARGUMENT", `field="user_id"`, `code="INVALID_VALUE"`, `message="referenced record does not exist"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Error() = %q, missing %s", got, want)
+		}
+	}
+	if bare := (&CallError{Op: "x", Status: 404, Code: "NOT_FOUND", Message: "gone"}).Error(); strings.Contains(bare, "details") {
+		t.Errorf("a refusal without details names none: %q", bare)
+	}
+}
+
 // The `details` half. A whole class of refusals says the same thing in
 // `message` — every request-validation failure answers "validation
 // failed" — so without reading the per-field details, six different

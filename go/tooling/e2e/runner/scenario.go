@@ -734,7 +734,7 @@ func matchCallError(want *ExpectError, err error, scope *runtime.Scope) error {
 		if ce.Code == "" {
 			return fmt.Errorf("expected %s, got status %d with no canonical code in the body: %s", want.Code, ce.Status, ce.Raw)
 		}
-		return fmt.Errorf("expected %s, got %s (status %d): %s", want.Code, ce.Code, ce.Status, ce.Message)
+		return fmt.Errorf("expected %s, got %s (status %d): %s%s", want.Code, ce.Code, ce.Status, ce.Message, detailsSuffix(ce))
 	}
 	if want.Message != nil {
 		if err := runtime.MatchExpect(map[string]any{"message": want.Message}, map[string]any{"message": ce.Message}, scope); err != nil {
