@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"encoding/json"
 	"context"
 	"errors"
 	"fmt"
@@ -721,6 +722,16 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 		}
 	}
 	if len(run) == 0 {
+		// Never silent (T1-1 pass #51, A51-30): the operator asked for the
+		// guards, and "applied" must not read as "guarded" when none came —
+		// nothing to guard, a console or a stored digest older than the
+		// checks, or probes the console could not port to this dialect,
+		// which its plan names and are listed here.
+		line := fmt.Sprintf("%s:   --checks: no %s check served for %s", verb, when, p.Migration.GetId())
+		if names := unportedChecks(p.Migration.GetManifestJson(), down); len(names) > 0 {
+			line += fmt.Sprintf("; the console could not port %d probe(s) to this dialect and left them out — verify by hand what they count: %s", len(names), strings.Join(names, ", "))
+		}
+		fmt.Fprintln(out, line)
 		return nil
 	}
 	if ra, ok := applier.(ResumableApplier); ok && !down {
@@ -782,6 +793,43 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 		fmt.Fprintf(out, "%s:   check %s passed\n", verb, c.GetName())
 	}
 	return nil
+}
+
+// unportedChecks names the probes a migration's plan says it does not carry
+// on its dialect (risk findings of op_kind check_not_portable), for one
+// direction: a rollback probe's name starts with "down__". Read loosely, like
+// every manifest field the applier uses — an unreadable manifest names none.
+func unportedChecks(manifestJSON string, down bool) []string {
+	raw := strings.TrimSpace(manifestJSON)
+	if raw == "" {
+		return nil
+	}
+	var doc struct {
+		RiskFindings []struct {
+			OpKind    string `json:"op_kind"`
+			Rationale string `json:"rationale"`
+		} `json:"risk_findings"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range doc.RiskFindings {
+		if r.OpKind != "check_not_portable" {
+			continue
+		}
+		name := "(unnamed)"
+		if rest, ok := strings.CutPrefix(r.Rationale, "the pre-apply check "); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				name = f[0]
+			}
+		}
+		if strings.HasPrefix(name, "down__") != down {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func doneWord(down bool) string {
