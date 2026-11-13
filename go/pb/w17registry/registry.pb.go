@@ -286,8 +286,16 @@ type Migration struct {
 	// NOT NULL tightening as a bare SET NOT NULL, and only a person noticed.
 	// An opaque number to the client: it compares, it never interprets.
 	PlannerVersion uint32 `protobuf:"varint,5,opt,name=planner_version,json=plannerVersion,proto3" json:"planner_version,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// raw marks a hand-authored `push-raw` body. No planner decided it, so its
+	// planner_version is 0 and says nothing about a decision it may lack: a
+	// planner floor does not judge it (T1-1 pass #51, Q51-35 — the floor named
+	// every raw head as "minted below the floor" and sent the operator to
+	// `migrate replace`, which refuses a raw migration). False on a console
+	// that predates the field, and on a raw migration stored before the console
+	// recorded which pushes were raw.
+	Raw           bool `protobuf:"varint,6,opt,name=raw,proto3" json:"raw,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Migration) Reset() {
@@ -353,6 +361,13 @@ func (x *Migration) GetPlannerVersion() uint32 {
 		return x.PlannerVersion
 	}
 	return 0
+}
+
+func (x *Migration) GetRaw() bool {
+	if x != nil {
+		return x.Raw
+	}
+	return false
 }
 
 type RegisterProjectRequest struct {
@@ -1899,7 +1914,7 @@ var File_w17registry_registry_proto protoreflect.FileDescriptor
 
 const file_w17registry_registry_proto_rawDesc = "" +
 	"\n" +
-	"\x1aw17registry/registry.proto\x12\fw17.registry\"\xb0\x01\n" +
+	"\x1aw17registry/registry.proto\x12\fw17.registry\"\xc2\x01\n" +
 	"\tMigration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n" +
 	"\n" +
@@ -1907,7 +1922,8 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"connection\x12%\n" +
 	"\x0econtent_sha256\x18\x03 \x01(\tR\rcontentSha256\x12#\n" +
 	"\rsuperseded_by\x18\x04 \x01(\tR\fsupersededBy\x12'\n" +
-	"\x0fplanner_version\x18\x05 \x01(\rR\x0eplannerVersion\",\n" +
+	"\x0fplanner_version\x18\x05 \x01(\rR\x0eplannerVersion\x12\x10\n" +
+	"\x03raw\x18\x06 \x01(\bR\x03raw\",\n" +
 	"\x16RegisterProjectRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"8\n" +
 	"\x17RegisterProjectResponse\x12\x1d\n" +
