@@ -1,9 +1,9 @@
 package migrate
 
 import (
-	"regexp"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )

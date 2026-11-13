@@ -49,7 +49,7 @@ func p51RenameSkirt(witness bool) *applyfetchpb.Migration {
 		w = p51Witness
 	}
 	return &applyfetchpb.Migration{
-		Id: p51ID,
+		Id:    p51ID,
 		UpSql: "BEGIN;\n\nINSERT INTO \"w17_migrations\" (\"timestamp\", \"content_sha256\", \"post_tx_complete\") VALUES ('" + p51TS + "', 'cc', false);\n\nCOMMIT;\n",
 		UpPostTx: w + `-- w17:skirt-op 1
 DROP INDEX CONCURRENTLY IF EXISTS "old_t_x_idx";
