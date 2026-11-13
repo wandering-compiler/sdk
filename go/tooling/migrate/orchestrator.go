@@ -706,7 +706,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 // optional — a warning probe that cannot run still refuses, as an unanswered
 // probe is not a pass.
 // A migration resumed after its in-tx half committed is past the point a
-// forward check could stop, so an apply runs none for it. A dialect that
+// forward check could stop, so an apply runs none for it; and its down
+// checks describe a schema it never reached, so a rollback runs none either.
+// A dialect that
 // cannot run checks refuses the migration that carries some: the operator
 // asked for them, and skipping them silently would read as a pass.
 func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bool, out io.Writer) error {
@@ -723,12 +725,26 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 	if len(run) == 0 {
 		return nil
 	}
-	if ra, ok := applier.(ResumableApplier); ok && !down {
+	if ra, ok := applier.(ResumableApplier); ok {
 		phase, err := ra.MigrationPhase(ctx, p.Migration.GetId())
 		if err != nil {
-			return fmt.Errorf("apply %s/%s: phase check: %w", p.Connection, p.Migration.GetId(), err)
+			return fmt.Errorf("%s %s/%s: phase check: %w", verb, p.Connection, p.Migration.GetId(), err)
+		}
+		if phase == PhasePending && !down {
+			return nil
 		}
 		if phase == PhasePending {
+			// The down probes are rendered against the fully-applied schema
+			// (the post-up names), which a skirt that stopped part-way never
+			// produced: a probe naming them cannot run, and --checks refused
+			// the very rollback the half-applied migration's failure names
+			// (T1-1 pass #51, Q51-3). Not run, and said so.
+			names := make([]string, 0, len(run))
+			for _, c := range run {
+				names = append(names, c.GetName())
+			}
+			fmt.Fprintf(out, "rollback:   %s/%s is half-applied: its pre-rollback check(s) %s are rendered for the fully-applied schema, which it does not have, and are not run\n",
+				p.Connection, p.Migration.GetId(), strings.Join(names, ", "))
 			return nil
 		}
 	}
@@ -833,10 +849,17 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		// this schema" gets no fake apply, because the alternative is
 		// recording the claim on the operator's word alone — which is the
 		// hand-written ledger INSERT this command replaces.
+		// The console renders a preflight for PostgreSQL only (T1-1 pass
+		// #51, A51-36): on any other store no fetch ever brings one, so the
+		// text must not send the operator to fetch.
+		fix := "the console renders one for PostgreSQL only, so --fake cannot record a migration on this store: apply it for real"
+		if isPostgresApplier(applier) {
+			fix = "fetch the migration again from a console that renders one (PostgreSQL only), or apply it for real"
+		}
 		err := fmt.Errorf("fake apply %s/%s: this migration carries no adopt preflight, so there is nothing to check the claim against\n"+
 			"  why: --fake records a migration without running it, and the licence for that is the database ALREADY holding what the migration describes\n"+
-			"  fix: fetch the migration again from a console that renders one (relational dialects only), or apply it for real",
-			p.Connection, p.Migration.GetId())
+			"  fix: %s",
+			p.Connection, p.Migration.GetId(), fix)
 		logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), err)
 		return err
 	}

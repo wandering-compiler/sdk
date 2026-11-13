@@ -536,3 +536,17 @@ func TestA51_34_AStoppedRollbackIsNotAppliedForward_Live(t *testing.T) {
 		t.Fatal("the rollback did not re-create the dropped index")
 	}
 }
+
+// A51-36 (first half) — a row-shape probe (the planner's uniqueness probe,
+// `… GROUP BY … HAVING count(*) > 1 LIMIT 1`) counted at most one duplicate
+// group: --checks reported "1 row(s)" over any number of them.
+func TestA51_36_UniqueProbeCountsEveryDuplicateGroup_Live(t *testing.T) {
+	ctx, _, a, conn := p51Open(t)
+	if _, err := conn.Exec(ctx, `CREATE TABLE "u" (s TEXT); INSERT INTO "u" VALUES ('a'), ('a'), ('b'), ('b'), ('c'), ('c'), ('d')`, pgx.QueryExecModeSimpleProtocol); err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.RunCheck(ctx, `SELECT "s", count(*) FROM "u" WHERE ("s") IS NOT NULL GROUP BY "s" HAVING count(*) > 1 LIMIT 1`, "")
+	if err != nil || n != 3 {
+		t.Fatalf("count = %d, %v; want the 3 duplicate groups", n, err)
+	}
+}
