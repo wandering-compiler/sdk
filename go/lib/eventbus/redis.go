@@ -829,10 +829,16 @@ func (s *redisSubscription) keepQueuedFresh(ctx context.Context, batch []goredis
 	}
 }
 
-// claimLoop polls XPENDING every AckWait for entries past the
-// idle threshold; reclaims them via XCLAIM + replays through
+// claimLoop polls XPENDING every quarter of AckWait for entries past
+// the idle threshold; reclaims them via XCLAIM + replays through
 // the handler. Entries past MaxDeliver land on
 // `<channel>.dlq` + are XACK'd to release the origin slot.
+//
+// The threshold is AckWait; the tick is only how late past it an entry is
+// seen. Ticking every AckWait made that up to a whole AckWait more: an
+// entry handed to a connection that died before it arrived (a link loss
+// mid-XREADGROUP) came back anywhere between one and two AckWaits later,
+// where NATS redelivers it at one. A quarter bounds it at 1.25.
 //
 // Resolves per-channel retry overrides at startup; the
 // ticker + idle threshold + DLQ cutoff all key off the
@@ -840,7 +846,11 @@ func (s *redisSubscription) keepQueuedFresh(ctx context.Context, batch []goredis
 func (s *redisSubscription) claimLoop(ctx context.Context, h HandlerFunc) {
 	defer s.wg.Done()
 	maxDeliver, ackWait := s.bus.retryFor(s.channel)
-	ticker := time.NewTicker(ackWait)
+	every := ackWait / redisClaimTicksPerAckWait
+	if every <= 0 {
+		every = time.Millisecond
+	}
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	bgCtx := context.WithoutCancel(ctx)
 	var failure redisLoopFailure
@@ -925,6 +935,10 @@ func (s *redisSubscription) claimPending(ctx context.Context, h HandlerFunc, max
 	}
 	return nil
 }
+
+// redisClaimTicksPerAckWait is how many times per AckWait the claim loop
+// looks at the pending list (claimLoop).
+const redisClaimTicksPerAckWait = 4
 
 // redisClaimPageSize / redisClaimPages bound one claim-loop tick: up to
 // 1000 pending entries looked at, the rest on the next tick.
