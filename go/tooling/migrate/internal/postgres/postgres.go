@@ -386,12 +386,14 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 // down_pre_tx runs statement-by-statement under
 // SimpleProtocol — same per-statement / no-prepare contract
 // as up_post_tx in Apply, for the same reason (CONCURRENTLY +
-// implicit-tx wrapping).
+// implicit-tx wrapping). For a half-applied migration (a pending
+// row with a recorded resume cursor, whose skirt operations are
+// marked) it skips the inverses of the operations that never ran
+// (rollbackPreTx, review R1-3).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
-	for _, stmt := range splitStatements(m.GetDownPreTx()) {
-		if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
-			return fmt.Errorf("postgres rollback down_pre_tx: %w", err)
-		}
+	// A half-applied skirt undoes only what ran (rollbackPreTx, review R1-3).
+	if err := a.rollbackPreTx(ctx, m); err != nil {
+		return err
 	}
 	if down := m.GetDownSql(); down != "" {
 		if _, err := a.conn.Exec(ctx, down, pgx.QueryExecModeSimpleProtocol); err != nil {
@@ -573,7 +575,12 @@ func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
 	if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
 		return fmt.Errorf("postgres Wipe: %w", err)
 	}
+	// The ledger is gone with its columns: the next one is created by a
+	// migration's own DDL, which may predate either column (review R1-6 —
+	// the cursor cache survived the wipe, so the next two-phase apply
+	// skipped the ALTER and failed 42703 on post_tx_done).
 	a.phaseColEnsured = false
+	a.cursorColEnsured = false
 	return nil
 }
 
