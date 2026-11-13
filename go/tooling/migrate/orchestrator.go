@@ -1,8 +1,8 @@
 package migrate
 
 import (
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
