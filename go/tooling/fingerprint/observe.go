@@ -397,13 +397,25 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 	// a DEFAULT lives in — and an IDENTITY column has no pg_attrdef row at
 	// all. Without the two flags the one reads as a phantom default and the
 	// other as "no default", and the reconstruction plans against a lie.
+	//
+	// The KIND of each travels too (T1-1 pass #51): an identity may be
+	// ALWAYS (`attidentity = 'a'`), a PostgreSQL 18 generated column may be
+	// VIRTUAL (`attgenerated = 'v'`), and a PostgreSQL 18 NOT NULL may be a
+	// NOT VALID constraint (`contype = 'n'`, not validated) while attnotnull
+	// still says true. Each reads as the converged declared kind otherwise.
+	// On an older server the three are simply false: no 'v', no 'n' rows.
 	rows, err := conn.Query(ctx, `
 		SELECT a.attname,
 		       format_type(a.atttypid, a.atttypmod),
 		       NOT a.attnotnull,
 		       COALESCE(pg_get_expr(d.adbin, d.adrelid), ''),
 		       a.attgenerated <> '',
-		       a.attidentity <> ''
+		       a.attidentity <> '',
+		       a.attidentity = 'a',
+		       a.attgenerated = 'v',
+		       EXISTS (SELECT 1 FROM pg_constraint nc
+		                WHERE nc.conrelid = a.attrelid AND nc.contype = 'n'
+		                  AND NOT nc.convalidated AND nc.conkey[1] = a.attnum)
 		  FROM pg_attribute a
 		  JOIN pg_class c ON c.oid = a.attrelid
 		  JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -419,12 +431,14 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 	var out []Column
 	for rows.Next() {
 		var name, dtype, def string
-		var nullable, generated, identity bool
-		if err := rows.Scan(&name, &dtype, &nullable, &def, &generated, &identity); err != nil {
+		var nullable, generated, identity, identityAlways, virtual, nnNotValid bool
+		if err := rows.Scan(&name, &dtype, &nullable, &def, &generated, &identity,
+			&identityAlways, &virtual, &nnNotValid); err != nil {
 			return nil, fmt.Errorf("postgres observe scan column %s.%s: %w", schema, table, err)
 		}
 		out = append(out, Column{Name: name, DataType: dtype, Nullable: nullable, Default: def,
-			Generated: generated, Identity: identity})
+			Generated: generated, Identity: identity,
+			IdentityAlways: identityAlways, GeneratedVirtual: virtual, NotNullNotValid: nnNotValid})
 	}
 	return out, rows.Err()
 }

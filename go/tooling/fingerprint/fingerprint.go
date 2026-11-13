@@ -91,6 +91,16 @@ type Column struct {
 	// Identity reports `attidentity <> ''` — the column self-generates and
 	// carries no pg_attrdef row.
 	Identity bool
+	// IdentityAlways reports `attidentity = 'a'`: GENERATED ALWAYS, which
+	// refuses an explicit value, where the emitter writes BY DEFAULT.
+	IdentityAlways bool
+	// GeneratedVirtual reports `attgenerated = 'v'` (PostgreSQL 18): a
+	// VIRTUAL generated column, where the emitter writes STORED.
+	GeneratedVirtual bool
+	// NotNullNotValid reports a PostgreSQL 18 `NOT NULL … NOT VALID`
+	// constraint on the column: Nullable is false (attnotnull), yet existing
+	// rows may hold NULL.
+	NotNullNotValid bool
 }
 
 // Format produces the canonical text representation of the
