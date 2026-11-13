@@ -210,6 +210,32 @@ func (a *Applier) ensurePhaseColumn(ctx context.Context) error {
 // `id` on this target (migrate.ResumableApplier). A missing table or
 // missing row reads as PhaseFresh (not an error) so a fresh DB / a
 // not-yet-applied migration flows through the normal Apply path.
+// PendingMigrations lists the ids of the ledger rows whose post-tx half has
+// not completed (migrate.PendingLister). Read-only like AppliedHead: a ledger
+// without the column holds only complete rows, and a missing one none.
+func (a *Applier) PendingMigrations(ctx context.Context) ([]string, error) {
+	hasPhase, err := a.hasPhaseColumn(ctx)
+	if err != nil || !hasPhase {
+		if err != nil {
+			err = fmt.Errorf("postgres PendingMigrations: %w", err)
+		}
+		return nil, err
+	}
+	rows, err := a.conn.Query(ctx, `SELECT to_char(timestamp AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"') FROM w17_migrations WHERE NOT post_tx_complete ORDER BY timestamp`)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("postgres PendingMigrations: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("postgres PendingMigrations: %w", err)
+	}
+	return ids, nil
+}
+
 func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase, error) {
 	// Read-only for the same reason as AppliedHead: a ledger without the
 	// column holds only complete rows.

@@ -301,6 +301,12 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			return nil, fmt.Errorf("connection %s: applier: %w", ct.Connection, err)
 		}
 		head, err := applier.AppliedHead(ctx)
+		var halfApplied []string
+		if pl, ok := applier.(PendingLister); ok && err == nil {
+			if halfApplied, err = pl.PendingMigrations(ctx); err != nil {
+				err = fmt.Errorf("half-applied migrations: %w", err)
+			}
+		}
 		closeErr := applier.Close()
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: AppliedHead: %w", ct.Connection, err)
@@ -346,6 +352,9 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			}
 		}
 
+		if err := refuseHalfAppliedOffPlan(ct.Connection, chain, head, halfApplied, replaced[ct.Connection]); err != nil {
+			return nil, err
+		}
 		pend, err := planConnection(ct.Connection, chain, head, replaced[ct.Connection])
 		if err != nil {
 			return nil, err
@@ -353,6 +362,42 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 		out = append(out, pend...)
 	}
 	return out, nil
+}
+
+// refuseHalfAppliedOffPlan refuses a database holding a half-applied
+// migration (its in-tx half committed, its post-tx skirt unfinished) that
+// this deploy will not resume: one the chain does not hold above the head —
+// replaced in the console since, or above a pin that was lowered. AppliedHead
+// leaves such a row out, so without this Plan answered "nothing pending" over
+// committed DDL, or planned the replacement on top of it (T1-1 pass #51,
+// A51-32). The way out is the rollback that undoes the half-applied
+// migration: PlanRollback finds rows like it on its own.
+func refuseHalfAppliedOffPlan(conn string, chain []*applyfetchpb.Migration, head string, halfApplied []string, replaced map[string]string) error {
+	sort.Strings(halfApplied)
+	for _, id := range halfApplied {
+		onPlan := false
+		for _, m := range chain {
+			if m.GetId() == id && (head == "" || id > head) {
+				onPlan = true
+				break
+			}
+		}
+		if onPlan {
+			continue // resumed by this deploy (applyOrResume)
+		}
+		why := "the history being deployed does not continue it (the lock pins a target below it, or the history moved on without it)"
+		if by, ok := replaced[id]; ok {
+			why = "it was replaced by " + by + " in the console (`w17ctl migrate replace`) after it started here"
+		}
+		to := head
+		if to == "" {
+			to = `""`
+		}
+		return fmt.Errorf("connection %s: refusing — this database holds migration %s half-applied (its transaction committed, the steps after it did not finish), and %s; nothing was applied. "+
+			"Undo it first: `migrate rollback --to %s --migrations <the directory it was migrated from>` rolls back %s, then deploy again",
+			conn, id, why, to, id)
+	}
+	return nil
 }
 
 // planConnection decides what one connection still needs from the chain that
