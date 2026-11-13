@@ -149,6 +149,16 @@ func runScript(ctx context.Context, applier Applier, m *applyfetchpb.Migration) 
 	return applier.Apply(ctx, m)
 }
 
+// PendingLister is an optional capability of a ResumableApplier: the ids of
+// the ledger rows whose post-tx half has not completed (PhasePending), read
+// only. Plan asks it because AppliedHead leaves those rows out, and a
+// half-applied migration the deploy does not continue — replaced in the
+// console, or above a lowered pin — was otherwise invisible to it (T1-1 pass
+// #51, A51-32). An applier without it is planned as before.
+type PendingLister interface {
+	PendingMigrations(ctx context.Context) ([]string, error)
+}
+
 type ResumableApplier interface {
 	// MigrationPhase reports the applied-state phase of the migration
 	// `id` on the target. A missing table / missing row is PhaseFresh

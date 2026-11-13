@@ -298,7 +298,7 @@ func TestRun_PreparationStepsDoNotGoThroughApply(t *testing.T) {
 	if len(fake.ran) != 0 {
 		t.Fatalf("a preparation step reached Apply: %q", fake.ran)
 	}
-	if len(fake.scripts) != 2 || !strings.Contains(fake.scripts[0], "pg_extension") || !strings.Contains(fake.scripts[1], "CREATE SCHEMA IF NOT EXISTS") {
+	if len(fake.scripts) != 2 || !strings.Contains(fake.scripts[0], "pg_extension") || !strings.Contains(fake.scripts[1], `CREATE SCHEMA "billing"`) {
 		t.Fatalf("scripts run = %q, want the extension probe then the schema prep", fake.scripts)
 	}
 }

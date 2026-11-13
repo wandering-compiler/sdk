@@ -23,8 +23,12 @@ func TestRequiredSchemasFromManifest(t *testing.T) {
 }
 
 func TestSchemaPrepSQL_QuotesEachName(t *testing.T) {
-	sql := schemaPrepSQL([]string{"billing", `we"ird`})
-	for _, want := range []string{`CREATE SCHEMA IF NOT EXISTS "billing";`, `CREATE SCHEMA IF NOT EXISTS "we""ird";`} {
+	// A name holding the dollar-quote tag gets another tag.
+	if sql := schemaPrepSQL([]string{"a$w17_schema_prep$b"}); !strings.HasPrefix(sql, "DO $w17_schema_prep_1$ ") {
+		t.Errorf("a name holding the tag kept it:\n%s", sql)
+	}
+	sql := schemaPrepSQL([]string{"billing", `we"ird`, `o'brien`})
+	for _, want := range []string{`nspname = 'billing') THEN CREATE SCHEMA "billing";`, `nspname = 'we"ird') THEN CREATE SCHEMA "we""ird";`, `nspname = 'o''brien') THEN CREATE SCHEMA "o'brien";`} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("missing %q in\n%s", want, sql)
 		}
@@ -51,7 +55,7 @@ func TestPrepareSchemas_PerConnection(t *testing.T) {
 	if err := prepareSchemas(context.Background(), ac, pending); err != nil {
 		t.Fatal(err)
 	}
-	if len(pg.ran) != 1 || pg.ran[0] != "CREATE SCHEMA IF NOT EXISTS \"billing\";\nCREATE SCHEMA IF NOT EXISTS \"ledger\";\n" {
+	if len(pg.ran) != 1 || pg.ran[0] != schemaPrepSQL([]string{"billing", "ledger"}) || strings.Count(pg.ran[0], "CREATE SCHEMA") != 2 {
 		t.Errorf("postgres ran %q", pg.ran)
 	}
 	if len(other.ran) != 0 {
