@@ -98,7 +98,7 @@ func TestApplier_SkirtResumesWhereItStopped_Live(t *testing.T) {
 	if err == nil {
 		t.Fatal("the skirt's SET NOT NULL applied over a NULL")
 	}
-	for _, want := range []string{"statement 4 of 7", "half-applied", "resumes at this statement", `migrate rollback --to "20260101T000000Z"`} {
+	for _, want := range []string{"statement 4 of 7", "half-applied", "first 3 statement(s)", "resumes at statement 4", `migrate rollback --to "20260101T000000Z"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the failure does not say %q:\n%v", want, err)
 		}
@@ -149,7 +149,10 @@ func TestApplier_SkirtCursorBootstrapsAndRerunsAConcurrentPair_Live(t *testing.T
 	if err := a.Apply(ctx, plainMigration("20260101T000000Z", "2026-01-01T00:00:00Z")); err != nil {
 		t.Fatalf("Apply first: %v", err)
 	}
+	// Minted with the witness (T1-1 pass #51, Q51-1): the in-tx half alone
+	// leaves a NULL cursor, which under the witness means nothing ran.
 	m := skirtMigration("20260201T000000Z", "2026-02-01T00:00:00Z")
+	m.UpPostTx = p51Witness + m.UpPostTx
 	if err := a.Apply(ctx, &applyfetchpb.Migration{Id: m.Id, UpSql: m.UpSql}); err != nil {
 		t.Fatalf("in-transaction half: %v", err)
 	}
@@ -161,7 +164,7 @@ func TestApplier_SkirtCursorBootstrapsAndRerunsAConcurrentPair_Live(t *testing.T
 		t.Fatalf("resume over a built, unrecorded concurrent index: %v", err)
 	}
 	var done int
-	if err := conn.QueryRow(ctx, `SELECT post_tx_done FROM w17_migrations WHERE timestamp = '2026-02-01T00:00:00Z'`).Scan(&done); err != nil || done != 3 {
-		t.Fatalf("post_tx_done = %d, %v; want 3", done, err)
+	if err := conn.QueryRow(ctx, `SELECT post_tx_done FROM w17_migrations WHERE timestamp = '2026-02-01T00:00:00Z'`).Scan(&done); err != nil || done != 4 {
+		t.Fatalf("post_tx_done = %d, %v; want 4 (the witness and three statements)", done, err)
 	}
 }

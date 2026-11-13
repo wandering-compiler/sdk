@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -46,6 +46,25 @@ import (
 // skirt without one — the legacy layout, an all-post-tx migration minted
 // before it got its own pending row — runs as it always did, and its failure
 // says that a new deploy would start it from the first statement.
+//
+// A NULL cursor under a pending row (T1-1 pass #51, Q51-1). An applier that
+// records no cursor — sdk af86452, released with the skirt flood — runs the
+// skirt from the top and records nothing, so a deploy of it that stopped
+// part-way leaves a pending row whose cursor is NULL with statements already
+// run. Taken as 0, the next deploy ran them again and the `DROP TABLE IF
+// EXISTS` ahead of a RENAME dropped the renamed table with its rows. So:
+//
+//   - the console heads every skirt with a WITNESS (`-- w17:skirt-witness`
+//     over a DO block that raises): such an applier runs it first and stops
+//     there, before any DDL of the skirt, saying to upgrade; this one records
+//     it done without running it. Under the witness, NULL means nothing ran;
+//   - a resume over NULL on a skirt minted without the witness refuses,
+//     lists the statements and names the ways out (record how many ran and
+//     deploy again, or roll back), and writes nothing — the rollback must
+//     still see NULL and run every inverse;
+//   - NULL right after this call's own in-tx half (Apply) is 0: nothing ran;
+//   - a ledger this role cannot ALTER to add the column refuses the skirt
+//     (owner ruling O51-2) — before the in-tx half when Apply can tell.
 
 // concurrentStmtRe matches a statement PostgreSQL refuses inside a
 // transaction block because it runs CONCURRENTLY. Leading comment lines and
@@ -83,30 +102,40 @@ func effectiveHead(stmt string) string {
 
 // runSkirt runs the skirt's statements from the first one the ledger does not
 // record as done. tracked: the migration has a pending ledger row to hold the
-// cursor (the caller re-checked the phase under the skirt's lock).
-func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts []string, tracked bool) error {
+// cursor (the caller re-checked the phase under the skirt's lock). resume:
+// the caller is ApplyPostTx — the pending row was NOT written by this call.
+func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts []string, tracked, resume bool) error {
 	done := 0
 	if tracked {
 		if err := a.ensureCursorColumn(ctx); err != nil {
-			// A ledger the applier may write but not ALTER: run as before
-			// (from the top) rather than refuse the deploy, and say so.
-			slog.Warn("postgres: the ledger has no post_tx_done column and it could not be added; this migration's non-transactional part runs without a resume point",
-				slog.String("migration_id", m.GetId()), slog.String("error", err.Error()))
-			tracked = false
+			// Owner ruling O51-2 (T1-1 pass #51): never run a skirt untracked
+			// under a pending row. It used to warn and run from the top, and
+			// the next deploy ran it from the top again — a re-run DROP TABLE
+			// IF EXISTS ahead of a RENAME drops the renamed table.
+			return a.cursorPrivilegeRefusal(ctx, m, err, true)
 		}
-	}
-	if tracked {
 		var known bool
 		var err error
 		if done, known, err = a.skirtDone(ctx, m.GetId()); err != nil {
 			return fmt.Errorf("postgres post-tx resume point: %w", err)
 		}
 		if !known {
+			// NULL: no cursor-aware applier recorded this skirt. Nothing of it
+			// ran when this very call just committed the in-tx half (!resume),
+			// or when the skirt is headed by the witness — an applier that
+			// records no cursor stops AT the witness, before any statement of
+			// the skirt runs. Otherwise an older applier may have run part of
+			// it, and from the top would run that part again (T1-1 pass #51,
+			// Q51-1: the renamed table dropped with its rows): refuse, and
+			// write nothing — a rollback must still see NULL and run every
+			// inverse (C51-2).
+			if resume && !carriesWitness(stmts) {
+				return a.unrecordedResumeRefusal(ctx, m, stmts)
+			}
 			// Mark the row as run by a cursor-aware applier before the first
 			// statement: from here on its cursor is authoritative, which is
 			// what lets a rollback skip the inverses of the statements it
-			// never ran (skirtUndoPlan). NULL is a row an older applier ran
-			// part of without recording anything.
+			// never ran (skirtUndoPlan).
 			if err := setSkirtDone(ctx, a.conn, m.GetId(), 0); err != nil {
 				return fmt.Errorf("postgres post-tx resume point: %w", err)
 			}
@@ -115,15 +144,30 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 			return fmt.Errorf("postgres apply up_post_tx: the ledger records %d statements of migration %s's non-transactional part as done, and it has %d — this is not the migration that ran here", done, m.GetId(), len(stmts))
 		}
 	}
+	recorded := done
 	for i := done; i < len(stmts); i++ {
 		stmt := stmts[i]
 		head := effectiveHead(stmt)
 		var err error
 		switch {
+		case isSkirtWitness(stmt):
+			// The witness stops an applier that records no cursor; this one
+			// records it done without running it.
+			if tracked {
+				err = setSkirtDone(ctx, a.conn, m.GetId(), i+1)
+			}
 		case !tracked:
 			_, err = a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol)
 		case concurrentStmtRe.MatchString(head):
-			err = a.runAlone(ctx, m.GetId(), stmt, i+1, !rerunSafeDropRe.MatchString(head))
+			advance := !rerunSafeDropRe.MatchString(head)
+			err = a.runAlone(ctx, m.GetId(), stmt, i+1, advance)
+			if err == nil && advance {
+				recorded = i + 1
+			}
+			if err != nil {
+				return a.skirtFailure(ctx, m, stmts, i, recorded, tracked, err)
+			}
+			continue
 		default:
 			err = a.runWithCursor(ctx, m.GetId(), stmt, i+1)
 			var pgErr *pgconn.PgError
@@ -134,10 +178,90 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 			}
 		}
 		if err != nil {
-			return a.skirtFailure(ctx, m, stmts, i, done, tracked, err)
+			return a.skirtFailure(ctx, m, stmts, i, recorded, tracked, err)
+		}
+		if tracked {
+			recorded = i + 1
 		}
 	}
 	return nil
+}
+
+// skirtWitnessRe reads the witness marker from a statement's leading
+// comments (emit/postgres RenderW17MigrationsSkirtWitness).
+var skirtWitnessRe = regexp.MustCompile(`(?m)^\s*--\s*w17:skirt-witness\s*$`)
+
+// isSkirtWitness reports whether stmt is the witness the console heads a
+// skirt with (T1-1 pass #51, Q51-1): a DO block that raises, under its
+// marker. An applier that records no resume cursor runs it and stops there,
+// before any statement of the skirt; this one records it done instead.
+func isSkirtWitness(stmt string) bool {
+	head := effectiveHead(stmt)
+	lead := strings.TrimSpace(stmt)
+	lead = lead[:len(lead)-len(head)]
+	return skirtWitnessRe.MatchString(lead) && strings.HasPrefix(head, "DO $w17_skirt$")
+}
+
+// carriesWitness reports whether a skirt is headed by the witness — minted by
+// a console that writes one. A NULL cursor on such a skirt means nothing of
+// it ran.
+func carriesWitness(stmts []string) bool {
+	return len(stmts) > 0 && isSkirtWitness(stmts[0])
+}
+
+// ledgerTimestamp renders a migration id (`20260201T000000Z`) as the ledger's
+// timestamp literal, for a statement an operator runs by hand.
+func ledgerTimestamp(id string) string {
+	if t, err := time.Parse("20060102T150405Z", id); err == nil {
+		return t.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	return id
+}
+
+// unrecordedResumeRefusal is the refusal of a resume over a pending row whose
+// cursor no applier recorded, on a skirt minted without the witness (Q51-1):
+// which statements there are, and the two ways out — record how many ran and
+// deploy again, or roll back (every inverse, as nothing is recorded).
+func (a *Applier) unrecordedResumeRefusal(ctx context.Context, m *applyfetchpb.Migration, stmts []string) error {
+	var list strings.Builder
+	for i, s := range stmts {
+		fmt.Fprintf(&list, "    statement %d: %s\n", i+1, shownStatement(s))
+	}
+	head, _ := a.AppliedHead(context.WithoutCancel(ctx))
+	return fmt.Errorf("postgres apply up_post_tx: migration %s is half-applied and its ledger row records no resume point (post_tx_done is NULL), so this applier cannot tell how many of the %d statement(s) of its non-transactional part already ran\n"+
+		"  why: an applier that does not record one (sdk/go before the skirt resume cursor) ran part of it, or a deploy stopped right after its transaction committed; running it again from the first statement can drop a table a later statement renamed into place, rows and all, so this deploy runs none of it\n"+
+		"  its statements:\n%s"+
+		"  fix: compare the database with these statements and record how many of them ran — `UPDATE w17_migrations SET post_tx_done = <k> WHERE timestamp = '%s';` (k = 0 when none did) — correct what stopped it, and deploy again: the apply resumes at statement k+1. Or undo it with `migrate rollback --to %q`: with no recorded resume point the rollback runs every inverse, and says so if one fails",
+		m.GetId(), len(stmts), list.String(), ledgerTimestamp(m.GetId()), head)
+}
+
+// cursorPrivilegeRefusal is the refusal of a skirt the applier cannot track
+// because it may not ALTER the ledger to add the cursor column (owner ruling
+// O51-2). pending: the in-tx half committed (a resume, or this call's own
+// apply); otherwise nothing of the migration ran.
+func (a *Applier) cursorPrivilegeRefusal(ctx context.Context, m *applyfetchpb.Migration, cause error, pending bool) error {
+	role := "<this role>"
+	var cu string
+	if err := a.conn.QueryRow(context.WithoutCancel(ctx), `SELECT current_user`).Scan(&cu); err == nil && cu != "" {
+		role = pgx.Identifier{cu}.Sanitize()
+	}
+	state := "nothing of this migration ran"
+	if pending {
+		state = "its transaction committed and this deploy ran none of its non-transactional part"
+	}
+	return fmt.Errorf("postgres apply up_post_tx: migration %s: the ledger w17_migrations has no post_tx_done column and this role cannot add it: %w\n"+
+		"  why: a migration's non-transactional part runs one statement at a time, and post_tx_done records how many ran so a deploy that stops part-way resumes after them; run without it, the next deploy would run it from the first statement again, and a re-run DROP TABLE ahead of a RENAME drops the renamed table with its rows — so it is not run untracked (%s)\n"+
+		"  fix: adding the column needs ownership of the ledger: make this role its owner (`ALTER TABLE w17_migrations OWNER TO %s;`), or have its owner run `ALTER TABLE w17_migrations ADD COLUMN IF NOT EXISTS post_tx_done INTEGER;` once; then deploy again",
+		m.GetId(), cause, state, role)
+}
+
+// shownStatement is a statement on one line, cut at 120 characters.
+func shownStatement(stmt string) string {
+	shown := strings.Join(strings.Fields(effectiveHead(stmt)), " ")
+	if len(shown) > 120 {
+		shown = shown[:120] + "…"
+	}
+	return shown
 }
 
 // runWithCursor runs one statement and records it done, in one transaction.
@@ -199,9 +323,10 @@ func (a *Applier) skirtDone(ctx context.Context, id string) (int, bool, error) {
 // missing — the ledger's CREATE TABLE (a migration's own DDL) predates it.
 // Nullable, no default: every row without it reads NULL, "no cursor-aware
 // applier recorded this skirt" — what an older applier left, which may have
-// run part of it. The resume treats NULL as 0 (from the top, as before); a
-// rollback trusts only a recorded number (skirtUndoPlan). Asks the catalogue
-// first, like ensurePhaseColumn, so a ledger that has it is never ALTERed.
+// run part of it. A resume over NULL runs from the top only under the
+// witness, and refuses otherwise (runSkirt); a rollback trusts only a
+// recorded number, or the witness (skirtUndoPlan). Asks the catalogue first,
+// like ensurePhaseColumn, so a ledger that has it is never ALTERed.
 func (a *Applier) ensureCursorColumn(ctx context.Context) error {
 	if a.cursorColEnsured {
 		return nil
@@ -240,23 +365,38 @@ func (a *Applier) hasCursorColumn(ctx context.Context) (bool, error) {
 
 // skirtFailure is the error of a skirt statement that failed: which one, what
 // is already done, and the way out — a half-applied migration whose error
-// named neither was the wedge the resume exists to prevent.
-func (a *Applier) skirtFailure(ctx context.Context, m *applyfetchpb.Migration, stmts []string, i, from int, tracked bool, cause error) error {
-	shown := strings.Join(strings.Fields(effectiveHead(stmts[i])), " ")
-	if len(shown) > 120 {
-		shown = shown[:120] + "…"
-	}
+// named neither was the wedge the resume exists to prevent. recorded is the
+// cursor as the ledger holds it now: a `DROP INDEX CONCURRENTLY IF EXISTS`
+// ahead of a concurrent build is not recorded on its own (it re-runs with
+// the build), so it can be less than i (T1-1 pass #51, Q51-4).
+func (a *Applier) skirtFailure(ctx context.Context, m *applyfetchpb.Migration, stmts []string, i, recorded int, tracked bool, cause error) error {
+	shown := shownStatement(stmts[i])
+	n := len(stmts)
 	if !tracked {
+		// The legacy layout: an all-post-tx migration minted before it got a
+		// pending row (owner ruling O51-2 refuses an untracked run under
+		// one). Its LAST statement is the ledger INSERT that records it, so
+		// running the rest by hand includes that statement, and `--fake`
+		// has nothing left to record (its INSERT meets the row: 23505) —
+		// T1-1 pass #51, Q51-2.
+		finish := fmt.Sprintf("run statement %d of its up_post_tx by hand — it is the ledger INSERT that records the migration", n)
+		if i+1 < n {
+			finish = fmt.Sprintf("run statements %d–%d of its up_post_tx by hand, then statement %d, the ledger INSERT that records the migration", i+1, n-1, n)
+		}
 		return fmt.Errorf("postgres apply up_post_tx: statement %d of %d (%s): %w\n"+
-			"  migration %s is half-applied and has no resume point: its ledger row is written after its last statement, so the %d statement(s) before this one ran and are recorded nowhere, and a new deploy would run them again from the first (a re-run DROP or RENAME can drop a table that a later statement put in its place)\n"+
-			"  fix: do NOT deploy it again unchanged — fix the cause, run statements %d–%d of its up_post_tx by hand, then record it with `migrate apply --fake` (which checks that the database holds what it describes); or undo the statements that ran, by hand",
-			i+1, len(stmts), shown, cause, m.GetId(), i, i+1, len(stmts))
+			"  migration %s is half-applied and has no resume point: its ledger row is written by its last statement (%d), so the %d statement(s) before this one ran and are recorded nowhere, and a new deploy would run them again from the first (a re-run DROP or RENAME can drop a table that a later statement put in its place)\n"+
+			"  fix: do NOT deploy it again unchanged — fix the cause, %s; or undo the statements that ran, by hand",
+			i+1, n, shown, cause, m.GetId(), n, i, finish)
 	}
 	head, _ := a.AppliedHead(context.WithoutCancel(ctx))
+	again := ""
+	if recorded < i {
+		again = fmt.Sprintf(" (statements %d–%d ran too and are not recorded: a DROP INDEX … IF EXISTS ahead of a concurrent build, which the resume runs again with the build)", recorded+1, i)
+	}
 	return fmt.Errorf("postgres apply up_post_tx: statement %d of %d (%s): %w\n"+
-		"  migration %s is half-applied: its transaction committed and the %d statement(s) of its non-transactional part before this one ran and are recorded as done\n"+
-		"  fix: correct the cause and deploy again — the apply resumes at this statement and never runs the ones before it again; or undo the migration with `migrate rollback --to %q` (it rolls back a half-applied migration too: it undoes the statements recorded as done, and skips the inverses of the ones that never ran when the migration marks its skirt operations — one minted before that runs every inverse, and says so if one fails)",
-		i+1, len(stmts), shown, cause, m.GetId(), i, head)
+		"  migration %s is half-applied: its transaction committed and the first %d statement(s) of its non-transactional part are recorded as done%s\n"+
+		"  fix: correct the cause and deploy again — the apply resumes at statement %d and never runs the recorded ones again; or undo the migration with `migrate rollback --to %q` (it rolls back a half-applied migration too: it undoes the statements recorded as done, and skips the inverses of the ones that never ran when the migration marks its skirt operations — one minted before that runs every inverse, and says so if one fails)",
+		i+1, n, shown, cause, m.GetId(), recorded, again, recorded+1, head)
 }
 
 // The rollback of a half-applied skirt (review R1-3).
@@ -302,15 +442,28 @@ func (a *Applier) skirtUndoPlan(ctx context.Context, m *applyfetchpb.Migration, 
 	if err != nil || phase != migrate.PhasePending {
 		return nil, false, 0, err
 	}
-	has, err := a.hasCursorColumn(ctx)
-	if err != nil || !has {
-		return nil, true, 0, err
-	}
-	done, known, err := a.skirtDone(ctx, m.GetId())
-	if err != nil || !known {
-		return nil, true, 0, err
-	}
 	up := splitStatements(m.GetUpPostTx())
+	// Under the witness (T1-1 pass #51, Q51-1) an unrecorded cursor — no
+	// column, or NULL — means nothing of the skirt ran: an applier that
+	// records none stops at the witness. Without it, it may mean anything,
+	// and every inverse runs.
+	witness := carriesWitness(up)
+	has, err := a.hasCursorColumn(ctx)
+	if err != nil {
+		return nil, true, 0, err
+	}
+	known := false
+	if has {
+		if done, known, err = a.skirtDone(ctx, m.GetId()); err != nil {
+			return nil, true, 0, err
+		}
+	}
+	if !known {
+		if !witness {
+			return nil, true, 0, nil
+		}
+		done = 0
+	}
 	starts := map[string]int{}
 	var order []string
 	for i, stmt := range up {
