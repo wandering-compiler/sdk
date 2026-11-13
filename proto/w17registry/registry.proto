@@ -143,6 +143,17 @@ message Migration {
   // while the migration is live. A superseded migration stays listed (nothing
   // is deleted from a history) and is never served to apply again.
   string superseded_by = 4;
+  // planner_version is the decision vocabulary of the console that planned
+  // this migration (PushSchemaResponse.planner_version, recorded in the
+  // migration's manifest when it was minted). 0 = minted by a console that
+  // predates it, or not by the planner at all (a hand-authored push-raw
+  // body). A release gate compares it with the floor a project requires
+  // (`w17ctl migrate check --generated --planner-floor N`): a migration a
+  // console below the floor planned may lack a decision a newer one asks
+  // for — 2026-11-11, a console predating the data-loss decisions planned a
+  // NOT NULL tightening as a bare SET NOT NULL, and only a person noticed.
+  // An opaque number to the client: it compares, it never interprets.
+  uint32 planner_version = 5;
 }
 
 message RegisterProjectRequest {
@@ -274,7 +285,19 @@ message PushSchemaResponse {
   // the client's; a real push carries no base. What the console itself
   // holds a decision to is its finding id (Finding.finding_id), which a mint
   // between the dry run and the push moves whenever it changes the column.
+  //
+  // The base names the stored schema AND the history that produced it
+  // (every migration stored for the project): a column dropped, re-added and
+  // dropped again returns the schema to an earlier shape, never the base to
+  // an earlier value. It is one console's: another console storing the same
+  // project answers another base.
   string base = 6;
+  // planner_version — the decision vocabulary of the planner that answered
+  // (every mode): it moves when the console starts asking a decision it did
+  // not ask before. 0 = a console that predates it. A client compares it with
+  // a floor the project requires and refuses below it; it never interprets
+  // the number. See Migration.planner_version.
+  uint32 planner_version = 7;
 }
 
 // Finding is one unresolved planner decision, flattened from
