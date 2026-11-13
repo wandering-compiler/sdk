@@ -51,6 +51,9 @@ type Applier struct {
 	// cursorColEnsured is the same for the skirt's resume cursor
 	// (post_tx_done). See ensureCursorColumn.
 	cursorColEnsured bool
+	// undoColEnsured is the same for the rollback's resume cursor
+	// (post_tx_undone). See ensureUndoColumn.
+	undoColEnsured bool
 }
 
 // Compile-time check the impl satisfies the migrate.Applier
@@ -618,6 +621,7 @@ func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
 	// skipped the ALTER and failed 42703 on post_tx_done).
 	a.phaseColEnsured = false
 	a.cursorColEnsured = false
+	a.undoColEnsured = false
 	return nil
 }
 

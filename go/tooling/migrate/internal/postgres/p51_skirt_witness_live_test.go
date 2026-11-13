@@ -443,3 +443,96 @@ INSERT INTO "w17_migrations" ("timestamp", "content_sha256") VALUES ('` + p51TS 
 		}
 	}
 }
+
+// A51-34 (first half) — a rollback that stops part-way through down_pre_tx
+// resumes after the inverses it already ran. It ran every inverse again: here
+// the RENAME back, already done, failed 42P01 on the second rollback, and the
+// rollback could not be finished.
+func TestA51_34_RollbackResumesAfterTheInversesItRan_Live(t *testing.T) {
+	ctx, _, a, conn := p51Open(t)
+	for _, q := range []string{ledgerCreate,
+		`INSERT INTO w17_migrations (timestamp, content_sha256) VALUES ('2026-01-01T00:00:00Z', 'aa')`,
+		`CREATE TABLE a (id BIGINT PRIMARY KEY, v BIGINT NOT NULL)`, `INSERT INTO a VALUES (1, 1)`} {
+		if _, err := conn.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	m := &applyfetchpb.Migration{
+		Id:    p51ID,
+		UpSql: "BEGIN;\n\nINSERT INTO \"w17_migrations\" (\"timestamp\", \"content_sha256\", \"post_tx_complete\") VALUES ('" + p51TS + "', 'cc', false);\n\nCOMMIT;\n",
+		UpPostTx: p51Witness + `-- w17:skirt-op 1
+ALTER TABLE "a" ALTER COLUMN "v" DROP NOT NULL;
+-- w17:skirt-op 2
+ALTER TABLE "a" RENAME TO "b";
+UPDATE "w17_migrations" SET "post_tx_complete" = true WHERE "timestamp" = '` + p51TS + `';`,
+		DownPreTx: `-- w17:skirt-op 2
+ALTER TABLE "b" RENAME TO "a";
+-- w17:skirt-op 1
+ALTER TABLE "a" ALTER COLUMN "v" SET NOT NULL;
+-- w17:skirt-op always
+DELETE FROM "w17_migrations" WHERE "timestamp" = '` + p51TS + `';`,
+	}
+	if err := a.Apply(ctx, m); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO b VALUES (2, NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	err := a.Rollback(ctx, m)
+	if err == nil {
+		t.Fatal("SET NOT NULL over a NULL rolled back")
+	}
+	for _, want := range []string{"statement 2 of 3", "first 1 statement(s) of its down_pre_tx are recorded as done", "resumes at statement 2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the failed rollback does not say %q:\n%v", want, err)
+		}
+	}
+	if _, err := conn.Exec(ctx, `UPDATE a SET v = 0 WHERE v IS NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Rollback(ctx, m); err != nil {
+		t.Fatalf("the second rollback ran the inverses again: %v", err)
+	}
+	if got := skirtRows(t, ctx, conn, `SELECT id, v FROM a ORDER BY id`); got != "1|1;2|0" {
+		t.Fatalf("after the rollback a = %q", got)
+	}
+	if got := skirtRows(t, ctx, conn, `SELECT count(*) FROM w17_migrations WHERE timestamp = '`+p51TS+`'`); got != "0" {
+		t.Fatalf("the ledger still holds the rolled-back migration: %s", got)
+	}
+}
+
+// A51-34 — the guard that keeps the rollback cursor honest: a half-applied
+// migration whose rollback stopped part-way is not resumed forward over the
+// half-undone schema; the rollback is finished instead, and gives t2 back.
+func TestA51_34_AStoppedRollbackIsNotAppliedForward_Live(t *testing.T) {
+	ctx, _, a, conn := p51Open(t)
+	p51Seed(t, ctx, conn)
+	m := p51RenameSkirt(true)
+	if err := a.Apply(ctx, m); err == nil || !strings.Contains(err.Error(), "statement 5 of 8") {
+		t.Fatalf("want the skirt to stop at the SET NOT NULL: %v", err)
+	}
+	// Something holds the name the inverse of the drop re-creates an index
+	// under: the rollback stops after re-creating the table.
+	if _, err := conn.Exec(ctx, `CREATE TABLE z (x BIGINT); CREATE INDEX old_t_x_idx ON z (x)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Rollback(ctx, m); err == nil || !strings.Contains(err.Error(), "resumes at statement 5") {
+		t.Fatalf("want the rollback to stop at the index build (statement 5): %v", err)
+	}
+	err := a.ApplyPostTx(ctx, m)
+	if err == nil || !strings.Contains(err.Error(), "finish the rollback") {
+		t.Fatalf("a half-rolled-back migration was applied forward: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `DROP TABLE z`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Rollback(ctx, m); err != nil {
+		t.Fatalf("finish the rollback: %v", err)
+	}
+	if got := skirtRows(t, ctx, conn, `SELECT id, v FROM t2 ORDER BY id`); got != "1|10;2|20;3|null" {
+		t.Fatalf("after the rollback t2 = %q", got)
+	}
+	if !indexExists(t, ctx, conn, "old_t_x_idx") {
+		t.Fatal("the rollback did not re-create the dropped index")
+	}
+}
