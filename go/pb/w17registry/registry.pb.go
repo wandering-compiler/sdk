@@ -274,9 +274,20 @@ type Migration struct {
 	// baseline, or the replacement `migrate replace` stored — and is empty
 	// while the migration is live. A superseded migration stays listed (nothing
 	// is deleted from a history) and is never served to apply again.
-	SupersededBy  string `protobuf:"bytes,4,opt,name=superseded_by,json=supersededBy,proto3" json:"superseded_by,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SupersededBy string `protobuf:"bytes,4,opt,name=superseded_by,json=supersededBy,proto3" json:"superseded_by,omitempty"`
+	// planner_version is the decision vocabulary of the console that planned
+	// this migration (PushSchemaResponse.planner_version, recorded in the
+	// migration's manifest when it was minted). 0 = minted by a console that
+	// predates it, or not by the planner at all (a hand-authored push-raw
+	// body). A release gate compares it with the floor a project requires
+	// (`w17ctl migrate check --generated --planner-floor N`): a migration a
+	// console below the floor planned may lack a decision a newer one asks
+	// for — 2026-11-11, a console predating the data-loss decisions planned a
+	// NOT NULL tightening as a bare SET NOT NULL, and only a person noticed.
+	// An opaque number to the client: it compares, it never interprets.
+	PlannerVersion uint32 `protobuf:"varint,5,opt,name=planner_version,json=plannerVersion,proto3" json:"planner_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Migration) Reset() {
@@ -335,6 +346,13 @@ func (x *Migration) GetSupersededBy() string {
 		return x.SupersededBy
 	}
 	return ""
+}
+
+func (x *Migration) GetPlannerVersion() uint32 {
+	if x != nil {
+		return x.PlannerVersion
+	}
+	return 0
 }
 
 type RegisterProjectRequest struct {
@@ -706,9 +724,21 @@ type PushSchemaResponse struct {
 	// the client's; a real push carries no base. What the console itself
 	// holds a decision to is its finding id (Finding.finding_id), which a mint
 	// between the dry run and the push moves whenever it changes the column.
-	Base          string `protobuf:"bytes,6,opt,name=base,proto3" json:"base,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	//
+	// The base names the stored schema AND the history that produced it
+	// (every migration stored for the project): a column dropped, re-added and
+	// dropped again returns the schema to an earlier shape, never the base to
+	// an earlier value. It is one console's: another console storing the same
+	// project answers another base.
+	Base string `protobuf:"bytes,6,opt,name=base,proto3" json:"base,omitempty"`
+	// planner_version — the decision vocabulary of the planner that answered
+	// (every mode): it moves when the console starts asking a decision it did
+	// not ask before. 0 = a console that predates it. A client compares it with
+	// a floor the project requires and refuses below it; it never interprets
+	// the number. See Migration.planner_version.
+	PlannerVersion uint32 `protobuf:"varint,7,opt,name=planner_version,json=plannerVersion,proto3" json:"planner_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PushSchemaResponse) Reset() {
@@ -781,6 +811,13 @@ func (x *PushSchemaResponse) GetBase() string {
 		return x.Base
 	}
 	return ""
+}
+
+func (x *PushSchemaResponse) GetPlannerVersion() uint32 {
+	if x != nil {
+		return x.PlannerVersion
+	}
+	return 0
 }
 
 // Finding is one unresolved planner decision, flattened from
@@ -1862,14 +1899,15 @@ var File_w17registry_registry_proto protoreflect.FileDescriptor
 
 const file_w17registry_registry_proto_rawDesc = "" +
 	"\n" +
-	"\x1aw17registry/registry.proto\x12\fw17.registry\"\x87\x01\n" +
+	"\x1aw17registry/registry.proto\x12\fw17.registry\"\xb0\x01\n" +
 	"\tMigration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n" +
 	"\n" +
 	"connection\x18\x02 \x01(\tR\n" +
 	"connection\x12%\n" +
 	"\x0econtent_sha256\x18\x03 \x01(\tR\rcontentSha256\x12#\n" +
-	"\rsuperseded_by\x18\x04 \x01(\tR\fsupersededBy\",\n" +
+	"\rsuperseded_by\x18\x04 \x01(\tR\fsupersededBy\x12'\n" +
+	"\x0fplanner_version\x18\x05 \x01(\rR\x0eplannerVersion\",\n" +
 	"\x16RegisterProjectRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"8\n" +
 	"\x17RegisterProjectResponse\x12\x1d\n" +
@@ -1898,7 +1936,7 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\rinitiative_id\x18\a \x01(\tR\finitiativeId\x1aB\n" +
 	"\x14DecideCustomSqlEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xad\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd6\x02\n" +
 	"\x12PushSchemaResponse\x127\n" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x17.w17.registry.MigrationR\n" +
@@ -1907,7 +1945,8 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\rresolved_mode\x18\x03 \x01(\x0e2\x16.w17.registry.PushModeR\fresolvedMode\x12)\n" +
 	"\x10unused_decisions\x18\x04 \x03(\tR\x0funusedDecisions\x12/\n" +
 	"\x13changed_connections\x18\x05 \x03(\tR\x12changedConnections\x12\x12\n" +
-	"\x04base\x18\x06 \x01(\tR\x04base\"\x9c\x03\n" +
+	"\x04base\x18\x06 \x01(\tR\x04base\x12'\n" +
+	"\x0fplanner_version\x18\a \x01(\rR\x0eplannerVersion\"\x9c\x03\n" +
 	"\aFinding\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +

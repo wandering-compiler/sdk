@@ -47,6 +47,9 @@ type Applier struct {
 	// … ADD COLUMN IF NOT EXISTS post_tx_complete) so it runs at most
 	// once per connection. See ensurePhaseColumn.
 	phaseColEnsured bool
+	// cursorColEnsured is the same for the skirt's resume cursor
+	// (post_tx_done). See ensureCursorColumn.
+	cursorColEnsured bool
 }
 
 // Compile-time check the impl satisfies the migrate.Applier
@@ -305,10 +308,13 @@ func (a *Applier) abandonOpenTx() {
 // path (migrate.ResumableApplier). The orchestrator calls this for a
 // PhasePending migration whose up_sql already committed (its pending
 // w17_migrations row exists); re-running up_sql would wedge on the
-// already-created in-tx objects. The post-tx body's leading
-// `DROP INDEX CONCURRENTLY IF EXISTS` clears any INVALID index a prior
-// crashed CONCURRENTLY left behind, then rebuilds; the trailing UPDATE
-// flips the row to complete.
+// already-created in-tx objects. It resumes AT the first statement the
+// ledger does not record as done (runSkirt), never from the top: the
+// skirt carries DDL that cannot run twice (a DROP TABLE IF EXISTS of a
+// name a later RENAME gives to another table). A
+// `DROP INDEX CONCURRENTLY IF EXISTS` before a concurrent index build
+// clears any INVALID index a crashed build left behind; the trailing
+// UPDATE flips the row to complete.
 func (a *Applier) ApplyPostTx(ctx context.Context, m *applyfetchpb.Migration) error {
 	return a.applyPostTx(ctx, m)
 }
@@ -354,14 +360,13 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 	// concurrent migrator finished it, so re-running would collide.
 	//
 	// PhaseFresh (no w17_migrations row yet) is a RUN case, not a skip: a
-	// PURE post-tx migration (no in-tx DDL — e.g. add-unique / concurrent
-	// index synthesised entirely as a CONCURRENTLY skirt) carries its own
-	// w17_migrations INSERT in the skirt, so its in-tx half wrote no pending
-	// marker. Gating on `== PhasePending` would have skipped it on a fresh
-	// apply, silently dropping the index + the bookkeeping row (→ never
-	// idempotent). The leading `DROP INDEX CONCURRENTLY IF EXISTS` keeps the
-	// skirt safe to re-run after a crash between the index build and the
-	// INSERT.
+	// PURE post-tx migration minted in the legacy layout (no in-tx half; the
+	// console has given every skirt a pending row since T1-1 pass #50,
+	// P50-18) carries its own w17_migrations INSERT at the end of the skirt,
+	// so nothing marked it pending. Gating on `== PhasePending` would have
+	// skipped it on a fresh apply, silently dropping the index + the
+	// bookkeeping row. Such a skirt has no resume point (runSkirt runs it
+	// untracked, and its failure says so).
 	phase, err := a.MigrationPhase(ctx, m.GetId())
 	if err != nil {
 		return fmt.Errorf("postgres post-tx phase re-check: %w", err)
@@ -370,12 +375,7 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 		return nil // already fully applied (concurrent migrator / re-run) — idempotent no-op
 	}
 
-	for _, stmt := range stmts {
-		if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
-			return fmt.Errorf("postgres apply up_post_tx: %w", err)
-		}
-	}
-	return nil
+	return a.runSkirt(ctx, m, stmts, phase == migrate.PhasePending)
 }
 
 // Rollback runs the migration's down payload — the inverse of
@@ -386,12 +386,14 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 // down_pre_tx runs statement-by-statement under
 // SimpleProtocol — same per-statement / no-prepare contract
 // as up_post_tx in Apply, for the same reason (CONCURRENTLY +
-// implicit-tx wrapping).
+// implicit-tx wrapping). For a half-applied migration (a pending
+// row with a recorded resume cursor, whose skirt operations are
+// marked) it skips the inverses of the operations that never ran
+// (rollbackPreTx, review R1-3).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
-	for _, stmt := range splitStatements(m.GetDownPreTx()) {
-		if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
-			return fmt.Errorf("postgres rollback down_pre_tx: %w", err)
-		}
+	// A half-applied skirt undoes only what ran (rollbackPreTx, review R1-3).
+	if err := a.rollbackPreTx(ctx, m); err != nil {
+		return err
 	}
 	if down := m.GetDownSql(); down != "" {
 		if _, err := a.conn.Exec(ctx, down, pgx.QueryExecModeSimpleProtocol); err != nil {
@@ -573,7 +575,12 @@ func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
 	if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
 		return fmt.Errorf("postgres Wipe: %w", err)
 	}
+	// The ledger is gone with its columns: the next one is created by a
+	// migration's own DDL, which may predate either column (review R1-6 —
+	// the cursor cache survived the wipe, so the next two-phase apply
+	// skipped the ALTER and failed 42703 on post_tx_done).
 	a.phaseColEnsured = false
+	a.cursorColEnsured = false
 	return nil
 }
 
