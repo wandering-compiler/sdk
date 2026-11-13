@@ -473,10 +473,21 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// reported to observx (that would be pure Sentry noise on every
 	// client disconnect / slow query). Surface the canonical gRPC
 	// codes the caller already expects for these conditions.
-	if errors.Is(err, context.Canceled) {
+	//
+	// The request's context decides, not only the error: lib/pq answers a
+	// context cancelled mid-statement with the server's own error (57014
+	// query_canceled, after its CancelRequest), which wraps no context error.
+	// The code alone cannot decide either — Postgres answers its own
+	// statement_timeout with 57014 too, and that one is a server fault,
+	// reported as one.
+	var ctxErr error
+	if ctx != nil {
+		ctxErr = ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(ctxErr, context.Canceled) {
 		return forCaller(ctx, codes.Canceled, method, "canceled", CodeCanceled, UserMsgid(codes.Canceled), nil)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctxErr, context.DeadlineExceeded) {
 		return forCaller(ctx, codes.DeadlineExceeded, method, "deadline exceeded", CodeTimeout, UserMsgid(codes.DeadlineExceeded), nil)
 	}
 	// The database could not be reached at all: the connection was never
