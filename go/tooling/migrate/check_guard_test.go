@@ -87,7 +87,7 @@ func TestCheckCountSQL(t *testing.T) {
 	if got := migrate.CheckCountSQL(`SELECT count(*) FROM "c" LIMIT 1;`); got != `SELECT count(*) FROM "c" LIMIT 1` {
 		t.Errorf("count shape: %q", got)
 	}
-	if got := migrate.CheckCountSQL(`SELECT "v", count(*) FROM "t" GROUP BY "v" HAVING count(*) > 1 LIMIT 1`); got != `SELECT count(*) FROM (SELECT "v", count(*) FROM "t" GROUP BY "v" HAVING count(*) > 1 LIMIT 1) AS w17_check` {
+	if got := migrate.CheckCountSQL(`SELECT "v", count(*) FROM "t" GROUP BY "v" HAVING count(*) > 1 LIMIT 1`); got != `SELECT count(*) FROM (SELECT "v", count(*) FROM "t" GROUP BY "v" HAVING count(*) > 1) AS w17_check` {
 		t.Errorf("row shape: %q", got)
 	}
 }

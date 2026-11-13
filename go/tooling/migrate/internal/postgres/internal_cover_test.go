@@ -50,11 +50,11 @@ func TestSplitStatements(t *testing.T) {
 func TestApplyPostTx_EmptySkirtSkipsLock(t *testing.T) {
 	a := &Applier{} // conn == nil
 	m := &applyfetchpb.Migration{UpPostTx: ""}
-	if err := a.applyPostTx(context.Background(), m); err != nil {
+	if err := a.applyPostTx(context.Background(), m, true); err != nil {
 		t.Fatalf("empty-skirt applyPostTx = %v, want nil (must not touch conn)", err)
 	}
 	// Whitespace-only skirt splits to zero statements — same fast path.
-	if err := a.applyPostTx(context.Background(), &applyfetchpb.Migration{UpPostTx: "  \n ;; \t"}); err != nil {
+	if err := a.applyPostTx(context.Background(), &applyfetchpb.Migration{UpPostTx: "  \n ;; \t"}, true); err != nil {
 		t.Fatalf("whitespace-only-skirt applyPostTx = %v, want nil", err)
 	}
 }

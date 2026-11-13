@@ -17,3 +17,9 @@ func SetCheckLimitsForTest(tempFileLimit, workMem string) func() {
 	checkTempFileLimit, checkWorkMem = tempFileLimit, workMem
 	return func() { checkTempFileLimit, checkWorkMem = t, w }
 }
+
+// SplitStatementsForTest splits a skirt the way the applier does, so a test
+// can run it the way an applier without the resume cursor (sdk af86452, the
+// one released with the skirt flood) ran it: every statement, in order, in
+// autocommit, recording nothing.
+var SplitStatementsForTest = splitStatements

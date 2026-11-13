@@ -3,6 +3,7 @@ package migrate
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -506,11 +507,18 @@ func isCheckWordByte(c byte) bool {
 // count-shape probe (`SELECT count(*) FROM … LIMIT 1`) as it is, its one value
 // the violating-row count; a row-shape probe (the unique-index `SELECT <cols>,
 // count(*) … GROUP BY … HAVING …`) wrapped so each row it returns counts —
-// the same reading the dev sync's guard gives them.
+// the same reading the dev sync's guard gives them. The planner closes a
+// row-shape probe with `LIMIT 1` (it reads as "is there any"); inside the
+// count that capped the answer at one duplicate group whatever the table held,
+// so it is dropped there (T1-1 pass #51, A51-36).
 func CheckCountSQL(sql string) string {
 	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
 	if strings.HasPrefix(strings.ToLower(body), "select count(*) from") {
 		return body
 	}
+	body = trailingLimitOneRe.ReplaceAllString(body, "")
 	return "SELECT count(*) FROM (" + body + ") AS w17_check"
 }
+
+// trailingLimitOneRe matches a probe's closing `LIMIT 1`.
+var trailingLimitOneRe = regexp.MustCompile(`(?i)\s+LIMIT\s+1\s*$`)

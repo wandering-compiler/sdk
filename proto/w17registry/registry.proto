@@ -154,6 +154,14 @@ message Migration {
   // NOT NULL tightening as a bare SET NOT NULL, and only a person noticed.
   // An opaque number to the client: it compares, it never interprets.
   uint32 planner_version = 5;
+  // raw marks a hand-authored `push-raw` body. No planner decided it, so its
+  // planner_version is 0 and says nothing about a decision it may lack: a
+  // planner floor does not judge it (T1-1 pass #51, Q51-35 — the floor named
+  // every raw head as "minted below the floor" and sent the operator to
+  // `migrate replace`, which refuses a raw migration). False on a console
+  // that predates the field, and on a raw migration stored before the console
+  // recorded which pushes were raw.
+  bool raw = 6;
 }
 
 message RegisterProjectRequest {

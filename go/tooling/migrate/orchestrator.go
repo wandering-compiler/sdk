@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -300,6 +301,12 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			return nil, fmt.Errorf("connection %s: applier: %w", ct.Connection, err)
 		}
 		head, err := applier.AppliedHead(ctx)
+		var halfApplied []string
+		if pl, ok := applier.(PendingLister); ok && err == nil {
+			if halfApplied, err = pl.PendingMigrations(ctx); err != nil {
+				err = fmt.Errorf("half-applied migrations: %w", err)
+			}
+		}
 		closeErr := applier.Close()
 		if err != nil {
 			return nil, fmt.Errorf("connection %s: AppliedHead: %w", ct.Connection, err)
@@ -345,6 +352,9 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 			}
 		}
 
+		if err := refuseHalfAppliedOffPlan(ct.Connection, chain, head, halfApplied, replaced[ct.Connection]); err != nil {
+			return nil, err
+		}
 		pend, err := planConnection(ct.Connection, chain, head, replaced[ct.Connection])
 		if err != nil {
 			return nil, err
@@ -352,6 +362,42 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 		out = append(out, pend...)
 	}
 	return out, nil
+}
+
+// refuseHalfAppliedOffPlan refuses a database holding a half-applied
+// migration (its in-tx half committed, its post-tx skirt unfinished) that
+// this deploy will not resume: one the chain does not hold above the head —
+// replaced in the console since, or above a pin that was lowered. AppliedHead
+// leaves such a row out, so without this Plan answered "nothing pending" over
+// committed DDL, or planned the replacement on top of it (T1-1 pass #51,
+// A51-32). The way out is the rollback that undoes the half-applied
+// migration: PlanRollback finds rows like it on its own.
+func refuseHalfAppliedOffPlan(conn string, chain []*applyfetchpb.Migration, head string, halfApplied []string, replaced map[string]string) error {
+	sort.Strings(halfApplied)
+	for _, id := range halfApplied {
+		onPlan := false
+		for _, m := range chain {
+			if m.GetId() == id && (head == "" || id > head) {
+				onPlan = true
+				break
+			}
+		}
+		if onPlan {
+			continue // resumed by this deploy (applyOrResume)
+		}
+		why := "the history being deployed does not continue it (the lock pins a target below it, or the history moved on without it)"
+		if by, ok := replaced[id]; ok {
+			why = "it was replaced by " + by + " in the console (`w17ctl migrate replace`) after it started here"
+		}
+		to := head
+		if to == "" {
+			to = `""`
+		}
+		return fmt.Errorf("connection %s: refusing — this database holds migration %s half-applied (its transaction committed, the steps after it did not finish), and %s; nothing was applied. "+
+			"Undo it first: `migrate rollback --to %s --migrations <the directory it was migrated from>` rolls back %s, then deploy again",
+			conn, id, why, to, id)
+	}
+	return nil
 }
 
 // planConnection decides what one connection still needs from the chain that
@@ -706,7 +752,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 // optional — a warning probe that cannot run still refuses, as an unanswered
 // probe is not a pass.
 // A migration resumed after its in-tx half committed is past the point a
-// forward check could stop, so an apply runs none for it. A dialect that
+// forward check could stop, so an apply runs none for it; and its down
+// checks describe a schema it never reached, so a rollback runs none either.
+// A dialect that
 // cannot run checks refuses the migration that carries some: the operator
 // asked for them, and skipping them silently would read as a pass.
 func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bool, out io.Writer) error {
@@ -721,14 +769,38 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 		}
 	}
 	if len(run) == 0 {
+		// Never silent (T1-1 pass #51, A51-30): the operator asked for the
+		// guards, and "applied" must not read as "guarded" when none came —
+		// nothing to guard, a console or a stored digest older than the
+		// checks, or probes the console could not port to this dialect,
+		// which its plan names and are listed here.
+		line := fmt.Sprintf("%s:   --checks: no %s check served for %s", verb, when, p.Migration.GetId())
+		if names := unportedChecks(p.Migration.GetManifestJson(), down); len(names) > 0 {
+			line += fmt.Sprintf("; the console could not port %d probe(s) to this dialect and left them out — verify by hand what they count: %s", len(names), strings.Join(names, ", "))
+		}
+		fmt.Fprintln(out, line)
 		return nil
 	}
-	if ra, ok := applier.(ResumableApplier); ok && !down {
+	if ra, ok := applier.(ResumableApplier); ok {
 		phase, err := ra.MigrationPhase(ctx, p.Migration.GetId())
 		if err != nil {
-			return fmt.Errorf("apply %s/%s: phase check: %w", p.Connection, p.Migration.GetId(), err)
+			return fmt.Errorf("%s %s/%s: phase check: %w", verb, p.Connection, p.Migration.GetId(), err)
+		}
+		if phase == PhasePending && !down {
+			return nil
 		}
 		if phase == PhasePending {
+			// The down probes are rendered against the fully-applied schema
+			// (the post-up names), which a skirt that stopped part-way never
+			// produced: a probe naming them cannot run, and --checks refused
+			// the very rollback the half-applied migration's failure names
+			// (T1-1 pass #51, Q51-3). Not run, and said so.
+			names := make([]string, 0, len(run))
+			for _, c := range run {
+				names = append(names, c.GetName())
+			}
+			fmt.Fprintf(out, "rollback:   %s/%s is half-applied: its pre-rollback check(s) %s are rendered for the fully-applied schema, which it does not have, and are not run\n",
+				p.Connection, p.Migration.GetId(), strings.Join(names, ", "))
 			return nil
 		}
 	}
@@ -784,6 +856,43 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 	return nil
 }
 
+// unportedChecks names the probes a migration's plan says it does not carry
+// on its dialect (risk findings of op_kind check_not_portable), for one
+// direction: a rollback probe's name starts with "down__". Read loosely, like
+// every manifest field the applier uses — an unreadable manifest names none.
+func unportedChecks(manifestJSON string, down bool) []string {
+	raw := strings.TrimSpace(manifestJSON)
+	if raw == "" {
+		return nil
+	}
+	var doc struct {
+		RiskFindings []struct {
+			OpKind    string `json:"op_kind"`
+			Rationale string `json:"rationale"`
+		} `json:"risk_findings"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range doc.RiskFindings {
+		if r.OpKind != "check_not_portable" {
+			continue
+		}
+		name := "(unnamed)"
+		if rest, ok := strings.CutPrefix(r.Rationale, "the pre-apply check "); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				name = f[0]
+			}
+		}
+		if strings.HasPrefix(name, "down__") != down {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
 func doneWord(down bool) string {
 	if down {
 		return "rolled back"
@@ -833,10 +942,17 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		// this schema" gets no fake apply, because the alternative is
 		// recording the claim on the operator's word alone — which is the
 		// hand-written ledger INSERT this command replaces.
+		// The console renders a preflight for PostgreSQL only (T1-1 pass
+		// #51, A51-36): on any other store no fetch ever brings one, so the
+		// text must not send the operator to fetch.
+		fix := "the console renders one for PostgreSQL only, so --fake cannot record a migration on this store: apply it for real"
+		if isPostgresApplier(applier) {
+			fix = "fetch the migration again from a console that renders one (PostgreSQL only), or apply it for real"
+		}
 		err := fmt.Errorf("fake apply %s/%s: this migration carries no adopt preflight, so there is nothing to check the claim against\n"+
 			"  why: --fake records a migration without running it, and the licence for that is the database ALREADY holding what the migration describes\n"+
-			"  fix: fetch the migration again from a console that renders one (relational dialects only), or apply it for real",
-			p.Connection, p.Migration.GetId())
+			"  fix: %s",
+			p.Connection, p.Migration.GetId(), fix)
 		logMigration(logger, "fake", p.Connection, p.Migration, time.Since(started), err)
 		return err
 	}

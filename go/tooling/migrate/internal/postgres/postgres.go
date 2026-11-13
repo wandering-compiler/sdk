@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"github.com/wandering-compiler/sdk/go/lib/dbsession"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,6 +51,9 @@ type Applier struct {
 	// cursorColEnsured is the same for the skirt's resume cursor
 	// (post_tx_done). See ensureCursorColumn.
 	cursorColEnsured bool
+	// undoColEnsured is the same for the rollback's resume cursor
+	// (post_tx_undone). See ensureUndoColumn.
+	undoColEnsured bool
 }
 
 // Compile-time check the impl satisfies the migrate.Applier
@@ -210,6 +214,32 @@ func (a *Applier) ensurePhaseColumn(ctx context.Context) error {
 // `id` on this target (migrate.ResumableApplier). A missing table or
 // missing row reads as PhaseFresh (not an error) so a fresh DB / a
 // not-yet-applied migration flows through the normal Apply path.
+// PendingMigrations lists the ids of the ledger rows whose post-tx half has
+// not completed (migrate.PendingLister). Read-only like AppliedHead: a ledger
+// without the column holds only complete rows, and a missing one none.
+func (a *Applier) PendingMigrations(ctx context.Context) ([]string, error) {
+	hasPhase, err := a.hasPhaseColumn(ctx)
+	if err != nil || !hasPhase {
+		if err != nil {
+			err = fmt.Errorf("postgres PendingMigrations: %w", err)
+		}
+		return nil, err
+	}
+	rows, err := a.conn.Query(ctx, `SELECT to_char(timestamp AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"') FROM w17_migrations WHERE NOT post_tx_complete ORDER BY timestamp`)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("postgres PendingMigrations: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("postgres PendingMigrations: %w", err)
+	}
+	return ids, nil
+}
+
 func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase, error) {
 	// Read-only for the same reason as AppliedHead: a ledger without the
 	// column holds only complete rows.
@@ -269,11 +299,47 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	if err := a.ensurePhaseColumn(ctx); err != nil {
 		return fmt.Errorf("postgres apply: ensure phase column: %w", err)
 	}
+	// A two-phase skirt needs the resume cursor; a role that cannot add it
+	// is refused BEFORE the in-tx half commits, so nothing is left pending
+	// (owner ruling O51-2, T1-1 pass #51). A ledger this body creates is the
+	// role's own, and runSkirt adds the column after it.
+	if stmts := splitStatements(m.GetUpPostTx()); completesAPendingRow(stmts) {
+		exists, err := a.ledgerExists(ctx)
+		if err != nil {
+			return fmt.Errorf("postgres apply: %w", err)
+		}
+		if exists {
+			if err := a.ensureCursorColumn(ctx); err != nil {
+				return a.cursorPrivilegeRefusal(ctx, m, err, false)
+			}
+		}
+	}
 	if _, err := a.conn.Exec(ctx, m.GetUpSql(), pgx.QueryExecModeSimpleProtocol); err != nil {
 		a.abandonOpenTx()
 		return fmt.Errorf("postgres apply up_sql: %w", err)
 	}
-	return a.applyPostTx(ctx, m)
+	return a.applyPostTx(ctx, m, false)
+}
+
+// completingUpdateRe matches the statement that ends a two-phase skirt: the
+// UPDATE flipping the migration's pending row complete.
+var completingUpdateRe = regexp.MustCompile(`(?is)^UPDATE\s+"?w17_migrations"?\s+SET\s+"?post_tx_complete"?\s*=\s*true\b`)
+
+// completesAPendingRow reports whether a skirt is the two-phase layout's (its
+// last statement completes the pending row the in-tx half writes), so it
+// runs with the resume cursor.
+func completesAPendingRow(stmts []string) bool {
+	return len(stmts) > 0 && completingUpdateRe.MatchString(effectiveHead(stmts[len(stmts)-1]))
+}
+
+// ledgerExists reports whether w17_migrations resolves on the session's
+// search_path.
+func (a *Applier) ledgerExists(ctx context.Context) (bool, error) {
+	var ok bool
+	if err := a.conn.QueryRow(ctx, `SELECT to_regclass('w17_migrations') IS NOT NULL`).Scan(&ok); err != nil {
+		return false, fmt.Errorf("read the ledger: %w", err)
+	}
+	return ok, nil
 }
 
 // RunScript executes SQL that is not a migration — the run's extension
@@ -316,7 +382,7 @@ func (a *Applier) abandonOpenTx() {
 // clears any INVALID index a crashed build left behind; the trailing
 // UPDATE flips the row to complete.
 func (a *Applier) ApplyPostTx(ctx context.Context, m *applyfetchpb.Migration) error {
-	return a.applyPostTx(ctx, m)
+	return a.applyPostTx(ctx, m, true)
 }
 
 // postTxAdvisoryLockKey is the session-level advisory-lock key the
@@ -339,7 +405,7 @@ const postTxAdvisoryLockKey int64 = 0x77313770737474 // "w17ptt"
 // auto-released if the process dies), then RE-CHECK the phase under the
 // lock — a concurrent migrator that already completed the skirt (flipping
 // post_tx_complete) makes this a clean no-op instead of a collision.
-func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) error {
+func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration, resume bool) error {
 	stmts := splitStatements(m.GetUpPostTx())
 	if len(stmts) == 0 {
 		return nil // no skirt — nothing to run or serialise
@@ -375,7 +441,7 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration) er
 		return nil // already fully applied (concurrent migrator / re-run) — idempotent no-op
 	}
 
-	return a.runSkirt(ctx, m, stmts, phase == migrate.PhasePending)
+	return a.runSkirt(ctx, m, stmts, phase == migrate.PhasePending, resume)
 }
 
 // Rollback runs the migration's down payload — the inverse of
@@ -581,6 +647,7 @@ func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
 	// skipped the ALTER and failed 42703 on post_tx_done).
 	a.phaseColEnsured = false
 	a.cursorColEnsured = false
+	a.undoColEnsured = false
 	return nil
 }
 
