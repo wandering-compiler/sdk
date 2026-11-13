@@ -80,12 +80,48 @@ func sortedKeys(set map[string]bool) []string {
 
 // schemaPrepSQL creates each namespace that does not exist yet. Identifiers
 // are double-quote escaped: they come from a proto option an author wrote.
+//
+// Not `CREATE SCHEMA IF NOT EXISTS`: Postgres checks CREATE on the database
+// before it looks whether the schema exists, so a least-privilege deploy
+// role — ALL on its schema, no CREATE on the database — was refused on every
+// deploy with the schema there all along (T1-1 pass #51, A51-35). The
+// catalog is asked first; only a missing namespace is created, and only that
+// needs the privilege.
 func schemaPrepSQL(schemas []string) string {
+	tag := dollarTag(schemas)
 	var b strings.Builder
 	for _, s := range schemas {
-		fmt.Fprintf(&b, "CREATE SCHEMA IF NOT EXISTS %s;\n", pgQuoteIdent(s))
+		fmt.Fprintf(&b, "DO %s BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = %s) THEN CREATE SCHEMA %s; END IF; END %s;\n",
+			tag, pgQuoteLiteral(s), pgQuoteIdent(s), tag)
 	}
 	return b.String()
+}
+
+// dollarTag is a dollar-quote tag no name occurs in, so an author's schema
+// name cannot end the DO body early.
+func dollarTag(names []string) string {
+	for i := 0; ; i++ {
+		tag := "$w17_schema_prep$"
+		if i > 0 {
+			tag = fmt.Sprintf("$w17_schema_prep_%d$", i)
+		}
+		clash := false
+		for _, n := range names {
+			if strings.Contains(n, tag) {
+				clash = true
+				break
+			}
+		}
+		if !clash {
+			return tag
+		}
+	}
+}
+
+// pgQuoteLiteral renders s as a Postgres string literal (standard conforming
+// strings: a quote is doubled, a backslash is literal).
+func pgQuoteLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // pgQuoteIdent renders name as a Postgres quoted identifier, doubling any
@@ -111,8 +147,8 @@ func pgQuoteIdent(name string) string {
 //
 // Unlike an extension, a schema needs no superuser: the role that owns the
 // database may create one, so this is the applier's step rather than the
-// platform's. Idempotent (`IF NOT EXISTS`), outside the migrations'
-// transactions, Postgres only — the manifest carries the field on every
+// platform's. Idempotent (only a missing namespace is created), outside the
+// migrations' transactions, Postgres only — the manifest carries the field on every
 // dialect, and only Postgres has schemas in this sense.
 func prepareSchemas(ctx context.Context, ac *runApplierCache, pending []Pending) error {
 	byConn := map[string]map[string]bool{}
