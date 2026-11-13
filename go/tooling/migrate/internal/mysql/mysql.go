@@ -140,6 +140,7 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	// Exec (up_post_tx, if any, still runs below).
 	if up := m.GetUpSql(); up != "" {
 		if err := a.execBody(ctx, up); err != nil {
+			err = withOrphanRepair(err)
 			if ddlStmtRe.MatchString(up) {
 				// T1-1 pass #51, A51-33: the BEGIN … COMMIT envelope does not
 				// hold DDL on MySQL; say what a failure after one leaves.
@@ -159,6 +160,23 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 		}
 	}
 	return nil
+}
+
+// withOrphanRepair names the repair when a foreign key refused rows that
+// reference no parent row (1452). In a migration body that is a key the
+// migration adds or re-adds with every row checked — a key the plan drops
+// and re-adds around a primary-key change or a column rebuild (MySQL has no
+// NOT VALID): rows an earlier migration added the key over with
+// FOREIGN_KEY_CHECKS off, or a parent row a step of this migration removed
+// (T1-1 pass #51 review R2). The bare server error names only the constraint.
+func withOrphanRepair(err error) error {
+	var me *gomysql.MySQLError
+	if !errors.As(err, &me) || me.Number != 1452 {
+		return err
+	}
+	return fmt.Errorf("%w\n"+
+		"  a foreign key refused child rows that reference no parent row (orphans): rows an earlier migration added the key over with FOREIGN_KEY_CHECKS off, or a parent row a step of this migration removed; `migrate apply --checks` counts them before the body runs\n"+
+		"  fix: repair the orphans without deleting them — re-create the missing parent rows (as ended rows) or end the child rows (or correct the step) — then deploy again", err)
 }
 
 // Rollback runs the migration's down payload. Order:
