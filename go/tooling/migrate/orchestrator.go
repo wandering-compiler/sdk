@@ -1908,9 +1908,9 @@ func loadConnectionMigrations(fsys fs.FS, connection string) ([]*applyfetchpb.Mi
 		// existed recomputes differently under the current one, and
 		// refusing it here reads as tampering on a file nobody touched.
 		if !migrationHashMatches(m) {
-			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is a real edit",
+			return nil, fmt.Errorf("artifact %s: content_sha256 mismatch (registry=%s, recomputed=%s) — the file does not hash to the digest it carries, under this compiler's formula or the one that predates required-extension binding. Two things produce this: the file was edited after it was fetched, or it was written by a build whose hash formula this one does not know. Re-fetch the connection's migrations before treating it as tampering — a fresh fetch rewrites every artifact under the formula this client verifies, and a mismatch that survives one is either a real edit or a console minting a digest formula newer than this build's (%s): then raise the project's sdk/go pin to the console's sdk_floor and rebuild",
 				path, m.GetContentSha256(),
-				ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()))
+				ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()), DigestFormula)
 		}
 		// Backfill connection_name when missing (older fetches that
 		// didn't stamp; harmless self-heal).
@@ -1958,9 +1958,9 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 		return fmt.Errorf("WriteMigration: %w", err)
 	}
 	if !migrationHashMatches(m) {
-		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s) — the artifact does not hash to its own digest under this compiler's formula or the one that predates required-extension binding. Unlike the load-side check this one reads a FRESH fetch, so re-fetching cannot help: the console and this client disagree about the artifact, which is either a console-side mutation or wire tampering",
+		return fmt.Errorf("WriteMigration: content_sha256 mismatch on %s (registry=%s recomputed=%s) — the artifact does not hash to its own digest under this compiler's formula or the one that predates required-extension binding. Unlike the load-side check this one reads a FRESH fetch, so re-fetching cannot help: the console and this client disagree about the artifact, which is a console minting a digest formula newer than this build's (%s) — raise the project's sdk/go pin to the console's sdk_floor and rebuild — or a console-side mutation or wire tampering",
 			m.GetId(), m.GetContentSha256(),
-			ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()))
+			ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()), DigestFormula)
 	}
 	// The segment check above is the refusal; the containment check is the
 	// backstop, so a future change to what a segment may hold cannot reopen

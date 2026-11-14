@@ -160,6 +160,18 @@ func ContentHashWithChecks(up, upPostTx, downPreTx, downSql, prev string, supers
 	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts, schemas, checks)
 }
 
+// DigestFormula names the newest content-digest formula this build mints and
+// verifies: w17.content.v2 with the required-extension, required-schema
+// (sdk#169, T2-5 pass #16 R16-6), adopt-preflight and checks segments.
+//
+// A digest refusal quotes it. A console moved to a NEWER formula mints digests
+// that a binary built against an older sdk/go recomputes differently, and
+// without the formula in the refusal that reads as an integrity failure
+// rather than "this build is older than the digest" (review F3). Bump it with
+// every new segment, together with the sdk_floor the console serves, so codegen
+// refuses a pin older than the formula.
+const DigestFormula = "w17.content.v2+reqext+reqschema+adoptpre+checks"
+
 // ChecksBound reports whether m's content_sha256 covers its checks —
 // trivially so when it carries none. The loader refuses an artifact whose
 // checks are not bound, and `apply --checks` asks again before it runs one.
