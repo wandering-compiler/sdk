@@ -14,9 +14,9 @@ const W17InvalidateTopic = "w17.invalidate"
 
 // EmitInvalidate is the convenience wrapper around
 // Dispatcher.Dispatch for the reserved w17.invalidate topic.
-// Drops FE caches tagged with the touched entity family —
-// both page-local (handler's own page) and cross-tab (every
-// other open client on the same channel).
+// Every open client on the channel re-asks its mounted queries
+// tagged with the touched entity family (the client drops
+// nothing; it re-asks).
 //
 // **Two call paths.** Both produce identical wire frames; pick
 // based on whether the mutation's proto carries

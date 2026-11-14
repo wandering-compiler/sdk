@@ -176,11 +176,13 @@ var (
 	// repeated string returns_entities = 50140;
 	E_ReturnsEntities = &file_w17_client_proto_extTypes[0]
 	// (w17.touches_entities) — mutation method annotation
-	// declaring the entity TYPES this RPC modifies. Drives both
-	// page-local cache invalidation (immediate, on success) and
-	// cross-tab invalidation via the reserved `w17.invalidate`
-	// eventbus topic (when the BE emits it — auto-emit codegen
-	// is C4.3+).
+	// declaring the entity TYPES this RPC modifies. After the
+	// mutation succeeds, the server emits the reserved
+	// `w17.invalidate` eventbus topic for each declared type, and
+	// every open client re-asks its mounted queries of that
+	// entity. The client itself drops nothing on a write: every
+	// query asks the server, and the cache only paints the last
+	// answer while it does.
 	//
 	// Usage:
 	//
