@@ -37,10 +37,14 @@ func requiredSchemasFromManifest(manifestJSON string) []string {
 // connection — exactly what schema prep creates, and so what a Wiper must
 // remove to return the store to empty. Pass every migration of the
 // connection's series, not only the pending ones.
+//
+// Only a list the migration's digest binds counts, as in schema prep
+// (schemasBound): a name added to an artifact on disk is not something
+// schema prep would have created, so it is not something to drop.
 func DeclaredNamespaces(migs []*applyfetchpb.Migration, connection string) []string {
 	set := map[string]bool{}
 	for _, m := range migs {
-		if m.GetConnection() != connection {
+		if m.GetConnection() != connection || !schemasBound(m) {
 			continue
 		}
 		for _, s := range requiredSchemasFromManifest(m.GetManifestJson()) {
@@ -153,6 +157,18 @@ func pgQuoteIdent(name string) string {
 func prepareSchemas(ctx context.Context, ac *runApplierCache, pending []Pending) error {
 	byConn := map[string]map[string]bool{}
 	for _, p := range pending {
+		// T2-5 pass #16 (R16-6): only a schema list the migration's content
+		// digest binds is obeyed. One it does not bind — minted before the
+		// digest covered the list, or edited on disk — creates nothing: the
+		// migration's own DDL then names a missing namespace, loudly.
+		if !schemasBound(p.Migration) {
+			if declared := requiredSchemasFromManifest(p.Migration.GetManifestJson()); len(declared) > 0 && ac.out != nil {
+				_, _ = fmt.Fprintf(ac.out, "apply %s: migration %s declares schema(s) %s that its content digest does not bind "+
+					"(minted before the digest covered them, or edited) — not created; create them yourself if they are missing\n",
+					p.Connection, p.Migration.GetId(), strings.Join(declared, ", "))
+			}
+			continue
+		}
 		for _, s := range requiredSchemasFromManifest(p.Migration.GetManifestJson()) {
 			if s = strings.TrimSpace(s); s == "" {
 				continue

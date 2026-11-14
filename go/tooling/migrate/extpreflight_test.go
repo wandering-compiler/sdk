@@ -287,8 +287,8 @@ func (f *scriptFake) RunScript(_ context.Context, sql string) error {
 func TestRun_PreparationStepsDoNotGoThroughApply(t *testing.T) {
 	fake := &scriptFake{}
 	ac := newRunApplierCache(func(string) (Applier, error) { return fake, nil }, io.Discard, 0)
-	pending := []Pending{{Connection: "main", Migration: withManifest("m1", "main",
-		`{"required_extensions":["vector"],"required_schemas":["billing"]}`)}}
+	pending := []Pending{{Connection: "main", Migration: minted(withManifest("m1", "main",
+		`{"required_extensions":["vector"],"required_schemas":["billing"]}`))}}
 	if err := preflightExtensions(context.Background(), ac, pending); err != nil {
 		t.Fatalf("preflight: %v", err)
 	}

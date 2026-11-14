@@ -48,9 +48,9 @@ func TestPrepareSchemas_PerConnection(t *testing.T) {
 		return pg, nil
 	}, io.Discard, 0)
 	pending := []Pending{
-		{Connection: "billing-postgres", Migration: withManifest("m1", "billing-postgres", `{"required_schemas":["billing"]}`)},
-		{Connection: "billing-postgres", Migration: withManifest("m2", "billing-postgres", `{"required_schemas":["billing","ledger"]}`)},
-		{Connection: "kv", Migration: withManifest("k1", "kv", `{"required_schemas":["billing"]}`)},
+		{Connection: "billing-postgres", Migration: minted(withManifest("m1", "billing-postgres", `{"required_schemas":["billing"]}`))},
+		{Connection: "billing-postgres", Migration: minted(withManifest("m2", "billing-postgres", `{"required_schemas":["billing","ledger"]}`))},
+		{Connection: "kv", Migration: minted(withManifest("k1", "kv", `{"required_schemas":["billing"]}`))},
 	}
 	if err := prepareSchemas(context.Background(), ac, pending); err != nil {
 		t.Fatal(err)
@@ -74,10 +74,10 @@ func TestPrepareSchemas_PerConnection(t *testing.T) {
 // out — from a fetched series and from a dev plan alike.
 func TestDeclaredNamespaces(t *testing.T) {
 	migs := []*applyfetchpb.Migration{
-		{Connection: "app", ManifestJson: `{"required_schemas":["ledger","billing"]}`},
-		{Connection: "app", ManifestJson: `{"required_schemas":["billing"," "]}`},
-		{Connection: "other", ManifestJson: `{"required_schemas":["theirs"]}`},
-		{Connection: "app", ManifestJson: `not json`},
+		minted(&applyfetchpb.Migration{Connection: "app", ManifestJson: `{"required_schemas":["ledger","billing"]}`}),
+		minted(&applyfetchpb.Migration{Connection: "app", ManifestJson: `{"required_schemas":["billing"," "]}`}),
+		minted(&applyfetchpb.Migration{Connection: "other", ManifestJson: `{"required_schemas":["theirs"]}`}),
+		minted(&applyfetchpb.Migration{Connection: "app", ManifestJson: `not json`}),
 	}
 	if got := DeclaredNamespaces(migs, "app"); strings.Join(got, ",") != "billing,ledger" {
 		t.Errorf("DeclaredNamespaces = %v, want [billing ledger]", got)
