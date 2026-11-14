@@ -9011,7 +9011,8 @@ type ClassifyIRRequest struct {
 	// head is the IR after the change.
 	Head []byte `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`
 	// mode is the environment posture for the gate decision: "prod" blocks
-	// breaking changes; anything else (incl. empty) is "dev" (breaking warns).
+	// breaking changes; "dev" (or empty) warns. Any other spelling is refused
+	// with InvalidArgument — never read as "dev".
 	Mode          string `protobuf:"bytes,3,opt,name=mode,proto3" json:"mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

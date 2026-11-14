@@ -2173,7 +2173,8 @@ message ClassifyIRRequest {
   // head is the IR after the change.
   bytes head = 2;
   // mode is the environment posture for the gate decision: "prod" blocks
-  // breaking changes; anything else (incl. empty) is "dev" (breaking warns).
+  // breaking changes; "dev" (or empty) warns. Any other spelling is refused
+  // with InvalidArgument — never read as "dev".
   string mode = 3;
 }
 
