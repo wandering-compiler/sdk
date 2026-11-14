@@ -127,8 +127,10 @@ func ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev string, sup
 	// changed the first time the console added a field — every pin in every
 	// lock would break on a release that changed nothing about what executes.
 	//
-	// What the client acts on is the required-extension set, and that is what
-	// gets hashed: sorted and deduplicated, because the set is the semantics.
+	// What the client acts on is the required-extension set and the
+	// required-schema set (schema prep CREATEs those — T2-5 pass #16, R16-6),
+	// and that is what gets hashed: each sorted and deduplicated, because the
+	// set is the semantics.
 	// Reordering it is not an edit anybody can act on, unlike `supersedes`
 	// below, where order is deliberately part of the digest.
 	//
@@ -154,7 +156,8 @@ func ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev string, sup
 // operator — and, when it only warns, its severity.
 func ContentHashWithChecks(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL, manifestJSON string, checks []*applyfetchpb.Check) string {
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
-	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts, checks)
+	schemas := canonicalExtensions(requiredSchemasFromManifest(manifestJSON))
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, adoptPreflightSQL, exts, schemas, checks)
 }
 
 // ChecksBound reports whether m's content_sha256 covers its checks —
@@ -164,8 +167,62 @@ func ChecksBound(m *applyfetchpb.Migration) bool {
 	if len(m.GetChecks()) == 0 {
 		return true
 	}
+	return boundWithOrWithoutSchemas(m, m.GetAdoptPreflightSql(), m.GetChecks())
+}
+
+// boundWithOrWithoutSchemas reports whether m's digest is the formula that
+// binds the given preflight and checks — with the required-schema segment
+// (every digest minted since it exists), or without it (one minted before).
+// Whether the SCHEMAS are bound is a separate question, [schemasBound]: a
+// digest of the second kind still binds everything else, so it may load, but
+// it licenses no CREATE SCHEMA.
+func boundWithOrWithoutSchemas(m *applyfetchpb.Migration, preflight string, checks []*applyfetchpb.Check) bool {
 	want := m.GetContentSha256()
-	return want != "" && ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()) == want
+	if want == "" {
+		return false
+	}
+	exts := canonicalExtensions(requiredExtensionsFromManifest(m.GetManifestJson()))
+	schemas := canonicalExtensions(requiredSchemasFromManifest(m.GetManifestJson()))
+	if contentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), preflight, exts, schemas, checks) == want {
+		return true
+	}
+	return len(schemas) > 0 &&
+		contentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), preflight, exts, nil, checks) == want
+}
+
+// schemasBound reports whether m's digest binds its required-schema set —
+// trivially so when it declares none. Schema prep and the Wiper act only on a
+// bound set (T2-5 pass #16, R16-6).
+//
+// The segment was added after migrations declaring schemas had been minted,
+// and those digests must keep loading — the extension segment's lesson (see
+// [ContentHashMatches]). But a digest WITHOUT the segment cannot tell an
+// edited list from the planned one: an artifact minted with no schemas, given
+// one on disk, still verifies under the older formula. So loading and acting
+// are separated: the loader accepts either formula (everything executable is
+// pinned by both), and CREATE SCHEMA runs only for a set the digest binds. A
+// migration minted before the segment, whose namespace does not exist yet,
+// then fails on its own DDL — loudly, naming the schema — instead of having
+// an unverifiable list obeyed.
+func schemasBound(m *applyfetchpb.Migration) bool {
+	schemas := canonicalExtensions(requiredSchemasFromManifest(m.GetManifestJson()))
+	if len(schemas) == 0 {
+		return true
+	}
+	want := m.GetContentSha256()
+	if want == "" {
+		return false
+	}
+	exts := canonicalExtensions(requiredExtensionsFromManifest(m.GetManifestJson()))
+	for _, d := range []string{
+		contentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), exts, schemas, m.GetChecks()),
+		contentHash(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), "", exts, schemas, nil),
+	} {
+		if d == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ContentHashMatches reports whether `want` is a digest this content can
@@ -196,15 +253,23 @@ func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersede
 		return false
 	}
 	exts := canonicalExtensions(requiredExtensionsFromManifest(manifestJSON))
-	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts, nil) == want {
+	schemas := canonicalExtensions(requiredSchemasFromManifest(manifestJSON))
+	if contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts, schemas, nil) == want {
+		return true
+	}
+	// The pre-segment formulas: identical but for the extension set (minted
+	// before it was bound), and — for a migration declaring schemas — without
+	// the schema segment (T2-5 pass #16, R16-6). A digest accepted under the
+	// second does NOT bind the schema list, so nothing acts on that list:
+	// see schemasBound.
+	if len(schemas) > 0 && contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts, nil, nil) == want {
 		return true
 	}
 	if len(exts) == 0 {
-		// No segment either way — one formula, and it did not match.
+		// No extension segment either way — and it did not match.
 		return false
 	}
-	// The pre-segment formula: identical but for the extension set.
-	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", nil, nil) == want
+	return contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", nil, nil, nil) == want
 }
 
 // migrationHashMatches is the artifact check the loader and WriteMigration
@@ -232,14 +297,13 @@ func preflightBound(m *applyfetchpb.Migration) bool {
 	if m.GetAdoptPreflightSql() == "" {
 		return true
 	}
-	want := m.GetContentSha256()
-	return want != "" && ContentHashWithChecks(m.GetUpSql(), m.GetUpPostTx(), m.GetDownPreTx(), m.GetDownSql(), m.GetPrevContentSha256(), m.GetSupersedes(), m.GetAdoptSql(), m.GetAdoptPreflightSql(), m.GetManifestJson(), m.GetChecks()) == want
+	return boundWithOrWithoutSchemas(m, m.GetAdoptPreflightSql(), m.GetChecks())
 }
 
-func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL string, exts []string, checks []*applyfetchpb.Check) string {
+func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []string, adoptSQL, adoptPreflightSQL string, exts, schemas []string, checks []*applyfetchpb.Check) string {
 
 	var b strings.Builder
-	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && adoptPreflightSQL == "" && len(exts) == 0 && len(checks) == 0 {
+	if prev == "" && len(supersedes) == 0 && adoptSQL == "" && adoptPreflightSQL == "" && len(exts) == 0 && len(schemas) == 0 && len(checks) == 0 {
 		b.WriteString("w17.content.v1\n")
 	} else {
 		b.WriteString("w17.content.v2\n")
@@ -276,6 +340,15 @@ func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 		writeSeg(&b, "reqext.n", strconv.Itoa(len(exts)))
 		for _, e := range exts {
 			writeSeg(&b, "reqext", e)
+		}
+	}
+	// The namespaces schema prep CREATEs at apply (prepareSchemas) — a set,
+	// like the extensions, and written only when non-empty so a migration
+	// declaring none keeps the digest it already had (T2-5 pass #16, R16-6).
+	if len(schemas) > 0 {
+		writeSeg(&b, "reqschema.n", strconv.Itoa(len(schemas)))
+		for _, s := range schemas {
+			writeSeg(&b, "reqschema", s)
 		}
 	}
 	// Written only when non-empty, so a migration without checks keeps the
