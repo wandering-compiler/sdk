@@ -244,7 +244,20 @@ type CustomFunction struct {
 	// permissively (runtime PG enforces the signature), but a few rules need
 	// to know aggregate-ness — notably the (w17.db.lock) shape guard, since
 	// PostgreSQL rejects FOR UPDATE combined with an aggregate (F16-1-2).
-	IsAggregate   bool `protobuf:"varint,4,opt,name=is_aggregate,json=isAggregate,proto3" json:"is_aggregate,omitempty"`
+	IsAggregate bool `protobuf:"varint,4,opt,name=is_aggregate,json=isAggregate,proto3" json:"is_aggregate,omitempty"`
+	// The author's promise that this function never returns NULL when every
+	// argument is non-NULL (DATE_TRUNC, REGEXP_REPLACE, ST_AsText …). The DQL
+	// nullability check then reads a call as NULL only when one of its
+	// arguments may be NULL, so a projection like
+	// `DATE_TRUNC('day', m.issue_date)` over a NOT NULL column fills a
+	// non-nullable response field. Without it a registered function is
+	// "cannot prove never NULL", and the field has to be declared `null: true`.
+	//
+	// It is a promise, not a checked fact: nothing on the database states it.
+	// (PostgreSQL's STRICT is the other direction — a NULL argument gives a
+	// NULL result — and proves nothing about a non-NULL one.) Refused on an
+	// aggregate, which is NULL over no rows whatever its arguments.
+	NonNull       bool `protobuf:"varint,5,opt,name=non_null,json=nonNull,proto3" json:"non_null,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -303,6 +316,13 @@ func (x *CustomFunction) GetDescription() string {
 func (x *CustomFunction) GetIsAggregate() bool {
 	if x != nil {
 		return x.IsAggregate
+	}
+	return false
+}
+
+func (x *CustomFunction) GetNonNull() bool {
+	if x != nil {
+		return x.NonNull
 	}
 	return false
 }
@@ -427,12 +447,13 @@ const file_w17_pg_module_proto_rawDesc = "" +
 	"\x13required_extensions\x18\x03 \x03(\tR\x12requiredExtensions\x129\n" +
 	"\x0econvertible_to\x18\x04 \x03(\v2\x12.w17.pg.ConversionR\rconvertibleTo\x12=\n" +
 	"\x10convertible_from\x18\x05 \x03(\v2\x12.w17.pg.ConversionR\x0fconvertibleFrom\x12 \n" +
-	"\vdescription\x18\x06 \x01(\tR\vdescription\"\x9a\x01\n" +
+	"\vdescription\x18\x06 \x01(\tR\vdescription\"\xb5\x01\n" +
 	"\x0eCustomFunction\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12/\n" +
 	"\x13required_extensions\x18\x02 \x03(\tR\x12requiredExtensions\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12!\n" +
-	"\fis_aggregate\x18\x04 \x01(\bR\visAggregate\"R\n" +
+	"\fis_aggregate\x18\x04 \x01(\bR\visAggregate\x12\x19\n" +
+	"\bnon_null\x18\x05 \x01(\bR\anonNull\"R\n" +
 	"\n" +
 	"Conversion\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
