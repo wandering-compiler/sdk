@@ -132,6 +132,20 @@ message CustomFunction {
   // to know aggregate-ness — notably the (w17.db.lock) shape guard, since
   // PostgreSQL rejects FOR UPDATE combined with an aggregate (F16-1-2).
   bool is_aggregate = 4;
+
+  // The author's promise that this function never returns NULL when every
+  // argument is non-NULL (DATE_TRUNC, REGEXP_REPLACE, ST_AsText …). The DQL
+  // nullability check then reads a call as NULL only when one of its
+  // arguments may be NULL, so a projection like
+  // `DATE_TRUNC('day', m.issue_date)` over a NOT NULL column fills a
+  // non-nullable response field. Without it a registered function is
+  // "cannot prove never NULL", and the field has to be declared `null: true`.
+  //
+  // It is a promise, not a checked fact: nothing on the database states it.
+  // (PostgreSQL's STRICT is the other direction — a NULL argument gives a
+  // NULL result — and proves nothing about a non-NULL one.) Refused on an
+  // aggregate, which is NULL over no rows whatever its arguments.
+  bool non_null = 5;
 }
 
 // Conversion — one cast / transformation entry inside CustomType's
