@@ -139,7 +139,8 @@ func serviceDesc(svc protoreflect.ServiceDescriptor, run invoke) (*grpc.ServiceD
 			return nil, fmt.Errorf("egress: %s is streaming; an egress call is one request and one response", md.FullName())
 		}
 		call := wire.Call(md)
-		if call == nil || call.GetMethod() == "" || call.GetPath() == "" {
+		// A SOAP operation posts to the endpoint itself: it has no path.
+		if call == nil || call.GetMethod() == "" || (call.GetPath() == "" && !wire.IsSOAP(call)) {
 			return nil, fmt.Errorf("egress: %s has no (w17.egress_call) — is this an egress client?", md.FullName())
 		}
 		m := &method{client: client, name: string(md.Name()), call: call}
