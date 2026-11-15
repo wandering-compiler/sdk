@@ -418,6 +418,16 @@ func DeferUntilCommit(ctx context.Context, reg CommitHook, fn func()) DeferOutco
 		return EmitNow
 	}
 	if reg == nil || fn == nil {
+		// No registry here (the business tier), yet the request names a
+		// transaction: a caller in another process runs it, and this one
+		// hears nothing of its outcome. The announcement goes out at once
+		// — before that commit, and kept if it rolls back — so it is said.
+		if fn != nil {
+			if txID := RequestTxID(ctx); txID != "" {
+				observx.ReportError(ctx, fmt.Errorf(
+					"txregistry: announcing inside transaction %q, which another process runs: this tier has no registry to wait on, so the event is published before that transaction commits (and kept if it rolls back)", txID))
+			}
+		}
 		return EmitNow
 	}
 	txID := RequestTxID(ctx)
