@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/eventbus"
@@ -62,6 +65,11 @@ type EventbusEventSource struct {
 	transcode TranscodeFunc
 	principal PrincipalLabelsFunc
 
+	// ownerScopes / principalScopes: set by [EventbusEventSource.WithOwnerRange]
+	// on an audience gateway whose range is the caller's own rows.
+	ownerScopes     []string
+	principalScopes PrincipalLabelsFunc
+
 	// openMu serializes lazy-open attempts. It is deliberately NOT mu: the
 	// open path talks to the broker and, when an attempt fails, drains what
 	// it opened — and a drain waits for in-flight handler callbacks, which
@@ -102,6 +110,9 @@ type transcodeReport struct {
 type hubClient struct {
 	wanted map[string]struct{}
 	labels map[string]string
+	// scopes are the client's data scopes (AuthResp.scopes, by name), on
+	// a hub with an owner range only.
+	scopes map[string]string
 	out    chan Event
 }
 
@@ -163,6 +174,27 @@ func NewEventbusEventSource(factory eventbus.SubscriberFactory, channels []strin
 	}
 }
 
+// WithOwnerRange makes the hub deliver as an OWNER-range audience gateway
+// reads rows (`default_scope: OWNER`, the client audience): the caller's
+// own, not the organization's. ownerScopes are the owner-axis data scopes
+// of the domain's models (`(w17.db.scope)` entries with `axis: OWNER`,
+// e.g. `owner_id`); principalScopes derives a connected client's scopes
+// from its AuthResp (`scopes`). An event is then delivered to a client
+// only when the request that emitted it carried the client's own value
+// for every one of those scopes — on top of the label rule. Labels
+// partition by organization only, so a staff member's write in the
+// organization reached every client of it: a row that client's own reads
+// would never return.
+//
+// Fail closed: an event that carries no owner scope (emitted outside a
+// request, or by a tier that does not stamp it) reaches no client of
+// this hub. Returns e for chaining. Call before the first Subscribe.
+func (e *EventbusEventSource) WithOwnerRange(ownerScopes []string, principalScopes PrincipalLabelsFunc) *EventbusEventSource {
+	e.ownerScopes = append([]string(nil), ownerScopes...)
+	e.principalScopes = principalScopes
+	return e
+}
+
 // Subscribe implements EventSource.Subscribe. Registers a new
 // client with the shared hub (opening the single bus subscriber
 // on the first client), returns the client's receive channel,
@@ -188,6 +220,9 @@ func (e *EventbusEventSource) Subscribe(ctx context.Context, topics []string, us
 		labels = e.principal(userData)
 	}
 	c := &hubClient{wanted: wanted, labels: labels, out: make(chan Event, hubClientBuffer)}
+	if len(e.ownerScopes) > 0 && e.principalScopes != nil {
+		c.scopes = e.principalScopes(userData)
+	}
 
 	e.mu.Lock()
 	e.clients[c] = struct{}{}
@@ -365,8 +400,69 @@ func (e *EventbusEventSource) handleDelivery(ctx context.Context, channel, topic
 	if skip {
 		return nil
 	}
-	e.fanOut(topic, labels, Event{Topic: topic, Data: payload})
+	var scopes map[string]string
+	if len(e.ownerScopes) > 0 {
+		scopes = eventScopes(topic, envelope)
+	}
+	e.fanOut(topic, labels, scopes, Event{Topic: topic, Data: payload})
 	return nil
+}
+
+// eventScopes reads the data scopes an event was emitted under, by name:
+// an InvalidateEvent's `scopes` (field 5), a domain envelope's `metadata`
+// (eventbus.EnvelopeMetadataField) — both keyed `x-w17-scope-<name>`.
+// Read off the wire, so the hub needs neither envelope's type; a field
+// that does not parse yields what was read before it (fewer scopes, so a
+// stricter answer, never a wider one).
+func eventScopes(topic string, envelope []byte) map[string]string {
+	field := eventbus.EnvelopeMetadataField
+	if topic == eventbus.W17InvalidateTopic {
+		field = 5
+	}
+	out := map[string]string{}
+	b := envelope
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return out
+		}
+		b = b[n:]
+		if num != field || typ != protowire.BytesType {
+			if n = protowire.ConsumeFieldValue(num, typ, b); n < 0 {
+				return out
+			}
+			b = b[n:]
+			continue
+		}
+		entry, n := protowire.ConsumeBytes(b)
+		if n < 0 {
+			return out
+		}
+		b = b[n:]
+		var k, v string
+		for len(entry) > 0 {
+			en, et, m := protowire.ConsumeTag(entry)
+			if m < 0 || et != protowire.BytesType {
+				break
+			}
+			entry = entry[m:]
+			val, m := protowire.ConsumeBytes(entry)
+			if m < 0 {
+				break
+			}
+			entry = entry[m:]
+			switch en {
+			case 1:
+				k = string(val)
+			case 2:
+				v = string(val)
+			}
+		}
+		if name, ok := strings.CutPrefix(k, eventbus.ScopeKeyPrefix); ok && v != "" {
+			out[name] = v
+		}
+	}
+	return out
 }
 
 // reportTranscodeFailure logs and reports a dropped, untranscodable
@@ -418,7 +514,7 @@ func (e *EventbusEventSource) anyInterested(topic string) bool {
 // blocking per client (drop on full buffer); the send happens
 // under e.mu so it can never race the close in the per-client
 // cleanup goroutine.
-func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string, ev Event) {
+func (e *EventbusEventSource) fanOut(topic string, eventLabels, eventScopes map[string]string, ev Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Label-based organization isolation is active when a principal-labels
@@ -429,6 +525,9 @@ func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string
 			continue
 		}
 		if !entitled(isolation, eventLabels, c.labels) {
+			continue
+		}
+		if !e.ownEvent(eventScopes, c.scopes) {
 			continue
 		}
 		select {
@@ -475,6 +574,19 @@ func entitled(isolation bool, eventLabels, principalLabels map[string]string) bo
 		return false
 	}
 	return labelsSubset(eventLabels, principalLabels)
+}
+
+// ownEvent is the owner-range rule ([EventbusEventSource.WithOwnerRange]):
+// every owner scope of the event must be present and equal to the
+// client's. Always true on a hub without an owner range.
+func (e *EventbusEventSource) ownEvent(eventScopes, clientScopes map[string]string) bool {
+	for _, name := range e.ownerScopes {
+		v := eventScopes[name]
+		if v == "" || clientScopes[name] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // labelsSubset reports whether every (key,value) in eventLabels is
