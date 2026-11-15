@@ -8,6 +8,8 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/sdk/go/lib/egress/wire"
 )
 
 // Reasons an egress error carries in its ErrorInfo, beside
@@ -18,6 +20,7 @@ const (
 	ReasonUndecodable  = "UPSTREAM_UNDECODABLE"
 	ReasonUnconfigured = "CLIENT_UNCONFIGURED"
 	ReasonBadRequest   = "REQUEST_UNENCODABLE"
+	ReasonSOAPFault    = "UPSTREAM_SOAP_FAULT"
 )
 
 // maxErrorBody bounds the upstream error body an ErrorInfo carries.
@@ -66,6 +69,25 @@ func httpError(client string, httpStatus, attempts int, body []byte) error {
 	}
 	return callError(codeFor(httpStatus), client, "UPSTREAM_HTTP_"+strconv.Itoa(httpStatus),
 		"upstream answered HTTP "+strconv.Itoa(httpStatus), meta)
+}
+
+// faultError is a SOAP Fault: a Client (Sender) fault blames our request,
+// any other the service — the codes of a 400 and of a 5xx.
+func faultError(client string, httpStatus, attempts int, f wire.Fault) error {
+	code := codes.Unavailable
+	if f.ClientFault() {
+		code = codes.InvalidArgument
+	}
+	meta := map[string]string{
+		"http_status": strconv.Itoa(httpStatus),
+		"attempts":    strconv.Itoa(attempts),
+		"fault_code":  f.Code,
+	}
+	if f.Detail != "" {
+		meta["detail"] = truncate([]byte(f.Detail), maxErrorBody)
+	}
+	return callError(code, client, ReasonSOAPFault,
+		"upstream SOAP fault "+f.Code+": "+truncate([]byte(f.Reason), maxErrorBody), meta)
 }
 
 // truncate cuts b to at most n bytes without splitting a UTF-8 sequence, and

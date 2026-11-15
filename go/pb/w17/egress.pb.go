@@ -97,6 +97,10 @@ const (
 	// application/x-www-form-urlencoded, nested fields in the deep-object
 	// convention (`metadata[order_id]=42`, `items[0][price]=…`).
 	EgressEncoding_EGRESS_ENCODING_FORM EgressEncoding = 2
+	// A SOAP 1.1 envelope (text/xml, SOAPAction header), document/literal.
+	EgressEncoding_EGRESS_ENCODING_SOAP11 EgressEncoding = 3
+	// A SOAP 1.2 envelope (application/soap+xml; action=…), document/literal.
+	EgressEncoding_EGRESS_ENCODING_SOAP12 EgressEncoding = 4
 )
 
 // Enum value maps for EgressEncoding.
@@ -105,11 +109,15 @@ var (
 		0: "EGRESS_ENCODING_UNSPECIFIED",
 		1: "EGRESS_ENCODING_JSON",
 		2: "EGRESS_ENCODING_FORM",
+		3: "EGRESS_ENCODING_SOAP11",
+		4: "EGRESS_ENCODING_SOAP12",
 	}
 	EgressEncoding_value = map[string]int32{
 		"EGRESS_ENCODING_UNSPECIFIED": 0,
 		"EGRESS_ENCODING_JSON":        1,
 		"EGRESS_ENCODING_FORM":        2,
+		"EGRESS_ENCODING_SOAP11":      3,
+		"EGRESS_ENCODING_SOAP12":      4,
 	}
 )
 
@@ -157,7 +165,10 @@ type EgressClient struct {
 	// `servers[0].url` of the document, when it has one: the base URL the
 	// generated DSN template starts from. Configuration, not a default — the
 	// runtime takes the base URL from the DSN only.
-	ServerUrl     string `protobuf:"bytes,5,opt,name=server_url,json=serverUrl,proto3" json:"server_url,omitempty"`
+	ServerUrl string `protobuf:"bytes,5,opt,name=server_url,json=serverUrl,proto3" json:"server_url,omitempty"`
+	// SOAP clients (generated from a WSDL): the SOAP version of the binding,
+	// "1.1" or "1.2". Empty for an OpenAPI client.
+	SoapVersion   string `protobuf:"bytes,6,opt,name=soap_version,json=soapVersion,proto3" json:"soap_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -227,6 +238,13 @@ func (x *EgressClient) GetServerUrl() string {
 	return ""
 }
 
+func (x *EgressClient) GetSoapVersion() string {
+	if x != nil {
+		return x.SoapVersion
+	}
+	return ""
+}
+
 // EgressCall — one HTTP operation.
 type EgressCall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -251,8 +269,23 @@ type EgressCall struct {
 	// only when this is set: the client fills the header once per call, and
 	// every attempt reuses it.
 	IdempotencyHeader string `protobuf:"bytes,6,opt,name=idempotency_header,json=idempotencyHeader,proto3" json:"idempotency_header,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// SOAP: the SOAPAction of the operation (sent as the SOAPAction header on
+	// SOAP 1.1, the action parameter of the content type on SOAP 1.2). Empty
+	// when the binding names none.
+	SoapAction string `protobuf:"bytes,7,opt,name=soap_action,json=soapAction,proto3" json:"soap_action,omitempty"`
+	// The operation may be repeated without effect — it reads. A SOAP call is
+	// always a POST, so this is what lets the runtime retry it on a 429 / 5xx
+	// like an idempotent HTTP method. Set from the client's `idempotent`
+	// operations (`w17ctl client generate --idempotent <op>`).
+	Idempotent bool `protobuf:"varint,8,opt,name=idempotent,proto3" json:"idempotent,omitempty"`
+	// SOAP document/literal: the qualified name of the element the request
+	// message becomes inside soap:Body, and of the one the response comes in.
+	RequestElement  string `protobuf:"bytes,9,opt,name=request_element,json=requestElement,proto3" json:"request_element,omitempty"`
+	ResponseElement string `protobuf:"bytes,10,opt,name=response_element,json=responseElement,proto3" json:"response_element,omitempty"`
+	// Their namespace (the schema's targetNamespace).
+	XmlNamespace  string `protobuf:"bytes,11,opt,name=xml_namespace,json=xmlNamespace,proto3" json:"xml_namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EgressCall) Reset() {
@@ -327,6 +360,41 @@ func (x *EgressCall) GetIdempotencyHeader() string {
 	return ""
 }
 
+func (x *EgressCall) GetSoapAction() string {
+	if x != nil {
+		return x.SoapAction
+	}
+	return ""
+}
+
+func (x *EgressCall) GetIdempotent() bool {
+	if x != nil {
+		return x.Idempotent
+	}
+	return false
+}
+
+func (x *EgressCall) GetRequestElement() string {
+	if x != nil {
+		return x.RequestElement
+	}
+	return ""
+}
+
+func (x *EgressCall) GetResponseElement() string {
+	if x != nil {
+		return x.ResponseElement
+	}
+	return ""
+}
+
+func (x *EgressCall) GetXmlNamespace() string {
+	if x != nil {
+		return x.XmlNamespace
+	}
+	return ""
+}
+
 // EgressField — one field's wire identity.
 type EgressField struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -342,7 +410,16 @@ type EgressField struct {
 	Required bool `protobuf:"varint,3,opt,name=required,proto3" json:"required,omitempty"`
 	// On a oneof arm of a discriminated union: the discriminator value that
 	// selects this arm.
-	Tag           string `protobuf:"bytes,4,opt,name=tag,proto3" json:"tag,omitempty"`
+	Tag string `protobuf:"bytes,4,opt,name=tag,proto3" json:"tag,omitempty"`
+	// SOAP: the XML namespace the element or attribute is qualified with —
+	// empty for an unqualified one (an XSD's elementFormDefault).
+	XmlNamespace string `protobuf:"bytes,5,opt,name=xml_namespace,json=xmlNamespace,proto3" json:"xml_namespace,omitempty"`
+	// SOAP: the field is an XML attribute of its parent element rather than
+	// a child element.
+	XmlAttribute bool `protobuf:"varint,6,opt,name=xml_attribute,json=xmlAttribute,proto3" json:"xml_attribute,omitempty"`
+	// SOAP: the field is the text content of its parent element (an XSD
+	// simpleContent: a value with attributes).
+	XmlText       bool `protobuf:"varint,7,opt,name=xml_text,json=xmlText,proto3" json:"xml_text,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -403,6 +480,27 @@ func (x *EgressField) GetTag() string {
 		return x.Tag
 	}
 	return ""
+}
+
+func (x *EgressField) GetXmlNamespace() string {
+	if x != nil {
+		return x.XmlNamespace
+	}
+	return ""
+}
+
+func (x *EgressField) GetXmlAttribute() bool {
+	if x != nil {
+		return x.XmlAttribute
+	}
+	return false
+}
+
+func (x *EgressField) GetXmlText() bool {
+	if x != nil {
+		return x.XmlText
+	}
+	return false
 }
 
 // EgressUnion — a oneof that is an OpenAPI union.
@@ -557,7 +655,7 @@ var File_w17_egress_proto protoreflect.FileDescriptor
 
 const file_w17_egress_proto_rawDesc = "" +
 	"\n" +
-	"\x10w17/egress.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xa1\x01\n" +
+	"\x10w17/egress.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xc4\x01\n" +
 	"\fEgressClient\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1f\n" +
@@ -565,7 +663,8 @@ const file_w17_egress_proto_rawDesc = "" +
 	"apiVersion\x12'\n" +
 	"\x0fopenapi_version\x18\x04 \x01(\tR\x0eopenapiVersion\x12\x1d\n" +
 	"\n" +
-	"server_url\x18\x05 \x01(\tR\tserverUrl\"\xf1\x01\n" +
+	"server_url\x18\x05 \x01(\tR\tserverUrl\x12!\n" +
+	"\fsoap_version\x18\x06 \x01(\tR\vsoapVersion\"\xab\x03\n" +
 	"\n" +
 	"EgressCall\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
@@ -573,12 +672,24 @@ const file_w17_egress_proto_rawDesc = "" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12>\n" +
 	"\x10request_encoding\x18\x04 \x01(\x0e2\x13.w17.EgressEncodingR\x0frequestEncoding\x12%\n" +
 	"\x0esuccess_status\x18\x05 \x01(\rR\rsuccessStatus\x12-\n" +
-	"\x12idempotency_header\x18\x06 \x01(\tR\x11idempotencyHeader\"n\n" +
+	"\x12idempotency_header\x18\x06 \x01(\tR\x11idempotencyHeader\x12\x1f\n" +
+	"\vsoap_action\x18\a \x01(\tR\n" +
+	"soapAction\x12\x1e\n" +
+	"\n" +
+	"idempotent\x18\b \x01(\bR\n" +
+	"idempotent\x12'\n" +
+	"\x0frequest_element\x18\t \x01(\tR\x0erequestElement\x12)\n" +
+	"\x10response_element\x18\n" +
+	" \x01(\tR\x0fresponseElement\x12#\n" +
+	"\rxml_namespace\x18\v \x01(\tR\fxmlNamespace\"\xd3\x01\n" +
 	"\vEgressField\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\x02in\x18\x02 \x01(\x0e2\r.w17.EgressInR\x02in\x12\x1a\n" +
 	"\brequired\x18\x03 \x01(\bR\brequired\x12\x10\n" +
-	"\x03tag\x18\x04 \x01(\tR\x03tag\"3\n" +
+	"\x03tag\x18\x04 \x01(\tR\x03tag\x12#\n" +
+	"\rxml_namespace\x18\x05 \x01(\tR\fxmlNamespace\x12#\n" +
+	"\rxml_attribute\x18\x06 \x01(\bR\fxmlAttribute\x12\x19\n" +
+	"\bxml_text\x18\a \x01(\bR\axmlText\"3\n" +
 	"\vEgressUnion\x12$\n" +
 	"\rdiscriminator\x18\x01 \x01(\tR\rdiscriminator*x\n" +
 	"\bEgressIn\x12\x19\n" +
@@ -586,11 +697,13 @@ const file_w17_egress_proto_rawDesc = "" +
 	"\x0eEGRESS_IN_PATH\x10\x01\x12\x13\n" +
 	"\x0fEGRESS_IN_QUERY\x10\x02\x12\x14\n" +
 	"\x10EGRESS_IN_HEADER\x10\x03\x12\x12\n" +
-	"\x0eEGRESS_IN_BODY\x10\x04*e\n" +
+	"\x0eEGRESS_IN_BODY\x10\x04*\x9d\x01\n" +
 	"\x0eEgressEncoding\x12\x1f\n" +
 	"\x1bEGRESS_ENCODING_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14EGRESS_ENCODING_JSON\x10\x01\x12\x18\n" +
-	"\x14EGRESS_ENCODING_FORM\x10\x02:V\n" +
+	"\x14EGRESS_ENCODING_FORM\x10\x02\x12\x1a\n" +
+	"\x16EGRESS_ENCODING_SOAP11\x10\x03\x12\x1a\n" +
+	"\x16EGRESS_ENCODING_SOAP12\x10\x04:V\n" +
 	"\regress_client\x12\x1c.google.protobuf.FileOptions\x18\x84\x88\x03 \x01(\v2\x11.w17.EgressClientR\fegressClient:R\n" +
 	"\vegress_call\x12\x1e.google.protobuf.MethodOptions\x18\x85\x88\x03 \x01(\v2\x0f.w17.EgressCallR\n" +
 	"egressCall:T\n" +

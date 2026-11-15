@@ -104,12 +104,18 @@ func (c *caller) maxAttempts() int {
 // do makes one call: in is the request message, out receives the decoded
 // success body.
 func (c *caller) do(ctx context.Context, m *method, in, out proto.Message) error {
-	ctx, span := observx.Tracer().Start(ctx, c.client+" "+m.call.GetMethod()+" "+m.call.GetPath(),
+	// A SOAP call has no path of its own (every operation POSTs to the
+	// endpoint): its operation names it.
+	where := m.call.GetPath()
+	if wire.IsSOAP(m.call) {
+		where = m.call.GetOperationId()
+	}
+	ctx, span := observx.Tracer().Start(ctx, c.client+" "+m.call.GetMethod()+" "+where,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			attribute.String("peer.service", c.client),
 			attribute.String("http.request.method", m.call.GetMethod()),
-			attribute.String("url.template", m.call.GetPath()),
+			attribute.String("url.template", where),
 			attribute.String("server.address", c.dsn.Base.Host),
 		))
 	defer span.End()
@@ -124,7 +130,8 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 	ctx, cancel := context.WithTimeout(ctx, TotalTimeout)
 	defer cancel()
 
-	req, err := wire.Split(in)
+	soap := wire.IsSOAP(m.call)
+	req, body, contentType, err := encodeRequest(m.call, in)
 	if err != nil {
 		return callError(codes.InvalidArgument, c.client, ReasonBadRequest, err.Error(), nil)
 	}
@@ -132,12 +139,8 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 	if err != nil {
 		return callError(codes.InvalidArgument, c.client, ReasonBadRequest, err.Error(), nil)
 	}
-	body, contentType, err := encodeBody(m.call, req)
-	if err != nil {
-		return callError(codes.InvalidArgument, c.client, ReasonBadRequest, err.Error(), nil)
-	}
 
-	retryable := idempotent(m.call.GetMethod())
+	retryable := idempotent(m.call.GetMethod()) || m.call.GetIdempotent()
 	if h := m.call.GetIdempotencyHeader(); h != "" {
 		// One key per call, every attempt reusing it, unless the caller
 		// chose one.
@@ -175,6 +178,17 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 			span.SetAttributes(attribute.Int("http.response.status_code", status))
 			cause = "HTTP " + strconv.Itoa(status)
 			final = httpError(c.client, status, attempt, respBody)
+			if soap {
+				if f, ok := wire.ParseFault(respBody); ok {
+					// A fault is the service's answer, not a wire failure:
+					// a Client one never improves by repeating.
+					cause = "SOAP fault " + f.Code
+					final = faultError(c.client, status, attempt, f)
+					if f.ClientFault() {
+						return final
+					}
+				}
+			}
 			if !retryStatus(status) {
 				return final
 			}
@@ -238,7 +252,11 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 		return 0, nil, 0, stop(callError(codes.InvalidArgument, c.client, ReasonBadRequest, transportText(err), nil))
 	}
 	r.Header = header.Clone()
-	r.Header.Set("Accept", "application/json")
+	if wire.IsSOAP(m.call) {
+		r.Header.Set("Accept", "text/xml, application/soap+xml")
+	} else {
+		r.Header.Set("Accept", "application/json")
+	}
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
 	}
@@ -269,6 +287,18 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 	}
 	if resp.StatusCode/100 != 2 {
 		return resp.StatusCode, raw, retryAfter(resp.Header.Get("Retry-After")), nil
+	}
+	if wire.IsSOAP(m.call) {
+		// Some services answer a fault with 200.
+		if f, ok := wire.ParseFault(raw); ok {
+			return 0, nil, 0, stop(faultError(c.client, resp.StatusCode, 1, f))
+		}
+		if err := wire.UnmarshalSOAP(raw, out); err != nil {
+			return 0, nil, 0, stop(callError(codes.Internal, c.client, ReasonUndecodable,
+				"upstream success body does not decode: "+err.Error(),
+				map[string]string{"http_status": strconv.Itoa(resp.StatusCode), "body": truncate(raw, maxErrorBody)}))
+		}
+		return resp.StatusCode, nil, 0, nil
 	}
 	if len(bytes.TrimSpace(raw)) > 0 {
 		span := trace.SpanFromContext(ctx)
@@ -361,6 +391,25 @@ func escapedPath(tmpl string, params map[string]string) string {
 	}
 	s, _ := fillPath(tmpl, esc)
 	return s
+}
+
+// encodeRequest takes the request message apart for the wire: a SOAP call
+// is all body — the envelope — plus its SOAPAction header.
+func encodeRequest(call *w17pb.EgressCall, in proto.Message) (*wire.Request, []byte, string, error) {
+	if wire.IsSOAP(call) {
+		req := &wire.Request{Header: http.Header{}}
+		if call.GetRequestEncoding() == w17pb.EgressEncoding_EGRESS_ENCODING_SOAP11 {
+			req.Header.Set("SOAPAction", `"`+call.GetSoapAction()+`"`)
+		}
+		body, err := wire.MarshalSOAP(call, in)
+		return req, body, wire.SOAPContentType(call), err
+	}
+	req, err := wire.Split(in)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	body, contentType, err := encodeBody(call, req)
+	return req, body, contentType, err
 }
 
 func encodeBody(call *w17pb.EgressCall, req *wire.Request) ([]byte, string, error) {
