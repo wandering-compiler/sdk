@@ -238,20 +238,19 @@ func TestSSEUnwrap(t *testing.T) {
 }
 
 func TestUnwrapToolResult(t *testing.T) {
-	// neither structuredContent nor a text block → empty object
-	out, err := unwrapToolResult("ref", &toolResult{})
-	if err != nil || len(out) != 0 {
-		t.Errorf("empty result = %v,%v; want {},nil", out, err)
+	// neither structuredContent nor a text block → refused (see
+	// TestUnwrapToolResult_NoContentIsAnError)
+	if _, err := unwrapToolResult("ref", &toolResult{}); err == nil {
+		t.Error("empty result accepted")
 	}
-	// a non-text content block is skipped, falling through to empty
+	// a non-text content block is skipped, falling through to the refusal
 	r := &toolResult{}
 	r.Content = append(r.Content, struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}{Type: "image", Text: "ignored"})
-	out, err = unwrapToolResult("ref", r)
-	if err != nil || len(out) != 0 {
-		t.Errorf("non-text content = %v,%v; want {},nil", out, err)
+	if _, err := unwrapToolResult("ref", r); err == nil {
+		t.Error("non-text content accepted")
 	}
 }
 
