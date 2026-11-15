@@ -10,10 +10,12 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/imagevariant"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // DownloadConfig drives one Slice C download endpoint. The
@@ -87,6 +89,14 @@ type DownloadField struct {
 	// served only when a record the caller may read references it (see
 	// [ServeDownloadGated]). False = any caller the route admits is served.
 	Gated bool
+
+	// DataScope is the range the gate reads the referencing record in
+	// (`x-w17-data-scope`: "owner", "org", "all"): the audience's default,
+	// widened as far as a method of the audience that returns this
+	// bucket's files widens (`(w17.widen_scope)`) — the rows those files'
+	// URLs are shown on. "" = none (a gateway that is not an audience's:
+	// storage applies every scope, as for its reads).
+	DataScope string
 }
 
 // RecordGate answers whether a record the caller may read references the
@@ -188,7 +198,11 @@ func ServeDownloadGated(w http.ResponseWriter, r *http.Request, cfg DownloadConf
 			notFound()
 			return
 		}
-		readable, err := gate(r.Context(), key)
+		gctx := r.Context()
+		if field.DataScope != "" {
+			gctx = metadata.AppendToOutgoingContext(gctx, principal.DataScopeMetadataKey, field.DataScope)
+		}
+		readable, err := gate(gctx, key)
 		switch {
 		case err != nil && gateRefusal(err):
 			notFound()

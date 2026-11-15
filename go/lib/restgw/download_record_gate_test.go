@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/kvfs/memory"
@@ -67,5 +68,34 @@ func TestServeDownloadGated_RecordGate(t *testing.T) {
 	restgw.ServeDownload(rec, httptest.NewRequest(http.MethodGet, "/dl/attachments/aa-0001", nil), gated)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("ServeDownload over a gated bucket: %d, want 404", rec.Code)
+	}
+}
+
+// TestServeDownloadGated_FieldRange: the gate reads the referencing record
+// in the range of the field the object belongs to — the one its URL was
+// shown under: a bucket a widened method returns is read at the
+// organization's range, another at the audience's default.
+func TestServeDownloadGated_FieldRange(t *testing.T) {
+	d := memory.New()
+	d.PutBytes("shared/aa-0001", []byte("BODY"))
+	d.PutBytes("own/bb-0001", []byte("BODY"))
+	cfg := restgw.NewDownloadConfig("/dl", []restgw.DownloadField{
+		{BucketPath: "/shared", Driver: d, Gated: true, DataScope: "org"},
+		{BucketPath: "/own", Driver: d, Gated: true, DataScope: "owner"},
+	}, "", false, false, false)
+	got := map[string][]string{}
+	gate := func(ctx context.Context, key string) (bool, error) {
+		md, _ := metadata.FromOutgoingContext(ctx)
+		got[key] = md.Get("x-w17-data-scope")
+		return true, nil
+	}
+	for _, p := range []string{"/dl/shared/aa-0001", "/dl/own/bb-0001"} {
+		restgw.ServeDownloadGated(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, p, nil), cfg, gate)
+	}
+	if r := got["shared/aa-0001"]; len(r) != 1 || r[0] != "org" {
+		t.Errorf("a widened bucket's record read in range %q, want org", r)
+	}
+	if r := got["own/bb-0001"]; len(r) != 1 || r[0] != "owner" {
+		t.Errorf("the default bucket's record read in range %q, want owner", r)
 	}
 }

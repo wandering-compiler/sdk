@@ -23,6 +23,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -81,7 +82,15 @@ func readableHandler(srv any, ctx context.Context, dec func(any) error, intercep
 // may read references key. ctx carries the caller's data scopes as
 // outgoing metadata (`x-w17-scope-<name>`, `x-w17-data-scope`) exactly as
 // for any other call the gateway makes on the caller's behalf.
+//
+// A key no stored object can have (empty, not UTF-8, a control character)
+// is answered false here, without a call: gRPC cannot even carry a string
+// that is not UTF-8, and the failure would surface as a 500 a caller can
+// produce at will (`GET /files/<bucket>/%ff`).
 func Readable(ctx context.Context, conn grpc.ClientConnInterface, key string) (bool, error) {
+	if !wellFormedKey(key) {
+		return false, nil
+	}
 	out := new(wrapperspb.BoolValue)
 	if err := conn.Invoke(ctx, readableMethod, wrapperspb.String(key), out); err != nil {
 		return false, err
@@ -142,7 +151,7 @@ type server struct{ refs []Ref }
 // "" equals no caller's value.
 func (s *server) Readable(ctx context.Context, in *wrapperspb.StringValue) (*wrapperspb.BoolValue, error) {
 	key := in.GetValue()
-	if key == "" {
+	if !wellFormedKey(key) {
 		return wrapperspb.Bool(false), nil
 	}
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -170,6 +179,25 @@ func (s *server) Readable(ctx context.Context, in *wrapperspb.StringValue) (*wra
 		return wrapperspb.Bool(true), nil
 	}
 	return wrapperspb.Bool(false), nil
+}
+
+// wellFormedKey reports whether key could name a stored object at all:
+// non-empty, valid UTF-8, no control character (NUL included). Anything
+// else is no file — answered false without asking the database, which on
+// Postgres or MySQL refuses such bytes with an error ("invalid byte
+// sequence for encoding UTF8"). That error would reach the download route
+// as a 500 and an error-log line any authenticated caller could produce at
+// will with `GET /files/<bucket>/%ff`.
+func wellFormedKey(key string) bool {
+	if key == "" || !utf8.ValidString(key) {
+		return false
+	}
+	for _, r := range key {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // bind resolves args against the caller's metadata; false when one of
