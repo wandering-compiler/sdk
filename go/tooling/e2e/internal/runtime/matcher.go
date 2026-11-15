@@ -297,6 +297,9 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		if !ok {
 			return nil, fmt.Errorf("count: `value` must be a number, got %v", m["value"])
 		}
+		if err := finiteOperand("count", val); err != nil {
+			return nil, err
+		}
 		if !validOp(op) {
 			return nil, fmt.Errorf("count: unknown op %q (want one of == != >= <= > <)", op)
 		}
@@ -324,6 +327,13 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		op, val, err := opAndValue(m, "distinct")
 		if err != nil {
 			return nil, err
+		}
+		// A distinct count is a count — never negative, and zero for an
+		// absent list — so the predicates `count` refuses as vacuous are
+		// vacuous here too.
+		if why := vacuousCount(op, val); why != "" {
+			return nil, fmt.Errorf("distinct: `op: %q, value: %v` %s — say what you mean instead: "+
+				"`op: '>=', value: 1` (or more) if the values must be there, `op: '==', value: 0` if none must be", op, val, why)
 		}
 		return distinctMatcher{field: field, op: op, value: val}, nil
 	default:
@@ -677,7 +687,20 @@ func opAndValue(m map[string]any, kind string) (string, float64, error) {
 	if !ok {
 		return "", 0, fmt.Errorf("%s: `value` must be a number, got %v", kind, m["value"])
 	}
+	if err := finiteOperand(kind, val); err != nil {
+		return "", 0, err
+	}
 	return op, val, nil
+}
+
+// finiteOperand refuses a NaN or infinite comparison operand: `!= NaN` and
+// `>= -Inf` hold for every number, `== NaN` for none, so neither says
+// anything about the value it is written against.
+func finiteOperand(kind string, v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("%s: `value: %v` is not finite — a comparison against it holds for every number or for none", kind, v)
+	}
+	return nil
 }
 
 // numMatcher compares a SCALAR numerically. `count` deliberately refuses

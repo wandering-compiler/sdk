@@ -62,22 +62,24 @@ func Run(ctx context.Context, label string, plan Plan, setup []runner.Step, load
 		}
 	}
 
-	return newReport(label, plan.Mode, plan.Concurrency,
-		results.lat, results.success, results.conn, results.c4, results.c5, results.elapsed), nil
+	rep := newReport(label, plan.Mode, plan.Concurrency,
+		results.lat, results.success, results.conn, results.c4, results.c5, results.elapsed)
+	rep.HTTP3xx = results.c3
+	return rep, nil
 }
 
 // loadResult is the merged outcome of the worker pool.
 type loadResult struct {
-	lat                   []int64
-	success, conn, c4, c5 int
-	elapsed               time.Duration
+	lat                       []int64
+	success, conn, c3, c4, c5 int
+	elapsed                   time.Duration
 }
 
 // workerBuf is one worker's lock-free accumulator (merged at the end —
 // avoids the single-atomic-index contention a shared buffer would have).
 type workerBuf struct {
-	lat                   []int64
-	success, conn, c4, c5 int
+	lat                       []int64
+	success, conn, c3, c4, c5 int
 }
 
 // loadState is the shared load-phase context handed to each worker (the
@@ -143,6 +145,7 @@ func runLoad(ctx context.Context, run *runtime.Run, plan Plan, load []Op, base m
 		res.lat = append(res.lat, bufs[i].lat...)
 		res.success += bufs[i].success
 		res.conn += bufs[i].conn
+		res.c3 += bufs[i].c3
 		res.c4 += bufs[i].c4
 		res.c5 += bufs[i].c5
 	}
@@ -256,6 +259,12 @@ func fireOp(ws *runtime.Scope, op *Op, token string, dev *runner.Device, lc *Loa
 		buf.c5++
 	case code >= 400:
 		buf.c4++
+	case code >= 300:
+		// A redirect is not a served call: an API route never answers
+		// 3xx, so one is a misrouted request (a proxy's sign-in page, a
+		// trailing-slash redirect) and counting it a success measured the
+		// redirect, not the endpoint.
+		buf.c3++
 	default:
 		buf.success++
 	}

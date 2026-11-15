@@ -20,6 +20,7 @@ type Report struct {
 
 	Success int
 	ConnErr int // status < 0 (transport/conn error)
+	HTTP3xx int // a redirect: an API route never answers one, so it is an error
 	HTTP4xx int
 	HTTP5xx int
 
@@ -27,7 +28,7 @@ type Report struct {
 }
 
 // Errors is the total non-success count.
-func (r *Report) Errors() int { return r.ConnErr + r.HTTP4xx + r.HTTP5xx }
+func (r *Report) Errors() int { return r.ConnErr + r.HTTP3xx + r.HTTP4xx + r.HTTP5xx }
 
 // ErrorRate is the error fraction over measured requests (0 when none).
 func (r *Report) ErrorRate() float64 {
@@ -77,7 +78,7 @@ func (r *Report) String() string {
 	fmt.Fprintf(&b, "throughput:  %.0f req/s\n", r.Throughput)
 	fmt.Fprintf(&b, "success:     %d / %d (%.1f%%)\n", r.Success, r.Requests, successPct(r))
 	if r.Errors() > 0 {
-		fmt.Fprintf(&b, "errors:      %d (conn: %d, 4xx: %d, 5xx: %d)\n", r.Errors(), r.ConnErr, r.HTTP4xx, r.HTTP5xx)
+		fmt.Fprintf(&b, "errors:      %d (conn: %d, 3xx: %d, 4xx: %d, 5xx: %d)\n", r.Errors(), r.ConnErr, r.HTTP3xx, r.HTTP4xx, r.HTTP5xx)
 	}
 	if r.Requests > 0 {
 		fmt.Fprintf(&b, "latency p50: %s\n", r.P50.Round(time.Microsecond))
@@ -97,12 +98,26 @@ func successPct(r *Report) float64 {
 
 // Check evaluates the plan's thresholds against the report and returns a
 // non-nil error listing every breached dimension (so a single run reports
-// all failures at once). Returns nil when t is nil (report-only) or all
-// gates pass. A run that measured no requests fails any thresholds: every
-// latency and error figure of an empty measurement is zero, so it would
-// otherwise pass each gate without having tested anything.
+// all failures at once). Returns nil when all gates pass. A run that
+// measured no requests fails: every latency and error figure of an empty
+// measurement is zero, so it would otherwise pass each gate without having
+// tested anything.
+//
+// A nil t is report-only: the figures are printed and no gate is applied —
+// except that a run whose measured requests ALL failed fails too. It
+// measured refusals or a dead target, not the endpoint, and report-only
+// used to exit 0 over 100 % 4xx/5xx.
 func (r *Report) Check(t *Thresholds) error {
 	if t == nil {
+		switch {
+		case r.Requests == 0:
+			return fmt.Errorf("stress run (report-only) failed: no requests were measured, so nothing was " +
+				"(check the load phase reached the server, and that warm-up does not cover the whole run)")
+		case r.Success == 0:
+			return fmt.Errorf("stress run (report-only) failed: no request succeeded — %d of %d answered an error "+
+				"(conn: %d, 3xx: %d, 4xx: %d, 5xx: %d), so the run measured refusals, not the endpoint",
+				r.Errors(), r.Requests, r.ConnErr, r.HTTP3xx, r.HTTP4xx, r.HTTP5xx)
+		}
 		return nil
 	}
 	if r.Requests == 0 {
