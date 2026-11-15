@@ -206,19 +206,22 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	if cfg.Redis != nil {
 		return cs.runRedis(ctx, cfg, list)
 	}
+	// A setup step that fails because ctx was cancelled is a stop asked for
+	// before the consumers started, not a failure: Run answers it as it
+	// answers a stop once they run.
 	if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, cfg.RequestStream); err != nil {
-		return err
+		return stoppedOr(ctx, err)
 	}
 	dl := cfg.Stream
 	if dl.MaxBytes <= 0 {
 		dl.MaxBytes = DeadLetterMaxBytes
 	}
 	if err := EnsureStream(ctx, cfg.JS, DeadLetterStream, []string{DeadLetterPrefix + ".>"}, dl); err != nil {
-		return err
+		return stoppedOr(ctx, err)
 	}
 	stream, err := cfg.JS.Stream(ctx, StreamName)
 	if err != nil {
-		return fmt.Errorf("eventlog: %w", err)
+		return stoppedOr(ctx, fmt.Errorf("eventlog: %w", err))
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, len(list))
@@ -575,4 +578,13 @@ func (cs *Consumers) serveLoop(ctx context.Context, cfg ConsumerConfig) error {
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// stoppedOr is nil when ctx was cancelled (the caller asked Run to stop), and
+// err otherwise.
+func stoppedOr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
 }
