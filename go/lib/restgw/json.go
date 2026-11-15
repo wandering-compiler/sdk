@@ -30,6 +30,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 )
 
 // readBufPool recycles the request-body read buffer across calls so
@@ -263,6 +265,15 @@ func UnmarshalProto(data []byte, msg proto.Message) error {
 				return fmt.Errorf("invalid JSON: %w", err)
 			}
 			payload = restored
+		}
+		// An enum sent as its number in a STRING ("7") — what the
+		// generated clients keep for a value their build does not name,
+		// and how the rpc-cli quotes an enum flag — would otherwise be
+		// read as an unknown value NAME and dropped by DiscardUnknown.
+		if protojsonx.HasAnyEnum(desc) {
+			if coerced, err := protojsonx.CoerceEnumNumericStrings(payload, desc); err == nil {
+				payload = coerced
+			}
 		}
 	}
 	if err := Unmarshaller.Unmarshal(payload, msg); err != nil {
