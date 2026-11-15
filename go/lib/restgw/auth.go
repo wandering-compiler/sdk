@@ -300,12 +300,22 @@ func AuthUserDataFromContext(ctx context.Context) []byte {
 }
 
 // WriteAuthError translates an auth-stage error to the HTTP
-// response. gRPC status errors round-trip via
-// [WriteGRPCError]; non-status errors land at 500 Internal
-// (auth dial failures, marshaling glitches — the consumer
-// can't recover from these). Auth methods that want a 401
-// surface return `status.Error(codes.Unauthenticated, ...)`.
+// response. A missing or invalid stream ticket ([ErrWSAuthNoTicket],
+// [ErrTicketInvalid], wrapped or not) is a 401: [NewWSAuth] returns them
+// as plain sentinels, and every route that accepts `?ticket=` — the
+// /w17-events hub, the per-RPC stream handlers, the authenticated
+// downloads — answers through here, so a browser EventSource reconnecting
+// with its consumed one-shot ticket reads "authenticate again", not a
+// server fault. gRPC status errors round-trip via [WriteGRPCError];
+// other non-status errors land at 500 Internal (auth dial failures,
+// marshaling glitches — the consumer can't recover from these). Auth
+// methods that want a 401 surface return
+// `status.Error(codes.Unauthenticated, ...)`.
 func WriteAuthError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrWSAuthNoTicket) || errors.Is(err, ErrTicketInvalid) {
+		WriteUnauthorized(w)
+		return
+	}
 	WriteGRPCError(w, err)
 }
 
@@ -331,18 +341,8 @@ func RequireAuth(authFn AuthFunc, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userData, err := authFn(r.Context(), r)
 		if err != nil {
-			// A missing or invalid ticket is an authentication failure,
-			// not a server error. NewWSAuth surfaces these as the plain
-			// sentinels ErrWSAuthNoTicket / ErrTicketInvalid (by design —
-			// callers do the status mapping), so map them to 401 here
-			// instead of letting WriteAuthError → WriteGRPCError fall
-			// through to 500. Genuine store/transport failures (which do
-			// NOT match ErrTicketInvalid) still get WriteAuthError's
-			// 500/503 treatment.
-			if errors.Is(err, ErrWSAuthNoTicket) || errors.Is(err, ErrTicketInvalid) {
-				WriteUnauthorized(w)
-				return
-			}
+			// WriteAuthError maps a missing / invalid ticket to 401;
+			// genuine store / transport failures keep their 500 / 503.
 			WriteAuthError(w, err)
 			return
 		}

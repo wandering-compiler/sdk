@@ -30,6 +30,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	"github.com/wandering-compiler/sdk/go/lib/protojsonx"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
+	"github.com/wandering-compiler/sdk/go/lib/restgw"
 	"github.com/wandering-compiler/sdk/go/lib/secheaders"
 )
 
@@ -499,7 +500,10 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	}
 	// ReadHeaderTimeout bounds the header phase only, so it is safe for
 	// the long-lived GET notification stream (Slowloris guard).
-	httpSrv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
+	// IdleTimeout closes a keep-alive connection that carries no request;
+	// the body of a request is bounded by restgw.BodyReadDeadline below
+	// (a POST of JSON-RPC — the GET stream has no body and is untouched).
+	httpSrv := &http.Server{ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	stopper := lifecycle.BindHTTP(httpSrv)
 
 	limits := s.resolvedSessionLimits()
@@ -540,7 +544,7 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
 	// The security headers every published listener sends (lib/secheaders).
-	httpSrv.Handler = secheaders.Middleware(mux)
+	httpSrv.Handler = secheaders.Middleware(restgw.BodyReadDeadline(restgw.DefaultBodyReadTimeout)(mux))
 
 	s.transport.Store(srv)
 	// Idle sessions end through the transport itself (sessions.go).

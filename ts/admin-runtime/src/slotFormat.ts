@@ -129,9 +129,22 @@ export function templateCurrencyField(tmpl: FormatTemplate | undefined): string 
 }
 
 /**
+ * The minor-unit scale of a MONEY field that declares none: the compiler's
+ * default: every MONEY field is stored at it unless it declares another.
+ */
+export const DEFAULT_MONEY_SCALE = 2;
+
+/**
  * The currency a row carries for a template: `row[currency_field]` when it is
  * a non-empty string, else undefined (the value then renders without a
  * symbol rather than in a guessed currency).
+ *
+ * `currency_field` is the PROTO field name (`bid_currency`), which is how the
+ * wire object and the admin's rows spell it; a generated client's normalised
+ * model spells the same field in lowerCamel (`bidCurrency`), and that is the
+ * object a typed app passes as the row. Both spellings are read, the proto
+ * name first — reading only it rendered every per-row amount of a normalised
+ * row without its currency.
  */
 export function rowCurrency(
   tmpl: FormatTemplate | undefined,
@@ -139,8 +152,16 @@ export function rowCurrency(
 ): string | undefined {
   const field = templateCurrencyField(tmpl);
   if (!field || !row) return undefined;
-  const v = row[field];
-  return typeof v === "string" && v.trim() !== "" ? v : undefined;
+  for (const key of [field, lowerCamel(field)]) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim() !== "") return v;
+  }
+  return undefined;
+}
+
+/** `bid_currency` → `bidCurrency`: the protojson / generated-model spelling. */
+function lowerCamel(name: string): string {
+  return name.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 }
 
 /**
@@ -253,7 +274,10 @@ function renderPreset(
     case "percent":
       return formatPercent(text, places, f);
     case "money":
-      return formatMoney(text, slot.scale ?? 0, slot.currency || ctx.currency, f);
+      // A money slot without a scale is the compiler's default scale, 2 —
+      // the one every MONEY field is stored at unless it declares another.
+      // Reading an absent scale as 0 rendered such an amount 100x too large.
+      return formatMoney(text, slot.scale ?? DEFAULT_MONEY_SCALE, slot.currency || ctx.currency, f);
     case "date":
       return formatDate(text, f);
     case "short_date":

@@ -13,6 +13,7 @@ import {
 } from "./slotFormat";
 import type { FormatContext, FormatTemplate } from "./slotFormat";
 import type { AdminPageSpec, AdminWidgetSpec } from "./types";
+import { moneyInputScale } from "./moneyInput";
 import {
   currencyCodes,
   formatMoney,
@@ -109,6 +110,23 @@ describe("money slots", () => {
     expect(templateCurrencyField(bare)).toBeUndefined();
     expect(rowCurrency(perRow, { currency: 5 })).toBeUndefined();
     expect(withRowCurrency(cs, bare, { currency: "EUR" })).toBe(cs);
+  });
+
+  it("reads a per-row currency off a normalised (camelCase) row too", () => {
+    // A generated client's model spells `bid_currency` as `bidCurrency`, and
+    // that is the object a typed app passes as the row.
+    const bid: FormatTemplate = {
+      msgid: "{value}",
+      slots: [{ name: "value", preset: "money", scale: 2, currency_field: "bid_currency" }],
+    };
+    expect(rowCurrency(bid, { bidCurrency: "EUR" })).toBe("EUR");
+    expect(rowCurrency(bid, { bid_currency: "CZK", bidCurrency: "EUR" })).toBe("CZK");
+  });
+
+  it("a money slot without a scale is the compiler default, 2", () => {
+    const slot = { name: "value", preset: "money" as const, currency: "EUR" };
+    expect(formatSlotValue("12345", slot, en)).toBe("€123.45");
+    expect(moneyInputScale({ msgid: "{value}", slots: [slot] })).toBe(2);
   });
 
   it("a set of rows shares a currency only when every row agrees", () => {

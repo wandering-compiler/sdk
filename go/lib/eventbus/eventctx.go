@@ -269,3 +269,30 @@ func LabelsFromContext(ctx context.Context) map[string]string {
 	}
 	return labels
 }
+
+// ScopeKeyPrefix is the gRPC metadata prefix of a request's data scopes,
+// `x-w17-scope-<name>` (restgw.ScopeKey); an event carries them under
+// the full key, in its envelope's `metadata` and in an InvalidateEvent's
+// `scopes`.
+const ScopeKeyPrefix = "x-w17-scope-"
+
+// ScopesFromContext returns the request's data scopes keyed by their full
+// `x-w17-scope-<name>` metadata key, read from the same side as every
+// other event field ([contextMD]); nil when it carries none.
+func ScopesFromContext(ctx context.Context) map[string]string {
+	md, ok := contextMD(ctx)
+	if !ok {
+		return nil
+	}
+	var out map[string]string
+	for k, vs := range md {
+		if len(vs) == 0 || vs[0] == "" || !strings.HasPrefix(k, ScopeKeyPrefix) {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = vs[0]
+	}
+	return out
+}

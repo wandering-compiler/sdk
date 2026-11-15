@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"slices"
@@ -312,7 +314,8 @@ func DecodeMatcher(spec any) (Matcher, error) {
 		if err != nil {
 			return nil, err
 		}
-		return numMatcher{op: op, value: val}, nil
+		exact, _ := exactNumeric(m["value"]) // a number: opAndValue refused anything else
+		return numMatcher{op: op, value: val, exact: exact}, nil
 	case "distinct":
 		field, _ := m["field"].(string)
 		if field == "" {
@@ -685,17 +688,84 @@ func opAndValue(m map[string]any, kind string) (string, float64, error) {
 type numMatcher struct {
 	op    string
 	value float64
+	// exact is value as an exact rational when the spec's number has one
+	// (every integer, every finite float) — the comparison runs on it.
+	exact *big.Rat
 }
 
 func (m numMatcher) Match(actual any, present bool, _ *Scope) error {
 	if !present {
 		return fmt.Errorf("num: field absent")
 	}
+	// Exact first: an int64 travels as a decimal string, and through
+	// float64 two values past 2^53 round to one — `== 9007199254740992`
+	// held for "9007199254740993".
+	if got, ok := exactNumeric(actual); ok && m.exact != nil {
+		return compareRat("value", got, m.op, m.exact)
+	}
 	got, ok := numericValue(actual)
 	if !ok {
 		return fmt.Errorf("num: field is not a number (%T: %v)", actual, actual)
 	}
 	return compareNum("value", got, m.op, m.value)
+}
+
+// exactNumeric is numericValue without the float64: an integer, a finite
+// float or a decimal string as an exact rational.
+func exactNumeric(v any) (*big.Rat, bool) {
+	switch n := v.(type) {
+	case int:
+		return new(big.Rat).SetInt64(int64(n)), true
+	case int32:
+		return new(big.Rat).SetInt64(int64(n)), true
+	case int64:
+		return new(big.Rat).SetInt64(n), true
+	case uint:
+		return new(big.Rat).SetUint64(uint64(n)), true
+	case uint32:
+		return new(big.Rat).SetUint64(uint64(n)), true
+	case uint64:
+		return new(big.Rat).SetUint64(n), true
+	case float32:
+		return ratOfFloat(float64(n))
+	case float64:
+		return ratOfFloat(n)
+	case string:
+		r, ok := new(big.Rat).SetString(strings.TrimSpace(n))
+		return r, ok
+	}
+	return nil, false
+}
+
+func ratOfFloat(f float64) (*big.Rat, bool) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return nil, false
+	}
+	return new(big.Rat).SetFloat64(f), true
+}
+
+// compareRat is compareNum over exact rationals.
+func compareRat(label string, got *big.Rat, op string, want *big.Rat) error {
+	c := got.Cmp(want)
+	ok := false
+	switch op {
+	case "==":
+		ok = c == 0
+	case "!=":
+		ok = c != 0
+	case ">=":
+		ok = c >= 0
+	case "<=":
+		ok = c <= 0
+	case ">":
+		ok = c > 0
+	case "<":
+		ok = c < 0
+	}
+	if !ok {
+		return fmt.Errorf("%s %s %s %s failed", label, got.RatString(), op, want.RatString())
+	}
+	return nil
 }
 
 // numericValue coerces a response field to a number, INCLUDING a numeric

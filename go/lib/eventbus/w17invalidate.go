@@ -71,5 +71,8 @@ func EmitInvalidate(ctx context.Context, bus Dispatcher, channel, group, message
 		Message: message,
 		Ids:     ids,
 		Labels:  LabelsFromContext(ctx),
+		// The data scopes it was emitted under: an owner-range audience
+		// gateway delivers it only to the client whose scope it carries.
+		Scopes: ScopesFromContext(ctx),
 	})
 }

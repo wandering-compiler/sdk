@@ -87,3 +87,30 @@ func TestDistinctMatcher_AbsentListIsEmpty(t *testing.T) {
 		t.Error("absent list passed distinct >= 1")
 	}
 }
+
+// TestNumMatcher_Int64PastFloatPrecision: an int64 travels as a decimal
+// string, and `num` compared it through float64 — above 2^53 two
+// different values round to the same float, so `== 9007199254740992`
+// held for a response of "9007199254740993" and `!=` failed on it. The
+// comparison is exact for integers and decimal strings.
+func TestNumMatcher_Int64PastFloatPrecision(t *testing.T) {
+	eq := map[string]any{"matcher": "num", "op": "==", "value": int64(9007199254740992)}
+	if err := match(t, eq, "9007199254740993", true); err == nil {
+		t.Error(`"9007199254740993" == 9007199254740992 held — compared through float64`)
+	}
+	if err := match(t, eq, "9007199254740992", true); err != nil {
+		t.Errorf("the equal int64 was refused: %v", err)
+	}
+	ne := map[string]any{"matcher": "num", "op": "!=", "value": int64(9007199254740992)}
+	if err := match(t, ne, "9007199254740993", true); err != nil {
+		t.Errorf("two different int64s compared equal: %v", err)
+	}
+	gt := map[string]any{"matcher": "num", "op": ">", "value": int64(9223372036854775806)}
+	if err := match(t, gt, "9223372036854775807", true); err != nil {
+		t.Errorf("max int64 > max-1 failed: %v", err)
+	}
+	half := map[string]any{"matcher": "num", "op": "==", "value": 0.5}
+	if err := match(t, half, "0.5", true); err != nil {
+		t.Errorf("a decimal string lost its fraction: %v", err)
+	}
+}
