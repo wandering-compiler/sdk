@@ -84,6 +84,10 @@ message EgressClient {
   // generated DSN template starts from. Configuration, not a default — the
   // runtime takes the base URL from the DSN only.
   string server_url = 5;
+
+  // SOAP clients (generated from a WSDL): the SOAP version of the binding,
+  // "1.1" or "1.2". Empty for an OpenAPI client.
+  string soap_version = 6;
 }
 
 // EgressCall — one HTTP operation.
@@ -114,6 +118,24 @@ message EgressCall {
   // only when this is set: the client fills the header once per call, and
   // every attempt reuses it.
   string idempotency_header = 6;
+
+  // SOAP: the SOAPAction of the operation (sent as the SOAPAction header on
+  // SOAP 1.1, the action parameter of the content type on SOAP 1.2). Empty
+  // when the binding names none.
+  string soap_action = 7;
+
+  // The operation may be repeated without effect — it reads. A SOAP call is
+  // always a POST, so this is what lets the runtime retry it on a 429 / 5xx
+  // like an idempotent HTTP method. Set from the client's `idempotent`
+  // operations (`w17ctl client generate --idempotent <op>`).
+  bool idempotent = 8;
+
+  // SOAP document/literal: the qualified name of the element the request
+  // message becomes inside soap:Body, and of the one the response comes in.
+  string request_element = 9;
+  string response_element = 10;
+  // Their namespace (the schema's targetNamespace).
+  string xml_namespace = 11;
 }
 
 // EgressField — one field's wire identity.
@@ -134,6 +156,18 @@ message EgressField {
   // On a oneof arm of a discriminated union: the discriminator value that
   // selects this arm.
   string tag = 4;
+
+  // SOAP: the XML namespace the element or attribute is qualified with —
+  // empty for an unqualified one (an XSD's elementFormDefault).
+  string xml_namespace = 5;
+
+  // SOAP: the field is an XML attribute of its parent element rather than
+  // a child element.
+  bool xml_attribute = 6;
+
+  // SOAP: the field is the text content of its parent element (an XSD
+  // simpleContent: a value with attributes).
+  bool xml_text = 7;
 }
 
 // EgressUnion — a oneof that is an OpenAPI union.
@@ -169,4 +203,8 @@ enum EgressEncoding {
   // application/x-www-form-urlencoded, nested fields in the deep-object
   // convention (`metadata[order_id]=42`, `items[0][price]=…`).
   EGRESS_ENCODING_FORM = 2;
+  // A SOAP 1.1 envelope (text/xml, SOAPAction header), document/literal.
+  EGRESS_ENCODING_SOAP11 = 3;
+  // A SOAP 1.2 envelope (application/soap+xml; action=…), document/literal.
+  EGRESS_ENCODING_SOAP12 = 4;
 }

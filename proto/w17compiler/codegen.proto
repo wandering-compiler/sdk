@@ -1376,8 +1376,18 @@ message GenerateEgressClientRequest {
   // empty = every operation of the document.
   repeated string endpoints = 4;
   repeated string operations = 5;
-  // A chunk of the OpenAPI document (JSON or YAML), appended in order.
+  // A chunk of the document — an OpenAPI document (JSON or YAML) or a WSDL
+  // — appended in order.
   bytes document = 6;
+
+  // WSDL: the schemas the document imports (xsd:import / xsd:include /
+  // wsdl:import), keyed by the resolved location a previous response listed
+  // in missing_imports. Sent on the first message.
+  map<string, bytes> imports = 7;
+
+  // WSDL: the operations that only read and may be repeated — a SOAP call
+  // is always a POST, so nothing else tells the runtime it may retry one.
+  repeated string idempotent = 8;
 }
 
 // GenerateEgressClientResponse — the signed client.
@@ -1387,7 +1397,8 @@ message GenerateEgressClientResponse {
   // `<name>.proto` and `client.yaml`.
   repeated GeneratedFile files = 2;
   // Where to write the document the request carried, unchanged
-  // (`…/openapi.json` or `…/openapi.yaml`, after its format). It is part of
+  // (`…/openapi.json`, `…/openapi.yaml` or `…/service.wsdl`, after its
+  // format). It is part of
   // the signed set by its sha256.
   string document_path = 3;
   // The selected operations as request lines.
@@ -1399,6 +1410,11 @@ message GenerateEgressClientResponse {
   // Alternatives and security schemes the DSN cannot express.
   repeated string auth_notes = 7;
   repeated string warnings = 8;
+
+  // WSDL: locations the document imports and the request did not carry.
+  // When non-empty, nothing else is set: the client fetches each one and
+  // sends the request again with them in `imports`.
+  repeated string missing_imports = 9;
 }
 
 // VerifyEgressClientRequest — one committed client.
