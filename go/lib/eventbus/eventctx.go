@@ -270,29 +270,59 @@ func LabelsFromContext(ctx context.Context) map[string]string {
 	return labels
 }
 
-// ScopeKeyPrefix is the gRPC metadata prefix of a request's data scopes,
-// `x-w17-scope-<name>` (restgw.ScopeKey); an event carries them under
-// the full key, in its envelope's `metadata` and in an InvalidateEvent's
-// `scopes`.
-const ScopeKeyPrefix = "x-w17-scope-"
+// RowScope is one data scope of a model a mutation touched
+// (`(w17.db.scope)` entry), for [RowScopes].
+type RowScope struct {
+	// Name is the scope's name — the AuthResp.scopes key, the
+	// `x-w17-scope-<name>` suffix.
+	Name string
+	// Owner marks an OWNER-axis entry.
+	Owner bool
+	// Row is the row's own value of the scope's column, read off the
+	// mutation's response when it IS the row; "" when it is not.
+	Row string
+	// Bypassed: the method bypasses this scope (`(w17.db.bypass_scope)`),
+	// so storage enforced nothing the request carried.
+	Bypassed bool
+}
 
-// ScopesFromContext returns the request's data scopes keyed by their full
-// `x-w17-scope-<name>` metadata key, read from the same side as every
-// other event field ([contextMD]); nil when it carries none.
-func ScopesFromContext(ctx context.Context) map[string]string {
-	md, ok := contextMD(ctx)
-	if !ok {
-		return nil
+// RowScopes returns the data-scope values of the rows a mutation touched,
+// as the storage tier knows them at emit, keyed by scope name — what an
+// InvalidateEvent carries in `scopes`, so a hub can deliver it to the
+// clients who may READ those rows, whoever wrote them.
+//
+// Per scope: the row's own value when the response carries the row (Row);
+// otherwise the value storage held every touched row to — the request's
+// `x-w17-scope-<name>`, which the generated statement both filtered on
+// and stamped — unless the method bypasses the scope, or the scope is
+// OWNER-axis and the request's range (`x-w17-data-scope` "org" / "all")
+// lifted it: then the rows' value is not known and the scope is left out.
+// Left out means "not known", never "matches": a hub delivers such an
+// event by the scopes it does carry.
+func RowScopes(ctx context.Context, scopes []RowScope) map[string]string {
+	md, _ := contextMD(ctx)
+	lifted := false
+	if v := md.Get(principal.DataScopeMetadataKey); len(v) == 1 && (v[0] == principal.DataScopeOrg || v[0] == principal.DataScopeAll) {
+		lifted = true
 	}
 	var out map[string]string
-	for k, vs := range md {
-		if len(vs) == 0 || vs[0] == "" || !strings.HasPrefix(k, ScopeKeyPrefix) {
-			continue
-		}
+	set := func(name, v string) {
 		if out == nil {
 			out = map[string]string{}
 		}
-		out[k] = vs[0]
+		out[name] = v
+	}
+	for _, s := range scopes {
+		switch {
+		case s.Name == "":
+		case s.Row != "":
+			set(s.Name, s.Row)
+		case s.Bypassed || (s.Owner && lifted):
+		default:
+			if v := md.Get(principal.ScopeKey(s.Name)); len(v) == 1 && v[0] != "" {
+				set(s.Name, v[0])
+			}
+		}
 	}
 	return out
 }

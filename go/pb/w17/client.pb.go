@@ -66,17 +66,18 @@ type InvalidateEvent struct {
 	// frame body is marshaled without it (a client is never told
 	// the label it was filtered by).
 	Labels map[string]string `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// scopes are the mutating request's data scopes — its
-	// `x-w17-scope-<name>` metadata, keyed by that full key, the way a
-	// domain event envelope carries them in its `metadata`. Taken from
-	// the request's context by `eventbus.EmitInvalidate`.
+	// scopes are the data-scope values of the ROWS the invalidation
+	// names, keyed by scope name (`org_id`, `user_id` — the AuthResp
+	// scopes keys): the row's own value when the mutation returned the
+	// row, else the value storage held every touched row to
+	// (`eventbus.RowScopes`). A scope whose value is not known — the owner
+	// of a row a staff member edited over the organization range, say —
+	// is absent; absent never matches anything.
 	//
-	// Consumed by the gateway hub only: on an audience gateway whose
-	// range is the caller's own rows (`default_scope: OWNER`) an event
-	// is delivered to a client only when it was emitted under that
-	// client's owner scope (restgw `WithOwnerRange`), and without them
-	// an invalidation reached no client of such a gateway. Cleared from
-	// the SSE frame body like labels.
+	// Consumed by the gateway hub only: an audience gateway delivers the
+	// invalidation to the clients who may read those rows (restgw
+	// `WithRowScopes`), whoever wrote them. Cleared from the SSE frame
+	// body like labels.
 	Scopes        map[string]string `protobuf:"bytes,5,rep,name=scopes,proto3" json:"scopes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
