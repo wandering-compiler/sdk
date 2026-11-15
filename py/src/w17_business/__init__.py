@@ -19,7 +19,7 @@ from .config import Config, ConfigError
 from .context import Context, Metadata, background
 from .distx import on_commit
 from .errors import ErrorInfo, Status, UserError, error_detail, for_user
-from .files import FileInfo, FileStore
+from .files import FileInfo, FileRefusedError, FileStore
 from .runtime import App, Clients
 from .secrets import Secret
 from .server import Registry, RegistrationError, Served
@@ -32,6 +32,7 @@ __all__ = [
     "Context",
     "ErrorInfo",
     "FileInfo",
+    "FileRefusedError",
     "FileStore",
     "Metadata",
     "Registry",

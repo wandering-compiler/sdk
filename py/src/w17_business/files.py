@@ -28,13 +28,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
+
 from .client import CompanionConn
 from .context import Context
 from .descriptors import Pool, default_pool
 from .errors import error_info
 from .manifest import FILES_SERVICE, FileConnection, FilePlacement
 
-__all__ = ["SERVICE", "DOMAIN", "CHUNK_SIZE", "FileInfo", "FileStore", "is_not_found", "resolve_field"]
+__all__ = [
+    "SERVICE", "DOMAIN", "CHUNK_SIZE", "FileInfo", "FileStore", "FileRefusedError", "is_not_found", "resolve_field",
+]
 
 SERVICE = FILES_SERVICE
 DOMAIN = "w17.files"  # the ErrorInfo domain of the companion's file errors
@@ -49,6 +54,34 @@ class FileInfo:
 
     size: int
     mod_time: datetime
+
+
+class FileRefusedError(GRPCError):
+    """A file call the SDK refused before anything was sent: an unknown or
+    ambiguous field, a field stored on another connection, a write to a
+    connection the gateway writes. A ``FAILED_PRECONDITION`` status, so a
+    handler that lets it through answers what the Rust tier and the companion
+    answer (not a panic answered ``INTERNAL``). The unknown-field refusals are
+    also a ``KeyError``, the read-only one a ``PermissionError``, as before."""
+
+    def __init__(self, message: str) -> None:
+        # Not GRPCError.__init__: its three arguments would reach the
+        # builtin base's (OSError reads them as errno, strerror, filename).
+        Exception.__init__(self, message)
+        self.status = Status.FAILED_PRECONDITION
+        self.message = message
+        self.details = None
+
+    def __str__(self) -> str:
+        return self.message
+
+
+class _FieldRefused(FileRefusedError, KeyError):
+    pass
+
+
+class _ReadOnlyRefused(FileRefusedError, PermissionError):
+    pass
 
 
 def is_not_found(err: BaseException | None) -> bool:
@@ -71,8 +104,8 @@ def resolve_field(field: str, placements: Iterable[FilePlacement]) -> FilePlacem
         return matches[0]
     known = ", ".join(sorted(p.field for p in ps)) or "none"
     if not matches:
-        raise KeyError(f"files: {field!r} is not a field this tier writes files for (have: {known})")
-    raise KeyError(f"files: {field!r} is ambiguous ({', '.join(sorted(p.field for p in matches))})")
+        raise _FieldRefused(f"files: {field!r} is not a field this tier writes files for (have: {known})")
+    raise _FieldRefused(f"files: {field!r} is ambiguous ({', '.join(sorted(p.field for p in matches))})")
 
 
 class _BodyError(Exception):
@@ -110,7 +143,7 @@ class FileStore:
 
     def _require_writable(self, what: str) -> None:
         if not self.writable:
-            raise PermissionError(
+            raise _ReadOnlyRefused(
                 f"files: {what} on {self.name}: the gateway writes this connection; this tier only reads it")
 
     async def put(self, ctx: Context, field: str, body: Body) -> str:
@@ -122,7 +155,7 @@ class FileStore:
         ``ctx`` or one past its deadline leaves no object behind."""
         p = resolve_field(field, self._placements)
         if p.connection != self.name:
-            raise KeyError(f"files: {p.field} is stored on {p.connection}, not on {self.name}")
+            raise _FieldRefused(f"files: {p.field} is stored on {p.connection}, not on {self.name}")
         self._require_writable(f"put {p.field}")
         try:
             reply = await self._conn.client_stream(ctx, self._put, self._requests(p.field, body))

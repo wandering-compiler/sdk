@@ -32,7 +32,7 @@ export { Context, Metadata, background, type ContextInit, type MetadataInit } fr
 export { Pool, getDefaultPool, type AnyMessage, type MessageType, type MethodInfo } from "./descriptors.js";
 export { onCommit } from "./distx.js";
 export { Status, StatusError, UserError, errorDetail, forUser, ErrorDetail, errorInfo, type ErrorInfo } from "./errors.js";
-export { FileStore, type FileInfo } from "./files.js";
+export { FileRefusedError, FileStore, type FileInfo } from "./files.js";
 export { Secret } from "./secrets.js";
 export { Registry, RegistrationError, Served, type ShutdownHook } from "./server.js";
 export { load as loadManifest, type Manifest, ManifestError } from "./manifest.js";
