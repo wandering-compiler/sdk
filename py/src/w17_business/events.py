@@ -113,7 +113,9 @@ def validate_topic(topic: str) -> None:
 
 _RESERVED = frozenset({"w17-tx-id", "w17-conn-id"})
 _CREDENTIAL_HEADERS = frozenset(
-    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-w17-credential"}
+    # dpop: a DPoP proof (RFC 9449), sent next to ``authorization: DPoP
+    # <token>`` — a signed JWS bound to this request.
+    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-w17-credential", "dpop"}
 )
 _CREDENTIAL_SEGMENTS = frozenset(
     {

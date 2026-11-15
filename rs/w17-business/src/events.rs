@@ -67,6 +67,9 @@ const CREDENTIAL_HEADERS: &[&str] = &[
     "cookie",
     "set-cookie",
     "x-w17-credential",
+    // A DPoP proof (RFC 9449), sent next to `authorization: DPoP <token>`: a
+    // signed JWS bound to this request.
+    "dpop",
 ];
 const CREDENTIAL_SEGMENTS: &[&str] = &[
     "auth",
