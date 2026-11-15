@@ -8243,9 +8243,19 @@ type GenerateProjectRequest struct {
 	// from it — or from the lock's own infra block while the project has not
 	// moved it into the file — and refuses a file that does not validate,
 	// naming w17/infra.yaml:line:col.
-	Infra         []byte `protobuf:"bytes,15,opt,name=infra,proto3" json:"infra,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Infra []byte `protobuf:"bytes,15,opt,name=infra,proto3" json:"infra,omitempty"`
+	// Dockerfiles are the project's own Dockerfiles: the project-root-relative
+	// path of every file named `Dockerfile`, outside hidden, vendor and
+	// node_modules directories and the generated services and gen dirs. The
+	// server cannot see the disk, and the infra render builds a hand-written
+	// business tier from a Dockerfile of the project: it reads this list to
+	// build from one that exists, and refuses the render, naming the fix, when
+	// there is none. dockerfiles_listed says the client looked — an older client
+	// sends neither, and the render then refuses rather than guess.
+	Dockerfiles       []string `protobuf:"bytes,16,rep,name=dockerfiles,proto3" json:"dockerfiles,omitempty"`
+	DockerfilesListed bool     `protobuf:"varint,17,opt,name=dockerfiles_listed,json=dockerfilesListed,proto3" json:"dockerfiles_listed,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GenerateProjectRequest) Reset() {
@@ -8381,6 +8391,20 @@ func (x *GenerateProjectRequest) GetInfra() []byte {
 		return x.Infra
 	}
 	return nil
+}
+
+func (x *GenerateProjectRequest) GetDockerfiles() []string {
+	if x != nil {
+		return x.Dockerfiles
+	}
+	return nil
+}
+
+func (x *GenerateProjectRequest) GetDockerfilesListed() bool {
+	if x != nil {
+		return x.DockerfilesListed
+	}
+	return false
 }
 
 // HandlerMsgids is one domain's share of the hand-written sentences.
@@ -13380,7 +13404,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\rper_bundle_pb\x18\x05 \x01(\bR\vperBundlePb\x12!\n" +
 	"\fservices_dir\x18\x06 \x01(\tR\vservicesDir\x12\x19\n" +
 	"\bw17_path\x18\a \x01(\tR\aw17Path\x12%\n" +
-	"\x0edeploy_targets\x18\b \x03(\tR\rdeployTargets\"\xea\x04\n" +
+	"\x0edeploy_targets\x18\b \x03(\tR\rdeployTargets\"\xbb\x05\n" +
 	"\x16GenerateProjectRequest\x124\n" +
 	"\x05files\x18\x01 \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\x05files\x12\x12\n" +
 	"\x04lock\x18\x02 \x01(\fR\x04lock\x12\x1b\n" +
@@ -13400,7 +13424,9 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\n" +
 	"e2e_inputs\x18\r \x03(\v2\x1e.w17.storage.codegen.ProtoFileR\te2eInputs\x12%\n" +
 	"\x0ew17ctl_version\x18\x0e \x01(\tR\rw17ctlVersion\x12\x14\n" +
-	"\x05infra\x18\x0f \x01(\fR\x05infra\"?\n" +
+	"\x05infra\x18\x0f \x01(\fR\x05infra\x12 \n" +
+	"\vdockerfiles\x18\x10 \x03(\tR\vdockerfiles\x12-\n" +
+	"\x12dockerfiles_listed\x18\x11 \x01(\bR\x11dockerfilesListed\"?\n" +
 	"\rHandlerMsgids\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x16\n" +
 	"\x06msgids\x18\x02 \x03(\tR\x06msgids\"\x8d\x02\n" +
