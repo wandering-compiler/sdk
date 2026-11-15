@@ -17,7 +17,8 @@
 //!
 //! `AuthResp` is generated per project: [`envelope`] decodes into the type
 //! you name, and the readers that need only its user id decode it through
-//! the descriptor set's single `AuthResp`, which the runtime resolves at boot.
+//! the descriptor set's `AuthResp` messages, which the runtime resolves at
+//! boot — one per realm (a domain with `auth` and `admin_auth` has two).
 
 use std::{fmt, sync::RwLock};
 
@@ -95,17 +96,62 @@ impl From<NoPrincipal> for Status {
     }
 }
 
-static AUTH_RESP: RwLock<Option<MessageDescriptor>> = RwLock::new(None);
+static AUTH_RESP: RwLock<Vec<MessageDescriptor>> = RwLock::new(Vec::new());
 
 /// The project's `AuthResp`, which the readers decode the envelope through.
-/// The runtime sets it at boot (the descriptor set's one message named
-/// `AuthResp`); tests may set it.
+/// The runtime sets it at boot ([`set_auth_resp_types`]); tests may set it.
 pub fn set_auth_resp_type(desc: Option<MessageDescriptor>) {
-    *AUTH_RESP.write().unwrap_or_else(|e| e.into_inner()) = desc;
+    set_auth_resp_types(desc.into_iter().collect());
 }
 
-fn auth_resp_type() -> Option<MessageDescriptor> {
+/// Every realm's `AuthResp` (the descriptor set's messages of that name):
+/// the runtime sets them at boot. The readers decode an envelope through
+/// each and take the user id they agree on; ids that disagree are refused.
+pub fn set_auth_resp_types(descs: Vec<MessageDescriptor>) {
+    *AUTH_RESP.write().unwrap_or_else(|e| e.into_inner()) = descs;
+}
+
+fn auth_resp_types() -> Vec<MessageDescriptor> {
     AUTH_RESP.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Why an envelope gave no user id.
+enum NoUserId {
+    NoType,
+    Undecodable,
+    Empty,
+    Ambiguous,
+}
+
+/// The user id `raw` (a marshalled `AuthResp`) carries, read through every
+/// known `AuthResp` type: the one non-empty id the types that decode it agree
+/// on. With two realms the envelope is one of them; a type it is not either
+/// fails to decode or reads no id, and ids that disagree are refused rather
+/// than guessed.
+fn user_id_of_envelope(raw: &[u8]) -> Result<String, NoUserId> {
+    let types = auth_resp_types();
+    if types.is_empty() {
+        return Err(NoUserId::NoType);
+    }
+    let mut decoded = false;
+    let mut id: Option<String> = None;
+    for desc in types {
+        let Ok(msg) = DynamicMessage::decode(desc, raw) else {
+            continue;
+        };
+        decoded = true;
+        if let Some(u) = user_id_of(&msg) {
+            match &id {
+                Some(have) if *have != u => return Err(NoUserId::Ambiguous),
+                _ => id = Some(u),
+            }
+        }
+    }
+    match (id, decoded) {
+        (Some(u), _) => Ok(u),
+        (None, true) => Err(NoUserId::Empty),
+        (None, false) => Err(NoUserId::Undecodable),
+    }
 }
 
 /// `org_id` → `x-w17-scope-org_id`.
@@ -129,12 +175,6 @@ fn envelope_bytes(md: &Metadata) -> Result<Vec<u8>, NoPrincipal> {
         .map_err(|_| NoPrincipal::new("undecodable envelope"))
 }
 
-fn dynamic_envelope(md: &Metadata) -> Result<DynamicMessage, NoPrincipal> {
-    let desc = auth_resp_type().ok_or_else(|| NoPrincipal::new("no AuthResp type is known"))?;
-    let raw = envelope_bytes(md)?;
-    DynamicMessage::decode(desc, raw.as_slice()).map_err(|_| NoPrincipal::new("unmarshal envelope"))
-}
-
 fn user_id_of(msg: &DynamicMessage) -> Option<String> {
     msg.get_field_by_name("user_id")
         .and_then(|v| v.as_str().map(str::to_string))
@@ -154,8 +194,18 @@ pub fn user_id(ctx: &Ctx) -> Result<String, NoPrincipal> {
     {
         return Ok(v.to_string());
     }
-    let msg = dynamic_envelope(ctx.incoming())?;
-    user_id_of(&msg).ok_or_else(|| NoPrincipal::new(""))
+    if auth_resp_types().is_empty() {
+        return Err(NoPrincipal::new("no AuthResp type is known"));
+    }
+    let raw = envelope_bytes(ctx.incoming())?;
+    user_id_of_envelope(&raw).map_err(|e| match e {
+        NoUserId::NoType => NoPrincipal::new("no AuthResp type is known"),
+        NoUserId::Undecodable => NoPrincipal::new("unmarshal envelope"),
+        NoUserId::Empty => NoPrincipal::new(""),
+        NoUserId::Ambiguous => {
+            NoPrincipal::new("the realms' AuthResp types read different user ids")
+        }
+    })
 }
 
 /// The full verified principal, decoded into the project's `AuthResp` type
@@ -274,16 +324,19 @@ pub fn act_as<M: prost::Message>(
     scopes: &[(&str, &str)],
 ) -> Result<Ctx, ActAsError> {
     let raw = user.encode_to_vec();
-    let desc = auth_resp_type()
-        .ok_or_else(|| ActAsError("principal: act_as: no AuthResp type is known".into()))?;
-    let msg = DynamicMessage::decode(desc, raw.as_slice()).map_err(|e| {
-        ActAsError(format!(
-            "principal: act_as: the user is not an AuthResp: {e}"
-        ))
+    user_id_of_envelope(&raw).map_err(|e| {
+        ActAsError(
+            match e {
+                NoUserId::NoType => "principal: act_as: no AuthResp type is known",
+                NoUserId::Undecodable => "principal: act_as: the user is not an AuthResp",
+                NoUserId::Empty => "principal: act_as needs a user id",
+                NoUserId::Ambiguous => {
+                    "principal: act_as: the realms' AuthResp types read different user ids from the user"
+                }
+            }
+            .into(),
+        )
     })?;
-    if user_id_of(&msg).is_none() {
-        return Err(ActAsError("principal: act_as needs a user id".into()));
-    }
     let mut stamps = vec![(
         USER_METADATA_KEY.to_string(),
         base64::engine::general_purpose::STANDARD.encode(&raw),

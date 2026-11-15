@@ -347,13 +347,7 @@ impl App {
         let descriptors: &'static [u8] = Box::leak(raw.into_boxed_slice());
         let pool = DescriptorPool::decode(descriptors)
             .map_err(|e| BootError(format!("descriptor_set: {}: {e}", set.display())))?;
-        let auth: Vec<_> = pool
-            .all_messages()
-            .filter(|d| d.name() == "AuthResp")
-            .collect();
-        if auth.len() == 1 {
-            principal::set_auth_resp_type(auth.into_iter().next());
-        }
+        install_auth_resp(&pool);
         let resolver = if manifest.config.iter().any(|k| k.secret) || manifest.events.is_some() {
             Some(secrets::new_resolver(&env).map_err(|e| BootError(format!("secrets: {e}")))?)
         } else {
@@ -968,4 +962,14 @@ pub async fn serve_for_test(
     let mut app = App::boot(m, env, digest, register).await?;
     app.drain_timeout = drain_timeout;
     app.run(stop).await
+}
+
+/// The project's `AuthResp`, for the principal readers that decode the
+/// envelope: the descriptor set's messages of that name, one per realm.
+pub(crate) fn install_auth_resp(pool: &DescriptorPool) {
+    principal::set_auth_resp_types(
+        pool.all_messages()
+            .filter(|d| d.name() == "AuthResp")
+            .collect(),
+    );
 }
