@@ -23,7 +23,8 @@ import type { FormatTemplate } from "./slotFormat";
 export function moneyInputScale(tmpl: FormatTemplate | undefined): number | undefined {
   for (const s of tmpl?.slots ?? []) {
     // An absent scale is the compiler's default (2), as the formatter reads it.
-    if (s.preset === "money") return s.scale === undefined ? DEFAULT_MONEY_SCALE : s.scale > 0 ? Math.floor(s.scale) : 0;
+    if (s.preset === "money")
+      return s.scale === undefined ? DEFAULT_MONEY_SCALE : s.scale > 0 ? Math.floor(s.scale) : 0;
   }
   return undefined;
 }
