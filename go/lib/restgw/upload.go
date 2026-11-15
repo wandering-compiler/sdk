@@ -63,16 +63,6 @@ type FilePartConfig struct {
 	// for in the request body (per the binding's http_name).
 	FormName string
 
-	// Owner is the uploading caller's data scopes (AuthResp.scopes:
-	// `org_id`, an owner `user_id`, …). Non-empty, they are recorded in
-	// the object's key (kvfs.OwnedObjectKey), and a download of a bucket
-	// that holds a scoped model's files serves the object only to a
-	// caller carrying the same values. The record the file belongs to is
-	// stamped from these same scopes by the request that carries the
-	// upload, so they name its owner. The generated gateway sets it on
-	// every upload of a surface that threads scopes.
-	Owner map[string]string
-
 	// Driver is the KV driver backing the upload's
 	// connection. Constructed at gateway main.go boot time
 	// from the connection's dialect-specific config (path
@@ -170,10 +160,11 @@ func ProcessFilePart(ctx context.Context, r *http.Request, cfg FilePartConfig) (
 		return "", err
 	}
 
-	// kvfs.OwnedObjectKey — the derivation every writer of a connection
-	// shares, so a file the business tier puts (kvfs.Put) is keyed like an
-	// upload, owner record included.
-	objectKey, err := kvfs.OwnedObjectKey(hash, cfg.Owner)
+	// kvfs.ObjectKey — the derivation every writer of a connection shares,
+	// so a file the business tier puts (kvfs.Put) is keyed like an upload.
+	// The key names the content and nothing else: who may download it is
+	// decided by the record that references it (restgw.ServeDownloadGated).
+	objectKey, err := kvfs.ObjectKey(hash)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		return "", err

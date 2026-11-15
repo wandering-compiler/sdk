@@ -42,8 +42,7 @@ var ErrTooLarge = errors.New("kvfs: object exceeds the field's max_size_bytes")
 // The body streams to a staging file (inside the driver's own storage when
 // it is a [StagingDirProvider], so the publish is a same-filesystem rename;
 // os.TempDir otherwise) while its sha256 is computed, then lands under
-// [BuildKey](p.BucketPath, [OwnedObjectKey](hash, <the request's data
-// scopes>), …) in one PutFromTempFile.
+// [BuildKey](p.BucketPath, [ObjectKey](hash), …) in one PutFromTempFile.
 // Every call stores its OWN object, even for a body identical to one
 // already stored (see [ObjectKey]). A body that fails to read, or a ctx
 // that ends before the commit, stores nothing.
@@ -62,10 +61,7 @@ func Put(ctx context.Context, d Driver, p Placement, body io.Reader) (handle str
 	// copies instead (another filesystem, S3) leaves it, and an error
 	// leaves it too. Either way it is ours to remove.
 	defer func() { _ = os.Remove(tmpPath) }()
-	// Owned by the caller the request serves, when there is one: a file
-	// the business tier makes for a caller is downloadable by that
-	// caller's organization exactly like one the caller uploaded.
-	objectKey, err := OwnedObjectKey(hash, incomingOwner(ctx))
+	objectKey, err := ObjectKey(hash)
 	if err != nil {
 		return "", err
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/imagevariant"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
@@ -76,20 +77,24 @@ type DownloadField struct {
 	// upload) and stored beside the original. Empty = originals only.
 	Variants []imagevariant.Spec
 
-	// Scopes names the data scopes a caller must share with an object's
-	// owner to be served it — the scope names of the models whose files
-	// this bucket holds (`(w17.db.scope)`), narrowed to the gateway's
-	// audience range. Empty = the bucket holds no scoped model's files,
-	// or the route is public: any caller the route admits is served.
-	// See [ServeDownloadFor].
-	Scopes []string
-
 	// Image marks an UPLOADED_IMAGE field: its originals are served with the
 	// raster type their bytes are (see imageType) instead of
 	// application/octet-stream, so a browser renders them inline. Anything
 	// that is not one of those types still goes out as octet-stream.
 	Image bool
+
+	// Gated marks a bucket that holds a scoped model's files: an object is
+	// served only when a record the caller may read references it (see
+	// [ServeDownloadGated]). False = any caller the route admits is served.
+	Gated bool
 }
+
+// RecordGate answers whether a record the caller may read references the
+// object stored under key — the storage tier's read of the models whose
+// files share the bucket, through the caller's own data scopes
+// (fileref.Readable over the gateway's storage connection). An error is a
+// failure to ask, not a "no".
+type RecordGate func(ctx context.Context, key string) (bool, error)
 
 // NewDownloadConfig sorts the field list by descending bucket-
 // path length and returns the result. Use when assembling a
@@ -110,11 +115,11 @@ func NewDownloadConfig(prefix string, fields []DownloadField, cacheControl strin
 	}
 }
 
-// ServeDownload is the handler body of a download route with no caller
-// to match: a public route (`exclude_auth`), or one whose buckets hold
-// no scoped model's files. An authenticated route of a scoped surface
-// calls [ServeDownloadFor] with the caller's data scopes instead; a field
-// with Scopes is refused here, as it would be to a caller with none.
+// ServeDownload is the handler body of a download route with no record
+// gate: a public route (`exclude_auth`), or one whose buckets hold no
+// scoped model's files. A [DownloadField.Gated] field is refused here (404),
+// as it would be to a caller no record admits; an authenticated route over
+// one calls [ServeDownloadGated].
 //
 // Path resolution:
 //   - Strip cfg.URLPrefix + "/" from r.URL.Path.
@@ -129,15 +134,19 @@ func NewDownloadConfig(prefix string, fields []DownloadField, cacheControl strin
 //     buckets exist gives an attacker a directory listing for
 //     free.
 func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
-	ServeDownloadFor(w, r, cfg, nil)
+	ServeDownloadGated(w, r, cfg, nil)
 }
 
-// ServeDownloadFor is [ServeDownload] for an authenticated caller whose
-// data scopes are caller (AuthResp.scopes). The generator emits a
-// per-endpoint closure that authenticates, decodes the scopes, and calls
-// here; a field's Scopes decide which of them must match the object's
-// owner record (kvfs.KeyOwner).
-func ServeDownloadFor(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, caller map[string]string) {
+// ServeDownloadGated is [ServeDownload] behind the record gate. The
+// generator emits a per-endpoint closure that authenticates the caller,
+// threads its data scopes onto a context bound to the storage tier, and
+// passes gate: an object of a [DownloadField.Gated] field is served only
+// when gate reports that a record the caller may read references its key.
+// So a file follows the record it belongs to — whoever stored it (the
+// caller, a staff member, a job, a business tier in any language) and
+// whenever (an object stored before the gate existed is served to its
+// record's readers like any other). A nil gate serves no gated object.
+func ServeDownloadGated(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, gate RecordGate) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		writeRefusalStatus(r.Context(), w, http.StatusMethodNotAllowed, codes.Unimplemented, "")
@@ -171,15 +180,26 @@ func ServeDownloadFor(w http.ResponseWriter, r *http.Request, cfg DownloadConfig
 		notFound()
 		return
 	}
-	// The owner gate: in a bucket holding a scoped model's files, an
-	// object is served only to a caller whose data scopes match the ones
-	// it was stored under. 404, like every other refusal here — a 403
-	// would confirm the key exists. An object with no owner record (stored
-	// before the record existed, or by a writer serving no caller) has no
-	// owner to match and is refused too.
-	if len(field.Scopes) > 0 && !ownerMatches(key, field.Scopes, caller) {
-		notFound()
-		return
+	// The record gate. 404 like every other refusal here — a 403 would
+	// confirm the key exists. A failure to ask is the operator's 500, not
+	// a 404 that would read as "no such file".
+	if field.Gated {
+		if gate == nil {
+			notFound()
+			return
+		}
+		readable, err := gate(r.Context(), key)
+		switch {
+		case err != nil && gateRefusal(err):
+			notFound()
+			return
+		case err != nil:
+			WriteInternal(r.Context(), w, "download: record gate: "+err.Error())
+			return
+		case !readable:
+			notFound()
+			return
+		}
 	}
 
 	ctx := r.Context()
@@ -472,26 +492,19 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 	http.ServeContent(w, r, "", info.ModTime, body)
 }
 
-// ownerMatches reports whether caller shares every scope in names with
-// the owner recorded in key. A missing value counts as "": a caller with
-// no organization does not match an object stored under one.
-func ownerMatches(key string, names []string, caller map[string]string) bool {
-	owner, ok := kvfs.KeyOwner(key)
-	if !ok {
-		return false
+// gateRefusal reports a gate error that answers "not for this caller"
+// rather than "could not ask": the storage tier refusing the caller's
+// scopes, or naming nothing.
+func gateRefusal(err error) bool {
+	switch status.Code(err) {
+	case codes.PermissionDenied, codes.NotFound, codes.Unauthenticated, codes.InvalidArgument:
+		return true
 	}
-	for _, n := range names {
-		if owner[n] != caller[n] {
-			return false
-		}
-	}
-	return true
+	return false
 }
 
 // VariantKey is where a variant of the object at key is stored: beside it,
-// under a name no upload produces (an object key is a hex digest, a '-'
-// and a hex nonce, optionally followed by a base64url owner record — none
-// of which contains '~').
+// under a name no upload produces (object keys are hex digests).
 func VariantKey(key, name string) string { return key + "~" + name }
 
 // renderVariant renders and stores one variant. The status is the answer a
