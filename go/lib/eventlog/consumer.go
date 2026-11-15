@@ -523,6 +523,10 @@ func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) 
 	if dsn == "" {
 		return errors.New("eventlog: request consumers need the bus DSN the request stream lives on (NATS or Redis)")
 	}
+	// Said once, as the recorder says where it records: the two sides pick
+	// the transport from their own environment, and a split between them
+	// (one on NATS, one on Redis) is otherwise silent.
+	log.Printf("eventlog: request consumers read the %s request stream at %s", streamTransport(dsn), dsnredact.String(dsn))
 	if IsRedisDSN(dsn) {
 		c, err := dialRedis(ctx, dsn)
 		if err != nil {
