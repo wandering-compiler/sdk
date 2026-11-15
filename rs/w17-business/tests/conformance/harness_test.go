@@ -97,7 +97,13 @@ type harness struct {
 	// dropCommitReply makes the next Commit commit and then answer
 	// Unavailable, as a reply lost in transport.
 	dropCommitReply bool
-	events          []event
+	// forgetEnded makes the next Rollback that finds its transaction gone
+	// answer NotFound WITHOUT the coordinator's ended detail, as a
+	// coordinator that restarted (or dropped the id from its record of
+	// ended transactions) does: the settle of a lost commit reply cannot
+	// read how it ended.
+	forgetEnded bool
+	events      []event
 
 	// filesRoot is the writable store's directory.
 	filesRoot string
@@ -379,7 +385,8 @@ func waitServing(cc *grpc.ClientConn, d time.Duration) error {
 }
 
 // interceptor stands in for the storage proxy's view: it records what Inspect
-// and ListNotes carried, and loses a Commit's reply on request.
+// and ListNotes carried, loses a Commit's reply on request, and on request
+// answers a Rollback of an ended transaction as a coordinator that forgot it.
 func (h *harness) interceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	resp, err := handler(ctx, req)
 	if strings.HasSuffix(info.FullMethod, "/Commit") {
@@ -395,6 +402,15 @@ func (h *harness) interceptor(ctx context.Context, req any, info *grpc.UnaryServ
 			// a trailers-only Unavailable would be, in every language.
 			_ = grpc.SendHeader(ctx, metadata.MD{})
 			return nil, status.Error(codes.Unavailable, "conformance: commit reply dropped")
+		}
+	}
+	if strings.HasSuffix(info.FullMethod, "/Rollback") && status.Code(err) == codes.NotFound {
+		h.mu.Lock()
+		forget := h.forgetEnded
+		h.forgetEnded = false
+		h.mu.Unlock()
+		if forget {
+			return resp, status.Error(codes.NotFound, status.Convert(err).Message())
 		}
 	}
 	return resp, err

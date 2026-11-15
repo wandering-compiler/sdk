@@ -470,17 +470,61 @@ func TestHandleFinished(t *testing.T) {
 	}
 }
 
-// The commit lands and its reply is lost: the probe rollback finds the
-// transaction gone, so the outcome is unknown — and the writes did land. The
-// work parked on the transaction (a composed CreateNote's event, an on_commit
-// insert) does NOT run: announcing a write that may not exist is the worse
-// failure.
-func TestCommitOutcomeUnknown(t *testing.T) {
+// The commit lands and its reply is lost: the settling rollback finds the
+// transaction gone, and the coordinator's NotFound says how it ended
+// (ended=committed, business-sdks.md B5.9 / data.md D3.16). That settles it:
+// the commit succeeded, so the method answers no error and the work parked on
+// the transaction (a composed CreateNote's event, an on_commit insert) runs,
+// as in Go.
+func TestALostCommitReplyIsSettledAsCommitted(t *testing.T) {
 	mark := env.eventCount()
 	before := len(env.rows(t))
 	env.mu.Lock()
 	env.dropCommitReply = true
 	env.mu.Unlock()
+	ctx, cancel := timeout(gatewayCtx(t), 20*time.Second)
+	defer cancel()
+	resp, err := env.call(ctx, "TxErrors", set(env.msg("TxErrorsRequest"), map[string]any{"case": "unknown"}), "TxErrorsResponse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := get(resp, "error").String(); got != "" {
+		t.Errorf("error = %q (%s), want none: the coordinator's record says the commit landed", got, get(resp, "message").String())
+	}
+	want := []string{"outcome-unknown", "outcome-unknown-composed", "after-outcome-unknown"}
+	var rows []string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if rows = env.rows(t)[before:]; len(rows) >= len(want) {
+			break
+		}
+	}
+	if !slices.Equal(rows, want) {
+		t.Errorf("rows = %v, want %v: the transaction's two writes and its on_commit write", rows, want)
+	}
+	if got := noteCreated(t, waitEvents(mark, 1, 5*time.Second)); !slices.Equal(got, []string{"outcome-unknown-composed"}) {
+		t.Errorf("note.created events = %v, want the composed CreateNote's, published after the settled commit", got)
+	}
+}
+
+// The commit lands and its reply is lost, and the coordinator no longer
+// knows how the transaction ended (it restarted, or the id left its record):
+// the settling rollback's NotFound carries no ended detail, so the outcome is
+// unknown (business-sdks.md B5.7, data.md D3.11) — and the writes did land.
+// The work parked on the transaction (a composed CreateNote's event, an
+// on_commit insert) does NOT run: announcing a write that may not exist is
+// the worse failure.
+func TestCommitOutcomeUnknown(t *testing.T) {
+	mark := env.eventCount()
+	before := len(env.rows(t))
+	env.mu.Lock()
+	env.dropCommitReply = true
+	env.forgetEnded = true
+	env.mu.Unlock()
+	t.Cleanup(func() {
+		env.mu.Lock()
+		env.forgetEnded = false
+		env.mu.Unlock()
+	})
 	ctx, cancel := timeout(gatewayCtx(t), 20*time.Second)
 	defer cancel()
 	resp, err := env.call(ctx, "TxErrors", set(env.msg("TxErrorsRequest"), map[string]any{"case": "unknown"}), "TxErrorsResponse")
