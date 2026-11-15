@@ -116,8 +116,11 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
   of requests; bidi both. A caller that hangs up, or whose deadline passes,
   mid-stream makes that iterable throw a `StatusError` (`CANCELLED`,
   `DEADLINE_EXCEEDED`) as Go's `Recv` returns one; rethrown, it answers as it
-  is, never as an internal error. A handler may stop reading early (`break`
-  out of its `for await`, or answer a client stream after the first request):
+  is, never as an internal error. A caller's own deadline that fires before
+  the server's (which is later by the transit of the request) reaches the
+  server as that caller's reset: `CANCELLED`, as a Go server reads it. A
+  handler may stop reading early (`break` out of its `for await`, or answer a
+  client stream after the first request):
   that only stops reading, as in Go, and the replies and the status are still
   sent; what the caller sends after that is dropped.
 - **Calling a stream:** a client-streaming or bidi call takes your iterable of

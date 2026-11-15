@@ -2,6 +2,7 @@
 // TypeScript stand-in for storage (served by the same Registry) and the
 // business service.
 
+import * as http2 from "node:http2";
 import { create, toBinary } from "@bufbuild/protobuf";
 import { FileDescriptorProtoSchema, FileDescriptorSetSchema } from "@bufbuild/protobuf/wkt";
 import { Client, Metadata as GrpcMetadata, Server, ServerCredentials, credentials, type ServiceError } from "@grpc/grpc-js";
@@ -756,28 +757,78 @@ describe("streams", () => {
     expect((other as Error).message).toBe("premature close");
   });
 
-  it("a deadline that passes mid-stream ends the request stream as the deadline, not as its end", async () => {
-    const logged: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
-    const p = pool();
-    streamPool(p);
+  // A Sum handler that records how its request stream ended: "ended" is a
+  // clean end (a truncated upload taken as complete), anything else is what
+  // the iterable threw.
+  function recordingSum(p: Pool, seen: unknown[]) {
     const Ping = p.message("test.stream.Ping");
-    const seen: unknown[] = [];
-    let got = 0;
-    class Reading extends Streamer {
+    return class extends Streamer {
       override async Sum(_ctx: Context, reqs: AsyncIterable<AnyMessage>) {
+        let got = 0;
         try {
           for await (const _r of reqs) got++;
-          seen.push("ended"); // a truncated upload taken as complete
+          seen.push("ended");
         } catch (e) {
           seen.push(e);
           throw e;
         }
         return Ping({ n: got });
       }
-    }
+    };
+  }
+
+  it("a deadline that passes mid-stream ends the request stream as the deadline, not as its end", async () => {
+    const logged: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
+    const p = pool();
+    streamPool(p);
+    const seen: unknown[] = [];
     const reg = new Registry(p);
-    reg.register("test.stream.Streamer", new Reading());
+    reg.register("test.stream.Streamer", new (recordingSum(p, seen))());
+    const [srv, port] = await listen(reg);
+    // A caller that sends one request and then holds its stream open —
+    // neither ending nor resetting it — so the deadline that passes is the
+    // server's own (grpc-timeout), whatever the timing: a grpc-js caller's
+    // deadline fires first and reaches the server as its reset (the next test).
+    const session = http2.connect(`http://127.0.0.1:${port}`);
+    try {
+      const req = session.request({
+        ":method": "POST",
+        ":path": "/test.stream.Streamer/Sum",
+        "content-type": "application/grpc",
+        te: "trailers",
+        "grpc-timeout": "200m",
+      });
+      // One length-prefixed Ping{n: 1}: uncompressed, 2 bytes, field 1 = 1.
+      req.write(Buffer.from([0, 0, 0, 0, 2, 0x08, 0x01]));
+      const code = await new Promise<number>((resolve, reject) => {
+        req.on("response", (h) => {
+          if (h["grpc-status"] !== undefined) resolve(Number(h["grpc-status"]));
+        });
+        req.on("trailers", (t) => resolve(Number(t["grpc-status"])));
+        req.on("error", reject);
+        req.resume();
+      });
+      expect(code).toBe(Status.DEADLINE_EXCEEDED);
+      expect(await settled(() => seen.length === 1 && reg.inflight === 0)).toBe(true);
+      expect(seen[0]).toBeInstanceOf(StatusError);
+      expect((seen[0] as StatusError).code).toBe(Status.DEADLINE_EXCEEDED);
+      expect(logged.filter((l) => l.includes("PANIC"))).toEqual([]);
+    } finally {
+      session.destroy();
+      await stop(srv);
+    }
+  });
+
+  it("a caller whose deadline passes mid-stream never ends the request stream as complete", async () => {
+    const logged: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
+    const p = pool();
+    streamPool(p);
+    const Ping = p.message("test.stream.Ping");
+    const seen: unknown[] = [];
+    const reg = new Registry(p);
+    reg.register("test.stream.Streamer", new (recordingSum(p, seen))());
     const [srv, port] = await listen(reg);
     const conn = new Conn(`127.0.0.1:${port}`, { tls: false });
     try {
@@ -788,8 +839,13 @@ describe("streams", () => {
       const st = await statusOf(new ServiceClient(conn, "test.stream.Streamer", p).Sum(new Context().withTimeout(200), sends()));
       expect(st.code).toBe(Status.DEADLINE_EXCEEDED);
       expect(await settled(() => seen.length === 1 && reg.inflight === 0)).toBe(true);
+      // grpc-js ends a call cut short by its deadline with a half-close and
+      // then a reset, in two writes. The server's deadline is the caller's
+      // plus the transit of the request headers, so the reset can arrive
+      // before it: then the server reads the caller's cancel (CANCELLED, as
+      // Go's server does), else its own deadline. Never a clean end.
       expect(seen[0]).toBeInstanceOf(StatusError);
-      expect((seen[0] as StatusError).code).toBe(Status.DEADLINE_EXCEEDED);
+      expect([Status.DEADLINE_EXCEEDED, Status.CANCELLED]).toContain((seen[0] as StatusError).code);
       expect(logged.filter((l) => l.includes("PANIC"))).toEqual([]);
     } finally {
       conn.close();
