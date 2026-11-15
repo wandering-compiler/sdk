@@ -24,6 +24,7 @@ package restgw
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -44,7 +45,10 @@ import (
 // no per-request allocation).
 //
 // Headers absent / blank on the incoming request are skipped —
-// the middleware never injects empty metadata keys.
+// the middleware never injects empty metadata keys. X-Forwarded-For is
+// the exception in both directions: listed, it always carries the
+// client address the gateway resolved through its trusted proxies
+// ([ClientAddrMiddleware]), whatever the caller sent or omitted.
 //
 // A header whose metadata key is reserved for the gateway
 // ([principal.IsEdgeReservedKey]: `x-w17-user`, `x-w17-scope-*`,
@@ -106,6 +110,21 @@ func metadataKeyFor(header string) string {
 func headerValue(r *http.Request, header string) string {
 	if strings.EqualFold(header, "host") {
 		return r.Host
+	}
+	if strings.EqualFold(header, "x-forwarded-for") {
+		// The client's address as the gateway RESOLVED it (the trusted
+		// proxies' hops believed, nothing else), never the header as the
+		// caller wrote it: a backend reading x-forwarded-for records it as
+		// the client — the auth plugin's device and sign-in IP — and a
+		// raw header let a direct caller name any address it liked. Only
+		// when ClientAddrMiddleware did not run is the peer used.
+		if a := ClientAddrFrom(r.Context()); a != "" {
+			return a
+		}
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			return host
+		}
+		return ""
 	}
 	return r.Header.Get(header)
 }
