@@ -24,8 +24,8 @@ changing it.
 | [data.md](data.md) | 18 | 167 | 2 | 4 |
 | [events-identity.md](events-identity.md) | 22 | 204 | 0 | 1 |
 | [tooling.md](tooling.md) | 30 | 217 | 0 | 0 |
-| [business-sdks.md](business-sdks.md) | 11 | 50 | 0 | 9 |
-| **All areas** | **150** | **1253** | **3** | **25** |
+| [business-sdks.md](business-sdks.md) | 11 | 57 | 0 | 10 |
+| **All areas** | **150** | **1260** | **3** | **26** |
 | [matrix.md](matrix.md) | — | 163 interactions | 9 | 16 |
 
 A row is "covered in part" when its test is followed by a note that limits it, or when part of
