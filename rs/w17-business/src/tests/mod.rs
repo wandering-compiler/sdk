@@ -2,6 +2,7 @@
 
 mod config;
 mod context;
+mod distx;
 mod events;
 mod manifest;
 mod misc;

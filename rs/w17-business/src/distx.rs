@@ -21,10 +21,21 @@
 //! - a second commit or rollback on a finished root handle is
 //!   [`Error::HandleFinished`], without an RPC;
 //! - a commit that fails in transport is probed with a detached rollback: if
-//!   it succeeds the commit did not take effect (an ordinary failure); if not,
+//!   it succeeds the commit did not take effect (an ordinary failure). When
+//!   the transaction is gone but the coordinator remembers how it ended (the
+//!   `ended` detail on its `NOT_FOUND`), that settles it: success and the
+//!   parked work runs when it committed, an ordinary failure when it did not.
+//!   Only a coordinator that cannot say leaves
 //!   [`Error::CommitOutcomeUnknown`] — the writes may have landed, and the
 //!   work parked for the commit is NOT run;
-//! - rollback outlives the caller's cancellation and deadline; a done context
+//! - a commit refused with `FAILED_PRECONDITION` (a call inside the
+//!   transaction still holds it) leaves the transaction open: the handle is
+//!   retryable and the parked work waits for the retry. [`run`] rolls such a
+//!   transaction back rather than leave it holding its locks until the
+//!   orphan timeout;
+//! - rollback outlives the caller's cancellation and deadline and is bounded
+//!   by [`ROLLBACK_WAIT`] of its own; a rollback of a transaction that
+//!   already ended without committing is done, not a failure. A done context
 //!   refuses to commit ([`run`]);
 //! - `ABORTED` from storage is returned to the caller, who retries the unit
 //!   of work.
@@ -54,6 +65,24 @@ pub const CONN_ID_HEADER: &str = "w17-conn-id";
 
 /// Bounds the rollback a commit sends to settle an ambiguous outcome.
 pub const OUTCOME_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Bounds every rollback sent on a context detached from its caller's
+/// ([`TxHandle::rollback`], the rollback-only commit, [`run`]'s rollback, the
+/// rollback after a dropped future). Detaching drops the caller's deadline
+/// too, so without a bound a coordinator that accepted the call and stalls
+/// would hold the caller forever. The server dooms the transaction before it
+/// waits for a running handler's lease, so a rollback cut by this bound is
+/// still decided. Go's rollbackWait: the finish wait, equal to the
+/// auto-rollback interceptor's RollbackWait.
+pub const ROLLBACK_WAIT: Duration = Duration::from_secs(30);
+
+/// The `google.rpc.ErrorInfo` the coordinator attaches to a `NOT_FOUND` for a
+/// transaction it remembers (its last 256 ids): `metadata[ENDED_KEY]` is
+/// "committed" or "not_committed". Go's distx.EndedDomain / EndedReason /
+/// EndedKey.
+pub const ENDED_DOMAIN: &str = "w17.distx";
+pub const ENDED_REASON: &str = "W17_TX_ENDED";
+pub const ENDED_KEY: &str = "ended";
 
 /// The `BeginRequest` for [`begin`] / [`run`]. `connection` is the
 /// connection's name in the lock (`shop-postgres`): the storage tier's
@@ -151,13 +180,28 @@ fn rollback_only(detail: &str) -> Error {
 #[derive(Clone)]
 pub struct Coordinator {
     client: W17DistributedTransactionClient<StorageChannel>,
+    /// [`ROLLBACK_WAIT`]; tests shorten it.
+    rollback_wait: Duration,
 }
 
 impl Coordinator {
     pub(crate) fn new(channel: StorageChannel) -> Self {
         Self {
             client: W17DistributedTransactionClient::new(channel),
+            rollback_wait: ROLLBACK_WAIT,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_rollback_wait(mut self, d: Duration) -> Self {
+        self.rollback_wait = d;
+        self
+    }
+
+    /// `ctx` without its cancellation and deadline (values and metadata
+    /// kept), bounded by the rollback wait.
+    fn detached_rollback_ctx(&self, ctx: &Ctx) -> Ctx {
+        ctx.without_cancel().with_timeout(self.rollback_wait)
     }
 
     async fn begin(&self, ctx: &Ctx, req: BeginRequest) -> Result<(String, String), Status> {
@@ -278,7 +322,9 @@ impl TxHandle {
     /// Outlives the context's cancellation and deadline: the commonest reason
     /// to roll back is that the caller is gone, and a call refused on a done
     /// context would leave the transaction held until the server times it
-    /// out.
+    /// out. It is bounded by [`ROLLBACK_WAIT`] instead, so a stalled
+    /// coordinator cannot hold the caller forever. A transaction that already
+    /// ended without committing is rolled back as asked: `Ok`.
     pub async fn rollback(&self, ctx: &Ctx) -> Result<(), Error> {
         if self.joined {
             self.root.scope.mark_rollback_only();
@@ -302,7 +348,10 @@ async fn commit_root(root: Arc<Root>, ctx: Ctx) -> Result<(), Error> {
             root.scope.discarded();
             if let Err(rerr) = root
                 .coord
-                .rollback(&root.attach(&ctx.without_cancel()), &root.tx_id)
+                .rollback(
+                    &root.attach(&root.coord.detached_rollback_ctx(&ctx)),
+                    &root.tx_id,
+                )
                 .await
             {
                 return Err(rollback_only(&format!(
@@ -322,17 +371,29 @@ async fn commit_root(root: Arc<Root>, ctx: Ctx) -> Result<(), Error> {
                 // Used up BEFORE the settle: nothing may commit this handle
                 // again while the outcome is being settled.
                 *ended = Some("left with its outcome unknown");
-                let settled = settle(&root, &ctx, e).await;
-                if settled.is_ok() {
-                    *ended = Some("rolled back");
+                match settle(&root, &ctx, e).await {
+                    Settled::Committed => {
+                        *ended = Some("committed");
+                        Ok(())
+                    }
+                    Settled::RolledBack(e) => {
+                        *ended = Some("rolled back");
+                        Err(e)
+                    }
+                    Settled::Unknown(e) => Err(e),
                 }
-                Err(settled.unwrap_or_else(|e| e))
             }
             Err(e) => Err(Error::Rpc(e)),
         }
     };
     if let Err(e) = result {
-        root.scope.discarded();
+        // Only an answer that ENDED the transaction drops its parked work. A
+        // refusal that left it open (a call still holds it) is retryable on
+        // this handle, and the retry's commit must still run the work waiting
+        // for it.
+        if !left_open(&e) {
+            root.scope.discarded();
+        }
         return Err(e);
     }
     // The transaction IS committed from here on: the parked work (the events
@@ -347,14 +408,30 @@ async fn commit_root(root: Arc<Root>, ctx: Ctx) -> Result<(), Error> {
     Ok(())
 }
 
-/// After a commit with an unknown outcome: roll back, detached. `Ok` (with
-/// the commit's own error) means the transaction was still open, so the
-/// commit never took effect; `Err` means it is gone and the outcome is
-/// unknown.
-async fn settle(root: &Root, ctx: &Ctx, commit_err: Status) -> Result<Error, Error> {
+/// How a commit with an unknown outcome settled.
+enum Settled {
+    /// The coordinator recorded the commit as landed; only its reply was lost.
+    Committed,
+    /// The transaction did not commit (the probe rolled it back, or the
+    /// coordinator recorded it as ended without committing): the commit's
+    /// own error.
+    RolledBack(Error),
+    /// Nobody can say.
+    Unknown(Error),
+}
+
+/// After a commit with an unknown outcome: roll back, detached. Success
+/// means the transaction was still open, so the commit never took effect. A
+/// `NOT_FOUND` carrying the coordinator's ended detail settles it from its
+/// record. Any other failure means it is gone and the outcome is unknown.
+async fn settle(root: &Root, ctx: &Ctx, commit_err: Status) -> Settled {
     let probe = ctx.without_cancel().with_timeout(OUTCOME_PROBE_TIMEOUT);
     match root.coord.rollback(&root.attach(&probe), &root.tx_id).await {
-        Ok(()) => Ok(Error::Rpc(commit_err)),
+        Ok(()) => Settled::RolledBack(Error::Rpc(commit_err)),
+        Err(rerr) if ended_from(&rerr) == Ended::Committed => Settled::Committed,
+        Err(rerr) if ended_from(&rerr) == Ended::NotCommitted => {
+            Settled::RolledBack(Error::Rpc(commit_err))
+        }
         Err(rerr) => {
             observability::report_error(&format!(
                 "distx: the outcome of committing transaction {} is unknown — the commit call failed ({}) and the \
@@ -366,7 +443,7 @@ async fn settle(root: &Root, ctx: &Ctx, commit_err: Status) -> Result<Error, Err
                 root.scope.pending(),
             ));
             root.scope.discarded();
-            Err(Error::CommitOutcomeUnknown(format!(
+            Settled::Unknown(Error::CommitOutcomeUnknown(format!(
                 "distx: the commit's outcome is unknown: transaction {}: {}",
                 root.tx_id,
                 commit_err.message()
@@ -381,12 +458,66 @@ async fn rollback_root(root: Arc<Root>, ctx: Ctx) -> Result<(), Error> {
         return Err(root.finished(how));
     }
     root.scope.discarded();
-    root.coord
-        .rollback(&root.attach(&ctx), &root.tx_id)
-        .await
-        .map_err(Error::Rpc)?;
+    let rctx = root.coord.detached_rollback_ctx(&ctx);
+    if let Err(st) = root.coord.rollback(&root.attach(&rctx), &root.tx_id).await {
+        match ended_from(&st) {
+            // Already ended without committing — the auto-rollback
+            // interceptor discarded it after a failed call, or its orphan
+            // bound ran out. That is what this rollback asked for, so it is
+            // not a failure.
+            Ended::NotCommitted => {}
+            Ended::Committed => {
+                *ended = Some("committed");
+                return Err(Error::Rpc(Status::with_details(
+                    st.code(),
+                    format!(
+                        "distx: cannot roll back transaction {}, it was already committed: {}",
+                        root.tx_id,
+                        st.message()
+                    ),
+                    st.details().to_vec().into(),
+                )));
+            }
+            Ended::Unknown => return Err(Error::Rpc(st)),
+        }
+    }
     *ended = Some("rolled back");
     Ok(())
+}
+
+/// A commit (or rollback) failure after which the transaction is still open:
+/// the coordinator refused to finish it because a call inside it still holds
+/// it past the finish wait (`FAILED_PRECONDITION`). The handle is not used
+/// up; the caller retries, or rolls back ([`run`] rolls back).
+fn left_open(e: &Error) -> bool {
+    matches!(e, Error::Rpc(st) if st.code() == Code::FailedPrecondition)
+}
+
+/// The coordinator's record of how a transaction it no longer holds ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Ended {
+    Committed,
+    NotCommitted,
+    Unknown,
+}
+
+/// Read from the `ErrorInfo` on the coordinator's `NOT_FOUND`;
+/// [`Ended::Unknown`] for any other status or a `NOT_FOUND` without it.
+fn ended_from(st: &Status) -> Ended {
+    if st.code() != Code::NotFound {
+        return Ended::Unknown;
+    }
+    for info in crate::errors::error_infos(st) {
+        if info.domain != ENDED_DOMAIN || info.reason != ENDED_REASON {
+            continue;
+        }
+        match info.metadata.get(ENDED_KEY).map(String::as_str) {
+            Some("committed") => return Ended::Committed,
+            Some("not_committed") => return Ended::NotCommitted,
+            _ => {}
+        }
+    }
+    Ended::Unknown
 }
 
 /// A commit failure that does not say whether the server committed: it
@@ -503,7 +634,8 @@ impl Drop for DropGuard {
 /// — the error keeps propagating — or when this future is dropped before it
 /// finished. A caller whose context is done gets no commit
 /// ([`Error::NotCommitted`]). A failed commit is returned as it is, and
-/// `f`'s work is lost.
+/// `f`'s work is lost; a commit refused because a call still held the
+/// transaction is rolled back first.
 ///
 /// `f` must use the context it receives for every write of the transaction.
 /// `E` is any error a [`Error`] converts into — `tonic::Status`, or
@@ -558,7 +690,23 @@ where
                 ))
                 .into());
             }
-            handle.commit(ctx).await?;
+            if let Err(e) = handle.commit(ctx).await {
+                // A refusal that left the transaction open (a call inside it
+                // still held it past the finish wait) is the one commit
+                // failure after which a rollback is still owed: run reports
+                // the failure, so it must not leave the transaction holding
+                // its locks until the orphan timeout. The server dooms it at
+                // once and rolls it back when the holder releases. Every
+                // other answer already ended it.
+                if left_open(&e)
+                    && let Err(rerr) = handle.rollback(&detached).await
+                {
+                    observability::report_error(&format!(
+                        "distx.run: rollback also failed: {rerr}"
+                    ));
+                }
+                return Err(e.into());
+            }
             Ok(v)
         }
     }

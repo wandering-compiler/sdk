@@ -111,6 +111,21 @@ pub struct ErrorInfo {
     pub metadata: std::collections::BTreeMap<String, String>,
 }
 
+/// Every `google.rpc.ErrorInfo` a status carries, in order; one that does
+/// not decode is skipped.
+pub(crate) fn error_infos(st: &Status) -> Vec<ErrorInfo> {
+    status_details(st)
+        .into_iter()
+        .filter(|d| d.type_url.rsplit('/').next() == Some("google.rpc.ErrorInfo"))
+        .filter_map(|d| tonic_types::pb::ErrorInfo::decode(d.value.as_slice()).ok())
+        .map(|i| ErrorInfo {
+            domain: i.domain,
+            reason: i.reason,
+            metadata: i.metadata.into_iter().collect(),
+        })
+        .collect()
+}
+
 /// The `google.rpc.ErrorInfo` a status carries, if any.
 pub fn error_info(st: &Status) -> Option<ErrorInfo> {
     status_details(st)
