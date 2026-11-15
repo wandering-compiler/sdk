@@ -20,10 +20,21 @@
  *   `HandleFinishedError` without an RPC.
  * - A commit that fails in transport is probed with a detached rollback: if
  *   the rollback succeeds the commit did not take effect (an ordinary
- *   failure); if not, `CommitOutcomeUnknownError` — the writes may have
- *   landed, and the work parked for the commit is NOT run.
- * - Rollback is detached from the caller's cancellation/deadline; a done
- *   context refuses to commit (`run`).
+ *   failure). When the transaction is gone but the coordinator remembers how
+ *   it ended (the `ended` detail on its NOT_FOUND), that settles it: success
+ *   and the parked work runs when it committed, an ordinary failure when it
+ *   did not. Only a coordinator that cannot say leaves
+ *   `CommitOutcomeUnknownError` — the writes may have landed, and the work
+ *   parked for the commit is NOT run.
+ * - A commit refused with `FAILED_PRECONDITION` (a call inside the
+ *   transaction still holds it) leaves the transaction open: the handle is
+ *   retryable and the parked work waits for the retry. `run` rolls such a
+ *   transaction back rather than leave it holding its locks until the orphan
+ *   timeout.
+ * - Rollback is detached from the caller's cancellation/deadline and bounded
+ *   by `ROLLBACK_WAIT_MS` of its own; a rollback of a transaction that
+ *   already ended without committing is done, not a failure. A done context
+ *   refuses to commit (`run`).
  * - `ABORTED` from storage is thrown to the caller, who retries the unit of
  *   work.
  *
@@ -34,7 +45,7 @@
 import { create, type Message } from "@bufbuild/protobuf";
 import type { Context, Metadata } from "./context.js";
 import { type AnyMessage, getDefaultPool } from "./descriptors.js";
-import { Status, StatusError } from "./errors.js";
+import { Status, StatusError, errorInfos } from "./errors.js";
 import { errorText, reportError } from "./observability.js";
 import * as txscope from "./txscope.js";
 
@@ -44,6 +55,41 @@ export const CONN_ID_HEADER = "w17-conn-id";
 
 /** Bounds the rollback a commit sends to settle an ambiguous outcome (ms). */
 export const OUTCOME_PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Bounds every rollback sent on a context detached from its caller's
+ * (`TxHandle.rollback`, the rollback-only commit, `run`'s rollback), in ms.
+ * Detaching drops the caller's deadline too, so without a bound a
+ * coordinator that accepted the call and stalls would hold the caller
+ * forever. The server dooms the transaction before it waits for a running
+ * handler's lease, so a rollback cut by this bound is still decided. Go's
+ * rollbackWait: the finish wait, equal to the auto-rollback interceptor's
+ * RollbackWait.
+ */
+export const ROLLBACK_WAIT_MS = 30_000;
+
+let rollbackWaitMs = ROLLBACK_WAIT_MS;
+
+/** @internal Tests shorten the rollback bound; returns the restore. */
+export function setRollbackWaitMs(ms: number): () => void {
+  const prev = rollbackWaitMs;
+  rollbackWaitMs = ms;
+  return () => {
+    rollbackWaitMs = prev;
+  };
+}
+
+/**
+ * The `google.rpc.ErrorInfo` the coordinator attaches to a NOT_FOUND for a
+ * transaction it remembers (its last 256 ids): `metadata[ENDED_KEY]` is
+ * "committed" or "not_committed". Go's distx.EndedDomain / EndedReason /
+ * EndedKey.
+ */
+export const ENDED_DOMAIN = "w17.distx";
+export const ENDED_REASON = "W17_TX_ENDED";
+export const ENDED_KEY = "ended";
+const COMMITTED = "committed";
+const NOT_COMMITTED = "not_committed";
 
 const PKG = "w17.common.distx.";
 
@@ -246,7 +292,7 @@ export class TxHandle {
       if (this.scope?.rollbackOnly) {
         this.scope.discarded();
         try {
-          await this.client.rollback(this.attach(ctx.withoutCancel()), msg("RollbackRequest", { txId: this.txId }));
+          await this.client.rollback(this.attach(detachedRollbackCtx(ctx)), msg("RollbackRequest", { txId: this.txId }));
         } catch (rerr) {
           throw new RollbackOnlyError(`the rollback also failed: ${errorText(rerr)}`, { cause: rerr });
         }
@@ -271,7 +317,11 @@ export class TxHandle {
       return;
     }
     if (err !== undefined) {
-      this.scope.discarded();
+      // Only an answer that ENDED the transaction drops its parked work. A
+      // refusal that left it open (a call still holds it) is retryable on
+      // this handle, and the retry's commit must still run the work waiting
+      // for it.
+      if (!leftOpen(err)) this.scope.discarded();
       throw err;
     }
     // The transaction IS committed from here on. The parked work (the events
@@ -291,14 +341,28 @@ export class TxHandle {
 
   /**
    * After a commit with an unknown outcome: roll back, detached. Success
-   * means the transaction was still open, so the commit never took effect;
-   * failure means it is gone and the outcome is unknown.
+   * means the transaction was still open, so the commit never took effect. A
+   * NOT_FOUND carrying the coordinator's ended detail settles it from its
+   * record (committed: undefined, and the handle reads "committed"; not
+   * committed: an ordinary failure). Any other failure means it is gone and
+   * the outcome is unknown.
    */
   async #settle(ctx: Context, commitErr: unknown): Promise<unknown> {
     const probe = ctx.withoutCancel().withTimeout(OUTCOME_PROBE_TIMEOUT_MS);
     try {
       await this.client.rollback(this.attach(probe), msg("RollbackRequest", { txId: this.txId }));
     } catch (rerr) {
+      const ended = endedFrom(rerr);
+      if (ended === COMMITTED) {
+        // The commit landed; only its reply was lost.
+        this.#ended = "committed";
+        return undefined;
+      }
+      if (ended === NOT_COMMITTED) {
+        this.#ended = "rolled back";
+        addNote(commitErr, `distx: transaction ${this.txId} did not commit (${errorText(rerr)})`);
+        return commitErr;
+      }
       const pending = this.scope?.pending() ?? 0;
       reportError(
         ctx.withoutCancel(),
@@ -324,7 +388,10 @@ export class TxHandle {
    *
    * Outlives ctx's cancellation and deadline: the commonest reason to roll
    * back is that the caller is gone, and a call refused on a done context
-   * would leave the transaction held until the server times it out.
+   * would leave the transaction held until the server times it out. It is
+   * bounded by `ROLLBACK_WAIT_MS` instead, so a stalled coordinator cannot
+   * hold the caller forever. A transaction that already ended without
+   * committing is rolled back as asked: no error.
    */
   async rollback(ctx: Context): Promise<void> {
     if (this.joined) {
@@ -334,10 +401,56 @@ export class TxHandle {
     await this.#lock.run(async () => {
       this.#claim();
       this.scope?.discarded();
-      await this.client.rollback(this.attach(ctx.withoutCancel()), msg("RollbackRequest", { txId: this.txId }));
+      try {
+        await this.client.rollback(this.attach(detachedRollbackCtx(ctx)), msg("RollbackRequest", { txId: this.txId }));
+      } catch (rerr) {
+        const ended = endedFrom(rerr);
+        if (ended === NOT_COMMITTED) {
+          // Already ended without committing — the auto-rollback interceptor
+          // discarded it after a failed call, or its orphan bound ran out.
+          // That is what this rollback asked for, so it is not a failure.
+          this.#ended = "rolled back";
+          return;
+        }
+        if (ended === COMMITTED) {
+          this.#ended = "committed";
+          throw new DistxError(`distx: cannot roll back transaction ${this.txId}, it was already committed`, { cause: rerr });
+        }
+        throw rerr;
+      }
       this.#ended = "rolled back";
     });
   }
+}
+
+/** ctx without its cancellation and deadline (values and metadata kept), bounded by `ROLLBACK_WAIT_MS`. */
+function detachedRollbackCtx(ctx: Context): Context {
+  return ctx.withoutCancel().withTimeout(rollbackWaitMs);
+}
+
+/**
+ * A commit failure after which the transaction is still open: the
+ * coordinator refused to finish it because a call inside it still holds it
+ * past the finish wait. The handle is not used up; the caller retries, or
+ * rolls back (`run` rolls back).
+ */
+function leftOpen(e: unknown): boolean {
+  return e instanceof StatusError && e.code === Status.FAILED_PRECONDITION;
+}
+
+/**
+ * The coordinator's record of how a transaction it no longer holds ended
+ * ("committed" / "not_committed"), read from the ErrorInfo on its NOT_FOUND;
+ * "" for any other error or a NOT_FOUND without it.
+ */
+function endedFrom(e: unknown): string {
+  if (!(e instanceof StatusError) || e.code !== Status.NOT_FOUND) return "";
+  for (const info of errorInfos(e)) {
+    if (info.domain !== ENDED_DOMAIN || info.reason !== ENDED_REASON) continue;
+    const ended = info.metadata[ENDED_KEY] ?? "";
+    if (ended === COMMITTED || ended === NOT_COMMITTED) return ended;
+  }
+  return "";
 }
 
 /**
@@ -411,7 +524,8 @@ function join(ctx: Context, root: TxHandle, req: AnyMessage): [TxHandle, Context
  * Commit when fn returns; roll back (detached) when it throws — the error
  * keeps propagating, with a note when the rollback failed too. A caller whose
  * context is done gets no commit. A failed commit is thrown as it is (with a
- * note naming the commit), and fn's work is lost.
+ * note naming the commit), and fn's work is lost; a commit refused because a
+ * call still held the transaction is rolled back first.
  *
  * fn must use the context it receives for every write of the transaction.
  */
@@ -459,6 +573,19 @@ export async function run<T>(
     await handle.commit(ctx);
   } catch (cerr) {
     addNote(cerr, "distx.run: commit");
+    // A refusal that left the transaction open (a call inside it still held
+    // it past the finish wait) is the one commit failure after which a
+    // rollback is still owed: run reports the failure, so it must not leave
+    // the transaction holding its locks until the orphan timeout. The server
+    // dooms it at once and rolls it back when the holder releases. Every
+    // other answer already ended it.
+    if (leftOpen(cerr)) {
+      try {
+        await handle.rollback(detachedCtx);
+      } catch (rerr) {
+        addNote(cerr, `distx.run: rollback also failed: ${errorText(rerr)}`);
+      }
+    }
     throw cerr;
   }
   return result;
