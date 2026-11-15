@@ -119,6 +119,11 @@ const (
 	// DropReasonNoHandler — an in-process (MemoryBus) dispatch
 	// matched no subscribed handler, so the event reached nobody.
 	DropReasonNoHandler = "no_handler"
+
+	// DropReasonTrimmed — a delivery that had not succeeded yet lost its
+	// stream entry to the channel's retention (RedisBus claim-loop path):
+	// the payload is gone, so it is settled without a DLQ copy.
+	DropReasonTrimmed = "trimmed"
 )
 
 // DefaultObserver is what a bus wires when the caller's Options
@@ -172,6 +177,8 @@ func (DefaultObserver) OnDrop(channel, topic, reason string) {
 		what = reason + ": every delivery failed; the message is in the channel's DLQ"
 	case DropReasonBufferFull:
 		what = reason + ": the channel's buffer stayed full; the message is lost"
+	case DropReasonTrimmed:
+		what = reason + ": retention removed the entry before a delivery succeeded; the message is lost"
 	}
 	reportBusEvent(fmt.Errorf("eventbus dropped a message: channel=%s topic=%s: %s", channel, topic, what))
 }

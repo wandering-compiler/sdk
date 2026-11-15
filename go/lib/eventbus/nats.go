@@ -1021,8 +1021,14 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			return
 		}
 
+		// The attempt is bounded by the consumer's AckWait (see
+		// attemptBudget): past it the broker redelivers, and a handler
+		// still running would execute the event a second time alongside
+		// the redelivery.
 		start := time.Now()
-		err := h(bgCtx, topic, msg.Data())
+		attemptCtx, attemptCancel := withAttemptDeadline(bgCtx, ackWait)
+		err := h(attemptCtx, topic, msg.Data())
+		attemptCancel()
 		reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))
 		if err != nil {
 			s.bus.opts.Observer.OnDeliverFailure(s.channel, topic, err)
