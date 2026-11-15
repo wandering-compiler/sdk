@@ -32,7 +32,7 @@ func TestBodyReadDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_, _ = io.WriteString(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n{")
 	go func() {
 		for i := 0; i < 39; i++ {
