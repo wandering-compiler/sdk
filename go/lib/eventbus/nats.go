@@ -154,6 +154,10 @@ type NatsBus struct {
 	// claims (see claimPoisonOutcome). Guarded by mu for init; the handle
 	// itself is safe for concurrent use.
 	claims jetstream.KeyValue
+	// arms is the lazily-created arm-ledger bucket (arms.go); armsMu
+	// guards the handle.
+	armsMu sync.Mutex
+	arms   jetstream.KeyValue
 
 	// inFlight holds the stream sequences a handler is CURRENTLY processing,
 	// keyed by the CONSUMER identity that owns the delivery — (stream,
@@ -1027,6 +1031,9 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		// the redelivery.
 		start := time.Now()
 		attemptCtx, attemptCancel := withAttemptDeadline(bgCtx, ackWait)
+		if meta != nil && metaErr == nil {
+			attemptCtx = withArmLedger(attemptCtx, natsArmLedger{bus: s.bus, key: natsArmKey(s.channel, consumerName, meta.Sequence.Stream)}, meta.NumDelivered > 1, s.channel, topic)
+		}
 		err := h(attemptCtx, topic, msg.Data())
 		attemptCancel()
 		reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))

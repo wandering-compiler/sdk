@@ -1163,15 +1163,15 @@ var errEntryWithoutTopic = errors.New("eventbus: redis entry has no topic field;
 // processMessage a second owner of the same unrefcounted key, and its release
 // then unmarked a message the batch was still holding. Do not reintroduce it.
 //
-// retryCount is passed for future observability wiring (Phase
-// E7) — for now unused beyond the DLQ threshold check happens
-// in claimPending before this function gets the message.
+// retryCount is the entry's delivery count before this claim (zero for a
+// fresh read): above zero the delivery is a redelivery, which is when the
+// arm ledger is read (arms.go).
 func (s *redisSubscription) processMessage(
 	ctx context.Context,
 	h HandlerFunc,
 	msgID string,
 	values map[string]any,
-	_ /* retryCount */ int64,
+	retryCount int64,
 ) {
 	s.wg.Add(1)
 	defer s.wg.Done()
@@ -1209,6 +1209,9 @@ func (s *redisSubscription) processMessage(
 	_, ackWait := s.bus.retryFor(s.channel)
 	start := time.Now()
 	attemptCtx, attemptCancel := withAttemptDeadline(ctx, ackWait)
+	// A claimed entry (retryCount > 0) is a redelivery: its dispatcher
+	// reads which handlers an earlier attempt completed (arms.go).
+	attemptCtx = withArmLedger(attemptCtx, redisArmLedger{client: s.bus.client, key: redisArmKey(s.channel, s.group, msgID)}, retryCount > 0, s.channel, topic)
 	err := h(attemptCtx, topic, raw)
 	attemptCancel()
 	reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))
