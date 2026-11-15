@@ -1165,6 +1165,14 @@ enum Type {
   //     same ciphertext, which is what lets an index enforce anything and a
   //     `WHERE col = :x` find anything.
   //
+  //   ⚠️ REFUSED TODAY: `unique: true` on a CRYPTED_SECRET is refused at IR
+  //   build. Rotating the key changes deterministic ciphertext, so a UNIQUE
+  //   index over it silently stops enforcing during a rotation; until a blind
+  //   index answers that, every CRYPTED_SECRET column is RANDOMISED. Look a
+  //   secret up by value with SECRET instead. (The platform's decision record
+  //   "a unique CRYPTED_SECRET needs a blind index".) What follows describes
+  //   the mode as designed.
+  //
   // Deterministic mode leaks EQUALITY, and that is a real cost on a
   // low-entropy column: a hundred rows of ciphertext where one value repeats
   // in 40% of them is a frequency table, not a secret. On a high-entropy

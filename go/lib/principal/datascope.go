@@ -27,8 +27,12 @@ const (
 	// DataScopeOrg applies the org-axis scopes only: the caller's
 	// organization.
 	DataScopeOrg = "org"
-	// DataScopeAll applies none: every organization. Only the admin surface's
-	// gateway stamps it.
+	// DataScopeAll is every organization's range, the admin surface's. Nothing
+	// stamps it yet, and the generated storage guard does not lift the
+	// organization scopes for it: under "all" a scoped method still requires
+	// the caller's org-axis scopes and lifts only the owner axis, as under
+	// "org". It fails closed until an admin stamper and the lift land
+	// together.
 	DataScopeAll = "all"
 )
 
