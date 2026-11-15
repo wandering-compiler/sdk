@@ -238,20 +238,32 @@ func TestSSEUnwrap(t *testing.T) {
 }
 
 func TestUnwrapToolResult(t *testing.T) {
-	// neither structuredContent nor a text block → empty object
+	// Neither structuredContent nor a text block is a tool that answered
+	// nothing: a w17 tool always carries its response as JSON text ("{}"
+	// for a message with no fields). Reading it as {} let a step with
+	// `expect: {}` — or a no-expect step — pass over an empty answer.
 	out, err := unwrapToolResult("ref", &toolResult{})
-	if err != nil || len(out) != 0 {
-		t.Errorf("empty result = %v,%v; want {},nil", out, err)
+	if err == nil || !strings.Contains(err.Error(), "neither structuredContent nor a text") {
+		t.Errorf("empty result = %v,%v; want it refused", out, err)
 	}
-	// a non-text content block is skipped, falling through to empty
+	// a non-text content block is skipped, falling through to the same
 	r := &toolResult{}
 	r.Content = append(r.Content, struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}{Type: "image", Text: "ignored"})
 	out, err = unwrapToolResult("ref", r)
-	if err != nil || len(out) != 0 {
-		t.Errorf("non-text content = %v,%v; want {},nil", out, err)
+	if err == nil {
+		t.Errorf("non-text content = %v,%v; want it refused", out, err)
+	}
+	// "{}" is a real answer: a response message with no fields.
+	r = &toolResult{}
+	r.Content = append(r.Content, struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{Type: "text", Text: "{}"})
+	if out, err = unwrapToolResult("ref", r); err != nil || len(out) != 0 {
+		t.Errorf(`text "{}" = %v,%v; want {},nil`, out, err)
 	}
 }
 

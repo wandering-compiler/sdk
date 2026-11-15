@@ -290,6 +290,11 @@ func sseUnwrap(raw []byte) []byte {
 // unwrapToolResult extracts the asserted object from a tool result:
 // structuredContent when present, else the first text content block
 // parsed as JSON.
+//
+// A result with neither is refused, not read as `{}`: a w17 tool always
+// answers its response message as JSON text (`{}` for a message with no
+// fields), so an empty result is a tool that answered nothing — and as
+// `{}` it passed `expect: {}`, and a step with no expect at all.
 func unwrapToolResult(ref string, r *toolResult) (map[string]any, error) {
 	if len(r.StructuredContent) > 0 {
 		return decodeObject(r.StructuredContent)
@@ -299,7 +304,7 @@ func unwrapToolResult(ref string, r *toolResult) (map[string]any, error) {
 			return decodeObject([]byte(c.Text))
 		}
 	}
-	return map[string]any{}, nil
+	return nil, fmt.Errorf("mcp %s: the tool result carries neither structuredContent nor a text content block — the tool answered nothing to assert", ref)
 }
 
 // grpcStatusFromMCPError pulls the canonical code out of a tool error the
