@@ -76,6 +76,14 @@ type DownloadField struct {
 	// upload) and stored beside the original. Empty = originals only.
 	Variants []imagevariant.Spec
 
+	// Scopes names the data scopes a caller must share with an object's
+	// owner to be served it — the scope names of the models whose files
+	// this bucket holds (`(w17.db.scope)`), narrowed to the gateway's
+	// audience range. Empty = the bucket holds no scoped model's files,
+	// or the route is public: any caller the route admits is served.
+	// See [ServeDownloadFor].
+	Scopes []string
+
 	// Image marks an UPLOADED_IMAGE field: its originals are served with the
 	// raster type their bytes are (see imageType) instead of
 	// application/octet-stream, so a browser renders them inline. Anything
@@ -102,9 +110,11 @@ func NewDownloadConfig(prefix string, fields []DownloadField, cacheControl strin
 	}
 }
 
-// ServeDownload is the post-auth handler body — the generator
-// emits a per-endpoint closure that runs auth + scope checks
-// and then calls into here.
+// ServeDownload is the handler body of a download route with no caller
+// to match: a public route (`exclude_auth`), or one whose buckets hold
+// no scoped model's files. An authenticated route of a scoped surface
+// calls [ServeDownloadFor] with the caller's data scopes instead; a field
+// with Scopes is refused here, as it would be to a caller with none.
 //
 // Path resolution:
 //   - Strip cfg.URLPrefix + "/" from r.URL.Path.
@@ -119,6 +129,15 @@ func NewDownloadConfig(prefix string, fields []DownloadField, cacheControl strin
 //     buckets exist gives an attacker a directory listing for
 //     free.
 func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
+	ServeDownloadFor(w, r, cfg, nil)
+}
+
+// ServeDownloadFor is [ServeDownload] for an authenticated caller whose
+// data scopes are caller (AuthResp.scopes). The generator emits a
+// per-endpoint closure that authenticates, decodes the scopes, and calls
+// here; a field's Scopes decide which of them must match the object's
+// owner record (kvfs.KeyOwner).
+func ServeDownloadFor(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, caller map[string]string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		writeRefusalStatus(r.Context(), w, http.StatusMethodNotAllowed, codes.Unimplemented, "")
@@ -149,6 +168,16 @@ func ServeDownload(w http.ResponseWriter, r *http.Request, cfg DownloadConfig) {
 
 	field, key, ok := matchBucket(cfg.Fields, remainder)
 	if !ok {
+		notFound()
+		return
+	}
+	// The owner gate: in a bucket holding a scoped model's files, an
+	// object is served only to a caller whose data scopes match the ones
+	// it was stored under. 404, like every other refusal here — a 403
+	// would confirm the key exists. An object with no owner record (stored
+	// before the record existed, or by a writer serving no caller) has no
+	// owner to match and is refused too.
+	if len(field.Scopes) > 0 && !ownerMatches(key, field.Scopes, caller) {
 		notFound()
 		return
 	}
@@ -443,8 +472,26 @@ func serveVariant(w http.ResponseWriter, r *http.Request, cfg DownloadConfig, fi
 	http.ServeContent(w, r, "", info.ModTime, body)
 }
 
+// ownerMatches reports whether caller shares every scope in names with
+// the owner recorded in key. A missing value counts as "": a caller with
+// no organization does not match an object stored under one.
+func ownerMatches(key string, names []string, caller map[string]string) bool {
+	owner, ok := kvfs.KeyOwner(key)
+	if !ok {
+		return false
+	}
+	for _, n := range names {
+		if owner[n] != caller[n] {
+			return false
+		}
+	}
+	return true
+}
+
 // VariantKey is where a variant of the object at key is stored: beside it,
-// under a name no upload produces (object keys are hex digests).
+// under a name no upload produces (an object key is a hex digest, a '-'
+// and a hex nonce, optionally followed by a base64url owner record — none
+// of which contains '~').
 func VariantKey(key, name string) string { return key + "~" + name }
 
 // renderVariant renders and stores one variant. The status is the answer a
