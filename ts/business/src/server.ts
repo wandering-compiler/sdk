@@ -198,18 +198,32 @@ export class Served {
     }
   }
 
+  /** The service's full name. An RPC named `service` wins over it; {@link Served.serviceOf} always answers. */
   get service(): string {
     return this.#service;
   }
 
-  /** The gRPC paths it serves. */
+  /** The gRPC paths it serves. An RPC named `paths` wins over it; {@link Served.pathsOf} always answers. */
   paths(): string[] {
-    return [...this.#methods.values()].map((m) => m.info.path);
+    return Served.pathsOf(this);
+  }
+
+  // The SDK's own reads go through these statics: an RPC may be named like
+  // any instance member (`service`, `paths`), and it must stay the RPC.
+
+  /** The full name of the service `s` serves, whatever its RPCs are named. */
+  static serviceOf(s: Served): string {
+    return s.#service;
+  }
+
+  /** The gRPC paths `s` serves, whatever its RPCs are named. */
+  static pathsOf(s: Served): string[] {
+    return [...s.#methods.values()].map((m) => m.info.path);
   }
 
   /** @internal */
-  methodImpls(): MethodImpl[] {
-    return [...this.#methods.values()];
+  static implsOf(s: Served): MethodImpl[] {
+    return [...s.#methods.values()];
   }
 }
  
@@ -400,7 +414,7 @@ export class Registry {
     for (const s of this.#served.values()) {
       const def: Record<string, MethodDefinition<unknown, unknown>> = {};
       const impl: UntypedServiceImplementation = {};
-      for (const m of s.methodImpls()) {
+      for (const m of Served.implsOf(s)) {
         def[m.info.name] = methodDefinition(m.info);
         impl[m.info.name] = handler(m, this);
       }

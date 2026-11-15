@@ -54,7 +54,7 @@ from .errors import StatusDetailsCodec
 from .files import FileStore
 from .manifest import Manifest, load
 from .secrets import new_resolver
-from .server import Registry, RegistrationError
+from .server import Registry, RegistrationError, served_service
 
 __all__ = ["Clients", "App", "BootError", "SHUTDOWN_TIMEOUT", "DRAIN_TIMEOUT", "serve"]
 
@@ -316,7 +316,7 @@ class App:
                     raise BootError(
                         f"plugin hook {hook.plugin}/{hook.slot} ({hook.registered_as}) calls {path}, which has no "
                         "handler: register its service, or the plugin's call fails at runtime")
-        served = {s.service for s in self.registry.served}
+        served = {served_service(s) for s in self.registry.served}
         for svc in m.services:
             if svc.name not in served:
                 log.info("%s is not registered; its calls answer Unimplemented, as in Go", svc.name)

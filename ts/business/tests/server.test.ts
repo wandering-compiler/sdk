@@ -16,7 +16,7 @@ import type { Emit } from "../src/manifest.ts";
 import * as observability from "../src/observability.ts";
 import * as paging from "../src/paging.ts";
 import * as principal from "../src/principal.ts";
-import { RegistrationError, Registry, methodDefinition, requests, toServiceError } from "../src/server.ts";
+import { RegistrationError, Registry, Served, methodDefinition, requests, toServiceError } from "../src/server.ts";
 import { serializer } from "../src/client.ts";
 import * as txscope from "../src/txscope.ts";
 import { msg, pool, settled, sleep } from "./helpers.ts";
@@ -1065,5 +1065,39 @@ describe("emits after the request", () => {
     } finally {
       events.settings.publishTimeoutMs = old;
     }
+  });
+});
+
+// --- RPCs named like the served object's own members ------------------------
+
+describe("an RPC named like a member of the served object", () => {
+  const NAMES = ["service", "paths", "methodImpls"] as const;
+  beforeAll(() => {
+    const p = pool();
+    if (p.files.includes("test/odd.proto")) return;
+    const M = { name: "M", field: [{ name: "s", number: 1, label: 1, type: 9, jsonName: "s" }] };
+    const file = create(FileDescriptorProtoSchema, {
+      name: "test/odd.proto",
+      package: "test.odd",
+      syntax: "proto3",
+      messageType: [M],
+      service: [{ name: "Odd", method: NAMES.map((name) => ({ name, inputType: ".test.odd.M", outputType: ".test.odd.M" })) }],
+    });
+    p.addSet(toBinary(FileDescriptorSetSchema, create(FileDescriptorSetSchema, { file: [file] })));
+  });
+
+  it("is still the RPC, and the registry still serves every path", async () => {
+    const M = pool().message("test.odd.M");
+    const impl = Object.fromEntries(NAMES.map((n) => [n, async (_c: Context, req: AnyMessage) => M({ s: `${n}:${String(req.s)}` })]));
+    const reg = new Registry(pool());
+    const served = reg.register("test.odd.Odd", impl);
+    for (const n of NAMES) {
+      const reply = (await reg.self("test.odd.Odd")[n](new Context(), M({ s: "x" }))) as AnyMessage;
+      expect(reply.s).toBe(`${n}:x`);
+    }
+    // The registry serves every path, whatever the RPCs are named.
+    reg.addTo(new Server());
+    expect(Served.serviceOf(served)).toBe("test.odd.Odd");
+    expect(Served.pathsOf(served).sort()).toEqual(["/test.odd.Odd/methodImpls", "/test.odd.Odd/paths", "/test.odd.Odd/service"]);
   });
 });

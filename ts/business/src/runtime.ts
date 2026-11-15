@@ -44,7 +44,7 @@ import * as observability from "./observability.js";
 import * as principal from "./principal.js";
 import * as reflection from "./reflection.js";
 import { type Env, newResolver } from "./secrets.js";
-import { RegistrationError, Registry } from "./server.js";
+import { RegistrationError, Registry, Served } from "./server.js";
 import * as tlsconfig from "./tlsconfig.js";
 import * as txscope from "./txscope.js";
 
@@ -331,7 +331,7 @@ export class App {
       if (e instanceof RegistrationError) throw new BootError(e.message);
       throw e;
     }
-    const served = new Set(this.registry!.served.flatMap((s) => s.paths()));
+    const served = new Set(this.registry!.served.flatMap((s) => Served.pathsOf(s)));
     for (const hook of m.pluginHooks) {
       for (const path of hook.methods) {
         if (!served.has(path)) {
@@ -342,7 +342,7 @@ export class App {
         }
       }
     }
-    const names = new Set(this.registry!.served.map((s) => s.service));
+    const names = new Set(this.registry!.served.map((s) => Served.serviceOf(s)));
     for (const svc of m.services) {
       if (!names.has(svc.name)) observability.logger.info(`${svc.name} is not registered; its calls answer Unimplemented, as in Go`);
     }
@@ -377,7 +377,7 @@ export class App {
     this.health.addTo(server);
     const v = this.env[this.manifest.reflectionEnv] ?? "";
     if (v === "1" || v === "true") {
-      const names = () => [...reg.served.map((s) => s.service), "grpc.health.v1.Health", ...reflection.SERVICES];
+      const names = () => [...reg.served.map((s) => Served.serviceOf(s)), "grpc.health.v1.Health", ...reflection.SERVICES];
       reflection.addTo(server, this.pool, names);
     }
     const bindHost = host.includes(":") ? `[${host}]` : host;
