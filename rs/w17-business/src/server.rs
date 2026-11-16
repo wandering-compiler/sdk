@@ -24,8 +24,9 @@
 //! - after an `OK` unary call the manifest lists an emit or an invalidate
 //!   for, it decodes the request and the response against the descriptor set
 //!   and publishes the event — at once, or after the root commit when the
-//!   context carries an open transaction (dropped on rollback). Streaming
-//!   methods carry no emit;
+//!   context carries an open transaction (dropped on rollback), or — reached
+//!   over the wire inside a transaction another process runs — after that
+//!   commit, as its coordinator reports it. Streaming methods carry no emit;
 //! - a [`crate::for_user`] status leaves prefixed with the method; a panic
 //!   answers `INTERNAL` `"<method>: internal error"` and is reported;
 //! - the page position a forwarded storage call reported answers as the
@@ -65,6 +66,7 @@ use crate::{
     BootError,
     channel::{BoxError, set_metadata},
     ctx::{CancelClock, CancelOnDrop, Ctx, HeaderSink},
+    distx::{Remote, RemoteCommits},
     errors::finish_for_user,
     events::{self, Dispatcher, EnvelopeBuilder},
     manifest::{Emit, Invalidate},
@@ -97,6 +99,10 @@ impl MethodRt {
 pub(crate) struct Shared {
     pub(crate) methods: HashMap<String, MethodRt>,
     pub(crate) dispatcher: Option<Arc<dyn Dispatcher>>,
+    /// The coordinator a method reached inside another process's
+    /// transaction parks its events with; `None` when this tier's storage
+    /// runs no distributed transactions.
+    pub(crate) remote: Option<RemoteCommits>,
     pub(crate) draining: AtomicBool,
     /// Cancels every handler still running (the drain's last step).
     pub(crate) kill: CancellationToken,
@@ -299,12 +305,14 @@ impl Registry {
     pub(crate) fn finish(
         &mut self,
         dispatcher: Option<Arc<dyn Dispatcher>>,
+        remote: Option<RemoteCommits>,
         extra: impl FnOnce(Routes) -> Routes,
     ) -> Served {
         let routes = extra(self.routes.take().unwrap_or_default()).prepare();
         let shared = Arc::new(Shared {
             methods: std::mem::take(&mut self.methods),
             dispatcher,
+            remote,
             draining: AtomicBool::new(false),
             kill: CancellationToken::new(),
             inflight: AtomicUsize::new(0),
@@ -749,8 +757,11 @@ impl Served {
 }
 
 /// The Go emit wrapper: after success, publish — or, inside a transaction,
-/// park until the root commits (dropped on rollback). The emit goes first,
-/// the invalidates after it, as the Go helper orders them.
+/// park until the root commits (dropped on rollback). A transaction this
+/// process opened is settled in process; one another process runs (the
+/// request's `w17-tx-id`, and no scope here) is asked of its coordinator.
+/// The emit goes first, the invalidates after it, as the Go helper orders
+/// them.
 async fn emit(
     ctx: &Ctx,
     shared: &Arc<Shared>,
@@ -802,6 +813,26 @@ async fn emit(
         (Outcome::Discarded, _) => observability::report_error(
             "txregistry: dropped an announcement made after its in-process transaction rolled back",
         ),
+        (Outcome::NoScope, Some(hook)) => {
+            // No transaction of this process, but the request may have
+            // reached it inside one ANOTHER process runs: then the event
+            // waits for that commit. The wait is registered before the
+            // method answers, and shielded like the publish — a caller that
+            // hangs up meanwhile must not take the event with it.
+            let remote = shared.remote.clone().zip(RemoteCommits::remote_tx(ctx));
+            let ctx = ctx.clone();
+            let _ = txscope::shielded(async move {
+                let hook = match remote {
+                    None => hook,
+                    Some((remote, tx_id)) => match remote.defer_remote(&ctx, &tx_id, hook).await {
+                        Remote::Now(hook) => hook,
+                        Remote::Deferred | Remote::Dropped => return,
+                    },
+                };
+                let _ = hook.await;
+            })
+            .await;
+        }
         (_, Some(hook)) => {
             // The write behind it has landed: a caller that hangs up now must
             // not take the event with it.

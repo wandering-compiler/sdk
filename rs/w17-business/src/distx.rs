@@ -43,6 +43,12 @@
 //! Work parked with [`crate::on_commit`] (and every event emitted inside the
 //! transaction) runs after the root commit, in order, and is dropped on
 //! rollback.
+//!
+//! A method reached over the wire inside a transaction ANOTHER process runs
+//! (its request carries that process's `w17-tx-id`, and nothing in this
+//! process opened it) parks its events with [`RemoteCommits`]: the
+//! coordinator's `W17TransactionOutcome.Await` says how that transaction
+//! ends.
 
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 
@@ -51,12 +57,14 @@ use tonic::{Code, Status};
 use crate::{
     channel::StorageChannel,
     ctx::Ctx,
+    metadata::Metadata,
     observability,
     pb::w17::common::distx::{
-        BeginRequest, CommitRequest, Isolation, RollbackRequest,
+        AwaitRequest, BeginRequest, CommitRequest, Isolation, RollbackRequest, TxOutcome,
         w17_distributed_transaction_client::W17DistributedTransactionClient,
+        w17_transaction_outcome_client::W17TransactionOutcomeClient,
     },
-    txscope::{self, Scope},
+    txscope::{self, Hook, Scope},
 };
 
 /// txregistry.HeaderName / distx.ConnIDHeader.
@@ -710,4 +718,193 @@ where
             Ok(v)
         }
     }
+}
+
+// --- a transaction another process runs ------------------------------------------
+
+/// Bounds how long [`RemoteCommits`] waits for the coordinator to confirm it
+/// is watching a transaction. The method is answering its caller meanwhile,
+/// so the bound is short; a coordinator that cannot confirm in time is
+/// treated as one that cannot say how the transaction ends. Go's
+/// registerWait.
+pub const REGISTER_WAIT: Duration = Duration::from_secs(10);
+
+/// What [`RemoteCommits::defer_remote`] did with the work it was handed.
+pub(crate) enum Remote {
+    /// The transaction had already committed, or its coordinator predates
+    /// the outcome service: the caller runs the work now.
+    Now(Hook),
+    /// The transaction is open: the work runs when it commits and is dropped
+    /// when it does not.
+    Deferred,
+    /// It had already ended without committing, the coordinator does not
+    /// know it, or cannot be asked: the work is dropped, and that is
+    /// reported.
+    Dropped,
+}
+
+/// The commit hook of a business tier reached over the wire inside a
+/// transaction ANOTHER process runs (Go's `distx.RemoteCommits`): the request
+/// carries that process's `w17-tx-id`, so no in-process scope will ever hear
+/// how it ends.
+///
+/// It asks the transaction's coordinator (`W17TransactionOutcome.Await`,
+/// served beside `W17DistributedTransaction` by the storage bundle that
+/// minted the id, on the same connection) and waits for the answer: the work
+/// runs once when the transaction commits and never when it does not — what
+/// the same method's events do inside one process. The wait is registered
+/// before the method answers its caller, so the caller's commit cannot
+/// outrun it.
+///
+/// Delivery is at-most-once, as everywhere after a commit: a process that
+/// stops while it waits, or a coordinator that cannot say how the
+/// transaction ended, loses the work, and that is reported.
+#[derive(Clone)]
+pub(crate) struct RemoteCommits {
+    client: W17TransactionOutcomeClient<StorageChannel>,
+    /// [`REGISTER_WAIT`]; tests shorten it.
+    register_wait: Duration,
+}
+
+impl RemoteCommits {
+    pub(crate) fn new(channel: StorageChannel) -> Self {
+        Self {
+            client: W17TransactionOutcomeClient::new(channel),
+            register_wait: REGISTER_WAIT,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_register_wait(mut self, d: Duration) -> Self {
+        self.register_wait = d;
+        self
+    }
+
+    /// The transaction a request reached this process inside, when another
+    /// process runs it: the request's `w17-tx-id`. `None` when there is none,
+    /// or when `ctx` belongs to a transaction this process opened (the
+    /// in-process scope settles that one).
+    pub(crate) fn remote_tx(ctx: &Ctx) -> Option<String> {
+        if ctx.tx().is_some() {
+            return None;
+        }
+        first_non_empty(ctx.incoming(), TX_ID_HEADER)
+    }
+
+    /// Register a wait for `tx_id` at the coordinator and park `hook` on it.
+    ///
+    /// `ctx` is the request's: its `w17-conn-id` (the storage proxy's routing
+    /// token) is echoed so the wait reaches the replica holding the
+    /// transaction, and nothing else of it goes along — not its principal,
+    /// its other metadata, nor its cancellation or deadline: the request ends
+    /// long before the commit.
+    pub(crate) async fn defer_remote(&self, ctx: &Ctx, tx_id: &str, hook: Hook) -> Remote {
+        let mut md = Metadata::new();
+        if let Some(conn) = first_non_empty(ctx.incoming(), CONN_ID_HEADER) {
+            md = md.with_set(CONN_ID_HEADER, [conn]);
+        }
+        let wctx = Ctx::background().with_outgoing(md);
+        let mut client = self.client.clone();
+        let req = wctx.request(AwaitRequest {
+            tx_id: tx_id.to_string(),
+        });
+        let first = tokio::time::timeout(self.register_wait, async move {
+            let mut stream = client.r#await(req).await?.into_inner();
+            let msg = stream.message().await?;
+            Ok::<_, Status>((stream, msg))
+        })
+        .await;
+        let (mut stream, first) = match first {
+            Err(_) => {
+                return unwatched(
+                    tx_id,
+                    format!(
+                        "the coordinator did not confirm the wait within {}",
+                        humantime::format_duration(self.register_wait)
+                    ),
+                );
+            }
+            Ok(Err(st)) if st.code() == Code::Unimplemented => {
+                // A coordinator older than the outcome service: it cannot be
+                // asked, and dropping every event in such a mixed deployment
+                // would be a regression nobody asked for. Announced now, as
+                // before — said.
+                observability::report_error(&format!(
+                    "distx: announcing inside transaction {tx_id:?} before it commits: its coordinator does not \
+                     serve W17TransactionOutcome (upgrade the storage bundle), so the event cannot wait for the \
+                     commit"
+                ));
+                return Remote::Now(hook);
+            }
+            Ok(Err(st)) => return unwatched(tx_id, status_text(&st)),
+            Ok(Ok((_, None))) => {
+                return unwatched(tx_id, "it ended the wait without an answer".into());
+            }
+            Ok(Ok((stream, Some(msg)))) => (stream, msg.outcome()),
+        };
+        match first {
+            TxOutcome::Committed => return Remote::Now(hook),
+            TxOutcome::NotCommitted => {
+                observability::report_error(&format!(
+                    "distx: dropped the deferred announcement of tx {tx_id:?}: the transaction ended without \
+                     committing before the emit registered"
+                ));
+                return Remote::Dropped;
+            }
+            TxOutcome::Pending => {}
+        }
+        // Tracked like every other piece of work a commit owes: the shutdown
+        // drain waits for it and counts it when it cannot.
+        let tx_id = tx_id.to_string();
+        txscope::spawn_tracked(async move {
+            loop {
+                let msg = match stream.message().await {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => {
+                        return stopped(&tx_id, "the stream ended");
+                    }
+                    Err(st) => return stopped(&tx_id, &status_text(&st)),
+                };
+                match msg.outcome() {
+                    TxOutcome::Committed => {
+                        if let Err(e) = txscope::run_hook(hook).await {
+                            observability::report_error(&format!(
+                                "distx: work parked on committed transaction {tx_id} failed: {e}"
+                            ));
+                        }
+                        return;
+                    }
+                    // Rolled back: the writes are gone, and so is their
+                    // announcement.
+                    TxOutcome::NotCommitted => return,
+                    TxOutcome::Pending => {}
+                }
+            }
+        });
+        Remote::Deferred
+    }
+}
+
+fn first_non_empty(md: &Metadata, key: &str) -> Option<String> {
+    md.get_all(key).iter().find(|v| !v.is_empty()).cloned()
+}
+
+fn status_text(st: &Status) -> String {
+    format!("{:?}: {}", st.code(), st.message())
+}
+
+/// Work whose wait could not be registered is dropped, said.
+fn unwatched(tx_id: &str, reason: String) -> Remote {
+    observability::report_error(&format!(
+        "distx: dropped the deferred announcement of tx {tx_id:?}: its coordinator could not be asked how the \
+         transaction ends ({reason})"
+    ));
+    Remote::Dropped
+}
+
+fn stopped(tx_id: &str, reason: &str) {
+    observability::report_error(&format!(
+        "distx: dropped the deferred announcement of tx {tx_id:?}: the coordinator stopped answering before the \
+         transaction ended ({reason}), so whether it committed is unknown"
+    ));
 }

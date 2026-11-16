@@ -221,6 +221,9 @@ func start(businessAddr string) (*harness, func(), error) {
 
 	gs := grpc.NewServer(grpc.UnaryInterceptor(h.interceptor))
 	distxpb.RegisterW17DistributedTransactionServer(gs, distx.NewServer(h.reg))
+	// Beside the coordinator, as a storage bundle registers it: the tier asks
+	// it how a transaction another process runs ends.
+	distxpb.RegisterW17TransactionOutcomeServer(gs, distx.NewOutcomeServer(h.reg))
 	gs.RegisterService(h.storageDesc(), h)
 	lis, err := net.Listen("tcp", storageListen)
 	if err != nil {

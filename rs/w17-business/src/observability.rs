@@ -66,11 +66,20 @@ pub fn warn(text: &str) {
 /// Sentry when it is on, and to the log always (Go falls through to
 /// `log.Printf` without Sentry).
 pub fn report_error(text: &str) {
+    #[cfg(test)]
+    REPORTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(text.to_string());
     log("ERROR", &format!("error: {text}"));
     if SENTRY_ON.load(Ordering::Relaxed) {
         sentry::capture_message(text, sentry::Level::Error);
     }
 }
+
+/// Every report this process made, for the tests to read.
+#[cfg(test)]
+pub(crate) static REPORTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 static SENTRY_ON: AtomicBool = AtomicBool::new(false);
 static OTEL_ON: AtomicBool = AtomicBool::new(false);

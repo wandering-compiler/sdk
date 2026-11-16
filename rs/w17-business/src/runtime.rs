@@ -48,7 +48,7 @@ use crate::{
     channel::{CompanionChannel, KEEPALIVE_TIME, KEEPALIVE_TIMEOUT, Outbound, StorageChannel},
     config::Config,
     ctx::Ctx,
-    distx::Coordinator,
+    distx::{Coordinator, RemoteCommits},
     events::{Dispatcher, NatsPublisher, RedisPublisher, Router},
     files::FileStore,
     manifest::{self, Manifest},
@@ -289,6 +289,17 @@ impl Clients {
         )))
     }
 
+    /// The coordinator's outcome service, on the channel the coordinator
+    /// uses: what a method reached inside another process's transaction
+    /// parks its events with. `None` when this domain's storage runs no
+    /// distributed transactions — then no request can name one of its
+    /// transactions, and events go out at once.
+    pub(crate) fn remote_commits(&self) -> Option<RemoteCommits> {
+        self.tx
+            .as_ref()
+            .map(|_| RemoteCommits::new(self.storage.clone()))
+    }
+
     /// The file store of the upload connection `connection`.
     pub fn store(&self, connection: &str) -> Result<FileStore, BootError> {
         self.stores.get(connection).cloned().ok_or_else(|| {
@@ -314,6 +325,7 @@ pub(crate) struct App {
     descriptors: &'static [u8],
     registry: Registry,
     dispatcher: Option<Arc<dyn Dispatcher>>,
+    remote: Option<RemoteCommits>,
     served: Option<Served>,
     health: Option<tonic_health::server::HealthReporter>,
     drain_timeout: Duration,
@@ -403,6 +415,7 @@ impl App {
             descriptors,
             registry,
             dispatcher,
+            remote: clients.remote_commits(),
             served: None,
             health: None,
             drain_timeout: DRAIN_TIMEOUT,
@@ -496,24 +509,30 @@ impl App {
             v == "1" || v == "true"
         };
         let descriptors = self.descriptors;
-        let served = self.registry.finish(self.dispatcher.clone(), |mut routes| {
-            routes = routes.add_service(health);
-            if reflection {
-                let v1 = tonic_reflection::server::Builder::configure()
-                    .register_encoded_file_descriptor_set(descriptors)
-                    .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
-                    .build_v1();
-                let v1alpha = tonic_reflection::server::Builder::configure()
-                    .register_encoded_file_descriptor_set(descriptors)
-                    .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
-                    .build_v1alpha();
-                match (v1, v1alpha) {
-                    (Ok(a), Ok(b)) => routes = routes.add_service(a).add_service(b),
-                    (Err(e), _) | (_, Err(e)) => observability::warn(&format!("reflection: {e}")),
+        let served = self.registry.finish(
+            self.dispatcher.clone(),
+            self.remote.clone(),
+            |mut routes| {
+                routes = routes.add_service(health);
+                if reflection {
+                    let v1 = tonic_reflection::server::Builder::configure()
+                        .register_encoded_file_descriptor_set(descriptors)
+                        .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+                        .build_v1();
+                    let v1alpha = tonic_reflection::server::Builder::configure()
+                        .register_encoded_file_descriptor_set(descriptors)
+                        .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+                        .build_v1alpha();
+                    match (v1, v1alpha) {
+                        (Ok(a), Ok(b)) => routes = routes.add_service(a).add_service(b),
+                        (Err(e), _) | (_, Err(e)) => {
+                            observability::warn(&format!("reflection: {e}"))
+                        }
+                    }
                 }
-            }
-            routes
-        });
+                routes
+            },
+        );
         self.served = Some(served.clone());
         let local = listener
             .local_addr()
@@ -627,8 +646,8 @@ impl App {
         }
         if !txscope::drain(until()).await {
             observability::report_error(&format!(
-                "runtime: {} piece(s) of work after a commit (events, on_commit hooks) still running at the shutdown \
-                 deadline; abandoned",
+                "runtime: {} piece(s) of work after a commit (events, on_commit hooks, events waiting for a commit \
+                 another process runs) still running at the shutdown deadline; abandoned",
                 txscope::pending_count()
             ));
         }
