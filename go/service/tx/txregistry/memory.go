@@ -74,6 +74,13 @@ type Memory struct {
 	// the map cannot grow with the process.
 	outcomes     map[string]tombstone
 	outcomeOrder []string
+
+	// waiters are the [Memory.AwaitEnd] channels of transactions that have
+	// not settled yet, keyed by tx id. Each receives the transaction's
+	// [Ended] kind exactly once, when [Memory.noteOutcomeLocked] records a
+	// settled kind for it — the one place every way a transaction ends
+	// passes through.
+	waiters map[string][]chan Ended
 }
 
 // tombstone is what the registry remembers about a drained id.
@@ -273,6 +280,7 @@ func NewMemory(dbs map[string]*sql.DB, opts ...MemoryOption) *Memory {
 		txs:        map[string]txEntry{},
 		finishWait: DefaultFinishWait,
 		outcomes:   map[string]tombstone{},
+		waiters:    map[string][]chan Ended{},
 	}
 	for _, o := range opts {
 		o(m)
@@ -349,6 +357,70 @@ func (m *Memory) noteOutcomeLocked(txID, reason string, ended Ended) {
 		m.outcomeOrder = append(m.outcomeOrder, txID)
 	}
 	m.outcomes[txID] = tombstone{reason: reason, ended: ended}
+	if ended == EndedUnknown {
+		// A commit in flight: its waiters hear the database's answer.
+		return
+	}
+	for _, ch := range m.waiters[txID] {
+		ch <- ended // buffered (1) and sent to once
+	}
+	delete(m.waiters, txID)
+}
+
+// AwaitEnd reports how the transaction txID ends, for a process that took
+// part in it without running it: a business method reached over the wire
+// inside another process's transaction, whose events must wait for that
+// transaction's commit. The coordinator's W17TransactionOutcome.Await serves
+// it.
+//
+// ok is false when the registry neither holds txID nor remembers it. When it
+// does, the returned channel receives [EndedCommitted] or
+// [EndedNotCommitted] exactly once: at once for a transaction that already
+// settled, otherwise when it does — the commit landing, a rollback, a doomed
+// transaction's deferred rollback, a failed database commit or the orphan
+// watcher. A Commit refused while a handler still holds the transaction
+// ([ErrTxBusy]) does not settle it, so nothing is sent until the commit that
+// lands.
+//
+// cancel withdraws the waiter (a caller that stopped listening); it is safe
+// to call more than once and after the answer arrived.
+func (m *Memory) AwaitEnd(txID string) (ch <-chan Ended, cancel func(), ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := make(chan Ended, 1)
+	if _, live := m.txs[txID]; !live {
+		t, known := m.outcomes[txID]
+		if !known {
+			return nil, func() {}, false
+		}
+		if t.ended != EndedUnknown {
+			c <- t.ended
+			return c, func() {}, true
+		}
+		// Taken by a Commit whose database commit has not returned yet: the
+		// waiter hears that answer.
+	}
+	m.waiters[txID] = append(m.waiters[txID], c)
+	return c, func() { m.withdrawWaiter(txID, c) }, true
+}
+
+// withdrawWaiter removes one [Memory.AwaitEnd] channel that is no longer
+// read.
+func (m *Memory) withdrawWaiter(txID string, c chan Ended) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ws := m.waiters[txID]
+	for i, w := range ws {
+		if w == c {
+			ws = append(ws[:i], ws[i+1:]...)
+			break
+		}
+	}
+	if len(ws) == 0 {
+		delete(m.waiters, txID)
+		return
+	}
+	m.waiters[txID] = ws
 }
 
 // EndedAs reports how the drained transaction txID ended, from the
@@ -608,6 +680,20 @@ func (w *workCount) wait(ctx context.Context) error {
 // its end instead of being cut off by the shutdown.
 func WaitAfterCommit(ctx context.Context) error {
 	return afterCommit.wait(ctx)
+}
+
+// TrackAfterCommit counts one piece of after-commit work that runs outside
+// this package — a business method's events parked on a transaction another
+// process runs (distx.RemoteCommits), waiting for its coordinator's answer —
+// so [WaitAfterCommit] waits for it at shutdown exactly as for the work a
+// local Commit released: the server stops taking calls, the wait hears the
+// commit, the events go out, and only then are the bus and the connections
+// closed. done must be called once, when the work has finished or was
+// abandoned.
+func TrackAfterCommit() (done func()) {
+	afterCommit.add()
+	var once sync.Once
+	return func() { once.Do(afterCommit.done) }
 }
 
 // hookPanic is what [runHook] recovered.

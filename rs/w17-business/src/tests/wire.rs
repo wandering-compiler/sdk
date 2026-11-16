@@ -880,7 +880,7 @@ async fn an_emitting_methods_request_body_is_bound_by_the_deadline() {
         &[inv],
     );
     r.register(W17FilesServer::new(Idle)).unwrap();
-    let served = r.finish(None, |routes| routes);
+    let served = r.finish(None, None, |routes| routes);
     // A request whose body never arrives.
     let body = http_body_util::StreamBody::new(futures::stream::pending::<
         Result<http_body::Frame<bytes::Bytes>, std::convert::Infallible>,
@@ -922,7 +922,7 @@ async fn an_emitting_methods_request_past_the_message_limit_is_refused() {
         &[inv],
     );
     r.register(W17FilesServer::new(Idle)).unwrap();
-    let served = r.finish(None, |routes| routes);
+    let served = r.finish(None, None, |routes| routes);
     // 5 MiB of a message that claims more, then a body that never ends: a
     // read with no bound would wait (and hold) forever; the bound refuses
     // once the limit is passed.

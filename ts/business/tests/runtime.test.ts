@@ -14,7 +14,7 @@ import { Status } from "../src/errors.ts";
 import * as health from "../src/health.ts";
 import { type Manifest, load } from "../src/manifest.ts";
 import * as observability from "../src/observability.ts";
-import { App, BootError } from "../src/runtime.ts";
+import { App, BootError, Clients } from "../src/runtime.ts";
 import type { Env } from "../src/secrets.ts";
 import { Served } from "../src/server.ts";
 import * as tlsconfig from "../src/tlsconfig.ts";
@@ -56,6 +56,20 @@ describe("boot", () => {
     inTmpDir(async () => {
       const app = new App(load(MANIFEST), { projectRoot: PROJECT, environ: env({ NOTES_LIMIT: "many" }) });
       await expect(app.boot()).rejects.toThrow(/NOTES_LIMIT/);
+    }));
+
+  it("the registry's emits wait on the coordinator's W17TransactionOutcome, and only when the tier has a coordinator", () =>
+    inTmpDir(async () => {
+      quiet();
+      const app = new App(load(MANIFEST), { projectRoot: PROJECT, environ: env() });
+      await app.boot();
+      expect(app.registry!.txOutcome).toBe(app.clients!.txOutcome());
+      expect(app.registry!.txOutcome).toBeDefined();
+      app.clients?.close();
+      const m = load(MANIFEST);
+      const none = new Clients(app.pool, { ...m, storage: { ...m.storage!, distributedTransactions: "" } }, env());
+      expect(none.txOutcome()).toBeUndefined();
+      none.close();
     }));
 
   it("a bad internal TLS value stops the start", () =>

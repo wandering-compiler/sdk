@@ -2,8 +2,8 @@
 // language keeps sdk/go's semantics.
 //
 // The harness is Go and real: a storage gRPC server with the distributed-
-// transaction coordinator (distx.Server over txregistry.Memory over SQLite),
-// adopting transactions as generated storage handlers do; an embedded NATS
+// transaction coordinator (distx.Server over txregistry.Memory over SQLite,
+// with the W17TransactionOutcome service beside it), adopting transactions as generated storage handlers do; an embedded NATS
 // JetStream broker consumed through sdk/go's own eventbus subscriber; and a
 // client that calls the business tier under test like a gateway would,
 // stamping the principal metadata a gateway stamps; and the tier's business
@@ -221,6 +221,7 @@ func start(businessAddr string) (*harness, func(), error) {
 
 	gs := grpc.NewServer(grpc.UnaryInterceptor(h.interceptor))
 	distxpb.RegisterW17DistributedTransactionServer(gs, distx.NewServer(h.reg))
+	distxpb.RegisterW17TransactionOutcomeServer(gs, distx.NewOutcomeServer(h.reg))
 	gs.RegisterService(h.storageDesc(), h)
 	lis, err := net.Listen("tcp", storageListen)
 	if err != nil {

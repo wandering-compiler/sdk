@@ -21,6 +21,60 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// TxOutcome is how far a transaction has got, as Await reports it.
+type TxOutcome int32
+
+const (
+	// The transaction is still open; the waiter is registered.
+	TxOutcome_TX_OUTCOME_PENDING TxOutcome = 0
+	// The database commit returned success.
+	TxOutcome_TX_OUTCOME_COMMITTED TxOutcome = 1
+	// Rolled back, timed out, or the database refused the commit: its writes
+	// are gone.
+	TxOutcome_TX_OUTCOME_NOT_COMMITTED TxOutcome = 2
+)
+
+// Enum value maps for TxOutcome.
+var (
+	TxOutcome_name = map[int32]string{
+		0: "TX_OUTCOME_PENDING",
+		1: "TX_OUTCOME_COMMITTED",
+		2: "TX_OUTCOME_NOT_COMMITTED",
+	}
+	TxOutcome_value = map[string]int32{
+		"TX_OUTCOME_PENDING":       0,
+		"TX_OUTCOME_COMMITTED":     1,
+		"TX_OUTCOME_NOT_COMMITTED": 2,
+	}
+)
+
+func (x TxOutcome) Enum() *TxOutcome {
+	p := new(TxOutcome)
+	*p = x
+	return p
+}
+
+func (x TxOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TxOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_distx_distributed_tx_proto_enumTypes[0].Descriptor()
+}
+
+func (TxOutcome) Type() protoreflect.EnumType {
+	return &file_common_distx_distributed_tx_proto_enumTypes[0]
+}
+
+func (x TxOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TxOutcome.Descriptor instead.
+func (TxOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{0}
+}
+
 // Isolation mirrors `(w17.db.method).tx_isolation`
 // (`w17.db.TxIsolation`) on the distributed-tx wire — same
 // names, same numbers — so a caller can open the transaction at
@@ -67,11 +121,11 @@ func (x Isolation) String() string {
 }
 
 func (Isolation) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_distx_distributed_tx_proto_enumTypes[0].Descriptor()
+	return file_common_distx_distributed_tx_proto_enumTypes[1].Descriptor()
 }
 
 func (Isolation) Type() protoreflect.EnumType {
-	return &file_common_distx_distributed_tx_proto_enumTypes[0]
+	return &file_common_distx_distributed_tx_proto_enumTypes[1]
 }
 
 func (x Isolation) Number() protoreflect.EnumNumber {
@@ -80,7 +134,95 @@ func (x Isolation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Isolation.Descriptor instead.
 func (Isolation) EnumDescriptor() ([]byte, []int) {
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{1}
+}
+
+type AwaitRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TxId          string                 `protobuf:"bytes,1,opt,name=tx_id,json=txId,proto3" json:"tx_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AwaitRequest) Reset() {
+	*x = AwaitRequest{}
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AwaitRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AwaitRequest) ProtoMessage() {}
+
+func (x *AwaitRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AwaitRequest.ProtoReflect.Descriptor instead.
+func (*AwaitRequest) Descriptor() ([]byte, []int) {
 	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *AwaitRequest) GetTxId() string {
+	if x != nil {
+		return x.TxId
+	}
+	return ""
+}
+
+type AwaitResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Outcome       TxOutcome              `protobuf:"varint,1,opt,name=outcome,proto3,enum=w17.common.distx.TxOutcome" json:"outcome,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AwaitResponse) Reset() {
+	*x = AwaitResponse{}
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AwaitResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AwaitResponse) ProtoMessage() {}
+
+func (x *AwaitResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AwaitResponse.ProtoReflect.Descriptor instead.
+func (*AwaitResponse) Descriptor() ([]byte, []int) {
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *AwaitResponse) GetOutcome() TxOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return TxOutcome_TX_OUTCOME_PENDING
 }
 
 type BeginRequest struct {
@@ -135,7 +277,7 @@ type BeginRequest struct {
 
 func (x *BeginRequest) Reset() {
 	*x = BeginRequest{}
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[0]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -147,7 +289,7 @@ func (x *BeginRequest) String() string {
 func (*BeginRequest) ProtoMessage() {}
 
 func (x *BeginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[0]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -160,7 +302,7 @@ func (x *BeginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginRequest.ProtoReflect.Descriptor instead.
 func (*BeginRequest) Descriptor() ([]byte, []int) {
-	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{0}
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *BeginRequest) GetConnectionName() string {
@@ -202,7 +344,7 @@ type BeginResponse struct {
 
 func (x *BeginResponse) Reset() {
 	*x = BeginResponse{}
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[1]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -214,7 +356,7 @@ func (x *BeginResponse) String() string {
 func (*BeginResponse) ProtoMessage() {}
 
 func (x *BeginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[1]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -227,7 +369,7 @@ func (x *BeginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginResponse.ProtoReflect.Descriptor instead.
 func (*BeginResponse) Descriptor() ([]byte, []int) {
-	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{1}
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *BeginResponse) GetConnId() string {
@@ -253,7 +395,7 @@ type CommitRequest struct {
 
 func (x *CommitRequest) Reset() {
 	*x = CommitRequest{}
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[2]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -265,7 +407,7 @@ func (x *CommitRequest) String() string {
 func (*CommitRequest) ProtoMessage() {}
 
 func (x *CommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[2]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -278,7 +420,7 @@ func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
 func (*CommitRequest) Descriptor() ([]byte, []int) {
-	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{2}
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CommitRequest) GetTxId() string {
@@ -296,7 +438,7 @@ type CommitResponse struct {
 
 func (x *CommitResponse) Reset() {
 	*x = CommitResponse{}
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[3]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -308,7 +450,7 @@ func (x *CommitResponse) String() string {
 func (*CommitResponse) ProtoMessage() {}
 
 func (x *CommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[3]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -321,7 +463,7 @@ func (x *CommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
 func (*CommitResponse) Descriptor() ([]byte, []int) {
-	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{3}
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{5}
 }
 
 type RollbackRequest struct {
@@ -333,7 +475,7 @@ type RollbackRequest struct {
 
 func (x *RollbackRequest) Reset() {
 	*x = RollbackRequest{}
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[4]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -345,7 +487,7 @@ func (x *RollbackRequest) String() string {
 func (*RollbackRequest) ProtoMessage() {}
 
 func (x *RollbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[4]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -358,7 +500,7 @@ func (x *RollbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackRequest.ProtoReflect.Descriptor instead.
 func (*RollbackRequest) Descriptor() ([]byte, []int) {
-	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{4}
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RollbackRequest) GetTxId() string {
@@ -376,7 +518,7 @@ type RollbackResponse struct {
 
 func (x *RollbackResponse) Reset() {
 	*x = RollbackResponse{}
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[5]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +530,7 @@ func (x *RollbackResponse) String() string {
 func (*RollbackResponse) ProtoMessage() {}
 
 func (x *RollbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_common_distx_distributed_tx_proto_msgTypes[5]
+	mi := &file_common_distx_distributed_tx_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -401,14 +543,18 @@ func (x *RollbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackResponse.ProtoReflect.Descriptor instead.
 func (*RollbackResponse) Descriptor() ([]byte, []int) {
-	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{5}
+	return file_common_distx_distributed_tx_proto_rawDescGZIP(), []int{7}
 }
 
 var File_common_distx_distributed_tx_proto protoreflect.FileDescriptor
 
 const file_common_distx_distributed_tx_proto_rawDesc = "" +
 	"\n" +
-	"!common/distx/distributed_tx.proto\x12\x10w17.common.distx\"\x96\x01\n" +
+	"!common/distx/distributed_tx.proto\x12\x10w17.common.distx\"#\n" +
+	"\fAwaitRequest\x12\x13\n" +
+	"\x05tx_id\x18\x01 \x01(\tR\x04txId\"F\n" +
+	"\rAwaitResponse\x125\n" +
+	"\aoutcome\x18\x01 \x01(\x0e2\x1b.w17.common.distx.TxOutcomeR\aoutcome\"\x96\x01\n" +
 	"\fBeginRequest\x12'\n" +
 	"\x0fconnection_name\x18\x01 \x01(\tR\x0econnectionName\x12\"\n" +
 	"\rtx_timeout_ms\x18\x02 \x01(\x05R\vtxTimeoutMs\x129\n" +
@@ -421,7 +567,11 @@ const file_common_distx_distributed_tx_proto_rawDesc = "" +
 	"\x0eCommitResponse\"&\n" +
 	"\x0fRollbackRequest\x12\x13\n" +
 	"\x05tx_id\x18\x01 \x01(\tR\x04txId\"\x12\n" +
-	"\x10RollbackResponse*w\n" +
+	"\x10RollbackResponse*[\n" +
+	"\tTxOutcome\x12\x16\n" +
+	"\x12TX_OUTCOME_PENDING\x10\x00\x12\x18\n" +
+	"\x14TX_OUTCOME_COMMITTED\x10\x01\x12\x1c\n" +
+	"\x18TX_OUTCOME_NOT_COMMITTED\x10\x02*w\n" +
 	"\tIsolation\x12\x19\n" +
 	"\x15ISOLATION_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10READ_UNCOMMITTED\x10\x01\x12\x12\n" +
@@ -431,7 +581,9 @@ const file_common_distx_distributed_tx_proto_rawDesc = "" +
 	"\x19W17DistributedTransaction\x12H\n" +
 	"\x05Begin\x12\x1e.w17.common.distx.BeginRequest\x1a\x1f.w17.common.distx.BeginResponse\x12K\n" +
 	"\x06Commit\x12\x1f.w17.common.distx.CommitRequest\x1a .w17.common.distx.CommitResponse\x12Q\n" +
-	"\bRollback\x12!.w17.common.distx.RollbackRequest\x1a\".w17.common.distx.RollbackResponseB>Z<github.com/wandering-compiler/sdk/go/pb/common/distx;distxpbb\x06proto3"
+	"\bRollback\x12!.w17.common.distx.RollbackRequest\x1a\".w17.common.distx.RollbackResponse2c\n" +
+	"\x15W17TransactionOutcome\x12J\n" +
+	"\x05Await\x12\x1e.w17.common.distx.AwaitRequest\x1a\x1f.w17.common.distx.AwaitResponse0\x01B>Z<github.com/wandering-compiler/sdk/go/pb/common/distx;distxpbb\x06proto3"
 
 var (
 	file_common_distx_distributed_tx_proto_rawDescOnce sync.Once
@@ -445,30 +597,36 @@ func file_common_distx_distributed_tx_proto_rawDescGZIP() []byte {
 	return file_common_distx_distributed_tx_proto_rawDescData
 }
 
-var file_common_distx_distributed_tx_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_common_distx_distributed_tx_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_common_distx_distributed_tx_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_common_distx_distributed_tx_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_common_distx_distributed_tx_proto_goTypes = []any{
-	(Isolation)(0),           // 0: w17.common.distx.Isolation
-	(*BeginRequest)(nil),     // 1: w17.common.distx.BeginRequest
-	(*BeginResponse)(nil),    // 2: w17.common.distx.BeginResponse
-	(*CommitRequest)(nil),    // 3: w17.common.distx.CommitRequest
-	(*CommitResponse)(nil),   // 4: w17.common.distx.CommitResponse
-	(*RollbackRequest)(nil),  // 5: w17.common.distx.RollbackRequest
-	(*RollbackResponse)(nil), // 6: w17.common.distx.RollbackResponse
+	(TxOutcome)(0),           // 0: w17.common.distx.TxOutcome
+	(Isolation)(0),           // 1: w17.common.distx.Isolation
+	(*AwaitRequest)(nil),     // 2: w17.common.distx.AwaitRequest
+	(*AwaitResponse)(nil),    // 3: w17.common.distx.AwaitResponse
+	(*BeginRequest)(nil),     // 4: w17.common.distx.BeginRequest
+	(*BeginResponse)(nil),    // 5: w17.common.distx.BeginResponse
+	(*CommitRequest)(nil),    // 6: w17.common.distx.CommitRequest
+	(*CommitResponse)(nil),   // 7: w17.common.distx.CommitResponse
+	(*RollbackRequest)(nil),  // 8: w17.common.distx.RollbackRequest
+	(*RollbackResponse)(nil), // 9: w17.common.distx.RollbackResponse
 }
 var file_common_distx_distributed_tx_proto_depIdxs = []int32{
-	0, // 0: w17.common.distx.BeginRequest.isolation:type_name -> w17.common.distx.Isolation
-	1, // 1: w17.common.distx.W17DistributedTransaction.Begin:input_type -> w17.common.distx.BeginRequest
-	3, // 2: w17.common.distx.W17DistributedTransaction.Commit:input_type -> w17.common.distx.CommitRequest
-	5, // 3: w17.common.distx.W17DistributedTransaction.Rollback:input_type -> w17.common.distx.RollbackRequest
-	2, // 4: w17.common.distx.W17DistributedTransaction.Begin:output_type -> w17.common.distx.BeginResponse
-	4, // 5: w17.common.distx.W17DistributedTransaction.Commit:output_type -> w17.common.distx.CommitResponse
-	6, // 6: w17.common.distx.W17DistributedTransaction.Rollback:output_type -> w17.common.distx.RollbackResponse
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: w17.common.distx.AwaitResponse.outcome:type_name -> w17.common.distx.TxOutcome
+	1, // 1: w17.common.distx.BeginRequest.isolation:type_name -> w17.common.distx.Isolation
+	4, // 2: w17.common.distx.W17DistributedTransaction.Begin:input_type -> w17.common.distx.BeginRequest
+	6, // 3: w17.common.distx.W17DistributedTransaction.Commit:input_type -> w17.common.distx.CommitRequest
+	8, // 4: w17.common.distx.W17DistributedTransaction.Rollback:input_type -> w17.common.distx.RollbackRequest
+	2, // 5: w17.common.distx.W17TransactionOutcome.Await:input_type -> w17.common.distx.AwaitRequest
+	5, // 6: w17.common.distx.W17DistributedTransaction.Begin:output_type -> w17.common.distx.BeginResponse
+	7, // 7: w17.common.distx.W17DistributedTransaction.Commit:output_type -> w17.common.distx.CommitResponse
+	9, // 8: w17.common.distx.W17DistributedTransaction.Rollback:output_type -> w17.common.distx.RollbackResponse
+	3, // 9: w17.common.distx.W17TransactionOutcome.Await:output_type -> w17.common.distx.AwaitResponse
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_common_distx_distributed_tx_proto_init() }
@@ -481,10 +639,10 @@ func file_common_distx_distributed_tx_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_distx_distributed_tx_proto_rawDesc), len(file_common_distx_distributed_tx_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   6,
+			NumEnums:      2,
+			NumMessages:   8,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_common_distx_distributed_tx_proto_goTypes,
 		DependencyIndexes: file_common_distx_distributed_tx_proto_depIdxs,

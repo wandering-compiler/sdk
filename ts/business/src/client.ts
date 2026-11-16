@@ -485,6 +485,27 @@ export class TxCoordinator {
   }
 }
 
+/**
+ * The `W17TransactionOutcome` client (`distx.TxOutcomeClient`): served by the
+ * same storage bundle, on the same connection, as {@link TxCoordinator}. A
+ * business method reached inside another process's transaction asks it how
+ * that transaction ends, so its events wait for the commit.
+ */
+export class TxOutcome {
+  static readonly SERVICE = "w17.common.distx.W17TransactionOutcome";
+  readonly #conn: Conn;
+  readonly #await: MethodInfo;
+
+  constructor(conn: Conn) {
+    this.#conn = conn;
+    this.#await = getDefaultPool().methods(TxOutcome.SERVICE).find((m) => m.name === "Await")!;
+  }
+
+  await(ctx: Context, req: Message): AsyncGenerator<AnyMessage> {
+    return this.#conn.serverStream(ctx, this.#await, req);
+  }
+}
+
 export function dial(addr: string, opts: { tls?: boolean } = {}): Conn {
   return new Conn(addr, opts);
 }

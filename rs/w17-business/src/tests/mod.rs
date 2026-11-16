@@ -6,4 +6,5 @@ mod distx;
 mod events;
 mod manifest;
 mod misc;
+mod remote_emit;
 mod wire;

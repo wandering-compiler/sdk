@@ -24,7 +24,10 @@ Every unary method runs through the same chain, over the wire AND through
 1. the author's method;
 2. the emit middleware, when the manifest lists an emit for it: after the
    method returns, the event is published — or, inside a transaction, parked
-   until the root commits and dropped if it rolls back (``txscope``).
+   until the root commits and dropped if it rolls back (``txscope``). A method
+   reached over the wire inside a transaction ANOTHER process runs (the
+   request carries ``w17-tx-id``, no scope here) parks it with that
+   transaction's coordinator instead (``distx.defer_remote``).
 
 **Compose your own methods through ``registry.self(Service)``**, which returns
 the served service with its middleware. A direct call on your class skips the
@@ -116,6 +119,16 @@ class _Method:
                     await events.fire(reg.dispatcher, c, inv.channel, inv.topic, ev, path)
 
         out = txscope.after_commit(ctx, lambda: publish(deferred))
+        if out is txscope.Outcome.NO_SCOPE and reg.tx_outcome is not None:
+            tx_id = next((v for v in ctx.incoming.get_all(distx.TX_ID_HEADER) if v), "")
+            if tx_id:
+                # Reached over the wire inside a transaction ANOTHER process
+                # runs: no scope here will hear how it ends, so the
+                # coordinator is asked, and the event waits for its answer.
+                # Shielded: a caller hanging up mid-registration must not
+                # take the event of a write that may still commit with it.
+                await txscope.shielded(self._emit_remote(ctx, tx_id, lambda: publish(deferred)))
+                return
         if out in (txscope.Outcome.NO_SCOPE, txscope.Outcome.ALREADY_COMMITTED):
             # The write behind it has landed: a caller cancelled now (a client
             # hang-up, a deadline) must not take the event with it.
@@ -123,6 +136,13 @@ class _Method:
         elif out is txscope.Outcome.DISCARDED:
             observability.report_error(
                 ctx, "txregistry: dropped an announcement made after its in-process transaction rolled back")
+
+    async def _emit_remote(self, ctx: Context, tx_id: str, publish: Callable[[], Any]) -> None:
+        out = await distx.defer_remote(ctx, self.registry.tx_outcome, tx_id, publish)
+        if out in (txscope.Outcome.NO_SCOPE, txscope.Outcome.ALREADY_COMMITTED):
+            await publish()
+        # DEFERRED waits for the commit; DISCARDED was reported where it was
+        # decided (an ordinary rollback is not).
 
 
 class Served:
@@ -177,7 +197,8 @@ class Registry:
 
     ``services``, when given (the manifest's list), is what the registry may
     serve: registering any other service is refused. ``emits`` and
-    ``invalidates`` are keyed by the method's gRPC path."""
+    ``invalidates`` are keyed by the method's gRPC path. ``tx_outcome`` is the
+    coordinator's outcome client (``client.TxOutcomeClient``)."""
 
     def __init__(
         self,
@@ -186,9 +207,14 @@ class Registry:
         dispatcher: events.Dispatcher | None = None,
         invalidates: tuple[Invalidate, ...] = (),
         services: tuple[str, ...] | None = None,
+        tx_outcome: distx.OutcomeClient | None = None,
     ) -> None:
         self.pool = pool
         self.dispatcher = dispatcher
+        # The coordinator's W17TransactionOutcome, when the tier has one: what
+        # an emit inside a transaction another process runs waits on. None
+        # (no coordinator configured) publishes such an emit at once.
+        self.tx_outcome = tx_outcome
         self._emits = {e.method: e for e in emits}
         self._invalidates: dict[str, list[Invalidate]] = {}
         for inv in invalidates:

@@ -175,8 +175,11 @@ There is nothing to call: the manifest says which methods emit, and the
 middleware builds the envelope from the method's request and response
 (decoded against the descriptor set) and publishes it to NATS or Redis
 Streams after an `OK` answer — or after the root commit when the call ran
-inside a transaction, never when it rolled back. Streaming methods carry no
-emit, as in Go.
+inside a transaction, never when it rolled back. That holds for a
+transaction another process runs too: a method called with the caller's
+`w17-tx-id` (and no transaction of its own process around it) asks the
+coordinator's `W17TransactionOutcome` how that transaction ends, and
+publishes on its commit. Streaming methods carry no emit, as in Go.
 
 ### Paging
 

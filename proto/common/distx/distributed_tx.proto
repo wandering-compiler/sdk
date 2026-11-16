@@ -44,6 +44,53 @@ service W17DistributedTransaction {
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
 }
 
+// W17TransactionOutcome tells a process that is NOT the transaction's root how
+// a transaction it took part in ended. It is registered beside
+// W17DistributedTransaction, on the same coordinator, and is a separate
+// service so that adding it changed no existing client interface.
+//
+// Its caller is a business method reached over the wire inside someone else's
+// transaction (the request carries `w17-tx-id`, and the transaction was begun
+// in another process). Such a method's events must wait for that
+// transaction's commit exactly as they would inside one process: the method
+// parks them, asks here, publishes them when the answer is COMMITTED and drops
+// them when it is NOT_COMMITTED.
+service W17TransactionOutcome {
+  // Await answers once the transaction for tx_id ends.
+  //
+  // While the transaction is open, the first message is PENDING: it is sent
+  // once the waiter is registered, so a caller that has read it cannot miss
+  // the end. The last message is COMMITTED or NOT_COMMITTED, and the stream
+  // then ends. A transaction that already ended answers with that last
+  // message alone (the coordinator remembers how its last few hundred
+  // transactions ended). An id it neither holds nor remembers answers
+  // NotFound.
+  //
+  // A Commit refused because a call inside the transaction still holds it
+  // (FailedPrecondition) does not end it, so it sends nothing: only the
+  // commit that lands answers COMMITTED, once.
+  rpc Await(AwaitRequest) returns (stream AwaitResponse);
+}
+
+message AwaitRequest {
+  string tx_id = 1;
+}
+
+// TxOutcome is how far a transaction has got, as Await reports it.
+enum TxOutcome {
+  // The transaction is still open; the waiter is registered.
+  TX_OUTCOME_PENDING = 0;
+  // The database commit returned success.
+  TX_OUTCOME_COMMITTED = 1;
+  // Rolled back, timed out, or the database refused the commit: its writes
+  // are gone.
+  TX_OUTCOME_NOT_COMMITTED = 2;
+}
+
+message AwaitResponse {
+  TxOutcome outcome = 1;
+}
+
 message BeginRequest {
   // ConnectionName names a connection declared in the domain's
   // schema (its unique identifier). Single-instance ignores

@@ -21,7 +21,7 @@ from typing import Any, TypeVar
 
 from .context import Context
 
-__all__ = ["Scope", "Outcome", "new", "scope_from", "active", "after_commit", "detach", "shielded", "drain", "cancel_pending"]
+__all__ = ["Scope", "Outcome", "new", "scope_from", "active", "after_commit", "detach", "shielded", "spawn", "drain", "cancel_pending"]
 
 T = TypeVar("T")
 
@@ -161,15 +161,23 @@ def _reap(t: asyncio.Task) -> None:
         report_error(None, RuntimeError(f"txscope: work run after its request failed: {e!r}"))
 
 
+def spawn(aw: Awaitable[T]) -> asyncio.Future[T]:
+    """Start aw as work that outlives its request, tracked like the rest of
+    it: ``drain`` waits for it, ``cancel_pending`` cancels and counts it, and
+    an exception it ends with is reported. For work nobody awaits — the wait
+    for a transaction another process commits."""
+    t = asyncio.ensure_future(aw)
+    _detached.add(t)
+    t.add_done_callback(_reap)
+    return t
+
+
 async def shielded(aw: Awaitable[T]) -> T:
     """Run aw to completion even when the awaiting task is cancelled.
 
     The caller sees its own cancellation as usual; aw keeps running, tracked,
     until it ends (``drain`` waits for it)."""
-    t = asyncio.ensure_future(aw)
-    _detached.add(t)
-    t.add_done_callback(_reap)
-    return await asyncio.shield(t)
+    return await asyncio.shield(spawn(aw))
 
 
 def _running() -> list[asyncio.Task]:
