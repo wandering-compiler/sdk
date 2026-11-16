@@ -111,6 +111,15 @@ export function registerBusiness(cfg: Config, registry: Registry, clients: Clien
 - **Work after a commit outlives the request.** Events and `onCommit` hooks of
   a committed transaction run to their end even when the client hangs up; the
   drain waits for them.
+- **A method reached inside another process's transaction** (its request
+  carries that process's `w17-tx-id`, and it opened none here) waits for that
+  transaction's commit before its event goes out, as inside one process: the
+  tier asks the transaction's coordinator (`W17TransactionOutcome.Await`,
+  beside `W17DistributedTransaction`) before the method answers, publishes
+  once on the commit and drops the event on a rollback. A coordinator that
+  does not serve the outcome service is reported and the event goes out at
+  once; one that cannot be asked drops it, reported. The waits count as work
+  after a commit for the drain.
 - **Streams:** a server-streaming handler is an async generator
   (`async *Watch(ctx, req)`); a client-streaming one takes an async iterable
   of requests; bidi both. A caller that hangs up, or whose deadline passes,

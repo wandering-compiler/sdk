@@ -43,7 +43,7 @@
  */
 
 import { create, type Message } from "@bufbuild/protobuf";
-import type { Context, Metadata } from "./context.js";
+import { Context, type Metadata } from "./context.js";
 import { type AnyMessage, getDefaultPool } from "./descriptors.js";
 import { Status, StatusError, errorInfos } from "./errors.js";
 import { errorText, reportError } from "./observability.js";
@@ -192,6 +192,35 @@ export interface TxClient {
   begin(ctx: Context, req: Message): Promise<{ reply: AnyMessage; header: Metadata }>;
   commit(ctx: Context, req: Message): Promise<unknown>;
   rollback(ctx: Context, req: Message): Promise<unknown>;
+}
+
+/**
+ * The `W17TransactionOutcome` client a business tier asks how a transaction
+ * another process runs ends (`clients` builds one beside the coordinator; a
+ * test may fake it). `await` streams `AwaitResponse`s: PENDING once the
+ * coordinator watches the transaction, then COMMITTED or NOT_COMMITTED.
+ */
+export interface TxOutcomeClient {
+  await(ctx: Context, req: Message): AsyncIterable<AnyMessage>;
+}
+
+/**
+ * Bounds how long `deferRemote` waits for the coordinator to confirm it is
+ * watching a transaction (ms). The method is answering its caller meanwhile,
+ * so the bound is short; a coordinator that cannot confirm in time is one
+ * that cannot say how the transaction ends. Go's registerWait.
+ */
+export const REGISTER_WAIT_MS = 10_000;
+
+let registerWaitMs = REGISTER_WAIT_MS;
+
+/** @internal Tests shorten the register bound; returns the restore. */
+export function setRegisterWaitMs(ms: number): () => void {
+  const prev = registerWaitMs;
+  registerWaitMs = ms;
+  return () => {
+    registerWaitMs = prev;
+  };
 }
 
 const ROOT = Symbol("w17.distx.root");
@@ -589,6 +618,177 @@ export async function run<T>(
     throw cerr;
   }
   return result;
+}
+
+/** What `deferRemote` did with the work it was given. Go's txregistry.DeferOutcome. */
+export const RemoteOutcome = {
+  /** The transaction is open: the work runs when it commits, never when it does not. */
+  DEFERRED: "deferred",
+  /** The transaction already committed, or the coordinator cannot wait: the caller runs it now. */
+  NOW: "now",
+  /** It ended without committing, or the coordinator cannot be asked: dropped, reported. */
+  DROPPED: "dropped",
+} as const;
+export type RemoteOutcome = (typeof RemoteOutcome)[keyof typeof RemoteOutcome];
+
+const TX_OUTCOME_COMMITTED = 1;
+const TX_OUTCOME_NOT_COMMITTED = 2;
+
+/**
+ * Park `fn` on a transaction ANOTHER process runs — Go's
+ * `distx.RemoteCommits.DeferRemote`. The request reached this tier over the
+ * wire carrying that process's `w17-tx-id`, so no in-process scope will ever
+ * hear how it ends: the transaction's coordinator is asked instead
+ * (`W17TransactionOutcome.Await`, served beside `W17DistributedTransaction`).
+ *
+ * The wait is registered BEFORE this resolves — before the method answers its
+ * caller — so the caller's commit cannot outrun it. Its first answer decides:
+ * PENDING hands the rest of the stream to tracked background work (run on
+ * COMMITTED, dropped on NOT_COMMITTED — an ordinary rollback, said nothing);
+ * COMMITTED is `NOW`; NOT_COMMITTED is `DROPPED`, reported. A coordinator
+ * older than the outcome service (UNIMPLEMENTED) is `NOW`, reported: dropping
+ * every event in a mixed deployment would be a regression. Any other failure
+ * (an unknown id, unreachable, no confirmation within `REGISTER_WAIT_MS`) is
+ * `DROPPED`, reported.
+ *
+ * The Await call carries only the request's `w17-conn-id` (the storage
+ * proxy's routing token, so it reaches the replica holding the transaction):
+ * nothing else the request carried is this call's to forward. It does not
+ * inherit the request's cancellation — the request ends long before the
+ * commit.
+ *
+ * Delivery is at-most-once, as everywhere after a commit: a process that
+ * stops while it waits, or a coordinator that stops answering, loses the
+ * work, and that is reported.
+ */
+export async function deferRemote(
+  ctx: Context,
+  client: TxOutcomeClient,
+  txId: string,
+  fn: () => unknown,
+): Promise<RemoteOutcome> {
+  const connId = ctx.incoming.getAll(CONN_ID_HEADER).find((v) => v) ?? "";
+  // A fresh context: only the routing token goes out, and the caller hanging
+  // up does not end the wait.
+  const wctx = new Context({ outgoing: connId ? { [CONN_ID_HEADER]: [connId] } : {} }).withCancel();
+  const reportCtx = ctx.withoutCancel();
+  let it: AsyncIterator<AnyMessage> | undefined;
+  let first: AnyMessage | undefined;
+  let failure: unknown;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    wctx.cancel();
+  }, registerWaitMs);
+  try {
+    it = client.await(wctx, msg("AwaitRequest", { txId }))[Symbol.asyncIterator]();
+    const n = await it.next();
+    if (n.done) failure = new Error("the coordinator ended the wait without an answer");
+    else first = n.value;
+  } catch (e) {
+    failure = e;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (timedOut) failure = new Error(`the coordinator did not confirm the wait within ${registerWaitMs}ms`);
+  if (failure !== undefined || first === undefined) {
+    closeWait(wctx, it);
+    return settleUnwatched(reportCtx, txId, failure);
+  }
+  const outcome = Number(first.outcome);
+  if (outcome === TX_OUTCOME_COMMITTED) {
+    closeWait(wctx, it);
+    return RemoteOutcome.NOW;
+  }
+  if (outcome === TX_OUTCOME_NOT_COMMITTED) {
+    closeWait(wctx, it);
+    reportError(
+      reportCtx,
+      new Error(`distx: dropped the deferred announcement of tx ${JSON.stringify(txId)}: the transaction ended without committing before the emit registered`),
+    );
+    return RemoteOutcome.DROPPED;
+  }
+  // Tracked like the work a local commit owes: a shutdown drain waits for it,
+  // and counts it among what it abandons at its deadline.
+  void txscope.shielded(awaitRemote(reportCtx, txId, it!, wctx, fn));
+  return RemoteOutcome.DEFERRED;
+}
+
+/** Reads the rest of an Await stream and runs fn on COMMITTED. Never throws. */
+async function awaitRemote(ctx: Context, txId: string, it: AsyncIterator<AnyMessage>, wctx: Context, fn: () => unknown): Promise<void> {
+  try {
+    for (;;) {
+      let n: IteratorResult<AnyMessage>;
+      try {
+        n = await it.next();
+      } catch (e) {
+        reportError(ctx, new Error(stoppedAnswering(txId, reasonOf(e))));
+        return;
+      }
+      if (n.done) {
+        reportError(ctx, new Error(stoppedAnswering(txId, "the stream ended without an outcome")));
+        return;
+      }
+      const outcome = Number(n.value.outcome);
+      if (outcome === TX_OUTCOME_COMMITTED) {
+        try {
+          await fn();
+        } catch (e) {
+          // The transaction has committed whatever fn does; there is no
+          // caller to throw into.
+          reportError(ctx, new Error(`distx: after-commit work of committed transaction ${txId} failed: ${errorText(e)}`));
+        }
+        return;
+      }
+      // Rolled back: the writes are gone, and so is their announcement.
+      if (outcome === TX_OUTCOME_NOT_COMMITTED) return;
+    }
+  } finally {
+    closeWait(wctx, it);
+  }
+}
+
+/** End an Await call nobody reads any more: the call, and the stream's generator. */
+function closeWait(wctx: Context, it: AsyncIterator<AnyMessage> | undefined): void {
+  wctx.cancel();
+  void Promise.resolve(it?.return?.()).catch(() => undefined);
+}
+
+/** A failure as a reason in a report: a status names its code. */
+function reasonOf(e: unknown): string {
+  if (e instanceof StatusError) return `${Status[e.code] ?? e.code}: ${e.message}`;
+  return errorText(e, "message");
+}
+
+function stoppedAnswering(txId: string, reason: string): string {
+  return (
+    `distx: dropped the deferred announcement of tx ${JSON.stringify(txId)}: the coordinator stopped answering ` +
+    `before the transaction ended (${reason}), so whether it committed is unknown`
+  );
+}
+
+/** What to do with work whose wait could not be registered. */
+function settleUnwatched(ctx: Context, txId: string, err: unknown): RemoteOutcome {
+  if (err instanceof StatusError && err.code === Status.UNIMPLEMENTED) {
+    // A coordinator older than the outcome service: it cannot be asked.
+    // Announced now, as before — said.
+    reportError(
+      ctx,
+      new Error(
+        `distx: announcing inside transaction ${JSON.stringify(txId)} before it commits: its coordinator does not serve ` +
+          "W17TransactionOutcome (upgrade the storage bundle), so the event cannot wait for the commit",
+      ),
+    );
+    return RemoteOutcome.NOW;
+  }
+  reportError(
+    ctx,
+    new Error(
+      `distx: dropped the deferred announcement of tx ${JSON.stringify(txId)}: its coordinator could not be asked ` +
+        `how the transaction ends (${reasonOf(err)})`,
+    ),
+  );
+  return RemoteOutcome.DROPPED;
 }
 
 /**

@@ -26,7 +26,7 @@ export * as observability from "./observability.js";
 export * as tlsconfig from "./tlsconfig.js";
 
 export { Clients, App, BootError } from "./runtime.js";
-export { CompanionConn, Conn, ServiceClient, TxCoordinator, type CallOptions } from "./client.js";
+export { CompanionConn, Conn, ServiceClient, TxCoordinator, TxOutcome, type CallOptions } from "./client.js";
 export { Config, ConfigError } from "./config.js";
 export { Context, Metadata, background, type ContextInit, type MetadataInit } from "./context.js";
 export { Pool, getDefaultPool, type AnyMessage, type MessageType, type MethodInfo } from "./descriptors.js";

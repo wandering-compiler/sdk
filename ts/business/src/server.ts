@@ -31,7 +31,10 @@
  * 1. the author's method;
  * 2. the emit middleware, when the manifest lists an emit for it: after the
  *    method returns, the event is published — or, inside a transaction,
- *    parked until the root commits and dropped if it rolls back (`txscope`).
+ *    parked until the root commits and dropped if it rolls back (`txscope`);
+ *    inside a transaction ANOTHER process runs (the request carries its
+ *    `w17-tx-id`), parked with that transaction's coordinator
+ *    (`distx.deferRemote`).
  *
  * **Compose your own methods through `registry.self(Service)`**, which
  * returns the served service with its middleware. A direct call on your
@@ -62,7 +65,7 @@ import { deserializer, fromGrpcMetadata, serializer, toGrpcMetadata } from "./cl
 import { ConfigError } from "./config.js";
 import { Context, cancelCall } from "./context.js";
 import type { AnyMessage, MethodInfo, Pool } from "./descriptors.js";
-import { DistxError, markBidi } from "./distx.js";
+import { DistxError, RemoteOutcome, TX_ID_HEADER, type TxOutcomeClient, deferRemote, markBidi } from "./distx.js";
 import { STATUS_DETAILS_KEY, Status, StatusError, UserError, encodeRpcStatus, pack } from "./errors.js";
 import * as events from "./events.js";
 import type { Emit, Invalidate } from "./manifest.js";
@@ -166,6 +169,17 @@ class MethodImpl {
       }
     };
     const out = txscope.afterCommit(ctx, () => publish(deferred));
+    if (out === txscope.Outcome.NO_SCOPE) {
+      // No transaction THIS process opened — but the request may name one
+      // another process runs (it reached us over the wire inside it). Its
+      // coordinator says when it commits; the event waits for that, as it
+      // would inside one process. No coordinator here: announced now.
+      const txId = ctx.incoming.getAll(TX_ID_HEADER).find((v) => v) ?? "";
+      if (txId && reg.txOutcome !== undefined) {
+        const remote = await deferRemote(ctx, reg.txOutcome, txId, () => publish(deferred));
+        if (remote !== RemoteOutcome.NOW) return;
+      }
+    }
     if (out === txscope.Outcome.NO_SCOPE || out === txscope.Outcome.ALREADY_COMMITTED) {
       // The write behind it has landed: a caller that hangs up now (a client
       // hang-up, a deadline) must not take the event with it.
@@ -240,6 +254,12 @@ export type ShutdownHook = (ctx: Context) => unknown;
 export class Registry {
   readonly pool: Pool;
   dispatcher: events.Dispatcher | undefined;
+  /**
+   * The coordinator's `W17TransactionOutcome`, when the tier has one: an emit
+   * of a method reached inside another process's transaction waits there for
+   * its commit. Undefined (no coordinator configured): published at once.
+   */
+  txOutcome: TxOutcomeClient | undefined;
   readonly #emits: ReadonlyMap<string, Emit>;
   readonly #invalidates = new Map<string, Invalidate[]>();
   readonly #allowed: ReadonlySet<string> | undefined;
@@ -256,10 +276,12 @@ export class Registry {
       dispatcher?: events.Dispatcher | undefined;
       invalidates?: readonly Invalidate[];
       services?: readonly string[];
+      txOutcome?: TxOutcomeClient | undefined;
     } = {},
   ) {
     this.pool = pool;
     this.dispatcher = opts.dispatcher;
+    this.txOutcome = opts.txOutcome;
     this.#emits = new Map((opts.emits ?? []).map((e) => [e.method, e]));
     for (const inv of opts.invalidates ?? []) {
       const l = this.#invalidates.get(inv.method) ?? [];

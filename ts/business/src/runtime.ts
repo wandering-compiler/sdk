@@ -32,7 +32,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Server, type ServerOptions } from "@grpc/grpc-js";
-import { CompanionConn, Conn, ServiceClient, TxCoordinator, parseAddr } from "./client.js";
+import { CompanionConn, Conn, ServiceClient, TxCoordinator, TxOutcome, parseAddr } from "./client.js";
 import { Config, ConfigError } from "./config.js";
 import { Context } from "./context.js";
 import { type Pool, getDefaultPool } from "./descriptors.js";
@@ -93,6 +93,7 @@ export class Clients {
   readonly #egress = new Map<string, ServiceClient>();
   readonly #stores = new Map<string, FileStore>();
   #tx: TxCoordinator | undefined;
+  #outcome: TxOutcome | undefined;
 
   constructor(pool: Pool, manifest: Manifest, environ: Env = process.env) {
     this.#storage(pool, manifest, environ);
@@ -125,7 +126,19 @@ export class Clients {
       }
       this.#byService.set(full, new ServiceClient(conn, full, pool));
     }
-    if (tier.distributedTransactions) this.#tx = new TxCoordinator(conn);
+    if (tier.distributedTransactions) {
+      this.#tx = new TxCoordinator(conn);
+      this.#outcome = new TxOutcome(conn);
+    }
+  }
+
+  /**
+   * The coordinator's `W17TransactionOutcome` (same connection), undefined
+   * when the storage tier registers no coordinator. The registry's emits use
+   * it; author code has no need of it.
+   */
+  txOutcome(): TxOutcome | undefined {
+    return this.#outcome;
   }
 
   #companionClients(pool: Pool, manifest: Manifest, environ: Env): void {
@@ -265,6 +278,7 @@ export class App {
       dispatcher: this.dispatcher,
       invalidates: invalidatesOf(m),
       services: m.services.map((s) => s.name),
+      txOutcome: this.clients.txOutcome(),
     });
     this.#checkEvents();
     await this.#register();
