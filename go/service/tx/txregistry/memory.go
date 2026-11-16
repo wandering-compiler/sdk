@@ -682,6 +682,20 @@ func WaitAfterCommit(ctx context.Context) error {
 	return afterCommit.wait(ctx)
 }
 
+// TrackAfterCommit counts one piece of after-commit work that runs outside
+// this package — a business method's events parked on a transaction another
+// process runs (distx.RemoteCommits), waiting for its coordinator's answer —
+// so [WaitAfterCommit] waits for it at shutdown exactly as for the work a
+// local Commit released: the server stops taking calls, the wait hears the
+// commit, the events go out, and only then are the bus and the connections
+// closed. done must be called once, when the work has finished or was
+// abandoned.
+func TrackAfterCommit() (done func()) {
+	afterCommit.add()
+	var once sync.Once
+	return func() { once.Do(afterCommit.done) }
+}
+
 // hookPanic is what [runHook] recovered.
 type hookPanic struct {
 	value any

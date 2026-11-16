@@ -120,7 +120,14 @@ func (r *RemoteCommits) DeferRemote(ctx context.Context, txID string, fn func())
 			"distx: dropped the deferred announcement of tx %q: the transaction ended without committing before the emit registered", txID))
 		return txregistry.EmitDropped
 	}
-	go awaitRemote(reportCtx, txID, stream, cancel, fn)
+	// Tracked like the work a local commit releases: a shutdown drain
+	// (txregistry.WaitAfterCommit) waits for the answer before the bus and
+	// the coordinator connection are closed under it.
+	done := txregistry.TrackAfterCommit()
+	go func() {
+		defer done()
+		awaitRemote(reportCtx, txID, stream, cancel, fn)
+	}()
 	return txregistry.EmitDeferred
 }
 
