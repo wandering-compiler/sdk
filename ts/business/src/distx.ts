@@ -709,9 +709,28 @@ export async function deferRemote(
     return RemoteOutcome.DROPPED;
   }
   // Tracked like the work a local commit owes: a shutdown drain waits for it,
-  // and counts it among what it abandons at its deadline.
-  void txscope.shielded(awaitRemote(reportCtx, txId, it!, wctx, fn));
+  // and counts it among what it abandons at its deadline — and an abandoned
+  // wait is cancelled (cancelRemoteWaits), so it neither holds the call open
+  // past the shutdown nor publishes on a dispatcher already closed.
+  remoteWaits.add(wctx);
+  void txscope.shielded(awaitRemote(reportCtx, txId, it!, wctx, fn).finally(() => remoteWaits.delete(wctx)));
   return RemoteOutcome.DEFERRED;
+}
+
+/** The Await calls of the remote waits still running (deferRemote). */
+const remoteWaits = new Set<Context>();
+
+/**
+ * Cancel every remote wait still running — what the runtime calls once its
+ * shutdown drain gave up on them, before it closes the dispatcher and the
+ * connections. Each cancelled wait reports that it dropped its event (whether
+ * the transaction committed is unknown to it). Returns how many it cancelled.
+ */
+export function cancelRemoteWaits(): number {
+  const n = remoteWaits.size;
+  for (const w of remoteWaits) w.cancel();
+  remoteWaits.clear();
+  return n;
 }
 
 /** Reads the rest of an Await stream and runs fn on COMMITTED. Never throws. */

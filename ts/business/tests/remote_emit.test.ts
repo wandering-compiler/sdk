@@ -303,6 +303,23 @@ describe("a method reached inside another process's transaction", () => {
     expect(biz.pub.published.length).toBe(0);
   });
 
+  it("a wait the shutdown drain abandons is cancelled: it reports the drop and never publishes", async () => {
+    captureReports();
+    const [h, txCtx] = await callerTx();
+    await create(txCtx);
+    expect(await txscope.drain(50)).toBe(false); // the transaction is still open
+    txscope.abandonPending();
+    expect(distx.cancelRemoteWaits()).toBe(1);
+    expect(await settled(() => reported.some((r) => r.includes(
+      `distx: dropped the deferred announcement of tx "${h.txId}": the coordinator stopped answering before the transaction ended (`,
+    )))).toBe(true);
+    // The commit lands after the shutdown closed the dispatcher: nothing goes out.
+    await h.commit(new Context());
+    await sleep(150);
+    expect(biz.pub.published.length).toBe(0);
+    expect(distx.cancelRemoteWaits()).toBe(0);
+  });
+
   it("echoes only the request's w17-conn-id on the Await call", async () => {
     const [h, txCtx] = await callerTx();
     const ctx = txCtx.withOutgoing(

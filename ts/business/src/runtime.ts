@@ -36,6 +36,7 @@ import { CompanionConn, Conn, ServiceClient, TxCoordinator, TxOutcome, parseAddr
 import { Config, ConfigError } from "./config.js";
 import { Context } from "./context.js";
 import { type Pool, getDefaultPool } from "./descriptors.js";
+import * as distx from "./distx.js";
 import * as events from "./events.js";
 import { FileStore } from "./files.js";
 import { HealthService } from "./health.js";
@@ -451,6 +452,9 @@ export class App {
     }
     if (!(await txscope.drain(untilAfterStop()))) {
       const n = txscope.abandonPending();
+      // A promise cannot be stopped from outside, but a remote wait's call
+      // can: cancelled, it does not publish on the dispatcher closed below.
+      distx.cancelRemoteWaits();
       observability.reportError(
         undefined,
         `runtime: ${n} piece(s) of work after a commit (events, onCommit hooks) still running at the shutdown deadline; abandoned`,
