@@ -326,6 +326,18 @@ type CommitHook interface {
 	OnCommit(txID string, fn func()) bool
 }
 
+// RemoteCommitHook is a [CommitHook] for a transaction ANOTHER process runs:
+// the request reached this tier over the wire carrying that process's
+// `w17-tx-id`, and nothing local hears how the transaction ends.
+// `distx.RemoteCommits` implements it by asking the transaction's
+// coordinator; [DeferUntilCommit] prefers it over OnCommit, because it needs
+// the request context (the routing token it echoes) and can answer all three
+// outcomes — a transaction that already committed runs the work now.
+type RemoteCommitHook interface {
+	CommitHook
+	DeferRemote(ctx context.Context, txID string, fn func()) DeferOutcome
+}
+
 // DeferOutcome is what [DeferUntilCommit] did with the work it was handed.
 // Three states, because "the registry is not holding a transaction for this
 // request" has two causes that need OPPOSITE answers — see [EmitNow] vs
@@ -397,6 +409,11 @@ func (o DeferOutcome) String() string {
 // — the RPC that queued it has already returned, and its ctx may well be
 // cancelled by the time the commit lands.
 //
+// A tier with no registry of its own — the business tier — is handed a
+// [RemoteCommitHook] instead: reached over the wire inside a transaction
+// another process runs, it parks fn with that transaction's coordinator,
+// with the same three answers.
+//
 // An IN-PROCESS transaction comes first (txscope): a business method composing
 // another one inside its own `distx.Run` reaches the callee's emit wrapper in
 // the same process, where no registry is wired (business tier) and the
@@ -418,21 +435,14 @@ func DeferUntilCommit(ctx context.Context, reg CommitHook, fn func()) DeferOutco
 		return EmitNow
 	}
 	if reg == nil || fn == nil {
-		// No registry here (the business tier), yet the request names a
-		// transaction: a caller in another process runs it, and this one
-		// hears nothing of its outcome. The announcement goes out at once
-		// — before that commit, and kept if it rolls back — so it is said.
-		if fn != nil {
-			if txID := RequestTxID(ctx); txID != "" {
-				observx.ReportError(ctx, fmt.Errorf(
-					"txregistry: announcing inside transaction %q, which another process runs: this tier has no registry to wait on, so the event is published before that transaction commits (and kept if it rolls back)", txID))
-			}
-		}
 		return EmitNow
 	}
 	txID := RequestTxID(ctx)
 	if txID == "" {
 		return EmitNow
+	}
+	if remote, ok := reg.(RemoteCommitHook); ok {
+		return remote.DeferRemote(ctx, txID, fn)
 	}
 	if reg.OnCommit(txID, fn) {
 		return EmitDeferred

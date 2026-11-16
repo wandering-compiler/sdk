@@ -262,3 +262,158 @@ var W17DistributedTransaction_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "common/distx/distributed_tx.proto",
 }
+
+const (
+	W17TransactionOutcome_Await_FullMethodName = "/w17.common.distx.W17TransactionOutcome/Await"
+)
+
+// W17TransactionOutcomeClient is the client API for W17TransactionOutcome service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// W17TransactionOutcome tells a process that is NOT the transaction's root how
+// a transaction it took part in ended. It is registered beside
+// W17DistributedTransaction, on the same coordinator, and is a separate
+// service so that adding it changed no existing client interface.
+//
+// Its caller is a business method reached over the wire inside someone else's
+// transaction (the request carries `w17-tx-id`, and the transaction was begun
+// in another process). Such a method's events must wait for that
+// transaction's commit exactly as they would inside one process: the method
+// parks them, asks here, publishes them when the answer is COMMITTED and drops
+// them when it is NOT_COMMITTED.
+type W17TransactionOutcomeClient interface {
+	// Await answers once the transaction for tx_id ends.
+	//
+	// While the transaction is open, the first message is PENDING: it is sent
+	// once the waiter is registered, so a caller that has read it cannot miss
+	// the end. The last message is COMMITTED or NOT_COMMITTED, and the stream
+	// then ends. A transaction that already ended answers with that last
+	// message alone (the coordinator remembers how its last few hundred
+	// transactions ended). An id it neither holds nor remembers answers
+	// NotFound.
+	//
+	// A Commit refused because a call inside the transaction still holds it
+	// (FailedPrecondition) does not end it, so it sends nothing: only the
+	// commit that lands answers COMMITTED, once.
+	Await(ctx context.Context, in *AwaitRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AwaitResponse], error)
+}
+
+type w17TransactionOutcomeClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewW17TransactionOutcomeClient(cc grpc.ClientConnInterface) W17TransactionOutcomeClient {
+	return &w17TransactionOutcomeClient{cc}
+}
+
+func (c *w17TransactionOutcomeClient) Await(ctx context.Context, in *AwaitRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AwaitResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &W17TransactionOutcome_ServiceDesc.Streams[0], W17TransactionOutcome_Await_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AwaitRequest, AwaitResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type W17TransactionOutcome_AwaitClient = grpc.ServerStreamingClient[AwaitResponse]
+
+// W17TransactionOutcomeServer is the server API for W17TransactionOutcome service.
+// All implementations must embed UnimplementedW17TransactionOutcomeServer
+// for forward compatibility.
+//
+// W17TransactionOutcome tells a process that is NOT the transaction's root how
+// a transaction it took part in ended. It is registered beside
+// W17DistributedTransaction, on the same coordinator, and is a separate
+// service so that adding it changed no existing client interface.
+//
+// Its caller is a business method reached over the wire inside someone else's
+// transaction (the request carries `w17-tx-id`, and the transaction was begun
+// in another process). Such a method's events must wait for that
+// transaction's commit exactly as they would inside one process: the method
+// parks them, asks here, publishes them when the answer is COMMITTED and drops
+// them when it is NOT_COMMITTED.
+type W17TransactionOutcomeServer interface {
+	// Await answers once the transaction for tx_id ends.
+	//
+	// While the transaction is open, the first message is PENDING: it is sent
+	// once the waiter is registered, so a caller that has read it cannot miss
+	// the end. The last message is COMMITTED or NOT_COMMITTED, and the stream
+	// then ends. A transaction that already ended answers with that last
+	// message alone (the coordinator remembers how its last few hundred
+	// transactions ended). An id it neither holds nor remembers answers
+	// NotFound.
+	//
+	// A Commit refused because a call inside the transaction still holds it
+	// (FailedPrecondition) does not end it, so it sends nothing: only the
+	// commit that lands answers COMMITTED, once.
+	Await(*AwaitRequest, grpc.ServerStreamingServer[AwaitResponse]) error
+	mustEmbedUnimplementedW17TransactionOutcomeServer()
+}
+
+// UnimplementedW17TransactionOutcomeServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedW17TransactionOutcomeServer struct{}
+
+func (UnimplementedW17TransactionOutcomeServer) Await(*AwaitRequest, grpc.ServerStreamingServer[AwaitResponse]) error {
+	return status.Error(codes.Unimplemented, "method Await not implemented")
+}
+func (UnimplementedW17TransactionOutcomeServer) mustEmbedUnimplementedW17TransactionOutcomeServer() {}
+func (UnimplementedW17TransactionOutcomeServer) testEmbeddedByValue()                               {}
+
+// UnsafeW17TransactionOutcomeServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to W17TransactionOutcomeServer will
+// result in compilation errors.
+type UnsafeW17TransactionOutcomeServer interface {
+	mustEmbedUnimplementedW17TransactionOutcomeServer()
+}
+
+func RegisterW17TransactionOutcomeServer(s grpc.ServiceRegistrar, srv W17TransactionOutcomeServer) {
+	// If the following call panics, it indicates UnimplementedW17TransactionOutcomeServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&W17TransactionOutcome_ServiceDesc, srv)
+}
+
+func _W17TransactionOutcome_Await_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(AwaitRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(W17TransactionOutcomeServer).Await(m, &grpc.GenericServerStream[AwaitRequest, AwaitResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type W17TransactionOutcome_AwaitServer = grpc.ServerStreamingServer[AwaitResponse]
+
+// W17TransactionOutcome_ServiceDesc is the grpc.ServiceDesc for W17TransactionOutcome service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var W17TransactionOutcome_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "w17.common.distx.W17TransactionOutcome",
+	HandlerType: (*W17TransactionOutcomeServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Await",
+			Handler:       _W17TransactionOutcome_Await_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "common/distx/distributed_tx.proto",
+}

@@ -72,7 +72,14 @@ type harness struct {
 
 	client  distxpb.W17DistributedTransactionClient
 	storage grpc.ClientConnInterface
-	biz     grpc.ClientConnInterface // composed business hop (inproc only)
+	// biz is the business service's conn: a separate binary over bufconn
+	// ("grpc"), or the composed in-process hop ("inproc").
+	biz grpc.ClientConnInterface
+	// outcome is the coordinator's W17TransactionOutcome client, on the
+	// storage conn — what a business tier's RemoteCommits asks.
+	outcome distxpb.W17TransactionOutcomeClient
+	// awaits records the routing headers each Await stream carried.
+	awaits []call
 
 	mu      sync.Mutex
 	calls   []call
@@ -86,7 +93,7 @@ type harness struct {
 	ownTx bool
 }
 
-func newHarness(t *testing.T, transport string) *harness {
+func newHarness(t *testing.T, transport string, opts ...txregistry.MemoryOption) *harness {
 	t.Helper()
 	h := &harness{t: t, transport: transport, dbs: map[string]*sql.DB{}}
 	dir := t.TempDir()
@@ -101,30 +108,26 @@ func newHarness(t *testing.T, transport string) *harness {
 		}
 		h.dbs[name] = db
 	}
-	h.reg = txregistry.NewMemory(h.dbs)
+	h.reg = txregistry.NewMemory(h.dbs, opts...)
 	srv := distx.NewServer(h.reg)
+	outcomeSrv := distx.NewOutcomeServer(h.reg)
 	icpt := h.interceptor
 
 	switch transport {
 	case "grpc":
-		gs := grpc.NewServer(grpc.UnaryInterceptor(icpt))
+		gs := grpc.NewServer(grpc.UnaryInterceptor(icpt), grpc.StreamInterceptor(h.streamInterceptor))
 		distxpb.RegisterW17DistributedTransactionServer(gs, srv)
+		distxpb.RegisterW17TransactionOutcomeServer(gs, outcomeSrv)
 		gs.RegisterService(&storageDesc, h)
-		lis := bufconn.Listen(1 << 20)
-		go func() { _ = gs.Serve(lis) }()
-		t.Cleanup(gs.Stop)
-		cc, err := grpc.NewClient("passthrough://bufconn",
-			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
-			grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = cc.Close() })
-		h.client = distxpb.NewW17DistributedTransactionClient(cc)
-		h.storage = cc
+		h.storage = serveBufconn(t, gs)
+		h.client = distxpb.NewW17DistributedTransactionClient(h.storage)
+		bs := grpc.NewServer()
+		bs.RegisterService(&bizDesc, h)
+		h.biz = serveBufconn(t, bs)
 	case "inproc":
-		c := inprocgrpc.New(inprocgrpc.WithUnaryInterceptor(icpt))
+		c := inprocgrpc.New(inprocgrpc.WithUnaryInterceptor(icpt), inprocgrpc.WithStreamInterceptor(h.streamInterceptor))
 		distxpb.RegisterW17DistributedTransactionServer(c, srv)
+		distxpb.RegisterW17TransactionOutcomeServer(c, outcomeSrv)
 		c.RegisterService(&storageDesc, h)
 		h.client = distxpb.NewW17DistributedTransactionClient(c)
 		h.storage = c
@@ -134,7 +137,34 @@ func newHarness(t *testing.T, transport string) *harness {
 	default:
 		t.Fatalf("unknown transport %q", transport)
 	}
+	h.outcome = distxpb.NewW17TransactionOutcomeClient(h.storage)
 	return h
+}
+
+// serveBufconn serves gs on an in-memory listener and returns a client conn.
+func serveBufconn(t *testing.T, gs *grpc.Server) *grpc.ClientConn {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+	cc, err := grpc.NewClient("passthrough://bufconn",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+	return cc
+}
+
+// streamInterceptor records the routing headers of every stream the storage
+// side serves (the coordinator's Await).
+func (h *harness) streamInterceptor(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	md, _ := metadata.FromIncomingContext(ss.Context())
+	h.mu.Lock()
+	h.awaits = append(h.awaits, call{method: info.FullMethod, txIDs: md.Get(txregistry.HeaderName), connIDs: md.Get(distx.ConnIDHeader)})
+	h.mu.Unlock()
+	return handler(srv, ss)
 }
 
 // interceptor stands in for the storage proxy and records every call.
