@@ -91,8 +91,12 @@ func (r *RemoteCommits) DeferRemote(ctx context.Context, txID string, fn func())
 		}
 	}
 	// A fresh outgoing set: only the routing token. Whatever else the
-	// request carried is not this call's to forward.
-	wctx, cancel := context.WithCancel(metadata.NewOutgoingContext(context.WithoutCancel(ctx), md))
+	// request carried is not this call's to forward — and the incoming side
+	// is cleared too, or the principal relay every generated dial installs
+	// (principal.ForwardToOutgoing) would copy the caller's principal,
+	// scopes and labels back onto the call.
+	wctx, cancel := context.WithCancel(metadata.NewOutgoingContext(
+		metadata.NewIncomingContext(context.WithoutCancel(ctx), metadata.MD{}), md))
 	reportCtx := context.WithoutCancel(ctx)
 
 	timer := time.AfterFunc(registerWait, cancel)
