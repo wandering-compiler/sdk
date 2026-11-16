@@ -645,6 +645,11 @@ impl App {
             ));
         }
         if !txscope::drain(until()).await {
+            // The waits for another process's commit among it are stopped,
+            // so none publishes on the dispatcher closed below.
+            if let Some(remote) = &served.shared.remote {
+                remote.abandon_waits();
+            }
             observability::report_error(&format!(
                 "runtime: {} piece(s) of work after a commit (events, on_commit hooks, events waiting for a commit \
                  another process runs) still running at the shutdown deadline; abandoned",

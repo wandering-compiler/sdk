@@ -476,3 +476,32 @@ async fn remote_emit_without_a_coordinator_announces_now() {
     assert_eq!(t.count(), 1);
     assert_eq!(reports("open-nocoord"), Vec::<String>::new());
 }
+
+/// The shutdown drain gave up on a wait whose transaction is still open: the
+/// runtime abandons it before it closes the dispatcher. The wait stops, says
+/// that it dropped the event, and a commit landing afterwards publishes
+/// nothing — it would publish on a dispatcher already closed.
+#[tokio::test]
+async fn remote_emit_a_wait_the_shutdown_abandons_stops_and_never_publishes() {
+    let o = Arc::new(Outcomes::default());
+    let remote = coordinator(o.clone(), true).await;
+    let t = tier(Some(remote.clone()));
+    t.call("open-abandoned", None).await;
+    remote.abandon_waits();
+    let until = tokio::time::Instant::now() + Duration::from_secs(3);
+    while reports("open-abandoned").is_empty() && tokio::time::Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let r = reports("open-abandoned");
+    assert!(
+        r.len() == 1
+            && r[0]
+                .contains("(the shutdown abandoned the wait), so whether it committed is unknown"),
+        "{r:?}"
+    );
+    // The commit lands after the shutdown gave up: nobody listens any more.
+    if let Some(send) = o.open.lock().unwrap().remove("open-abandoned") {
+        let _ = send.unbounded_send(msg(TxOutcome::Committed));
+    }
+    assert_eq!(t.settle(1).await, 0);
+}

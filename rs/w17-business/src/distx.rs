@@ -51,6 +51,7 @@
 //! ends.
 
 use std::{fmt, future::Future, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 use tonic::{Code, Status};
 
@@ -764,6 +765,11 @@ pub(crate) struct RemoteCommits {
     client: W17TransactionOutcomeClient<StorageChannel>,
     /// [`REGISTER_WAIT`]; tests shorten it.
     register_wait: Duration,
+    /// Cancelled when the shutdown drain gives up on the waits still running
+    /// ([`RemoteCommits::abandon_waits`]): each stops listening, reports the
+    /// drop, and never publishes on the dispatcher closed after it. Shared by
+    /// every clone.
+    abandoned: CancellationToken,
 }
 
 impl RemoteCommits {
@@ -771,7 +777,16 @@ impl RemoteCommits {
         Self {
             client: W17TransactionOutcomeClient::new(channel),
             register_wait: REGISTER_WAIT,
+            abandoned: CancellationToken::new(),
         }
+    }
+
+    /// Stop every wait still running — what the runtime calls once its
+    /// shutdown drain gave up on them, before it closes the dispatcher. A
+    /// task cannot be stopped from outside, but its wait can: each one
+    /// reports that it dropped its event and ends.
+    pub(crate) fn abandon_waits(&self) {
+        self.abandoned.cancel();
     }
 
     #[cfg(test)]
@@ -856,9 +871,17 @@ impl RemoteCommits {
         // Tracked like every other piece of work a commit owes: the shutdown
         // drain waits for it and counts it when it cannot.
         let tx_id = tx_id.to_string();
+        let abandoned = self.abandoned.clone();
         txscope::spawn_tracked(async move {
             loop {
-                let msg = match stream.message().await {
+                let next = tokio::select! {
+                    biased;
+                    () = abandoned.cancelled() => {
+                        return stopped(&tx_id, "the shutdown abandoned the wait");
+                    }
+                    next = stream.message() => next,
+                };
+                let msg = match next {
                     Ok(Some(msg)) => msg,
                     Ok(None) => {
                         return stopped(&tx_id, "the stream ended");
