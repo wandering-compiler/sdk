@@ -43,7 +43,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TypeVar
 
 from grpclib.const import Status
@@ -75,6 +76,9 @@ __all__ = [
     "begin",
     "run",
     "on_commit",
+    "OutcomeClient",
+    "defer_remote",
+    "REGISTER_WAIT",
     "OUTCOME_PROBE_TIMEOUT",
     "ROLLBACK_WAIT",
     "ENDED_DOMAIN",
@@ -194,6 +198,14 @@ class TxClient(Protocol):
     async def commit(self, ctx: Context, req: Any) -> Any: ...
 
     async def rollback(self, ctx: Context, req: Any) -> Any: ...
+
+
+class OutcomeClient(Protocol):
+    """``W17TransactionOutcome``: how a transaction another process runs ends.
+    ``client.TxOutcomeClient`` is the one the runtime wires; a test may fake
+    it. ``await_outcome`` streams ``AwaitResponse`` messages."""
+
+    def await_outcome(self, ctx: Context, req: Any) -> AsyncIterator[Any]: ...
 
 
 _ROOT = object()
@@ -581,3 +593,131 @@ async def on_commit(ctx: Context, fn: Callable[[], Any]) -> txscope.Outcome:
     elif out is txscope.Outcome.DISCARDED:
         report_error(ctx, "distx: on_commit work dropped: it was registered after its transaction rolled back")
     return out
+
+
+# --- a transaction another process runs -----------------------------------------
+#
+# A business method reached over the wire with the caller's ``w17-tx-id`` (and
+# no in-process scope) takes part in a transaction begun in the caller's
+# process: neither a local scope nor anything else here hears how it ends. Its
+# events must still wait for the commit, as they would inside one process, so
+# the transaction's coordinator is asked (W17TransactionOutcome.Await, served
+# by the storage bundle beside W17DistributedTransaction). Go's twin is
+# ``distx.RemoteCommits``.
+
+# Bounds how long defer_remote waits for the coordinator to confirm it is
+# watching the transaction. The method's caller is waiting for its answer
+# meanwhile, so the bound is short; a coordinator that cannot confirm in time
+# is one that cannot say how the transaction ends. Go's registerWait.
+REGISTER_WAIT = 10.0
+
+# TxOutcome, as Await reports it.
+_TX_PENDING, _TX_COMMITTED, _TX_NOT_COMMITTED = 0, 1, 2
+
+
+def _why(e: BaseException) -> str:
+    if isinstance(e, GRPCError):
+        return f"{e.status.name}: {e.message}" if e.message else e.status.name
+    if isinstance(e, StopAsyncIteration):
+        return "the stream ended without saying how the transaction ended"
+    return repr(e)
+
+
+async def defer_remote(ctx: Context, client: OutcomeClient | None, tx_id: str,
+                       fn: Callable[[], Any]) -> txscope.Outcome:
+    """Park ``fn`` until the transaction ``tx_id`` — run by ANOTHER process —
+    commits, by asking its coordinator. Registered before this returns, so the
+    caller's commit cannot outrun the wait.
+
+    - ``DEFERRED``: the transaction is open; ``fn`` runs once when it commits
+      and never when it does not. The wait is tracked as work after a commit
+      (``txscope.drain`` waits for it, the shutdown cancels and counts it).
+    - ``ALREADY_COMMITTED``: it had committed already; the caller runs ``fn``.
+    - ``NO_SCOPE``: no coordinator to ask (none configured, or one too old to
+      serve the outcome service — reported); the caller runs ``fn`` now.
+    - ``DISCARDED``: it ended without committing, the coordinator does not know
+      it, or it cannot be asked — reported; ``fn`` must not run.
+
+    ``ctx`` is the request's: its ``w17-conn-id`` (the storage proxy's routing
+    token) is echoed so the wait reaches the replica holding the transaction,
+    and nothing else of it is — not its metadata, not its cancellation or
+    deadline: the request ends long before the commit.
+
+    Delivery is at-most-once, as everywhere after a commit: a process that
+    stops while it waits, or a coordinator that stops answering, loses the
+    work, and that is reported."""
+    if client is None or fn is None or not tx_id:
+        return txscope.Outcome.NO_SCOPE
+    report_ctx = ctx.without_cancel()
+    conn_id = next((v for v in ctx.incoming.get_all(CONN_ID_HEADER) if v), "")
+    # A fresh context: only the routing token goes out.
+    wctx = Context(outgoing={CONN_ID_HEADER: conn_id} if conn_id else None)
+    stream = client.await_outcome(wctx, _msg("AwaitRequest")(tx_id=tx_id))
+    try:
+        first = await asyncio.wait_for(anext(stream), REGISTER_WAIT)
+    except Exception as e:  # noqa: BLE001 — every failure is settled below
+        await _close(stream)
+        if isinstance(e, GRPCError) and e.status == Status.UNIMPLEMENTED:
+            # A coordinator older than the outcome service: it cannot be
+            # asked, and dropping every event in such a mixed deployment
+            # would be a regression nobody asked for. Announced now, as
+            # before — said.
+            report_error(report_ctx, f"distx: announcing inside transaction {_q(tx_id)} before it commits: its "
+                                     "coordinator does not serve W17TransactionOutcome (upgrade the storage "
+                                     "bundle), so the event cannot wait for the commit")
+            return txscope.Outcome.NO_SCOPE
+        reason = (f"the coordinator did not confirm the wait within {REGISTER_WAIT:g}s"
+                  if isinstance(e, TimeoutError) else _why(e))
+        report_error(report_ctx, f"distx: dropped the deferred announcement of tx {_q(tx_id)}: its coordinator "
+                                 f"could not be asked how the transaction ends ({reason})")
+        return txscope.Outcome.DISCARDED
+    if first.outcome == _TX_COMMITTED:
+        await _close(stream)
+        return txscope.Outcome.ALREADY_COMMITTED
+    if first.outcome == _TX_NOT_COMMITTED:
+        await _close(stream)
+        report_error(report_ctx, f"distx: dropped the deferred announcement of tx {_q(tx_id)}: the transaction "
+                                 "ended without committing before the emit registered")
+        return txscope.Outcome.DISCARDED
+    txscope.spawn(_await_commit(report_ctx, tx_id, stream, fn))
+    return txscope.Outcome.DEFERRED
+
+
+def _q(s: str) -> str:
+    """Go's %q of an id: double-quoted, escaped."""
+    return json.dumps(s)
+
+
+async def _close(stream: AsyncIterator[Any]) -> None:
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        try:
+            await aclose()
+        except Exception:  # noqa: BLE001 — a stream that will not close cleanly is gone either way
+            pass
+
+
+async def _await_commit(ctx: Context, tx_id: str, stream: AsyncIterator[Any], fn: Callable[[], Any]) -> None:
+    """Read the rest of an Await stream; run fn once on COMMITTED."""
+    try:
+        while True:
+            try:
+                msg = await anext(stream)
+            except Exception as e:  # noqa: BLE001
+                report_error(ctx, f"distx: dropped the deferred announcement of tx {_q(tx_id)}: the coordinator "
+                                  f"stopped answering before the transaction ended ({_why(e)}), so whether it "
+                                  "committed is unknown")
+                return
+            if msg.outcome == _TX_COMMITTED:
+                break
+            if msg.outcome == _TX_NOT_COMMITTED:
+                # Rolled back: the writes are gone, and so is their announcement.
+                return
+    finally:
+        await _close(stream)
+    try:
+        r = fn()
+        if inspect.isawaitable(r):
+            await r
+    except Exception as e:  # noqa: BLE001 — the transaction has committed whatever fn does
+        report_error(ctx, RuntimeError(f"distx: work parked on committed transaction {tx_id} failed: {e!r}"))

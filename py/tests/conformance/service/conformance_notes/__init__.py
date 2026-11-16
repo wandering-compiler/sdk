@@ -48,6 +48,18 @@ class NoteService:
         return self.registry.self("conformance.v1.NoteService")
 
     async def CreateNote(self, ctx, req):
+        caller_tx = ctx.incoming.first(distx.TX_ID_HEADER)
+        if caller_tx:
+            # Reached inside a transaction its CALLER runs: take part in it
+            # (forward its routing headers) rather than open one. The event
+            # waits for the caller's commit, which the SDK asks the
+            # coordinator about.
+            out = ctx.outgoing.with_set(distx.TX_ID_HEADER, caller_tx)
+            conn_id = ctx.incoming.first(distx.CONN_ID_HEADER)
+            if conn_id:
+                out = out.with_set(distx.CONN_ID_HEADER, conn_id)
+            return await self.storage.InsertNote(ctx.with_outgoing(out), self.InsertNoteRequest(text=req.text))
+
         async def write(tx_ctx):
             return await self.storage.InsertNote(tx_ctx, self.InsertNoteRequest(text=req.text))
 

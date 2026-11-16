@@ -22,7 +22,8 @@ does what Go's generated business ``main`` does:
    in-flight ones ``shutdown_timeout_seconds`` (10, Go's ShutdownTimeout),
    cancel the rest and give them one more timeout to return (a rollback, a
    commit in progress), wait for the work committed transactions still owe
-   (events, on_commit hooks), then run the shutdown hooks under one 30s
+   (events, on_commit hooks, and the events still waiting for a transaction
+   another process runs to commit), then run the shutdown hooks under one 30s
    drain deadline (Go's shutdownDrainTimeout), close the buses and the
    channels, flush telemetry. The whole drain is ONE budget, set when it
    starts: every step draws from what is left of it.
@@ -46,7 +47,7 @@ from grpclib.health.service import OVERALL, Health
 from grpclib.server import Server
 
 from . import _grpclib, events, observability, principal, tlsconfig, txscope
-from .client import CompanionConn, Conn, ServiceClient, TxCoordinator, parse_addr
+from .client import CompanionConn, Conn, ServiceClient, TxCoordinator, TxOutcomeClient, parse_addr
 from .config import Config, ConfigError
 from .context import Context
 from .descriptors import Pool, default_pool
@@ -96,6 +97,7 @@ class Clients:
         self._egress: dict[str, ServiceClient] = {}  # by client name
         self._stores: dict[str, FileStore] = {}
         self._tx: TxCoordinator | None = None
+        self._tx_outcome: TxOutcomeClient | None = None
         self._storage(pool, manifest, env)
         self._companion_clients(pool, manifest, env)
 
@@ -123,6 +125,7 @@ class Clients:
             self._by_service[full] = ServiceClient(conn, full, pool)
         if tier.distributed_transactions:
             self._tx = TxCoordinator(conn)
+            self._tx_outcome = TxOutcomeClient(conn)
 
     def _companion_clients(self, pool: Pool, manifest: Manifest, env: Mapping[str, str]) -> None:
         comp = manifest.companion
@@ -200,6 +203,12 @@ class Clients:
                 "(it declares no mutation service), so there is no transaction to begin")
         return self._tx
 
+    def transaction_outcome(self) -> TxOutcomeClient | None:
+        """The coordinator's ``W17TransactionOutcome`` (served beside
+        ``W17DistributedTransaction``, on its connection), or None when the
+        storage registers no coordinator. The registry's emits wait on it."""
+        return self._tx_outcome
+
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()
@@ -248,7 +257,8 @@ class App:
         self.dispatcher = await self._bus()
         self.clients = Clients(self.pool, m, self.env)
         self.registry = Registry(
-            self.pool, m.emits, self.dispatcher, m.invalidates, services=tuple(s.name for s in m.services))
+            self.pool, m.emits, self.dispatcher, m.invalidates, services=tuple(s.name for s in m.services),
+            tx_outcome=self.clients.transaction_outcome())
         self._check_events()
         await self._register()
 

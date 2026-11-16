@@ -44,7 +44,7 @@ from .context import Context, Metadata
 from .descriptors import MethodInfo, Pool, default_pool
 from .errors import StatusDetailsCodec
 
-__all__ = ["RetryPolicy", "Conn", "CompanionConn", "ServiceClient", "TxCoordinator", "dial", "parse_addr"]
+__all__ = ["RetryPolicy", "Conn", "CompanionConn", "ServiceClient", "TxCoordinator", "TxOutcomeClient", "dial", "parse_addr"]
 
 
 class RetryPolicy:
@@ -403,6 +403,23 @@ class TxCoordinator:
     async def rollback(self, ctx: Context, req: Any):
         reply, _ = await self._conn.unary(ctx, self._rollback, req)
         return reply
+
+
+class TxOutcomeClient:
+    """The ``W17TransactionOutcome`` client (``distx.OutcomeClient``): how a
+    transaction another process runs ends. The storage bundle serves it beside
+    ``W17DistributedTransaction``, so it shares that coordinator's connection."""
+
+    SERVICE = "w17.common.distx.W17TransactionOutcome"
+
+    def __init__(self, conn: Conn) -> None:
+        self._conn = conn
+        self._await = {m.name: m for m in default_pool().methods(self.SERVICE)}["Await"]
+
+    def await_outcome(self, ctx: Context, req: Any) -> AsyncIterator[Any]:
+        """``Await``: PENDING once the wait is registered, then COMMITTED or
+        NOT_COMMITTED, then the stream ends."""
+        return self._conn.server_stream(ctx, self._await, req)
 
 
 def dial(addr: str, *, tls: bool | None = None) -> Conn:
