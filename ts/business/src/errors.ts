@@ -209,15 +209,25 @@ export interface ErrorInfo {
 
 /** The `google.rpc.ErrorInfo` a `StatusError` carries, or undefined (also for anything that is not one). */
 export function errorInfo(err: unknown): ErrorInfo | undefined {
-  if (!(err instanceof StatusError)) return undefined;
+  return errorInfos(err)[0];
+}
+
+/**
+ * Every `google.rpc.ErrorInfo` a `StatusError` carries, in order (none for
+ * anything that is not one). Details that do not decode carry none, and end
+ * the walk.
+ */
+export function errorInfos(err: unknown): ErrorInfo[] {
+  const out: ErrorInfo[] = [];
+  if (!(err instanceof StatusError)) return out;
   try {
     for (const d of err.details) {
-      if (d.typeUrl.slice(d.typeUrl.lastIndexOf("/") + 1) === ERROR_INFO_TYPE) return decodeErrorInfo(d.value);
+      if (d.typeUrl.slice(d.typeUrl.lastIndexOf("/") + 1) === ERROR_INFO_TYPE) out.push(decodeErrorInfo(d.value));
     }
   } catch {
-    return undefined; // details that do not decode carry no ErrorInfo
+    // details that do not decode carry no (further) ErrorInfo
   }
-  return undefined;
+  return out;
 }
 
 function decodeErrorInfo(bytes: Uint8Array): ErrorInfo {

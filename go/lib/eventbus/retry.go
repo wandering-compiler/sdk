@@ -1,6 +1,9 @@
 package eventbus
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // ChannelRetry overrides the bus-level Default{MaxDeliver,AckWait}
 // for one specific channel. Set via Options.ChannelRetries (a
@@ -182,4 +185,26 @@ func (p retryPlan) delay(attempt int) time.Duration {
 		return MaxBackoff
 	}
 	return d
+}
+
+// attemptBudget is how long one delivery attempt may run: AckWait less a
+// tenth. The broker counts an attempt as failed at AckWait and hands the
+// message to another consumer; a handler still running then would execute
+// the same event twice, concurrently. The tenth leaves the attempt's
+// outcome time to settle (Ack, Nak with its backoff) before the broker
+// decides on its own.
+func attemptBudget(ackWait time.Duration) time.Duration {
+	if ackWait <= 0 {
+		return 0
+	}
+	return ackWait - ackWait/10
+}
+
+// withAttemptDeadline bounds one handler attempt by attemptBudget. A zero
+// AckWait (no bound configured) leaves ctx as it is.
+func withAttemptDeadline(ctx context.Context, ackWait time.Duration) (context.Context, context.CancelFunc) {
+	if b := attemptBudget(ackWait); b > 0 {
+		return context.WithTimeout(ctx, b)
+	}
+	return ctx, func() {}
 }

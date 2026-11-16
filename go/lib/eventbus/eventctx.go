@@ -269,3 +269,60 @@ func LabelsFromContext(ctx context.Context) map[string]string {
 	}
 	return labels
 }
+
+// RowScope is one data scope of a model a mutation touched
+// (`(w17.db.scope)` entry), for [RowScopes].
+type RowScope struct {
+	// Name is the scope's name — the AuthResp.scopes key, the
+	// `x-w17-scope-<name>` suffix.
+	Name string
+	// Owner marks an OWNER-axis entry.
+	Owner bool
+	// Row is the row's own value of the scope's column, read off the
+	// mutation's response when it IS the row; "" when it is not.
+	Row string
+	// Bypassed: the method bypasses this scope (`(w17.db.bypass_scope)`),
+	// so storage enforced nothing the request carried.
+	Bypassed bool
+}
+
+// RowScopes returns the data-scope values of the rows a mutation touched,
+// as the storage tier knows them at emit, keyed by scope name — what an
+// InvalidateEvent carries in `scopes`, so a hub can deliver it to the
+// clients who may READ those rows, whoever wrote them.
+//
+// Per scope: the row's own value when the response carries the row (Row);
+// otherwise the value storage held every touched row to — the request's
+// `x-w17-scope-<name>`, which the generated statement both filtered on
+// and stamped — unless the method bypasses the scope, or the scope is
+// OWNER-axis and the request's range (`x-w17-data-scope` "org" / "all")
+// lifted it: then the rows' value is not known and the scope is left out.
+// Left out means "not known", never "matches": a hub delivers such an
+// event by the scopes it does carry.
+func RowScopes(ctx context.Context, scopes []RowScope) map[string]string {
+	md, _ := contextMD(ctx)
+	lifted := false
+	if v := md.Get(principal.DataScopeMetadataKey); len(v) == 1 && (v[0] == principal.DataScopeOrg || v[0] == principal.DataScopeAll) {
+		lifted = true
+	}
+	var out map[string]string
+	set := func(name, v string) {
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[name] = v
+	}
+	for _, s := range scopes {
+		switch {
+		case s.Name == "":
+		case s.Row != "":
+			set(s.Name, s.Row)
+		case s.Bypassed || (s.Owner && lifted):
+		default:
+			if v := md.Get(principal.ScopeKey(s.Name)); len(v) == 1 && v[0] != "" {
+				set(s.Name, v[0])
+			}
+		}
+	}
+	return out
+}

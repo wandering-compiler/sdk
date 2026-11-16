@@ -20,8 +20,10 @@ func TestCheck_ZeroMeasuredRequestsFails(t *testing.T) {
 			t.Errorf("%s: zero measured requests passed: %v", name, err)
 		}
 	}
-	if err := r.Check(nil); err != nil {
-		t.Errorf("report-only (no thresholds) stays a pass: %v", err)
+	// Report-only (no thresholds) fails it too: a run that measured nothing
+	// reports nothing (TestCheck_ReportOnlyStillFailsARunWithNoSuccess).
+	if err := r.Check(nil); err == nil || !strings.Contains(err.Error(), "no requests were measured") {
+		t.Errorf("report-only over zero measured requests passed: %v", err)
 	}
 }
 

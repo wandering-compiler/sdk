@@ -771,6 +771,15 @@ func (s *redisSubscription) consumeLoop(ctx context.Context, h HandlerFunc) {
 			stopFresh := s.keepQueuedFresh(ctx, batch, &started)
 			defer stopFresh()
 			for i, msg := range batch {
+				// Draining (ctx ended): the entry running finished above;
+				// the ones not started go back to the group, claimable by
+				// a sibling at once, as the NATS adapter Naks a delivery
+				// that arrives mid-drain. Running them here pushed the exit
+				// out by every handler left in the batch.
+				if ctx.Err() != nil {
+					s.handBack(bgCtx, batch[i:])
+					return
+				}
 				started.Store(int64(i + 1))
 				s.processMessage(bgCtx, h, msg.ID, msg.Values, 0)
 			}
@@ -827,6 +836,25 @@ func (s *redisSubscription) keepQueuedFresh(ctx context.Context, batch []goredis
 		close(stop)
 		<-done
 	}
+}
+
+// handBack returns entries this consumer read but never started to the
+// group: XCLAIM with an IDLE of a whole AckWait makes each one due to every
+// sibling's claim loop on its next tick, and RETRYCOUNT 0 leaves the
+// delivery that never ran uncounted (the sibling's claim counts its own).
+// Best effort: an entry that cannot be handed back is claimed after
+// AckWait, as it would have been.
+func (s *redisSubscription) handBack(ctx context.Context, entries []goredis.XMessage) {
+	if len(entries) == 0 {
+		return
+	}
+	_, ackWait := s.bus.retryFor(s.channel)
+	args := []any{"XCLAIM", s.channel, s.group, s.bus.opts.ConsumerName, 0}
+	for _, m := range entries {
+		args = append(args, m.ID)
+	}
+	args = append(args, "IDLE", ackWait.Milliseconds(), "RETRYCOUNT", 0, "JUSTID")
+	_ = s.bus.client.Do(ctx, args...).Err()
 }
 
 // claimLoop polls XPENDING every quarter of AckWait for entries past
@@ -1039,7 +1067,15 @@ func (s *redisSubscription) claimEntries(ctx context.Context, h HandlerFunc, max
 			MinIdle:  minIdle,
 			Messages: []string{p.ID},
 		}).Result()
-		if err != nil || len(claimed) == 0 {
+		if err != nil {
+			continue
+		}
+		if len(claimed) == 0 || claimed[0].Values == nil {
+			// Nothing claimed: a sibling got there first, or the stream
+			// no longer has the entry — retention trimmed it while it
+			// waited for its retry. The second is a lost event, and must
+			// be said so, not skipped on every tick.
+			s.settleIfTrimmed(ctx, p.ID)
 			continue
 		}
 		if p.RetryCount >= int64(limit) {
@@ -1127,15 +1163,15 @@ var errEntryWithoutTopic = errors.New("eventbus: redis entry has no topic field;
 // processMessage a second owner of the same unrefcounted key, and its release
 // then unmarked a message the batch was still holding. Do not reintroduce it.
 //
-// retryCount is passed for future observability wiring (Phase
-// E7) — for now unused beyond the DLQ threshold check happens
-// in claimPending before this function gets the message.
+// retryCount is the entry's delivery count before this claim (zero for a
+// fresh read): above zero the delivery is a redelivery, which is when the
+// arm ledger is read (arms.go).
 func (s *redisSubscription) processMessage(
 	ctx context.Context,
 	h HandlerFunc,
 	msgID string,
 	values map[string]any,
-	_ /* retryCount */ int64,
+	retryCount int64,
 ) {
 	s.wg.Add(1)
 	defer s.wg.Done()
@@ -1167,8 +1203,17 @@ func (s *redisSubscription) processMessage(
 	payload, _ := values[redisFieldPayload].(string)
 	raw := []byte(payload)
 
+	// The attempt is bounded by the channel's AckWait (see attemptBudget):
+	// past it a sibling replica's claim loop takes the entry over, and a
+	// handler still running here would execute it alongside that run.
+	_, ackWait := s.bus.retryFor(s.channel)
 	start := time.Now()
-	err := h(ctx, topic, raw)
+	attemptCtx, attemptCancel := withAttemptDeadline(ctx, ackWait)
+	// A claimed entry (retryCount > 0) is a redelivery: its dispatcher
+	// reads which handlers an earlier attempt completed (arms.go).
+	attemptCtx = withArmLedger(attemptCtx, redisArmLedger{client: s.bus.client, key: redisArmKey(s.channel, s.group, msgID)}, retryCount > 0, s.channel, topic)
+	err := h(attemptCtx, topic, raw)
+	attemptCancel()
 	reportDeliverLatency(s.bus.opts.Observer, s.channel, topic, time.Since(start))
 	if err != nil {
 		// Don't ack; PEL retains the entry. Claim loop
@@ -1195,7 +1240,14 @@ func (s *redisSubscription) routeToDLQ(ctx context.Context, msgID string) {
 	// Fetch the original entry by ID so we have the
 	// topic+payload to forward.
 	msgs, err := s.bus.client.XRange(ctx, s.channel, msgID, msgID).Result()
-	if err != nil || len(msgs) == 0 {
+	if err == nil && len(msgs) == 0 {
+		// The read worked and the entry is gone: retention trimmed it.
+		// There is nothing to copy into the DLQ, ever — settle it rather
+		// than retry a copy that cannot succeed on every tick.
+		s.settleTrimmed(ctx, msgID)
+		return
+	}
+	if err != nil {
 		// Couldn't fetch the source entry — do NOT ack. Leaving it in the
 		// PEL lets the next claim tick retry the DLQ routing. Acking here
 		// would lose a poisoned message from BOTH the stream and the DLQ,
@@ -1214,6 +1266,28 @@ func (s *redisSubscription) routeToDLQ(ctx context.Context, msgID string) {
 	// Only now that the payload is safely in the DLQ do we ack the origin.
 	_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
 	s.bus.opts.Observer.OnDrop(s.channel, topic, DropReasonMaxDeliverExceeded)
+}
+
+// settleIfTrimmed settles msgID when the stream no longer holds it (see
+// settleTrimmed). An entry still present, or a read that failed, is left as
+// it is for the next tick.
+func (s *redisSubscription) settleIfTrimmed(ctx context.Context, msgID string) {
+	msgs, err := s.bus.client.XRange(ctx, s.channel, msgID, msgID).Result()
+	if err != nil || len(msgs) > 0 {
+		return
+	}
+	s.settleTrimmed(ctx, msgID)
+}
+
+// settleTrimmed acknowledges a pending entry whose stream row is gone and
+// reports it as dropped (DropReasonTrimmed): it had not been delivered
+// successfully, and its payload no longer exists anywhere. Redis 7 removes
+// such a row from the pending list inside XCLAIM without a word; earlier
+// servers keep listing it forever. Either way this is the one place the
+// loss is told.
+func (s *redisSubscription) settleTrimmed(ctx context.Context, msgID string) {
+	_ = s.bus.client.XAck(ctx, s.channel, s.group, msgID).Err()
+	s.bus.opts.Observer.OnDrop(s.channel, "", DropReasonTrimmed)
 }
 
 // xadd appends one entry to stream, trimming it to the retention limits in

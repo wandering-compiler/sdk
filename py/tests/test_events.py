@@ -37,6 +37,16 @@ def test_ordinary_and_gateway_owned_keys_travel(key):
     assert not events.reserved_metadata_key(key)
 
 
+@pytest.mark.parametrize("key", ["dpop", "DPoP", "grpcgateway-dpop"])
+def test_a_dpop_proof_never_rides_an_envelope(key):
+    # Go's eventctx_dpop_labels_test: a DPoP proof (RFC 9449) is a signed JWS
+    # bound to the request — a credential.
+    assert events.is_credential_key(key)
+    assert events.reserved_metadata_key(key)
+    ctx = Context(incoming=[(key, "eyJ0eXAiOiJkcG9wK2p3dCJ9.proof.sig"), ("x-w17-user", "u1")])
+    assert events.metadata_from_context(ctx) == {"x-w17-user": "u1"}
+
+
 def test_tx_keys_never_ride_an_envelope():
     assert events.reserved_metadata_key("w17-tx-id")
     assert events.reserved_metadata_key("W17-Conn-Id")

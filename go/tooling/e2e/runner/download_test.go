@@ -232,3 +232,29 @@ func TestRenderImage(t *testing.T) {
 		t.Error("100000x100000: no error, want one rather than gigabytes of pixels")
 	}
 }
+
+// A download step with no assertion passed on any 2xx body — an HTML error
+// page served with 200 included — because the "asserts nothing" refusal
+// exempted downloads and a file answer has no fields of its own to trip it.
+// `expect: {}` stays the explicit opt-out.
+func TestDownloadStep_RefusesAStepThatAssertsNothing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/files/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<html>not the file</html>")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	bare := downloadStep("bare", "/api/files/covers/aa/k1", "", "")
+	err := RunScenario(context.Background(), []Step{bare}, restCallers(srv))
+	if err == nil || !strings.Contains(err.Error(), "asserts nothing") {
+		t.Fatalf("err = %v, want the step refused for asserting nothing", err)
+	}
+
+	optOut := downloadStep("opt-out", "/api/files/covers/aa/k1", "", "")
+	optOut.Expect = map[string]any{}
+	if err := RunScenario(context.Background(), []Step{optOut}, restCallers(srv)); err != nil {
+		t.Fatalf("`expect: {}` is the explicit opt-out, got %v", err)
+	}
+}

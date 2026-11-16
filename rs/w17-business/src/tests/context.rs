@@ -11,6 +11,10 @@ use crate::{
     paging, principal,
 };
 
+/// The principal readers' AuthResp type is process-wide: the tests that set
+/// it take this lock.
+pub(crate) static AUTH_RESP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub(crate) fn conformance_pool() -> DescriptorPool {
     let raw = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -128,6 +132,7 @@ fn a_request_carries_its_context() {
 
 #[test]
 fn principal_readers_fail_closed() {
+    let _g = AUTH_RESP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     principal::set_auth_resp_type(
         conformance_pool().get_message_by_name("conformance.v1.AuthResp"),
     );
@@ -204,6 +209,7 @@ fn the_relay_replaces_the_outgoing_principal() {
 
 #[test]
 fn act_as_stamps_the_outgoing_side_only() {
+    let _g = AUTH_RESP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = conformance_pool();
     principal::set_auth_resp_type(pool.get_message_by_name("conformance.v1.AuthResp"));
     let mut user =
@@ -222,6 +228,78 @@ fn act_as_stamps_the_outgoing_side_only() {
     let empty = DynamicMessage::new(pool.get_message_by_name("conformance.v1.AuthResp").unwrap());
     assert!(principal::act_as(&c, &empty, &[]).is_err());
     assert!(principal::act_as(&c, &user, &[(" bad", "x")]).is_err());
+}
+
+/// A descriptor set with two realms' `AuthResp` (auth + admin_auth, the
+/// reference / matrix-admin shape), the user id at different numbers.
+fn two_realms_pool() -> DescriptorPool {
+    use prost_types::{
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+        field_descriptor_proto::{Label, Type},
+    };
+    let file = |name: &str, pkg: &str, uid: i32| FileDescriptorProto {
+        name: Some(name.into()),
+        package: Some(pkg.into()),
+        syntax: Some("proto3".into()),
+        message_type: vec![DescriptorProto {
+            name: Some("AuthResp".into()),
+            field: [("email", 1), ("user_id", uid), ("token", 9)]
+                .into_iter()
+                .filter(|(f, _)| uid != 1 || *f != "email")
+                .map(|(f, n)| FieldDescriptorProto {
+                    name: Some(f.into()),
+                    number: Some(n),
+                    label: Some(Label::Optional as i32),
+                    r#type: Some(Type::String as i32),
+                    json_name: Some(f.into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    DescriptorPool::from_file_descriptor_set(FileDescriptorSet {
+        file: vec![
+            file("app/auth.proto", "app.auth", 1),
+            file("app/admin_auth.proto", "app.admin_auth", 2),
+        ],
+    })
+    .unwrap()
+}
+
+#[test]
+fn act_as_and_user_id_with_two_realms() {
+    let _g = AUTH_RESP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let pool = two_realms_pool();
+    crate::runtime::install_auth_resp(&pool);
+    for realm in ["app.auth.AuthResp", "app.admin_auth.AuthResp"] {
+        let mut user = DynamicMessage::new(pool.get_message_by_name(realm).unwrap());
+        user.set_field_by_name("user_id", Value::String("svc".into()));
+        let a = principal::act_as(&Ctx::background(), &user, &[])
+            .unwrap_or_else(|e| panic!("{realm}: {e}"));
+        // The envelope it stamped reads back as the same user, with no
+        // user_id scope to shortcut it.
+        let back = Ctx::background().with_incoming(a.outgoing().clone());
+        assert_eq!(principal::user_id(&back).as_deref(), Ok("svc"), "{realm}");
+        let empty = DynamicMessage::new(pool.get_message_by_name(realm).unwrap());
+        assert!(
+            principal::act_as(&Ctx::background(), &empty, &[]).is_err(),
+            "{realm}"
+        );
+    }
+    // An envelope the two types read as two different users is refused, not
+    // guessed: field 1 is auth's user_id and admin_auth's email, field 2 the
+    // reverse.
+    let mut both =
+        DynamicMessage::new(pool.get_message_by_name("app.admin_auth.AuthResp").unwrap());
+    both.set_field_by_name("email", Value::String("alice".into()));
+    both.set_field_by_name("user_id", Value::String("bob".into()));
+    let raw =
+        base64::engine::general_purpose::STANDARD.encode(prost::Message::encode_to_vec(&both));
+    assert!(principal::user_id(&with_incoming(&[("x-w17-user", &raw)])).is_err());
+    assert!(principal::act_as(&Ctx::background(), &both, &[]).is_err());
+    principal::set_auth_resp_type(None);
 }
 
 #[test]

@@ -423,6 +423,18 @@ func genuineOneofByKey(desc protoreflect.MessageDescriptor, key string) protoref
 	return nil
 }
 
+// enumArmNaming returns the first enum arm among flds whose enum declares
+// a value named s, or nil.
+func enumArmNaming(flds protoreflect.FieldDescriptors, s string) protoreflect.FieldDescriptor {
+	for j := 0; j < flds.Len(); j++ {
+		fd := flds.Get(j)
+		if fd.Kind() == protoreflect.EnumKind && fd.Enum().Values().ByName(protoreflect.Name(s)) != nil {
+			return fd
+		}
+	}
+	return nil
+}
+
 func resolveArm(od protoreflect.OneofDescriptor, v any) (protoreflect.FieldDescriptor, any) {
 	flds := od.Fields()
 	if obj, ok := v.(map[string]any); ok {
@@ -442,6 +454,19 @@ func resolveArm(od protoreflect.OneofDescriptor, v any) (protoreflect.FieldDescr
 		}
 	}
 	if kind := jsonValueKind(v); kind != "" {
+		// A bare STRING that names a value of an enum arm is that arm.
+		// The w17 wire sends an enum's number, but protojson accepts the
+		// value name for a plain enum field, and the generated TS/JS
+		// clients' surface for an enum IS the name — a client in JSON mode
+		// sends the body as written. Without this the name landed in the
+		// oneof's string arm, or was dropped when there was none. Checked
+		// before the by-primitive match, so within one oneof a string that
+		// spells an enum value name belongs to the enum arm.
+		if s, ok := v.(string); ok {
+			if fd := enumArmNaming(flds, s); fd != nil {
+				return fd, v
+			}
+		}
 		// Bare scalar (incl scalar-WKT) → the arm of that JSON primitive.
 		for j := 0; j < flds.Len(); j++ {
 			fd := flds.Get(j)

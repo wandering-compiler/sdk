@@ -65,7 +65,20 @@ type InvalidateEvent struct {
 	// Consumed by the gateway hub, not by the browser: the SSE
 	// frame body is marshaled without it (a client is never told
 	// the label it was filtered by).
-	Labels        map[string]string `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Labels map[string]string `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// scopes are the data-scope values of the ROWS the invalidation
+	// names, keyed by scope name (`org_id`, `user_id` — the AuthResp
+	// scopes keys): the row's own value when the mutation returned the
+	// row, else the value storage held every touched row to
+	// (`eventbus.RowScopes`). A scope whose value is not known — the owner
+	// of a row a staff member edited over the organization range, say —
+	// is absent; absent never matches anything.
+	//
+	// Consumed by the gateway hub only: an audience gateway delivers the
+	// invalidation to the clients who may read those rows (restgw
+	// `WithRowScopes`), whoever wrote them. Cleared from the SSE frame
+	// body like labels.
+	Scopes        map[string]string `protobuf:"bytes,5,rep,name=scopes,proto3" json:"scopes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -124,6 +137,13 @@ func (x *InvalidateEvent) GetIds() []string {
 func (x *InvalidateEvent) GetLabels() map[string]string {
 	if x != nil {
 		return x.Labels
+	}
+	return nil
+}
+
+func (x *InvalidateEvent) GetScopes() map[string]string {
+	if x != nil {
+		return x.Scopes
 	}
 	return nil
 }
@@ -220,13 +240,17 @@ var File_w17_client_proto protoreflect.FileDescriptor
 
 const file_w17_client_proto_rawDesc = "" +
 	"\n" +
-	"\x10w17/client.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xc8\x01\n" +
+	"\x10w17/client.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xbd\x02\n" +
 	"\x0fInvalidateEvent\x12\x14\n" +
 	"\x05group\x18\x01 \x01(\tR\x05group\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x10\n" +
 	"\x03ids\x18\x03 \x03(\tR\x03ids\x128\n" +
-	"\x06labels\x18\x04 \x03(\v2 .w17.InvalidateEvent.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x04 \x03(\v2 .w17.InvalidateEvent.LabelsEntryR\x06labels\x128\n" +
+	"\x06scopes\x18\x05 \x03(\v2 .w17.InvalidateEvent.ScopesEntryR\x06scopes\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
+	"\vScopesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:K\n" +
 	"\x10returns_entities\x12\x1e.google.protobuf.MethodOptions\x18܇\x03 \x03(\tR\x0freturnsEntities:K\n" +
@@ -245,23 +269,25 @@ func file_w17_client_proto_rawDescGZIP() []byte {
 	return file_w17_client_proto_rawDescData
 }
 
-var file_w17_client_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_w17_client_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_w17_client_proto_goTypes = []any{
 	(*InvalidateEvent)(nil),            // 0: w17.InvalidateEvent
 	nil,                                // 1: w17.InvalidateEvent.LabelsEntry
-	(*descriptorpb.MethodOptions)(nil), // 2: google.protobuf.MethodOptions
-	(*descriptorpb.FieldOptions)(nil),  // 3: google.protobuf.FieldOptions
+	nil,                                // 2: w17.InvalidateEvent.ScopesEntry
+	(*descriptorpb.MethodOptions)(nil), // 3: google.protobuf.MethodOptions
+	(*descriptorpb.FieldOptions)(nil),  // 4: google.protobuf.FieldOptions
 }
 var file_w17_client_proto_depIdxs = []int32{
 	1, // 0: w17.InvalidateEvent.labels:type_name -> w17.InvalidateEvent.LabelsEntry
-	2, // 1: w17.returns_entities:extendee -> google.protobuf.MethodOptions
-	2, // 2: w17.touches_entities:extendee -> google.protobuf.MethodOptions
-	3, // 3: w17.entity_id:extendee -> google.protobuf.FieldOptions
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	1, // [1:4] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: w17.InvalidateEvent.scopes:type_name -> w17.InvalidateEvent.ScopesEntry
+	3, // 2: w17.returns_entities:extendee -> google.protobuf.MethodOptions
+	3, // 3: w17.touches_entities:extendee -> google.protobuf.MethodOptions
+	4, // 4: w17.entity_id:extendee -> google.protobuf.FieldOptions
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	2, // [2:5] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_w17_client_proto_init() }
@@ -275,7 +301,7 @@ func file_w17_client_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_client_proto_rawDesc), len(file_w17_client_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 3,
 			NumServices:   0,
 		},

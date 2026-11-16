@@ -26,7 +26,7 @@ import { create, type DescMessage, type Message } from "@bufbuild/protobuf";
 import type { CompanionConn } from "./client.js";
 import type { Context } from "./context.js";
 import { type AnyMessage, type MethodInfo, type Pool, getDefaultPool } from "./descriptors.js";
-import { errorInfo } from "./errors.js";
+import { Status, StatusError, errorInfo } from "./errors.js";
 import { FILES_SERVICE, type FileConnection, type FilePlacement } from "./manifest.js";
 
 export const SERVICE = FILES_SERVICE;
@@ -53,6 +53,20 @@ export function isNotFound(err: unknown): boolean {
   return info !== undefined && info.domain === DOMAIN && info.reason === "FILE_NOT_FOUND";
 }
 
+/**
+ * A file call the SDK refused before anything was sent: an unknown or
+ * ambiguous field, a field stored on another connection, a write to a
+ * connection the gateway writes. A `FAILED_PRECONDITION` status, so a handler
+ * that lets it through answers what the Rust tier and the companion answer
+ * (not a panic answered `INTERNAL`).
+ */
+export class FileRefusedError extends StatusError {
+  override name = "FileRefusedError";
+  constructor(message: string) {
+    super(Status.FAILED_PRECONDITION, message);
+  }
+}
+
 /** The placement of `field`: its full proto name, or `Message.field` when that names exactly one placement. */
 export function resolveField(field: string, placements: readonly FilePlacement[]): FilePlacement {
   const name = field.replace(/^\./, "");
@@ -62,9 +76,9 @@ export function resolveField(field: string, placements: readonly FilePlacement[]
   if (matches.length === 1) return matches[0]!;
   if (matches.length === 0) {
     const known = placements.map((p) => p.field).sort().join(", ") || "none";
-    throw new RangeError(`files: ${JSON.stringify(field)} is not a field this tier writes files for (have: ${known})`);
+    throw new FileRefusedError(`files: ${JSON.stringify(field)} is not a field this tier writes files for (have: ${known})`);
   }
-  throw new RangeError(`files: ${JSON.stringify(field)} is ambiguous (${matches.map((p) => p.field).sort().join(", ")})`);
+  throw new FileRefusedError(`files: ${JSON.stringify(field)} is ambiguous (${matches.map((p) => p.field).sort().join(", ")})`);
 }
 
 /** One upload connection's store, as the companion serves it. */
@@ -100,7 +114,7 @@ export class FileStore {
 
   #requireWritable(what: string): void {
     if (!this.writable) {
-      throw new Error(`files: ${what} on ${this.name}: the gateway writes this connection; this tier only reads it`);
+      throw new FileRefusedError(`files: ${what} on ${this.name}: the gateway writes this connection; this tier only reads it`);
     }
   }
 
@@ -113,7 +127,7 @@ export class FileStore {
    */
   async put(ctx: Context, field: string, body: Body): Promise<string> {
     const p = resolveField(field, this.#placements);
-    if (p.connection !== this.name) throw new RangeError(`files: ${p.field} is stored on ${p.connection}, not on ${this.name}`);
+    if (p.connection !== this.name) throw new FileRefusedError(`files: ${p.field} is stored on ${p.connection}, not on ${this.name}`);
     this.#requireWritable(`put ${p.field}`);
     const input = this.#put.input;
     async function* requests(): AsyncGenerator<Message> {

@@ -36,6 +36,14 @@ describe("credentials and reserved keys", () => {
     (k) => expect(events.reservedMetadataKey(k)).toBe(false),
   );
 
+  // Go's eventctx_dpop_labels_test: a DPoP proof (RFC 9449) is a signed JWS
+  // bound to the request — a credential.
+  it.each(["dpop", "DPoP", "grpcgateway-dpop"])("a DPoP proof (%s) never rides an envelope", (k) => {
+    expect(events.reservedMetadataKey(k)).toBe(true);
+    const ctx = new Context({ incoming: [[k, "eyJ0eXAiOiJkcG9wK2p3dCJ9.proof.sig"], ["x-w17-user", "u1"]] });
+    expect(events.metadataFromContext(ctx)).toEqual({ "x-w17-user": "u1" });
+  });
+
   it("transaction keys never ride an envelope", () => {
     expect(events.reservedMetadataKey("w17-tx-id")).toBe(true);
     expect(events.reservedMetadataKey("W17-Conn-Id")).toBe(true);

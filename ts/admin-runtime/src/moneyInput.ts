@@ -12,6 +12,7 @@
 // operator edits. Either `.` or `,` is accepted as the decimal separator, so
 // a Czech "123,45" and an English "123.45" both mean 12345 at scale 2.
 
+import { DEFAULT_MONEY_SCALE } from "./slotFormat";
 import type { FormatTemplate } from "./slotFormat";
 
 /**
@@ -21,7 +22,9 @@ import type { FormatTemplate } from "./slotFormat";
  */
 export function moneyInputScale(tmpl: FormatTemplate | undefined): number | undefined {
   for (const s of tmpl?.slots ?? []) {
-    if (s.preset === "money") return s.scale !== undefined && s.scale > 0 ? Math.floor(s.scale) : 0;
+    // An absent scale is the compiler's default (2), as the formatter reads it.
+    if (s.preset === "money")
+      return s.scale === undefined ? DEFAULT_MONEY_SCALE : s.scale > 0 ? Math.floor(s.scale) : 0;
   }
   return undefined;
 }

@@ -5,7 +5,9 @@
 
 import { isGatewayOwnedKey } from "./principal.js";
 
-const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-w17-credential"]);
+// dpop: a DPoP proof (RFC 9449), sent next to `authorization: DPoP <token>` —
+// a signed JWS bound to this request.
+const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-w17-credential", "dpop"]);
 const CREDENTIAL_SEGMENTS = new Set([
   "auth", "authorization", "apikey", "bearer", "cookie", "credential", "credentials",
   "jwt", "key", "otp", "pass", "passwd", "password", "pwd", "secret", "session",

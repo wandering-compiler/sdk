@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Context, Metadata } from "../src/context.ts";
 import { type AnyMessage, getDefaultPool } from "../src/descriptors.ts";
 import * as distx from "../src/distx.ts";
-import { Status, StatusError } from "../src/errors.ts";
+import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
+import { Status, StatusError, encodeRpcStatus } from "../src/errors.ts";
 import * as txscope from "../src/txscope.ts";
 import { settled, sleep } from "./helpers.ts";
 
@@ -450,4 +451,139 @@ describe("work after the commit", () => {
     expect(ran).toEqual([1]);
     expect(failures.length).toBe(1);
   });
+});
+
+// --- the coordinator's ended record, a busy commit, a bounded rollback --------
+//
+// Go's client (sdk/go/service/tx/distx, D3.3 / D3.9 / D3.15-D3.17) settles a
+// lost commit reply from the ended detail on the coordinator's NotFound, keeps
+// the parked work across a FAILED_PRECONDITION refusal, rolls back a busy
+// commit in run(), treats a rollback of a transaction that already ended
+// without committing as done, and bounds every detached rollback. These are
+// the same cases, against the TypeScript client.
+
+function ended(kind: string): StatusError {
+  const w = new BinaryWriter();
+  w.tag(1, WireType.LengthDelimited).string("W17_TX_ENDED");
+  w.tag(2, WireType.LengthDelimited).string("w17.distx");
+  w.tag(3, WireType.LengthDelimited).fork();
+  w.tag(1, WireType.LengthDelimited).string("ended");
+  w.tag(2, WireType.LengthDelimited).string(kind);
+  w.join();
+  const details = encodeRpcStatus({
+    code: Status.NOT_FOUND,
+    message: "distx: unknown transaction",
+    details: [{ typeUrl: "type.googleapis.com/google.rpc.ErrorInfo", value: w.finish() }],
+  });
+  return new StatusError(Status.NOT_FOUND, "distx: unknown transaction", details);
+}
+
+/** A coordinator that accepts a rollback and never answers: the call ends only when its deadline passes. */
+class StallingRollbackTx extends ScriptedTx {
+  override async rollback(ctx: Context, _req: Message): Promise<unknown> {
+    if (ctx.done()) throw new StatusError(Status.CANCELLED, ctx.err()!);
+    this.calls.push("rollback");
+    const rem = ctx.timeRemaining();
+    await sleep(rem === undefined ? 3_600_000 : Math.max(rem, 0));
+    throw new StatusError(Status.DEADLINE_EXCEEDED, "context deadline exceeded");
+  }
+}
+
+describe("the coordinator's record and a busy commit (Go parity)", () => {
+  it("a lost commit reply settled as committed runs the parked work", async () => {
+    const tx = new ScriptedTx({ commitErr: new StatusError(Status.UNAVAILABLE, "reply lost"), rollbackErr: ended("committed") });
+    const ran: number[] = [];
+    const [h, ctx] = await distx.begin(new Context(), tx);
+    await distx.onCommit(ctx, () => ran.push(1));
+    await h.commit(new Context());
+    expect(ran).toEqual([1]);
+    expect(tx.seq()).toBe("begin,commit,rollback");
+    await expect(h.commit(new Context())).rejects.toThrow(/already committed/);
+  });
+
+  it("a lost commit reply settled as not committed is an ordinary failure", async () => {
+    const tx = new ScriptedTx({ commitErr: new StatusError(Status.DEADLINE_EXCEEDED, "lost"), rollbackErr: ended("not_committed") });
+    const ran: number[] = [];
+    const [h, ctx] = await distx.begin(new Context(), tx);
+    await distx.onCommit(ctx, () => ran.push(1));
+    const e = await caught(h.commit(new Context()));
+    expect(e).not.toBeInstanceOf(distx.CommitOutcomeUnknownError);
+    expect((e as StatusError).code).toBe(Status.DEADLINE_EXCEEDED);
+    expect(notes(e).some((n) => n.includes("did not commit"))).toBe(true);
+    expect(ran).toEqual([]);
+  });
+
+  it("a busy commit keeps the parked work for the retry", async () => {
+    const tx = new ScriptedTx({ commitErr: new StatusError(Status.FAILED_PRECONDITION, "a call still holds it") });
+    const ran: number[] = [];
+    const [h, ctx] = await distx.begin(new Context(), tx);
+    await distx.onCommit(ctx, () => ran.push(1));
+    await expect(h.commit(new Context())).rejects.toThrow(StatusError);
+    tx.commitErr = undefined;
+    await h.commit(new Context());
+    expect(tx.seq()).toBe("begin,commit,commit");
+    expect(ran).toEqual([1]);
+  });
+
+  it("run rolls back a busy commit", async () => {
+    const tx = new ScriptedTx({ commitErr: new StatusError(Status.FAILED_PRECONDITION, "a call still holds it") });
+    const e = await caught(distx.run(new Context(), tx, null, () => 1));
+    expect((e as StatusError).code).toBe(Status.FAILED_PRECONDITION);
+    expect(tx.seq()).toBe("begin,commit,rollback");
+  });
+
+  it("a rollback of a transaction that ended without committing is done", async () => {
+    const tx = new ScriptedTx({ rollbackErr: ended("not_committed") });
+    const [h] = await distx.begin(new Context(), tx);
+    await h.rollback(new Context());
+    await expect(h.rollback(new Context())).rejects.toThrow(/already rolled back/);
+  });
+
+  it("run notes no rollback failure for an already ended transaction", async () => {
+    const tx = new ScriptedTx({ rollbackErr: ended("not_committed") });
+    const e = await caught(
+      distx.run(new Context(), tx, null, () => {
+        throw new Error("storage refused the write");
+      }),
+    );
+    expect(notes(e).some((n) => n.includes("rollback also failed"))).toBe(false);
+  });
+
+  it("a rollback of a committed transaction names it", async () => {
+    const tx = new ScriptedTx({ rollbackErr: ended("committed") });
+    const [h] = await distx.begin(new Context(), tx);
+    await expect(h.rollback(new Context())).rejects.toThrow(/already committed/);
+  });
+
+  it("the rollback bound is the finish wait", () => {
+    expect(distx.ROLLBACK_WAIT_MS).toBe(30_000);
+  });
+
+  for (const path of ["rollback", "run", "rollbackOnly"] as const) {
+    it(`a detached rollback is bounded (${path})`, async () => {
+      const restore = distx.setRollbackWaitMs(50);
+      try {
+        const tx = new StallingRollbackTx();
+        const go = async () => {
+          if (path === "rollback") {
+            const [h] = await distx.begin(new Context(), tx);
+            await h.rollback(new Context());
+          } else if (path === "run") {
+            await distx.run(new Context(), tx, null, () => {
+              throw new Error("boom");
+            });
+          } else {
+            const [h, ctx] = await distx.begin(new Context(), tx);
+            const [inner] = await distx.begin(ctx, tx);
+            await inner.rollback(ctx);
+            await h.commit(new Context());
+          }
+        };
+        const outcome = await Promise.race([caught(go()), sleep(3000).then(() => "hung")]);
+        expect(outcome).not.toBe("hung");
+      } finally {
+        restore();
+      }
+    }, 10_000);
+  }
 });

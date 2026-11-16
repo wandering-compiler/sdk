@@ -198,18 +198,32 @@ export class Served {
     }
   }
 
+  /** The service's full name. An RPC named `service` wins over it; {@link Served.serviceOf} always answers. */
   get service(): string {
     return this.#service;
   }
 
-  /** The gRPC paths it serves. */
+  /** The gRPC paths it serves. An RPC named `paths` wins over it; {@link Served.pathsOf} always answers. */
   paths(): string[] {
-    return [...this.#methods.values()].map((m) => m.info.path);
+    return Served.pathsOf(this);
+  }
+
+  // The SDK's own reads go through these statics: an RPC may be named like
+  // any instance member (`service`, `paths`), and it must stay the RPC.
+
+  /** The full name of the service `s` serves, whatever its RPCs are named. */
+  static serviceOf(s: Served): string {
+    return s.#service;
+  }
+
+  /** The gRPC paths `s` serves, whatever its RPCs are named. */
+  static pathsOf(s: Served): string[] {
+    return [...s.#methods.values()].map((m) => m.info.path);
   }
 
   /** @internal */
-  methodImpls(): MethodImpl[] {
-    return [...this.#methods.values()];
+  static implsOf(s: Served): MethodImpl[] {
+    return [...s.#methods.values()];
   }
 }
  
@@ -400,7 +414,7 @@ export class Registry {
     for (const s of this.#served.values()) {
       const def: Record<string, MethodDefinition<unknown, unknown>> = {};
       const impl: UntypedServiceImplementation = {};
-      for (const m of s.methodImpls()) {
+      for (const m of Served.implsOf(s)) {
         def[m.info.name] = methodDefinition(m.info);
         impl[m.info.name] = handler(m, this);
       }
@@ -566,16 +580,32 @@ function cutShort(ctx: Context, cause?: unknown): StatusError {
 const nextMacrotask = () => new Promise<void>((r) => setImmediate(r));
 
 /**
+ * Resolves once the event loop has polled for I/O again: the first
+ * setImmediate runs in this turn's check phase, right after the poll that
+ * delivered what we are reacting to; the second only after the next turn's
+ * poll, which reads whatever the socket already holds.
+ */
+const afterNextPoll = async () => {
+  await nextMacrotask();
+  await nextMacrotask();
+};
+
+/**
  * @internal The request stream of a client-streaming or bidi call, as Go's
  * Recv reads it: a caller that hangs up (or whose deadline passes)
  * mid-stream is a CANCELLED (DEADLINE_EXCEEDED) StatusError, never the
  * stream's own error — which the server would report as a panic — and never
- * a clean end. Node's http2 ENDS the request stream when the stream is
- * reset, and grpc-js reports the cancel only after that, on the same turn:
- * so an end, or a throw, is read once that turn is over, when the context
- * says which it was. (A grpc-js CLIENT that cancels half-closes first and
- * resets after, in two writes: that end can arrive as a clean one, as it
- * would to a Go server.)
+ * a clean end. grpc-js reports a reset as the cancel on the turn it reads
+ * it, so a throw is read once that turn is over, when the context says
+ * which it was. An END is read only after the next I/O poll: a grpc-js
+ * caller cut short (its cancel, or its own deadline passing) half-closes
+ * first and resets after, in two writes, and the reset can be read a poll
+ * later than the half-close. The server's deadline is the caller's plus the
+ * transit of the request headers, so that reset can arrive before the
+ * server's own deadline: it reads as the caller's cancel (CANCELLED), as a
+ * Go server reads it. (A reset that reaches the server later than the next
+ * poll after its half-close still reads as a clean end, as it would to a Go
+ * server.)
  */
 export async function* requests(
   call: ServerReadableStream<unknown, unknown> | ServerDuplexStream<unknown, unknown>,
@@ -599,7 +629,7 @@ export async function* requests(
       }
       if (n.done) {
         finished = true;
-        await nextMacrotask();
+        await afterNextPoll();
         if (ctx.done()) throw cutShort(ctx);
         return;
       }

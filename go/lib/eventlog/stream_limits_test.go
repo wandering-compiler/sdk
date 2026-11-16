@@ -93,3 +93,16 @@ func TestEnsureStream_AHalvedCapIsReported(t *testing.T) {
 		t.Fatalf("the halved cap was not reported as an error: %q", buf.String())
 	}
 }
+
+// A stop asked for while Run is still creating its streams is a clean stop:
+// Run answers nil, as it does once the consumers run.
+func TestConsumers_AStopDuringSetupIsNotAnError(t *testing.T) {
+	_, js := embeddedJetStream(t)
+	cs := &Consumers{}
+	_ = cs.Audit("a", funcConsumer{audit: func(context.Context, *ConsumedBatch) error { return nil }})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := cs.Run(ctx, ConsumerConfig{JS: js, DurablePrefix: "test"}); err != nil {
+		t.Fatalf("Run with a cancelled context = %v; want nil (a stop, not a failure)", err)
+	}
+}

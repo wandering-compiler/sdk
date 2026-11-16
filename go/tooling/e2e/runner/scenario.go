@@ -642,7 +642,13 @@ func runUnaryStep(ctx context.Context, s Step, caller Caller, input map[string]a
 		return matchCallError(s.ExpectError, err, scope)
 	case err != nil:
 		return err
-	case s.Expect == nil && len(s.AwaitEvents) == 0 && s.Download == nil && len(responseFields(resp)) > 0:
+	case s.Expect == nil && s.Download != nil:
+		// A file answer has no fields of its own, so the check below never
+		// trips on it: a download step with no expect passed on ANY 2xx body,
+		// an HTML error page served with 200 included. Say what the file is
+		// (`w17_wire.content_type`, `.size`, …), or `expect: {}` on purpose.
+		return fmt.Errorf("download step asserts nothing about what %s served — add an expect on %s.<fact> (content_type, size, width, …), `expect: {}` to say on purpose that any file will do, or expect_error for a refusal", s.Endpoint.Ref, WireKey)
+	case s.Expect == nil && len(s.AwaitEvents) == 0 && len(responseFields(resp)) > 0:
 		// Nothing asserted but "the status was below 400": a response of any
 		// shape would pass. A step without an expect therefore passes only on
 		// a response with no fields — the unary twin of runStreamStep's

@@ -19,11 +19,20 @@ half, with Go's semantics:
 - A second commit/rollback on a finished root handle raises
   ``HandleFinishedError`` without an RPC.
 - A commit that fails in transport is probed with a detached rollback: if the
-  rollback succeeds the commit did not take effect (an ordinary failure); if not,
-  ``CommitOutcomeUnknownError`` — the writes may have landed, and the work
-  parked for the commit is NOT run.
-- Rollback is detached from the caller's cancellation/deadline; a done context
-  refuses to commit (``run``).
+  rollback succeeds the commit did not take effect (an ordinary failure). When
+  the transaction is gone but the coordinator remembers how it ended (the
+  ``ended`` detail on its NotFound), that settles it: success and the parked
+  work runs when it committed, an ordinary failure when it did not. Only a
+  coordinator that cannot say leaves ``CommitOutcomeUnknownError`` — the
+  writes may have landed, and the work parked for the commit is NOT run.
+- A commit refused with ``FAILED_PRECONDITION`` (a call inside the transaction
+  still holds it) leaves the transaction open: the handle is retryable and the
+  parked work waits for the retry. ``run`` rolls such a transaction back
+  rather than leave it holding its locks until the orphan timeout.
+- Rollback is detached from the caller's cancellation/deadline and bounded by
+  ``ROLLBACK_WAIT`` of its own; a rollback of a transaction that already ended
+  without committing is done, not a failure. A done context refuses to commit
+  (``run``).
 - ``Aborted`` from storage is raised to the caller, who retries the unit of work.
 
 Work parked with ``on_commit`` (and every event emitted inside the transaction)
@@ -43,6 +52,7 @@ from grpclib.exceptions import GRPCError, StreamTerminatedError
 from . import txscope
 from .context import Context, Metadata
 from .descriptors import default_pool
+from .errors import error_infos
 from .observability import report_error
 
 __all__ = [
@@ -66,6 +76,10 @@ __all__ = [
     "run",
     "on_commit",
     "OUTCOME_PROBE_TIMEOUT",
+    "ROLLBACK_WAIT",
+    "ENDED_DOMAIN",
+    "ENDED_REASON",
+    "ENDED_KEY",
 ]
 
 # txregistry.HeaderName / distx.ConnIDHeader.
@@ -74,6 +88,25 @@ CONN_ID_HEADER = "w17-conn-id"
 
 # Bounds the rollback a commit sends to settle an ambiguous outcome.
 OUTCOME_PROBE_TIMEOUT = 10.0
+
+# Bounds every rollback sent on a context detached from its caller's
+# (TxHandle.rollback, the rollback-only commit, run's rollback). Detaching
+# drops the caller's deadline too, so without a bound a coordinator that
+# accepted the call and stalls would hold the caller forever. The server dooms
+# the transaction before it waits for a running handler's lease, so a rollback
+# cut by this bound is still decided. Go's rollbackWait: the finish wait, equal
+# to the auto-rollback interceptor's RollbackWait.
+ROLLBACK_WAIT = 30.0
+
+# The google.rpc.ErrorInfo the coordinator attaches to a NotFound for a
+# transaction it remembers (its last 256 ids): metadata[ENDED_KEY] is
+# "committed" or "not_committed". Go's distx.EndedDomain / EndedReason /
+# EndedKey.
+ENDED_DOMAIN = "w17.distx"
+ENDED_REASON = "W17_TX_ENDED"
+ENDED_KEY = "ended"
+_COMMITTED = "committed"
+_NOT_COMMITTED = "not_committed"
 
 T = TypeVar("T")
 
@@ -233,7 +266,7 @@ class TxHandle:
             if self._scope is not None and self._scope.rollback_only:
                 self._scope.discarded()
                 try:
-                    await self._client.rollback(self.attach(ctx.without_cancel()), _msg("RollbackRequest")(tx_id=self._tx_id))
+                    await self._client.rollback(self.attach(_detached_rollback_ctx(ctx)), _msg("RollbackRequest")(tx_id=self._tx_id))
                 except Exception as rerr:
                     e = RollbackOnlyError(f"the rollback also failed: {rerr}")
                     raise e from rerr
@@ -245,17 +278,14 @@ class TxHandle:
             except asyncio.CancelledError:
                 # The caller is being cancelled mid-commit: settle the outcome
                 # on a detached context, then let the cancellation through.
-                # Whichever way it settles, nothing parked may run: either
-                # the transaction rolled back, or its outcome is unknown.
-                # Used up BEFORE the settle is awaited: a second cancellation
-                # during it must not leave a handle that commits again. A
-                # settle whose rollback succeeds turns this into "rolled back".
+                # The parked work runs only when the coordinator recorded the
+                # commit as landed; otherwise the transaction rolled back or
+                # its outcome is unknown, and it is dropped. Used up BEFORE the
+                # settle is awaited: a second cancellation during it must not
+                # leave a handle that commits again. The settle (and the
+                # parked work it may run) finishes even then, tracked.
                 self._ended = "left with its outcome unknown"
-                try:
-                    await txscope.shielded(self._settle(ctx, None))
-                finally:
-                    if self._scope is not None:
-                        self._scope.discarded()
+                await txscope.shielded(self._settle_cancelled(ctx))
                 raise
             except Exception as e:
                 err = e
@@ -268,29 +298,63 @@ class TxHandle:
                 raise err
             return
         if err is not None:
-            self._scope.discarded()
+            # Only an answer that ENDED the transaction drops its parked work.
+            # A refusal that left it open (a call still holds it) is
+            # retryable on this handle, and the retry's commit must still run
+            # the work waiting for it.
+            if not _left_open(err):
+                self._scope.discarded()
             raise err
         # The transaction IS committed from here on. The parked work (the
         # events of the writes among it) runs to its end even when the caller
         # is cancelled now — a client hang-up must not lose them — and every
         # failure is reported, never raised into a commit that landed.
+        await txscope.shielded(self._run_parked(ctx))
+
+    async def _run_parked(self, ctx: Context) -> None:
         scope, detached, tx_id = self._scope, ctx.without_cancel(), self._tx_id
+        if scope is None:
+            return
+        for failure in await scope.run_committed():
+            report_error(detached, RuntimeError(
+                f"distx: work parked on committed transaction {tx_id} failed: {failure!r}"))
 
-        async def run_parked() -> None:
-            for failure in await scope.run_committed():
-                report_error(detached, RuntimeError(
-                    f"distx: work parked on committed transaction {tx_id} failed: {failure!r}"))
-
-        await txscope.shielded(run_parked())
+    async def _settle_cancelled(self, ctx: Context) -> None:
+        """The settle of a commit its caller cancelled, with what follows it:
+        the parked work runs when the coordinator recorded the commit, and is
+        dropped otherwise."""
+        committed = False
+        try:
+            await self._settle(ctx, None)
+            committed = self._ended == "committed"
+        finally:
+            if self._scope is not None and not committed:
+                self._scope.discarded()
+        if committed:
+            await self._run_parked(ctx)
 
     async def _settle(self, ctx: Context, commit_err: BaseException | None) -> BaseException | None:
         """After a commit with an unknown outcome: roll back, detached. Success
-        means the transaction was still open, so the commit never took effect;
-        failure means it is gone and the outcome is unknown."""
+        means the transaction was still open, so the commit never took effect.
+        A NotFound carrying the coordinator's ended detail settles it from its
+        record (committed: None and the handle reads "committed"; not
+        committed: an ordinary failure). Any other failure means it is gone
+        and the outcome is unknown."""
         probe = ctx.without_cancel().with_timeout(OUTCOME_PROBE_TIMEOUT)
         try:
             await self._client.rollback(self.attach(probe), _msg("RollbackRequest")(tx_id=self._tx_id))
         except Exception as rerr:
+            ended = _ended_from(rerr)
+            if ended == _COMMITTED:
+                # The commit landed; only its reply was lost.
+                self._ended = "committed"
+                return None
+            if ended == _NOT_COMMITTED:
+                self._ended = "rolled back"
+                if commit_err is None:
+                    return None
+                commit_err.add_note(f"distx: transaction {self._tx_id} did not commit ({rerr!r})")
+                return commit_err
             why = repr(commit_err) if commit_err is not None else "the caller was cancelled mid-commit"
             pending = self._scope.pending() if self._scope is not None else 0
             report_error(ctx.without_cancel(), RuntimeError(
@@ -315,7 +379,10 @@ class TxHandle:
 
         Outlives ctx's cancellation and deadline: the commonest reason to roll
         back is that the caller is gone, and a call refused on a done context
-        would leave the transaction held until the server times it out."""
+        would leave the transaction held until the server times it out. It is
+        bounded by ``ROLLBACK_WAIT`` instead, so a stalled coordinator cannot
+        hold the caller forever. A transaction that already ended without
+        committing is rolled back as asked: no error."""
         if self._joined:
             if self._scope is not None:
                 self._scope.mark_rollback_only()
@@ -324,8 +391,52 @@ class TxHandle:
             self._claim()
             if self._scope is not None:
                 self._scope.discarded()
-            await self._client.rollback(self.attach(ctx.without_cancel()), _msg("RollbackRequest")(tx_id=self._tx_id))
+            try:
+                await self._client.rollback(self.attach(_detached_rollback_ctx(ctx)), _msg("RollbackRequest")(tx_id=self._tx_id))
+            except Exception as rerr:
+                ended = _ended_from(rerr)
+                if ended == _NOT_COMMITTED:
+                    # Already ended without committing — the auto-rollback
+                    # interceptor discarded it after a failed call, or its
+                    # orphan bound ran out. That is what this rollback asked
+                    # for, so it is not a failure.
+                    self._ended = "rolled back"
+                    return
+                if ended == _COMMITTED:
+                    self._ended = "committed"
+                    raise DistxError(
+                        f"distx: cannot roll back transaction {self._tx_id}, it was already committed") from rerr
+                raise
             self._ended = "rolled back"
+
+
+def _detached_rollback_ctx(ctx: Context) -> Context:
+    """ctx without its cancellation and deadline (values and metadata kept),
+    bounded by ``ROLLBACK_WAIT``."""
+    return ctx.without_cancel().with_timeout(ROLLBACK_WAIT)
+
+
+def _left_open(e: BaseException) -> bool:
+    """A commit failure after which the transaction is still open: the
+    coordinator refused to finish it because a call inside it still holds it
+    past the finish wait. The handle is not used up; the caller retries, or
+    rolls back (``run`` rolls back)."""
+    return isinstance(e, GRPCError) and e.status == Status.FAILED_PRECONDITION
+
+
+def _ended_from(e: BaseException) -> str:
+    """The coordinator's record of how a transaction it no longer holds ended
+    (``"committed"`` / ``"not_committed"``), read from the ErrorInfo on its
+    NotFound; "" for any other error or a NotFound without it."""
+    if not isinstance(e, GRPCError) or e.status != Status.NOT_FOUND:
+        return ""
+    for info in error_infos(e):
+        if info.domain != ENDED_DOMAIN or info.reason != ENDED_REASON:
+            continue
+        ended = info.metadata.get(ENDED_KEY, "")
+        if ended in (_COMMITTED, _NOT_COMMITTED):
+            return ended
+    return ""
 
 
 def _outcome_unknown(e: BaseException) -> bool:
@@ -393,7 +504,8 @@ async def run(
     Commit when fn returns; roll back (detached) when it raises — the
     exception keeps propagating, with a note when the rollback failed too. A
     caller whose context is done gets no commit. A failed commit is raised
-    as it is (with a note naming the commit), and fn's work is lost.
+    as it is (with a note naming the commit), and fn's work is lost; a commit
+    refused because a call still held the transaction is rolled back first.
 
     fn must use the context it receives for every write of the transaction."""
     if client is None:
@@ -430,6 +542,17 @@ async def run(
         await handle.commit(ctx)
     except Exception as cerr:
         cerr.add_note("distx.run: commit")
+        # A refusal that left the transaction open (a call inside it still
+        # held it past the finish wait) is the one commit failure after which
+        # a rollback is still owed: run reports the failure, so it must not
+        # leave the transaction holding its locks until the orphan timeout.
+        # The server dooms it at once and rolls it back when the holder
+        # releases. Every other answer already ended it.
+        if _left_open(cerr):
+            try:
+                await asyncio.shield(handle.rollback(detached))
+            except Exception as rerr:  # noqa: BLE001
+                cerr.add_note(f"distx.run: rollback also failed: {rerr!r}")
         raise
     return result
 

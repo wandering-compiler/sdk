@@ -16,6 +16,7 @@ import { type Manifest, load } from "../src/manifest.ts";
 import * as observability from "../src/observability.ts";
 import { App, BootError } from "../src/runtime.ts";
 import type { Env } from "../src/secrets.ts";
+import { Served } from "../src/server.ts";
 import * as tlsconfig from "../src/tlsconfig.ts";
 import * as txscope from "../src/txscope.ts";
 import { MANIFEST, PROJECT, TESTDATA, inTmpDir, msg, sleep } from "./helpers.ts";
@@ -187,7 +188,7 @@ describe("serving", () => {
         },
       };
       // Sleep, made to hold a transaction until the drain cancels it.
-      const impl = app.registry!.served[0]!.methodImpls().find((m) => m.info.name === "Sleep")!;
+      const impl = Served.implsOf(app.registry!.served[0]!).find((m) => m.info.name === "Sleep")!;
       (impl as { fn: unknown }).fn = (ctx: Context) =>
         distx.run(ctx, tx, distx.beginRequest("main"), (txCtx) => new Promise((_, rej) => txCtx.onDone(() => rej(new Error(txCtx.err())))));
       app.dispatcher = { dispatch: async () => {}, close: async () => void order.push("bus closed") };
@@ -217,7 +218,7 @@ describe("serving", () => {
       const app = new App({ ...load(MANIFEST), shutdownTimeoutMs: timeout }, { projectRoot: PROJECT, environ: env(), drainTimeoutMs: budget });
       await app.boot();
       await app.start();
-      const impl = app.registry!.served[0]!.methodImpls().find((m) => m.info.name === "Sleep")!;
+      const impl = Served.implsOf(app.registry!.served[0]!).find((m) => m.info.name === "Sleep")!;
       (impl as { fn: unknown }).fn = () => new Promise(() => undefined);
       void txscope.shielded(new Promise(() => undefined));
       let hookAt = -1;

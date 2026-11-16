@@ -566,3 +566,179 @@ async def test_a_second_cancel_during_the_settle_still_uses_the_handle_up():
     rollback_gate.set()
     assert await txscope.drain(1.0)
     assert tx.seq() == "begin,commit,rollback"
+
+
+# --- the coordinator's ended record, a busy commit, a bounded rollback --------
+#
+# Go's client (sdk/go/service/tx/distx, D3.3 / D3.9 / D3.15-D3.17) settles a
+# lost commit reply from the ended detail on the coordinator's NotFound, keeps
+# the parked work across a FailedPrecondition refusal, rolls back a busy
+# commit in run(), treats a rollback of a transaction that already ended
+# without committing as done, and bounds every detached rollback. These are
+# the same cases, against the Python client.
+
+from google.protobuf import any_pb2  # noqa: E402
+from google.rpc import error_details_pb2  # noqa: E402
+
+
+def _ended(kind: str, packed: bool = True) -> GRPCError:
+    info = error_details_pb2.ErrorInfo(domain="w17.distx", reason="W17_TX_ENDED", metadata={"ended": kind})
+    detail = info
+    if packed:
+        detail = any_pb2.Any()
+        detail.Pack(info)
+    return GRPCError(Status.NOT_FOUND, "distx: unknown transaction", [detail])
+
+
+@pytest.mark.parametrize("packed", [True, False])
+async def test_a_lost_commit_reply_settled_as_committed_runs_the_parked_work(packed):
+    # D3.16: the commit landed, only its reply was lost; the coordinator's
+    # tombstone says so on the settling rollback's NotFound.
+    tx = ScriptedTx(commit_err=GRPCError(Status.UNAVAILABLE, "reply lost"), rollback_err=_ended("committed", packed))
+    ran = []
+    h, ctx = await distx.begin(Context(), tx)
+    await distx.on_commit(ctx, lambda: ran.append(1))
+    await h.commit(Context())
+    assert ran == [1], "a commit the coordinator recorded as committed must run its parked work"
+    assert tx.seq() == "begin,commit,rollback"
+    with pytest.raises(distx.HandleFinishedError, match="committed"):
+        await h.commit(Context())
+
+
+async def test_a_lost_commit_reply_settled_as_not_committed_is_an_ordinary_failure():
+    tx = ScriptedTx(commit_err=GRPCError(Status.DEADLINE_EXCEEDED, "lost"), rollback_err=_ended("not_committed"))
+    ran = []
+    h, ctx = await distx.begin(Context(), tx)
+    await distx.on_commit(ctx, lambda: ran.append(1))
+    with pytest.raises(GRPCError) as ei:
+        await h.commit(Context())
+    assert not isinstance(ei.value, distx.CommitOutcomeUnknownError)
+    assert ei.value.status == Status.DEADLINE_EXCEEDED
+    assert any("did not commit" in n for n in ei.value.__notes__)
+    assert ran == []
+
+
+async def test_a_busy_commit_keeps_the_parked_work_for_the_retry():
+    # D3.9: FailedPrecondition (a call still holds the transaction) leaves it
+    # open; the retried commit must still run what waited for it.
+    tx = ScriptedTx(commit_err=GRPCError(Status.FAILED_PRECONDITION, "a call still holds it"))
+    ran = []
+    h, ctx = await distx.begin(Context(), tx)
+    await distx.on_commit(ctx, lambda: ran.append(1))
+    with pytest.raises(GRPCError):
+        await h.commit(Context())
+    tx.commit_err = None
+    await h.commit(Context())
+    assert tx.seq() == "begin,commit,commit"
+    assert ran == [1], "the retry's commit must run the work parked before the busy refusal"
+
+
+async def test_run_rolls_back_a_busy_commit():
+    # D3.15: run() reports the failure, so it must not leave the transaction
+    # holding its locks until the orphan watcher.
+    tx = ScriptedTx(commit_err=GRPCError(Status.FAILED_PRECONDITION, "a call still holds it"))
+
+    async def fn(c):
+        return 1
+
+    with pytest.raises(GRPCError) as ei:
+        await distx.run(Context(), tx, None, fn)
+    assert ei.value.status == Status.FAILED_PRECONDITION
+    assert tx.seq() == "begin,commit,rollback"
+
+
+async def test_rollback_of_a_transaction_that_ended_without_committing_is_done():
+    # D3.17: the storage tier's auto-rollback already ended it.
+    tx = ScriptedTx(rollback_err=_ended("not_committed"))
+    h, _ = await distx.begin(Context(), tx)
+    await h.rollback(Context())
+    with pytest.raises(distx.HandleFinishedError, match="rolled back"):
+        await h.rollback(Context())
+
+
+async def test_run_does_not_note_a_rollback_failure_for_an_already_ended_transaction():
+    tx = ScriptedTx(rollback_err=_ended("not_committed"))
+
+    async def fn(c):
+        raise ValueError("storage refused the write")
+
+    with pytest.raises(ValueError) as ei:
+        await distx.run(Context(), tx, None, fn)
+    assert not any("rollback also failed" in n for n in getattr(ei.value, "__notes__", ()))
+
+
+async def test_rollback_of_a_committed_transaction_names_it():
+    tx = ScriptedTx(rollback_err=_ended("committed"))
+    h, _ = await distx.begin(Context(), tx)
+    with pytest.raises(distx.DistxError, match="already committed"):
+        await h.rollback(Context())
+
+
+class StallingRollbackTx(ScriptedTx):
+    """A coordinator that accepts a rollback and never answers: the call ends
+    only when the deadline the client put on it passes."""
+
+    async def rollback(self, ctx, req):
+        self._check(ctx)
+        self.calls.append("rollback")
+        rem = ctx.time_remaining()
+        await asyncio.sleep(3600 if rem is None else max(rem, 0))
+        raise GRPCError(Status.DEADLINE_EXCEEDED, "context deadline exceeded")
+
+
+@pytest.mark.parametrize("path", ["rollback", "run", "rollback_only"])
+async def test_a_detached_rollback_is_bounded(monkeypatch, path):
+    # D3.3: detaching drops the caller's deadline; without a bound of its own
+    # a stalled coordinator holds the caller forever.
+    monkeypatch.setattr(distx, "ROLLBACK_WAIT", 0.05, raising=False)
+    tx = StallingRollbackTx()
+
+    async def go():
+        if path == "rollback":
+            h, _ = await distx.begin(Context(), tx)
+            await h.rollback(Context())
+        elif path == "run":
+            async def fn(c):
+                raise ValueError("boom")
+            await distx.run(Context(), tx, None, fn)
+        else:
+            h, ctx = await distx.begin(Context(), tx)
+            inner, _ = await distx.begin(ctx, tx)
+            await inner.rollback(ctx)
+            await h.commit(Context())
+
+    with pytest.raises((GRPCError, ValueError, distx.RollbackOnlyError)):
+        await asyncio.wait_for(go(), 5)
+
+
+def test_the_rollback_bound_is_the_finish_wait():
+    # Go's rollbackWait = txregistry.DefaultFinishWait (the auto-rollback
+    # interceptor's RollbackWait).
+    assert distx.ROLLBACK_WAIT == 30.0
+
+
+async def test_cancel_mid_commit_settled_as_committed_still_runs_the_parked_work():
+    # Go settles a cancelled commit the same way (the call fails Canceled,
+    # the probe reads the ended record): a landed commit's events must not be
+    # lost because the caller hung up during it.
+    tx = ScriptedTx(rollback_err=_ended("committed"))
+    ran = []
+    h, ctx = await distx.begin(Context(), tx)
+    await distx.on_commit(ctx, lambda: ran.append(1))
+    gate = asyncio.Event()
+    commit = tx.commit
+
+    async def hanging_commit(c, req):
+        await commit(c, req)
+        await gate.wait()
+
+    tx.commit = hanging_commit
+    task = asyncio.create_task(h.commit(Context()))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await txscope.drain(1.0)
+    assert ran == [1]
+    with pytest.raises(distx.HandleFinishedError, match="committed"):
+        await h.commit(Context())

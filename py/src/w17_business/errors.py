@@ -32,7 +32,7 @@ from google.protobuf import any_pb2
 
 from .descriptors import default_pool
 
-__all__ = ["UserError", "for_user", "error_detail", "Status", "ErrorInfo", "error_info", "ERROR_INFO_TYPE"]
+__all__ = ["UserError", "for_user", "error_detail", "Status", "ErrorInfo", "error_info", "error_infos", "ERROR_INFO_TYPE"]
 
 
 def _status(code: Status | int | str) -> Status:
@@ -154,19 +154,28 @@ class ErrorInfo:
 def error_info(err: BaseException | None) -> ErrorInfo | None:
     """The ``google.rpc.ErrorInfo`` a ``GRPCError`` carries, or None (also for
     anything that is not a ``GRPCError``)."""
+    for info in error_infos(err):
+        return info
+    return None
+
+
+def error_infos(err: BaseException | None):
+    """Every ``google.rpc.ErrorInfo`` a ``GRPCError`` carries, in order (none
+    for anything that is not a ``GRPCError``). A detail that does not decode
+    ends the walk, as it ends ``error_info``."""
     if not isinstance(err, GRPCError):
-        return None
+        return
     for d in err.details or ():
         if isinstance(d, any_pb2.Any):
             if d.type_url.rsplit("/", 1)[-1] != ERROR_INFO_TYPE:
                 continue
             try:
-                return _decode_error_info(d.value)
+                yield _decode_error_info(d.value)
             except ValueError:
-                return None
+                return
+            continue
         if getattr(getattr(d, "DESCRIPTOR", None), "full_name", "") == ERROR_INFO_TYPE:
-            return ErrorInfo(domain=d.domain, reason=d.reason, metadata=dict(d.metadata))
-    return None
+            yield ErrorInfo(domain=d.domain, reason=d.reason, metadata=dict(d.metadata))
 
 
 def _varint(b: bytes, i: int) -> tuple[int, int]:

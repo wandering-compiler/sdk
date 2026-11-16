@@ -67,6 +67,9 @@ const CREDENTIAL_HEADERS: &[&str] = &[
     "cookie",
     "set-cookie",
     "x-w17-credential",
+    // A DPoP proof (RFC 9449), sent next to `authorization: DPoP <token>`: a
+    // signed JWS bound to this request.
+    "dpop",
 ];
 const CREDENTIAL_SEGMENTS: &[&str] = &[
     "auth",
@@ -390,6 +393,11 @@ pub(crate) fn invalidate_events(inv: &Invalidate, ctx: &Ctx) -> Vec<Vec<u8>> {
                 message: entity.clone(),
                 ids: Vec::new(),
                 labels: labels.clone().into_iter().collect(),
+                // The touched rows' data-scope values are not known to a
+                // hand-written tier: none is carried, and an audience hub
+                // delivers the invalidation by its labels and the scopes
+                // the client carries — as for the Go `EmitInvalidate`.
+                scopes: Default::default(),
             }
             .encode_to_vec()
         })

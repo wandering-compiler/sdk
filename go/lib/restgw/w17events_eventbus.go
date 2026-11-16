@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
+
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/eventbus"
 )
@@ -62,6 +64,19 @@ type EventbusEventSource struct {
 	transcode TranscodeFunc
 	principal PrincipalLabelsFunc
 
+	// orgScopes / ownerScopes / principalScopes: set by
+	// [EventbusEventSource.WithRowScopes] on an audience gateway, so a
+	// cache invalidation reaches the clients who may read the rows it
+	// names.
+	orgScopes       []string
+	ownerScopes     []string
+	principalScopes PrincipalLabelsFunc
+	// eventRows reads a domain event's row scopes (WithEventRows);
+	// ownerLifted are the entities whose invalidations this audience does
+	// not narrow by owner (WithOwnerLifted).
+	eventRows   EventRowsFunc
+	ownerLifted map[string]bool
+
 	// openMu serializes lazy-open attempts. It is deliberately NOT mu: the
 	// open path talks to the broker and, when an attempt fails, drains what
 	// it opened — and a drain waits for in-flight handler callbacks, which
@@ -102,6 +117,9 @@ type transcodeReport struct {
 type hubClient struct {
 	wanted map[string]struct{}
 	labels map[string]string
+	// scopes are the client's data scopes (AuthResp.scopes, by name), on
+	// a hub with an owner range only.
+	scopes map[string]string
 	out    chan Event
 }
 
@@ -163,6 +181,81 @@ func NewEventbusEventSource(factory eventbus.SubscriberFactory, channels []strin
 	}
 }
 
+// WithRowScopes makes the hub deliver cache invalidations (the reserved
+// w17.invalidate topic) by the data range of the audience it serves: to
+// the clients who may READ the rows an invalidation names, whoever wrote
+// them — a staff member, a job, a subscriber. The invalidation carries
+// those rows' data-scope values, by scope name (eventbus.RowScopes:
+// the row's own value when the mutation returned the row, else what
+// storage held every touched row to); principalScopes derives a connected
+// client's scopes from its AuthResp (`scopes`).
+//
+// orgScopes are the organization-axis scopes of the domain's models;
+// ownerScopes the owner-axis ones, passed only by an audience whose range
+// is the caller's own rows (`default_scope: OWNER`). For each of them an
+// invalidation that carries a value reaches only a client holding that
+// same value; a client without it never matches. A scope the invalidation
+// does not carry is unknown — the rows of a staff member's organization-
+// range write may be anyone's in the organization — and does not narrow
+// it: the organization (labels, or the org-axis values) still does. An
+// invalidation that carries no labels is delivered, on an isolating hub,
+// only when it carries every org-axis value and they are the client's.
+//
+// A domain event carries a row's DATA, not only its id, so on this hub it
+// reaches no one its row would not: see [EventbusEventSource.WithEventRows].
+// Returns e for chaining. Call before the first Subscribe.
+func (e *EventbusEventSource) WithRowScopes(orgScopes, ownerScopes []string, principalScopes PrincipalLabelsFunc) *EventbusEventSource {
+	e.orgScopes = append([]string(nil), orgScopes...)
+	e.ownerScopes = append([]string(nil), ownerScopes...)
+	e.principalScopes = principalScopes
+	return e
+}
+
+// EventRowsFunc reads the row a domain event carries off its envelope: the
+// row's data-scope values by scope name — present for every scope of the
+// row's model, "" where the event does not carry the value — and whether
+// the event carries a row at all. Codegen writes one per audience gateway.
+type EventRowsFunc func(topic string, envelope []byte) (scopes map[string]string, row bool)
+
+// WithEventRows makes a row-scoped hub ([EventbusEventSource.WithRowScopes])
+// deliver a domain event by the row it carries, as the audience's reads
+// would return that row:
+//
+//   - each org- or owner-axis scope the row's model has must be the
+//     client's own value. A value the event does not carry is unknown: an
+//     unknown OWNER value reaches nobody (the row could be anyone's in the
+//     organization, and the event carries its contents); an unknown org
+//     value leaves the organization to the labels.
+//   - an event that carries no row (rows reports false, or no reader is
+//     set) is delivered by its labels on an organization-range hub, and to
+//     NOBODY on an owner-range one: its payload is not tied to a row the
+//     client may read, and labels partition by organization only — a
+//     member would receive what her colleagues' reads never return to her.
+//
+// Returns e for chaining. Call before the first Subscribe.
+func (e *EventbusEventSource) WithEventRows(rows EventRowsFunc) *EventbusEventSource {
+	e.eventRows = rows
+	return e
+}
+
+// WithOwnerLifted names the entities (touched model names, as an
+// invalidation carries them) this audience serves at the organization
+// range although its default is the owner's — a method of it widens to the
+// organization (`(w17.widen_scope)`) and returns that model. Their
+// invalidations are not narrowed by owner, so a member's list of the
+// organization's rows hears about a colleague's row changing, as the
+// method that lists them shows it. Returns e for chaining.
+func (e *EventbusEventSource) WithOwnerLifted(entities ...string) *EventbusEventSource {
+	if len(entities) == 0 {
+		return e
+	}
+	e.ownerLifted = map[string]bool{}
+	for _, n := range entities {
+		e.ownerLifted[n] = true
+	}
+	return e
+}
+
 // Subscribe implements EventSource.Subscribe. Registers a new
 // client with the shared hub (opening the single bus subscriber
 // on the first client), returns the client's receive channel,
@@ -188,6 +281,9 @@ func (e *EventbusEventSource) Subscribe(ctx context.Context, topics []string, us
 		labels = e.principal(userData)
 	}
 	c := &hubClient{wanted: wanted, labels: labels, out: make(chan Event, hubClientBuffer)}
+	if e.rowScoped() {
+		c.scopes = e.principalScopes(userData)
+	}
 
 	e.mu.Lock()
 	e.clients[c] = struct{}{}
@@ -365,8 +461,117 @@ func (e *EventbusEventSource) handleDelivery(ctx context.Context, channel, topic
 	if skip {
 		return nil
 	}
-	e.fanOut(topic, labels, Event{Topic: topic, Data: payload})
+	d := delivery{labels: labels}
+	if e.rowScoped() {
+		if topic == eventbus.W17InvalidateTopic {
+			d.scopes = invalidateScopes(envelope)
+			if e.ownerLifted[invalidateMessage(envelope)] {
+				for _, name := range e.ownerScopes {
+					delete(d.scopes, name)
+				}
+			}
+		} else {
+			d.domain = true
+			if e.eventRows != nil {
+				d.scopes, d.row = e.eventRows(topic, envelope)
+			}
+		}
+	}
+	e.fanOut(topic, d, Event{Topic: topic, Data: payload})
 	return nil
+}
+
+// delivery is what decides who receives one event.
+type delivery struct {
+	labels map[string]string
+	// scopes: an invalidation's rows' values (nil off a row-scoped hub);
+	// a domain event's row's (EventRowsFunc).
+	scopes map[string]string
+	// domain: a domain event on a row-scoped hub; row: it carries a row.
+	domain, row bool
+}
+
+// rowScoped reports a hub configured by [EventbusEventSource.WithRowScopes].
+func (e *EventbusEventSource) rowScoped() bool {
+	return e.principalScopes != nil && (len(e.orgScopes) > 0 || len(e.ownerScopes) > 0)
+}
+
+// invalidateScopes reads an InvalidateEvent's `scopes` (field 5): the data
+// scopes of the rows it names, by scope name. Read off the wire, so the
+// hub needs no type; a field that does not parse yields what was read
+// before it — fewer known scopes, which narrow less but never admit a
+// client a carried value excludes.
+// invalidateMessage reads InvalidateEvent.message (field 2) — the touched
+// entity's name — off the wire bytes.
+func invalidateMessage(envelope []byte) string {
+	b := envelope
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return ""
+		}
+		b = b[n:]
+		if num == 2 && typ == protowire.BytesType {
+			v, n := protowire.ConsumeBytes(b)
+			if n < 0 {
+				return ""
+			}
+			return string(v)
+		}
+		if n = protowire.ConsumeFieldValue(num, typ, b); n < 0 {
+			return ""
+		}
+		b = b[n:]
+	}
+	return ""
+}
+
+func invalidateScopes(envelope []byte) map[string]string {
+	const field = 5
+	out := map[string]string{}
+	b := envelope
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return out
+		}
+		b = b[n:]
+		if num != field || typ != protowire.BytesType {
+			if n = protowire.ConsumeFieldValue(num, typ, b); n < 0 {
+				return out
+			}
+			b = b[n:]
+			continue
+		}
+		entry, n := protowire.ConsumeBytes(b)
+		if n < 0 {
+			return out
+		}
+		b = b[n:]
+		var k, v string
+		for len(entry) > 0 {
+			en, et, m := protowire.ConsumeTag(entry)
+			if m < 0 || et != protowire.BytesType {
+				break
+			}
+			entry = entry[m:]
+			val, m := protowire.ConsumeBytes(entry)
+			if m < 0 {
+				break
+			}
+			entry = entry[m:]
+			switch en {
+			case 1:
+				k = string(val)
+			case 2:
+				v = string(val)
+			}
+		}
+		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // reportTranscodeFailure logs and reports a dropped, untranscodable
@@ -418,7 +623,7 @@ func (e *EventbusEventSource) anyInterested(topic string) bool {
 // blocking per client (drop on full buffer); the send happens
 // under e.mu so it can never race the close in the per-client
 // cleanup goroutine.
-func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string, ev Event) {
+func (e *EventbusEventSource) fanOut(topic string, d delivery, ev Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Label-based organization isolation is active when a principal-labels
@@ -428,8 +633,34 @@ func (e *EventbusEventSource) fanOut(topic string, eventLabels map[string]string
 		if _, ok := c.wanted[topic]; !ok {
 			continue
 		}
-		if !entitled(isolation, eventLabels, c.labels) {
-			continue
+		switch {
+		case d.domain && !d.row:
+			// A domain event that carries no row: by labels on an
+			// organization-range hub, to no one on an owner-range one.
+			if len(e.ownerScopes) > 0 || !entitled(isolation, d.labels, c.labels) {
+				continue
+			}
+		case d.domain:
+			// A row's data: the row's scopes decide, unknown owner = no one.
+			if !e.mayReadRow(d.scopes, c.scopes) {
+				continue
+			}
+			if !entitled(isolation, d.labels, c.labels) && !e.orgKnown(d.scopes) {
+				continue
+			}
+		case d.scopes != nil:
+			// An invalidation on a row-scoped hub: its rows' scopes decide,
+			// on top of the organization.
+			if !e.mayReadRows(d.scopes, c.scopes) {
+				continue
+			}
+			if !entitled(isolation, d.labels, c.labels) && !e.orgKnown(d.scopes) {
+				continue
+			}
+		default:
+			if !entitled(isolation, d.labels, c.labels) {
+				continue
+			}
 		}
 		select {
 		case c.out <- ev:
@@ -475,6 +706,68 @@ func entitled(isolation bool, eventLabels, principalLabels map[string]string) bo
 		return false
 	}
 	return labelsSubset(eventLabels, principalLabels)
+}
+
+// mayReadRows: every org- and owner-axis scope the invalidation carries
+// a value for is the client's own value. A scope it does not carry is
+// unknown and narrows nothing; a client missing a carried scope matches
+// nothing.
+func (e *EventbusEventSource) mayReadRows(rowScopes, clientScopes map[string]string) bool {
+	for _, names := range [][]string{e.orgScopes, e.ownerScopes} {
+		for _, name := range names {
+			v := rowScopes[name]
+			if v == "" {
+				continue
+			}
+			if c := clientScopes[name]; c == "" || c != v {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// mayReadRow: the domain event's row is one the client's reads would
+// return. For every org- and owner-axis scope the row's model has (a key
+// of rowScopes), its value is the client's own; an owner value the event
+// does not carry ("") reaches no one, an org value it does not carry is
+// left to the labels. A scope the row's model does not have narrows
+// nothing.
+func (e *EventbusEventSource) mayReadRow(rowScopes, clientScopes map[string]string) bool {
+	for _, name := range e.ownerScopes {
+		v, has := rowScopes[name]
+		if !has {
+			continue
+		}
+		if c := clientScopes[name]; v == "" || c == "" || c != v {
+			return false
+		}
+	}
+	for _, name := range e.orgScopes {
+		v := rowScopes[name]
+		if v == "" {
+			continue
+		}
+		if c := clientScopes[name]; c == "" || c != v {
+			return false
+		}
+	}
+	return true
+}
+
+// orgKnown: the invalidation carries a value for every org-axis scope, so
+// [mayReadRows] already held the client to the rows' organization — an
+// unlabelled invalidation (a job's, a subscriber's) can be delivered by it.
+func (e *EventbusEventSource) orgKnown(rowScopes map[string]string) bool {
+	if len(e.orgScopes) == 0 {
+		return false
+	}
+	for _, name := range e.orgScopes {
+		if rowScopes[name] == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // labelsSubset reports whether every (key,value) in eventLabels is

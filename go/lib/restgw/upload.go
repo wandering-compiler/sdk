@@ -50,6 +50,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/fileref"
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	"github.com/wandering-compiler/sdk/go/lib/imagevariant"
 	"github.com/wandering-compiler/sdk/go/lib/kvfs"
@@ -162,6 +163,8 @@ func ProcessFilePart(ctx context.Context, r *http.Request, cfg FilePartConfig) (
 
 	// kvfs.ObjectKey — the derivation every writer of a connection shares,
 	// so a file the business tier puts (kvfs.Put) is keyed like an upload.
+	// The key names the content and nothing else: who may download it is
+	// decided by the record that references it (restgw.ServeDownloadGated).
 	objectKey, err := kvfs.ObjectKey(hash)
 	if err != nil {
 		_ = os.Remove(tmpPath)
@@ -333,6 +336,18 @@ type UploadedObject struct {
 	Variants []imagevariant.Spec
 	// Pregenerate is the field's `(w17.field).upload.pregenerate`.
 	Pregenerate bool
+}
+
+// WithUploaded marks the handles this request's multipart parts stored as
+// the gateway's own: the claim guard (fileref.GuardClaims) lets them
+// through, where a handle the client wrote into the request itself must be
+// a file the caller may already read.
+func WithUploaded(ctx context.Context, objs []UploadedObject) context.Context {
+	handles := make([]string, 0, len(objs))
+	for _, o := range objs {
+		handles = append(handles, o.Handle)
+	}
+	return fileref.WithMinted(ctx, handles...)
 }
 
 // RollbackUploads deletes objects a failed request had already written.

@@ -153,4 +153,18 @@ message InvalidateEvent {
   // frame body is marshaled without it (a client is never told
   // the label it was filtered by).
   map<string, string> labels = 4;
+
+  // scopes are the data-scope values of the ROWS the invalidation
+  // names, keyed by scope name (`org_id`, `user_id` — the AuthResp
+  // scopes keys): the row's own value when the mutation returned the
+  // row, else the value storage held every touched row to
+  // (`eventbus.RowScopes`). A scope whose value is not known — the owner
+  // of a row a staff member edited over the organization range, say —
+  // is absent; absent never matches anything.
+  //
+  // Consumed by the gateway hub only: an audience gateway delivers the
+  // invalidation to the clients who may read those rows (restgw
+  // `WithRowScopes`), whoever wrote them. Cleared from the SSE frame
+  // body like labels.
+  map<string, string> scopes = 5;
 }

@@ -506,3 +506,30 @@ async def test_boot_refusals(pool):
     assert c._companion.addr == "notes-business-companion:50051"
     assert isinstance(c._companion, CompanionConn) and c._companion is not c._conn
     c.close()
+
+
+async def test_a_refused_file_call_answers_failed_precondition(companion):
+    # The SDK refuses before any call (an unknown field, a field stored on
+    # another connection, a write to a connection the gateway writes). A
+    # handler that lets the refusal through answers FAILED_PRECONDITION, as
+    # the Rust tier (files::Error::Refused) and the companion (D18.2) do —
+    # not a PANIC answered INTERNAL. The refusal is still the KeyError /
+    # PermissionError it was.
+    from w17_business.server import _to_status
+
+    store = companion.clients.store("notes-files")
+    media = companion.clients.store("notes-media")
+    cases = [
+        (lambda: store.put(Context(), "Nope.file", b"x"), KeyError),
+        (lambda: media.put(Context(), "NoteFile.file", b"x"), KeyError),
+        (lambda: media.delete(Context(), "any"), PermissionError),
+    ]
+    for call, kind in cases:
+        with pytest.raises(kind) as ei:
+            await call()
+        st = _to_status(ei.value, "/conformance.v1.Notes/Export", Context())
+        assert st.status == Status.FAILED_PRECONDITION, (ei.value, st)
+        assert "internal error" not in (st.message or "")
+    with pytest.raises(KeyError) as ei:
+        files.resolve_field("file", [])
+    assert _to_status(ei.value, "/x.Y/Z", Context()).status == Status.FAILED_PRECONDITION

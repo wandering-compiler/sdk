@@ -137,7 +137,7 @@ its own per-method transaction when no header is present.
 **Deliberate limits.**
 - No automatic retry on serialization failures or deadlocks; such errors surface to the caller, and inside a distributed transaction they discard it (D7).
 - No outcome-query RPC. A lost Commit reply is settled from the coordinator's record of the id (D3.16), which it keeps for its last 256 drained ids and loses on restart; a commit still running when the settling Rollback arrives is not settled either. Then the outcome is unknown (`ErrCommitOutcomeUnknown`): the write may or may not have landed, the caller decides whether to re-read or retry, and the after-commit work for it is not run (at-most-once).
-- The ended detail (D5.17) is read by the Go client only; the Python, TypeScript and Rust business SDKs still settle a lost Commit reply as unknown when the transaction is gone.
+- The Python, TypeScript and Rust business SDKs follow D3.3, D3.9 and D3.15–D3.17 the same way (business-sdks.md B5.9–B5.12).
 - `TxHandle.Commit` itself does not roll back a transaction the coordinator refused as busy (D3.9): the handle stays retryable. A hand-driven handle that gives up must call Rollback; `Run` does (D3.15).
 
 ## D4. Nested transactions

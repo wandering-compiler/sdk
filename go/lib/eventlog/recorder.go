@@ -316,6 +316,9 @@ func (r *Recorder) Close(ctx context.Context) error {
 // A redis:// or rediss:// dsn stores the stream on Redis Streams instead
 // (see [RedisSink]), for a project that runs no NATS.
 func Open(ctx context.Context, dsn string, cfg RecorderConfig) (*Recorder, error) {
+	// Said once: the consumers pick the stream's transport from their own
+	// environment, so this line beside theirs is where a split shows.
+	log.Printf("eventlog: recording requests to the %s request stream at %s", streamTransport(dsn), dsnredact.String(dsn))
 	if IsRedisDSN(dsn) {
 		c, err := dialRedis(ctx, dsn)
 		if err != nil {
@@ -992,4 +995,13 @@ func (r *Recorder) reportSyncLate(method string, err error) {
 			"eventlog: domain %s: a sync audit record of %s was not acknowledged within %s — the request went on, the record stays queued: %w",
 			r.domain, method, r.syncWait, err))
 	}
+}
+
+// streamTransport names the broker a request-stream DSN points at, for the
+// boot lines of the recorder and the consumers.
+func streamTransport(dsn string) string {
+	if IsRedisDSN(dsn) {
+		return "Redis Streams"
+	}
+	return "NATS"
 }

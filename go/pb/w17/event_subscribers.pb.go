@@ -200,9 +200,10 @@ func (x *RequestConsumers) GetRegister() string {
 //   - topic_filter  — glob with `*` (single segment) and `**`
 //     (multi-segment). Default `**` = match every
 //     topic on the channel. Matches against the
-//     emitted event's `topic` at delivery time;
-//     NATS / REDIS_STREAMS push the filter down
-//     to the transport when supported.
+//     emitted event's `topic` at delivery time, in
+//     the generated dispatcher: the transport
+//     subscription is the whole channel (`**`), so
+//     the filter narrows what runs, not what is read.
 //   - handler       — `<module>.<Service>.<Method>` ref into the
 //     domain's gRPC service catalogue. Handler's
 //     request type must match the event message

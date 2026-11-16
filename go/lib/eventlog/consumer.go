@@ -144,7 +144,10 @@ type ConsumerConfig struct {
 	// MaxDeliver is how often a batch is offered before it goes to the dead
 	// letter subject. Default 5.
 	MaxDeliver int
-	// AckWait bounds one Consume call. Default 30s.
+	// AckWait is how long the broker waits for a batch's outcome before it
+	// offers the batch again. One Consume call may run nine tenths of it
+	// (so its outcome, and the backoff it asks for, lands first). Default
+	// 30s.
 	AckWait time.Duration
 	// Backoff is the wait before a failed batch is offered again. Default 1s,
 	// doubling to 1m.
@@ -203,19 +206,22 @@ func (cs *Consumers) Run(ctx context.Context, cfg ConsumerConfig) error {
 	if cfg.Redis != nil {
 		return cs.runRedis(ctx, cfg, list)
 	}
+	// A setup step that fails because ctx was cancelled is a stop asked for
+	// before the consumers started, not a failure: Run answers it as it
+	// answers a stop once they run.
 	if err := EnsureStream(ctx, cfg.JS, StreamName, []string{SubjectPrefix + ".>"}, cfg.RequestStream); err != nil {
-		return err
+		return stoppedOr(ctx, err)
 	}
 	dl := cfg.Stream
 	if dl.MaxBytes <= 0 {
 		dl.MaxBytes = DeadLetterMaxBytes
 	}
 	if err := EnsureStream(ctx, cfg.JS, DeadLetterStream, []string{DeadLetterPrefix + ".>"}, dl); err != nil {
-		return err
+		return stoppedOr(ctx, err)
 	}
 	stream, err := cfg.JS.Stream(ctx, StreamName)
 	if err != nil {
-		return fmt.Errorf("eventlog: %w", err)
+		return stoppedOr(ctx, fmt.Errorf("eventlog: %w", err))
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, len(list))
@@ -322,10 +328,16 @@ func handleMessage(ctx context.Context, msg jetstream.Msg, r registered, cfg Con
 // because its dead-letter publish failed.
 var errPastMaxDeliver = errors.New("eventlog: every attempt failed; an earlier dead-letter publish did not land")
 
-// callConsumer runs one Consume, bounded by the ack wait; a panic is an
-// error like any other.
+// callConsumer runs one Consume, bounded by the ack wait less a tenth; a
+// panic is an error like any other.
+//
+// Not by the ack wait itself: that is the moment the broker redelivers on
+// its own, so a Consume that ran into its deadline settled its Nak — and
+// the backoff it carries — only after the broker had already offered the
+// batch again, at once. Ending the attempt a tenth early lets the Nak land
+// first.
 func callConsumer(ctx context.Context, r registered, b *ConsumedBatch, wait time.Duration) (err error) {
-	cctx, cancel := context.WithTimeout(ctx, wait)
+	cctx, cancel := context.WithTimeout(ctx, attemptBudget(wait))
 	defer cancel()
 	defer func() {
 		if p := recover(); p != nil {
@@ -333,6 +345,11 @@ func callConsumer(ctx context.Context, r registered, b *ConsumedBatch, wait time
 		}
 	}()
 	return r.consume(cctx, b)
+}
+
+// attemptBudget is the part of an ack wait one Consume may use.
+func attemptBudget(ackWait time.Duration) time.Duration {
+	return ackWait - ackWait/10
 }
 
 func deadLetter(ctx context.Context, msg jetstream.Msg, cfg ConsumerConfig, dlq, name string, attempt int, cause error) {
@@ -509,6 +526,10 @@ func (cs *Consumers) Serve(ctx context.Context, dsn string, cfg ConsumerConfig) 
 	if dsn == "" {
 		return errors.New("eventlog: request consumers need the bus DSN the request stream lives on (NATS or Redis)")
 	}
+	// Said once, as the recorder says where it records: the two sides pick
+	// the transport from their own environment, and a split between them
+	// (one on NATS, one on Redis) is otherwise silent.
+	log.Printf("eventlog: request consumers read the %s request stream at %s", streamTransport(dsn), dsnredact.String(dsn))
 	if IsRedisDSN(dsn) {
 		c, err := dialRedis(ctx, dsn)
 		if err != nil {
@@ -557,4 +578,13 @@ func (cs *Consumers) serveLoop(ctx context.Context, cfg ConsumerConfig) error {
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// stoppedOr is nil when ctx was cancelled (the caller asked Run to stop), and
+// err otherwise.
+func stoppedOr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
 }

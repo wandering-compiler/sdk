@@ -15,6 +15,16 @@ use crate::{
     pb::w17::InvalidateEvent,
 };
 
+/// Go's eventctx_dpop_labels_test: a DPoP proof (RFC 9449) is a signed JWS
+/// bound to the request — a credential.
+#[test]
+fn a_dpop_proof_is_a_credential() {
+    for k in ["dpop", "DPoP", "grpcgateway-dpop"] {
+        assert!(is_credential_key(k), "{k}");
+        assert!(reserved_metadata_key(k), "{k}");
+    }
+}
+
 #[test]
 fn credential_keys() {
     for k in [

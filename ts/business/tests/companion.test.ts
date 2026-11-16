@@ -16,7 +16,7 @@ import { Status, StatusError, encodeRpcStatus, errorInfo } from "../src/errors.t
 import * as files from "../src/files.ts";
 import { ManifestError, fromObject, load, parseJSON } from "../src/manifest.ts";
 import { BootError, Clients } from "../src/runtime.ts";
-import { Registry } from "../src/server.ts";
+import { Registry, toServiceError } from "../src/server.ts";
 import { MANIFEST, pool } from "./helpers.ts";
 
 type Obj = Record<string, any>;
@@ -498,7 +498,7 @@ it("a short field name must be unambiguous", () => {
   const other = { ...ps[0]!, field: "other.v1.NoteFile.file" };
   expect(files.resolveField("NoteFile.file", ps).field).toBe("conformance.v1.NoteFile.file");
   expect(() => files.resolveField("NoteFile.file", [...ps, other])).toThrow(/ambiguous/);
-  expect(() => files.resolveField("file", ps)).toThrow(RangeError);
+  expect(() => files.resolveField("file", ps)).toThrow(files.FileRefusedError);
 });
 
 it("boot refusals", () => {
@@ -514,4 +514,32 @@ it("boot refusals", () => {
   expect(c.egress("echo").conn).toBeInstanceOf(CompanionConn);
   expect(c.egress("echo").conn.addr).toBe("notes-business-companion:50051");
   c.close();
+});
+
+it("a refused file call answers FAILED_PRECONDITION, not a panic", async () => {
+  // The SDK refuses before any call (an unknown field, a field stored on
+  // another connection, a write to a connection the gateway writes). A
+  // handler that lets the refusal through answers FAILED_PRECONDITION, as the
+  // Rust tier (files::Error::Refused) and the companion (D18.2) do.
+  const m = load(MANIFEST);
+  const ps = m.companion!.files!.placements;
+  const refusals: unknown[] = [];
+  try {
+    files.resolveField("Nope.file", ps);
+  } catch (e) {
+    refusals.push(e);
+  }
+  const conns = m.companion!.files!.connections;
+  const media = new files.FileStore(undefined as never, conns.find((c) => !c.writable)!, ps);
+  for (const p of [media.put(new Context(), "NoteFile.file", new Uint8Array(1)), media.delete(new Context(), "any")]) {
+    try {
+      await p;
+    } catch (e) {
+      refusals.push(e);
+    }
+  }
+  expect(refusals).toHaveLength(3);
+  for (const e of refusals) {
+    expect(toServiceError(e, "/conformance.v1.Notes/Export", new Context()).code).toBe(Status.FAILED_PRECONDITION);
+  }
 });

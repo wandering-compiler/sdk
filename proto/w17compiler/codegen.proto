@@ -2019,6 +2019,17 @@ message GenerateProjectRequest {
   // moved it into the file — and refuses a file that does not validate,
   // naming w17/infra.yaml:line:col.
   bytes infra = 15;
+
+  // Dockerfiles are the project's own Dockerfiles: the project-root-relative
+  // path of every file named `Dockerfile`, outside hidden, vendor and
+  // node_modules directories and the generated services and gen dirs. The
+  // server cannot see the disk, and the infra render builds a hand-written
+  // business tier from a Dockerfile of the project: it reads this list to
+  // build from one that exists, and refuses the render, naming the fix, when
+  // there is none. dockerfiles_listed says the client looked — an older client
+  // sends neither, and the render then refuses rather than guess.
+  repeated string dockerfiles = 16;
+  bool dockerfiles_listed = 17;
 }
 
 // HandlerMsgids is one domain's share of the hand-written sentences.

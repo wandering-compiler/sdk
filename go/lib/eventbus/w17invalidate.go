@@ -65,11 +65,29 @@ const W17InvalidateTopic = "w17.invalidate"
 // surface in observability (which entities triggered the
 // invalidate). The auto-emit path passes nil because the
 // generator has no shape-aware response field extractor yet.
+//
+// **Scopes are the rows', not the caller's.** An invalidation carries no
+// data scopes here: the caller did not say whose rows changed, and the
+// request's own scopes name who WROTE them (a staff member, a job), not who
+// may read them. A hub delivers such an event by its labels (the
+// organization). The generated path calls [EmitInvalidateRows] with the
+// touched rows' values ([RowScopes]), which an audience hub narrows on.
 func EmitInvalidate(ctx context.Context, bus Dispatcher, channel, group, message string, ids []string) error {
+	return EmitInvalidateRows(ctx, bus, channel, group, message, ids, nil)
+}
+
+// EmitInvalidateRows is [EmitInvalidate] for rows whose data-scope values
+// are known ([RowScopes]): they ride in the event's `scopes`, so an
+// audience gateway's hub delivers it to the clients who may read those
+// rows — the row's owner on an owner-range audience, its organization's
+// members on an organization-range one — whoever wrote them. A scope
+// left out of rowScopes is unknown, and the hub decides by the rest.
+func EmitInvalidateRows(ctx context.Context, bus Dispatcher, channel, group, message string, ids []string, rowScopes map[string]string) error {
 	return bus.Dispatch(ctx, channel, W17InvalidateTopic, &w17pb.InvalidateEvent{
 		Group:   group,
 		Message: message,
 		Ids:     ids,
 		Labels:  LabelsFromContext(ctx),
+		Scopes:  rowScopes,
 	})
 }

@@ -133,20 +133,43 @@ class Served:
         note = await self.svc.CreateNote(ctx, req)   # emits, as over the wire
     """
 
+    # Its own state lives under name-mangled attributes, and ``service`` is
+    # resolved RPC first: an RPC may be named like anything (``service``,
+    # ``_methods``, ``paths``), and it must still be the RPC.
+
     def __init__(self, service: str, methods: dict[str, _Method]) -> None:
-        self.service = service
-        self._methods = methods
+        self.__service = service
+        self.__methods = methods
+
+    def __getattribute__(self, name: str):
+        if not name.startswith("_Served__") and not (name.startswith("__") and name.endswith("__")):
+            m = object.__getattribute__(self, "_Served__methods").get(name)
+            if m is not None:
+                return _call_of(m)
+        return object.__getattribute__(self, name)
 
     def __getattr__(self, name: str):
-        m = self.__dict__.get("_methods", {}).get(name)
-        if m is None:
-            raise AttributeError(f"{self.__dict__.get('service')} has no rpc {name!r}")
-        if not m.info.client_streaming and not m.info.server_streaming:
-            return m.invoke_unary
-        return m.fn
+        raise AttributeError(f"{object.__getattribute__(self, '_Served__service')} has no rpc {name!r}")
+
+    @property
+    def service(self) -> str:
+        """The service's full name (an RPC named ``service`` wins over this;
+        ``served_service`` always answers)."""
+        return self.__service
 
     def __mapping__(self) -> dict[str, grpclib.const.Handler]:
-        return {m.info.path: _handler(m, self) for m in self._methods.values()}
+        return {m.info.path: _handler(m, self) for m in self.__methods.values()}
+
+
+def _call_of(m: _Method):
+    if not m.info.client_streaming and not m.info.server_streaming:
+        return m.invoke_unary
+    return m.fn
+
+
+def served_service(s: Served) -> str:
+    """The full name of the service ``s`` serves, whatever its RPCs are named."""
+    return object.__getattribute__(s, "_Served__service")
 
 
 class Registry:

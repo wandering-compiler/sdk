@@ -680,3 +680,46 @@ async def test_a_request_message_past_4_mib_is_refused_before_it_is_buffered(sta
     assert stack.storage.rows == []
     note = await stack.client.CreateNote(Context(), msg("CreateNoteRequest")(text="y" * (1024 * 1024)))
     assert len(note.text) == 1024 * 1024
+
+
+def _odd_pool():
+    """A service whose RPCs are named like the served object's own members."""
+    from google.protobuf import descriptor_pb2, descriptor_pool
+
+    from w17_business.descriptors import Pool
+
+    fdp = descriptor_pb2.FileDescriptorProto(name="odd/v1/odd.proto", package="odd.v1", syntax="proto3")
+    m = fdp.message_type.add(name="M")
+    m.field.add(name="s", number=1, type=descriptor_pb2.FieldDescriptorProto.TYPE_STRING,
+                label=descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL, json_name="s")
+    svc = fdp.service.add(name="Odd")
+    for name in ("service", "_methods", "paths"):
+        svc.method.add(name=name, input_type=".odd.v1.M", output_type=".odd.v1.M")
+    pool = Pool(descriptor_pool.DescriptorPool())
+    pool.add_set(descriptor_pb2.FileDescriptorSet(file=[fdp]).SerializeToString())
+    return pool
+
+
+async def test_an_rpc_named_like_a_member_of_the_served_object_is_still_its_rpc():
+    pool = _odd_pool()
+    M = pool.message("odd.v1.M")
+
+    class Odd:
+        async def service(self, ctx, req):
+            return M(s="service:" + req.s)
+
+        async def _methods(self, ctx, req):
+            return M(s="_methods:" + req.s)
+
+        async def paths(self, ctx, req):
+            return M(s="paths:" + req.s)
+
+    reg = Registry(pool)
+    served = reg.register("odd.v1.Odd", Odd())
+    for name in ("service", "_methods", "paths"):
+        reply = await getattr(reg.self("odd.v1.Odd"), name)(Context(), M(s="x"))
+        assert reply.s == f"{name}:x", name
+    # The registry still knows which service it serves, and every path.
+    from w17_business.server import served_service
+    assert served_service(served) == "odd.v1.Odd"
+    assert sorted(served.__mapping__()) == ["/odd.v1.Odd/_methods", "/odd.v1.Odd/paths", "/odd.v1.Odd/service"]
