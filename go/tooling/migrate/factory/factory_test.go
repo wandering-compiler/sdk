@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/factory"
+	_ "github.com/wandering-compiler/sdk/go/tooling/migrate/sqlitedriver"
 )
 
 func TestParseTargets_Happy(t *testing.T) {

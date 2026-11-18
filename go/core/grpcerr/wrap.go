@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
-	sqlitelib "modernc.org/sqlite"
 )
 
 // ConstraintInfo is one registry entry — the payload Wrap
@@ -830,8 +829,8 @@ func isTooManyValues(err error, d Dialect) bool {
 		// placeholders".
 		return errors.As(err, &me) && me.Number == 1390
 	case DialectSQLite:
-		var se *sqlitelib.Error
-		return errors.As(err, &se) && strings.Contains(se.Error(), "too many SQL variables")
+		se, ok := dialect.AsSQLite(err)
+		return ok && strings.Contains(se.Error(), "too many SQL variables")
 	}
 	return false
 }

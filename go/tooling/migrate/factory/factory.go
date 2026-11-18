@@ -17,8 +17,28 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/redis"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/s3"
-	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/sqlite"
 )
+
+// The SQLite migrator is the one dialect this package does not import: it
+// carries modernc.org/sqlite, SQLite in pure Go — a third of the SDK's module
+// sources and most of a cold build's compile time — and every generated
+// server links this package for `migrate`. A binary that migrates SQLite
+// registers it by importing tooling/migrate/sqlitedriver (the generated
+// server of a project with a SQLite connection does, and w17ctl does).
+var sqliteDriver struct {
+	newApplier     func(ctx context.Context, dsn string) (migrate.Applier, error)
+	newSnapshotter func(dsn string) (migrate.Snapshotter, error)
+}
+
+// RegisterSQLite installs the SQLite migrator; tooling/migrate/sqlitedriver
+// calls it from init.
+func RegisterSQLite(newApplier func(ctx context.Context, dsn string) (migrate.Applier, error), newSnapshotter func(dsn string) (migrate.Snapshotter, error)) {
+	sqliteDriver.newApplier, sqliteDriver.newSnapshotter = newApplier, newSnapshotter
+}
+
+func errNoSQLite(connection string) error {
+	return fmt.Errorf("connection %q is SQLite, and this binary carries no SQLite migrator — it is linked in by importing github.com/wandering-compiler/sdk/go/tooling/migrate/sqlitedriver (a generated server does when its project declares a SQLite connection; regenerate after adding one)", connection)
+}
 
 // TargetSpec is one parsed `--target` flag. The CLI accepts the
 // form `<connection>=<dsn>` (repeatable). Connection name maps to
@@ -101,7 +121,10 @@ func FromTargets(specs []TargetSpec, opts ...option) migrate.ApplierFor {
 		case "mysql":
 			return mysql.New(context.Background(), spec.DSN)
 		case "sqlite":
-			return sqlite.New(context.Background(), spec.DSN)
+			if sqliteDriver.newApplier == nil {
+				return nil, errNoSQLite(connection)
+			}
+			return sqliteDriver.newApplier(context.Background(), spec.DSN)
 		case "redis":
 			a, err := redis.New(context.Background(), spec.DSN)
 			if err != nil {
@@ -151,7 +174,10 @@ func SnapshotterFromTargets(specs []TargetSpec) migrate.SnapshotterFor {
 		case "mysql":
 			return mysql.NewSnapshotter(spec.DSN)
 		case "sqlite":
-			return sqlite.NewSnapshotter(spec.DSN)
+			if sqliteDriver.newSnapshotter == nil {
+				return nil, errNoSQLite(connection)
+			}
+			return sqliteDriver.newSnapshotter(spec.DSN)
 		case "redis":
 			return redis.NewSnapshotter(spec.DSN)
 		case "nats":
