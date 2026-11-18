@@ -1,12 +1,51 @@
 package dialect
 
 import (
-	"errors"
+	"reflect"
 	"regexp"
 	"strings"
-
-	sqlitelib "modernc.org/sqlite"
 )
+
+// SQLiteError is modernc.org/sqlite's *Error as this package reads it: its
+// extended result code and its message.
+type SQLiteError interface {
+	error
+	Code() int
+}
+
+// AsSQLite finds modernc.org/sqlite's *Error in err's chain (Unwrap, and
+// errors.Join's Unwrap() []error) without importing the driver: it is SQLite
+// in pure Go, the largest module the SDK depends on, and this package sits
+// under every generated storage handler — a project on PostgreSQL would
+// download and compile all of it for a type assertion. The type is matched by
+// its package and name, so another error that happens to have Code() int is
+// not taken for it.
+func AsSQLite(err error) (SQLiteError, bool) {
+	for err != nil {
+		if se, ok := err.(SQLiteError); ok && isModerncSQLiteError(err) { //nolint:errorlint // this loop IS the chain walk; errors.As would stop at the first Code() int, which may not be SQLite's.
+			return se, true
+		}
+		switch u := err.(type) { //nolint:errorlint // as above: the unwrap step of the walk.
+		case interface{ Unwrap() []error }:
+			for _, e := range u.Unwrap() {
+				if se, ok := AsSQLite(e); ok {
+					return se, true
+				}
+			}
+			return nil, false
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+func isModerncSQLiteError(err error) bool {
+	t := reflect.TypeOf(err)
+	return t.Kind() == reflect.Pointer && t.Elem().PkgPath() == "modernc.org/sqlite" && t.Elem().Name() == "Error"
+}
 
 // SQLite extended result codes (`sqlite3_extended_errcode`).
 // The driver's `Error.Code()` returns these directly. We
@@ -57,8 +96,8 @@ func ParseSQLite(err error) (*ConstraintError, bool) {
 	if err == nil {
 		return nil, false
 	}
-	var se *sqlitelib.Error
-	if !errors.As(err, &se) {
+	se, ok := AsSQLite(err)
+	if !ok {
 		return nil, false
 	}
 	kind, ok := sqliteKindByCode[se.Code()]

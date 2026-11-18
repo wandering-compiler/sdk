@@ -534,9 +534,12 @@ the dialect defines.
 
 ## T15. Dialect appliers and run locks
 
-**Code.** `go/tooling/migrate/internal/postgres/postgres.go`, `internal/mysql/mysql.go`, `internal/mysql/runlock.go`, `internal/sqlite/sqlite.go`, `internal/redis/redis.go`, `internal/redis/runlock.go`, `internal/nats/nats.go`, `internal/s3/s3.go`, `internal/s3/runlock.go` (all under `go/tooling/migrate/`); `go/tooling/migrate/factory/factory.go` — `FromTargets`, `SeedCandidate`
+**Code.** `go/tooling/migrate/internal/postgres/postgres.go`, `internal/mysql/mysql.go`, `internal/mysql/runlock.go`, `internal/sqlite/sqlite.go`, `internal/redis/redis.go`, `internal/redis/runlock.go`, `internal/nats/nats.go`, `internal/s3/s3.go`, `internal/s3/runlock.go` (all under `go/tooling/migrate/`); `go/tooling/migrate/factory/factory.go` — `FromTargets`, `SeedCandidate`, `RegisterSQLite`; `go/tooling/migrate/sqlitedriver`
 
-**Purpose.** One applier per store kind. Run locks: Postgres takes a session advisory lock per database (`pg_try_advisory_lock`, fail-fast), plus a second advisory lock with a phase re-check for the post-transaction half; MySQL takes `GET_LOCK` on a dedicated session, per schema; SQLite relies on the ledger primary key; Redis uses `SET NX` on `w17:migrate:runlock` (TTL 5 min, heartbeat 60 s); S3 uses a conditional PUT of `w17-migrate-runlock.json`, stale after 3 min.
+**Purpose.** One applier per store kind. The factory links every one but SQLite's: that one carries
+`modernc.org/sqlite` (SQLite in pure Go, the largest module the SDK depends on), so a binary
+registers it by importing `tooling/migrate/sqlitedriver`. A generated server does when its project
+declares a SQLite connection; w17ctl always does. Run locks: Postgres takes a session advisory lock per database (`pg_try_advisory_lock`, fail-fast), plus a second advisory lock with a phase re-check for the post-transaction half; MySQL takes `GET_LOCK` on a dedicated session, per schema; SQLite relies on the ledger primary key; Redis uses `SET NX` on `w17:migrate:runlock` (TTL 5 min, heartbeat 60 s); S3 uses a conditional PUT of `w17-migrate-runlock.json`, stale after 3 min.
 
 Redis, S3, MySQL and Postgres locks implement `migrate.CheckedRunLock`. Redis and S3 keep a lease on the
 local monotonic clock, counted from when the last successful acquire or refresh was sent, with a
@@ -576,6 +579,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
 | T15.16 | A MySQL body that fails MUST NOT hand its connection back to the pool (a `FOREIGN_KEY_CHECKS` it turned off, or a transaction it left open, would reach the next borrower). A body that succeeds after turning the checks off around one `ADD … FOREIGN KEY` (save, off, add, restore — the planner's shape for a key over existing rows) MUST leave its session with the checks on. | `TestApply_AFailedBodyDoesNotReturnItsSessionToThePool`, `TestApply_FKChecksRestoredAfterASuccessfulBody` (live) |
 | T15.17 | A Postgres migration body that fails between its own `BEGIN` and `COMMIT` MUST NOT leave the applier's session in an aborted transaction: the applier issues `ROLLBACK` on a fresh context, so the next migration, a rollback or a ledger read on that connection works. | `TestApply_AFailedBodyLeavesNoTransactionOpen_Live` |
+| T15.18 | A binary that does not import `tooling/migrate/sqlitedriver` MUST NOT depend on `modernc.org/sqlite` through the packages every generated server links (`core/grpcerr`, `service/inprocgrpc`, `service/bootstrap`, `migrate/migratecli`), and MUST refuse a SQLite target naming the package to import. `grpcerr` MUST still classify the driver's errors (found by package and type name, through `%w` and `errors.Join`). | `TestServerPackagesDoNotPullInSQLite`, `TestFromTargets_SQLiteWithoutTheDriverSaysWhatToImport`, `TestAsSQLite_FindsTheDriverErrorOnly` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.
