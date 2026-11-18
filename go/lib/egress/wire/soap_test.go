@@ -177,3 +177,38 @@ func TestUnmarshalSOAP_NilEmptyAndText(t *testing.T) {
 		t.Errorf("simpleContent round trip: %v %v", back, err)
 	}
 }
+
+// A value keeps what its XSD type's whiteSpace facet keeps: an xsd:string
+// arrives padded as the service padded it (a register's fixed-width column),
+// a collapse type and a non-string kind are trimmed and folded, and a
+// normalizedString attribute has its line breaks turned to spaces.
+func TestUnmarshalSOAP_WhitespaceFollowsTheFacet(t *testing.T) {
+	raw := `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+		<StatusResponse xmlns="urn:feature">
+		  <status statusCode="0" statusText="MINISTERSTVO FINANCÍ   "/>
+		  <payer dic=" CZ1 " cisloFu=" 461 ">
+		    <account><nestandardniUcet>
+		      DE89   3704 </nestandardniUcet></account>
+		    <account><standardniUcet cislo="19-1" kodBanky="0100" nazevBanky="Česká&#10;národní	banka"/></account>
+		    <balance currency="CZK">
+		      12.50 </balance>
+		  </payer>
+		</StatusResponse></s:Body></s:Envelope>`
+	m := dynamicpb.NewMessage(mdIn(t, featureSoap, "StatusResponse"))
+	if err := UnmarshalSOAP([]byte(raw), m); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := protojson.MarshalOptions{UseProtoNames: true}.Marshal(m)
+	for _, want := range []string{
+		`"status_text":"MINISTERSTVO FINANCÍ   "`, // xsd:string: preserve
+		`"dic":" CZ1 "`,                           // xsd:string attribute: preserve
+		`"cislo_fu":"461"`,                        // a number: collapsed
+		`"nestandardni_ucet":"DE89 3704"`,         // a collapse facet
+		`"nazev_banky":"Česká národní banka"`,     // normalizedString: replace
+		`"value":"12.50"`,                         // xsd:decimal text: collapsed
+	} {
+		if !strings.Contains(strings.ReplaceAll(string(got), `": "`, `":"`), want) {
+			t.Errorf("decoded %s\n missing %s", got, want)
+		}
+	}
+}

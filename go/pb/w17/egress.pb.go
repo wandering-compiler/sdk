@@ -22,6 +22,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// EgressXmlWhitespace — an XSD whiteSpace facet.
+type EgressXmlWhitespace int32
+
+const (
+	// preserve: the text as sent (xsd:string).
+	EgressXmlWhitespace_EGRESS_XML_WHITESPACE_UNSPECIFIED EgressXmlWhitespace = 0
+	// replace: each tab, newline and carriage return becomes a space
+	// (xsd:normalizedString).
+	EgressXmlWhitespace_EGRESS_XML_WHITESPACE_REPLACE EgressXmlWhitespace = 1
+	// collapse: replace, then runs of spaces fold into one and the ends are
+	// trimmed (xsd:token and the built-ins derived from it, a list).
+	EgressXmlWhitespace_EGRESS_XML_WHITESPACE_COLLAPSE EgressXmlWhitespace = 2
+)
+
+// Enum value maps for EgressXmlWhitespace.
+var (
+	EgressXmlWhitespace_name = map[int32]string{
+		0: "EGRESS_XML_WHITESPACE_UNSPECIFIED",
+		1: "EGRESS_XML_WHITESPACE_REPLACE",
+		2: "EGRESS_XML_WHITESPACE_COLLAPSE",
+	}
+	EgressXmlWhitespace_value = map[string]int32{
+		"EGRESS_XML_WHITESPACE_UNSPECIFIED": 0,
+		"EGRESS_XML_WHITESPACE_REPLACE":     1,
+		"EGRESS_XML_WHITESPACE_COLLAPSE":    2,
+	}
+)
+
+func (x EgressXmlWhitespace) Enum() *EgressXmlWhitespace {
+	p := new(EgressXmlWhitespace)
+	*p = x
+	return p
+}
+
+func (x EgressXmlWhitespace) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EgressXmlWhitespace) Descriptor() protoreflect.EnumDescriptor {
+	return file_w17_egress_proto_enumTypes[0].Descriptor()
+}
+
+func (EgressXmlWhitespace) Type() protoreflect.EnumType {
+	return &file_w17_egress_proto_enumTypes[0]
+}
+
+func (x EgressXmlWhitespace) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EgressXmlWhitespace.Descriptor instead.
+func (EgressXmlWhitespace) EnumDescriptor() ([]byte, []int) {
+	return file_w17_egress_proto_rawDescGZIP(), []int{0}
+}
+
 // EgressIn — where a request field travels.
 type EgressIn int32
 
@@ -71,11 +126,11 @@ func (x EgressIn) String() string {
 }
 
 func (EgressIn) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_egress_proto_enumTypes[0].Descriptor()
+	return file_w17_egress_proto_enumTypes[1].Descriptor()
 }
 
 func (EgressIn) Type() protoreflect.EnumType {
-	return &file_w17_egress_proto_enumTypes[0]
+	return &file_w17_egress_proto_enumTypes[1]
 }
 
 func (x EgressIn) Number() protoreflect.EnumNumber {
@@ -84,7 +139,7 @@ func (x EgressIn) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EgressIn.Descriptor instead.
 func (EgressIn) EnumDescriptor() ([]byte, []int) {
-	return file_w17_egress_proto_rawDescGZIP(), []int{0}
+	return file_w17_egress_proto_rawDescGZIP(), []int{1}
 }
 
 // EgressEncoding — request body encoding.
@@ -132,11 +187,11 @@ func (x EgressEncoding) String() string {
 }
 
 func (EgressEncoding) Descriptor() protoreflect.EnumDescriptor {
-	return file_w17_egress_proto_enumTypes[1].Descriptor()
+	return file_w17_egress_proto_enumTypes[2].Descriptor()
 }
 
 func (EgressEncoding) Type() protoreflect.EnumType {
-	return &file_w17_egress_proto_enumTypes[1]
+	return &file_w17_egress_proto_enumTypes[2]
 }
 
 func (x EgressEncoding) Number() protoreflect.EnumNumber {
@@ -145,7 +200,7 @@ func (x EgressEncoding) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EgressEncoding.Descriptor instead.
 func (EgressEncoding) EnumDescriptor() ([]byte, []int) {
-	return file_w17_egress_proto_rawDescGZIP(), []int{1}
+	return file_w17_egress_proto_rawDescGZIP(), []int{2}
 }
 
 // EgressClient — provenance of a generated client.
@@ -419,7 +474,12 @@ type EgressField struct {
 	XmlAttribute bool `protobuf:"varint,6,opt,name=xml_attribute,json=xmlAttribute,proto3" json:"xml_attribute,omitempty"`
 	// SOAP: the field is the text content of its parent element (an XSD
 	// simpleContent: a value with attributes).
-	XmlText       bool `protobuf:"varint,7,opt,name=xml_text,json=xmlText,proto3" json:"xml_text,omitempty"`
+	XmlText bool `protobuf:"varint,7,opt,name=xml_text,json=xmlText,proto3" json:"xml_text,omitempty"`
+	// SOAP: what the decoder does to a string field's text, from the XSD
+	// type's whiteSpace facet. Unset is preserve, xsd:string's own: the text
+	// arrives as the service sent it. A field of another kind (a number, a
+	// date, an enum) is always read collapsed.
+	XmlWhitespace EgressXmlWhitespace `protobuf:"varint,8,opt,name=xml_whitespace,json=xmlWhitespace,proto3,enum=w17.EgressXmlWhitespace" json:"xml_whitespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -501,6 +561,13 @@ func (x *EgressField) GetXmlText() bool {
 		return x.XmlText
 	}
 	return false
+}
+
+func (x *EgressField) GetXmlWhitespace() EgressXmlWhitespace {
+	if x != nil {
+		return x.XmlWhitespace
+	}
+	return EgressXmlWhitespace_EGRESS_XML_WHITESPACE_UNSPECIFIED
 }
 
 // EgressUnion — a oneof that is an OpenAPI union.
@@ -681,7 +748,7 @@ const file_w17_egress_proto_rawDesc = "" +
 	"\x0frequest_element\x18\t \x01(\tR\x0erequestElement\x12)\n" +
 	"\x10response_element\x18\n" +
 	" \x01(\tR\x0fresponseElement\x12#\n" +
-	"\rxml_namespace\x18\v \x01(\tR\fxmlNamespace\"\xd3\x01\n" +
+	"\rxml_namespace\x18\v \x01(\tR\fxmlNamespace\"\x94\x02\n" +
 	"\vEgressField\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\x02in\x18\x02 \x01(\x0e2\r.w17.EgressInR\x02in\x12\x1a\n" +
@@ -689,9 +756,14 @@ const file_w17_egress_proto_rawDesc = "" +
 	"\x03tag\x18\x04 \x01(\tR\x03tag\x12#\n" +
 	"\rxml_namespace\x18\x05 \x01(\tR\fxmlNamespace\x12#\n" +
 	"\rxml_attribute\x18\x06 \x01(\bR\fxmlAttribute\x12\x19\n" +
-	"\bxml_text\x18\a \x01(\bR\axmlText\"3\n" +
+	"\bxml_text\x18\a \x01(\bR\axmlText\x12?\n" +
+	"\x0exml_whitespace\x18\b \x01(\x0e2\x18.w17.EgressXmlWhitespaceR\rxmlWhitespace\"3\n" +
 	"\vEgressUnion\x12$\n" +
-	"\rdiscriminator\x18\x01 \x01(\tR\rdiscriminator*x\n" +
+	"\rdiscriminator\x18\x01 \x01(\tR\rdiscriminator*\x83\x01\n" +
+	"\x13EgressXmlWhitespace\x12%\n" +
+	"!EGRESS_XML_WHITESPACE_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dEGRESS_XML_WHITESPACE_REPLACE\x10\x01\x12\"\n" +
+	"\x1eEGRESS_XML_WHITESPACE_COLLAPSE\x10\x02*x\n" +
 	"\bEgressIn\x12\x19\n" +
 	"\x15EGRESS_IN_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eEGRESS_IN_PATH\x10\x01\x12\x13\n" +
@@ -723,38 +795,40 @@ func file_w17_egress_proto_rawDescGZIP() []byte {
 	return file_w17_egress_proto_rawDescData
 }
 
-var file_w17_egress_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_w17_egress_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_w17_egress_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_w17_egress_proto_goTypes = []any{
-	(EgressIn)(0),                         // 0: w17.EgressIn
-	(EgressEncoding)(0),                   // 1: w17.EgressEncoding
-	(*EgressClient)(nil),                  // 2: w17.EgressClient
-	(*EgressCall)(nil),                    // 3: w17.EgressCall
-	(*EgressField)(nil),                   // 4: w17.EgressField
-	(*EgressUnion)(nil),                   // 5: w17.EgressUnion
-	(*descriptorpb.FileOptions)(nil),      // 6: google.protobuf.FileOptions
-	(*descriptorpb.MethodOptions)(nil),    // 7: google.protobuf.MethodOptions
-	(*descriptorpb.FieldOptions)(nil),     // 8: google.protobuf.FieldOptions
-	(*descriptorpb.OneofOptions)(nil),     // 9: google.protobuf.OneofOptions
-	(*descriptorpb.EnumValueOptions)(nil), // 10: google.protobuf.EnumValueOptions
+	(EgressXmlWhitespace)(0),              // 0: w17.EgressXmlWhitespace
+	(EgressIn)(0),                         // 1: w17.EgressIn
+	(EgressEncoding)(0),                   // 2: w17.EgressEncoding
+	(*EgressClient)(nil),                  // 3: w17.EgressClient
+	(*EgressCall)(nil),                    // 4: w17.EgressCall
+	(*EgressField)(nil),                   // 5: w17.EgressField
+	(*EgressUnion)(nil),                   // 6: w17.EgressUnion
+	(*descriptorpb.FileOptions)(nil),      // 7: google.protobuf.FileOptions
+	(*descriptorpb.MethodOptions)(nil),    // 8: google.protobuf.MethodOptions
+	(*descriptorpb.FieldOptions)(nil),     // 9: google.protobuf.FieldOptions
+	(*descriptorpb.OneofOptions)(nil),     // 10: google.protobuf.OneofOptions
+	(*descriptorpb.EnumValueOptions)(nil), // 11: google.protobuf.EnumValueOptions
 }
 var file_w17_egress_proto_depIdxs = []int32{
-	1,  // 0: w17.EgressCall.request_encoding:type_name -> w17.EgressEncoding
-	0,  // 1: w17.EgressField.in:type_name -> w17.EgressIn
-	6,  // 2: w17.egress_client:extendee -> google.protobuf.FileOptions
-	7,  // 3: w17.egress_call:extendee -> google.protobuf.MethodOptions
-	8,  // 4: w17.egress_field:extendee -> google.protobuf.FieldOptions
-	9,  // 5: w17.egress_union:extendee -> google.protobuf.OneofOptions
-	10, // 6: w17.egress_enum_value:extendee -> google.protobuf.EnumValueOptions
-	2,  // 7: w17.egress_client:type_name -> w17.EgressClient
-	3,  // 8: w17.egress_call:type_name -> w17.EgressCall
-	4,  // 9: w17.egress_field:type_name -> w17.EgressField
-	5,  // 10: w17.egress_union:type_name -> w17.EgressUnion
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	7,  // [7:11] is the sub-list for extension type_name
-	2,  // [2:7] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	2,  // 0: w17.EgressCall.request_encoding:type_name -> w17.EgressEncoding
+	1,  // 1: w17.EgressField.in:type_name -> w17.EgressIn
+	0,  // 2: w17.EgressField.xml_whitespace:type_name -> w17.EgressXmlWhitespace
+	7,  // 3: w17.egress_client:extendee -> google.protobuf.FileOptions
+	8,  // 4: w17.egress_call:extendee -> google.protobuf.MethodOptions
+	9,  // 5: w17.egress_field:extendee -> google.protobuf.FieldOptions
+	10, // 6: w17.egress_union:extendee -> google.protobuf.OneofOptions
+	11, // 7: w17.egress_enum_value:extendee -> google.protobuf.EnumValueOptions
+	3,  // 8: w17.egress_client:type_name -> w17.EgressClient
+	4,  // 9: w17.egress_call:type_name -> w17.EgressCall
+	5,  // 10: w17.egress_field:type_name -> w17.EgressField
+	6,  // 11: w17.egress_union:type_name -> w17.EgressUnion
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	8,  // [8:12] is the sub-list for extension type_name
+	3,  // [3:8] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_w17_egress_proto_init() }
@@ -767,7 +841,7 @@ func file_w17_egress_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_egress_proto_rawDesc), len(file_w17_egress_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   4,
 			NumExtensions: 5,
 			NumServices:   0,

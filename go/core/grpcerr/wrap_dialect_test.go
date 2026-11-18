@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"google.golang.org/grpc/codes"
@@ -202,6 +204,40 @@ func TestIsRetryable_AllDrivers(t *testing.T) {
 
 // INVARIANT: a pq.Error serialization failure routes to Aborted via
 // Wrap, exercising the pq branch of isRetryable end to end.
+// INVARIANT: a lock the statement would not wait for (Postgres 55P03 from
+// either driver, MySQL 3572) is Aborted with ROW_LOCKED, so a caller that
+// took the lock with NOWAIT can tell "another run holds it" from a failure.
+func TestWrap_LockNotAvailableIsRowLocked(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		d    Dialect
+	}{
+		{"pgx", &pgconn.PgError{Code: "55P03", Message: "could not obtain lock on row in relation \"t\""}, DialectPostgres},
+		{"pq", &pq.Error{Code: "55P03"}, DialectPostgres},
+		{"mysql nowait", &mysql.MySQLError{Number: 3572}, DialectMySQL},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Wrap(context.Background(), "M.LockRollup", tc.err, nil, tc.d)
+			st, _ := status.FromError(err)
+			if st.Code() != codes.Aborted {
+				t.Fatalf("Code = %v, want Aborted", st.Code())
+			}
+			if got := detailCode(err); got != CodeRowLocked {
+				t.Errorf("detail code = %q, want %q", got, CodeRowLocked)
+			}
+			if !strings.Contains(st.Message(), "row locked by another transaction") {
+				t.Errorf("message = %q", st.Message())
+			}
+		})
+	}
+	// Another dialect's code is not taken for it.
+	if isLockNotAvailable(&mysql.MySQLError{Number: 3572}, DialectPostgres) || isLockNotAvailable(&pq.Error{Code: "55P03"}, DialectMySQL) {
+		t.Error("a lock code was recognised under the wrong dialect")
+	}
+}
+
 func TestWrap_PqRetryable(t *testing.T) {
 	got := Wrap(context.Background(), "M.G", &pq.Error{Code: "40001"}, nil, DialectPostgres)
 	st, _ := status.FromError(got)
