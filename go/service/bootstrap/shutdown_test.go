@@ -93,10 +93,13 @@ func TestRun_ShutdownDeadlineBoundsAStuckComponent(t *testing.T) {
 func TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown(t *testing.T) {
 	t.Setenv("W17_SHUTDOWN_DEADLINE_SECONDS", "1")
 	closerCtxDone := make(chan struct{})
+	never := make(chan struct{})
+	t.Cleanup(func() { close(never) })
+	// A closer that ignores its context: only the deadline ends the wait.
 	closer := func(ctx context.Context) error {
-		<-ctx.Done()
-		close(closerCtxDone)
-		return ctx.Err()
+		go func() { <-ctx.Done(); close(closerCtxDone) }()
+		<-never
+		return nil
 	}
 	comp := bootstrap.Func(func(ctx context.Context) error { <-ctx.Done(); return nil })
 
@@ -113,6 +116,9 @@ func TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown(t *testing.T) {
 		if err == nil {
 			t.Fatal("RunGraceful = nil although the teardown overran the deadline")
 		}
+		if !strings.Contains(err.Error(), "resource closer 0 was still running") {
+			t.Errorf("the deadline error does not name the closer still running: %v", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunGraceful did not bound the resource teardown")
 	}
@@ -120,6 +126,45 @@ func TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown(t *testing.T) {
 	case <-closerCtxDone:
 	case <-time.After(2 * time.Second):
 		t.Error("the overrunning closer's context was not cancelled")
+	}
+}
+
+// The report's case: a closer that waits on its context to give up (log what
+// it cut off, return) gets to, inside the deadline, and the closer after it
+// still runs. The closers' context used to run 30 s from the end of the drain
+// against a 20 s deadline, cancelled in the instant the process exited.
+func TestRunGraceful_ACloserGetsTimeToGiveUpInsideTheDeadline(t *testing.T) {
+	t.Setenv("W17_SHUTDOWN_DEADLINE_SECONDS", "1")
+	var log []string
+	waits := func(ctx context.Context) error {
+		<-ctx.Done()
+		log = append(log, "gave up")
+		return nil
+	}
+	next := func(context.Context) error { log = append(log, "ran"); return nil }
+	comp := bootstrap.Func(func(ctx context.Context) error { <-ctx.Done(); return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bootstrap.RunGraceful(ctx, testObs, []func(context.Context) error{waits, next}, comp)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunGraceful = %v: the closers finished inside the deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunGraceful did not return")
+	}
+	if took := time.Since(start); took >= time.Second {
+		t.Errorf("shutdown took %v, past the 1s deadline", took)
+	}
+	if strings.Join(log, ",") != "gave up,ran" {
+		t.Errorf("closers ran %v, want the give-up branch and then the next closer", log)
 	}
 }
 

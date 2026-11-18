@@ -21,7 +21,7 @@ main
      │          listen → grpc.NewServer(opts) → RegisterServices → reflection (guarded, S10)? → health
      │          serve … ctx.Done → health NOT_SERVING → lifecycle.StopGRPC(bounded) → OnShutdown (cfg.Shutdowns, 30s) → nil
      ├─ wait for every component      ┐ bounded together by W17_SHUTDOWN_DEADLINE_SECONDS (20s)
-     ├─ resources[i](ctx 30s)         ┘ (RunGraceful only, in order; errors reported)
+     ├─ resources[i](ctx: deadline − margin) ┘ (RunGraceful only, in order; errors reported)
      └─ observx.Shutdown(5s)
 ```
 
@@ -160,7 +160,7 @@ after every transport has drained, so in-flight requests keep their pools.
 
 | Setting | Default | Invalid or edge values |
 |---|---|---|
-| `resources []func(context.Context) error` | none | run in slice order on one fresh 30s context, which is cancelled early when the shutdown deadline (S1.9) passes; `nil` entries are skipped |
+| `resources []func(context.Context) error` | none | run in slice order on one fresh context that ends `TeardownMargin` (a tenth of the shutdown deadline, at most 1 s) before the deadline (S1.9) — 30 s when the deadline is off; `nil` entries are skipped |
 
 **Guarantees.**
 
@@ -170,9 +170,10 @@ after every transport has drained, so in-flight requests keep their pools.
 | S4.2 | Closers MUST run in caller-defined order. | `TestRunGraceful_ResourcesCloseAfterComponentsDrain` |
 | S4.3 | `nil` closers MUST be skipped. | `TestRunGraceful_NilResourceSkipped` |
 | S4.4 | Closers MUST run even when a component failed. | `TestRunGraceful_ClosersRunWhenAComponentFailed` |
-| S4.5 | The whole phase MUST be bounded by 30s and by the shutdown deadline (S1.9), whose passing cancels the closers' context; Run returns at the deadline even when a closer ignores its context. | `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown`, `TestRunGraceful_ResourceTeardownIsBoundedAtThirtySeconds` |
+| S4.5 | The whole phase MUST be bounded by the shutdown deadline (S1.9) — by 30 s when the deadline is off — and the deadline's passing cancels the closers' context; Run returns at the deadline even when a closer ignores its context. | `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown`, `TestRunGraceful_ResourceTeardownIsBoundedAtThirtySeconds` |
 | S4.6 | A resource MUST NOT be closed while a request still uses it. | `TestGRPCComponent_AbandonedHandlerHoldsResources`, `TestRunGraceful_HeldResourcesAreNotClosed`, `TestGRPCComponent_ShutdownHooksWaitForHandlersAfterForcedStop` |
 | S4.7 | A closer's error MUST be reported through `observx.ReportError`; later closers still run and Run's result stays the components' verdict. | `TestRunGraceful_ResourceCloserErrorIsReported` |
+| S4.8 | The closers' context MUST end before the shutdown deadline, by `TeardownMargin`, so a closer that waits on it to give up can report what it cut off and return, and the closers after it still run; a deadline that passes mid-teardown MUST name the closer still running. | `TestRunGraceful_ACloserGetsTimeToGiveUpInsideTheDeadline`, `TestRunGraceful_ShutdownDeadlineBoundsResourceTeardown` |
 
 **Deliberate limits.**
 - After a forced gRPC stop (S12) the component waits a short grace (5s) for handlers to return. A handler still running then is abandoned: the component's hooks are skipped, it calls `bootstrap.HoldResources`, and the closers are skipped and reported. The process exits next, which releases them; what is lost is a clean close.

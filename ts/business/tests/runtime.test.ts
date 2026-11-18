@@ -280,6 +280,27 @@ describe("serving", () => {
     }));
 });
 
+describe("the shutdown hooks", () => {
+  it("a hook that waits on its context to give up gets time to, and the next one runs", () =>
+    inTmpDir(async () => {
+      // The hooks' context ends a margin before the deadline that stops
+      // waiting for them: with one instant for both, the give-up branch
+      // (log what was cut off) never ran.
+      quiet();
+      const app = new App({ ...load(MANIFEST), shutdownTimeoutMs: 100 }, { projectRoot: PROJECT, environ: env(), drainTimeoutMs: 1000 });
+      await app.boot();
+      await app.start();
+      const log: string[] = [];
+      app.registry!.registerShutdown(async (ctx) => {
+        await sleep(ctx.timeRemaining() ?? 0);
+        log.push("gave up");
+      });
+      app.registry!.registerShutdown(() => void log.push("ran"));
+      await app.shutdown();
+      expect(log).toEqual(["gave up", "ran"]);
+    }));
+});
+
 describe("the health command", () => {
   it("the probe target matches Go", () => {
     expect(probeTarget(":50061")).toEqual(["127.0.0.1", 50061]);

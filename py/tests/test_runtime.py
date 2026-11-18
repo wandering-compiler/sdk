@@ -384,6 +384,28 @@ async def test_shutdown_drains_work_started_by_closing_the_server_before_closing
     assert at_close == {"done": [1]}, "the bus closed before the work the server's close started"
 
 
+async def test_a_shutdown_hook_gets_time_to_give_up(chdir_tmp):
+    # The hooks' context ends a margin before the deadline wait_for cancels
+    # them at: with one instant for both, the give-up branch (log what was
+    # cut off) never ran, and the next hook was left a millisecond.
+    import dataclasses
+
+    m = dataclasses.replace(load(MANIFEST), shutdown_timeout=0.1)
+    app = App(m, project_root=PROJECT, environ=env(), drain_timeout=1.0)
+    await app.boot()
+    await app.start()
+    log = []
+
+    async def waits(ctx):
+        await asyncio.sleep(ctx.time_remaining() or 0)
+        log.append("gave up")
+
+    app.registry.register_shutdown(waits)
+    app.registry.register_shutdown(lambda ctx: log.append("ran"))
+    await app.shutdown()
+    assert log == ["gave up", "ran"]
+
+
 async def test_the_whole_drain_stays_within_one_budget(chdir_tmp, msg):
     # A handler still running at the stop, work after a commit that never
     # ends, a hook and a bus that hang: each step may take only what is left

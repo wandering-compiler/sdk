@@ -54,7 +54,7 @@ use crate::{
     manifest::{self, Manifest},
     observability, principal,
     secrets::{self, Env},
-    server::{Registry, Served},
+    server::{Registry, Served, ShutdownHook},
     tlsconfig, txscope,
 };
 
@@ -657,15 +657,7 @@ impl App {
             ));
         }
         let remaining = || left().max(Duration::from_millis(1));
-        let drain_ctx = Ctx::background().with_timeout(left());
-        for (i, hook) in self.registry.take_shutdowns().into_iter().enumerate() {
-            if tokio::time::timeout(remaining(), hook(drain_ctx.clone()))
-                .await
-                .is_err()
-            {
-                observability::report_error(&format!("runtime: shutdown hook {i}: timed out"));
-            }
-        }
+        run_shutdown_hooks(self.registry.take_shutdowns(), budget, &left).await;
         if let Some(d) = &self.dispatcher
             && tokio::time::timeout(remaining(), d.close()).await.is_err()
         {
@@ -673,6 +665,28 @@ impl App {
         }
         closing.abort();
         observability::shutdown(Duration::from_secs(5));
+    }
+}
+
+/// Runs the author's shutdown hooks in order, each bounded by what is left
+/// of the drain budget. Their context ends a margin before that (a tenth of
+/// the budget, at most 1 s): a hook that waits on it to give up then has
+/// time to say what it cut off and return before the timeout drops it at
+/// the deadline — with one deadline for both, the give-up branch never ran.
+pub(crate) async fn run_shutdown_hooks(
+    hooks: Vec<ShutdownHook>,
+    budget: Duration,
+    left: &(dyn Fn() -> Duration + Sync),
+) {
+    let margin = (budget / 10).min(Duration::from_secs(1));
+    let ctx = Ctx::background().with_timeout(left().saturating_sub(margin));
+    for (i, hook) in hooks.into_iter().enumerate() {
+        if tokio::time::timeout(left().max(Duration::from_millis(1)), hook(ctx.clone()))
+            .await
+            .is_err()
+        {
+            observability::report_error(&format!("runtime: shutdown hook {i}: timed out"));
+        }
     }
 }
 

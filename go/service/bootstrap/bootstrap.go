@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -179,6 +180,10 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	// resource closer still running then is told to give up.
 	teardownCtx, teardownCancel := context.WithCancel(context.Background())
 	defer teardownCancel()
+	// closing is the index of the resource closer running, -1 between them:
+	// a deadline that passes mid-teardown names it.
+	var closing atomic.Int32
+	closing.Store(-1)
 	done := make(chan struct{})
 	go func() { //nolint:gosec // G118: teardown runs after ctx is done, so its context cannot derive from ctx
 		defer close(done)
@@ -198,17 +203,19 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 		if held := gate.reasons(); len(held) > 0 && len(resources) > 0 {
 			observx.ReportError(context.Background(), fmt.Errorf("bootstrap: resource teardown skipped, request work still running: %s", strings.Join(held, "; ")))
 		} else if len(resources) > 0 {
-			drainCtx, dcancel := context.WithTimeout(teardownCtx, 30*time.Second)
+			drainCtx, dcancel := closerContext(teardownCtx, gate)
 			for i, closeRes := range resources {
 				if closeRes == nil {
 					continue
 				}
+				closing.Store(int32(i)) //nolint:gosec // G115: an index into a short slice of closers.
 				// A failing closer does not stop the rest, and it does not
 				// change Run's result (the components already decided that);
 				// it is reported so a failed pool close or bus flush is seen.
 				if err := closeRes(drainCtx); err != nil {
 					observx.ReportError(drainCtx, fmt.Errorf("bootstrap: resource closer %d: %w", i, err))
 				}
+				closing.Store(-1)
 			}
 			dcancel()
 		}
@@ -222,6 +229,9 @@ func RunGraceful(parent context.Context, obs observx.Config, resources []func(co
 	case <-ctx.Done():
 		gate.startShutdown()
 		if err := awaitShutdown(done, deadline); err != nil {
+			if i := closing.Load(); i >= 0 {
+				err = fmt.Errorf("%w; resource closer %d was still running", err, i)
+			}
 			teardownCancel()
 			observx.ReportError(context.Background(), err)
 			return errors.Join(firstQueued(errCh), err)
@@ -283,6 +293,35 @@ func awaitShutdown(done <-chan struct{}, d time.Duration) error {
 	case <-t.C:
 		return fmt.Errorf("bootstrap: shutdown did not finish within %s (%s); exiting with components or resource closers still running", d, EnvShutdownDeadline)
 	}
+}
+
+// unboundedCloserTimeout bounds the resource teardown when the shutdown has no
+// deadline (EnvShutdownDeadline 0).
+const unboundedCloserTimeout = 30 * time.Second
+
+// closerContext is the resource closers' context. With a shutdown deadline it
+// ends TeardownMargin before that deadline (TeardownDeadline), never after it:
+// the process exits at the deadline, so a context that outlived it (it used to
+// run 30 s from the end of the drain, against a 20 s deadline) was cancelled
+// in the same instant the process left, and a closer's give-up branch — log
+// what was cut off, return — never ran. Without a deadline it is the fixed
+// unboundedCloserTimeout.
+func closerContext(parent context.Context, g *teardownGate) (context.Context, context.CancelFunc) {
+	if g.deadline <= 0 {
+		return context.WithTimeout(parent, unboundedCloserTimeout)
+	}
+	return context.WithDeadline(parent, g.teardownBy())
+}
+
+// TeardownMargin is how long before the shutdown deadline d a teardown is
+// told to give up, so it can say what it cut off and return before the
+// process exits: a tenth of d, at most a second. runtime.GRPCComponent's
+// hooks and RunGraceful's resource closers both end by it.
+func TeardownMargin(d time.Duration) time.Duration {
+	if m := d / 10; m < time.Second {
+		return m
+	}
+	return time.Second
 }
 
 // firstQueued returns the first component error already reported, without
@@ -349,6 +388,23 @@ func TeardownDeadline(ctx context.Context) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return g.startShutdown().Add(g.deadline), true
+}
+
+// TeardownBy is the instant a teardown running under ctx's supervisor should
+// give up by: TeardownDeadline less TeardownMargin, so what it does when told
+// to stop (report what it cut off, return) happens before the process exits.
+// ok is false outside a supervisor, or when the deadline is switched off.
+func TeardownBy(ctx context.Context) (time.Time, bool) {
+	g, ok := ctx.Value(teardownGateKey{}).(*teardownGate)
+	if !ok || g.deadline <= 0 {
+		return time.Time{}, false
+	}
+	return g.teardownBy(), true
+}
+
+// teardownBy is TeardownBy for this supervisor.
+func (g *teardownGate) teardownBy() time.Time {
+	return g.startShutdown().Add(g.deadline - TeardownMargin(g.deadline))
 }
 
 // teardownGate collects the HoldResources calls of one RunGraceful, and
