@@ -287,16 +287,12 @@ func waitAfterCommit(parent context.Context) {
 // shutdownDrainTimeout bounds the whole cfg.Shutdowns phase.
 const shutdownDrainTimeout = 30 * time.Second
 
-// teardownMargin is how long before the supervisor's shutdown deadline the
-// teardown context ends, so the hooks see their context end and return (and
-// their errors are reported) before the supervisor gives up and the process
-// exits under them.
-const teardownMargin = time.Second
-
 // teardownContext is the context the post-stop teardown (the wait for
 // after-commit work, then the Shutdowns hooks) runs on: detached from the
-// component's cancelled ctx, and ending teardownMargin before the
-// supervisor's deadline when ctx belongs to one (bootstrap.TeardownDeadline).
+// component's cancelled ctx, and ending a margin before the supervisor's
+// deadline when ctx belongs to one (bootstrap.TeardownBy), so the hooks see
+// their context end and return (their errors reported) before the supervisor
+// gives up and the process exits under them.
 // The component's own bounds — ShutdownTimeout (10 s) for the graceful stop,
 // as long again for the forced stop, the handler grace (5 s), 30 s for the
 // after-commit work and 30 s for the hooks — add up past the supervisor's
@@ -304,8 +300,8 @@ const teardownMargin = time.Second
 // process exit.
 func teardownContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(ctx)
-	if dl, ok := bootstrap.TeardownDeadline(ctx); ok {
-		return context.WithDeadline(base, dl.Add(-teardownMargin))
+	if by, ok := bootstrap.TeardownBy(ctx); ok {
+		return context.WithDeadline(base, by)
 	}
 	return context.WithCancel(base)
 }

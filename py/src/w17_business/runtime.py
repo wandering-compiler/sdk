@@ -388,7 +388,8 @@ class App:
         # timeout, or the operator's shutdown timeout when that is longer.
         # Every step below draws from what is left of it, so a deployment's
         # termination grace bounds the drain as a whole, not each step alone.
-        drain = Context().with_timeout(max(self.drain_timeout, timeout))
+        budget = max(self.drain_timeout, timeout)
+        drain = Context().with_timeout(budget)
 
         def left() -> float:
             return max(drain.time_remaining() or 0.0, 0.0)
@@ -440,14 +441,20 @@ class App:
             observability.report_error(
                 None, f"runtime: {n} piece(s) of work after a commit (events, on_commit hooks) still running "
                       "at the shutdown deadline; cancelled")
-        # The shutdown hooks and the bus close get the rest of the budget.
+        # The shutdown hooks and the bus close get the rest of the budget. The
+        # hooks' context ends a margin before it (a tenth of the budget, at
+        # most 1 s): a hook that waits on it to give up then has time to say
+        # what it cut off and return before wait_for cancels it at the
+        # deadline — with one deadline for both, the give-up branch never ran
+        # and every later hook was left a millisecond.
+        hooks = Context().with_timeout(max(left() - min(budget / 10, 1.0), 0.0))
         for i, fn in enumerate(reg.shutdowns if reg else []):
             try:
-                r = fn(drain)
+                r = fn(hooks)
                 if inspect.isawaitable(r):
                     await asyncio.wait_for(r, max(left(), 0.001))
             except Exception as e:  # noqa: BLE001
-                observability.report_error(drain, RuntimeError(f"runtime: shutdown hook {i}: {e!r}"))
+                observability.report_error(hooks, RuntimeError(f"runtime: shutdown hook {i}: {e!r}"))
         if self.dispatcher is not None:
             try:
                 await asyncio.wait_for(self.dispatcher.close(), max(left(), 0.001))

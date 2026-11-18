@@ -414,7 +414,8 @@ export class App {
     // timeout, or the operator's shutdown timeout when that is longer. Every
     // step below draws from what is left of it, so a deployment's
     // termination grace bounds the drain as a whole, not each step alone.
-    const drain = new Context().withTimeout(Math.max(this.drainTimeoutMs, timeout));
+    const budget = Math.max(this.drainTimeoutMs, timeout);
+    const drain = new Context().withTimeout(budget);
     const left = () => Math.max(drain.timeRemaining() ?? 0, 0);
     this.health.set(false);
     if (reg !== undefined) reg.draining = true;
@@ -460,13 +461,18 @@ export class App {
         `runtime: ${n} piece(s) of work after a commit (events, onCommit hooks) still running at the shutdown deadline; abandoned`,
       );
     }
-    // The shutdown hooks and the bus close get the rest of the budget.
+    // The shutdown hooks and the bus close get the rest of the budget. The
+    // hooks' context ends a margin before it (a tenth of the budget, at most
+    // 1 s): a hook that waits on it to give up then has time to say what it
+    // cut off and return before the deadline stops the wait — with one
+    // deadline for both, the give-up branch never ran.
     const remaining = () => Math.max(left(), 1);
+    const hooks = new Context().withTimeout(Math.max(left() - Math.min(budget / 10, 1000), 0));
     for (const [i, fn] of (reg?.shutdowns ?? []).entries()) {
       try {
-        await bounded(Promise.resolve().then(() => fn(drain)), remaining(), `shutdown hook ${i}`);
+        await bounded(Promise.resolve().then(() => fn(hooks)), remaining(), `shutdown hook ${i}`);
       } catch (e) {
-        observability.reportError(drain, new Error(`runtime: shutdown hook ${i}: ${msgOf(e)}`));
+        observability.reportError(hooks, new Error(`runtime: shutdown hook ${i}: ${msgOf(e)}`));
       }
     }
     if (this.dispatcher !== undefined) {

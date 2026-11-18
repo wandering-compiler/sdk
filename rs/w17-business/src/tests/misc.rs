@@ -217,3 +217,35 @@ fn event_frames_name_what_cannot_be_read() {
     assert!(e.contains("response") && e.contains("compressed"), "{e}");
     assert!(event_frames(None, ok).is_err());
 }
+
+/// A shutdown hook that waits on its context to give up still runs its
+/// give-up branch, and the hook after it still runs: the hooks' context ends a
+/// margin before the budget that bounds them, not at the same instant.
+#[tokio::test]
+async fn shutdown_hooks_get_time_to_give_up() {
+    use crate::server::ShutdownHook;
+    use std::sync::Mutex;
+
+    let log = Arc::new(Mutex::new(Vec::<&str>::new()));
+    let (a, b) = (log.clone(), log.clone());
+    let waits: ShutdownHook = Box::new(move |ctx: crate::ctx::Ctx| {
+        Box::pin(async move {
+            ctx.done().await;
+            a.lock().unwrap().push("gave up");
+        })
+    });
+    let next: ShutdownHook = Box::new(move |_ctx: crate::ctx::Ctx| {
+        Box::pin(async move {
+            b.lock().unwrap().push("ran");
+        })
+    });
+    let budget = Duration::from_secs(1);
+    let start = std::time::Instant::now();
+    let left = move || budget.saturating_sub(start.elapsed());
+    crate::runtime::run_shutdown_hooks(vec![waits, next], budget, &left).await;
+    assert_eq!(*log.lock().unwrap(), vec!["gave up", "ran"]);
+    assert!(
+        start.elapsed() < budget,
+        "the hooks finished inside the budget"
+    );
+}
