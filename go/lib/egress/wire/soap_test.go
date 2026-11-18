@@ -201,11 +201,11 @@ func TestUnmarshalSOAP_WhitespaceFollowsTheFacet(t *testing.T) {
 	got, _ := protojson.MarshalOptions{UseProtoNames: true}.Marshal(m)
 	for _, want := range []string{
 		`"status_text":"MINISTERSTVO FINANCÍ   "`, // xsd:string: preserve
-		`"dic":" CZ1 "`,                           // xsd:string attribute: preserve
-		`"cislo_fu":"461"`,                        // a number: collapsed
-		`"nestandardni_ucet":"DE89 3704"`,         // a collapse facet
-		`"nazev_banky":"Česká národní banka"`,     // normalizedString: replace
-		`"value":"12.50"`,                         // xsd:decimal text: collapsed
+		`"dic":" CZ1 "`,                       // xsd:string attribute: preserve
+		`"cislo_fu":"461"`,                    // a number: collapsed
+		`"nestandardni_ucet":"DE89 3704"`,     // a collapse facet
+		`"nazev_banky":"Česká národní banka"`, // normalizedString: replace
+		`"value":"12.50"`,                     // xsd:decimal text: collapsed
 	} {
 		if !strings.Contains(strings.ReplaceAll(string(got), `": "`, `":"`), want) {
 			t.Errorf("decoded %s\n missing %s", got, want)

@@ -173,12 +173,12 @@ const (
 // nothing for the catalog to translate, only a developer's sentence that the
 // gateway then showed to a person.
 const (
-	CodeNotFound        = "NOT_FOUND"
-	CodeConflictRetry   = "CONFLICT_RETRY"
+	CodeNotFound      = "NOT_FOUND"
+	CodeConflictRetry = "CONFLICT_RETRY"
 	// CodeRowLocked: a row the call needed is locked by another transaction
 	// and the statement refused to wait for it (`FOR UPDATE NOWAIT`, or a
 	// lock_timeout ran out). Another run holds it; the caller tries later.
-	CodeRowLocked = "ROW_LOCKED"
+	CodeRowLocked       = "ROW_LOCKED"
 	CodeCanceled        = "REQUEST_CANCELED"
 	CodeTimeout         = "TIMEOUT"
 	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
