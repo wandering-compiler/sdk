@@ -379,8 +379,13 @@ export class Registry {
   }
 
   /**
-   * A drain hook: called with a context bounded by the drain timeout (30s)
-   * after the server stopped serving. May be sync or async.
+   * A drain hook, run after the server stopped serving and its calls ended,
+   * in the order registered. Its context ends a margin before the drain
+   * budget does (a tenth of it, at most 1 s), and the runtime stops waiting
+   * for the hook at the budget: one that waits on the context to give up has
+   * that margin to report what it cut off and return. A hook that takes the
+   * whole of it leaves the hooks after it only what is left. May be sync or
+   * async.
    */
   registerShutdown(fn: ShutdownHook): void {
     this.#shutdowns.push(fn);
