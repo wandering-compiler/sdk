@@ -54,12 +54,12 @@ service FeatureSoapApi {
 message Account {
   oneof choice {
     StandardAccount standardni_ucet = 1 [(w17.egress_field) = { name: "standardniUcet" xml_namespace: "urn:feature" }];
-    string nestandardni_ucet = 2 [(w17.egress_field) = { name: "nestandardniUcet" xml_namespace: "urn:feature" }];
+    string nestandardni_ucet = 2 [(w17.egress_field) = { name: "nestandardniUcet" xml_namespace: "urn:feature" xml_whitespace: EGRESS_XML_WHITESPACE_COLLAPSE }];
   }
 }
 
 message Amount {
-  string value = 1 [(w17.egress_field) = { xml_text: true }];
+  string value = 1 [(w17.egress_field) = { xml_text: true xml_whitespace: EGRESS_XML_WHITESPACE_COLLAPSE }];
   string currency = 2 [(w17.egress_field) = { name: "currency" required: true xml_attribute: true }];
 }
 
@@ -91,6 +91,7 @@ enum Reliability {
 message StandardAccount {
   string cislo = 1 [(w17.egress_field) = { name: "cislo" required: true xml_attribute: true }];
   string kod_banky = 2 [(w17.egress_field) = { name: "kodBanky" required: true xml_attribute: true }];
+  optional string nazev_banky = 3 [(w17.egress_field) = { name: "nazevBanky" xml_attribute: true xml_whitespace: EGRESS_XML_WHITESPACE_REPLACE }];
 }
 
 message Status {

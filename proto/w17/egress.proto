@@ -168,6 +168,24 @@ message EgressField {
   // SOAP: the field is the text content of its parent element (an XSD
   // simpleContent: a value with attributes).
   bool xml_text = 7;
+
+  // SOAP: what the decoder does to a string field's text, from the XSD
+  // type's whiteSpace facet. Unset is preserve, xsd:string's own: the text
+  // arrives as the service sent it. A field of another kind (a number, a
+  // date, an enum) is always read collapsed.
+  EgressXmlWhitespace xml_whitespace = 8;
+}
+
+// EgressXmlWhitespace — an XSD whiteSpace facet.
+enum EgressXmlWhitespace {
+  // preserve: the text as sent (xsd:string).
+  EGRESS_XML_WHITESPACE_UNSPECIFIED = 0;
+  // replace: each tab, newline and carriage return becomes a space
+  // (xsd:normalizedString).
+  EGRESS_XML_WHITESPACE_REPLACE = 1;
+  // collapse: replace, then runs of spaces fold into one and the ends are
+  // trimmed (xsd:token and the built-ins derived from it, a list).
+  EGRESS_XML_WHITESPACE_COLLAPSE = 2;
 }
 
 // EgressUnion — a oneof that is an OpenAPI union.

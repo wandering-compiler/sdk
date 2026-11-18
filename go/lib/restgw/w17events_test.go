@@ -101,6 +101,22 @@ func TestHandleW17Events_HeartbeatEvery(t *testing.T) {
 	}
 }
 
+// TestHandleW17Events_OpensWithTheHeartbeatInterval — the first frame names
+// the interval, so the generated client's watchdog knows how long a silent
+// stream may be before it is a dead one.
+func TestHandleW17Events_OpensWithTheHeartbeatInterval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/w17-events?topics=X", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	restgw.HandleW17Events(rec, req, &blockingSource{}, 45*time.Second)
+
+	if body := rec.Body.String(); !strings.HasPrefix(body, ": heartbeat 45000\n\n") {
+		t.Errorf("the stream does not open with its heartbeat interval:\n%s", body)
+	}
+}
+
 // TestHandleW17Events_NoSource — passing nil EventSource
 // returns a 500 INTERNAL envelope and never opens SSE headers; the
 // wiring mistake goes to the operator, not the client.

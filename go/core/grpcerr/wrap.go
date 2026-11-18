@@ -173,8 +173,12 @@ const (
 // nothing for the catalog to translate, only a developer's sentence that the
 // gateway then showed to a person.
 const (
-	CodeNotFound        = "NOT_FOUND"
-	CodeConflictRetry   = "CONFLICT_RETRY"
+	CodeNotFound      = "NOT_FOUND"
+	CodeConflictRetry = "CONFLICT_RETRY"
+	// CodeRowLocked: a row the call needed is locked by another transaction
+	// and the statement refused to wait for it (`FOR UPDATE NOWAIT`, or a
+	// lock_timeout ran out). Another run holds it; the caller tries later.
+	CodeRowLocked       = "ROW_LOCKED"
 	CodeCanceled        = "REQUEST_CANCELED"
 	CodeTimeout         = "TIMEOUT"
 	CodeValueOutOfRange = "VALUE_OUT_OF_RANGE"
@@ -466,6 +470,13 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// declares `tx_isolation: SERIALIZABLE` should expect to.
 	if isRetryable(err, d) {
 		return forCaller(ctx, codes.Aborted, method, "retryable failure", CodeConflictRetry, UserMsgid(codes.Aborted), nil)
+	}
+	// A lock the statement would not wait for is Aborted too, under its
+	// own code: "another run holds the row" is not "run the transaction
+	// again now", and a caller that took the lock with NOWAIT to refuse a
+	// concurrent run branches on it.
+	if isLockNotAvailable(err, d) {
+		return forCaller(ctx, codes.Aborted, method, "row locked by another transaction", CodeRowLocked, UserMsgid(codes.Aborted), nil)
 	}
 	// Context cancellation / deadline BEFORE constraint parsing —
 	// a DB call aborted by a cancelled or timed-out context is not
@@ -836,6 +847,33 @@ func isPgDataException(code string) bool {
 	switch code {
 	case "22001", "22003", "22007", "22P02":
 		return true
+	}
+	return false
+}
+
+// isLockNotAvailable detects a lock the statement refused to wait for:
+//
+//	PG   : 55P03 lock_not_available (FOR UPDATE NOWAIT, lock_timeout)
+//	MySQL: 3572 ER_LOCK_NOWAIT (FOR UPDATE NOWAIT)
+//
+// MySQL's lock wait timeout (1205) stays with isRetryable, where it was
+// first mapped.
+func isLockNotAvailable(err error, d Dialect) bool {
+	switch d {
+	case DialectPostgres:
+		var pgxErr *pgconn.PgError
+		if errors.As(err, &pgxErr) {
+			return pgxErr.Code == "55P03"
+		}
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) {
+			return pqErr.Code == "55P03"
+		}
+	case DialectMySQL:
+		var me *mysql.MySQLError
+		if errors.As(err, &me) {
+			return me.Number == 3572
+		}
 	}
 	return false
 }

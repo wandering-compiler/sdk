@@ -25,7 +25,10 @@ import (
 //
 // Plus a comment-frame heartbeat (`: ping\n\n`) every
 // `heartbeat` interval (defaults to 30s when zero) so
-// intermediate proxies don't drop the connection on idle.
+// intermediate proxies don't drop the connection on idle. The
+// stream opens with `: heartbeat <ms>` naming that interval: the
+// generated client's watchdog reads it, and a stream silent for a few
+// intervals is a half-open connection it drops and reconnects.
 //
 // **EventSource is pluggable.** C3.1 ships the handler +
 // interface; C3.2 wires the real eventbus implementation.
@@ -128,6 +131,9 @@ func HandleW17Events(w http.ResponseWriter, r *http.Request, source EventSource,
 	// never ready — when the handler runs outside a bound server.
 	draining := lifecycle.Draining(ctx)
 
+	if err := withWriteDeadline(func() error { return writeHeartbeatInterval(w, flusher, heartbeat) }); err != nil {
+		return
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -261,6 +267,17 @@ func parseTopicsParam(raw string) []string {
 // pins. Caller catches the io error on client disconnect.
 func writeW17EventFrame(w http.ResponseWriter, flusher http.Flusher, ev Event) error {
 	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Topic, ev.Data); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+// writeHeartbeatInterval opens the stream with a comment frame naming the
+// heartbeat interval in milliseconds (`: heartbeat 30000`). A comment, so an
+// SSE reader that does not know it skips it.
+func writeHeartbeatInterval(w http.ResponseWriter, flusher http.Flusher, every time.Duration) error {
+	if _, err := fmt.Fprintf(w, ": heartbeat %d\n\n", every.Milliseconds()); err != nil {
 		return err
 	}
 	flusher.Flush()

@@ -297,7 +297,10 @@ func decodeInto(d *xml.Decoder, start xml.StartElement, m protoreflect.Message) 
 		if fd == nil || (a.Value == "" && fd.Kind() != protoreflect.StringKind && fd.Kind() != protoreflect.BytesKind) {
 			continue
 		}
-		v, err := parseScalar(fd, a.Value)
+		// An attribute value reaches the facet already normalised by XML
+		// itself (XML 1.0 §3.3.3: each white space character is a space),
+		// which encoding/xml leaves to its caller.
+		v, err := parseScalar(fd, valueText(fd, xmlReplace.Replace(a.Value)))
 		if err != nil {
 			return err
 		}
@@ -315,7 +318,7 @@ func decodeInto(d *xml.Decoder, start xml.StartElement, m protoreflect.Message) 
 			}
 		case xml.EndElement:
 			if textField != nil {
-				if s := strings.TrimSpace(text.String()); s != "" || textField.Kind() == protoreflect.StringKind {
+				if s := valueText(textField, text.String()); s != "" || textField.Kind() == protoreflect.StringKind {
 					v, err := parseScalar(textField, s)
 					if err != nil {
 						return err
@@ -349,7 +352,7 @@ func decodeInto(d *xml.Decoder, start xml.StartElement, m protoreflect.Message) 
 				if err := d.DecodeElement(&raw, &t); err != nil {
 					return err
 				}
-				raw = strings.TrimSpace(raw)
+				raw = valueText(fd, raw)
 				if raw == "" && fd.Kind() != protoreflect.StringKind && fd.Kind() != protoreflect.BytesKind {
 					// An empty number, date or enum is no value.
 					continue
@@ -370,6 +373,36 @@ func decodeInto(d *xml.Decoder, start xml.StartElement, m protoreflect.Message) 
 		}
 	}
 }
+
+// valueText is a value's text as its XSD type reads it. A string field keeps
+// what its whiteSpace facet keeps (xml_whitespace; unset is preserve,
+// xsd:string's own, so a padded column arrives padded). Any other kind — a
+// number, a boolean, a date, an enum — is collapsed by its type, and its
+// surrounding whitespace is no part of the value.
+func valueText(fd protoreflect.FieldDescriptor, s string) string {
+	if fd.Kind() != protoreflect.StringKind {
+		return strings.TrimSpace(s)
+	}
+	var ws w17pb.EgressXmlWhitespace
+	if o := fieldOptions(fd); o != nil {
+		ws = o.GetXmlWhitespace()
+	}
+	switch ws {
+	case w17pb.EgressXmlWhitespace_EGRESS_XML_WHITESPACE_REPLACE:
+		return xmlReplace.Replace(s)
+	case w17pb.EgressXmlWhitespace_EGRESS_XML_WHITESPACE_COLLAPSE:
+		return strings.Join(strings.FieldsFunc(s, isXMLSpace), " ")
+	}
+	return s
+}
+
+// xmlReplace is the whiteSpace facet's replace: each tab, newline and
+// carriage return becomes a space.
+var xmlReplace = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ")
+
+// isXMLSpace is XML's white space (#x20 | #x9 | #xD | #xA), the only kind a
+// collapse folds — a no-break space is part of the value.
+func isXMLSpace(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }
 
 func xmlFields(md protoreflect.MessageDescriptor) (elems, attrs map[string]protoreflect.FieldDescriptor, text protoreflect.FieldDescriptor) {
 	elems, attrs = map[string]protoreflect.FieldDescriptor{}, map[string]protoreflect.FieldDescriptor{}
