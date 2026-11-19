@@ -1,6 +1,7 @@
 {
   "name": "@w17/dpop",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "wandering-compiler DPoP client (RFC 9449): a device key held by WebCrypto, its RFC 7638 thumbprint, proofs, and a fetch wrapper that follows server nonces. No runtime dependencies.",
   "type": "module",
   "exports": {
