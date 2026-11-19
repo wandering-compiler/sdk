@@ -33,13 +33,13 @@ publish = false
 [workspace]               # standalone: never captured by a project workspace
 
 [dependencies]
-w17-business = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0-rc.72" }
+w17-business = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0" }
 tonic = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["macros"] }
 
 [build-dependencies]
-w17-business-build = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0-rc.72" }
+w17-business-build = { git = "https://github.com/wandering-compiler/sdk", tag = "rs/v0.1.0" }
 ```
 
 `tonic` and `prost` are your own dependencies because the generated code names
