@@ -22,7 +22,7 @@ own package manager and versioning:
 | Language | Module / path | README |
 |---|---|---|
 | **Go** | `go/` (`github.com/wandering-compiler/sdk/go`) | [`go/README.md`](go/README.md) |
-| **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`), `ts/dpop/` (`@w17/dpop`) | — |
+| **TypeScript** | `ts/admin-runtime/` (`@w17/admin-runtime`), `ts/dpop/` (`@w17/dpop`) | [`ts/admin-runtime/README.md`](ts/admin-runtime/README.md), [`ts/dpop/README.md`](ts/dpop/README.md) |
 | **Python** | `py/` (`w17_business`, the business-tier SDK) | [`py/README.md`](py/README.md) |
 | **TypeScript business** | `ts/business/` (`@w17/business`, the business-tier SDK) | [`ts/business/README.md`](ts/business/README.md) |
 | **Rust business** | `rs/w17-business/` (`w17-business` and its build helper `w17-business-build`, the business-tier SDK) | [`rs/w17-business/README.md`](rs/w17-business/README.md) |
@@ -89,3 +89,21 @@ further language gets its own top-level directory and README when it lands.
   internals.
 
 See the per-language README for the concrete package map.
+
+## Versions
+
+The SDK is released with the rest of w17 on one version line, tagged per
+language (`go/v0.1.0`, `py/v0.1.0`, `rs/v0.1.0`, `ts/v0.1.0`). Everything on one
+minor line works together: an SDK `0.1.x` with a w17ctl and plugins `0.1.y`. A
+fix is a patch release; a new feature or an incompatible change goes out as
+release candidates of the next minor (`0.2.0-rc.N`).
+
+The Go module declares the Go release line it needs as its first release
+(`go 1.27.0`, from `go.version`): any patch of the line builds it.
+`scripts/go-bump.sh <line>` moves the repository to another line, and
+`scripts/check-go-version.sh` (CI) holds every go.mod, image and setup-go
+version to it.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
