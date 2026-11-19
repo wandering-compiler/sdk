@@ -79,7 +79,7 @@ check-refs:
 PY_TEST_IMAGE ?= w17-sdk-py-test:3.13
 PY_CONF_IMAGE ?= w17-sdk-py-conformance:dev
 CONF_PREFIX ?= w17-sdk-conformance
-GO_IMAGE ?= golang:1.26
+GO_IMAGE ?= golang:1.27
 GO_DOCKER_FLAGS ?=
 PROTOC_DESC = docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR):/src" -w /src $(PROTOC_IMAGE) --include_imports
 
