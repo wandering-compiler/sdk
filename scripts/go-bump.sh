@@ -15,7 +15,8 @@ scripts/go-version-files.sh | while IFS= read -r f; do
 	perl -pi -e "s/golang:${o}(?![0-9.])/golang:${new}/g; s/^go ${o}(\\.[0-9]+)?\\s*\$/go ${new}.0\\n/; s/(go-version: .)${o}\\.x/\${1}${new}.x/g" "$f"
 done
 printf '%s\n' "$new" > go.version
-if [ -f srcgo/lib/goversion/goversion.go ]; then
-	perl -pi -e "s/^const Minor = \"${o}\"/const Minor = \"${new}\"/" srcgo/lib/goversion/goversion.go
+# The SDK's goversion package carries the line into the compiler and w17ctl.
+if [ -f go/tooling/goversion/goversion.go ]; then
+	perl -pi -e "s/^const Minor = \"${o}\"/const Minor = \"${new}\"/" go/tooling/goversion/goversion.go
 fi
-echo "moved Go $old -> $new. Now: set goversion.AlpineImagePinned's digest, regenerate, scripts/check-go-version.sh"
+echo "moved Go $old -> $new. Now: in the SDK set goversion.AlpineImagePinned's digest; regenerate; scripts/check-go-version.sh"
