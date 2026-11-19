@@ -326,8 +326,8 @@ type RpcGroup struct {
 	// Backend methods this public service wraps, by `ref`. A ref is
 	// either a whole service (all its methods) or a single method:
 	//
-	//	"console.initiatives.InitiativeQuery"               — whole service
-	//	"console.initiatives.SnapshotMutation.PushSnapshot" — one method
+	//   "console.initiatives.InitiativeQuery"               — whole service
+	//   "console.initiatives.SnapshotMutation.PushSnapshot" — one method
 	//
 	// `<module>` is the proto module (last package segment), matching
 	// the FK / REST `ref` shape. Resolution is

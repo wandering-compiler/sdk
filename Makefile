@@ -14,7 +14,9 @@
 # generates it, so it has no source here — the console's maintainers refresh it
 # with a pull request when that API changes. make pb leaves it alone.
 
-PROTOC_IMAGE ?= w17-sdk-protoc:29.3
+# The Go line is in the tag: protoc-gen-go is built with it, and its go/printer
+# shapes the generated files, so an image from another line must not be reused.
+PROTOC_IMAGE ?= w17-sdk-protoc:29.3-go$(shell tr -d "[:space:]" < go.version)
 MOD := github.com/wandering-compiler/sdk/go/pb
 PROTOC = docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR):/src" -w /src $(PROTOC_IMAGE) \
 	--proto_path=proto --go_out=go/pb --go_opt=module=$(MOD)

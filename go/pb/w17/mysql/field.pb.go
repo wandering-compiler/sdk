@@ -36,7 +36,7 @@ type MysqlField struct {
 	//
 	// EXCEPT the string-only rules: `min_len` / `max_len` / `pattern` /
 	// `choices` / `blank` synthesise CHECKs that assume text storage
-	// (char_length, `<> ”`, a regex, an IN list) against a column type the
+	// (char_length, `<> ''`, a regex, an IN list) against a column type the
 	// author overrode, so the emitter cannot honour them. Declaring one
 	// alongside `custom_type` is a compile error — the same refusal
 	// (w17.pg.field) has always made. It used to be ACCEPTED here and

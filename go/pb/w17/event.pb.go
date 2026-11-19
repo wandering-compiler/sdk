@@ -172,11 +172,11 @@ type Event struct {
 	// here falls through to the next cascade tier.
 	//
 	// Resolution order (most-specific wins):
-	//  1. This field — `(w17.event).retry`
-	//  2. Channel default — `(w17.module).channels[].retry`
-	//  3. Domain default — `(w17.module).event_defaults.retry`
-	//  4. Framework hard default — max_deliver=3, ack_wait=30s,
-	//     backoff=EXPONENTIAL.
+	//   1. This field — `(w17.event).retry`
+	//   2. Channel default — `(w17.module).channels[].retry`
+	//   3. Domain default — `(w17.module).event_defaults.retry`
+	//   4. Framework hard default — max_deliver=3, ack_wait=30s,
+	//                                backoff=EXPONENTIAL.
 	Retry *RetryPolicy `protobuf:"bytes,3,opt,name=retry,proto3" json:"retry,omitempty"`
 	// Public marks the event as reaching the gateway's
 	// auto-mounted `/w17-events` SSE broadcast — a shipped path,

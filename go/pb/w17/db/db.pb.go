@@ -1522,23 +1522,23 @@ type Operation struct {
 	// for the op that loads the item the caller named and wrong for every other
 	// one. In
 	//
-	//	m:    SELECT … FROM OrgMembership m WHERE m.id = :id
-	//	r:    SELECT r.id FROM Role r WHERE r.name = :role AND r.org_scoped
-	//	main: UPDATE OrgMembership SET role = :role WHERE id = :id …
+	//   m:    SELECT … FROM OrgMembership m WHERE m.id = :id
+	//   r:    SELECT r.id FROM Role r WHERE r.name = :role AND r.org_scoped
+	//   main: UPDATE OrgMembership SET role = :role WHERE id = :id …
 	//
 	// a mistyped role is not a missing membership, but both answered alike, so
 	// the person who mistyped it was sent to look for an item that exists.
 	//
-	//	ops: {
-	//	  name: "r"
-	//	  dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.name = :role …"
-	//	  on_empty: {
-	//	    code:       ON_EMPTY_INVALID_ARGUMENT
-	//	    error_code: "UNKNOWN_ROLE"
-	//	    field:      "role"
-	//	    message:    "There is no organization role named {role}."
-	//	  }
-	//	}
+	//   ops: {
+	//     name: "r"
+	//     dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.name = :role …"
+	//     on_empty: {
+	//       code:       ON_EMPTY_INVALID_ARGUMENT
+	//       error_code: "UNKNOWN_ROLE"
+	//       field:      "role"
+	//       message:    "There is no organization role named {role}."
+	//     }
+	//   }
 	//
 	// Only an op whose miss can happen accepts it: an INTERMEDIATE op that reads
 	// one row — a SELECT, or a write whose RETURNING a later op reads. The
@@ -1555,17 +1555,17 @@ type Operation struct {
 	// could be written only for an UPDATE or DELETE, as `AND NOT EXISTS (…)` in
 	// the write's own WHERE. An INSERT has no WHERE:
 	//
-	//	ops: {
-	//	  name: "locked"
-	//	  dql:  "SELECT pl.id AS id FROM @module.PeriodLock pl
-	//	         WHERE pl.year = :year AND pl.month = :month"
-	//	  on_present: {
-	//	    code:       ON_PRESENT_FAILED_PRECONDITION
-	//	    error_code: "PERIOD_LOCKED"
-	//	    message:    "The period {year}-{month} is closed."
-	//	  }
-	//	}
-	//	ops: { name: "main", dql: "INSERT INTO @module.Expense SET … RETURNING id" }
+	//   ops: {
+	//     name: "locked"
+	//     dql:  "SELECT pl.id AS id FROM @module.PeriodLock pl
+	//            WHERE pl.year = :year AND pl.month = :month"
+	//     on_present: {
+	//       code:       ON_PRESENT_FAILED_PRECONDITION
+	//       error_code: "PERIOD_LOCKED"
+	//       message:    "The period {year}-{month} is closed."
+	//     }
+	//   }
+	//   ops: { name: "main", dql: "INSERT INTO @module.Expense SET … RETURNING id" }
 	//
 	// The op runs in the method's transaction like every other op, and the method
 	// continues only when it found NO row, so it is as atomic as the `NOT EXISTS`
@@ -1805,14 +1805,14 @@ type Table struct {
 	// correctness, same contract as (w17.pg.field).custom_type.
 	//
 	// Use when:
-	//   - the built-in CHECK variants (Length / Blank / Range / Regex /
-	//     Choices) can't express the constraint AND structured
-	//     `checks:` (DQL-based predicate) can't either —
-	//     typically because the body needs a PG-specific operator the
-	//     DQL grammar doesn't accept yet
-	//   - the built-in index shape (btree, fields, INCLUDE, WHERE/expr
-	//     via DQL) can't express the index — GIN / GIST / BRIN /
-	//     HASH, operator classes (gin_trgm_ops)
+	//  - the built-in CHECK variants (Length / Blank / Range / Regex /
+	//    Choices) can't express the constraint AND structured
+	//    `checks:` (DQL-based predicate) can't either —
+	//    typically because the body needs a PG-specific operator the
+	//    DQL grammar doesn't accept yet
+	//  - the built-in index shape (btree, fields, INCLUDE, WHERE/expr
+	//    via DQL) can't express the index — GIN / GIST / BRIN /
+	//    HASH, operator classes (gin_trgm_ops)
 	RawChecks  []*RawCheck `protobuf:"bytes,3,rep,name=raw_checks,json=rawChecks,proto3" json:"raw_checks,omitempty"`
 	RawIndexes []*RawIndex `protobuf:"bytes,4,rep,name=raw_indexes,json=rawIndexes,proto3" json:"raw_indexes,omitempty"`
 	// SQL-visible table comment. Emits
@@ -1847,11 +1847,11 @@ type Table struct {
 	// Whether the module prefix prepends onto THIS table's
 	// derived name. Same shape as (w17.module).prefix:
 	//
-	//	unset       — inherit from module; prefix applies
-	//	prefix:true — explicit; prefix applies (same as unset
-	//	              unless the module opted out — then this
-	//	              forces it back on for this one table)
-	//	prefix:false — opt out for this table specifically
+	//   unset       — inherit from module; prefix applies
+	//   prefix:true — explicit; prefix applies (same as unset
+	//                 unless the module opted out — then this
+	//                 forces it back on for this one table)
+	//   prefix:false — opt out for this table specifically
 	//
 	// Has no effect when `name` is set explicitly (an explicit
 	// name owns the whole identifier, prefix never applies).
@@ -1953,13 +1953,12 @@ type Table struct {
 	//     DQL grammar can't spell (e.g. PG-specific operators).
 	//
 	// Authoring:
-	//
-	//	checks: [
-	//	  { name: "orders_dates_ordered",
-	//	    predicate: "start_date <= end_date" },
-	//	  { name: "users_name_or_email",
-	//	    predicate: "name IS NOT NULL OR email IS NOT NULL" }
-	//	]
+	//   checks: [
+	//     { name: "orders_dates_ordered",
+	//       predicate: "start_date <= end_date" },
+	//     { name: "users_name_or_email",
+	//       predicate: "name IS NOT NULL OR email IS NOT NULL" }
+	//   ]
 	//
 	// The predicate is COMPILED, not passed through: it is parsed,
 	// checked, and rendered back to the SQL that goes into the schema.
@@ -1976,7 +1975,6 @@ type Table struct {
 	//     column refs, and proto-canonical CAST targets (`INT64` and
 	//     friends resolve per dialect, and a schema has no dialect
 	//     left to resolve against — write the engine's own type).
-	//
 	// A body that needs none of that round-trips exactly as written.
 	//
 	// Lands in the same RawCheck IR entry as raw_checks (same differ
@@ -1995,10 +1993,10 @@ type Table struct {
 	// table is the same one, renamed when its name changes, and its columns
 	// are compared field number by field number as usual.
 	//
-	//	message OrgBankRate {
-	//	  option (w17.db.table) = { renamed_from: "identity.v1.TenantBankRate" };
-	//	  ...
-	//	}
+	//   message OrgBankRate {
+	//     option (w17.db.table) = { renamed_from: "identity.v1.TenantBankRate" };
+	//     ...
+	//   }
 	//
 	// It matters while a database still holds the old message's table. Once
 	// the rename is applied everywhere it says nothing, and it can stay or
@@ -2276,12 +2274,11 @@ type Index struct {
 	// build-time error, not a silent fallback.
 	//
 	// Three states (proto3 optional):
-	//
-	//	unset → dialect-driven default (PG → true, others → false)
-	//	true  → force concurrent build
-	//	false → force in-transaction build (escape hatch when the
-	//	        author wants the BEGIN/COMMIT atomicity for an
-	//	        index they know is on a small / quiet table)
+	//   unset → dialect-driven default (PG → true, others → false)
+	//   true  → force concurrent build
+	//   false → force in-transaction build (escape hatch when the
+	//           author wants the BEGIN/COMMIT atomicity for an
+	//           index they know is on a small / quiet table)
 	//
 	// Default-true on PG is the production-safe posture: every
 	// index gets the SHARE_UPDATE_EXCLUSIVE-only lock instead of
@@ -2320,20 +2317,19 @@ type Index struct {
 	// `lib/dql/typecheck` pass when real portability pain shows up.
 	//
 	// Authoring:
-	//
-	//	indexes: [{
-	//	  fields: [{ name: "email" }],
-	//	  unique: true,
-	//	  where:  "deleted_at IS NULL"
-	//	}]
+	//   indexes: [{
+	//     fields: [{ name: "email" }],
+	//     unique: true,
+	//     where:  "deleted_at IS NULL"
+	//   }]
 	//
 	// Per-dialect support:
 	//   - PG     — emits `WHERE <body>` after the column list.
 	//   - SQLite — emits `WHERE <body>` after the column list.
 	//   - MySQL  — refuses at emit time (no native partial-index
-	//     grammar). Authors who need MySQL coverage either
-	//     drop `where` and accept the full index, or move
-	//     the predicate into application-side filtering.
+	//              grammar). Authors who need MySQL coverage either
+	//              drop `where` and accept the full index, or move
+	//              the predicate into application-side filtering.
 	//
 	// Default empty → non-partial (full) index — unchanged behaviour
 	// for indexes that don't author the field.
@@ -2343,9 +2339,9 @@ type Index struct {
 	// enabled feature set (the `(w17.contrib.plugin_feature*)` family,
 	// applied by `featurefilter` before the file is compiled).
 	//
-	//	plugin_feature        — keep this entry only when the feature IS
-	//	                        enabled.
-	//	plugin_feature_unless — keep it only when the feature is NOT.
+	//   plugin_feature        — keep this entry only when the feature IS
+	//                           enabled.
+	//   plugin_feature_unless — keep it only when the feature is NOT.
 	//
 	// Both on one entry is a contradiction with no reading and is
 	// refused, exactly like the rpc-level pair.
@@ -2513,11 +2509,10 @@ type IndexField struct {
 	// column list as one entry.
 	//
 	// Authoring:
-	//
-	//	indexes: [{
-	//	  fields: [{ expr: "lower(email)" }],
-	//	  unique: true
-	//	}]
+	//   indexes: [{
+	//     fields: [{ expr: "lower(email)" }],
+	//     unique: true
+	//   }]
 	//
 	// Per-dialect support:
 	//   - PG / SQLite / MySQL — all three render `(<body>)` as one
@@ -2842,10 +2837,8 @@ type Column struct {
 	// Deletion rule — what happens to rows carrying this FK when the
 	// referenced parent row is deleted. Applies only when `fk` is set.
 	// Unspecified infers from (w17.field).null:
-	//
-	//	null: true  → ORPHAN (child survives, FK becomes NULL)
-	//	null: false → CASCADE (child is deleted with parent)
-	//
+	//   null: true  → ORPHAN (child survives, FK becomes NULL)
+	//   null: false → CASCADE (child is deleted with parent)
 	// Explicit value wins over inference.
 	DeletionRule DeletionRule `protobuf:"varint,4,opt,name=deletion_rule,json=deletionRule,proto3,enum=w17.db.DeletionRule" json:"deletion_rule,omitempty"`
 	// Storage type override — orthogonal to (w17.field).type. When unset
@@ -2863,13 +2856,12 @@ type Column struct {
 	// existing and the expression being deterministic.
 	//
 	// Usage:
-	//
-	//	string full_name = 3 [
-	//	  (w17.field)     = { type: CHAR, max_len: 200 },
-	//	  (w17.db.column) = {
-	//	    generated_expr: "first_name || ' ' || last_name"
-	//	  }
-	//	];
+	//   string full_name = 3 [
+	//     (w17.field)     = { type: CHAR, max_len: 200 },
+	//     (w17.db.column) = {
+	//       generated_expr: "first_name || ' ' || last_name"
+	//     }
+	//   ];
 	//
 	// Incompatible with (w17.field).default_* (the computed value IS the
 	// value), `pk: true` (PG rejects generated columns as primary keys),
@@ -2949,11 +2941,10 @@ type Column struct {
 	// migration plan for a MySQL connection refuses the field.
 	//
 	// Usage:
-	//
-	//	string area_id = 2 [
-	//	  (w17.field)     = { type: UUID },
-	//	  (w17.db.column) = { fk: "area.Area", deletion_rule: BLOCK, deferrable: true }
-	//	];
+	//   string area_id = 2 [
+	//     (w17.field)     = { type: UUID },
+	//     (w17.db.column) = { fk: "area.Area", deletion_rule: BLOCK, deferrable: true }
+	//   ];
 	Deferrable    bool `protobuf:"varint,10,opt,name=deferrable,proto3" json:"deferrable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3189,16 +3180,15 @@ var (
 	// (w17.db.table) — message-level DB configuration.
 	//
 	// Usage:
-	//
-	//	message Product {
-	//	  option (w17.db.table) = {
-	//	    name: "products",
-	//	    indexes: [
-	//	      { fields: ["category_id", "is_active"] }
-	//	    ]
-	//	  };
-	//	  ...
-	//	}
+	//   message Product {
+	//     option (w17.db.table) = {
+	//       name: "products",
+	//       indexes: [
+	//         { fields: ["category_id", "is_active"] }
+	//       ]
+	//     };
+	//     ...
+	//   }
 	//
 	// optional w17.db.Table table = 51000;
 	E_Table = &file_w17_db_proto_extTypes[0]
@@ -3224,30 +3214,30 @@ var (
 	//
 	// Usage:
 	//
-	//	message Task {
-	//	  option (w17.db.table) = { name: "tasks" };
-	//	  option (w17.db.scope) = {
-	//	    entries: [{ name: "org_id", path: "org_id" }]
-	//	  };
+	//   message Task {
+	//     option (w17.db.table) = { name: "tasks" };
+	//     option (w17.db.scope) = {
+	//       entries: [{ name: "org_id", path: "org_id" }]
+	//     };
 	//
-	//	  int64  id        = 1 [(w17.field) = { pk: true }];
-	//	  string org_id = 2 [(w17.field) = { type: UUID }];
-	//	  ...
-	//	}
+	//     int64  id        = 1 [(w17.field) = { pk: true }];
+	//     string org_id = 2 [(w17.field) = { type: UUID }];
+	//     ...
+	//   }
 	//
-	//	message Comment {
-	//	  option (w17.db.table) = { name: "comments" };
-	//	  option (w17.db.scope) = {
-	//	    entries: [{ name: "org_id", path: "org_id" }]
-	//	  };
+	//   message Comment {
+	//     option (w17.db.table) = { name: "comments" };
+	//     option (w17.db.scope) = {
+	//       entries: [{ name: "org_id", path: "org_id" }]
+	//     };
 	//
-	//	  // Denormalised: a child of Task carries its own org_id
-	//	  // rather than reaching the parent's. Until the dotted-path
-	//	  // slice lands this is the way to scope a child — the
-	//	  // alternative is `(w17.db.bypass_scope)` plus a hand-written
-	//	  // WHERE in the query's DQL.
-	//	  string org_id = 3 [(w17.field) = { type: UUID }];
-	//	}
+	//     // Denormalised: a child of Task carries its own org_id
+	//     // rather than reaching the parent's. Until the dotted-path
+	//     // slice lands this is the way to scope a child — the
+	//     // alternative is `(w17.db.bypass_scope)` plus a hand-written
+	//     // WHERE in the query's DQL.
+	//     string org_id = 3 [(w17.field) = { type: UUID }];
+	//   }
 	//
 	// Auth backend returns the caller's scope values in
 	// AuthResp.scopes (a `map<string,string>` field, parser-
@@ -3270,11 +3260,10 @@ var (
 	// future tablespace / storage parameters.
 	//
 	// Usage:
-	//
-	//	string email = 3 [
-	//	  (w17.field)     = { type: EMAIL, unique: true },
-	//	  (w17.db.column) = { index: true, name: "email_address" }
-	//	];
+	//   string email = 3 [
+	//     (w17.field)     = { type: EMAIL, unique: true },
+	//     (w17.db.column) = { index: true, name: "email_address" }
+	//   ];
 	//
 	// optional w17.db.Column column = 51002;
 	E_Column = &file_w17_db_proto_extTypes[1]
@@ -3292,40 +3281,40 @@ var (
 	//
 	// Single-query usage:
 	//
-	//	rpc GetUser(GetUserReq) returns (GetUserResp) {
-	//	  option (w17.db.method) = {
-	//	    ops: {
-	//	      name: "main",
-	//	      dql: "SELECT u FROM User u WHERE u.id = :user_id"
-	//	    }
-	//	  };
-	//	}
+	//   rpc GetUser(GetUserReq) returns (GetUserResp) {
+	//     option (w17.db.method) = {
+	//       ops: {
+	//         name: "main",
+	//         dql: "SELECT u FROM User u WHERE u.id = :user_id"
+	//       }
+	//     };
+	//   }
 	//
 	// Single-mutation usage (RETURNING populates the response):
 	//
-	//	rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
-	//	  option (w17.db.method) = {
-	//	    ops: {
-	//	      name: "insert",
-	//	      dql: "INSERT INTO User SET :user RETURNING id, created_at"
-	//	    }
-	//	  };
-	//	}
+	//   rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
+	//     option (w17.db.method) = {
+	//       ops: {
+	//         name: "insert",
+	//         dql: "INSERT INTO User SET :user RETURNING id, created_at"
+	//       }
+	//     };
+	//   }
 	//
 	// Multi-operation usage (load-then-save with cross-op alias):
 	//
-	//	rpc IncrementCounter(IncReq) returns (IncResp) {
-	//	  option (w17.db.method) = {
-	//	    ops: {
-	//	      name: "load",
-	//	      dql: "SELECT c.value FROM Counter c WHERE c.id = :id"
-	//	    },
-	//	    ops: {
-	//	      name: "save",
-	//	      dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id"
-	//	    }
-	//	  };
-	//	}
+	//   rpc IncrementCounter(IncReq) returns (IncResp) {
+	//     option (w17.db.method) = {
+	//       ops: {
+	//         name: "load",
+	//         dql: "SELECT c.value FROM Counter c WHERE c.id = :id"
+	//       },
+	//       ops: {
+	//         name: "save",
+	//         dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id"
+	//       }
+	//     };
+	//   }
 	//
 	// Locks (`(w17.db.lock)`) are a sibling method-level annotation
 	// (declared below); `execution_plan` (below) overrides the default
@@ -3353,17 +3342,17 @@ var (
 	//
 	// Usage:
 	//
-	//	rpc IncrementCounter(IncReq) returns (IncResp) {
-	//	  option (w17.db.method) = {
-	//	    ops:    { name: "load", dql: "SELECT c.value FROM Counter c WHERE c.id = :id" }
-	//	    ops: { name: "save", dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id" }
-	//	  };
-	//	  option (w17.db.lock) = {
-	//	    locks: [
-	//	      { resource: "Counter", kind: SELECT_FOR_UPDATE }
-	//	    ]
-	//	  };
-	//	}
+	//   rpc IncrementCounter(IncReq) returns (IncResp) {
+	//     option (w17.db.method) = {
+	//       ops:    { name: "load", dql: "SELECT c.value FROM Counter c WHERE c.id = :id" }
+	//       ops: { name: "save", dql: "UPDATE Counter SET value = :load.value + 1 WHERE id = :id" }
+	//     };
+	//     option (w17.db.lock) = {
+	//       locks: [
+	//         { resource: "Counter", kind: SELECT_FOR_UPDATE }
+	//       ]
+	//     };
+	//   }
 	//
 	// KV / QUEUE connections ignore the lock (no transactional row
 	// locking primitive). SQLite skips the suffix too — its locking
@@ -3385,13 +3374,12 @@ var (
 	// guard for the listed scope names.
 	//
 	// Forms:
-	//
-	//	["*"]                       — bypass every scope on every
-	//	                               scoped model the method/service
-	//	                               touches.
-	//	["org_id"]               — bypass listed scopes only;
-	//	                               other scopes (multi-scope
-	//	                               models) still apply.
+	//   ["*"]                       — bypass every scope on every
+	//                                  scoped model the method/service
+	//                                  touches.
+	//   ["org_id"]               — bypass listed scopes only;
+	//                                  other scopes (multi-scope
+	//                                  models) still apply.
 	//
 	// The two layers UNION — they do not override one another.
 	// A method-level list ADDS to the service-level one (and either
@@ -3412,17 +3400,17 @@ var (
 	//
 	// Usage:
 	//
-	//	service AdminService {
-	//	  option (w17.db.bypass_scope_service) = "*";
-	//	  rpc PurgeStaleTasks(...) returns (...);
-	//	}
+	//   service AdminService {
+	//     option (w17.db.bypass_scope_service) = "*";
+	//     rpc PurgeStaleTasks(...) returns (...);
+	//   }
 	//
-	//	service TaskMutation {
-	//	  rpc ReassignOrg(...) returns (...) {
-	//	    option (w17.db.bypass_scope) = "org_id";
-	//	    option (w17.db.bypass_scope) = "org_id";  // repeat to add
-	//	  }
-	//	}
+	//   service TaskMutation {
+	//     rpc ReassignOrg(...) returns (...) {
+	//       option (w17.db.bypass_scope) = "org_id";
+	//       option (w17.db.bypass_scope) = "org_id";  // repeat to add
+	//     }
+	//   }
 	//
 	// repeated string bypass_scope = 51010;
 	E_BypassScope = &file_w17_db_proto_extTypes[6]
@@ -3438,11 +3426,11 @@ var (
 	//
 	// Usage:
 	//
-	//	enum UserSortField {
-	//	  USER_SORT_UNSPECIFIED = 0;
-	//	  USER_SORT_NAME    = 1 [(w17.db.enum_value) = { sort_sql: "name DESC" }];
-	//	  USER_SORT_CREATED = 2 [(w17.db.enum_value) = { sort_sql: "created_at DESC" }];
-	//	}
+	//   enum UserSortField {
+	//     USER_SORT_UNSPECIFIED = 0;
+	//     USER_SORT_NAME    = 1 [(w17.db.enum_value) = { sort_sql: "name DESC" }];
+	//     USER_SORT_CREATED = 2 [(w17.db.enum_value) = { sort_sql: "created_at DESC" }];
+	//   }
 	//
 	// Codegen reads each value's annotation when an `ORDER BY
 	// :<path>` clause resolves to a field of this enum type and

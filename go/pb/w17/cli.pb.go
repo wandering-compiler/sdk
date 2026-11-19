@@ -33,9 +33,7 @@ type Cli struct {
 	// placeholders binding request fields as POSITIONAL arguments.
 	//
 	// Example: `command: "task project create <name>"` produces
-	//
-	//	<domain>-cli task project create <name> [--other-field ...]
-	//
+	//   <domain>-cli task project create <name> [--other-field ...]
 	// where `name` is taken positionally and every other request
 	// field becomes a `--flag`. Repeated positionals (only the last
 	// placeholder may bind a `repeated` field) are variadic.
@@ -48,7 +46,6 @@ type Cli struct {
 	//   - The full command path must be unique across the surface;
 	//     a token that is a namespace for one command and a leaf
 	//     action for another is a collision (hard error).
-	//
 	// Empty = derive the action from the method name (snake_case)
 	// with no namespace and no positional bindings.
 	Command       string `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`

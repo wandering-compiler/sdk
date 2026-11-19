@@ -181,17 +181,15 @@ var (
 	// the entity TYPES this RPC's response is keyed by.
 	//
 	// Usage:
-	//
-	//	rpc GetAccount(GetReq) returns (Account) {
-	//	  option (w17.returns_entities) = "Account";
-	//	}
+	//   rpc GetAccount(GetReq) returns (Account) {
+	//     option (w17.returns_entities) = "Account";
+	//   }
 	//
 	// Multi-entity response (e.g. JOIN-shaped):
-	//
-	//	rpc GetAccountWithOwner(GetReq) returns (Joined) {
-	//	  option (w17.returns_entities) = "Account";
-	//	  option (w17.returns_entities) = "User";
-	//	}
+	//   rpc GetAccountWithOwner(GetReq) returns (Joined) {
+	//     option (w17.returns_entities) = "Account";
+	//     option (w17.returns_entities) = "User";
+	//   }
 	//
 	// repeated string returns_entities = 50140;
 	E_ReturnsEntities = &file_w17_client_proto_extTypes[0]
@@ -205,10 +203,9 @@ var (
 	// answer while it does.
 	//
 	// Usage:
-	//
-	//	rpc UpdateAccount(UpdateReq) returns (Account) {
-	//	  option (w17.touches_entities) = "Account";
-	//	}
+	//   rpc UpdateAccount(UpdateReq) returns (Account) {
+	//     option (w17.touches_entities) = "Account";
+	//   }
 	//
 	// repeated string touches_entities = 50141;
 	E_TouchesEntities = &file_w17_client_proto_extTypes[1]
@@ -226,11 +223,10 @@ var (
 	// possible) or multiple (ambiguous identity).
 	//
 	// Usage:
-	//
-	//	message Account {
-	//	  string id = 1 [(w17.entity_id) = true];
-	//	  string name = 2;
-	//	}
+	//   message Account {
+	//     string id = 1 [(w17.entity_id) = true];
+	//     string name = 2;
+	//   }
 	//
 	// optional bool entity_id = 50142;
 	E_EntityId = &file_w17_client_proto_extTypes[2]

@@ -530,7 +530,6 @@ type AdminAuth struct {
 	//     them onto a richer credential shape internally),
 	//   - return a response carrying a JWT-shaped token the SPA
 	//     stores in localStorage.
-	//
 	// Required.
 	LoginMethod string `protobuf:"bytes,1,opt,name=login_method,json=loginMethod,proto3" json:"login_method,omitempty"`
 	// Reference to the gRPC method that resolves a token back to
@@ -1031,13 +1030,12 @@ type AdminColumn struct {
 	// tri-state field overrides that default:
 	//   - unset (default) → auto-derive from the DQL projection.
 	//   - false           → force NOT sortable (e.g. an unindexed big
-	//     string on a huge table where a sort scan is
-	//     undesirable even though it's a plain column).
+	//                        string on a huge table where a sort scan is
+	//                        undesirable even though it's a plain column).
 	//   - true            → force sortable; REQUIRES `sort_key` to name
-	//     the underlying ORDER BY column (the codegen
-	//     cannot infer a fragment for a projection it
-	//     did not classify as a plain column).
-	//
+	//                        the underlying ORDER BY column (the codegen
+	//                        cannot infer a fragment for a projection it
+	//                        did not classify as a plain column).
 	// The (w17.admin_sortable) field tag is superseded by this DQL-driven
 	// derivation and is no longer consulted.
 	Sortable *bool `protobuf:"varint,4,opt,name=sortable,proto3,oneof" json:"sortable,omitempty"`
@@ -1055,7 +1053,7 @@ type AdminColumn struct {
 	// the `(w17.field).format` of the field it renders. Same template
 	// surface, same one-slot rule — see (w17.field).format.
 	//
-	//	{ name: "created_at", format: "{value|short_date}" }
+	//   { name: "created_at", format: "{value|short_date}" }
 	//
 	// The override exists because the default belongs once, next to
 	// the model, but a dense list occasionally wants it shorter than
