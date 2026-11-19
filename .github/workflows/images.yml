@@ -1,0 +1,148 @@
+name: SDK images
+
+# ghcr.io/wandering-compiler/sdk-go:<sdk>-go<patch> — the build image of a w17
+# Go service (images/go/Dockerfile), and :<sdk>-go<line> following the line's
+# newest patch. Built for every Go line upstream supports from go.version's on,
+# at that line's newest patch, for each SDK release; and again when Go ships a
+# patch, so a security fix in the standard library reaches the next build. An
+# image tag that exists already is not rebuilt.
+on:
+  push:
+    tags: ['go/v*']
+  schedule:
+    - cron: '23 5 * * *' # a Go patch release: the newest SDK release on it
+  workflow_dispatch:
+    inputs:
+      sdk:
+        description: SDK release (v0.1.0); empty for the newest go/v* tag
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-images
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sdk: ${{ steps.plan.outputs.sdk }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          INPUT_SDK: ${{ inputs.sdk }}
+          REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_SDK:-}" ]; then sdk="$INPUT_SDK"
+          elif [[ "$REF" == refs/tags/go/v* ]]; then sdk="${REF#refs/tags/go/}"
+          else sdk="$(git tag -l 'go/v*' | sed 's#^go/##' | sed 's/-rc\./~rc./' | sort -V | tail -1 | sed 's/~rc\./-rc./')"
+          fi
+          echo "$sdk" | grep -Eq '^v0\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || { echo "::error::not an SDK release: $sdk"; exit 1; }
+          floor="$(tr -d '[:space:]' < go.version)"
+          # The newest patch of every stable line upstream lists (it lists the
+          # supported ones), from go.version's line on.
+          gos="$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r --arg floor "$floor" '
+            [.[] | select(.stable) | .version | ltrimstr("go")]
+            | map(select((split(".")[0:2] | map(tonumber)) >= ($floor | split(".") | map(tonumber))))
+            | .[]')"
+          [ -n "$gos" ] || { echo "::error::go.dev lists no stable Go from $floor on"; exit 1; }
+          matrix='[]'
+          for go in $gos; do
+            tag="${sdk#v}-go$go"
+            if docker manifest inspect "ghcr.io/${GITHUB_REPOSITORY_OWNER}/sdk-go:$tag" >/dev/null 2>&1; then
+              echo "sdk-go:$tag exists — not rebuilt"; continue
+            fi
+            matrix="$(jq -c --arg go "$go" '. + [$go]' <<<"$matrix")"
+          done
+          echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "SDK $sdk, Go to build: $matrix"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ${{ fromJSON(needs.plan.outputs.matrix) }}
+        # Native runners: the image holds what each builder platform's own
+        # toolchain compiled, for both targets.
+        builder:
+          - { runner: ubuntu-24.04, platform: linux/amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux/arm64 }
+    runs-on: ${{ matrix.builder.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/go
+          platforms: ${{ matrix.builder.platform }}
+          build-args: |
+            GO_IMAGE=golang:${{ matrix.go }}-alpine
+            SDK_VERSION=${{ needs.plan.outputs.sdk }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/sdk-go,push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+      - name: the digest, for the index
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GO: ${{ matrix.go }}
+          ARCH: ${{ matrix.builder.platform }}
+        run: |
+          mkdir -p digests
+          echo "$DIGEST" > "digests/${GO}-${ARCH#linux/}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.go }}-${{ strategy.job-index }}
+          path: digests/*
+
+  index:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: one index per Go patch, and its line's tag
+        env:
+          SDK: ${{ needs.plan.outputs.sdk }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          img="ghcr.io/${GITHUB_REPOSITORY_OWNER}/sdk-go"
+          for go in $(jq -r '.[]' <<<"$MATRIX"); do
+            line="${go%.*}"
+            docker buildx imagetools create \
+              -t "$img:${SDK#v}-go$go" -t "$img:${SDK#v}-go$line" \
+              "$img@$(cat "digests/$go-amd64")" "$img@$(cat "digests/$go-arm64")"
+            echo "### sdk-go:${SDK#v}-go$go" >> "$GITHUB_STEP_SUMMARY"
+            docker buildx imagetools inspect "$img:${SDK#v}-go$go" --format '{{json .Manifest.Digest}}' >> "$GITHUB_STEP_SUMMARY"
+          done
