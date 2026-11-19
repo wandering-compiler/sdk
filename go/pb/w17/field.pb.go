@@ -336,28 +336,28 @@ type Type int32
 const (
 	// AUTO — infer the carrier from the proto kind. The mapping is:
 	//
-	//	bool                       → CARRIER_BOOL
-	//	int32 / int64 / uint32 /   → ID when same-block `pk: true`,
-	//	uint64                       else NUMBER
-	//	float / double             → NUMBER (FLOAT-shaped storage)
-	//	string                     → TEXT (CHAR is opt-in: requires max_len)
-	//	bytes                      → BYTES carrier; sem stays UNSPECIFIED
-	//	enum                       → ENUM (numeric carrier; choices from
-	//	                             the enum descriptor, *_UNSPECIFIED=0
-	//	                             stripped per proto3 norm)
-	//	google.protobuf.Timestamp  → DATETIME
-	//	google.protobuf.Duration   → INTERVAL
-	//	repeated <T>               → list/array; element kind resolves
-	//	                             recursively (element-AUTO = the same
-	//	                             rules applied to <T>)
-	//	map<K,V>                   → AUTO-as-collection (compiler picks
-	//	                             KV / JSON storage per dialect)
-	//	message <Other>            → MESSAGE carrier; serialised whole as
-	//	                             JSONB by default, or BYTEA (protobuf
-	//	                             binary) via `(w17.db.column).db_type`.
-	//	                             AUTO is the ONLY type valid here — a
-	//	                             scalar refinement (CHAR / UUID / …) is
-	//	                             refused with a diag
+	//   bool                       → CARRIER_BOOL
+	//   int32 / int64 / uint32 /   → ID when same-block `pk: true`,
+	//   uint64                       else NUMBER
+	//   float / double             → NUMBER (FLOAT-shaped storage)
+	//   string                     → TEXT (CHAR is opt-in: requires max_len)
+	//   bytes                      → BYTES carrier; sem stays UNSPECIFIED
+	//   enum                       → ENUM (numeric carrier; choices from
+	//                                the enum descriptor, *_UNSPECIFIED=0
+	//                                stripped per proto3 norm)
+	//   google.protobuf.Timestamp  → DATETIME
+	//   google.protobuf.Duration   → INTERVAL
+	//   repeated <T>               → list/array; element kind resolves
+	//                                recursively (element-AUTO = the same
+	//                                rules applied to <T>)
+	//   map<K,V>                   → AUTO-as-collection (compiler picks
+	//                                KV / JSON storage per dialect)
+	//   message <Other>            → MESSAGE carrier; serialised whole as
+	//                                JSONB by default, or BYTEA (protobuf
+	//                                binary) via `(w17.db.column).db_type`.
+	//                                AUTO is the ONLY type valid here — a
+	//                                scalar refinement (CHAR / UUID / …) is
+	//                                refused with a diag
 	//
 	// AUTO is the default when (w17.field) is present without `type:`
 	// (`[(w17.field) = {}]`). Column-membership is a MODEL-level rule,
@@ -508,21 +508,21 @@ const (
 	//
 	// # The cipher mode follows `unique`, and that is the whole knob
 	//
-	//	no unique (the DEFAULT) — RANDOMISED. A fresh nonce per write, so the
-	//	  same secret stores differently every time and the database leaks not
-	//	  even which two rows hold the same value.
+	//   no unique (the DEFAULT) — RANDOMISED. A fresh nonce per write, so the
+	//     same secret stores differently every time and the database leaks not
+	//     even which two rows hold the same value.
 	//
-	//	unique: true — DETERMINISTIC. The same secret always encrypts to the
-	//	  same ciphertext, which is what lets an index enforce anything and a
-	//	  `WHERE col = :x` find anything.
+	//   unique: true — DETERMINISTIC. The same secret always encrypts to the
+	//     same ciphertext, which is what lets an index enforce anything and a
+	//     `WHERE col = :x` find anything.
 	//
-	//	⚠️ REFUSED TODAY: `unique: true` on a CRYPTED_SECRET is refused at IR
-	//	build. Rotating the key changes deterministic ciphertext, so a UNIQUE
-	//	index over it silently stops enforcing during a rotation; until a blind
-	//	index answers that, every CRYPTED_SECRET column is RANDOMISED. Look a
-	//	secret up by value with SECRET instead. (The platform's decision record
-	//	"a unique CRYPTED_SECRET needs a blind index".) What follows describes
-	//	the mode as designed.
+	//   ⚠️ REFUSED TODAY: `unique: true` on a CRYPTED_SECRET is refused at IR
+	//   build. Rotating the key changes deterministic ciphertext, so a UNIQUE
+	//   index over it silently stops enforcing during a rotation; until a blind
+	//   index answers that, every CRYPTED_SECRET column is RANDOMISED. Look a
+	//   secret up by value with SECRET instead. (The platform's decision record
+	//   "a unique CRYPTED_SECRET needs a blind index".) What follows describes
+	//   the mode as designed.
 	//
 	// Deterministic mode leaks EQUALITY, and that is a real cost on a
 	// low-entropy column: a hundred rows of ciphertext where one value repeats
@@ -619,13 +619,11 @@ const (
 	Type_INTERVAL Type = 30
 	// Enumerated value (carrier: string / int32 / int64; also auto-inferred
 	// on bare proto-enum fields). Dispatch per carrier:
-	//
-	//	string  → PG `CREATE TYPE <table>_<col> AS ENUM (names…)` + column
-	//	          of that type; MySQL `ENUM(...)`; SQLite TEXT + CHECK IN names.
-	//	int32/int64 → INTEGER / BIGINT column + CHECK IN (numbers…).
-	//	proto-enum field (e.g. `Status s = 1;`) — auto-dispatches to int32
-	//	          carrier + ENUM sem + choices=FQN derived from the enum.
-	//
+	//   string  → PG `CREATE TYPE <table>_<col> AS ENUM (names…)` + column
+	//             of that type; MySQL `ENUM(...)`; SQLite TEXT + CHECK IN names.
+	//   int32/int64 → INTEGER / BIGINT column + CHECK IN (numbers…).
+	//   proto-enum field (e.g. `Status s = 1;`) — auto-dispatches to int32
+	//             carrier + ENUM sem + choices=FQN derived from the enum.
 	// Requires `choices:` on the string-carrier path; on int and proto-enum
 	// paths the numbers come from the enum descriptor (names stripped of the
 	// *_UNSPECIFIED=0 sentinel per proto3 convention).
@@ -739,10 +737,9 @@ type AutoDefault int32
 const (
 	AutoDefault_AUTO_DEFAULT_UNSPECIFIED AutoDefault = 0
 	// Temporal — resolved per Type:
-	//
-	//	DATE     → CURRENT_DATE
-	//	TIME     → CURRENT_TIME
-	//	DATETIME → NOW() / CURRENT_TIMESTAMP
+	//   DATE     → CURRENT_DATE
+	//   TIME     → CURRENT_TIME
+	//   DATETIME → NOW() / CURRENT_TIMESTAMP
 	AutoDefault_NOW AutoDefault = 1
 	// UUID generation — valid on string carrier with type UUID.
 	AutoDefault_UUID_V4 AutoDefault = 10
@@ -757,11 +754,10 @@ const (
 	AutoDefault_FALSE AutoDefault = 31
 	// Auto-incrementing integer PK. Valid on int32 / int64 carrier with
 	// type: ID and pk: true. Emitter renders per dialect:
-	//
-	//	Postgres / Oracle / DB2 / SQL Server 2012+:
-	//	  GENERATED BY DEFAULT AS IDENTITY (SQL:2003 standard)
-	//	MySQL:  AUTO_INCREMENT
-	//	SQLite: INTEGER PRIMARY KEY AUTOINCREMENT (rowid-backed)
+	//   Postgres / Oracle / DB2 / SQL Server 2012+:
+	//     GENERATED BY DEFAULT AS IDENTITY (SQL:2003 standard)
+	//   MySQL:  AUTO_INCREMENT
+	//   SQLite: INTEGER PRIMARY KEY AUTOINCREMENT (rowid-backed)
 	AutoDefault_IDENTITY AutoDefault = 40
 	// Cryptographically-safe random string. Valid only on string
 	// carrier with type CHAR + max_len > 0. The storage codegen
@@ -1162,13 +1158,11 @@ type Field struct {
 	// EMAIL / … are opt-in).
 	//
 	// Where an explicit value IS constrained:
-	//
-	//	bool    — must NOT set a type (one column shape, nothing to refine)
-	//	bytes   — only JSON, or nothing
-	//	Timestamp — DATE / TIME / DATETIME (infers DATETIME)
-	//	Duration  — INTERVAL only (infers INTERVAL)
-	//	map / repeated / message — AUTO only
-	//
+	//   bool    — must NOT set a type (one column shape, nothing to refine)
+	//   bytes   — only JSON, or nothing
+	//   Timestamp — DATE / TIME / DATETIME (infers DATETIME)
+	//   Duration  — INTERVAL only (infers INTERVAL)
+	//   map / repeated / message — AUTO only
 	// The full carrier × type matrix is enforced at IR build time.
 	Type Type `protobuf:"varint,1,opt,name=type,proto3,enum=w17.Type" json:"type,omitempty"`
 	// Primary key.
@@ -1227,18 +1221,18 @@ type Field struct {
 	// the ERROR, never in the guarantee:
 	//
 	//   - a column field   → exactly `null: false`. The wire shape does not
-	//     change. Validation refuses an absent value by
-	//     name, before the write, instead of letting the
-	//     database refuse it by constraint.
+	//                        change. Validation refuses an absent value by
+	//                        name, before the write, instead of letting the
+	//                        database refuse it by constraint.
 	//   - a presence-bearing parameter → an omitted value is refused, naming
-	//     the parameter. This is the case `null` cannot
-	//     express.
+	//                        the parameter. This is the case `null` cannot
+	//                        express.
 	//   - a repeated or map field → an EMPTY one is refused, naming the
-	//     field. A list's absent value is empty, as
-	//     `(w17.validate)` rules and DQL's `?` already
-	//     treat it — so a lookup by `repeated int64 ids`
-	//     declared `required: true` never runs as an
-	//     empty `IN ()` that answers "nothing".
+	//                        field. A list's absent value is empty, as
+	//                        `(w17.validate)` rules and DQL's `?` already
+	//                        treat it — so a lookup by `repeated int64 ids`
+	//                        declared `required: true` never runs as an
+	//                        empty `IN ()` that answers "nothing".
 	//
 	// A scalar with no presence and no column cannot report absence at all: a
 	// proto3 scalar's zero value is indistinguishable from an omitted one. The
@@ -1251,19 +1245,19 @@ type Field struct {
 	// `null` and a form's `blank`, and for the same reason — all four
 	// combinations mean something:
 	//
-	//	null:false             → NOT NULL column, input required (derived)
-	//	null:true              → nullable column, input optional (derived)
-	//	null:true  required:t  → nullable column, but THIS call must supply it
-	//	null:false required:f  → NOT NULL column the SERVER fills (a default,
-	//	                         an auto value, a stamped scope) — the caller
-	//	                         must not be asked for it
+	//   null:false             → NOT NULL column, input required (derived)
+	//   null:true              → nullable column, input optional (derived)
+	//   null:true  required:t  → nullable column, but THIS call must supply it
+	//   null:false required:f  → NOT NULL column the SERVER fills (a default,
+	//                            an auto value, a stamped scope) — the caller
+	//                            must not be asked for it
 	//
 	// `optional` so the derived default can be told from an explicit override:
 	// unset means "derive from null and from whether the server supplies the
 	// value", exactly as `min_len` and `gt` above are optional to tell 0 from
 	// unset.
 	Required *bool `protobuf:"varint,33,opt,name=required,proto3,oneof" json:"required,omitempty"`
-	// String-only. When true allows empty string (default CHECK col <> ”).
+	// String-only. When true allows empty string (default CHECK col <> '').
 	// Orthogonal to null.
 	Blank bool `protobuf:"varint,6,opt,name=blank,proto3" json:"blank,omitempty"`
 	// Data-level uniqueness. Renders as UNIQUE INDEX in SQL. Orthogonal to the
@@ -1311,12 +1305,12 @@ type Field struct {
 	// request: error reports (Sentry), traces (OTel), and the request event
 	// stream (marketing, audit). A field carries neither, one, or both.
 	//
-	//	sink                    unlabelled   gdpr          sensitive
-	//	logs, Sentry, traces    yes          yes           never
-	//	marketing stream        yes          yes (with     never
-	//	                                     the consent
-	//	                                     flag)
-	//	audit stream            yes          yes           never
+	//   sink                    unlabelled   gdpr          sensitive
+	//   logs, Sentry, traces    yes          yes           never
+	//   marketing stream        yes          yes (with     never
+	//                                        the consent
+	//                                        flag)
+	//   audit stream            yes          yes           never
 	//
 	// gdpr — personal data: a name, an e-mail address, a phone number, a postal
 	// address. It may travel, and is labelled so that what handles a data
@@ -1403,10 +1397,9 @@ type Field struct {
 	// never travels inside the amount.
 	//
 	// Usage:
-	//
-	//	int64  price       = 5 [(w17.field) = { type: MONEY, currency: "CZK" }];
-	//	int64  unit_price  = 6 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
-	//	string currency    = 7 [(w17.field) = { type: CHAR, max_len: 3 }];
+	//   int64  price       = 5 [(w17.field) = { type: MONEY, currency: "CZK" }];
+	//   int64  unit_price  = 6 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
+	//   string currency    = 7 [(w17.field) = { type: CHAR, max_len: 3 }];
 	Currency      string `protobuf:"bytes,37,opt,name=currency,proto3" json:"currency,omitempty"`
 	CurrencyField string `protobuf:"bytes,38,opt,name=currency_field,json=currencyField,proto3" json:"currency_field,omitempty"`
 	// --- Default value at insert time ---
@@ -1505,17 +1498,17 @@ type Field struct {
 	//
 	// Example:
 	//
-	//	message Comment {
-	//	  int64 user_id = 5 [
-	//	    (w17.field)     = { related_name: "comments" },
-	//	    (w17.db.column) = { fk: "users.User" }
-	//	  ];
-	//	}
+	//   message Comment {
+	//     int64 user_id = 5 [
+	//       (w17.field)     = { related_name: "comments" },
+	//       (w17.db.column) = { fk: "users.User" }
+	//     ];
+	//   }
 	//
-	//	// DQL on the User side:
-	//	//   User u JOIN u.comments c WHERE c.body LIKE ...
-	//	//
-	//	// Without `related_name`, the accessor would be `comment_set`.
+	//   // DQL on the User side:
+	//   //   User u JOIN u.comments c WHERE c.body LIKE ...
+	//   //
+	//   // Without `related_name`, the accessor would be `comment_set`.
 	//
 	// DQL-only — does NOT generate a Go navigation collection on
 	// the target struct. The compiler resolves the accessor at
@@ -1591,11 +1584,10 @@ type Field struct {
 	// constraint.
 	//
 	// Usage:
-	//
-	//	string profile = 5 [(w17.field) = {
-	//	  type: TEXT, json: true
-	//	}];
-	//	// DQL: `WHERE u.profile.contact.email = :email`
+	//   string profile = 5 [(w17.field) = {
+	//     type: TEXT, json: true
+	//   }];
+	//   // DQL: `WHERE u.profile.contact.email = :email`
 	//
 	// Chain navigation reads are one part of DQL's JSON access; the
 	// function catalog (CONTAINS / EXISTS / JSON_LENGTH / …) and the
@@ -1633,8 +1625,8 @@ type Field struct {
 	// The required carrier is per-VARIANT, and the pairing is enforced
 	// at IR build time (either mismatch is a hard diag):
 	//
-	//	ACL_PERMISSIONS     — string carrier (CHECK over value NAMES)
-	//	ACL_PERMISSION_IDS  — int32 / int64 carrier (CHECK over numbers)
+	//   ACL_PERMISSIONS     — string carrier (CHECK over value NAMES)
+	//   ACL_PERMISSION_IDS  — int32 / int64 carrier (CHECK over numbers)
 	AutoChoices AutoChoices `protobuf:"varint,31,opt,name=auto_choices,json=autoChoices,proto3,enum=w17.AutoChoices" json:"auto_choices,omitempty"`
 	// Locale-aware display format for this field's value — a template
 	// the COMPILER parses and lowers to a (msgid, slots) pair; the
@@ -1642,9 +1634,9 @@ type Field struct {
 	// is rendered, so the default belongs here, once, next to the
 	// model. `AdminColumn.format` overrides it for one list.
 	//
-	//	format: "{value|decimal:2}"
-	//	format: "{qty|number|zero:_(\"none\")}"
-	//	format: "{value|percent:1} of quota"
+	//   format: "{value|decimal:2}"
+	//   format: "{qty|number|zero:_(\"none\")}"
+	//   format: "{value|percent:1} of quota"
 	//
 	// The template must fill EXACTLY ONE slot — a field format renders
 	// one value, so a second slot has no value to draw from. The
@@ -2484,11 +2476,10 @@ var (
 	// concern, not a source concern.
 	//
 	// Usage:
-	//
-	//	string slug = 2 [(w17.field) = { type: SLUG, max_len: 120, unique: true }];
-	//	int64 price = 5 [(w17.field) = { type: MONEY, currency: "CZK", gte: 0 }];
-	//	google.protobuf.Timestamp created_at = 10
-	//	  [(w17.field) = { type: DATETIME, default_auto: NOW }];
+	//   string slug = 2 [(w17.field) = { type: SLUG, max_len: 120, unique: true }];
+	//   int64 price = 5 [(w17.field) = { type: MONEY, currency: "CZK", gte: 0 }];
+	//   google.protobuf.Timestamp created_at = 10
+	//     [(w17.field) = { type: DATETIME, default_auto: NOW }];
 	//
 	// optional w17.Field field = 51001;
 	E_Field = &file_w17_field_proto_extTypes[0]
@@ -2504,18 +2495,18 @@ var (
 	//
 	// Usage:
 	//
-	//	message ChangePasswordReq {
-	//	  string old_password = 1;
-	//	  string new_password = 2 [(w17.field) = { min_len: 8 }];
-	//	  string email        = 3 [(w17.field) = { type: EMAIL }];
+	//   message ChangePasswordReq {
+	//     string old_password = 1;
+	//     string new_password = 2 [(w17.field) = { min_len: 8 }];
+	//     string email        = 3 [(w17.field) = { type: EMAIL }];
 	//
-	//	  option (w17.validate) = {
-	//	    rules: [
-	//	      { kind: REQUIRED_IF,  field: "new_password", when_field: "old_password" },
-	//	      { kind: NOT_CONTAINS, field: "new_password", against_fields: ["email"] },
-	//	    ]
-	//	  };
-	//	}
+	//     option (w17.validate) = {
+	//       rules: [
+	//         { kind: REQUIRED_IF,  field: "new_password", when_field: "old_password" },
+	//         { kind: NOT_CONTAINS, field: "new_password", against_fields: ["email"] },
+	//       ]
+	//     };
+	//   }
 	//
 	// Field references use dotted notation for nested messages —
 	// `user.email` resolves through `req.GetUser().GetEmail()`. The

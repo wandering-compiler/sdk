@@ -2,7 +2,7 @@
 # declare: protoc v5.29.3 (protobuf release 29.3), protoc-gen-go v1.36.11,
 # protoc-gen-go-grpc v1.6.2. A different version rewrites every header, so the
 # pins move together and only on purpose.
-FROM golang:1.26-alpine AS plugins
+FROM golang:1.27-alpine AS plugins
 ENV CGO_ENABLED=0
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 \
  && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2

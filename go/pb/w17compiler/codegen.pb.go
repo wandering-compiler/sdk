@@ -10418,7 +10418,7 @@ type ObservedColumn struct {
 	// connection. Compared against what the emitter would render rather than
 	// parsed back into a declaration.
 	DefaultExpr string `protobuf:"bytes,4,opt,name=default_expr,json=defaultExpr,proto3" json:"default_expr,omitempty"`
-	// The column is GENERATED (`attgenerated <> ”`) — default_expr then holds
+	// The column is GENERATED (`attgenerated <> ''`) — default_expr then holds
 	// the GENERATION expression, which lives in the same catalogue slot a
 	// DEFAULT does. Without this flag the reconstruction read the expression
 	// as a phantom default and planned a `DROP DEFAULT` that cannot apply.
@@ -10429,7 +10429,7 @@ type ObservedColumn struct {
 	// server keep a declared-generated column converged when a non-empty
 	// default_expr arrives flag-less (T1-1 pass #51 Q51-31).
 	Generated bool `protobuf:"varint,5,opt,name=generated,proto3" json:"generated,omitempty"`
-	// The column is IDENTITY (`attidentity <> ”`) — it self-generates and has
+	// The column is IDENTITY (`attidentity <> ''`) — it self-generates and has
 	// NO pg_attrdef row, so without this flag it is indistinguishable from a
 	// column with no default. Absent means unknown, same as `generated`.
 	Identity bool `protobuf:"varint,6,opt,name=identity,proto3" json:"identity,omitempty"`
@@ -10817,10 +10817,10 @@ type GenerateRequest struct {
 	// i.e. relative to gen_dir) where per-binary bundles land.
 	// Each bundle is a self-contained gRPC server tree:
 	//
-	//	<services_dir>/<domain>-storage/
-	//	    main.go, Dockerfile, compose.yaml, k8s.yaml,
-	//	    .env.defaults, .env.example,
-	//	    query/, mutation/
+	//     <services_dir>/<domain>-storage/
+	//         main.go, Dockerfile, compose.yaml, k8s.yaml,
+	//         .env.defaults, .env.example,
+	//         query/, mutation/
 	//
 	// Threads through to:
 	//   - response relative_paths (`<services_dir>/<name>/...`)

@@ -6,7 +6,7 @@
 #
 #   py/tests/conformance/run.sh <python-image> <name-prefix>
 #
-# GO_IMAGE (default golang:1.26) runs the harness with `go test`, the
+# GO_IMAGE (default golang:1.27) runs the harness with `go test`, the
 # checkout mounted read-only; GO_DOCKER_FLAGS adds flags to that container
 # (cache mounts). `make conformance-py` builds the image and calls this. Every
 # container and the network are named <name-prefix>-*, and removed on exit
@@ -18,7 +18,7 @@ PREFIX=$2
 NET="$PREFIX-net"
 HARNESS="$PREFIX-harness"
 BIZ="$PREFIX-biz"
-GO_IMAGE=${GO_IMAGE:-golang:1.26}
+GO_IMAGE=${GO_IMAGE:-golang:1.27}
 GO_DOCKER_FLAGS=${GO_DOCKER_FLAGS:-}
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 

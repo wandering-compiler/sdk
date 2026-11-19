@@ -359,11 +359,11 @@ type Module struct {
 	//
 	// Presence-aware:
 	//
-	//	unset           — default; module prefix applies
-	//	table_prefix:true  — explicit; module prefix applies
-	//	                     (same as unset; useful for clarity)
-	//	table_prefix:false — opt out; derived names stay bare
-	//	                     (`<module>` not prepended)
+	//   unset           — default; module prefix applies
+	//   table_prefix:true  — explicit; module prefix applies
+	//                        (same as unset; useful for clarity)
+	//   table_prefix:false — opt out; derived names stay bare
+	//                        (`<module>` not prepended)
 	//
 	// Per-table override on `(w17.db.table).prefix` can re-enable
 	// the prefix for one specific table even when the module
@@ -440,9 +440,9 @@ type Module struct {
 	//
 	// Patterns are `.dockerignore` syntax, relative to the context root:
 	//
-	//	option (w17.module) = {
-	//	  build_context_excludes: ["frontend/dist/", "*.mp4", "testdata/large/"]
-	//	};
+	//   option (w17.module) = {
+	//     build_context_excludes: ["frontend/dist/", "*.mp4", "testdata/large/"]
+	//   };
 	//
 	// Domain-level like `channels`: the context is the project's, not a module's,
 	// so every bundle gets the same list.

@@ -48,11 +48,13 @@ func TestThumbprint_RFC7638Vector(t *testing.T) {
 // rfc9449Key is the P-256 key of the RFC 9449 examples.
 func rfc9449Key(t *testing.T) *ecdsa.PublicKey {
 	t.Helper()
-	return &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(b64(t, "l8tFrhx-34tV3hRICRDY9zCkDlpBhF42UQUfWVAWBFs")),
-		Y:     new(big.Int).SetBytes(b64(t, "9VE4jf_Ok_o64zbTTlcuNJajHmt6v9TDVrU0CdvGRDA")),
+	point := append([]byte{4}, b64(t, "l8tFrhx-34tV3hRICRDY9zCkDlpBhF42UQUfWVAWBFs")...)
+	point = append(point, b64(t, "9VE4jf_Ok_o64zbTTlcuNJajHmt6v9TDVrU0CdvGRDA")...)
+	k, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return k
 }
 
 // RFC 9449 §6.1: the example key's jkt.

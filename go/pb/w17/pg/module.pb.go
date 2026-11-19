@@ -348,7 +348,6 @@ type Conversion struct {
 	// Target / source type. Either:
 	//   - another CustomType alias ("road_vector" / "default_vector")
 	//   - a native PG type keyword ("jsonb" / "text" / "integer")
-	//
 	// Native types bypass registry lookup (no alias matching).
 	Type string `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
 	// USING-clause template (Go text/template syntax). Required when

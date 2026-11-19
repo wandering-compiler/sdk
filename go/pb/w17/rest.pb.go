@@ -601,11 +601,9 @@ type RestApi struct {
 	// returns 401 without invoking any backend.
 	//
 	// The named methods must:
-	//
 	//   - take a request type with at least one field that holds
 	//     the bearer header (validated at parse time via the same
 	//     path-template binding rules as endpoints), and
-	//
 	//   - return a response type carrying `repeated int32
 	//     permission_ids` whenever any model or endpoint on this
 	//     surface has effective ACL. ACL permissions are
@@ -928,13 +926,13 @@ type BrowserRedirect struct {
 	// is absolute by nature. Two things make that acceptable and both
 	// have to hold — say so in the endpoint's comment when you set this:
 	//
-	//  1. the target comes from SERVER-SIDE CONFIGURATION (a provider
-	//     row an administrator wrote), not from anything the caller
-	//     sent;
-	//  2. the endpoint hands out NO credential, so a victim redirected
-	//     somewhere unexpected loses nothing — set `token_field` and
-	//     `allow_external` together and you have built the primitive
-	//     this flag exists to keep rare.
+	//   1. the target comes from SERVER-SIDE CONFIGURATION (a provider
+	//      row an administrator wrote), not from anything the caller
+	//      sent;
+	//   2. the endpoint hands out NO credential, so a victim redirected
+	//      somewhere unexpected loses nothing — set `token_field` and
+	//      `allow_external` together and you have built the primitive
+	//      this flag exists to keep rare.
 	//
 	// The parser refuses the combination for that reason.
 	AllowExternal bool `protobuf:"varint,5,opt,name=allow_external,json=allowExternal,proto3" json:"allow_external,omitempty"`
@@ -1352,7 +1350,7 @@ type RestGroup struct {
 	// URL sub-prefix prepended to every endpoint / stream path
 	// in this group. Composes with `RestApi.prefix`:
 	//
-	//	final URL = <api.prefix> + <group.prefix> + <endpoint.path>
+	//   final URL = <api.prefix> + <group.prefix> + <endpoint.path>
 	//
 	// Convention is to start with `/` (e.g. "/users", "/tasks");
 	// empty is allowed when the group sits at the api root.
@@ -1520,25 +1518,25 @@ type RestEndpoint struct {
 	Fields []*FieldBinding `protobuf:"bytes,9,rep,name=fields,proto3" json:"fields,omitempty"`
 	// Body shape:
 	//
-	//	""            (default) the JSON body is the whole
-	//	              request msg, minus every field bound
-	//	              elsewhere via path template / `fields[]`
-	//	              / `query_expand`. OpenAPI emits the
-	//	              reduced schema; generated body decoder
-	//	              only populates the residual fields.
+	//   ""            (default) the JSON body is the whole
+	//                 request msg, minus every field bound
+	//                 elsewhere via path template / `fields[]`
+	//                 / `query_expand`. OpenAPI emits the
+	//                 reduced schema; generated body decoder
+	//                 only populates the residual fields.
 	//
-	//	"*"           explicit synonym of "" (whole-msg minus
-	//	              routed-out fields).
+	//   "*"           explicit synonym of "" (whole-msg minus
+	//                 routed-out fields).
 	//
-	//	"<fieldname>" the body IS the contents of `<fieldname>`,
-	//	              unwrapped to top-level JSON. The field
-	//	              must exist on the request msg and be a
-	//	              message-typed or repeated field (scalars
-	//	              as bare-JSON bodies are bizarre and
-	//	              rejected at parse time). Other fields
-	//	              must all be routed via path / query /
-	//	              header (otherwise they have nowhere to
-	//	              land).
+	//   "<fieldname>" the body IS the contents of `<fieldname>`,
+	//                 unwrapped to top-level JSON. The field
+	//                 must exist on the request msg and be a
+	//                 message-typed or repeated field (scalars
+	//                 as bare-JSON bodies are bizarre and
+	//                 rejected at parse time). Other fields
+	//                 must all be routed via path / query /
+	//                 header (otherwise they have nowhere to
+	//                 land).
 	Body string `protobuf:"bytes,10,opt,name=body,proto3" json:"body,omitempty"`
 	// Submessage-to-query expansion shortcut. Each
 	// entry names a request-msg field; every leaf scalar
@@ -1707,7 +1705,6 @@ type RestEndpoint struct {
 	//     and repeatable;
 	//   - it may change something — a verb other than GET/HEAD whose storage
 	//     method is not read-only: a registration, a contact form, an order.
-	//
 	// The refusal names the rule that matched and the line to add. Everything
 	// else — public reads — is not limited and not asked about.
 	//
@@ -2331,11 +2328,10 @@ type RestStream struct {
 	// semantics match RestEndpoint.path.
 	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	// Auto-derivation table:
-	//
-	//	gRPC server-stream  → SSE (text/event-stream, GET-shaped)
-	//	gRPC client-stream  → WS  (browsers can't natively
-	//	                           upload-stream over HTTP)
-	//	gRPC bidi-stream    → WS
+	//   gRPC server-stream  → SSE (text/event-stream, GET-shaped)
+	//   gRPC client-stream  → WS  (browsers can't natively
+	//                              upload-stream over HTTP)
+	//   gRPC bidi-stream    → WS
 	//
 	// Override only when the consumer needs the non-default — e.g.
 	// a server-stream RPC where the browser also needs to send
@@ -2565,11 +2561,10 @@ type DownloadEndpoint struct {
 	// fully-qualified UPLOADED_* field refs.
 	//
 	// Glob syntax (single-segment wildcard, no `**`):
-	//
-	//	"*"                       — every UPLOADED_* field in the surface
-	//	"<module>.*"              — every UPLOADED_* field in <module>
-	//	"<module>.<Msg>.*"        — every UPLOADED_* field on <Msg>
-	//	"<module>.<Msg>.<field>"  — exact field
+	//   "*"                       — every UPLOADED_* field in the surface
+	//   "<module>.*"              — every UPLOADED_* field in <module>
+	//   "<module>.<Msg>.*"        — every UPLOADED_* field on <Msg>
+	//   "<module>.<Msg>.<field>"  — exact field
 	//
 	// `<module>` is the last segment of the proto package
 	// (matches REST endpoint ref shape). Globs resolve at parse
@@ -2610,14 +2605,14 @@ type DownloadEndpoint struct {
 	// refuses URL_FORM_UNSPECIFIED so the choice is always
 	// explicit at declaration time.
 	//
-	//	RELATIVE — `<prefix>/<bucket>/<key>` only; the FE
-	//	           composes the absolute URL itself (typical
-	//	           when FE + BE share the same host).
-	//	ABSOLUTE — `<scheme>://<host><prefix>/<bucket>/<key>`;
-	//	           the gateway prepends a host read from
-	//	           `<ENV_PREFIX>_PUBLIC_HOST` at boot. Picks
-	//	           this when FE runs on a different domain
-	//	           (CORS deploys, mobile clients, CDN-fronted).
+	//   RELATIVE — `<prefix>/<bucket>/<key>` only; the FE
+	//              composes the absolute URL itself (typical
+	//              when FE + BE share the same host).
+	//   ABSOLUTE — `<scheme>://<host><prefix>/<bucket>/<key>`;
+	//              the gateway prepends a host read from
+	//              `<ENV_PREFIX>_PUBLIC_HOST` at boot. Picks
+	//              this when FE runs on a different domain
+	//              (CORS deploys, mobile clients, CDN-fronted).
 	UrlForm       URLForm `protobuf:"varint,10,opt,name=url_form,json=urlForm,proto3,enum=w17.URLForm" json:"url_form,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
