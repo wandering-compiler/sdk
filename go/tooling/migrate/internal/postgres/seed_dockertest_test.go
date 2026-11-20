@@ -2,6 +2,9 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
+	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -102,6 +105,33 @@ func TestExecSeed_EmptyIsANoOp(t *testing.T) {
 func seedTestPG(t *testing.T) (string, context.Context) {
 	t.Helper()
 	ctx := context.Background()
+	// W17_SEED_TEST_DSN: a server to use instead of a container this test
+	// starts (a run inside a container, where 127.0.0.1 is not the docker
+	// host). Each call gets a database of its own there.
+	if base := os.Getenv("W17_SEED_TEST_DSN"); base != "" {
+		admin, err := pgx.Connect(ctx, base)
+		if err != nil {
+			t.Fatalf("W17_SEED_TEST_DSN: %v", err)
+		}
+		defer func() { _ = admin.Close(ctx) }()
+		db := fmt.Sprintf("seed_%d", time.Now().UnixNano())
+		if _, err := admin.Exec(ctx, "CREATE DATABASE "+db); err != nil {
+			t.Fatalf("create %s: %v", db, err)
+		}
+		u, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.Path = "/" + db
+		dsn := u.String()
+		c, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatalf("connect %s: %v", db, err)
+		}
+		_, _ = c.Exec(ctx, `CREATE TABLE seedprobe (id BIGINT PRIMARY KEY, name TEXT NOT NULL)`)
+		_ = c.Close(ctx)
+		return dsn, ctx
+	}
 	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P",
 		"-e", "POSTGRES_PASSWORD=seed", "-e", "POSTGRES_DB=seed", "postgres:18").Output()
 	if err != nil {
@@ -144,4 +174,51 @@ func connect(t *testing.T, ctx context.Context, dsn string) *pgx.Conn {
 	}
 	t.Cleanup(func() { _ = c.Close(ctx) })
 	return c
+}
+
+// A fixture whose rows reference another fixture's sorts BEFORE it by name
+// (org-hosts before acme-org) and still lands: the seeder
+// retries it after the others. A parent no fixture creates still fails,
+// naming the fixture; any other error is not retried.
+func TestExecSeed_AFixtureReferencingALaterOneLands(t *testing.T) {
+	dsn, ctx := seedTestPG(t)
+	conn := connect(t, ctx, dsn)
+	if _, err := conn.Exec(ctx, `CREATE TABLE org (id BIGINT PRIMARY KEY);
+		CREATE TABLE org_host (id BIGINT PRIMARY KEY, org_id BIGINT NOT NULL REFERENCES org (id))`); err != nil {
+		t.Fatal(err)
+	}
+	ap, err := postgres.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+	host := func(id, org int64) migrate.SeedStmt {
+		return migrate.SeedStmt{SQL: `INSERT INTO org_host (id, org_id) VALUES ($1, $2)`, Args: []any{id, org}, File: "app/org-hosts"}
+	}
+	org := func(id int64) migrate.SeedStmt {
+		return migrate.SeedStmt{SQL: `INSERT INTO org (id) VALUES ($1)`, Args: []any{id}, File: "app/acme-org"}
+	}
+	if err := ap.ExecSeed(ctx, []migrate.SeedStmt{host(1, 7), host(2, 7), org(7)}); err != nil {
+		t.Fatalf("a fixture referencing a later one: %v", err)
+	}
+	var n int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM org_host`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("org_host rows = %d (%v), want 2", n, err)
+	}
+
+	err = ap.ExecSeed(ctx, []migrate.SeedStmt{host(3, 99), org(8)})
+	if err == nil || !strings.Contains(err.Error(), "fixture app/org-hosts") || !strings.Contains(err.Error(), "23503") {
+		t.Fatalf("a parent no fixture creates: err = %v, want the fixture named and the FK violation", err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM org WHERE id = 8`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("org 8 = %d row(s) — a failed seed left a fixture behind", n)
+	}
+
+	err = ap.ExecSeed(ctx, []migrate.SeedStmt{
+		{SQL: `INSERT INTO org (id) VALUES ($1)`, Args: []any{int64(7)}, File: "app/dup"},
+		org(9),
+	})
+	if err == nil || !strings.Contains(err.Error(), "fixture app/dup") || strings.Contains(err.Error(), "23503") {
+		t.Fatalf("a duplicate key is not deferred: err = %v", err)
+	}
 }

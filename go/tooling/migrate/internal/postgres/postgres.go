@@ -722,15 +722,31 @@ func (a *Applier) ExecSeed(ctx context.Context, stmts []migrate.SeedStmt) error 
 		return fmt.Errorf("postgres seed: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	for i, st := range stmts {
-		if _, err := tx.Exec(ctx, st.SQL, st.Args...); err != nil {
-			return fmt.Errorf("postgres seed: statement %d of %d: %w", i+1, len(stmts), err)
-		}
+	// A fixture at a time, retrying one whose rows reference another
+	// fixture's applied after it (migrate.ExecSeedFiles).
+	if err := migrate.ExecSeedFiles(ctx, seedTx{tx}, stmts, IsForeignKeyViolation); err != nil {
+		return fmt.Errorf("postgres seed: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("postgres seed: commit: %w", err)
 	}
 	return nil
+}
+
+// seedTx adapts a pgx transaction to migrate.SeedTx.
+type seedTx struct{ tx pgx.Tx }
+
+func (t seedTx) Exec(ctx context.Context, sql string, args ...any) error {
+	_, err := t.tx.Exec(ctx, sql, args...)
+	return err
+}
+
+// IsForeignKeyViolation reports a PostgreSQL foreign key violation (SQLSTATE
+// 23503) — a row pointing at one that is not there yet, which a seed retries
+// after its other fixtures.
+func IsForeignKeyViolation(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23503"
 }
 
 // Observe reports this database's live schema as structure — see

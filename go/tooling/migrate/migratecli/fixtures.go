@@ -114,6 +114,8 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 	// creates — and the renderer orders rows within a file, not between them.
 	// Applying file by file would let a failure in the third one leave the
 	// first two behind, which is a database in a state no fixture describes.
+	// Each statement carries its fixture, so the seeder retries one whose
+	// rows reference a fixture that sorts after it (migrate.ExecSeedFiles).
 	var stmts []migrate.SeedStmt
 	for _, s := range seeds {
 		for _, st := range s.Statements {
@@ -121,7 +123,7 @@ func runFixtures(ctx context.Context, args []string, opts Options, out io.Writer
 			for _, a := range st.GetArgs() {
 				args = append(args, a.AsInterface())
 			}
-			stmts = append(stmts, migrate.SeedStmt{SQL: st.GetSql(), Args: args})
+			stmts = append(stmts, migrate.SeedStmt{SQL: st.GetSql(), Args: args, File: s.Domain + "/" + s.Name})
 		}
 	}
 
