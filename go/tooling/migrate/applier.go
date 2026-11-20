@@ -244,6 +244,12 @@ type SeedCapable interface {
 type SeedStmt struct {
 	SQL  string
 	Args []any
+	// File names the rendered fixture the statement came from
+	// (`<domain>/<name>`). Consecutive statements with one File are one
+	// fixture: the renderer orders rows within it, not between fixtures, so
+	// ExecSeedFiles retries a fixture whose rows reference one applied after
+	// it. Empty: the statements are one set, applied in order.
+	File string
 }
 
 // ObserveCapable is an optional Applier capability: report the target's live
