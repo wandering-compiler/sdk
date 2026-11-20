@@ -39,8 +39,15 @@ var gatewayOwnedPrefixes = []string{"x-w17-", LabelKeyPrefix}
 var gatewayOwnedKeys = []string{"w17-tx-id", "w17-conn-id"}
 
 // SanitizeGatewayMD returns a copy of ctx's INCOMING metadata with the
-// gateway-owned keys ([IsGatewayOwnedKey]) removed, ready for the caller to
+// edge-reserved keys ([IsEdgeReservedKey]) removed, ready for the caller to
 // stamp its verified principal onto and hand to [WithGatewayMD].
+//
+// Edge-reserved, not only gateway-owned: the same rule the REST and MCP
+// edges apply, so a native gRPC client cannot send what only the gateway's
+// own translation writes either — `grpcgateway-*` (the HTTP headers
+// grpc-gateway forwards) and a `grpc-metadata-` spelling of a gateway-owned
+// key. Nothing trusts those today; a future reader of them must not be
+// handed a forgeable value by the one edge that let it through.
 //
 // Clearing rather than overwriting is the point. A gateway stamps
 // `x-w17-scope-<name>` once per scope the auth response actually returns,
@@ -60,7 +67,7 @@ func SanitizeGatewayMD(ctx context.Context) metadata.MD {
 		md = metadata.MD{}
 	}
 	for k := range md {
-		if IsGatewayOwnedKey(k) {
+		if IsEdgeReservedKey(k) {
 			delete(md, k)
 		}
 	}

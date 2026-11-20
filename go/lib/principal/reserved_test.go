@@ -76,3 +76,31 @@ func TestSanitizeGatewayMD_StripsTransactionKeys(t *testing.T) {
 		}
 	}
 }
+
+// The rpc edge strips what the REST and MCP edges strip: a native gRPC
+// client's `grpcgateway-*` key, or a `grpc-metadata-` spelling of a
+// gateway-owned one, never reaches the backend; a key that merely
+// contains the words stays.
+func TestSanitizeGatewayMD_StripsEdgeReservedKeys(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD{
+		"grpcgateway-authorization": {"forged"},
+		"GrpcGateway-Origin":        {"forged"},
+		"grpc-metadata-x-w17-user":  {"forged"},
+		"x-grpcgateway-note":        {"kept"},
+		"authorization":             {"Bearer t"},
+	})
+	md := principal.SanitizeGatewayMD(ctx)
+	for k := range md {
+		if principal.IsEdgeReservedKey(k) {
+			t.Errorf("sanitized md keeps edge-reserved %s = %v", k, md[k])
+		}
+	}
+	for _, k := range []string{"x-grpcgateway-note", "authorization"} {
+		if len(md[k]) != 1 {
+			t.Errorf("sanitized md[%s] = %v, want kept", k, md[k])
+		}
+	}
+	if len(md) != 2 {
+		t.Errorf("sanitized md = %v, want only the two ordinary keys", md)
+	}
+}
