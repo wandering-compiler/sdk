@@ -249,8 +249,13 @@ type SecretKey struct {
 	UpdatedBy string `protobuf:"bytes,4,opt,name=updated_by,json=updatedBy,proto3" json:"updated_by,omitempty"`
 	// An environment variable, and `value` is its value. FALSE for a secret,
 	// whose value is never listed.
-	Plain         bool   `protobuf:"varint,5,opt,name=plain,proto3" json:"plain,omitempty"`
-	Value         string `protobuf:"bytes,6,opt,name=value,proto3" json:"value,omitempty"`
+	Plain bool   `protobuf:"varint,5,opt,name=plain,proto3" json:"plain,omitempty"`
+	Value string `protobuf:"bytes,6,opt,name=value,proto3" json:"value,omitempty"`
+	// The value is the empty string — set on purpose (`secrets set
+	// --allow-empty`), as an optional knob the deployment leaves empty, and
+	// waiting for its real value. Listed for a secret too: whether a value is
+	// empty is what an agent needs to know, never the value itself.
+	Empty         bool `protobuf:"varint,7,opt,name=empty,proto3" json:"empty,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -325,6 +330,13 @@ func (x *SecretKey) GetValue() string {
 		return x.Value
 	}
 	return ""
+}
+
+func (x *SecretKey) GetEmpty() bool {
+	if x != nil {
+		return x.Empty
+	}
+	return false
 }
 
 type FetchEnvironmentSecretsReq struct {
@@ -1164,7 +1176,7 @@ const file_domains_console_secrets_secrets_proto_rawDesc = "" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12 \n" +
 	"\venvironment\x18\x02 \x01(\tR\venvironment\"D\n" +
 	"\x12ListSecretKeysResp\x12.\n" +
-	"\x04keys\x18\x01 \x03(\v2\x1a.console.secrets.SecretKeyR\x04keys\"\xbd\x01\n" +
+	"\x04keys\x18\x01 \x03(\v2\x1a.console.secrets.SecretKeyR\x04keys\"\xd3\x01\n" +
 	"\tSecretKey\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x129\n" +
@@ -1173,7 +1185,8 @@ const file_domains_console_secrets_secrets_proto_rawDesc = "" +
 	"\n" +
 	"updated_by\x18\x04 \x01(\tR\tupdatedBy\x12\x14\n" +
 	"\x05plain\x18\x05 \x01(\bR\x05plain\x12\x14\n" +
-	"\x05value\x18\x06 \x01(\tR\x05value\"|\n" +
+	"\x05value\x18\x06 \x01(\tR\x05value\x12\x14\n" +
+	"\x05empty\x18\a \x01(\bR\x05empty\"|\n" +
 	"\x1aFetchEnvironmentSecretsReq\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12 \n" +
