@@ -287,6 +287,19 @@ message Field {
   optional double lt  = 12;
   optional double lte = 13;
 
+  // --- Item bounds (repeated / map fields) ---
+  // How many items a list (or entries a map) may hold, checked on the
+  // request like max_len is on a string: max_items refuses a longer list,
+  // min_items a shorter one (an absent list holds 0). Refused on a field
+  // that is not repeated or a map, and min_items above max_items.
+  //
+  // What it is for: a list a request carries straight into a statement (an
+  // `IN (:codes)` of a generated query) has no other bound than the message
+  // size limit — about half a million ids in one statement on a public
+  // surface.
+  optional uint32 min_items = 74;
+  optional uint32 max_items = 75;
+
   // --- Pattern override (string carriers) ---
   // Replaces the default regex implied by `type` (e.g. SLUG's `^[a-z0-9-]+$`).
   // Empty string = no override.
@@ -824,6 +837,10 @@ enum ValidationType {
 
   // Path-family rules.
   VALIDATION_PATH_EXTENSION = 40; // file path extension not in allow-list
+
+  // Collection rules (repeated / map).
+  VALIDATION_MIN_ITEMS = 60;     // fewer items than min_items
+  VALIDATION_MAX_ITEMS = 61;     // more items than max_items
 
   // DB-side constraint rules — author opts a constraint failure into
   // user-class validation by setting an override message; without

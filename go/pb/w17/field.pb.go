@@ -219,6 +219,9 @@ const (
 	ValidationType_VALIDATION_ENUM    ValidationType = 31 // proto enum value out of range
 	// Path-family rules.
 	ValidationType_VALIDATION_PATH_EXTENSION ValidationType = 40 // file path extension not in allow-list
+	// Collection rules (repeated / map).
+	ValidationType_VALIDATION_MIN_ITEMS ValidationType = 60 // fewer items than min_items
+	ValidationType_VALIDATION_MAX_ITEMS ValidationType = 61 // more items than max_items
 	// DB-side constraint rules — author opts a constraint failure into
 	// user-class validation by setting an override message; without
 	// override the constraint failure stays internal-class (PgError →
@@ -255,6 +258,8 @@ var (
 		30: "VALIDATION_CHOICES",
 		31: "VALIDATION_ENUM",
 		40: "VALIDATION_PATH_EXTENSION",
+		60: "VALIDATION_MIN_ITEMS",
+		61: "VALIDATION_MAX_ITEMS",
 		50: "VALIDATION_UNIQUE",
 		51: "VALIDATION_FK_VIOLATION",
 		52: "VALIDATION_NOT_NULL",
@@ -284,6 +289,8 @@ var (
 		"VALIDATION_CHOICES":           30,
 		"VALIDATION_ENUM":              31,
 		"VALIDATION_PATH_EXTENSION":    40,
+		"VALIDATION_MIN_ITEMS":         60,
+		"VALIDATION_MAX_ITEMS":         61,
 		"VALIDATION_UNIQUE":            50,
 		"VALIDATION_FK_VIOLATION":      51,
 		"VALIDATION_NOT_NULL":          52,
@@ -1278,6 +1285,18 @@ type Field struct {
 	Gte *float64 `protobuf:"fixed64,11,opt,name=gte,proto3,oneof" json:"gte,omitempty"`
 	Lt  *float64 `protobuf:"fixed64,12,opt,name=lt,proto3,oneof" json:"lt,omitempty"`
 	Lte *float64 `protobuf:"fixed64,13,opt,name=lte,proto3,oneof" json:"lte,omitempty"`
+	// --- Item bounds (repeated / map fields) ---
+	// How many items a list (or entries a map) may hold, checked on the
+	// request like max_len is on a string: max_items refuses a longer list,
+	// min_items a shorter one (an absent list holds 0). Refused on a field
+	// that is not repeated or a map, and min_items above max_items.
+	//
+	// What it is for: a list a request carries straight into a statement (an
+	// `IN (:codes)` of a generated query) has no other bound than the message
+	// size limit — about half a million ids in one statement on a public
+	// surface.
+	MinItems *uint32 `protobuf:"varint,74,opt,name=min_items,json=minItems,proto3,oneof" json:"min_items,omitempty"`
+	MaxItems *uint32 `protobuf:"varint,75,opt,name=max_items,json=maxItems,proto3,oneof" json:"max_items,omitempty"`
 	// --- Pattern override (string carriers) ---
 	// Replaces the default regex implied by `type` (e.g. SLUG's `^[a-z0-9-]+$`).
 	// Empty string = no override.
@@ -1812,6 +1831,20 @@ func (x *Field) GetLt() float64 {
 func (x *Field) GetLte() float64 {
 	if x != nil && x.Lte != nil {
 		return *x.Lte
+	}
+	return 0
+}
+
+func (x *Field) GetMinItems() uint32 {
+	if x != nil && x.MinItems != nil {
+		return *x.MinItems
+	}
+	return 0
+}
+
+func (x *Field) GetMaxItems() uint32 {
+	if x != nil && x.MaxItems != nil {
+		return *x.MaxItems
 	}
 	return 0
 }
@@ -2583,8 +2616,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x0eagainst_fields\x18\b \x03(\tR\ragainstFields\x12\x18\n" +
 	"\apattern\x18\t \x01(\tR\apattern\x12\x18\n" +
 	"\amessage\x18\n" +
-	" \x01(\tR\amessage\"\xc5\n" +
-	"\n" +
+	" \x01(\tR\amessage\"\xa5\v\n" +
 	"\x05Field\x12\x1d\n" +
 	"\x04type\x18\x01 \x01(\x0e2\t.w17.TypeR\x04type\x12\x0e\n" +
 	"\x02pk\x18\x02 \x01(\bR\x02pk\x12\x1c\n" +
@@ -2599,14 +2631,16 @@ const file_w17_field_proto_rawDesc = "" +
 	" \x01(\x01H\x03R\x02gt\x88\x01\x01\x12\x15\n" +
 	"\x03gte\x18\v \x01(\x01H\x04R\x03gte\x88\x01\x01\x12\x13\n" +
 	"\x02lt\x18\f \x01(\x01H\x05R\x02lt\x88\x01\x01\x12\x15\n" +
-	"\x03lte\x18\r \x01(\x01H\x06R\x03lte\x88\x01\x01\x12\x18\n" +
+	"\x03lte\x18\r \x01(\x01H\x06R\x03lte\x88\x01\x01\x12 \n" +
+	"\tmin_items\x18J \x01(\rH\aR\bminItems\x88\x01\x01\x12 \n" +
+	"\tmax_items\x18K \x01(\rH\bR\bmaxItems\x88\x01\x01\x12\x18\n" +
 	"\apattern\x18\x0e \x01(\tR\apattern\x12\"\n" +
 	"\rzero_is_value\x18\" \x01(\bR\vzeroIsValue\x12\x12\n" +
 	"\x04gdpr\x18# \x01(\bR\x04gdpr\x12\x1c\n" +
 	"\tsensitive\x18$ \x01(\bR\tsensitive\x12\x18\n" +
 	"\achoices\x18\x10 \x01(\tR\achoices\x12\x1c\n" +
 	"\tprecision\x18\x11 \x01(\x05R\tprecision\x12\x19\n" +
-	"\x05scale\x18\x12 \x01(\x05H\aR\x05scale\x88\x01\x01\x12\x1a\n" +
+	"\x05scale\x18\x12 \x01(\x05H\tR\x05scale\x88\x01\x01\x12\x1a\n" +
 	"\bcurrency\x18% \x01(\tR\bcurrency\x12%\n" +
 	"\x0ecurrency_field\x18& \x01(\tR\rcurrencyField\x12'\n" +
 	"\x0edefault_string\x18\x14 \x01(\tH\x00R\rdefaultString\x12!\n" +
@@ -2639,7 +2673,11 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x03_gtB\x06\n" +
 	"\x04_gteB\x05\n" +
 	"\x03_ltB\x06\n" +
-	"\x04_lteB\b\n" +
+	"\x04_lteB\f\n" +
+	"\n" +
+	"_min_itemsB\f\n" +
+	"\n" +
+	"_max_itemsB\b\n" +
 	"\x06_scaleJ\x04\b\x03\x10\x04J\x04\b\x0f\x10\x10R\x02fkR\n" +
 	"orphanable\"V\n" +
 	"\x11ValidationMessage\x12'\n" +
@@ -2686,7 +2724,7 @@ const file_w17_field_proto_rawDesc = "" +
 	"\vAutoChoices\x12\x1c\n" +
 	"\x18AUTO_CHOICES_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fACL_PERMISSIONS\x10\x01\x12\x16\n" +
-	"\x12ACL_PERMISSION_IDS\x10\x02*\xaa\x05\n" +
+	"\x12ACL_PERMISSION_IDS\x10\x02*\xde\x05\n" +
 	"\x0eValidationType\x12\x1f\n" +
 	"\x1bVALIDATION_TYPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13VALIDATION_REQUIRED\x10\x01\x12\x14\n" +
@@ -2710,7 +2748,9 @@ const file_w17_field_proto_rawDesc = "" +
 	"\x1cVALIDATION_DECIMAL_PRECISION\x10\x1a\x12\x16\n" +
 	"\x12VALIDATION_CHOICES\x10\x1e\x12\x13\n" +
 	"\x0fVALIDATION_ENUM\x10\x1f\x12\x1d\n" +
-	"\x19VALIDATION_PATH_EXTENSION\x10(\x12\x15\n" +
+	"\x19VALIDATION_PATH_EXTENSION\x10(\x12\x18\n" +
+	"\x14VALIDATION_MIN_ITEMS\x10<\x12\x18\n" +
+	"\x14VALIDATION_MAX_ITEMS\x10=\x12\x15\n" +
 	"\x11VALIDATION_UNIQUE\x102\x12\x1b\n" +
 	"\x17VALIDATION_FK_VIOLATION\x103\x12\x17\n" +
 	"\x13VALIDATION_NOT_NULL\x104\x12\x1f\n" +
