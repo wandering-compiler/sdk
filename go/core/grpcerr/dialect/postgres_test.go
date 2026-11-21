@@ -7,6 +7,17 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// pqError has the shape of lib/pq's *pq.Error, which storage generated
+// before 0.2 raises: a SQLState method and Constraint / Table / Column
+// fields. The SDK recognises it by that shape and does not import lib/pq.
+type pqError struct {
+	Code                      string
+	Constraint, Table, Column string
+}
+
+func (e *pqError) Error() string    { return "pq: " + e.Code }
+func (e *pqError) SQLState() string { return e.Code }
+
 // PG fixtures recorded 2026-05-09 against PostgreSQL 18 in
 // docker (w17-schemas-pg18). See db-error-classification-
 // portability.md "Empirical evidence" for the SQL that
@@ -76,6 +87,18 @@ func TestParsePg_Pgx_NotNull(t *testing.T) {
 	}
 	if len(ce.Columns) != 1 || ce.Columns[0] != "email" {
 		t.Errorf("Columns = %v", ce.Columns)
+	}
+}
+
+func TestParsePg_LibPq_Unique(t *testing.T) {
+	err := &pqError{
+		Code:       "23505",
+		Constraint: "probe_users_email_unique",
+		Table:      "probe_users",
+	}
+	ce, ok := ParsePg(err)
+	if !ok || ce.Name != "probe_users_email_unique" {
+		t.Fatalf("lib/pq path broke: %+v ok=%v", ce, ok)
 	}
 }
 

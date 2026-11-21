@@ -21,7 +21,7 @@ func TestScanArray_PostgresLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var (
 		s  []string

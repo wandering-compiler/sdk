@@ -1249,7 +1249,7 @@ returns the same connection unless it was closed.
 
 **Code.** `go/core/grpcerr/wrap.go` — `Wrap`, `ConstraintRegistry`, `UserMsgid`, `Vocabulary`, `RecoverPanic`, `RecoverPump`; `go/core/grpcerr/dialect` — per-driver classification.
 
-**Purpose.** Translates driver errors (Postgres via pgx, MySQL, SQLite) into gRPC
+**Purpose.** Translates driver errors (Postgres via pgx, and lib/pq for storage generated before 0.2, recognised by shape; MySQL; SQLite) into gRPC
 statuses carrying a user-facing `w17.ErrorDetail` and an operator-facing message.
 
 **Configuration.** `ConstraintRegistry` (generated): `ByName`, `ByColumns`, `SoleFKByTable` with
