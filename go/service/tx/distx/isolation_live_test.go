@@ -11,7 +11,7 @@ import (
 	"time"
 
 	mysqldrv "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/wandering-compiler/sdk/go/lib/dbsession"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
@@ -33,7 +33,7 @@ func liveServerDSN(t *testing.T, env string) string {
 
 func openLivePG(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("postgres", dbsession.ApplyPGDSNParams(liveServerDSN(t, "W17_PG_DSN")))
+	db, err := sql.Open("pgx", dbsession.ApplyPGDSNParams(liveServerDSN(t, "W17_PG_DSN")))
 	if err != nil {
 		t.Fatal(err)
 	}

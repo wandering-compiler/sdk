@@ -12,7 +12,7 @@ import (
 	"time"
 
 	mysqldrv "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
 	"github.com/wandering-compiler/sdk/go/lib/dpop"
@@ -176,7 +176,7 @@ func liveDSN(t *testing.T, env string) string {
 }
 
 func TestSQLJTIStore_Contract_PostgresLive(t *testing.T) {
-	db, err := sql.Open("postgres", liveDSN(t, "W17_PG_DSN"))
+	db, err := sql.Open("pgx", liveDSN(t, "W17_PG_DSN"))
 	if err != nil {
 		t.Fatal(err)
 	}

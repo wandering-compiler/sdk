@@ -15,7 +15,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/dqlbind"
@@ -789,13 +788,8 @@ func lookupRegistry(r *ConstraintRegistry, ce *dialect.ConstraintError) (Constra
 func isDataException(err error, d Dialect) bool {
 	switch d {
 	case DialectPostgres:
-		var pgxErr *pgconn.PgError
-		if errors.As(err, &pgxErr) {
-			return isPgDataException(pgxErr.Code)
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return isPgDataException(string(pqErr.Code))
+		if pe, ok := dialect.PgSQLError(err); ok {
+			return isPgDataException(pe.Code)
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
@@ -860,13 +854,8 @@ func isPgDataException(code string) bool {
 func isLockNotAvailable(err error, d Dialect) bool {
 	switch d {
 	case DialectPostgres:
-		var pgxErr *pgconn.PgError
-		if errors.As(err, &pgxErr) {
-			return pgxErr.Code == "55P03"
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return pqErr.Code == "55P03"
+		if pe, ok := dialect.PgSQLError(err); ok {
+			return pe.Code == "55P03"
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
@@ -880,13 +869,8 @@ func isLockNotAvailable(err error, d Dialect) bool {
 func isRetryable(err error, d Dialect) bool {
 	switch d {
 	case DialectPostgres:
-		var pgxErr *pgconn.PgError
-		if errors.As(err, &pgxErr) {
-			return pgxErr.Code == "40001" || pgxErr.Code == "40P01"
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return pqErr.Code == "40001" || pqErr.Code == "40P01"
+		if pe, ok := dialect.PgSQLError(err); ok {
+			return pe.Code == "40001" || pe.Code == "40P01"
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
