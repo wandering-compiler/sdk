@@ -95,6 +95,9 @@ type Server struct {
 	// (SetToolMethod), told to the auth method as the call's method.
 	toolMethods map[string]string
 
+	// cursorKey signs the cursors of paged tools (SetCursorKey).
+	cursorKey []byte
+
 	// resource and resourceURL make the HTTP transport an OAuth protected
 	// resource (SetResourceServer, resource.go); nil = not one.
 	resource    *ResourceServer

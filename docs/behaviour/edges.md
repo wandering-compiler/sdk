@@ -1005,7 +1005,7 @@ is bounded without a global cap.
 
 ## E27. MCP server and transports
 
-**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`; `go/lib/mcp/sessions.go` — `SetSessionLimits`, `SessionLimits`.
+**Code.** `go/lib/mcp/server.go` — `NewServer`, `ServeStreamableHTTP`, `CallUnary`, `RecoverTool`; `go/lib/mcp/errors.go`; `go/lib/mcp/bodylimit.go` — `SetMaxRequestBodyBytes`; `go/lib/mcp/sessions.go` — `SetSessionLimits`, `SessionLimits`; `go/lib/mcp/paged.go` — `CallPaged`, `PagedTool`, `SetCursorKey`.
 
 **Purpose.** Runs generated MCP tool proxies over stdio or streamable HTTP; each tool call is a
 unary gRPC call using the w17 JSON dialect.
@@ -1047,9 +1047,14 @@ unary gRPC call using the w17 JSON dialect.
 | E27.13 | A streamable HTTP session that no request touched for the idle TTL, and that has no open notification stream, MUST be ended with all of its transport state (as a client's DELETE ends it); a session in use MUST be kept, and one whose stream ended goes idle from then | `TestServeStreamableHTTP_IdleSessionIsEnded`, `TestServeStreamableHTTP_OpenStreamKeepsItsSession` |
 | E27.14 | The live sessions MUST stay within the per-address and the per-process cap: a request that would open one more is refused (429 per address, 503 in total, both with `Retry-After`) before the MCP library keeps anything; requests on a live session pass at the cap; an ended session frees its slot. On a protected resource (E28) the token check runs first, so a caller without a token takes no slot | `TestServeStreamableHTTP_SessionsAreCapped`, `TestSessionLimits_EnvAndDefaults` |
 | E27.15 | The HTTP transport MUST refuse (403) a request whose browser `Origin` is not allowed — by default every one, the endpoint's own included, since a DNS-rebound page is same-origin by its Host — before a session is opened; a request without `Origin` MUST be served; a listed origin is served exactly as written, `*` accepts any, and the environment lists them when the code did not | `TestServeStreamableHTTP_RefusesAForeignOrigin`, `TestServeStreamableHTTP_AllowedOrigins` |
+| E27.16 | A paged tool (`CallPaged`) MUST page as the REST endpoint of its method does (E23 and the generated REST handler): the `limit` argument clamped to the maximum and echoed in `paging.limit`, the default when omitted; the keyset boundaries, the limit and a cursor's cached total sent to the backend as paging metadata; `next_cursor` only on a full forward page or a backward one, `previous_cursor` only on a resumed page, a backward page returned in forward order, and an empty resumed page handing back a cursor the way the caller came. A `cursor` restores the request it was minted from; the other arguments are not read while one is given | `TestCallPaged_WalksForwardAndBackLikeREST`, `TestCallPaged_DefaultAndClampedLimit`, `TestCallPaged_AnEmptyResumedPageHandsBackTheWayItCame` |
+| E27.17 | A paged tool's cursor MUST be signed (`SetCursorKey`) for the caller it was minted for — the user (`user_id`, field 2 of the auth response), the scopes and the broadcast labels of the call's auth metadata — and presented by another caller MUST be refused `INVALID_ARGUMENT` with a detail naming the argument | `TestCallPaged_ACursorOfAnotherCallerIsRefused` |
+| E27.18 | A `cursor` that is not a string or does not decode, and a `limit` that is not a whole non-negative number, MUST be refused `INVALID_ARGUMENT` with a detail naming the argument, before the backend is called. The arguments are read in both shapes a call hands them over: decoded, and the raw JSON the HTTP transport captures | `TestCallPaged_ALimitThatIsNoPageSizeIsRefused`, `TestCallPaged_ReadsTheArgumentsTheHTTPTransportHandsOver` |
 
 **Deliberate limits.**
 - Unary tools only.
+- A paged tool runs the one ORDER BY of its method (sort selector 0); a cursor minted under
+  another one is refused.
 - Session bounds are per process. A request naming a session this process does not hold is served
   without one (the transport validates the id's form only, so a session from another replica keeps
   working) and keeps nothing.
