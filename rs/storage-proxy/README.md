@@ -191,12 +191,12 @@ The routing **decision** is the pure function
 it has no I/O, so the whole routing table is unit-tested from
 `(path, conn_id, map-state)`.
 
-## Not in this slice
+## Not covered here
 
-Prod codegen materialization into Compose/k8s (S4) — including wiring
+Prod codegen materialization into Compose/k8s — including wiring
 `W17_OTEL_ENDPOINT` into the proxy service env, the Go client-side
-`distx.Begin` helper (S3), and the live multi-replica end-to-end proof
-(S6). Mutual TLS to replicas is out of scope: the proxy speaks plaintext
-prior-knowledge h2 to in-cluster replicas. OTEL (this slice, S5) is done:
+`distx.Begin` helper, and the live multi-replica end-to-end proof. Mutual
+TLS to replicas is out of scope: the proxy speaks plaintext
+prior-knowledge h2 to in-cluster replicas. OTEL is done:
 trace-context propagation (always), metrics (when an endpoint is set),
 and opt-in/sampled per-RPC spans.

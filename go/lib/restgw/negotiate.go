@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Content negotiation (C9). The REST gateway speaks JSON by
+// Content negotiation. The REST gateway speaks JSON by
 // default and binary protobuf on demand. The format is chosen
 // per request from the standard HTTP headers — JSON clients
 // (curl, browsers, existing FE) never send the protobuf media
@@ -42,7 +42,7 @@ type WireFormat int
 
 const (
 	// WireJSON — protojson encoding (the default + only format
-	// pre-C9). Content-Type `application/json`.
+	// before content negotiation). Content-Type `application/json`.
 	WireJSON WireFormat = iota
 	// WireProto — binary protobuf encoding. Content-Type
 	// `application/protobuf`.

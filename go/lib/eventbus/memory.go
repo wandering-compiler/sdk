@@ -86,7 +86,7 @@ type MemoryBus struct {
 
 	// drops tallies dropped emits per channel for
 	// observability fallback queries (`bus.Drops()`); the
-	// Observer interface (E7) is the primary push surface.
+	// Observer interface is the primary push surface.
 	drops map[string]int64
 
 	// observer is the metric/log callback surface. Always

@@ -173,8 +173,8 @@ type NatsBus struct {
 	// reach the DLQ, not be skipped because someone else is holding the same
 	// sequence.
 	//
-	// A-P9-1: this map is a process-LOCAL fast path only. It cannot see a
-	// handler mid-run on another replica (the advisory queue group is
+	// This map is a process-LOCAL fast path only. It cannot see a handler
+	// mid-run on another replica (the advisory queue group is
 	// cluster-wide), and it is not yet set for deliveries parked in the
 	// client prefetch buffer. The load-bearing, replica-agnostic guard is
 	// the broker-shared poison-outcome claim — see claimPoisonOutcome.
@@ -637,8 +637,8 @@ type natsSubscriber struct {
 // second chance, unlike the Redis poller's next tick). The registry lives on
 // the BUS, keyed by consumer identity — see [NatsBus.inFlight]; it is the
 // same-process fast path in front of the broker-shared poison-outcome claim
-// (A-P9-1, claimPoisonOutcome), which is what actually holds across replicas
-// and prefetch buffers.
+// (claimPoisonOutcome), which is what actually holds across replicas and
+// prefetch buffers.
 func (s *natsSubscriber) markInFlight(consumer string, seq uint64) func() {
 	key := natsInFlightKey(s.channel, consumer, seq)
 	s.bus.inFlight.Store(key, struct{}{})
@@ -657,19 +657,19 @@ func (s *natsSubscriber) inFlightBusy(consumer string, seq uint64) bool {
 // consumer, seq): first claimant owns it, via KV Create (create-if-absent).
 // Returns whether THIS caller won the claim.
 //
-// A-P9-1: the in-flight sync.Map alone cannot make the DLQ decision safe —
-// it is process-local (a MAX_DELIVERIES advisory rides a cluster-wide queue
-// group and can land on a replica that never marked the message), and it is
-// not yet set while the message sits prefetched in the client buffer with
-// the server's AckWait clock running. The broker offers no terminal-state
-// oracle to re-check either: at the instant the advisory fires the server
-// has ALREADY removed the message from ack-pending and moved the ack floor
-// past it (hasMaxDeliveries), a later ack is void and leaves no per-message
-// trace (only the aggregate NumRedelivered, masked to 0 for MaxDeliver=1),
-// and under LimitsPolicy GetMsg happily serves an already-succeeded message
-// — verified against nats-server v2.14.2 source + an embedded-server probe.
-// So the DECISION itself is made atomic instead: the delivery path claims
-// before running a final-attempt handler, the advisory path claims before
+// The in-flight sync.Map alone cannot make the DLQ decision safe — it is
+// process-local (a MAX_DELIVERIES advisory rides a cluster-wide queue group
+// and can land on a replica that never marked the message), and it is not yet
+// set while the message sits prefetched in the client buffer with the
+// server's AckWait clock running. The broker offers no terminal-state oracle
+// to re-check either: at the instant the advisory fires the server has
+// ALREADY removed the message from ack-pending and moved the ack floor past
+// it (hasMaxDeliveries), a later ack is void and leaves no per-message trace
+// (only the aggregate NumRedelivered, masked to 0 for MaxDeliver=1), and
+// under LimitsPolicy GetMsg happily serves an already-succeeded message —
+// verified against nats-server v2.14.2 source + an embedded-server probe. So
+// the DECISION itself is made atomic instead: the delivery path claims before
+// running a final-attempt handler, the advisory path claims before
 // dead-lettering, and the loser defers entirely.
 func (s *natsSubscriber) claimPoisonOutcome(ctx context.Context, consumer string, seq uint64, role string) (bool, error) {
 	kv, err := s.bus.ensureDLQClaims(ctx)
@@ -914,7 +914,7 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 		return err
 	}
 	// The poison-outcome claim bucket both DLQ authorities (consume path +
-	// advisory) arbitrate through (A-P9-1). Created eagerly so config/broker
+	// advisory) arbitrate through. Created eagerly so config/broker
 	// failures surface here rather than inside the first advisory callback.
 	if _, err := s.bus.ensureDLQClaims(ctx); err != nil {
 		return err
@@ -982,20 +982,20 @@ func (s *natsSubscriber) Subscribe(ctx context.Context, topicFilter string, h Ha
 			defer release()
 		}
 
-		// A-P9-1 — on the FINAL delivery attempt, claim this message's
-		// terminal outcome BEFORE running the handler. The claim is
-		// broker-shared, so it is visible to the advisory handler on ANY
-		// replica (the in-flight mark above is not), and it closes the
-		// prefetch window: if the MAX_DELIVERIES advisory already claimed
-		// (and dead-lettered) this message while it sat past AckWait in
-		// our client buffer, the delivery we are holding is a zombie —
-		// running its handler would report a success for a message that
-		// was just dropped, the incoherent drop+success this guard exists
-		// to prevent. Skip the handler and Ack to settle the client side;
-		// the drop was already surfaced by the advisory's OnDrop. A claim
-		// ERROR proceeds as before the claim existed: at-least-once bias,
-		// and the window is no worse than the pre-claim code. Below the
-		// cap no claim is taken — the happy path pays no broker RTT.
+		// On the FINAL delivery attempt, claim this message's terminal
+		// outcome BEFORE running the handler. The claim is broker-shared,
+		// so it is visible to the advisory handler on ANY replica (the
+		// in-flight mark above is not), and it closes the prefetch window:
+		// if the MAX_DELIVERIES advisory already claimed (and
+		// dead-lettered) this message while it sat past AckWait in our
+		// client buffer, the delivery we are holding is a zombie — running
+		// its handler would report a success for a message that was just
+		// dropped, the incoherent drop+success this guard exists to
+		// prevent. Skip the handler and Ack to settle the client side; the
+		// drop was already surfaced by the advisory's OnDrop. A claim ERROR
+		// proceeds as before the claim existed: at-least-once bias, and the
+		// window is no worse than the pre-claim code. Below the cap no
+		// claim is taken — the happy path pays no broker RTT.
 		// The topic's own retry, when its channel has one: a lower cap
 		// than the consumer's, and the delay before the next attempt.
 		// The consumer stops at the channel's MaxDeliver; a topic that
@@ -1397,7 +1397,7 @@ func (s *natsSubscriber) routeToDLQ(ctx context.Context, consumer string, adviso
 	// Acks (no DLQ); on failure at the cap it DLQs itself. Routing here
 	// would drop + OnDrop a message that may yet succeed. Mirrors the Redis
 	// in-flight guard. This is only the local fast path — the
-	// load-bearing, replica-agnostic guard is the claim below (A-P9-1).
+	// load-bearing, replica-agnostic guard is the claim below.
 	if s.inFlightBusy(consumer, adv.StreamSeq) {
 		return
 	}
@@ -1407,20 +1407,20 @@ func (s *natsSubscriber) routeToDLQ(ctx context.Context, consumer string, adviso
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// A-P9-1 — claim the poison outcome before dead-lettering. The
-	// process-local map above cannot see a handler mid-run on ANOTHER
-	// replica (the advisory queue group is cluster-wide), nor a delivery
-	// parked past AckWait in a client prefetch buffer that a handler will
-	// still pick up; and the broker keeps no re-checkable terminal state
-	// (at advisory time it has already ack-floored past the message, and a
-	// late ack leaves no per-message trace — see claimPoisonOutcome). If
-	// the claim is LOST, a delivery path owns/owned this message's outcome
-	// (its handler decides: Ack on success, DLQ on failure at the cap) —
-	// dead-lettering here would both double-report drops and drop messages
-	// that succeed. If the claim ERRORS, surface a deliver failure and do
-	// NOT dead-letter: acting without the claim reopens the drop+success
-	// incoherence, and any message a live client still holds reaches the
-	// DLQ through its delivery path anyway.
+	// Claim the poison outcome before dead-lettering. The process-local map
+	// above cannot see a handler mid-run on ANOTHER replica (the advisory
+	// queue group is cluster-wide), nor a delivery parked past AckWait in a
+	// client prefetch buffer that a handler will still pick up; and the
+	// broker keeps no re-checkable terminal state (at advisory time it has
+	// already ack-floored past the message, and a late ack leaves no
+	// per-message trace — see claimPoisonOutcome). If the claim is LOST, a
+	// delivery path owns/owned this message's outcome (its handler decides:
+	// Ack on success, DLQ on failure at the cap) — dead-lettering here
+	// would both double-report drops and drop messages that succeed. If the
+	// claim ERRORS, surface a deliver failure and do NOT dead-letter:
+	// acting without the claim reopens the drop+success incoherence, and
+	// any message a live client still holds reaches the DLQ through its
+	// delivery path anyway.
 	owned, claimErr := s.claimPoisonOutcome(ctx, consumer, adv.StreamSeq, natsDLQClaimRoleAdvisory)
 	if claimErr != nil {
 		s.bus.opts.Observer.OnDeliverFailure(s.channel, "", claimErr)

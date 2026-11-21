@@ -9,13 +9,13 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 )
 
-// T2-5 pass #16 (R16-6, A16-5). `required_schemas` decides what executes at a
-// production apply — prepareSchemas runs CREATE SCHEMA for every name in it —
-// and it rode OUTSIDE the content digest: three manifests that differed only
-// in it hashed to one digest, and an artifact whose list was edited on disk
-// passed the loader. The coverage gate's excuse for manifest_json ("the one
-// part the client ACTS on — required_extensions — IS hashed") went stale the
-// day schema prep became a second consumer.
+// `required_schemas` decides what executes at a production apply —
+// prepareSchemas runs CREATE SCHEMA for every name in it — and it rode OUTSIDE
+// the content digest: three manifests that differed only in it hashed to one
+// digest, and an artifact whose list was edited on disk passed the loader. The
+// coverage gate's excuse for manifest_json ("the one part the client ACTS on —
+// required_extensions — IS hashed") went stale the day schema prep became a
+// second consumer.
 //
 // The marker is a benign, attacker-named EMPTY namespace: what the measured
 // edit could do.

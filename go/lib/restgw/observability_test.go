@@ -45,7 +45,7 @@ func TestObservabilityMiddleware_EchoesIncomingID(t *testing.T) {
 // does — a special-char / overlong id enables log-forging once it
 // reaches RequestIDFromContext and any downstream log line. A malformed id must
 // be replaced with a fresh UUID, not echoed/correlated as-is.
-func TestObservabilityMiddleware_RejectsMalformedRequestID_B40(t *testing.T) {
+func TestObservabilityMiddleware_RejectsMalformedRequestID(t *testing.T) {
 	var seenID string
 	wrapped := restgw.ObservabilityMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenID = restgw.RequestIDFromContext(r.Context())

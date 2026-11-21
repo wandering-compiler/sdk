@@ -243,7 +243,7 @@ type CustomFunction struct {
 	// array_agg, bool_and). The DQL typechecker treats custom functions
 	// permissively (runtime PG enforces the signature), but a few rules need
 	// to know aggregate-ness — notably the (w17.db.lock) shape guard, since
-	// PostgreSQL rejects FOR UPDATE combined with an aggregate (F16-1-2).
+	// PostgreSQL rejects FOR UPDATE combined with an aggregate.
 	IsAggregate bool `protobuf:"varint,4,opt,name=is_aggregate,json=isAggregate,proto3" json:"is_aggregate,omitempty"`
 	// The author's promise that this function never returns NULL when every
 	// argument is non-NULL (DATE_TRUNC, REGEXP_REPLACE, ST_AsText …). The DQL

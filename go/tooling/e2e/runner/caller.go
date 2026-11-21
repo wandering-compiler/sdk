@@ -358,7 +358,7 @@ func rawWire(raw []byte, h http.Header) map[string]any {
 //
 // It exists because the runner carries no proto descriptors: a binary
 // protobuf body is opaque to it, so without these facts a scenario could
-// never assert that content negotiation (C9) actually happened — the
+// never assert that content negotiation actually happened — the
 // step would just fail to decode. A non-JSON body therefore yields ONLY
 // this field; there is nothing else the runner can honestly report.
 const WireKey = "w17_wire"

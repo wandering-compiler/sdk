@@ -1,6 +1,6 @@
 //! Env-driven configuration for the storage gRPC proxy.
 //!
-//! All knobs are read from the environment so the Go codegen (slice S4)
+//! All knobs are read from the environment so the Go codegen
 //! can wire them via Compose/k8s without recompiling the proxy.
 
 use std::net::SocketAddr;

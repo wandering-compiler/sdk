@@ -10,11 +10,11 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/mysql"
 )
 
-// T1-1 pass #51, A51-33 — MySQL commits each DDL statement on its own, so a
-// migration body that fails after one leaves it committed and the migration
-// unrecorded. The failure said nothing of it, and the retry the operator
-// reaches for wedges on the committed DDL (1050 "already exists") with the
-// bare server error. Both name what happened and the way out.
+// MySQL commits each DDL statement on its own, so a migration body that fails
+// after one leaves it committed and the migration unrecorded. The failure
+// said nothing of it, and the retry the operator reaches for wedges on the
+// committed DDL (1050 "already exists") with the bare server error. Both name
+// what happened and the way out.
 func TestApply_BodyFailureAfterDDLNamesTheCommittedStatements_Live(t *testing.T) {
 	dsn, admin := liveMySQL(t)
 	schema := strings.TrimPrefix(mustURL(t, dsn).Path, "/")

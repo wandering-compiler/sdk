@@ -33,7 +33,7 @@ func TestValidateCheckSQL(t *testing.T) {
 		}
 	}
 	refused := []q{
-		// round 5
+		// statement smuggling and side-effecting functions
 		{`SELECT 0; COMMIT; DELETE FROM "c"; SELECT 0`, my},
 		{`PRAGMA query_only = OFF; DELETE FROM "c"`, lite},
 		{`ATTACH '/tmp/x.db' AS x`, lite},
@@ -41,7 +41,7 @@ func TestValidateCheckSQL(t *testing.T) {
 		{`SELECT pg_sleep(100)`, pg},
 		{`SELECT pg_notify('c', 'x')`, pg},
 		{`WITH d AS (DELETE FROM "c" RETURNING 1) SELECT count(*) FROM d`, pg},
-		// round 6b: the denylist bypasses
+		// the denylist bypasses
 		{`SELECT "pg_terminate_backend"(1)`, pg},                     // quoted function name
 		{`SELECT count(*) FROM "c" WHERE "PG_SLEEP"(1) IS NULL`, pg}, // quoted, other case
 		{`SELECT pg_sleep /* x */ (100)`, pg},                        // a comment before the (

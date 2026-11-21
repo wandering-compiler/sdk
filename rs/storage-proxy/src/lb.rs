@@ -30,7 +30,7 @@ impl RoundRobin {
     }
 
     /// Number of replicas. Reserved for the `affinity_map_size` /
-    /// `replica_up` metrics (slice S5).
+    /// `replica_up` metrics.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.len

@@ -153,8 +153,8 @@ func runScript(ctx context.Context, applier Applier, m *applyfetchpb.Migration) 
 // the ledger rows whose post-tx half has not completed (PhasePending), read
 // only. Plan asks it because AppliedHead leaves those rows out, and a
 // half-applied migration the deploy does not continue — replaced in the
-// console, or above a lowered pin — was otherwise invisible to it (T1-1 pass
-// #51, A51-32). An applier without it is planned as before.
+// console, or above a lowered pin — was otherwise invisible to it. An
+// applier without it is planned as before.
 type PendingLister interface {
 	PendingMigrations(ctx context.Context) ([]string, error)
 }

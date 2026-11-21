@@ -163,10 +163,10 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	//
 	// Only violations the migration INTRODUCED fail it: more orphans of a key
 	// the database already had. A key the migration ADDS over a table that
-	// already held orphans is the case the migrator tolerates
-	// (fk-add-over-existing-rows) — Postgres adds it NOT VALID, MySQL with the
-	// checks off — so its orphans are reported, not refused; and orphans an
-	// earlier such key left behind must not fail every later rebuild.
+	// already held orphans is the case the migrator tolerates — Postgres adds
+	// it NOT VALID, MySQL with the checks off — so its orphans are reported,
+	// not refused; and orphans an earlier such key left behind must not fail
+	// every later rebuild.
 	if err := assertNoForeignKeyViolations(ctx, conn, m.GetUpSql(), m.GetId(), before); err != nil {
 		return err
 	}
@@ -423,9 +423,8 @@ func queryStrings(ctx context.Context, conn *sql.Conn, q string) ([]string, erro
 // a key the database had before (before, read by observeForeignKeysBefore)
 // with more violating rows than it had then. A key the migration added is
 // reported with its count and left as it is: the table held those rows
-// already, and the migrator adds such a key without refusing them
-// (fk-add-over-existing-rows). New writes are checked under foreign_keys=ON
-// either way.
+// already, and the migrator adds such a key without refusing them. New writes
+// are checked under foreign_keys=ON either way.
 func assertNoForeignKeyViolations(ctx context.Context, conn *sql.Conn, body, migID string, before *fkState) error {
 	if before == nil || !strings.Contains(body, "PRAGMA foreign_key_check") {
 		return nil

@@ -1432,7 +1432,7 @@ type Field struct {
 	//	*Field_DefaultDouble
 	//	*Field_DefaultAuto
 	Default isField_Default `protobuf_oneof:"default"`
-	// Allowed file extensions for FILE_PATH / IMAGE_PATH (D22d).
+	// Allowed file extensions for FILE_PATH / IMAGE_PATH.
 	// Case-insensitive, no leading dot ("jpg", not ".jpg"). Use ["*"] to
 	// disable the format CHECK (author documents "this is a path but any
 	// suffix is fine"). Ignored for non-path types. Default when unset

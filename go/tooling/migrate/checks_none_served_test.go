@@ -10,10 +10,10 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/stub"
 )
 
-// A51-30 (T1-1 pass #51): `--checks` was a silent no-op for a migration
-// that carries no checks — an older console (no field), a digest predating
-// check binding, or a MySQL / SQLite migration whose every probe the console
-// could not port (check_not_portable, in the plan only). The operator who set
+// `--checks` was a silent no-op for a migration that carries no checks — an
+// older console (no field), a digest predating check binding, or a MySQL /
+// SQLite migration whose every probe the console could not port
+// (check_not_portable, in the plan only). The operator who set
 // W17_MIGRATE_CHECKS=1 read "applied" as "guarded". The run now says so, and
 // names the probes the console left out.
 func TestRun_ChecksSayWhenNoneWereServed(t *testing.T) {

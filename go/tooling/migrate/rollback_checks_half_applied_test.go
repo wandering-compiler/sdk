@@ -36,12 +36,11 @@ func (p *pendingCheckingApplier) RunCheck(ctx context.Context, sql, body string)
 	return p.checkingApplier.RunCheck(ctx, sql, body)
 }
 
-// T1-1 pass #51, Q51-3 (C51-8 + A51-34's second half) — `rollback --checks` of
-// a half-applied migration ran its down probes, which the planner renders
-// against the fully-applied schema; an unfinished skirt does not have it, the
-// probe could not run, and --checks refused the very rollback the half-applied
-// migration's failure text names. As on apply, the probes of a half-applied
-// migration are not run; the run says so.
+// `rollback --checks` of a half-applied migration ran its down probes, which
+// the planner renders against the fully-applied schema; an unfinished skirt
+// does not have it, the probe could not run, and --checks refused the very
+// rollback the half-applied migration's failure text names. As on apply, the
+// probes of a half-applied migration are not run; the run says so.
 func TestRollback_ChecksSkipAHalfAppliedMigrationsDownProbes(t *testing.T) {
 	m := checkedMigration()
 	dir := seedDir(t, m)

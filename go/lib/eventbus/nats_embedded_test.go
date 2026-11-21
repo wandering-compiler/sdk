@@ -775,9 +775,9 @@ func TestNatsBus_SlowFailureAtCapStillDLQs_Embedded(t *testing.T) {
 }
 
 // topicOutcomes counts the deliver-success and drop records for one topic —
-// the A-P9-1 tests must assert PER MESSAGE coherence (one message must never
-// be reported both dropped and delivered), which the aggregate snapshots()
-// cannot express.
+// the poison-outcome claim tests must assert PER MESSAGE coherence (one
+// message must never be reported both dropped and delivered), which the
+// aggregate snapshots() cannot express.
 func topicOutcomes(obs *recordingObserver, topic string) (successes, drops int) {
 	obs.mu.Lock()
 	defer obs.mu.Unlock()
@@ -794,14 +794,14 @@ func topicOutcomes(obs *recordingObserver, topic string) (successes, drops int) 
 	return successes, drops
 }
 
-// INVARIANT (A-P9-1, prefetch variant): a message that sits in the client's
-// prefetch buffer past its AckWait at the delivery cap — because an earlier
-// message's handler is hogging the consume callback — must reach exactly ONE
-// terminal outcome. The server fires its MAX_DELIVERIES advisory while the
-// message is buffered and unstarted, so the process-local in-flight mark does
-// not exist yet; without a broker-shared claim the advisory dead-letters the
-// message IN THE VERY PROCESS that then runs its handler successfully — one
-// message reported both dropped and delivered.
+// INVARIANT (poison-outcome claim, prefetch variant): a message that sits in
+// the client's prefetch buffer past its AckWait at the delivery cap — because
+// an earlier message's handler is hogging the consume callback — must reach
+// exactly ONE terminal outcome. The server fires its MAX_DELIVERIES advisory
+// while the message is buffered and unstarted, so the process-local in-flight
+// mark does not exist yet; without a broker-shared claim the advisory
+// dead-letters the message IN THE VERY PROCESS that then runs its handler
+// successfully — one message reported both dropped and delivered.
 func TestNatsBus_AdvisoryWhileBuffered_NoDropPlusSuccess_Embedded(t *testing.T) {
 	obs := &recordingObserver{}
 	bus, err := eventbus.NewNatsBus(eventbus.NatsBusOptions{
@@ -863,7 +863,7 @@ func TestNatsBus_AdvisoryWhileBuffered_NoDropPlusSuccess_Embedded(t *testing.T) 
 
 	s, d := topicOutcomes(obs, "victim")
 	if s > 0 && d > 0 {
-		t.Errorf("victim reported BOTH delivered (%d) and dropped (%d) — A-P9-1 incoherent drop+success (victim handler ran %d times)",
+		t.Errorf("victim reported BOTH delivered (%d) and dropped (%d) — incoherent drop+success (victim handler ran %d times)",
 			s, d, victimRuns.Load())
 	}
 	if s+d == 0 {
@@ -874,10 +874,10 @@ func TestNatsBus_AdvisoryWhileBuffered_NoDropPlusSuccess_Embedded(t *testing.T) 
 	}
 }
 
-// INVARIANT (A-P9-1, cross-replica variant): the MAX_DELIVERIES advisory
-// rides a cluster-wide queue group keyed on the shared durable name, so it
-// can land on a replica that never marked the message in flight while the
-// handler is still running on its sibling. Each message must still reach
+// INVARIANT (poison-outcome claim, cross-replica variant): the MAX_DELIVERIES
+// advisory rides a cluster-wide queue group keyed on the shared durable name,
+// so it can land on a replica that never marked the message in flight while
+// the handler is still running on its sibling. Each message must still reach
 // exactly one terminal outcome. Two buses sharing one DurablePrefix model the
 // two replicas; every handler overruns AckWait on its only delivery and then
 // succeeds, so on unfixed code every advisory that crosses replicas
@@ -956,7 +956,7 @@ func TestNatsBus_CrossReplicaAdvisory_NoDropPlusSuccess_Embedded(t *testing.T) {
 		s, d := outcomes(topic)
 		total += s + d
 		if s > 0 && d > 0 {
-			t.Errorf("%s reported BOTH delivered (%d) and dropped (%d) — A-P9-1 incoherent drop+success across replicas", topic, s, d)
+			t.Errorf("%s reported BOTH delivered (%d) and dropped (%d) — incoherent drop+success across replicas", topic, s, d)
 		}
 	}
 	if total < rounds {

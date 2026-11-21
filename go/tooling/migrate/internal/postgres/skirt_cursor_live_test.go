@@ -15,10 +15,10 @@ import (
 )
 
 // renameOntoFreedSlot is the skirt the migrator writes when a table takes the
-// name of a table it drops in the same migration, next to a concurrent index
-// (T1-1 pass #50, D50-2b): drop the old table, rename the other onto its name,
-// then tighten a column of the renamed table — the statement that fails on a
-// NULL row, inviting the documented "fix the row and deploy again".
+// name of a table it drops in the same migration, next to a concurrent index:
+// drop the old table, rename the other onto its name, then tighten a column
+// of the renamed table — the statement that fails on a NULL row, inviting the
+// documented "fix the row and deploy again".
 func renameOntoFreedSlot(id, ts string) *applyfetchpb.Migration {
 	return &applyfetchpb.Migration{
 		Id: id,
@@ -64,10 +64,10 @@ func skirtRows(t *testing.T, ctx context.Context, conn *pgx.Conn, q string) stri
 	return strings.Join(out, ";")
 }
 
-// P50-18 (R1: D50-1 + D50-2 + D50-2b) — a skirt that stopped part-way
-// resumes AFTER the statements it already ran. It used to run again from the
-// first: here the leading `DROP TABLE IF EXISTS "old_t"` dropped the renamed
-// table with its three rows, and the resume failed on `"t2" does not exist`.
+// A skirt that stopped part-way resumes AFTER the statements it already ran.
+// It used to run again from the first: here the leading `DROP TABLE IF EXISTS
+// "old_t"` dropped the renamed table with its three rows, and the resume
+// failed on `"t2" does not exist`.
 func TestApplier_SkirtResumesWhereItStopped_Live(t *testing.T) {
 	dsn := liveDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -149,10 +149,10 @@ func TestApplier_SkirtCursorBootstrapsAndRerunsAConcurrentPair_Live(t *testing.T
 	if err := a.Apply(ctx, plainMigration("20260101T000000Z", "2026-01-01T00:00:00Z")); err != nil {
 		t.Fatalf("Apply first: %v", err)
 	}
-	// Minted with the witness (T1-1 pass #51, Q51-1): the in-tx half alone
-	// leaves a NULL cursor, which under the witness means nothing ran.
+	// Minted with the witness: the in-tx half alone leaves a NULL cursor,
+	// which under the witness means nothing ran.
 	m := skirtMigration("20260201T000000Z", "2026-02-01T00:00:00Z")
-	m.UpPostTx = p51Witness + m.UpPostTx
+	m.UpPostTx = skirtWitnessStmt + m.UpPostTx
 	if err := a.Apply(ctx, &applyfetchpb.Migration{Id: m.Id, UpSql: m.UpSql}); err != nil {
 		t.Fatalf("in-transaction half: %v", err)
 	}

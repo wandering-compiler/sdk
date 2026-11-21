@@ -155,7 +155,7 @@ func FromTargets(specs []TargetSpec, opts ...option) migrate.ApplierFor {
 // right per-dialect Snapshotter for a connection name — the dev DB
 // lifecycle's snapshot-tier analogue of FromTargets. Dialect is
 // inferred from the same DSN scheme. Stores whose Dump/Restore adapter
-// has not landed yet (S2) route to a clear "not yet implemented"
+// has not landed yet route to a clear "not yet implemented"
 // error rather than a generic unrecognised-scheme one, so a partially
 // covered snapshot surfaces the specific gap.
 func SnapshotterFromTargets(specs []TargetSpec) migrate.SnapshotterFor {

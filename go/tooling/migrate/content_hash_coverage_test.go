@@ -41,8 +41,8 @@ func TestContentHash_EveryMigrationFieldIsHashedOrExcused(t *testing.T) {
 			"every lock pin on a release that changed nothing executable. The parts the client ACTS on " +
 			"ARE hashed, each as a sorted, deduplicated set: required_extensions (an empty list means " +
 			"\"proceed\", so stripping it would license a run the preflight refuses) and required_schemas " +
-			"(prepareSchemas CREATEs them at apply — TestContentHash_BindsTheSchemaSet; T2-5 pass #16 " +
-			"found it outside the digest once schema prep became the second consumer). A new manifest " +
+			"(prepareSchemas CREATEs them at apply — TestContentHash_BindsTheSchemaSet; " +
+			"it was left outside the digest when schema prep became the second consumer). A new manifest " +
 			"field the client acts on joins the digest the same way",
 		"id": "bound by ORDER instead: the console assigns ids monotonically per connection, " +
 			"and chainFromTarget requires them to increase along the chain. Hashing it would " +
