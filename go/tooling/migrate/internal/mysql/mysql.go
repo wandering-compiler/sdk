@@ -142,8 +142,8 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 		if err := a.execBody(ctx, up); err != nil {
 			err = withOrphanRepair(err)
 			if ddlStmtRe.MatchString(up) {
-				// T1-1 pass #51, A51-33: the BEGIN … COMMIT envelope does not
-				// hold DDL on MySQL; say what a failure after one leaves.
+				// The BEGIN … COMMIT envelope does not hold DDL on MySQL;
+				// say what a failure after one leaves.
 				return fmt.Errorf("mysql apply up_sql: %w\n"+
 					"  MySQL commits each DDL statement on its own (an implicit commit), so the statements of this body before the one that failed may be committed while migration %s is not recorded (its ledger INSERT did not run); a retry runs the body from its first statement and fails on what is already there (1050 \"already exists\", 1060 \"Duplicate column\")\n"+
 					"  fix: compare the database with the migration's up_sql: undo by hand the statements that committed, correct the cause and deploy again; or run the rest of the body by hand, its ledger INSERT included",
@@ -167,8 +167,8 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 // migration adds or re-adds with every row checked — a key the plan drops
 // and re-adds around a primary-key change or a column rebuild (MySQL has no
 // NOT VALID): rows an earlier migration added the key over with
-// FOREIGN_KEY_CHECKS off, or a parent row a step of this migration removed
-// (T1-1 pass #51 review R2). The bare server error names only the constraint.
+// FOREIGN_KEY_CHECKS off, or a parent row a step of this migration removed.
+// The bare server error names only the constraint.
 func withOrphanRepair(err error) error {
 	var me *gomysql.MySQLError
 	if !errors.As(err, &me) || me.Number != 1452 {

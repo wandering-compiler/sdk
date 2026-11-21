@@ -299,9 +299,9 @@ func (a *Applier) Apply(ctx context.Context, m *applyfetchpb.Migration) error {
 	if err := a.ensurePhaseColumn(ctx); err != nil {
 		return fmt.Errorf("postgres apply: ensure phase column: %w", err)
 	}
-	// A two-phase skirt needs the resume cursor; a role that cannot add it
-	// is refused BEFORE the in-tx half commits, so nothing is left pending
-	// (owner ruling O51-2, T1-1 pass #51). A ledger this body creates is the
+	// A two-phase skirt needs the resume cursor, and a skirt is never run
+	// untracked: a role that cannot add it is refused BEFORE the in-tx half
+	// commits, so nothing is left pending. A ledger this body creates is the
 	// role's own, and runSkirt adds the column after it.
 	if stmts := splitStatements(m.GetUpPostTx()); completesAPendingRow(stmts) {
 		exists, err := a.ledgerExists(ctx)
@@ -427,8 +427,8 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration, re
 	//
 	// PhaseFresh (no w17_migrations row yet) is a RUN case, not a skip: a
 	// PURE post-tx migration minted in the legacy layout (no in-tx half; the
-	// console has given every skirt a pending row since T1-1 pass #50,
-	// P50-18) carries its own w17_migrations INSERT at the end of the skirt,
+	// console has given every skirt a pending row since skirts got a resume
+	// cursor) carries its own w17_migrations INSERT at the end of the skirt,
 	// so nothing marked it pending. Gating on `== PhasePending` would have
 	// skipped it on a fresh apply, silently dropping the index + the
 	// bookkeeping row. Such a skirt has no resume point (runSkirt runs it
@@ -455,9 +455,9 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration, re
 // implicit-tx wrapping). For a half-applied migration (a pending
 // row with a recorded resume cursor, whose skirt operations are
 // marked) it skips the inverses of the operations that never ran
-// (rollbackPreTx, review R1-3).
+// (rollbackPreTx).
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
-	// A half-applied skirt undoes only what ran (rollbackPreTx, review R1-3).
+	// A half-applied skirt undoes only what ran (rollbackPreTx).
 	if err := a.rollbackPreTx(ctx, m); err != nil {
 		return err
 	}
@@ -642,9 +642,9 @@ func (a *Applier) Wipe(ctx context.Context, namespaces []string) error {
 		return fmt.Errorf("postgres Wipe: %w", err)
 	}
 	// The ledger is gone with its columns: the next one is created by a
-	// migration's own DDL, which may predate either column (review R1-6 —
-	// the cursor cache survived the wipe, so the next two-phase apply
-	// skipped the ALTER and failed 42703 on post_tx_done).
+	// migration's own DDL, which may predate either column. A cursor cache
+	// that survived the wipe made the next two-phase apply skip the ALTER
+	// and fail 42703 on post_tx_done.
 	a.phaseColEnsured = false
 	a.cursorColEnsured = false
 	a.undoColEnsured = false

@@ -14,7 +14,7 @@ use crate::lb::RoundRobin;
 
 /// gRPC method names on the distributed-tx service, matched as a `:path`
 /// suffix so the package prefix is irrelevant (contract-blind).
-/// Reserved for metrics/log labelling (slice S5); routing uses the
+/// Reserved for metrics/log labelling; routing uses the
 /// exact suffixes below.
 #[allow(dead_code)]
 const SVC: &str = "/w17.common.distx.W17DistributedTransaction/";

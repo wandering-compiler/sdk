@@ -88,9 +88,8 @@ func sortedKeys(set map[string]bool) []string {
 // Not `CREATE SCHEMA IF NOT EXISTS`: Postgres checks CREATE on the database
 // before it looks whether the schema exists, so a least-privilege deploy
 // role — ALL on its schema, no CREATE on the database — was refused on every
-// deploy with the schema there all along (T1-1 pass #51, A51-35). The
-// catalog is asked first; only a missing namespace is created, and only that
-// needs the privilege.
+// deploy with the schema there all along. The catalog is asked first; only a
+// missing namespace is created, and only that needs the privilege.
 func schemaPrepSQL(schemas []string) string {
 	tag := dollarTag(schemas)
 	var b strings.Builder
@@ -157,10 +156,10 @@ func pgQuoteIdent(name string) string {
 func prepareSchemas(ctx context.Context, ac *runApplierCache, pending []Pending) error {
 	byConn := map[string]map[string]bool{}
 	for _, p := range pending {
-		// T2-5 pass #16 (R16-6): only a schema list the migration's content
-		// digest binds is obeyed. One it does not bind — minted before the
-		// digest covered the list, or edited on disk — creates nothing: the
-		// migration's own DDL then names a missing namespace, loudly.
+		// Only a schema list the migration's content digest binds is
+		// obeyed. One it does not bind — minted before the digest covered
+		// the list, or edited on disk — creates nothing: the migration's own
+		// DDL then names a missing namespace, loudly.
 		if !schemasBound(p.Migration) {
 			if declared := requiredSchemasFromManifest(p.Migration.GetManifestJson()); len(declared) > 0 && ac.out != nil {
 				_, _ = fmt.Fprintf(ac.out, "apply %s: migration %s declares schema(s) %s that its content digest does not bind "+

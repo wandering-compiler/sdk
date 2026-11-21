@@ -66,13 +66,13 @@ func TestT_RegisteredLocale_TranslatesAndSubstitutes(t *testing.T) {
 	}
 }
 
-// B31-i18n-1: w17-language often carries a raw Accept-Language header (the
-// Accept-Language → w17-language rename), which browsers ALWAYS send as a
-// multi-value q-weighted list (e.g. "fr-FR,fr;q=0.9,cs;q=0.8"). An exact catalog
-// lookup on that whole string misses → every browser request fell back to the
-// default language. T must negotiate: parse the list (q-order) and pick the
+// w17-language often carries a raw Accept-Language header (the Accept-Language
+// → w17-language rename), which browsers ALWAYS send as a multi-value
+// q-weighted list (e.g. "fr-FR,fr;q=0.9,cs;q=0.8"). An exact catalog lookup on
+// that whole string misses → every browser request fell back to the default
+// language. T must negotiate: parse the list (q-order) and pick the
 // highest-priority tag that has a catalog (exact or base-language).
-func TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31(t *testing.T) {
+func TestT_AcceptLanguageMultiValue_NegotiatesCatalog(t *testing.T) {
 	resetState(t)
 	i18n.Register("cs", []byte(minimalPO("cs", "hello", "ahoj")))
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -82,7 +82,7 @@ func TestT_AcceptLanguageMultiValue_NegotiatesCatalog_B31(t *testing.T) {
 	}
 }
 
-func TestT_AcceptLanguageRegion_FallsBackToBase_B31(t *testing.T) {
+func TestT_AcceptLanguageRegion_FallsBackToBase(t *testing.T) {
 	resetState(t)
 	i18n.Register("en", []byte(minimalPO("en", "hello", "hi")))
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -92,7 +92,7 @@ func TestT_AcceptLanguageRegion_FallsBackToBase_B31(t *testing.T) {
 	}
 }
 
-// B6-i18n-1: T with an EMPTY msgid must return "" — never the .po header.
+// T with an EMPTY msgid must return "" — never the .po header.
 // In gettext the empty msgid ("") is reserved for the catalog's header
 // metadata (Content-Type, Language, …), so an unguarded lookupCatalog("")
 // returns that header. A caller translating a possibly-empty label would then

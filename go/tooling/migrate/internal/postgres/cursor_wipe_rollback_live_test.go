@@ -12,11 +12,11 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"
 )
 
-// T1-1 pass #50, review R1-6 — Wipe forgot that the ledger had the phase
-// column but not that it had the cursor column. One Applier: a two-phase
-// apply (the cursor column is added, and cached), a Wipe, a ledger created
-// again WITHOUT post_tx_done (its CREATE TABLE is the migration's own DDL),
-// and the next two-phase apply skipped the ALTER and refused the deploy:
+// Wipe forgot that the ledger had the phase column but not that it had the
+// cursor column. One Applier: a two-phase apply (the cursor column is added,
+// and cached), a Wipe, a ledger created again WITHOUT post_tx_done (its CREATE
+// TABLE is the migration's own DDL), and the next two-phase apply skipped the
+// ALTER and refused the deploy:
 // `postgres post-tx resume point: … column "post_tx_done" does not exist`.
 func TestApplier_WipeForgetsTheCursorColumn_Live(t *testing.T) {
 	dsn := liveDatabase(t)
@@ -43,15 +43,14 @@ func TestApplier_WipeForgetsTheCursorColumn_Live(t *testing.T) {
 	build()
 }
 
-// T1-1 pass #50, review R1-3 — a skirt that stopped at statement k: the
-// promised way out, `migrate rollback --to`, ran the WHOLE down_pre_tx, so the
-// inverse of an operation that never ran failed (here the inverse of the
-// unrun `ALTER TABLE t2 RENAME TO t` renames t — still the old table — onto
-// t2, which still exists: 42P07) and the rollback stopped half-way too. With
-// the migrator's operation markers, the rollback of a half-applied skirt runs
-// only the inverses of the operations the cursor records as started; without
-// them (a migration minted before) it runs every inverse, and a failing one
-// says why and what to do.
+// A skirt that stopped at statement k: the promised way out, `migrate
+// rollback --to`, ran the WHOLE down_pre_tx, so the inverse of an operation
+// that never ran failed (here the inverse of the unrun `ALTER TABLE t2 RENAME
+// TO t` renames t — still the old table — onto t2, which still exists: 42P07)
+// and the rollback stopped half-way too. With the migrator's operation
+// markers, the rollback of a half-applied skirt runs only the inverses of the
+// operations the cursor records as started; without them (a migration minted
+// before) it runs every inverse, and a failing one says why and what to do.
 func r1HalfAppliedSkirt(marked bool) *applyfetchpb.Migration {
 	const ts = "2026-02-01T00:00:00Z"
 	op := func(n string) string {
@@ -145,9 +144,9 @@ func TestApplier_RollbackOfAHalfAppliedSkirtSkipsTheUnrunInverses_Live(t *testin
 	}
 }
 
-// R1-3 — a cursor no cursor-aware applier recorded (NULL: an older applier
-// ran part of the skirt and recorded nothing) is not trusted: every inverse
-// runs, as before, and the failure says why.
+// A cursor no cursor-aware applier recorded (NULL: an older applier ran part
+// of the skirt and recorded nothing) is not trusted: every inverse runs, as
+// before, and the failure says why.
 func TestApplier_RollbackTrustsOnlyARecordedCursor_Live(t *testing.T) {
 	dsn := liveDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

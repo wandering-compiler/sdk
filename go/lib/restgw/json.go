@@ -134,7 +134,7 @@ var MaxRequestBodyBytes int64 = 10 << 20
 // bodies routinely carry trailing newlines, and some clients
 // pad bare `null` with whitespace.
 //
-// The body format is negotiated from Content-Type (C9): a
+// The body format is negotiated from Content-Type: a
 // protobuf media type decodes via binary proto.Unmarshal,
 // everything else (the default) via the JSON path. An
 // application/x-www-form-urlencoded body — what a browser's HTML
@@ -391,13 +391,13 @@ func WriteJSON(w http.ResponseWriter, status int, data []byte) {
 }
 
 // WriteResponse marshals a proto message and writes it with the
-// given HTTP status. The optional trailing request enables C9
+// given HTTP status. The optional trailing request enables
 // content negotiation: when present, the response format is
 // negotiated from its Accept header (binary protobuf when asked,
 // JSON otherwise); when omitted, the response is JSON. The arg is
 // variadic (pass at most one) purely for backward compatibility —
-// generated code that predates C9 calls `WriteResponse(w, status,
-// msg)` and keeps the historical JSON behaviour unchanged; the C9
+// generated code that predates negotiation calls `WriteResponse(w, status,
+// msg)` and keeps the historical JSON behaviour unchanged; the negotiating
 // gateway template passes the request as the trailing arg. Marshal
 // failures (proto3 data corruption) surface as a 500 JSON envelope.
 func WriteResponse(w http.ResponseWriter, status int, msg proto.Message, rOpt ...*http.Request) {
@@ -522,7 +522,7 @@ func writeNegotiated(ctx context.Context, w http.ResponseWriter, format WireForm
 // `omitFields` may be empty / nil (degenerates to plain
 // WriteResponse) so callers don't need a per-call branch.
 //
-// Format is negotiated from the optional trailing request (C9) the
+// Format is negotiated from the optional trailing request the
 // same way WriteResponse does — the omitted fields are cleared on
 // a clone before encoding in either wire format. The request arg
 // is variadic for backward compatibility (see WriteResponse).

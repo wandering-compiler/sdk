@@ -369,9 +369,9 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 // this deploy will not resume: one the chain does not hold above the head —
 // replaced in the console since, or above a pin that was lowered. AppliedHead
 // leaves such a row out, so without this Plan answered "nothing pending" over
-// committed DDL, or planned the replacement on top of it (T1-1 pass #51,
-// A51-32). The way out is the rollback that undoes the half-applied
-// migration: PlanRollback finds rows like it on its own.
+// committed DDL, or planned the replacement on top of it. The way out is the
+// rollback that undoes the half-applied migration: PlanRollback finds rows
+// like it on its own.
 func refuseHalfAppliedOffPlan(conn string, chain []*applyfetchpb.Migration, head string, halfApplied []string, replaced map[string]string) error {
 	sort.Strings(halfApplied)
 	for _, id := range halfApplied {
@@ -769,11 +769,11 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 		}
 	}
 	if len(run) == 0 {
-		// Never silent (T1-1 pass #51, A51-30): the operator asked for the
-		// guards, and "applied" must not read as "guarded" when none came —
-		// nothing to guard, a console or a stored digest older than the
-		// checks, or probes the console could not port to this dialect,
-		// which its plan names and are listed here.
+		// Never silent: the operator asked for the guards, and "applied"
+		// must not read as "guarded" when none came — nothing to guard, a
+		// console or a stored digest older than the checks, or probes the
+		// console could not port to this dialect, which its plan names and
+		// are listed here.
 		line := fmt.Sprintf("%s:   --checks: no %s check served for %s", verb, when, p.Migration.GetId())
 		if names := unportedChecks(p.Migration.GetManifestJson(), down); len(names) > 0 {
 			line += fmt.Sprintf("; the console could not port %d probe(s) to this dialect and left them out — verify by hand what they count: %s", len(names), strings.Join(names, ", "))
@@ -793,8 +793,8 @@ func runMigrationChecks(ctx context.Context, applier Applier, p Pending, down bo
 			// The down probes are rendered against the fully-applied schema
 			// (the post-up names), which a skirt that stopped part-way never
 			// produced: a probe naming them cannot run, and --checks refused
-			// the very rollback the half-applied migration's failure names
-			// (T1-1 pass #51, Q51-3). Not run, and said so.
+			// the very rollback the half-applied migration's failure names.
+			// Not run, and said so.
 			names := make([]string, 0, len(run))
 			for _, c := range run {
 				names = append(names, c.GetName())
@@ -942,9 +942,9 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		// this schema" gets no fake apply, because the alternative is
 		// recording the claim on the operator's word alone — which is the
 		// hand-written ledger INSERT this command replaces.
-		// The console renders a preflight for PostgreSQL only (T1-1 pass
-		// #51, A51-36): on any other store no fetch ever brings one, so the
-		// text must not send the operator to fetch.
+		// The console renders a preflight for PostgreSQL only: on any other
+		// store no fetch ever brings one, so the text must not send the
+		// operator to fetch.
 		fix := "the console renders one for PostgreSQL only, so --fake cannot record a migration on this store: apply it for real"
 		if isPostgresApplier(applier) {
 			fix = "fetch the migration again from a console that renders one (PostgreSQL only), or apply it for real"

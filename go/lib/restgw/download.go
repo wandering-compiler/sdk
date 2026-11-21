@@ -25,7 +25,7 @@ import (
 //
 // Fields[].BucketPath is the URL prefix segment between
 // `<URLPrefix>/` and the per-object key — uniqueness across
-// the slice is parser-enforced (Slice C2).
+// the slice is parser-enforced.
 type DownloadConfig struct {
 	// URLPrefix is the composed `<api.prefix><group.prefix><download.path>`
 	// — the same value Method.HTTPPath uses for unary endpoints.

@@ -72,9 +72,9 @@ func fkApplier(t *testing.T) (*sqlite.Applier, context.Context) {
 
 // TestApply_RebuildAddsFKOverOrphans_Reports — a rebuild that ADDS a key over
 // a table already holding a row that references nothing (an orphan) applies:
-// the migrator adds such a key without refusing the rows it finds
-// (fk-add-over-existing-rows; Postgres adds it NOT VALID, MySQL with the
-// checks off). The orphan stays, and a new one is still refused.
+// the migrator adds such a key without refusing the rows it finds (Postgres
+// adds it NOT VALID, MySQL with the checks off). The orphan stays, and a new
+// one is still refused.
 func TestApply_RebuildAddsFKOverOrphans_Reports(t *testing.T) {
 	a, ctx := fkApplier(t)
 	if err := a.Apply(ctx, &applyfetchpb.Migration{
@@ -103,7 +103,7 @@ func TestApply_RebuildAddsFKOverOrphans_Reports(t *testing.T) {
 	}
 }
 
-// TestApply_RebuildFKViolation_Caught (B4) — a 12-step rebuild runs its body
+// TestApply_RebuildFKViolation_Caught — a 12-step rebuild runs its body
 // under `foreign_keys=OFF`, so a rebuild that breaks a key the database
 // already enforced is NOT rejected during the copy. The emit body ends with
 // `PRAGMA foreign_key_check` before COMMIT, but that runs via Exec (rows

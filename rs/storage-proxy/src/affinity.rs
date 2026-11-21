@@ -140,7 +140,7 @@ impl AffinityMap {
     }
 
     /// Current number of (possibly-expired-but-not-yet-reaped) entries.
-    /// Exposed for the `affinity_map_size` metric (slice S5).
+    /// Exposed for the `affinity_map_size` metric.
     pub fn len(&self) -> usize {
         self.guard().len()
     }

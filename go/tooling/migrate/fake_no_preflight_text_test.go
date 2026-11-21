@@ -10,11 +10,11 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/stub"
 )
 
-// T1-1 pass #51, A51-36 (second half) — the refusal of --fake on a migration
-// with no adopt preflight sent every operator to "fetch the migration again
-// from a console that renders one (relational dialects only)". The console
-// renders one for PostgreSQL only: on MySQL or SQLite no fetch ever brings
-// one, and the text must say so instead of promising one.
+// The refusal of --fake on a migration with no adopt preflight sent every
+// operator to "fetch the migration again from a console that renders one
+// (relational dialects only)". The console renders one for PostgreSQL only:
+// on MySQL or SQLite no fetch ever brings one, and the text must say so
+// instead of promising one.
 func TestFake_NoPreflightRefusalNamesPostgreSQLOnly(t *testing.T) {
 	m := &applyfetchpb.Migration{
 		Id: "20260101T000000Z", Connection: "main",
