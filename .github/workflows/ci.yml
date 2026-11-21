@@ -3,8 +3,9 @@ name: ci
 on:
   # A change to Markdown alone builds and tests nothing, so it runs nothing.
   # Comments in code are not Markdown and still run everything.
+  # main is the released line (0.1.x), next the coming minor: both run on push.
   push:
-    branches: [main]
+    branches: [main, next]
     paths-ignore: ["**/*.md"]
   pull_request:
     paths-ignore: ["**/*.md"]
