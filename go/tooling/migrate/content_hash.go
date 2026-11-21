@@ -128,7 +128,7 @@ func ContentHashWithPreflight(up, upPostTx, downPreTx, downSql, prev string, sup
 	// lock would break on a release that changed nothing about what executes.
 	//
 	// What the client acts on is the required-extension set and the
-	// required-schema set (schema prep CREATEs those — T2-5 pass #16, R16-6),
+	// required-schema set (schema prep CREATEs those),
 	// and that is what gets hashed: each sorted and deduplicated, because the
 	// set is the semantics.
 	// Reordering it is not an edit anybody can act on, unlike `supersedes`
@@ -161,15 +161,15 @@ func ContentHashWithChecks(up, upPostTx, downPreTx, downSql, prev string, supers
 }
 
 // DigestFormula names the newest content-digest formula this build mints and
-// verifies: w17.content.v2 with the required-extension, required-schema
-// (sdk#169, T2-5 pass #16 R16-6), adopt-preflight and checks segments.
+// verifies: w17.content.v2 with the required-extension, required-schema,
+// adopt-preflight and checks segments.
 //
 // A digest refusal quotes it. A console moved to a NEWER formula mints digests
 // that a binary built against an older sdk/go recomputes differently, and
 // without the formula in the refusal that reads as an integrity failure
-// rather than "this build is older than the digest" (review F3). Bump it with
-// every new segment, together with the sdk_floor the console serves, so codegen
-// refuses a pin older than the formula.
+// rather than "this build is older than the digest". Bump it with every new
+// segment, together with the sdk_floor the console serves, so codegen refuses
+// a pin older than the formula.
 const DigestFormula = "w17.content.v2+reqext+reqschema+adoptpre+checks"
 
 // ChecksBound reports whether m's content_sha256 covers its checks —
@@ -204,7 +204,7 @@ func boundWithOrWithoutSchemas(m *applyfetchpb.Migration, preflight string, chec
 
 // schemasBound reports whether m's digest binds its required-schema set —
 // trivially so when it declares none. Schema prep and the Wiper act only on a
-// bound set (T2-5 pass #16, R16-6).
+// bound set.
 //
 // The segment was added after migrations declaring schemas had been minted,
 // and those digests must keep loading — the extension segment's lesson (see
@@ -271,9 +271,8 @@ func ContentHashMatches(up, upPostTx, downPreTx, downSql, prev string, supersede
 	}
 	// The pre-segment formulas: identical but for the extension set (minted
 	// before it was bound), and — for a migration declaring schemas — without
-	// the schema segment (T2-5 pass #16, R16-6). A digest accepted under the
-	// second does NOT bind the schema list, so nothing acts on that list:
-	// see schemasBound.
+	// the schema segment. A digest accepted under the second does NOT bind
+	// the schema list, so nothing acts on that list: see schemasBound.
 	if len(schemas) > 0 && contentHash(up, upPostTx, downPreTx, downSql, prev, supersedes, adoptSQL, "", exts, nil, nil) == want {
 		return true
 	}
@@ -356,7 +355,7 @@ func contentHash(up, upPostTx, downPreTx, downSql, prev string, supersedes []str
 	}
 	// The namespaces schema prep CREATEs at apply (prepareSchemas) — a set,
 	// like the extensions, and written only when non-empty so a migration
-	// declaring none keeps the digest it already had (T2-5 pass #16, R16-6).
+	// declaring none keeps the digest it already had.
 	if len(schemas) > 0 {
 		writeSeg(&b, "reqschema.n", strconv.Itoa(len(schemas)))
 		for _, s := range schemas {

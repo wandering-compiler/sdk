@@ -282,17 +282,17 @@ type Migration struct {
 	// body). A release gate compares it with the floor a project requires
 	// (`w17ctl migrate check --generated --planner-floor N`): a migration a
 	// console below the floor planned may lack a decision a newer one asks
-	// for — 2026-11-11, a console predating the data-loss decisions planned a
-	// NOT NULL tightening as a bare SET NOT NULL, and only a person noticed.
+	// for — a console predating the data-loss decisions planned a NOT NULL
+	// tightening as a bare SET NOT NULL, and only a person noticed.
 	// An opaque number to the client: it compares, it never interprets.
 	PlannerVersion uint32 `protobuf:"varint,5,opt,name=planner_version,json=plannerVersion,proto3" json:"planner_version,omitempty"`
 	// raw marks a hand-authored `push-raw` body. No planner decided it, so its
 	// planner_version is 0 and says nothing about a decision it may lack: a
-	// planner floor does not judge it (T1-1 pass #51, Q51-35 — the floor named
-	// every raw head as "minted below the floor" and sent the operator to
-	// `migrate replace`, which refuses a raw migration). False on a console
-	// that predates the field, and on a raw migration stored before the console
-	// recorded which pushes were raw.
+	// planner floor does not judge it (judging it named every raw head as
+	// "minted below the floor" and sent the operator to `migrate replace`,
+	// which refuses a raw migration). False on a console that predates the
+	// field, and on a raw migration stored before the console recorded which
+	// pushes were raw.
 	Raw           bool `protobuf:"varint,6,opt,name=raw,proto3" json:"raw,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

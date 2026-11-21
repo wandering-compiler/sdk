@@ -27,9 +27,9 @@ func (p *pendingListing) PendingMigrations(context.Context) ([]string, error) {
 	return out, nil
 }
 
-// A51-32 (T1-1 pass #51): AppliedHead leaves a half-applied (PhasePending)
-// migration out, and Plan judged the head only — so a half-applied
-// migration the deploy does not continue was invisible:
+// AppliedHead leaves a half-applied (PhasePending) migration out, and Plan
+// judged the head only — so a half-applied migration the deploy does not
+// continue was invisible:
 //
 //	(b) the lock lowered below it: "nothing pending", while its in-tx DDL is
 //	    committed and its skirt unfinished;
@@ -87,8 +87,9 @@ func TestPlan_RefusesAHalfAppliedMigrationTheDeployDoesNotContinue(t *testing.T)
 	})
 }
 
-// A51-32, live: the Postgres applier lists the half-applied rows of its
-// ledger, and a deploy pinned below one is refused rather than "up to date".
+// The same refusal, live: the Postgres applier lists the half-applied rows of
+// its ledger, and a deploy pinned below one is refused rather than "up to
+// date".
 func TestPlan_RefusesAHalfAppliedMigrationAboveThePin_Live(t *testing.T) {
 	dsn := fakePGDatabase(t)
 	ctx := context.Background()

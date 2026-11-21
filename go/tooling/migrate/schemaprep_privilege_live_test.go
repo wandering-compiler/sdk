@@ -14,12 +14,11 @@ import (
 	"github.com/wandering-compiler/sdk/go/tooling/migrate/internal/postgres"
 )
 
-// A51-35 (T1-1 pass #51): schema prep ran `CREATE SCHEMA IF NOT EXISTS` for
-// every namespace a pending migration declares, and Postgres checks CREATE on
-// the database BEFORE it looks whether the schema exists — so a
-// least-privilege deploy role (ALL on its schema, no CREATE on the database)
-// was refused on every deploy, the schema there all along. Prep creates only
-// the namespaces that are missing.
+// Schema prep ran `CREATE SCHEMA IF NOT EXISTS` for every namespace a pending
+// migration declares, and Postgres checks CREATE on the database BEFORE it
+// looks whether the schema exists — so a least-privilege deploy role (ALL on
+// its schema, no CREATE on the database) was refused on every deploy, the
+// schema there all along. Prep creates only the namespaces that are missing.
 func TestApply_SchemaPrepLeavesAnExistingSchemaToALeastPrivilegeRole_Live(t *testing.T) {
 	dsn := fakePGDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -109,7 +108,7 @@ func TestApply_SchemaPrepLeavesAnExistingSchemaToALeastPrivilegeRole_Live(t *tes
 	}
 }
 
-// A51-35, the creating leg: a missing namespace — with a quote, an
+// Schema prep, the creating leg: a missing namespace — with a quote, an
 // apostrophe and a dollar in its name — is created, and a second run leaves
 // it be.
 func TestApply_SchemaPrepCreatesAMissingSchema_Live(t *testing.T) {

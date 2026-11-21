@@ -510,7 +510,7 @@ func isCheckWordByte(c byte) bool {
 // the same reading the dev sync's guard gives them. The planner closes a
 // row-shape probe with `LIMIT 1` (it reads as "is there any"); inside the
 // count that capped the answer at one duplicate group whatever the table held,
-// so it is dropped there (T1-1 pass #51, A51-36).
+// so it is dropped there.
 func CheckCountSQL(sql string) string {
 	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
 	if strings.HasPrefix(strings.ToLower(body), "select count(*) from") {

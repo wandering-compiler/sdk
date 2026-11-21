@@ -398,11 +398,11 @@ func pgObserveColumns(ctx context.Context, conn PgxQuerier, schema, table string
 	// all. Without the two flags the one reads as a phantom default and the
 	// other as "no default", and the reconstruction plans against a lie.
 	//
-	// The KIND of each travels too (T1-1 pass #51): an identity may be
-	// ALWAYS (`attidentity = 'a'`), a PostgreSQL 18 generated column may be
-	// VIRTUAL (`attgenerated = 'v'`), and a PostgreSQL 18 NOT NULL may be a
-	// NOT VALID constraint (`contype = 'n'`, not validated) while attnotnull
-	// still says true. Each reads as the converged declared kind otherwise.
+	// The KIND of each travels too: an identity may be ALWAYS
+	// (`attidentity = 'a'`), a PostgreSQL 18 generated column may be VIRTUAL
+	// (`attgenerated = 'v'`), and a PostgreSQL 18 NOT NULL may be a NOT VALID
+	// constraint (`contype = 'n'`, not validated) while attnotnull still says
+	// true. Each reads as the converged declared kind otherwise.
 	// On an older server the three are simply false: no 'v', no 'n' rows.
 	rows, err := conn.Query(ctx, `
 		SELECT a.attname,

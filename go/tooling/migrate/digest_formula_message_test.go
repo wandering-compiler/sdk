@@ -10,13 +10,13 @@ import (
 	applyfetchpb "github.com/wandering-compiler/sdk/go/pb/applyfetch"
 )
 
-// Review F3 (T2-5 pass #16): sdk#169 put the required-schema set into the
-// digest. A console on the new formula mints digests a binary built against an
-// older sdk/go recomputes differently — and that binary's refusal read as an
-// integrity failure ("edited", "tampering"), never as "this build is older
-// than the digest". The refusal now names the newest formula this build knows
-// and the remedy (raise the sdk/go pin), so the NEXT formula change is
-// diagnosable from the refusal of every binary built from here on.
+// Adding the required-schema set to the digest changed its formula. A console
+// on the new formula mints digests a binary built against an older sdk/go
+// recomputes differently — and that binary's refusal read as an integrity
+// failure ("edited", "tampering"), never as "this build is older than the
+// digest". The refusal now names the newest formula this build knows and the
+// remedy (raise the sdk/go pin), so the NEXT formula change is diagnosable
+// from the refusal of every binary built from here on.
 func TestMismatchRefusals_NameTheDigestFormula(t *testing.T) {
 	m := &applyfetchpb.Migration{
 		Id: "0001_init", Connection: "main",

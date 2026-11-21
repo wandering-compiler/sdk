@@ -130,7 +130,7 @@ message CustomFunction {
   // array_agg, bool_and). The DQL typechecker treats custom functions
   // permissively (runtime PG enforces the signature), but a few rules need
   // to know aggregate-ness — notably the (w17.db.lock) shape guard, since
-  // PostgreSQL rejects FOR UPDATE combined with an aggregate (F16-1-2).
+  // PostgreSQL rejects FOR UPDATE combined with an aggregate.
   bool is_aggregate = 4;
 
   // The author's promise that this function never returns NULL when every

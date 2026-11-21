@@ -230,7 +230,7 @@ func WriteSSEGRPCErrorCtxWithTimeout(ctx context.Context, w http.ResponseWriter,
 
 // AcceptWebSocket upgrades the HTTP request to a WebSocket
 // connection with the project's standard options:
-//   - subprotocols: advertises `w17.pb` + `w17.json` (C9) so a
+//   - subprotocols: advertises `w17.pb` + `w17.json` so a
 //     browser client — which can't set request headers on a WS
 //     upgrade — negotiates the wire format via the subprotocol.
 //     coder/websocket echoes the first advertised protocol the
@@ -282,7 +282,7 @@ func wsReadLimit() int64 {
 }
 
 // WSFormat reports the wire format negotiated for a WS conn from
-// the accepted subprotocol (C9). `w17.pb` → WireProto; anything
+// the accepted subprotocol. `w17.pb` → WireProto; anything
 // else (including the empty subprotocol a JSON / legacy client
 // leaves) → WireJSON. Generated WS handlers compute this once
 // after AcceptWebSocket and thread it into the read/write pumps.
@@ -334,7 +334,7 @@ func WSWatchClientClose(ctx context.Context, conn *websocket.Conn) context.Conte
 
 // wsFormatOpt resolves a WS frame format from the optional trailing
 // arg (JSON when absent) — keeps WSReadProto / WSWriteProto
-// backward compatible with pre-C9 generated callers.
+// backward compatible with pre-negotiation generated callers.
 func wsFormatOpt(fmtOpt []WireFormat) WireFormat {
 	if len(fmtOpt) > 0 {
 		return fmtOpt[0]
@@ -343,10 +343,10 @@ func wsFormatOpt(fmtOpt []WireFormat) WireFormat {
 }
 
 // WSReadProto reads one WS message and unmarshals it into msg in
-// the negotiated format (C9): a binary frame via proto.Unmarshal
+// the negotiated format: a binary frame via proto.Unmarshal
 // when the format is WireProto, otherwise a text frame via the JSON
 // path. The format arg is variadic (pass at most one) for backward
-// compatibility — pre-C9 callers (`WSReadProto(ctx, conn, msg)`)
+// compatibility — pre-negotiation callers (`WSReadProto(ctx, conn, msg)`)
 // keep the text/JSON behaviour. Returns the underlying error on
 // connection close / decode failure; generated handlers translate
 // close errors to gRPC EOF and decode errors to a status
@@ -462,7 +462,7 @@ func wsUnwrapJSONFrame(data []byte) ([]byte, error) {
 	}
 }
 
-// WSWriteProto marshals msg in the negotiated format (C9) and
+// WSWriteProto marshals msg in the negotiated format and
 // writes it as one WS message: a binary frame (proto.Marshal)
 // when format is WireProto, otherwise a text JSON frame. Errors
 // are propagated to the generated handler which closes the conn.

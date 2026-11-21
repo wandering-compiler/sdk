@@ -304,7 +304,7 @@ export function formatStatValue(
   // the `?? "0"` turns that into a zero, and the formatter then renders "0"
   // for a date it could have formatted perfectly from the raw value — which
   // is exactly what the sibling paths do: axisLabeler and renderCell both
-  // receive the value untouched (A2).
+  // receive the value untouched.
   const value = templateIsNumeric(tmpl) ? (wireNumberText(raw) ?? "0") : raw;
   const formatted = formatCellValue(value, tmpl, ctx, translate, data);
   return formatted !== undefined ? formatted : formatCount(raw, ctx);

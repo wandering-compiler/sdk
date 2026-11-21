@@ -85,7 +85,7 @@ func TestValidateExtension_NilHeaderRejected(t *testing.T) {
 }
 
 // wsFormatOpt defaults to JSON when no explicit format rides the
-// variadic — keeps pre-C9 WSReadProto / WSWriteProto callers on the
+// variadic — keeps pre-negotiation WSReadProto / WSWriteProto callers on the
 // text/JSON wire.
 func TestWsFormatOpt_DefaultsJSON(t *testing.T) {
 	if got := wsFormatOpt(nil); got != WireJSON {
