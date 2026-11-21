@@ -259,18 +259,17 @@ func mysqlParams(dsn string) (map[string]string, bool) {
 }
 
 // PGDSNParams returns the libpq-style DSN parameters every process that
-// opens a w17 PostgreSQL database must carry. Both drivers forward
-// unrecognised parameters as server startup options — lib/pq through its
-// Runtime map, pgx through its config — so one spelling reaches both.
+// opens a w17 PostgreSQL database must carry. pgx forwards unrecognised
+// parameters as server startup options (its config's RuntimeParams), so one
+// spelling reaches every connection.
 //
 //   - standard_conforming_strings — the PG emitter inlines string
 //     literals by doubling quotes ONLY, which is correct exactly while
 //     this is on. It is settable per database and per role, and with it
 //     off the server reads backslashes inside a literal as escapes, so an
-//     emitted `'a\b'` stops meaning what the declaration said. Both PG
-//     surfaces were exposed: lib/pq has no scs handling at all, and the
-//     applier's pgx only checks scs when a query HAS bind arguments,
-//     which migration bodies do not.
+//     emitted `'a\b'` stops meaning what the declaration said. pgx checks
+//     scs only when a query HAS bind arguments, which migration bodies do
+//     not, so the parameter is what holds it.
 //   - search_path — w17 puts every table in one schema and
 //     addresses it with bare identifiers (the namespace decision chose a
 //     prefix over a schema per module), so bare names resolve through

@@ -11349,13 +11349,15 @@ func (x *ReplaceDirectives) GetPerBundlePb() bool {
 // DepVersions enumerates every library version the per-bundle
 // go.mod's `require` block templates in.
 type DepVersions struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Grpc          string                 `protobuf:"bytes,1,opt,name=grpc,proto3" json:"grpc,omitempty"`                                        // google.golang.org/grpc
-	Protobuf      string                 `protobuf:"bytes,2,opt,name=protobuf,proto3" json:"protobuf,omitempty"`                                // google.golang.org/protobuf
-	LibPq         string                 `protobuf:"bytes,3,opt,name=lib_pq,json=libPq,proto3" json:"lib_pq,omitempty"`                         // github.com/lib/pq
-	GoMysql       string                 `protobuf:"bytes,4,opt,name=go_mysql,json=goMysql,proto3" json:"go_mysql,omitempty"`                   // github.com/go-sql-driver/mysql
-	ModerncSqlite string                 `protobuf:"bytes,5,opt,name=modernc_sqlite,json=moderncSqlite,proto3" json:"modernc_sqlite,omitempty"` // modernc.org/sqlite
-	GoRedis       string                 `protobuf:"bytes,6,opt,name=go_redis,json=goRedis,proto3" json:"go_redis,omitempty"`                   // github.com/redis/go-redis/v9
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Grpc     string                 `protobuf:"bytes,1,opt,name=grpc,proto3" json:"grpc,omitempty"`         // google.golang.org/grpc
+	Protobuf string                 `protobuf:"bytes,2,opt,name=protobuf,proto3" json:"protobuf,omitempty"` // google.golang.org/protobuf
+	// Deprecated: generated PostgreSQL bundles use pgx (field 14). Kept so a
+	// client of an older compiler still reads the message; nothing renders it.
+	LibPq         string `protobuf:"bytes,3,opt,name=lib_pq,json=libPq,proto3" json:"lib_pq,omitempty"`                         // github.com/lib/pq
+	GoMysql       string `protobuf:"bytes,4,opt,name=go_mysql,json=goMysql,proto3" json:"go_mysql,omitempty"`                   // github.com/go-sql-driver/mysql
+	ModerncSqlite string `protobuf:"bytes,5,opt,name=modernc_sqlite,json=moderncSqlite,proto3" json:"modernc_sqlite,omitempty"` // modernc.org/sqlite
+	GoRedis       string `protobuf:"bytes,6,opt,name=go_redis,json=goRedis,proto3" json:"go_redis,omitempty"`                   // github.com/redis/go-redis/v9
 	// Gateway-flavoured bundles only — the gateway main.go
 	// template imports otelgrpc (gRPC backend dial-time tracing
 	// hookup) and coder/websocket (WS upgrade for streaming
@@ -11403,6 +11405,7 @@ type DepVersions struct {
 	// `v0.0.0-00010101000000-000000000000`, which a consumer's resolver
 	// then moves independently per module.
 	SdkGo         string `protobuf:"bytes,13,opt,name=sdk_go,json=sdkGo,proto3" json:"sdk_go,omitempty"` // github.com/wandering-compiler/sdk/go
+	Pgx           string `protobuf:"bytes,14,opt,name=pgx,proto3" json:"pgx,omitempty"`                  // github.com/jackc/pgx/v5 (the PostgreSQL driver, through database/sql)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11517,6 +11520,13 @@ func (x *DepVersions) GetMcpGo() string {
 func (x *DepVersions) GetSdkGo() string {
 	if x != nil {
 		return x.SdkGo
+	}
+	return ""
+}
+
+func (x *DepVersions) GetPgx() string {
+	if x != nil {
+		return x.Pgx
 	}
 	return ""
 }
@@ -13668,7 +13678,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x11ReplaceDirectives\x12\x1b\n" +
 	"\tparent_to\x18\x01 \x01(\tR\bparentTo\x122\n" +
 	"\x15wandering_compiler_to\x18\x02 \x01(\tR\x13wanderingCompilerTo\x12\"\n" +
-	"\rper_bundle_pb\x18\x03 \x01(\bR\vperBundlePb\"\xe0\x02\n" +
+	"\rper_bundle_pb\x18\x03 \x01(\bR\vperBundlePb\"\xf2\x02\n" +
 	"\vDepVersions\x12\x12\n" +
 	"\x04grpc\x18\x01 \x01(\tR\x04grpc\x12\x1a\n" +
 	"\bprotobuf\x18\x02 \x01(\tR\bprotobuf\x12\x15\n" +
@@ -13682,7 +13692,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	" \x01(\tR\x05goChi\x12\x17\n" +
 	"\anats_go\x18\v \x01(\tR\x06natsGo\x12\x15\n" +
 	"\x06mcp_go\x18\f \x01(\tR\x05mcpGo\x12\x15\n" +
-	"\x06sdk_go\x18\r \x01(\tR\x05sdkGoJ\x04\b\a\x10\bR\x03gox\"\xba\b\n" +
+	"\x06sdk_go\x18\r \x01(\tR\x05sdkGo\x12\x10\n" +
+	"\x03pgx\x18\x0e \x01(\tR\x03pgxJ\x04\b\a\x10\bR\x03gox\"\xba\b\n" +
 	"\rGatewayTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +

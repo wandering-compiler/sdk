@@ -91,7 +91,7 @@ type ReleaseFunc func()
 // serialises two handlers that each intend a SEQUENCE of them,
 // and an open `*sql.Rows` from a locked query concurrent with a
 // sibling's mutation desyncs the driver protocol outright
-// (lib/pq multiplexes nothing). So LookupTx hands a tx to one
+// (a PostgreSQL connection multiplexes nothing). So LookupTx hands a tx to one
 // adopter at a time: a second caller waits for the first to
 // release, bounded by ctx (and by the implementation's own
 // cap), then gets [ErrTxBusy]. Symmetrically, a finisher

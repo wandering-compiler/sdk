@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/lib/pq"
 )
 
 // PG fixtures recorded 2026-05-09 against PostgreSQL 18 in
@@ -77,18 +76,6 @@ func TestParsePg_Pgx_NotNull(t *testing.T) {
 	}
 	if len(ce.Columns) != 1 || ce.Columns[0] != "email" {
 		t.Errorf("Columns = %v", ce.Columns)
-	}
-}
-
-func TestParsePg_LibPq_Unique(t *testing.T) {
-	err := &pq.Error{
-		Code:       "23505",
-		Constraint: "probe_users_email_unique",
-		Table:      "probe_users",
-	}
-	ce, ok := ParsePg(err)
-	if !ok || ce.Name != "probe_users_email_unique" {
-		t.Fatalf("lib/pq path broke: %+v ok=%v", ce, ok)
 	}
 }
 

@@ -4,15 +4,11 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/lib/pq"
 )
 
 // ParsePg normalises a PG driver error into a
-// ConstraintError. Recognises both pgx (`*pgconn.PgError`)
-// and lib/pq (`*pq.Error`) — the storage tier uses pgx for
-// real connections; lib/pq still appears in some legacy
-// paths. Both expose the same set of fields under different
-// type names.
+// ConstraintError. The PostgreSQL driver is pgx, whose server
+// errors are `*pgconn.PgError` — through database/sql too.
 //
 // Returns (nil, false) when err is not a PG constraint
 // violation — caller treats as internal/unrecognised and
@@ -34,25 +30,16 @@ func ParsePg(err error) (*ConstraintError, bool) {
 	if err == nil {
 		return nil, false
 	}
-	// pgx structured path — preferred for new code.
 	var pgxErr *pgconn.PgError
 	if errors.As(err, &pgxErr) {
 		return pgFromFields(pgxErr.Code, pgxErr.ConstraintName,
 			pgxErr.TableName, pgxErr.ColumnName)
 	}
-	// lib/pq legacy path — same fields, different type.
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		return pgFromFields(string(pqErr.Code), pqErr.Constraint,
-			pqErr.Table, pqErr.Column)
-	}
 	return nil, false
 }
 
 // pgFromFields builds a ConstraintError from the structured
-// pieces both PG drivers expose under different type names.
-// The four arguments correspond 1:1 to pgconn.PgError /
-// pq.Error fields.
+// pieces of a pgconn.PgError.
 func pgFromFields(sqlstate, constraint, table, column string) (*ConstraintError, bool) {
 	kind, ok := pgKind(sqlstate)
 	if !ok {

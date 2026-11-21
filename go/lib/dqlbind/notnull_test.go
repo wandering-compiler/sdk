@@ -4,26 +4,21 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/lib/pq"
 	"google.golang.org/protobuf/types/descriptorpb"
 	_ "modernc.org/sqlite"
 )
 
-// An empty repeated value binds as the empty array, not as NULL: lib/pq
-// sends a nil slice as NULL, which a NOT NULL array column refuses.
-func TestArr_EmptyBindsTheEmptyArrayNotNull(t *testing.T) {
-	v, err := pq.Array(Arr[int64](nil)).Value()
-	if err != nil {
-		t.Fatal(err)
+// An empty repeated value binds as the empty array, not as NULL: the driver
+// sends a nil slice as NULL, which a NOT NULL array column refuses, so Arr
+// hands it a non-nil empty slice instead.
+func TestArr_EmptyRepeatedBindsAsEmptyArray(t *testing.T) {
+	got := Arr[int64](nil)
+	if got == nil || len(got) != 0 {
+		t.Fatalf("Arr(nil) = %#v, want a non-nil empty slice", got)
 	}
-	if v == nil {
-		t.Fatal("an empty repeated value binds NULL")
-	}
-	if s, _ := v.(string); s != "{}" {
-		t.Errorf("bound %v, want the empty array {}", v)
-	}
-	if got := Arr([]string{"a", "b"}); len(got) != 2 || got[0] != "a" {
-		t.Errorf("Arr changed a non-empty slice: %v", got)
+	keep := []int64{1}
+	if out := Arr(keep); &out[0] != &keep[0] {
+		t.Fatal("Arr copied a non-empty slice")
 	}
 }
 

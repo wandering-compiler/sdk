@@ -17,7 +17,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -73,7 +73,7 @@ func TestWrap_AnUnreachableDatabaseIsUnavailableAndReportedOnce(t *testing.T) {
 
 	var failures []error
 	for _, open := range []struct{ driver, dsn string }{
-		{"postgres", "postgres://u:p@" + addr + "/db?sslmode=disable&connect_timeout=2"},
+		{"pgx", "postgres://u:p@" + addr + "/db?sslmode=disable&connect_timeout=2"},
 		{"mysql", "u:p@tcp(" + addr + ")/db?timeout=2s"},
 	} {
 		db, err := sql.Open(open.driver, open.dsn)

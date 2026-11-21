@@ -15,7 +15,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/dqlbind"
@@ -484,9 +483,9 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// client disconnect / slow query). Surface the canonical gRPC
 	// codes the caller already expects for these conditions.
 	//
-	// The request's context decides, not only the error: lib/pq answers a
-	// context cancelled mid-statement with the server's own error (57014
-	// query_canceled, after its CancelRequest), which wraps no context error.
+	// The request's context decides, not only the error: a driver can answer
+	// a context cancelled mid-statement with the server's own error (57014
+	// query_canceled, after its cancel request), which wraps no context error.
 	// The code alone cannot decide either — Postgres answers its own
 	// statement_timeout with 57014 too, and that one is a server fault,
 	// reported as one.
@@ -793,10 +792,6 @@ func isDataException(err error, d Dialect) bool {
 		if errors.As(err, &pgxErr) {
 			return isPgDataException(pgxErr.Code)
 		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return isPgDataException(string(pqErr.Code))
-		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
 		if errors.As(err, &me) {
@@ -818,8 +813,8 @@ func isTooManyValues(err error, d Dialect) bool {
 	}
 	switch d {
 	case DialectPostgres:
-		// Neither driver reaches the server: pgx and lib/pq both refuse
-		// past 65 535 parameters client-side, with a plain error.
+		// pgx refuses past 65 535 parameters client-side, before the
+		// server, with a plain error (the second wording is the server's).
 		msg := err.Error()
 		return strings.Contains(msg, "extended protocol limited to") ||
 			strings.Contains(msg, "only supports 65535 parameters")
@@ -864,10 +859,6 @@ func isLockNotAvailable(err error, d Dialect) bool {
 		if errors.As(err, &pgxErr) {
 			return pgxErr.Code == "55P03"
 		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return pqErr.Code == "55P03"
-		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
 		if errors.As(err, &me) {
@@ -883,10 +874,6 @@ func isRetryable(err error, d Dialect) bool {
 		var pgxErr *pgconn.PgError
 		if errors.As(err, &pgxErr) {
 			return pgxErr.Code == "40001" || pgxErr.Code == "40P01"
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return pqErr.Code == "40001" || pqErr.Code == "40P01"
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError

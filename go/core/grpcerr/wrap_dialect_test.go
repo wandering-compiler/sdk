@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -183,15 +182,12 @@ func TestIsRetryable_AllDrivers(t *testing.T) {
 		d    Dialect
 		want bool
 	}{
-		{"pq serialization", &pq.Error{Code: "40001"}, DialectPostgres, true},
-		{"pq deadlock", &pq.Error{Code: "40P01"}, DialectPostgres, true},
-		{"pq other", &pq.Error{Code: "23505"}, DialectPostgres, false},
 		{"mysql deadlock", &mysql.MySQLError{Number: 1213}, DialectMySQL, true},
 		{"mysql lock wait", &mysql.MySQLError{Number: 1205}, DialectMySQL, true},
 		{"mysql other", &mysql.MySQLError{Number: 1062}, DialectMySQL, false},
 		{"non-driver err pg", errors.New("boom"), DialectPostgres, false},
 		{"sqlite unhandled", errors.New("busy"), DialectSQLite, false},
-		{"unknown dialect", &pq.Error{Code: "40001"}, DialectUnknown, false},
+		{"unknown dialect", &pgconn.PgError{Code: "40001"}, DialectUnknown, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,7 +198,7 @@ func TestIsRetryable_AllDrivers(t *testing.T) {
 	}
 }
 
-// INVARIANT: a pq.Error serialization failure routes to Aborted via
+// INVARIANT: a PostgreSQL serialization failure routes to Aborted via
 // Wrap, exercising the pq branch of isRetryable end to end.
 // INVARIANT: a lock the statement would not wait for (Postgres 55P03 from
 // either driver, MySQL 3572) is Aborted with ROW_LOCKED, so a caller that
@@ -214,7 +210,6 @@ func TestWrap_LockNotAvailableIsRowLocked(t *testing.T) {
 		d    Dialect
 	}{
 		{"pgx", &pgconn.PgError{Code: "55P03", Message: "could not obtain lock on row in relation \"t\""}, DialectPostgres},
-		{"pq", &pq.Error{Code: "55P03"}, DialectPostgres},
 		{"mysql nowait", &mysql.MySQLError{Number: 3572}, DialectMySQL},
 	}
 	for _, tc := range cases {
@@ -233,13 +228,13 @@ func TestWrap_LockNotAvailableIsRowLocked(t *testing.T) {
 		})
 	}
 	// Another dialect's code is not taken for it.
-	if isLockNotAvailable(&mysql.MySQLError{Number: 3572}, DialectPostgres) || isLockNotAvailable(&pq.Error{Code: "55P03"}, DialectMySQL) {
+	if isLockNotAvailable(&mysql.MySQLError{Number: 3572}, DialectPostgres) || isLockNotAvailable(&pgconn.PgError{Code: "55P03"}, DialectMySQL) {
 		t.Error("a lock code was recognised under the wrong dialect")
 	}
 }
 
-func TestWrap_PqRetryable(t *testing.T) {
-	got := Wrap(context.Background(), "M.G", &pq.Error{Code: "40001"}, nil, DialectPostgres)
+func TestWrap_PgRetryable(t *testing.T) {
+	got := Wrap(context.Background(), "M.G", &pgconn.PgError{Code: "40001"}, nil, DialectPostgres)
 	st, _ := status.FromError(got)
 	if st.Code() != codes.Aborted {
 		t.Errorf("Code = %v, want Aborted", st.Code())
