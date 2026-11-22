@@ -290,4 +290,12 @@ message RpcGroup {
   // rather than emitting a registration gRPC will never match.
   // Empty = served under the lock name only.
   string public_fqn = 4;
+
+  // (private surface only) The domains this group's methods admit — a
+  // subset of the surface's `(w17.private_api).callers`. The private gateway
+  // refuses any other caller before the method runs, so a powerful method is
+  // reachable only by the domains that need it. Empty = every caller of the
+  // surface. Where a whole service and one of its methods are both named,
+  // the method's own group decides for it. Refused on any other surface.
+  repeated string callers = 5;
 }
