@@ -53,6 +53,21 @@ service ProjectRegistry {
   // Console validates + signs + stores. `w17ctl migrate migration` calls it.
   rpc PushRawMigration(PushRawMigrationRequest) returns (PushRawMigrationResponse);
 
+  // PushDataMigration stores a DQL data migration — a data fix written in DQL
+  // over the project's models (`UPDATE billing.Invoice SET … WHERE …`). The
+  // console compiles it against the stored schema into the connection's SQL,
+  // wraps it with the history bookkeeping, signs it and appends it to the
+  // connection's history: every deployed environment applies it with the
+  // rest, in order. A local stack does not run the history; check a data
+  // migration there with CompileDataMigration (`w17ctl migrate try-data`).
+  rpc PushDataMigration(PushDataMigrationRequest) returns (PushDataMigrationResponse);
+
+  // CompileDataMigration compiles DQL data-migration statements against the
+  // stored schema without storing anything: the SQL `w17ctl migrate
+  // try-data` runs in a transaction it rolls back, and a preview before
+  // PushDataMigration.
+  rpc CompileDataMigration(CompileDataMigrationRequest) returns (CompileDataMigrationResponse);
+
   // PushFixture stores (or replaces) a fixture body for (project, domain,
   // name). The raw JSON is validated SERVER-side against the project's stored
   // schema (table / column / pk-arity) before storing — the client ships the
@@ -162,6 +177,13 @@ message Migration {
   // field, and on a raw migration stored before the console recorded which
   // pushes were raw.
   bool raw = 6;
+  // data marks a DQL data migration (PushDataMigration): a data fix, applied
+  // in order like any migration on a deployed environment. Also raw: no
+  // planner decided it.
+  bool data = 7;
+  // data_source is what the data migration was written as: its description,
+  // then its DQL statements, for review.
+  string data_source = 8;
 }
 
 message RegisterProjectRequest {
@@ -372,6 +394,46 @@ message PushRawMigrationRequest {
 message PushRawMigrationResponse {
   // migration is the stored result (server-assigned id + content_sha256).
   Migration migration = 1;
+}
+
+message PushDataMigrationRequest {
+  string project_id = 1;
+  string connection = 2;
+  // statements are the DQL write statements, one each, run in order.
+  repeated string statements = 3;
+  // description says what the data migration fixes and why; kept with it.
+  string description = 4;
+  // initiative_id — see PushRawMigrationRequest.
+  string initiative_id = 5;
+}
+
+message PushDataMigrationResponse {
+  Migration migration = 1;
+  // compiled is the SQL the migration runs, per statement.
+  CompileDataMigrationResponse compiled = 2;
+}
+
+message CompileDataMigrationRequest {
+  string project_id = 1;
+  string connection = 2;
+  repeated string statements = 3;
+}
+
+message CompileDataMigrationResponse {
+  // dialect of the connection: "postgres", "mysql" or "sqlite".
+  string dialect = 1;
+  repeated CompiledDataStatement statements = 2;
+}
+
+// CompiledDataStatement is one DQL statement and the SQL it compiles to.
+message CompiledDataStatement {
+  string dql = 1;
+  // kind: UPDATE, INSERT, DELETE, UPSERT or TRUNCATE.
+  string kind = 2;
+  // table is the SQL table it writes.
+  string table = 3;
+  // sql: one or more statements, literals inline, without a trailing `;`.
+  repeated string sql = 4;
 }
 
 message PushFixtureRequest {

@@ -293,7 +293,14 @@ type Migration struct {
 	// which refuses a raw migration). False on a console that predates the
 	// field, and on a raw migration stored before the console recorded which
 	// pushes were raw.
-	Raw           bool `protobuf:"varint,6,opt,name=raw,proto3" json:"raw,omitempty"`
+	Raw bool `protobuf:"varint,6,opt,name=raw,proto3" json:"raw,omitempty"`
+	// data marks a DQL data migration (PushDataMigration): a data fix, applied
+	// in order like any migration on a deployed environment. Also raw: no
+	// planner decided it.
+	Data bool `protobuf:"varint,7,opt,name=data,proto3" json:"data,omitempty"`
+	// data_source is what the data migration was written as: its description,
+	// then its DQL statements, for review.
+	DataSource    string `protobuf:"bytes,8,opt,name=data_source,json=dataSource,proto3" json:"data_source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -368,6 +375,20 @@ func (x *Migration) GetRaw() bool {
 		return x.Raw
 	}
 	return false
+}
+
+func (x *Migration) GetData() bool {
+	if x != nil {
+		return x.Data
+	}
+	return false
+}
+
+func (x *Migration) GetDataSource() string {
+	if x != nil {
+		return x.DataSource
+	}
+	return ""
 }
 
 type RegisterProjectRequest struct {
@@ -1126,6 +1147,323 @@ func (x *PushRawMigrationResponse) GetMigration() *Migration {
 	return nil
 }
 
+type PushDataMigrationRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId  string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Connection string                 `protobuf:"bytes,2,opt,name=connection,proto3" json:"connection,omitempty"`
+	// statements are the DQL write statements, one each, run in order.
+	Statements []string `protobuf:"bytes,3,rep,name=statements,proto3" json:"statements,omitempty"`
+	// description says what the data migration fixes and why; kept with it.
+	Description string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	// initiative_id — see PushRawMigrationRequest.
+	InitiativeId  string `protobuf:"bytes,5,opt,name=initiative_id,json=initiativeId,proto3" json:"initiative_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PushDataMigrationRequest) Reset() {
+	*x = PushDataMigrationRequest{}
+	mi := &file_w17registry_registry_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PushDataMigrationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PushDataMigrationRequest) ProtoMessage() {}
+
+func (x *PushDataMigrationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_w17registry_registry_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PushDataMigrationRequest.ProtoReflect.Descriptor instead.
+func (*PushDataMigrationRequest) Descriptor() ([]byte, []int) {
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *PushDataMigrationRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *PushDataMigrationRequest) GetConnection() string {
+	if x != nil {
+		return x.Connection
+	}
+	return ""
+}
+
+func (x *PushDataMigrationRequest) GetStatements() []string {
+	if x != nil {
+		return x.Statements
+	}
+	return nil
+}
+
+func (x *PushDataMigrationRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *PushDataMigrationRequest) GetInitiativeId() string {
+	if x != nil {
+		return x.InitiativeId
+	}
+	return ""
+}
+
+type PushDataMigrationResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Migration *Migration             `protobuf:"bytes,1,opt,name=migration,proto3" json:"migration,omitempty"`
+	// compiled is the SQL the migration runs, per statement.
+	Compiled      *CompileDataMigrationResponse `protobuf:"bytes,2,opt,name=compiled,proto3" json:"compiled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PushDataMigrationResponse) Reset() {
+	*x = PushDataMigrationResponse{}
+	mi := &file_w17registry_registry_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PushDataMigrationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PushDataMigrationResponse) ProtoMessage() {}
+
+func (x *PushDataMigrationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_w17registry_registry_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PushDataMigrationResponse.ProtoReflect.Descriptor instead.
+func (*PushDataMigrationResponse) Descriptor() ([]byte, []int) {
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PushDataMigrationResponse) GetMigration() *Migration {
+	if x != nil {
+		return x.Migration
+	}
+	return nil
+}
+
+func (x *PushDataMigrationResponse) GetCompiled() *CompileDataMigrationResponse {
+	if x != nil {
+		return x.Compiled
+	}
+	return nil
+}
+
+type CompileDataMigrationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Connection    string                 `protobuf:"bytes,2,opt,name=connection,proto3" json:"connection,omitempty"`
+	Statements    []string               `protobuf:"bytes,3,rep,name=statements,proto3" json:"statements,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompileDataMigrationRequest) Reset() {
+	*x = CompileDataMigrationRequest{}
+	mi := &file_w17registry_registry_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompileDataMigrationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompileDataMigrationRequest) ProtoMessage() {}
+
+func (x *CompileDataMigrationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_w17registry_registry_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompileDataMigrationRequest.ProtoReflect.Descriptor instead.
+func (*CompileDataMigrationRequest) Descriptor() ([]byte, []int) {
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CompileDataMigrationRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *CompileDataMigrationRequest) GetConnection() string {
+	if x != nil {
+		return x.Connection
+	}
+	return ""
+}
+
+func (x *CompileDataMigrationRequest) GetStatements() []string {
+	if x != nil {
+		return x.Statements
+	}
+	return nil
+}
+
+type CompileDataMigrationResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// dialect of the connection: "postgres", "mysql" or "sqlite".
+	Dialect       string                   `protobuf:"bytes,1,opt,name=dialect,proto3" json:"dialect,omitempty"`
+	Statements    []*CompiledDataStatement `protobuf:"bytes,2,rep,name=statements,proto3" json:"statements,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompileDataMigrationResponse) Reset() {
+	*x = CompileDataMigrationResponse{}
+	mi := &file_w17registry_registry_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompileDataMigrationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompileDataMigrationResponse) ProtoMessage() {}
+
+func (x *CompileDataMigrationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_w17registry_registry_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompileDataMigrationResponse.ProtoReflect.Descriptor instead.
+func (*CompileDataMigrationResponse) Descriptor() ([]byte, []int) {
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CompileDataMigrationResponse) GetDialect() string {
+	if x != nil {
+		return x.Dialect
+	}
+	return ""
+}
+
+func (x *CompileDataMigrationResponse) GetStatements() []*CompiledDataStatement {
+	if x != nil {
+		return x.Statements
+	}
+	return nil
+}
+
+// CompiledDataStatement is one DQL statement and the SQL it compiles to.
+type CompiledDataStatement struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Dql   string                 `protobuf:"bytes,1,opt,name=dql,proto3" json:"dql,omitempty"`
+	// kind: UPDATE, INSERT, DELETE, UPSERT or TRUNCATE.
+	Kind string `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	// table is the SQL table it writes.
+	Table string `protobuf:"bytes,3,opt,name=table,proto3" json:"table,omitempty"`
+	// sql: one or more statements, literals inline, without a trailing `;`.
+	Sql           []string `protobuf:"bytes,4,rep,name=sql,proto3" json:"sql,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompiledDataStatement) Reset() {
+	*x = CompiledDataStatement{}
+	mi := &file_w17registry_registry_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompiledDataStatement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompiledDataStatement) ProtoMessage() {}
+
+func (x *CompiledDataStatement) ProtoReflect() protoreflect.Message {
+	mi := &file_w17registry_registry_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompiledDataStatement.ProtoReflect.Descriptor instead.
+func (*CompiledDataStatement) Descriptor() ([]byte, []int) {
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CompiledDataStatement) GetDql() string {
+	if x != nil {
+		return x.Dql
+	}
+	return ""
+}
+
+func (x *CompiledDataStatement) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *CompiledDataStatement) GetTable() string {
+	if x != nil {
+		return x.Table
+	}
+	return ""
+}
+
+func (x *CompiledDataStatement) GetSql() []string {
+	if x != nil {
+		return x.Sql
+	}
+	return nil
+}
+
 type PushFixtureRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ProjectId string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
@@ -1140,7 +1478,7 @@ type PushFixtureRequest struct {
 
 func (x *PushFixtureRequest) Reset() {
 	*x = PushFixtureRequest{}
-	mi := &file_w17registry_registry_proto_msgTypes[10]
+	mi := &file_w17registry_registry_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1152,7 +1490,7 @@ func (x *PushFixtureRequest) String() string {
 func (*PushFixtureRequest) ProtoMessage() {}
 
 func (x *PushFixtureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[10]
+	mi := &file_w17registry_registry_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,7 +1503,7 @@ func (x *PushFixtureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushFixtureRequest.ProtoReflect.Descriptor instead.
 func (*PushFixtureRequest) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{10}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PushFixtureRequest) GetProjectId() string {
@@ -1208,7 +1546,7 @@ type PushFixtureResponse struct {
 
 func (x *PushFixtureResponse) Reset() {
 	*x = PushFixtureResponse{}
-	mi := &file_w17registry_registry_proto_msgTypes[11]
+	mi := &file_w17registry_registry_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1220,7 +1558,7 @@ func (x *PushFixtureResponse) String() string {
 func (*PushFixtureResponse) ProtoMessage() {}
 
 func (x *PushFixtureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[11]
+	mi := &file_w17registry_registry_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1233,7 +1571,7 @@ func (x *PushFixtureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushFixtureResponse.ProtoReflect.Descriptor instead.
 func (*PushFixtureResponse) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{11}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PushFixtureResponse) GetContentSha256() string {
@@ -1261,7 +1599,7 @@ type ReleaseProjectToOrgRequest struct {
 
 func (x *ReleaseProjectToOrgRequest) Reset() {
 	*x = ReleaseProjectToOrgRequest{}
-	mi := &file_w17registry_registry_proto_msgTypes[12]
+	mi := &file_w17registry_registry_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1273,7 +1611,7 @@ func (x *ReleaseProjectToOrgRequest) String() string {
 func (*ReleaseProjectToOrgRequest) ProtoMessage() {}
 
 func (x *ReleaseProjectToOrgRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[12]
+	mi := &file_w17registry_registry_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1286,7 +1624,7 @@ func (x *ReleaseProjectToOrgRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseProjectToOrgRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseProjectToOrgRequest) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{12}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ReleaseProjectToOrgRequest) GetProjectId() string {
@@ -1312,7 +1650,7 @@ type ReleaseProjectToOrgResponse struct {
 
 func (x *ReleaseProjectToOrgResponse) Reset() {
 	*x = ReleaseProjectToOrgResponse{}
-	mi := &file_w17registry_registry_proto_msgTypes[13]
+	mi := &file_w17registry_registry_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1324,7 +1662,7 @@ func (x *ReleaseProjectToOrgResponse) String() string {
 func (*ReleaseProjectToOrgResponse) ProtoMessage() {}
 
 func (x *ReleaseProjectToOrgResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[13]
+	mi := &file_w17registry_registry_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1337,7 +1675,7 @@ func (x *ReleaseProjectToOrgResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseProjectToOrgResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseProjectToOrgResponse) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{13}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ReleaseProjectToOrgResponse) GetTargetOrgId() string {
@@ -1358,7 +1696,7 @@ type ClaimProjectRequest struct {
 
 func (x *ClaimProjectRequest) Reset() {
 	*x = ClaimProjectRequest{}
-	mi := &file_w17registry_registry_proto_msgTypes[14]
+	mi := &file_w17registry_registry_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1370,7 +1708,7 @@ func (x *ClaimProjectRequest) String() string {
 func (*ClaimProjectRequest) ProtoMessage() {}
 
 func (x *ClaimProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[14]
+	mi := &file_w17registry_registry_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1383,7 +1721,7 @@ func (x *ClaimProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimProjectRequest.ProtoReflect.Descriptor instead.
 func (*ClaimProjectRequest) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{14}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ClaimProjectRequest) GetProjectId() string {
@@ -1410,7 +1748,7 @@ type ClaimProjectResponse struct {
 
 func (x *ClaimProjectResponse) Reset() {
 	*x = ClaimProjectResponse{}
-	mi := &file_w17registry_registry_proto_msgTypes[15]
+	mi := &file_w17registry_registry_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1422,7 +1760,7 @@ func (x *ClaimProjectResponse) String() string {
 func (*ClaimProjectResponse) ProtoMessage() {}
 
 func (x *ClaimProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[15]
+	mi := &file_w17registry_registry_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1435,7 +1773,7 @@ func (x *ClaimProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimProjectResponse.ProtoReflect.Descriptor instead.
 func (*ClaimProjectResponse) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{15}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ClaimProjectResponse) GetProjectName() string {
@@ -1490,7 +1828,7 @@ type ResetHistoryRequest struct {
 
 func (x *ResetHistoryRequest) Reset() {
 	*x = ResetHistoryRequest{}
-	mi := &file_w17registry_registry_proto_msgTypes[16]
+	mi := &file_w17registry_registry_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1502,7 +1840,7 @@ func (x *ResetHistoryRequest) String() string {
 func (*ResetHistoryRequest) ProtoMessage() {}
 
 func (x *ResetHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[16]
+	mi := &file_w17registry_registry_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1515,7 +1853,7 @@ func (x *ResetHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetHistoryRequest.ProtoReflect.Descriptor instead.
 func (*ResetHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{16}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ResetHistoryRequest) GetProjectId() string {
@@ -1594,7 +1932,7 @@ type ImportProjectRequest struct {
 
 func (x *ImportProjectRequest) Reset() {
 	*x = ImportProjectRequest{}
-	mi := &file_w17registry_registry_proto_msgTypes[17]
+	mi := &file_w17registry_registry_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1606,7 +1944,7 @@ func (x *ImportProjectRequest) String() string {
 func (*ImportProjectRequest) ProtoMessage() {}
 
 func (x *ImportProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[17]
+	mi := &file_w17registry_registry_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1619,7 +1957,7 @@ func (x *ImportProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportProjectRequest.ProtoReflect.Descriptor instead.
 func (*ImportProjectRequest) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{17}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ImportProjectRequest) GetSourceProjectId() string {
@@ -1654,7 +1992,7 @@ type ImportProjectResponse struct {
 
 func (x *ImportProjectResponse) Reset() {
 	*x = ImportProjectResponse{}
-	mi := &file_w17registry_registry_proto_msgTypes[18]
+	mi := &file_w17registry_registry_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1666,7 +2004,7 @@ func (x *ImportProjectResponse) String() string {
 func (*ImportProjectResponse) ProtoMessage() {}
 
 func (x *ImportProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[18]
+	mi := &file_w17registry_registry_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1679,7 +2017,7 @@ func (x *ImportProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportProjectResponse.ProtoReflect.Descriptor instead.
 func (*ImportProjectResponse) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{18}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ImportProjectResponse) GetMigrationsImported() int32 {
@@ -1712,7 +2050,7 @@ type VerifyHistoryRequest struct {
 
 func (x *VerifyHistoryRequest) Reset() {
 	*x = VerifyHistoryRequest{}
-	mi := &file_w17registry_registry_proto_msgTypes[19]
+	mi := &file_w17registry_registry_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1724,7 +2062,7 @@ func (x *VerifyHistoryRequest) String() string {
 func (*VerifyHistoryRequest) ProtoMessage() {}
 
 func (x *VerifyHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[19]
+	mi := &file_w17registry_registry_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +2075,7 @@ func (x *VerifyHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyHistoryRequest.ProtoReflect.Descriptor instead.
 func (*VerifyHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{19}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *VerifyHistoryRequest) GetProjectId() string {
@@ -1764,7 +2102,7 @@ type VerifyHistoryResponse struct {
 
 func (x *VerifyHistoryResponse) Reset() {
 	*x = VerifyHistoryResponse{}
-	mi := &file_w17registry_registry_proto_msgTypes[20]
+	mi := &file_w17registry_registry_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1776,7 +2114,7 @@ func (x *VerifyHistoryResponse) String() string {
 func (*VerifyHistoryResponse) ProtoMessage() {}
 
 func (x *VerifyHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[20]
+	mi := &file_w17registry_registry_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1789,7 +2127,7 @@ func (x *VerifyHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyHistoryResponse.ProtoReflect.Descriptor instead.
 func (*VerifyHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{20}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *VerifyHistoryResponse) GetVerdict() HistoryVerdict {
@@ -1840,7 +2178,7 @@ type ResetHistoryResponse struct {
 
 func (x *ResetHistoryResponse) Reset() {
 	*x = ResetHistoryResponse{}
-	mi := &file_w17registry_registry_proto_msgTypes[21]
+	mi := &file_w17registry_registry_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1852,7 +2190,7 @@ func (x *ResetHistoryResponse) String() string {
 func (*ResetHistoryResponse) ProtoMessage() {}
 
 func (x *ResetHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_w17registry_registry_proto_msgTypes[21]
+	mi := &file_w17registry_registry_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1865,7 +2203,7 @@ func (x *ResetHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetHistoryResponse.ProtoReflect.Descriptor instead.
 func (*ResetHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_w17registry_registry_proto_rawDescGZIP(), []int{21}
+	return file_w17registry_registry_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ResetHistoryResponse) GetMigrationsDropped() int32 {
@@ -1914,7 +2252,7 @@ var File_w17registry_registry_proto protoreflect.FileDescriptor
 
 const file_w17registry_registry_proto_rawDesc = "" +
 	"\n" +
-	"\x1aw17registry/registry.proto\x12\fw17.registry\"\xc2\x01\n" +
+	"\x1aw17registry/registry.proto\x12\fw17.registry\"\xf7\x01\n" +
 	"\tMigration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n" +
 	"\n" +
@@ -1923,7 +2261,10 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\x0econtent_sha256\x18\x03 \x01(\tR\rcontentSha256\x12#\n" +
 	"\rsuperseded_by\x18\x04 \x01(\tR\fsupersededBy\x12'\n" +
 	"\x0fplanner_version\x18\x05 \x01(\rR\x0eplannerVersion\x12\x10\n" +
-	"\x03raw\x18\x06 \x01(\bR\x03raw\",\n" +
+	"\x03raw\x18\x06 \x01(\bR\x03raw\x12\x12\n" +
+	"\x04data\x18\a \x01(\bR\x04data\x12\x1f\n" +
+	"\vdata_source\x18\b \x01(\tR\n" +
+	"dataSource\",\n" +
 	"\x16RegisterProjectRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"8\n" +
 	"\x17RegisterProjectResponse\x12\x1d\n" +
@@ -1991,7 +2332,40 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\tyaml_body\x18\x03 \x01(\tR\byamlBody\x12#\n" +
 	"\rinitiative_id\x18\x04 \x01(\tR\finitiativeId\"Q\n" +
 	"\x18PushRawMigrationResponse\x125\n" +
-	"\tmigration\x18\x01 \x01(\v2\x17.w17.registry.MigrationR\tmigration\"s\n" +
+	"\tmigration\x18\x01 \x01(\v2\x17.w17.registry.MigrationR\tmigration\"\xc0\x01\n" +
+	"\x18PushDataMigrationRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x1e\n" +
+	"\n" +
+	"connection\x18\x02 \x01(\tR\n" +
+	"connection\x12\x1e\n" +
+	"\n" +
+	"statements\x18\x03 \x03(\tR\n" +
+	"statements\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12#\n" +
+	"\rinitiative_id\x18\x05 \x01(\tR\finitiativeId\"\x9a\x01\n" +
+	"\x19PushDataMigrationResponse\x125\n" +
+	"\tmigration\x18\x01 \x01(\v2\x17.w17.registry.MigrationR\tmigration\x12F\n" +
+	"\bcompiled\x18\x02 \x01(\v2*.w17.registry.CompileDataMigrationResponseR\bcompiled\"|\n" +
+	"\x1bCompileDataMigrationRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x1e\n" +
+	"\n" +
+	"connection\x18\x02 \x01(\tR\n" +
+	"connection\x12\x1e\n" +
+	"\n" +
+	"statements\x18\x03 \x03(\tR\n" +
+	"statements\"}\n" +
+	"\x1cCompileDataMigrationResponse\x12\x18\n" +
+	"\adialect\x18\x01 \x01(\tR\adialect\x12C\n" +
+	"\n" +
+	"statements\x18\x02 \x03(\v2#.w17.registry.CompiledDataStatementR\n" +
+	"statements\"e\n" +
+	"\x15CompiledDataStatement\x12\x10\n" +
+	"\x03dql\x18\x01 \x01(\tR\x03dql\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x14\n" +
+	"\x05table\x18\x03 \x01(\tR\x05table\x12\x10\n" +
+	"\x03sql\x18\x04 \x03(\tR\x03sql\"s\n" +
 	"\x12PushFixtureRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x16\n" +
@@ -2064,13 +2438,15 @@ const file_w17registry_registry_proto_rawDesc = "" +
 	"\x0eHistoryVerdict\x12\x1b\n" +
 	"\x17HISTORY_VERDICT_UNKNOWN\x10\x00\x12\x1e\n" +
 	"\x1aHISTORY_VERDICT_CONSISTENT\x10\x01\x12\x1b\n" +
-	"\x17HISTORY_VERDICT_DRIFTED\x10\x022\xa4\a\n" +
+	"\x17HISTORY_VERDICT_DRIFTED\x10\x022\xf9\b\n" +
 	"\x0fProjectRegistry\x12^\n" +
 	"\x0fRegisterProject\x12$.w17.registry.RegisterProjectRequest\x1a%.w17.registry.RegisterProjectResponse\x12[\n" +
 	"\x0eListMigrations\x12#.w17.registry.ListMigrationsRequest\x1a$.w17.registry.ListMigrationsResponse\x12O\n" +
 	"\n" +
 	"PushSchema\x12\x1f.w17.registry.PushSchemaRequest\x1a .w17.registry.PushSchemaResponse\x12a\n" +
-	"\x10PushRawMigration\x12%.w17.registry.PushRawMigrationRequest\x1a&.w17.registry.PushRawMigrationResponse\x12R\n" +
+	"\x10PushRawMigration\x12%.w17.registry.PushRawMigrationRequest\x1a&.w17.registry.PushRawMigrationResponse\x12d\n" +
+	"\x11PushDataMigration\x12&.w17.registry.PushDataMigrationRequest\x1a'.w17.registry.PushDataMigrationResponse\x12m\n" +
+	"\x14CompileDataMigration\x12).w17.registry.CompileDataMigrationRequest\x1a*.w17.registry.CompileDataMigrationResponse\x12R\n" +
 	"\vPushFixture\x12 .w17.registry.PushFixtureRequest\x1a!.w17.registry.PushFixtureResponse\x12j\n" +
 	"\x13ReleaseProjectToOrg\x12(.w17.registry.ReleaseProjectToOrgRequest\x1a).w17.registry.ReleaseProjectToOrgResponse\x12U\n" +
 	"\fClaimProject\x12!.w17.registry.ClaimProjectRequest\x1a\".w17.registry.ClaimProjectResponse\x12U\n" +
@@ -2091,74 +2467,86 @@ func file_w17registry_registry_proto_rawDescGZIP() []byte {
 }
 
 var file_w17registry_registry_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_w17registry_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_w17registry_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_w17registry_registry_proto_goTypes = []any{
-	(PushMode)(0),                       // 0: w17.registry.PushMode
-	(ResetHistoryPolicy)(0),             // 1: w17.registry.ResetHistoryPolicy
-	(HistoryVerdict)(0),                 // 2: w17.registry.HistoryVerdict
-	(*Migration)(nil),                   // 3: w17.registry.Migration
-	(*RegisterProjectRequest)(nil),      // 4: w17.registry.RegisterProjectRequest
-	(*RegisterProjectResponse)(nil),     // 5: w17.registry.RegisterProjectResponse
-	(*ListMigrationsRequest)(nil),       // 6: w17.registry.ListMigrationsRequest
-	(*ListMigrationsResponse)(nil),      // 7: w17.registry.ListMigrationsResponse
-	(*PushSchemaRequest)(nil),           // 8: w17.registry.PushSchemaRequest
-	(*PushSchemaResponse)(nil),          // 9: w17.registry.PushSchemaResponse
-	(*Finding)(nil),                     // 10: w17.registry.Finding
-	(*PushRawMigrationRequest)(nil),     // 11: w17.registry.PushRawMigrationRequest
-	(*PushRawMigrationResponse)(nil),    // 12: w17.registry.PushRawMigrationResponse
-	(*PushFixtureRequest)(nil),          // 13: w17.registry.PushFixtureRequest
-	(*PushFixtureResponse)(nil),         // 14: w17.registry.PushFixtureResponse
-	(*ReleaseProjectToOrgRequest)(nil),  // 15: w17.registry.ReleaseProjectToOrgRequest
-	(*ReleaseProjectToOrgResponse)(nil), // 16: w17.registry.ReleaseProjectToOrgResponse
-	(*ClaimProjectRequest)(nil),         // 17: w17.registry.ClaimProjectRequest
-	(*ClaimProjectResponse)(nil),        // 18: w17.registry.ClaimProjectResponse
-	(*ResetHistoryRequest)(nil),         // 19: w17.registry.ResetHistoryRequest
-	(*ImportProjectRequest)(nil),        // 20: w17.registry.ImportProjectRequest
-	(*ImportProjectResponse)(nil),       // 21: w17.registry.ImportProjectResponse
-	(*VerifyHistoryRequest)(nil),        // 22: w17.registry.VerifyHistoryRequest
-	(*VerifyHistoryResponse)(nil),       // 23: w17.registry.VerifyHistoryResponse
-	(*ResetHistoryResponse)(nil),        // 24: w17.registry.ResetHistoryResponse
-	nil,                                 // 25: w17.registry.PushSchemaRequest.DecideCustomSqlEntry
-	nil,                                 // 26: w17.registry.ResetHistoryRequest.DecideCustomSqlEntry
+	(PushMode)(0),                        // 0: w17.registry.PushMode
+	(ResetHistoryPolicy)(0),              // 1: w17.registry.ResetHistoryPolicy
+	(HistoryVerdict)(0),                  // 2: w17.registry.HistoryVerdict
+	(*Migration)(nil),                    // 3: w17.registry.Migration
+	(*RegisterProjectRequest)(nil),       // 4: w17.registry.RegisterProjectRequest
+	(*RegisterProjectResponse)(nil),      // 5: w17.registry.RegisterProjectResponse
+	(*ListMigrationsRequest)(nil),        // 6: w17.registry.ListMigrationsRequest
+	(*ListMigrationsResponse)(nil),       // 7: w17.registry.ListMigrationsResponse
+	(*PushSchemaRequest)(nil),            // 8: w17.registry.PushSchemaRequest
+	(*PushSchemaResponse)(nil),           // 9: w17.registry.PushSchemaResponse
+	(*Finding)(nil),                      // 10: w17.registry.Finding
+	(*PushRawMigrationRequest)(nil),      // 11: w17.registry.PushRawMigrationRequest
+	(*PushRawMigrationResponse)(nil),     // 12: w17.registry.PushRawMigrationResponse
+	(*PushDataMigrationRequest)(nil),     // 13: w17.registry.PushDataMigrationRequest
+	(*PushDataMigrationResponse)(nil),    // 14: w17.registry.PushDataMigrationResponse
+	(*CompileDataMigrationRequest)(nil),  // 15: w17.registry.CompileDataMigrationRequest
+	(*CompileDataMigrationResponse)(nil), // 16: w17.registry.CompileDataMigrationResponse
+	(*CompiledDataStatement)(nil),        // 17: w17.registry.CompiledDataStatement
+	(*PushFixtureRequest)(nil),           // 18: w17.registry.PushFixtureRequest
+	(*PushFixtureResponse)(nil),          // 19: w17.registry.PushFixtureResponse
+	(*ReleaseProjectToOrgRequest)(nil),   // 20: w17.registry.ReleaseProjectToOrgRequest
+	(*ReleaseProjectToOrgResponse)(nil),  // 21: w17.registry.ReleaseProjectToOrgResponse
+	(*ClaimProjectRequest)(nil),          // 22: w17.registry.ClaimProjectRequest
+	(*ClaimProjectResponse)(nil),         // 23: w17.registry.ClaimProjectResponse
+	(*ResetHistoryRequest)(nil),          // 24: w17.registry.ResetHistoryRequest
+	(*ImportProjectRequest)(nil),         // 25: w17.registry.ImportProjectRequest
+	(*ImportProjectResponse)(nil),        // 26: w17.registry.ImportProjectResponse
+	(*VerifyHistoryRequest)(nil),         // 27: w17.registry.VerifyHistoryRequest
+	(*VerifyHistoryResponse)(nil),        // 28: w17.registry.VerifyHistoryResponse
+	(*ResetHistoryResponse)(nil),         // 29: w17.registry.ResetHistoryResponse
+	nil,                                  // 30: w17.registry.PushSchemaRequest.DecideCustomSqlEntry
+	nil,                                  // 31: w17.registry.ResetHistoryRequest.DecideCustomSqlEntry
 }
 var file_w17registry_registry_proto_depIdxs = []int32{
 	3,  // 0: w17.registry.ListMigrationsResponse.migrations:type_name -> w17.registry.Migration
 	0,  // 1: w17.registry.PushSchemaRequest.mode:type_name -> w17.registry.PushMode
-	25, // 2: w17.registry.PushSchemaRequest.decide_custom_sql:type_name -> w17.registry.PushSchemaRequest.DecideCustomSqlEntry
+	30, // 2: w17.registry.PushSchemaRequest.decide_custom_sql:type_name -> w17.registry.PushSchemaRequest.DecideCustomSqlEntry
 	3,  // 3: w17.registry.PushSchemaResponse.migrations:type_name -> w17.registry.Migration
 	10, // 4: w17.registry.PushSchemaResponse.findings:type_name -> w17.registry.Finding
 	0,  // 5: w17.registry.PushSchemaResponse.resolved_mode:type_name -> w17.registry.PushMode
 	3,  // 6: w17.registry.PushRawMigrationResponse.migration:type_name -> w17.registry.Migration
-	1,  // 7: w17.registry.ResetHistoryRequest.policy:type_name -> w17.registry.ResetHistoryPolicy
-	26, // 8: w17.registry.ResetHistoryRequest.decide_custom_sql:type_name -> w17.registry.ResetHistoryRequest.DecideCustomSqlEntry
-	2,  // 9: w17.registry.VerifyHistoryResponse.verdict:type_name -> w17.registry.HistoryVerdict
-	3,  // 10: w17.registry.ResetHistoryResponse.replacement:type_name -> w17.registry.Migration
-	10, // 11: w17.registry.ResetHistoryResponse.findings:type_name -> w17.registry.Finding
-	4,  // 12: w17.registry.ProjectRegistry.RegisterProject:input_type -> w17.registry.RegisterProjectRequest
-	6,  // 13: w17.registry.ProjectRegistry.ListMigrations:input_type -> w17.registry.ListMigrationsRequest
-	8,  // 14: w17.registry.ProjectRegistry.PushSchema:input_type -> w17.registry.PushSchemaRequest
-	11, // 15: w17.registry.ProjectRegistry.PushRawMigration:input_type -> w17.registry.PushRawMigrationRequest
-	13, // 16: w17.registry.ProjectRegistry.PushFixture:input_type -> w17.registry.PushFixtureRequest
-	15, // 17: w17.registry.ProjectRegistry.ReleaseProjectToOrg:input_type -> w17.registry.ReleaseProjectToOrgRequest
-	17, // 18: w17.registry.ProjectRegistry.ClaimProject:input_type -> w17.registry.ClaimProjectRequest
-	19, // 19: w17.registry.ProjectRegistry.ResetHistory:input_type -> w17.registry.ResetHistoryRequest
-	22, // 20: w17.registry.ProjectRegistry.VerifyHistory:input_type -> w17.registry.VerifyHistoryRequest
-	20, // 21: w17.registry.ProjectRegistry.ImportProject:input_type -> w17.registry.ImportProjectRequest
-	5,  // 22: w17.registry.ProjectRegistry.RegisterProject:output_type -> w17.registry.RegisterProjectResponse
-	7,  // 23: w17.registry.ProjectRegistry.ListMigrations:output_type -> w17.registry.ListMigrationsResponse
-	9,  // 24: w17.registry.ProjectRegistry.PushSchema:output_type -> w17.registry.PushSchemaResponse
-	12, // 25: w17.registry.ProjectRegistry.PushRawMigration:output_type -> w17.registry.PushRawMigrationResponse
-	14, // 26: w17.registry.ProjectRegistry.PushFixture:output_type -> w17.registry.PushFixtureResponse
-	16, // 27: w17.registry.ProjectRegistry.ReleaseProjectToOrg:output_type -> w17.registry.ReleaseProjectToOrgResponse
-	18, // 28: w17.registry.ProjectRegistry.ClaimProject:output_type -> w17.registry.ClaimProjectResponse
-	24, // 29: w17.registry.ProjectRegistry.ResetHistory:output_type -> w17.registry.ResetHistoryResponse
-	23, // 30: w17.registry.ProjectRegistry.VerifyHistory:output_type -> w17.registry.VerifyHistoryResponse
-	21, // 31: w17.registry.ProjectRegistry.ImportProject:output_type -> w17.registry.ImportProjectResponse
-	22, // [22:32] is the sub-list for method output_type
-	12, // [12:22] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	3,  // 7: w17.registry.PushDataMigrationResponse.migration:type_name -> w17.registry.Migration
+	16, // 8: w17.registry.PushDataMigrationResponse.compiled:type_name -> w17.registry.CompileDataMigrationResponse
+	17, // 9: w17.registry.CompileDataMigrationResponse.statements:type_name -> w17.registry.CompiledDataStatement
+	1,  // 10: w17.registry.ResetHistoryRequest.policy:type_name -> w17.registry.ResetHistoryPolicy
+	31, // 11: w17.registry.ResetHistoryRequest.decide_custom_sql:type_name -> w17.registry.ResetHistoryRequest.DecideCustomSqlEntry
+	2,  // 12: w17.registry.VerifyHistoryResponse.verdict:type_name -> w17.registry.HistoryVerdict
+	3,  // 13: w17.registry.ResetHistoryResponse.replacement:type_name -> w17.registry.Migration
+	10, // 14: w17.registry.ResetHistoryResponse.findings:type_name -> w17.registry.Finding
+	4,  // 15: w17.registry.ProjectRegistry.RegisterProject:input_type -> w17.registry.RegisterProjectRequest
+	6,  // 16: w17.registry.ProjectRegistry.ListMigrations:input_type -> w17.registry.ListMigrationsRequest
+	8,  // 17: w17.registry.ProjectRegistry.PushSchema:input_type -> w17.registry.PushSchemaRequest
+	11, // 18: w17.registry.ProjectRegistry.PushRawMigration:input_type -> w17.registry.PushRawMigrationRequest
+	13, // 19: w17.registry.ProjectRegistry.PushDataMigration:input_type -> w17.registry.PushDataMigrationRequest
+	15, // 20: w17.registry.ProjectRegistry.CompileDataMigration:input_type -> w17.registry.CompileDataMigrationRequest
+	18, // 21: w17.registry.ProjectRegistry.PushFixture:input_type -> w17.registry.PushFixtureRequest
+	20, // 22: w17.registry.ProjectRegistry.ReleaseProjectToOrg:input_type -> w17.registry.ReleaseProjectToOrgRequest
+	22, // 23: w17.registry.ProjectRegistry.ClaimProject:input_type -> w17.registry.ClaimProjectRequest
+	24, // 24: w17.registry.ProjectRegistry.ResetHistory:input_type -> w17.registry.ResetHistoryRequest
+	27, // 25: w17.registry.ProjectRegistry.VerifyHistory:input_type -> w17.registry.VerifyHistoryRequest
+	25, // 26: w17.registry.ProjectRegistry.ImportProject:input_type -> w17.registry.ImportProjectRequest
+	5,  // 27: w17.registry.ProjectRegistry.RegisterProject:output_type -> w17.registry.RegisterProjectResponse
+	7,  // 28: w17.registry.ProjectRegistry.ListMigrations:output_type -> w17.registry.ListMigrationsResponse
+	9,  // 29: w17.registry.ProjectRegistry.PushSchema:output_type -> w17.registry.PushSchemaResponse
+	12, // 30: w17.registry.ProjectRegistry.PushRawMigration:output_type -> w17.registry.PushRawMigrationResponse
+	14, // 31: w17.registry.ProjectRegistry.PushDataMigration:output_type -> w17.registry.PushDataMigrationResponse
+	16, // 32: w17.registry.ProjectRegistry.CompileDataMigration:output_type -> w17.registry.CompileDataMigrationResponse
+	19, // 33: w17.registry.ProjectRegistry.PushFixture:output_type -> w17.registry.PushFixtureResponse
+	21, // 34: w17.registry.ProjectRegistry.ReleaseProjectToOrg:output_type -> w17.registry.ReleaseProjectToOrgResponse
+	23, // 35: w17.registry.ProjectRegistry.ClaimProject:output_type -> w17.registry.ClaimProjectResponse
+	29, // 36: w17.registry.ProjectRegistry.ResetHistory:output_type -> w17.registry.ResetHistoryResponse
+	28, // 37: w17.registry.ProjectRegistry.VerifyHistory:output_type -> w17.registry.VerifyHistoryResponse
+	26, // 38: w17.registry.ProjectRegistry.ImportProject:output_type -> w17.registry.ImportProjectResponse
+	27, // [27:39] is the sub-list for method output_type
+	15, // [15:27] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_w17registry_registry_proto_init() }
@@ -2172,7 +2560,7 @@ func file_w17registry_registry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17registry_registry_proto_rawDesc), len(file_w17registry_registry_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   24,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
