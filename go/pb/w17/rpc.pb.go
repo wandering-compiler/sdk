@@ -368,7 +368,14 @@ type RpcGroup struct {
 	// each segment an identifier; the parser refuses anything else
 	// rather than emitting a registration gRPC will never match.
 	// Empty = served under the lock name only.
-	PublicFqn     string `protobuf:"bytes,4,opt,name=public_fqn,json=publicFqn,proto3" json:"public_fqn,omitempty"`
+	PublicFqn string `protobuf:"bytes,4,opt,name=public_fqn,json=publicFqn,proto3" json:"public_fqn,omitempty"`
+	// (private surface only) The domains this group's methods admit — a
+	// subset of the surface's `(w17.private_api).callers`. The private gateway
+	// refuses any other caller before the method runs, so a powerful method is
+	// reachable only by the domains that need it. Empty = every caller of the
+	// surface. Where a whole service and one of its methods are both named,
+	// the method's own group decides for it. Refused on any other surface.
+	Callers       []string `protobuf:"bytes,5,rep,name=callers,proto3" json:"callers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -429,6 +436,13 @@ func (x *RpcGroup) GetPublicFqn() string {
 		return x.PublicFqn
 	}
 	return ""
+}
+
+func (x *RpcGroup) GetCallers() []string {
+	if x != nil {
+		return x.Callers
+	}
+	return nil
 }
 
 var file_w17_rpc_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -529,13 +543,14 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"\x0eRpcPublicLimit\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12&\n" +
 	"\x05limit\x18\x02 \x01(\x0e2\x10.w17.PublicLimitR\x05limit\x12#\n" +
-	"\x04rate\x18\x03 \x01(\v2\x0f.w17.PublicRateR\x04rate\"s\n" +
+	"\x04rate\x18\x03 \x01(\v2\x0f.w17.PublicRateR\x04rate\"\x8d\x01\n" +
 	"\bRpcGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
 	"\x04refs\x18\x03 \x03(\tR\x04refs\x12\x1d\n" +
 	"\n" +
-	"public_fqn\x18\x04 \x01(\tR\tpublicFqn:2\n" +
+	"public_fqn\x18\x04 \x01(\tR\tpublicFqn\x12\x18\n" +
+	"\acallers\x18\x05 \x03(\tR\acallers:2\n" +
 	"\x03rpc\x12\x1e.google.protobuf.MethodOptions\x18\xbf\x87\x03 \x01(\bR\x03rpc:A\n" +
 	"\vrpc_service\x12\x1e.google.protobuf.MethodOptions\x18\xc0\x87\x03 \x01(\tR\n" +
 	"rpcService:D\n" +

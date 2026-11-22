@@ -63,7 +63,8 @@ type PrivateApi struct {
 	// The domains admitted. A caller whose certificate names another domain is
 	// refused before any method runs. Empty refuses the build: a private
 	// surface no one may call is a mistake, and one anyone may call is not
-	// private.
+	// private. A group's or an include's own `callers` narrows this for its
+	// methods: one that only some callers need is reachable by those only.
 	Callers []string `protobuf:"bytes,4,rep,name=callers,proto3" json:"callers,omitempty"`
 	// Records each call (who called, which method, the outcome), like the
 	// public surfaces' request events.
@@ -144,7 +145,11 @@ type PrivateInclude struct {
 	Plugin string `protobuf:"bytes,1,opt,name=plugin,proto3" json:"plugin,omitempty"`
 	// Plugin-relative `<Service>.<Method>` refs, each one the plugin's `rpc`
 	// preset offers.
-	Methods       []string `protobuf:"bytes,2,rep,name=methods,proto3" json:"methods,omitempty"`
+	Methods []string `protobuf:"bytes,2,rep,name=methods,proto3" json:"methods,omitempty"`
+	// The domains these methods admit — a subset of the surface's `callers`,
+	// refused before the method runs for any other, as a group's `callers`.
+	// Empty = every caller of the surface.
+	Callers       []string `protobuf:"bytes,3,rep,name=callers,proto3" json:"callers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -193,6 +198,13 @@ func (x *PrivateInclude) GetMethods() []string {
 	return nil
 }
 
+func (x *PrivateInclude) GetCallers() []string {
+	if x != nil {
+		return x.Callers
+	}
+	return nil
+}
+
 var file_w17_private_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.FileOptions)(nil),
@@ -224,10 +236,11 @@ const file_w17_private_proto_rawDesc = "" +
 	"\x06groups\x18\x02 \x03(\v2\r.w17.RpcGroupR\x06groups\x12-\n" +
 	"\ainclude\x18\x03 \x03(\v2\x13.w17.PrivateIncludeR\ainclude\x12\x18\n" +
 	"\acallers\x18\x04 \x03(\tR\acallers\x129\n" +
-	"\x0erequest_events\x18\x05 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"B\n" +
+	"\x0erequest_events\x18\x05 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"\\\n" +
 	"\x0ePrivateInclude\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x18\n" +
-	"\amethods\x18\x02 \x03(\tR\amethods:P\n" +
+	"\amethods\x18\x02 \x03(\tR\amethods\x12\x18\n" +
+	"\acallers\x18\x03 \x03(\tR\acallers:P\n" +
 	"\vprivate_api\x12\x1c.google.protobuf.FileOptions\x18ć\x03 \x01(\v2\x0f.w17.PrivateApiR\n" +
 	"privateApiB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
 
