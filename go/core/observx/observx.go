@@ -391,7 +391,13 @@ func initLocked(c Config) error {
 			Environment:      c.Environment,
 			EnableTracing:    true,
 			TracesSampleRate: 0.2,
-			BeforeSend:       sentryBeforeSend,
+			BeforeSend: func(e *sentry.Event, h *sentry.EventHint) *sentry.Event {
+				e = readableTypes(e)
+				if sentryBeforeSend != nil {
+					return sentryBeforeSend(e, h)
+				}
+				return e
+			},
 		}
 		if err := sentry.Init(opts); err != nil {
 			return fmt.Errorf("observx: sentry init: %w", err)
