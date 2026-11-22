@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -75,6 +76,48 @@ var (
 	rpcUnmarshal = protojson.UnmarshalOptions{DiscardUnknown: false}
 	rpcMarshal   = protojson.MarshalOptions{UseProtoNames: true, UseEnumNumbers: true}
 )
+
+// Fire makes one unary call for load: the answer is read off the wire and
+// dropped (load measures the outcome and the latency, not the contract), and
+// the outcome is the status code — codes.OK on success. A non-nil error is a
+// call that could not be made: a request that does not fit, or no status.
+func (c *RPCCaller) Fire(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string) (codes.Code, error) {
+	req, err := c.message(ep.RPCRequest)
+	if err != nil {
+		return codes.Unknown, err
+	}
+	resp, err := c.message(ep.RPCResponse)
+	if err != nil {
+		return codes.Unknown, err
+	}
+	if len(input) > 0 {
+		raw, err := json.Marshal(input)
+		if err != nil {
+			return codes.Unknown, err
+		}
+		if err := rpcUnmarshal.Unmarshal(raw, req); err != nil {
+			return codes.Unknown, fmt.Errorf("rpc %s: input does not fit %s: %w", ep.FullMethod, ep.RPCRequest, err)
+		}
+	}
+	md := metadata.MD{}
+	for k, v := range headers {
+		md.Append(k, v)
+	}
+	if token != "" && ep.AuthRequired && !ep.CredentialInURL && !ep.Mint {
+		md.Set("authorization", "Bearer "+token)
+	}
+	if len(md) > 0 {
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+	err = c.conn.Invoke(ctx, ep.FullMethod, req, resp)
+	if err == nil {
+		return codes.OK, nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Code(), nil
+	}
+	return codes.Unavailable, err
+}
 
 // Call makes one unary call.
 func (c *RPCCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, credential string, files []FilePart) (map[string]any, error) {

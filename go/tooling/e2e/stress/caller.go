@@ -1,11 +1,15 @@
 package stress
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"google.golang.org/grpc/codes"
 
 	"github.com/wandering-compiler/sdk/go/tooling/e2e/runner"
 )
@@ -17,14 +21,87 @@ import (
 // (default MaxIdleConnsPerHost=2 → connection re-dial storm; HTTP/2 single
 // connection → stream-limit serialization). Routing is shared with the
 // asserting RESTCaller via runner.ResolveREST, so a load op maps to
-// exactly the HTTP call e2e would make. Only the REST (and REST-shaped
-// admin) transport is driven under load.
+// exactly the HTTP call e2e would make. REST (and the REST-shaped admin) go
+// over HTTP; an RPC endpoint over gRPC when the caller has connections
+// (WithRPC).
 type LoadCaller struct {
 	BaseURL string
 	timeout time.Duration
 	client  *fasthttp.Client
 
 	signer runner.Signer // nil: Bearer, as before
+
+	// rpc are the connections an RPC endpoint (Transport "rpc") is fired
+	// over, round robin: one HTTP/2 connection serializes its streams past
+	// the server's limit, so load spreads over several (WithRPC).
+	rpc  []*runner.RPCCaller
+	next atomic.Uint64
+}
+
+// WithRPC makes the load fire an RPC endpoint natively: over conns gRPC
+// connections to target (host:port), from the suite's baked descriptors.
+// A gRPC status is counted as the HTTP status it corresponds to
+// (rpcStatus), so the report's buckets read the same for every transport.
+func (c *LoadCaller) WithRPC(target string, descriptors []byte, conns int) (*LoadCaller, error) {
+	if conns < 1 {
+		conns = 1
+	}
+	for range conns {
+		rc, err := runner.NewRPCCaller(target, descriptors)
+		if err != nil {
+			return nil, err
+		}
+		c.rpc = append(c.rpc, rc)
+	}
+	return c, nil
+}
+
+// rpcStatus is the HTTP status a gRPC code stands for (the mapping
+// grpc-gateway uses), so a load report buckets an RPC refusal the way it
+// buckets the same refusal over REST.
+func rpcStatus(code codes.Code) int {
+	switch code {
+	case codes.OK:
+		return http.StatusOK
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.OutOfRange:
+		return http.StatusBadRequest
+	case codes.Unauthenticated:
+		return http.StatusUnauthorized
+	case codes.PermissionDenied:
+		return http.StatusForbidden
+	case codes.NotFound:
+		return http.StatusNotFound
+	case codes.AlreadyExists, codes.Aborted:
+		return http.StatusConflict
+	case codes.ResourceExhausted:
+		return http.StatusTooManyRequests
+	case codes.Canceled:
+		return 499
+	case codes.Unimplemented:
+		return http.StatusNotImplemented
+	case codes.Unavailable:
+		return http.StatusServiceUnavailable
+	case codes.DeadlineExceeded:
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusInternalServerError
+}
+
+func (c *LoadCaller) fireRPC(ep runner.Endpoint, input map[string]any, token string, headers map[string]string) (int, error) {
+	if len(c.rpc) == 0 {
+		return -1, fmt.Errorf("load: %s is an RPC endpoint and this load caller has no RPC connection (WithRPC)", ep.Ref)
+	}
+	if c.signer != nil {
+		return -1, fmt.Errorf("load: %s: the RPC load signs no DPoP proof", ep.Ref)
+	}
+	rc := c.rpc[c.next.Add(1)%uint64(len(c.rpc))]
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+	code, err := rc.Fire(ctx, ep, input, token, headers)
+	if err != nil {
+		return -1, err
+	}
+	return rpcStatus(code), nil
 }
 
 // WithSigner makes the load sign with device keys, as the asserting
@@ -71,6 +148,9 @@ func (c *LoadCaller) Fire(ep runner.Endpoint, input map[string]any, token string
 // FireAs is Fire signing as dev when the caller signs (WithSigner); a nil
 // dev means the signer's own device. Without a signer dev is ignored.
 func (c *LoadCaller) FireAs(dev *runner.Device, ep runner.Endpoint, input map[string]any, token string, headers map[string]string) (int, error) {
+	if ep.Transport == "rpc" {
+		return c.fireRPC(ep, input, token, headers)
+	}
 	method, target, body, err := runner.ResolveREST(c.BaseURL, ep, input)
 	if err != nil {
 		return -1, err
