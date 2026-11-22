@@ -138,3 +138,32 @@ message WithdrawReportReq {
 message WithdrawReportResp {
   string id = 1;
 }
+
+// The public roadmap (`w17ctl roadmap`): w17's features planned for a
+// release, in progress or shipped. The console's RoadmapQuery.ReadRoadmap;
+// writing it is w17's operator's (the operator MCP surface, the backoffice).
+message RoadmapItem {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    PLANNED     = 1;
+    IN_PROGRESS = 2;
+    SHIPPED     = 3;
+    DROPPED     = 4;
+  }
+}
+
+message ReadRoadmapReq {
+  // A release to keep ("0.2.0"); empty = every release.
+  string release = 1;
+}
+
+message PublicRoadmapItem {
+  string release = 1;
+  string title = 2;
+  string summary = 3;
+  RoadmapItem.Status status = 4;
+}
+
+message ReadRoadmapResp {
+  repeated PublicRoadmapItem items = 1;
+}
