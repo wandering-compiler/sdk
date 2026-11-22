@@ -1,5 +1,10 @@
 name: SDK images
 
+# ghcr.io/wandering-compiler/sdk-admin-spa:<sdk>-node<node> — the build image
+# of a generated admin SPA (images/admin-spa/Dockerfile): Node with the SPA's
+# dependency set (go/tooling/adminspa/deps.json) installed, built once per SDK
+# release for both builder platforms.
+#
 # ghcr.io/wandering-compiler/sdk-go:<sdk>-go<patch> — the build image of a w17
 # Go service (images/go/Dockerfile), and :<sdk>-go<line> following the line's
 # newest patch. Built for every Go line upstream supports from go.version's on,
@@ -146,3 +151,98 @@ jobs:
             echo "### sdk-go:${SDK#v}-go$go" >> "$GITHUB_STEP_SUMMARY"
             docker buildx imagetools inspect "$img:${SDK#v}-go$go" --format '{{json .Manifest.Digest}}' >> "$GITHUB_STEP_SUMMARY"
           done
+
+  admin-spa-plan:
+    needs: plan
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      node: ${{ steps.plan.outputs.node }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: go/${{ needs.plan.outputs.sdk }}
+      - id: plan
+        env:
+          SDK: ${{ needs.plan.outputs.sdk }}
+        run: |
+          set -euo pipefail
+          node="$(jq -r .node go/tooling/adminspa/deps.json)"
+          tag="${SDK#v}-node${node%%-*}"
+          if docker manifest inspect "ghcr.io/${GITHUB_REPOSITORY_OWNER}/sdk-admin-spa:$tag" >/dev/null 2>&1; then
+            echo "sdk-admin-spa:$tag exists — not rebuilt"; tag=""
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "node=$node" >> "$GITHUB_OUTPUT"
+
+  admin-spa-build:
+    needs: [plan, admin-spa-plan]
+    if: needs.admin-spa-plan.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        builder:
+          - { runner: ubuntu-24.04, platform: linux/amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux/arm64 }
+    runs-on: ${{ matrix.builder.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: go/${{ needs.plan.outputs.sdk }}
+      - name: package.json from the dependency set
+        run: jq '{name:"w17-admin-spa",private:true,dependencies,devDependencies}' go/tooling/adminspa/deps.json > images/admin-spa/package.json
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/admin-spa
+          platforms: ${{ matrix.builder.platform }}
+          build-args: |
+            NODE_IMAGE=node:${{ needs.admin-spa-plan.outputs.node }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/sdk-admin-spa,push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+      - env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.builder.platform }}
+        run: |
+          mkdir -p digests
+          echo "$DIGEST" > "digests/${ARCH#linux/}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-spa-digest-${{ strategy.job-index }}
+          path: digests/*
+
+  admin-spa-index:
+    needs: [admin-spa-plan, admin-spa-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: admin-spa-digest-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - env:
+          TAG: ${{ needs.admin-spa-plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          img="ghcr.io/${GITHUB_REPOSITORY_OWNER}/sdk-admin-spa"
+          docker buildx imagetools create -t "$img:$TAG" "$img@$(cat digests/amd64)" "$img@$(cat digests/arm64)"
+          echo "### sdk-admin-spa:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "$img:$TAG" --format '{{json .Manifest.Digest}}' >> "$GITHUB_STEP_SUMMARY"
