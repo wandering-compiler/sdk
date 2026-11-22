@@ -213,6 +213,28 @@ message RestApi {
   // `(w17.db.scope)`). Same field as `RpcApi.unauthenticated` and
   // `McpApi.unauthenticated`.
   bool unauthenticated = 12;
+
+  // principal_rate limits how often ONE authenticated caller may call this
+  // surface: a token bucket per principal (the auth method's `user_id`),
+  // refilled at `per_minute`, holding at most `burst`. It is the
+  // authenticated twin of the per-address limit on the methods that take
+  // no credential (`RestEndpoint.public_limit`): those bound guesses, this
+  // bounds what one token holder may ask of the backend — an API token
+  // calling as fast as it can, a script in a loop.
+  //
+  // One bucket per principal for the whole surface; a method spends
+  // `RestEndpoint.principal_cost` tokens of it (1 by default), or none with
+  // `principal_exempt`. A stream spends its cost once, when it opens. A
+  // refused call is 429 `RESOURCE_EXHAUSTED` with `Retry-After`.
+  //
+  // Unset: not limited — unless the deployment switches it on with
+  // `<PREFIX>_PRINCIPAL_RATELIMIT_PER_MINUTE` / `_BURST` (the transport's
+  // `_REST_` variant overrides; `<= 0` switches a declared limit off).
+  // In-process, per gateway replica, like the per-address limit. Refused on
+  // a surface without auth: there is no principal to count. A
+  // `principal_cost` declared without it applies when the deployment
+  // switches the limit on.
+  PrincipalRate principal_rate = 13;
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
@@ -884,6 +906,17 @@ message RestEndpoint {
   // alone: `<PREFIX>_PUBLIC_RATELIMIT_<SERVICE>_<METHOD>_PER_MINUTE` /
   // `_BURST` (the generated `.env` files list the names).
   PublicRate public_rate = 24;
+
+  // principal_cost is how many tokens of the caller's per-principal budget
+  // (`RestApi.principal_rate`) one call of this endpoint spends: a heavy
+  // search 10, a cheap read 1. Unset (0) is 1. Not with `exclude_auth`
+  // (no principal) or `principal_exempt`.
+  uint32 principal_cost = 25;
+
+  // principal_exempt: this endpoint spends nothing of the per-principal
+  // budget — a token refresh, a "who am I", a health read the client polls.
+  // Not with `exclude_auth` or `principal_cost`.
+  bool principal_exempt = 26;
 }
 
 // RawResponse names the response fields the HTTP answer is made of.
@@ -1161,6 +1194,10 @@ message RestStream {
   // refused until it says how.
   PublicLimit public_limit = 11;
   PublicRate public_rate = 12;
+  // principal_cost / principal_exempt: as on RestEndpoint; a stream spends
+  // its cost once, when it opens.
+  uint32 principal_cost = 13;
+  bool principal_exempt = 14;
 }
 
 // DownloadEndpoint binds a static download route under the
@@ -1299,6 +1336,18 @@ message PublicRate {
   uint32 per_minute = 1;
   // Requests one address may make at once, before the rate applies.
   // Required, > 0.
+  uint32 burst = 2;
+}
+
+// PrincipalRate is a surface's threshold per authenticated caller: a token
+// bucket refilled at `per_minute` that holds at most `burst`. See
+// RestApi.principal_rate.
+message PrincipalRate {
+  // Tokens a minute one principal may keep up. Required, > 0.
+  uint32 per_minute = 1;
+  // Tokens one principal may spend at once, before the rate applies.
+  // Required, > 0, and at least the largest `principal_cost` on the
+  // surface (a call that costs more than the bucket holds could never run).
   uint32 burst = 2;
 }
 
