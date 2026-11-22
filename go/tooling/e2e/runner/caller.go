@@ -476,6 +476,10 @@ type CallErrorDetail struct {
 // the code's generic sentence ("The request could not be accepted as sent."),
 // and which field, under which rule, is in details[] alone.
 func (e *CallError) Error() string {
+	if e.Status == 0 && e.Code != "" {
+		// A transport without HTTP statuses (RPC): the code is the answer.
+		return fmt.Sprintf("%s: %s: %s%s", e.Op, e.Code, e.Message, detailsSuffix(e))
+	}
 	if e.Code != "" {
 		return fmt.Sprintf("%s: status %d: %s: %s%s", e.Op, e.Status, e.Code, e.Message, detailsSuffix(e))
 	}

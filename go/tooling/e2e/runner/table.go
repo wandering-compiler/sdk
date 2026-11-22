@@ -100,4 +100,15 @@ type Endpoint struct {
 
 	// ToolName is the MCP tool the ref maps to (`tools/call` name).
 	ToolName string
+
+	// --- RPC routing (Transport == "rpc") ---
+
+	// FullMethod is the gRPC method the RPC surface serves the ref as,
+	// `/w17lock.<leaf>.rpc.<Service>/<Method>`: the public service name,
+	// not the ref's.
+	FullMethod string
+
+	// RPCRequest and RPCResponse are the full names of the method's
+	// messages, resolved in the descriptors baked into the runner.
+	RPCRequest, RPCResponse string
 }
