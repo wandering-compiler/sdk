@@ -1395,6 +1395,11 @@ message GenerateEgressClientRequest {
   // recorded in client.yaml so `client update` keeps them.
   bool per_call_credential = 9;
   bool per_call_destination = 10;
+
+  // A mail client ((w17.egress_client).mail, w17/mail.proto): `client
+  // generate --mail`. It has no document — source, document, imports and
+  // the selectors stay empty — and its one method is Send.
+  bool mail = 11;
 }
 
 // GenerateEgressClientResponse — the signed client.

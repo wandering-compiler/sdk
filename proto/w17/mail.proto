@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package w17;
+
+option go_package = "github.com/wandering-compiler/sdk/go/pb/w17;w17pb";
+
+// w17/mail.proto — the messages of a mail client: the egress client that
+// `w17ctl client generate --mail` declares (`proto/clients/<name>/`, its
+// file marked `(w17.egress_client) = { mail: true }`). Its service has one
+// method,
+//
+//   rpc Send(w17.MailMessage) returns (w17.MailReceipt);
+//
+// served in-process by sdk/go/lib/egress/mail and configured, like every
+// egress client, by its W17_CLIENT_<NAME>_DSN: an SMTP server
+// (`smtps://user:password@smtp.example.com:465`,
+// `smtp://user:password@smtp.example.com:587` with STARTTLS) or a
+// transactional-mail API (`postmark://<server token>@`,
+// `sendgrid://<api key>@`, `mailgun://<api key>@<sending domain>`,
+// `resend://<api key>@`). The DSN may name the default sender
+// (`?from=Invoices <invoices@example.com>`).
+//
+// The platform sends; it does not template, queue or parse bounces. A
+// failure the provider certainly did not accept (an SMTP 4xx, a refused
+// connection, HTTP 429 or 503) is retried within the call; any other one
+// ends the call, so a retry never risks a second copy of the message.
+
+// MailMessage — one e-mail. Every address is an RFC 5322 mailbox, bare
+// (`a@example.com`) or with a display name (`Jana Nováková <a@example.com>`).
+message MailMessage {
+  // The sender. Empty = the DSN's `from`; a message with neither is
+  // refused (INVALID_ARGUMENT).
+  string from = 1;
+
+  // The recipients. At least one of to, cc and bcc.
+  repeated string to = 2;
+  repeated string cc = 3;
+  // Blind copies: delivered, never written into the message's headers.
+  repeated string bcc = 4;
+
+  // Where replies go, when not to the sender.
+  repeated string reply_to = 5;
+
+  // The subject, plain text (non-ASCII is encoded as RFC 2047).
+  string subject = 6;
+
+  // The body: plain text, HTML, or both (sent as alternatives, the
+  // reader's client picks). At least one of them.
+  string text = 7;
+  string html = 8;
+
+  // Files carried with the message. Their total size with the body is
+  // capped at 20 MiB, below what common providers accept.
+  repeated MailAttachment attachments = 9;
+
+  // Extra headers (`X-Entity-Ref-ID`, `List-Unsubscribe`, …). The ones
+  // the message already sets from its fields (From, To, Cc, Bcc,
+  // Reply-To, Subject, Date, Message-ID, MIME-Version, Content-*) are
+  // refused here.
+  map<string, string> headers = 10;
+}
+
+// MailAttachment — one file of a MailMessage.
+message MailAttachment {
+  // The file name the recipient sees (`faktura-2026-0042.pdf`).
+  string filename = 1;
+
+  // Its media type (`application/pdf`). Empty = from the file name's
+  // extension, `application/octet-stream` when that says nothing.
+  string content_type = 2;
+
+  // The file itself.
+  bytes content = 3;
+
+  // Set = an inline part the HTML body refers to as `cid:<content_id>`,
+  // not a file offered for download.
+  string content_id = 4;
+}
+
+// MailReceipt — what the provider answered when it accepted the message.
+// Accepted is not delivered: a bounce comes later, through the provider.
+message MailReceipt {
+  // The Message-ID header the message was sent with, angle brackets
+  // included: what a reply's In-Reply-To or a bounce refers to. Set when
+  // the platform composed the message itself (SMTP, Mailgun); a JSON API
+  // (Postmark, SendGrid, Resend) assigns its own, so it is empty there and
+  // provider_id names the message.
+  string message_id = 1;
+
+  // The provider's own id of the message, when its API returns one
+  // (Postmark's MessageID, SendGrid's X-Message-Id, Mailgun's and
+  // Resend's id); empty over SMTP.
+  string provider_id = 2;
+
+  // How many attempts it took.
+  int32 attempts = 3;
+}

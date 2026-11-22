@@ -112,6 +112,13 @@ message EgressClient {
   // not spend everyone's capacity. `w17ctl client generate
   // --per-call-destination`.
   bool per_call_destination = 8;
+
+  // A mail client: its service is `<Name>Api { rpc Send(w17.MailMessage)
+  // returns (w17.MailReceipt); }` (w17/mail.proto), and its DSN names an
+  // SMTP server or a transactional-mail API instead of a base URL. It has
+  // no OpenAPI document and no per-call credential or destination.
+  // `w17ctl client generate --mail`.
+  bool mail = 9;
 }
 
 // EgressCall — one HTTP operation.

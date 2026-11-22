@@ -246,8 +246,14 @@ type EgressClient struct {
 	// not spend everyone's capacity. `w17ctl client generate
 	// --per-call-destination`.
 	PerCallDestination bool `protobuf:"varint,8,opt,name=per_call_destination,json=perCallDestination,proto3" json:"per_call_destination,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// A mail client: its service is `<Name>Api { rpc Send(w17.MailMessage)
+	// returns (w17.MailReceipt); }` (w17/mail.proto), and its DSN names an
+	// SMTP server or a transactional-mail API instead of a base URL. It has
+	// no OpenAPI document and no per-call credential or destination.
+	// `w17ctl client generate --mail`.
+	Mail          bool `protobuf:"varint,9,opt,name=mail,proto3" json:"mail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EgressClient) Reset() {
@@ -332,6 +338,13 @@ func (x *EgressClient) GetPerCallCredential() bool {
 func (x *EgressClient) GetPerCallDestination() bool {
 	if x != nil {
 		return x.PerCallDestination
+	}
+	return false
+}
+
+func (x *EgressClient) GetMail() bool {
+	if x != nil {
+		return x.Mail
 	}
 	return false
 }
@@ -758,7 +771,7 @@ var File_w17_egress_proto protoreflect.FileDescriptor
 
 const file_w17_egress_proto_rawDesc = "" +
 	"\n" +
-	"\x10w17/egress.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xa6\x02\n" +
+	"\x10w17/egress.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xba\x02\n" +
 	"\fEgressClient\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1f\n" +
@@ -769,7 +782,8 @@ const file_w17_egress_proto_rawDesc = "" +
 	"server_url\x18\x05 \x01(\tR\tserverUrl\x12!\n" +
 	"\fsoap_version\x18\x06 \x01(\tR\vsoapVersion\x12.\n" +
 	"\x13per_call_credential\x18\a \x01(\bR\x11perCallCredential\x120\n" +
-	"\x14per_call_destination\x18\b \x01(\bR\x12perCallDestination\"\xab\x03\n" +
+	"\x14per_call_destination\x18\b \x01(\bR\x12perCallDestination\x12\x12\n" +
+	"\x04mail\x18\t \x01(\bR\x04mail\"\xab\x03\n" +
 	"\n" +
 	"EgressCall\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
