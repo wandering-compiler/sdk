@@ -1388,6 +1388,13 @@ message GenerateEgressClientRequest {
   // WSDL: the operations that only read and may be repeated — a SOAP call
   // is always a POST, so nothing else tells the runtime it may retry one.
   repeated string idempotent = 8;
+
+  // The client takes its credential / its destination with each call
+  // ((w17.egress_client).per_call_credential / per_call_destination):
+  // `client generate --per-call-credential / --per-call-destination`,
+  // recorded in client.yaml so `client update` keeps them.
+  bool per_call_credential = 9;
+  bool per_call_destination = 10;
 }
 
 // GenerateEgressClientResponse — the signed client.
