@@ -39,6 +39,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 
+	"github.com/wandering-compiler/sdk/go/lib/egress/mail"
 	"github.com/wandering-compiler/sdk/go/lib/egress/wire"
 )
 
@@ -73,6 +74,9 @@ func Register(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, dsn
 		opt(&o)
 	}
 	client := Name(svc)
+	if IsMail(svc) {
+		return fmt.Errorf("egress client %s is a mail client: its DSN is a mail one — RegisterFromEnv, or mail.Register", client)
+	}
 	if err := matchesClient(svc, dsn); err != nil {
 		return fmt.Errorf("egress client %s: %w", client, err)
 	}
@@ -87,11 +91,20 @@ func Register(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, dsn
 	return nil
 }
 
+// IsMail reports a mail client (`(w17.egress_client) = { mail: true }`):
+// its one method sends a w17.MailMessage, served by package mail.
+func IsMail(svc protoreflect.ServiceDescriptor) bool {
+	return wire.Client(svc.ParentFile()).GetMail()
+}
+
 // RegisterUnconfigured serves svc refusing every call with
 // FAILED_PRECONDITION naming env: a bundle whose environment carries no DSN
 // for the client still links its callers, and a call is how they learn.
 func RegisterUnconfigured(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, env string) error {
 	client := Name(svc)
+	if IsMail(svc) {
+		return mail.RegisterUnconfigured(reg, svc, client, env)
+	}
 	desc, err := serviceDesc(svc, func(*method, proto.Message, proto.Message) func(context.Context) error {
 		return func(context.Context) error {
 			return callError(codes.FailedPrecondition, client, ReasonUnconfigured,
@@ -111,6 +124,17 @@ func RegisterUnconfigured(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDes
 // parse is an error — a misconfiguration, reported at boot; the message
 // names the variable and never its value.
 func RegisterFromEnv(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, env string, lookup func(string) (string, bool), opts ...Option) error {
+	if IsMail(svc) {
+		var o options
+		for _, opt := range opts {
+			opt(&o)
+		}
+		var mopts []mail.Option
+		if o.transport != nil {
+			mopts = append(mopts, mail.WithTransport(o.transport))
+		}
+		return mail.RegisterFromEnv(reg, svc, Name(svc), env, lookup, mopts...)
+	}
 	v, ok := lookup(env)
 	if !ok || v == "" {
 		return RegisterUnconfigured(reg, svc, env)

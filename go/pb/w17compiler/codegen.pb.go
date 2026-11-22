@@ -5415,8 +5415,12 @@ type GenerateEgressClientRequest struct {
 	// recorded in client.yaml so `client update` keeps them.
 	PerCallCredential  bool `protobuf:"varint,9,opt,name=per_call_credential,json=perCallCredential,proto3" json:"per_call_credential,omitempty"`
 	PerCallDestination bool `protobuf:"varint,10,opt,name=per_call_destination,json=perCallDestination,proto3" json:"per_call_destination,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// A mail client ((w17.egress_client).mail, w17/mail.proto): `client
+	// generate --mail`. It has no document — source, document, imports and
+	// the selectors stay empty — and its one method is Send.
+	Mail          bool `protobuf:"varint,11,opt,name=mail,proto3" json:"mail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GenerateEgressClientRequest) Reset() {
@@ -5515,6 +5519,13 @@ func (x *GenerateEgressClientRequest) GetPerCallCredential() bool {
 func (x *GenerateEgressClientRequest) GetPerCallDestination() bool {
 	if x != nil {
 		return x.PerCallDestination
+	}
+	return false
+}
+
+func (x *GenerateEgressClientRequest) GetMail() bool {
+	if x != nil {
+		return x.Mail
 	}
 	return false
 }
@@ -13250,7 +13261,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x05prior\x18\x03 \x01(\fR\x05prior\x12\x1a\n" +
 	"\bunsigned\x18\x04 \x01(\fR\bunsigned\"-\n" +
 	"\x13SignAclLockResponse\x12\x16\n" +
-	"\x06signed\x18\x01 \x01(\fR\x06signed\"\xce\x03\n" +
+	"\x06signed\x18\x01 \x01(\fR\x06signed\"\xe2\x03\n" +
 	"\x1bGenerateEgressClientRequest\x12\x12\n" +
 	"\x04lock\x18\x01 \x01(\fR\x04lock\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12\x12\n" +
@@ -13266,7 +13277,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"idempotent\x12.\n" +
 	"\x13per_call_credential\x18\t \x01(\bR\x11perCallCredential\x120\n" +
 	"\x14per_call_destination\x18\n" +
-	" \x01(\bR\x12perCallDestination\x1a:\n" +
+	" \x01(\bR\x12perCallDestination\x12\x12\n" +
+	"\x04mail\x18\v \x01(\bR\x04mail\x1a:\n" +
 	"\fImportsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xd1\x02\n" +

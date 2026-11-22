@@ -32,6 +32,7 @@ outside the compiler can resolve them** — which is what a plugin author needs.
 | `packages.proto` | what an organization can be given: a domain's packages of methods and audiences |
 | `grant/hooks.proto` | the `GrantHooks` contract a product may implement (nothing calls it yet), in its own Go package |
 | `contrib.proto` | **plugin features** — the one a plugin author reaches for first |
+| `egress.proto`, `mail.proto` | egress clients (`w17ctl client generate`): the REST / SOAP call options, and a mail client's message and receipt |
 | `paging.proto`, `rpc.proto`, `mcp.proto`, `cli.proto`, `client.proto`, `error.proto`, `lock.proto` | the remaining surfaces |
 | `pg/`, `mysql/`, `sqlite/` | the per-dialect escape hatches — a native column type, a dialect-only module or project setting |
 
