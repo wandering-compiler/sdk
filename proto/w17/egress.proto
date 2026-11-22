@@ -88,6 +88,30 @@ message EgressClient {
   // SOAP clients (generated from a WSDL): the SOAP version of the binding,
   // "1.1" or "1.2". Empty for an OpenAPI client.
   string soap_version = 6;
+
+  // The credential comes with each CALL, not with the deployment: a
+  // customer's own token for their account at the upstream. The project's
+  // getter then takes it as a parameter (`egress.Fio(egress.Bearer(tok))`),
+  // so a call without one does not compile, and it is carried as a secret
+  // like the DSN's. The DSN still names the host and the scheme, with the
+  // credential written `per_call` (`?auth=bearer&token=per_call`); a DSN
+  // that carries a real one for this client, or `per_call` for a client
+  // that does not declare it, is refused at boot. `w17ctl client generate
+  // --per-call-credential`.
+  bool per_call_credential = 7;
+
+  // The destination comes with each call: a customer's webhook URL, a row of
+  // data rather than configuration. The getter takes it
+  // (`egress.Webhooks(dest)`, dest from `egress.To(url)`), and the DSN is a
+  // POLICY instead of an address: `dynamic?timeout=5s&max_attempts=3`.
+  // Every destination is checked when it is dialled: a private, loopback,
+  // link-local, multicast or unspecified address is refused unless the DSN
+  // allows it (`allow=private,loopback`), and a redirect is never followed.
+  // A destination that keeps failing is suspended for a while (`budget=`
+  // consecutive failures, `cooldown=`), so one customer's dead endpoint does
+  // not spend everyone's capacity. `w17ctl client generate
+  // --per-call-destination`.
+  bool per_call_destination = 8;
 }
 
 // EgressCall — one HTTP operation.

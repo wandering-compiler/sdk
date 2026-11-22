@@ -5408,9 +5408,15 @@ type GenerateEgressClientRequest struct {
 	Imports map[string][]byte `protobuf:"bytes,7,rep,name=imports,proto3" json:"imports,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// WSDL: the operations that only read and may be repeated — a SOAP call
 	// is always a POST, so nothing else tells the runtime it may retry one.
-	Idempotent    []string `protobuf:"bytes,8,rep,name=idempotent,proto3" json:"idempotent,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Idempotent []string `protobuf:"bytes,8,rep,name=idempotent,proto3" json:"idempotent,omitempty"`
+	// The client takes its credential / its destination with each call
+	// ((w17.egress_client).per_call_credential / per_call_destination):
+	// `client generate --per-call-credential / --per-call-destination`,
+	// recorded in client.yaml so `client update` keeps them.
+	PerCallCredential  bool `protobuf:"varint,9,opt,name=per_call_credential,json=perCallCredential,proto3" json:"per_call_credential,omitempty"`
+	PerCallDestination bool `protobuf:"varint,10,opt,name=per_call_destination,json=perCallDestination,proto3" json:"per_call_destination,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GenerateEgressClientRequest) Reset() {
@@ -5497,6 +5503,20 @@ func (x *GenerateEgressClientRequest) GetIdempotent() []string {
 		return x.Idempotent
 	}
 	return nil
+}
+
+func (x *GenerateEgressClientRequest) GetPerCallCredential() bool {
+	if x != nil {
+		return x.PerCallCredential
+	}
+	return false
+}
+
+func (x *GenerateEgressClientRequest) GetPerCallDestination() bool {
+	if x != nil {
+		return x.PerCallDestination
+	}
+	return false
 }
 
 // GenerateEgressClientResponse — the signed client.
@@ -13230,7 +13250,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\x05prior\x18\x03 \x01(\fR\x05prior\x12\x1a\n" +
 	"\bunsigned\x18\x04 \x01(\fR\bunsigned\"-\n" +
 	"\x13SignAclLockResponse\x12\x16\n" +
-	"\x06signed\x18\x01 \x01(\fR\x06signed\"\xec\x02\n" +
+	"\x06signed\x18\x01 \x01(\fR\x06signed\"\xce\x03\n" +
 	"\x1bGenerateEgressClientRequest\x12\x12\n" +
 	"\x04lock\x18\x01 \x01(\fR\x04lock\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12\x12\n" +
@@ -13243,7 +13263,10 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\aimports\x18\a \x03(\v2=.w17.storage.codegen.GenerateEgressClientRequest.ImportsEntryR\aimports\x12\x1e\n" +
 	"\n" +
 	"idempotent\x18\b \x03(\tR\n" +
-	"idempotent\x1a:\n" +
+	"idempotent\x12.\n" +
+	"\x13per_call_credential\x18\t \x01(\bR\x11perCallCredential\x120\n" +
+	"\x14per_call_destination\x18\n" +
+	" \x01(\bR\x12perCallDestination\x1a:\n" +
 	"\fImportsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xd1\x02\n" +

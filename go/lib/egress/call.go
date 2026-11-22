@@ -66,6 +66,16 @@ type caller struct {
 	client string
 	dsn    *DSN
 	http   *http.Client
+	// budget suspends a dynamic client's failing destinations; nil for a
+	// fixed one.
+	budget *budgets
+}
+
+// callEnv is what one call goes to and sends: the DSN's, or what came with
+// the call (calltime.go).
+type callEnv struct {
+	base                       *url.URL
+	token, user, password, key string
 }
 
 func newCaller(client string, dsn *DSN, rt http.RoundTripper) *caller {
@@ -77,14 +87,54 @@ func newCaller(client string, dsn *DSN, rt http.RoundTripper) *caller {
 		if dsn.Proxy != nil {
 			t.Proxy = http.ProxyURL(dsn.Proxy)
 		}
+		if dsn.Dynamic {
+			// Every dial of a destination the caller's data chose is held to
+			// the address policy, after resolution.
+			t.DialContext = guardedDialer(dsn.Allow).DialContext
+		}
 		rt = t
 	}
-	return &caller{client: client, dsn: dsn, http: &http.Client{
+	c := &caller{client: client, dsn: dsn, http: &http.Client{
 		Transport: rt,
 		// A redirect is the upstream's answer, not a second request this
-		// client decided to make — with the credential — elsewhere.
+		// client decided to make — with the credential — elsewhere. For a
+		// dynamic client it is also how an allowed destination would point
+		// the call at an address the policy refuses.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
+	if dsn.Dynamic {
+		c.budget = newBudgets(dsn.Budget, dsn.Cooldown)
+	}
+	return c
+}
+
+// resolve is the call's destination and credential: the DSN's, or the ones
+// the call brought (Bind) for a client that takes them per call. A per-call
+// client called without them — through a connection of the project's own,
+// say — is refused, never sent without.
+func (c *caller) resolve(ctx context.Context) (callEnv, error) {
+	cv := callEnv{base: c.dsn.Base, token: c.dsn.Token, user: c.dsn.User, password: c.dsn.Password, key: c.dsn.Key}
+	v := callValuesOf(ctx)
+	if c.dsn.Dynamic {
+		if v.dest == nil || v.dest.base == nil {
+			return cv, callError(codes.FailedPrecondition, c.client, ReasonNoDestination,
+				"the client's destination comes with the call, and this call brought none (call it through the project's egress getter)", nil)
+		}
+		cv.base = v.dest.base
+	}
+	if c.dsn.PerCall {
+		cr := v.cred
+		if cr == nil || cr.empty() {
+			return cv, callError(codes.FailedPrecondition, c.client, ReasonNoCredential,
+				"the client's credential comes with the call, and this call brought none (call it through the project's egress getter)", nil)
+		}
+		if cr.auth != c.dsn.Auth {
+			return cv, callError(codes.InvalidArgument, c.client, ReasonNoCredential,
+				"the call brought a "+string(cr.auth)+" credential; the client's DSN says auth="+string(c.dsn.Auth), nil)
+		}
+		cv.token, cv.user, cv.password, cv.key = cr.token, cr.user, cr.password, cr.key
+	}
+	return cv, nil
 }
 
 func (c *caller) timeout() time.Duration {
@@ -104,6 +154,15 @@ func (c *caller) maxAttempts() int {
 // do makes one call: in is the request message, out receives the decoded
 // success body.
 func (c *caller) do(ctx context.Context, m *method, in, out proto.Message) error {
+	cv, err := c.resolve(ctx)
+	if err != nil {
+		return err
+	}
+	if c.budget != nil {
+		if err := c.budget.admit(c.client, cv.base.Host); err != nil {
+			return err
+		}
+	}
 	// A SOAP call has no path of its own (every operation POSTs to the
 	// endpoint): its operation names it.
 	where := m.call.GetPath()
@@ -116,17 +175,20 @@ func (c *caller) do(ctx context.Context, m *method, in, out proto.Message) error
 			attribute.String("peer.service", c.client),
 			attribute.String("http.request.method", m.call.GetMethod()),
 			attribute.String("url.template", where),
-			attribute.String("server.address", c.dsn.Base.Host),
+			attribute.String("server.address", cv.base.Host),
 		))
 	defer span.End()
-	err := c.attempts(ctx, span, m, in, out)
+	err = c.attempts(ctx, span, m, in, out, cv)
+	if c.budget != nil {
+		c.budget.record(cv.base.Host, err)
+	}
 	if err != nil {
 		span.SetStatus(otelcodes.Error, err.Error())
 	}
 	return err
 }
 
-func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, out proto.Message) error {
+func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, out proto.Message, cv callEnv) error {
 	ctx, cancel := context.WithTimeout(ctx, TotalTimeout)
 	defer cancel()
 
@@ -135,7 +197,7 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 	if err != nil {
 		return callError(codes.InvalidArgument, c.client, ReasonBadRequest, err.Error(), nil)
 	}
-	target, err := c.target(m.call, req)
+	target, err := c.target(m.call, req, cv)
 	if err != nil {
 		return callError(codes.InvalidArgument, c.client, ReasonBadRequest, err.Error(), nil)
 	}
@@ -155,7 +217,7 @@ func (c *caller) attempts(ctx context.Context, span trace.Span, m *method, in, o
 	}
 
 	for attempt := 1; ; attempt++ {
-		status, respBody, wait, err := c.attempt(ctx, m, target, req.Header, body, contentType, out)
+		status, respBody, wait, err := c.attempt(ctx, m, target, req.Header, body, contentType, out, cv)
 		span.SetAttributes(attribute.Int("w17.egress.attempts", attempt))
 		if err == nil && status/100 == 2 {
 			span.SetAttributes(attribute.Int("http.response.status_code", status))
@@ -240,7 +302,7 @@ func stop(err error) error { return stopError{err} }
 // attempt sends the request once. It returns the status and, for a failure,
 // the (capped) body; for a success it decodes into out. wait is the
 // upstream's Retry-After, zero when it sent none.
-func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header http.Header, body []byte, contentType string, out proto.Message) (status int, failBody []byte, wait time.Duration, err error) {
+func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header http.Header, body []byte, contentType string, out proto.Message, cv callEnv) (status int, failBody []byte, wait time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout())
 	defer cancel()
 	var rd io.Reader
@@ -260,7 +322,18 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
 	}
-	c.authorize(r)
+	c.authorize(r, cv)
+	if c.dsn.Dynamic && c.dsn.Proxy != nil {
+		// Through a proxy the dial is the proxy's: the destination is
+		// resolved and checked here (a name that resolves differently for
+		// the proxy a moment later is the proxy's policy to refuse).
+		if err := checkResolved(ctx, target.Hostname(), c.dsn.Allow); err != nil {
+			if re := refusedAddressCallError(c.client, err); re != nil {
+				return 0, nil, 0, stop(re)
+			}
+			return 0, nil, 0, err
+		}
+	}
 	for _, h := range hooksFor(&before, m) {
 		if err := h(ctx, r); err != nil {
 			return 0, nil, 0, stop(callError(codes.Internal, c.client, "HOOK_REFUSED", "before-request hook: "+err.Error(), nil))
@@ -268,6 +341,9 @@ func (c *caller) attempt(ctx context.Context, m *method, target *url.URL, header
 	}
 	resp, err := c.http.Do(r)
 	if err != nil {
+		if re := refusedAddressCallError(c.client, err); re != nil {
+			return 0, nil, 0, stop(re)
+		}
 		return 0, nil, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -334,18 +410,18 @@ func transportText(err error) string {
 
 // target is the request URL: the DSN's base, the path template filled in,
 // the query.
-func (c *caller) target(call *w17pb.EgressCall, req *wire.Request) (*url.URL, error) {
+func (c *caller) target(call *w17pb.EgressCall, req *wire.Request, cv callEnv) (*url.URL, error) {
 	path, err := fillPath(call.GetPath(), req.Path)
 	if err != nil {
 		return nil, err
 	}
-	u := *c.dsn.Base
-	u.Path = c.dsn.Base.Path + path
-	u.RawPath = c.dsn.Base.EscapedPath() + escapedPath(call.GetPath(), req.Path)
+	u := *cv.base
+	u.Path = cv.base.Path + path
+	u.RawPath = cv.base.EscapedPath() + escapedPath(call.GetPath(), req.Path)
 	q := req.Query
 	if c.dsn.Auth == AuthAPIKey && c.dsn.KeyInQuery {
 		q = cloneValues(q)
-		q.Set(c.dsn.KeyName, c.dsn.Key)
+		q.Set(c.dsn.KeyName, cv.key)
 	}
 	u.RawQuery = q.Encode()
 	return &u, nil
@@ -427,15 +503,15 @@ func encodeBody(call *w17pb.EgressCall, req *wire.Request) ([]byte, string, erro
 	return b, "application/json", err
 }
 
-func (c *caller) authorize(r *http.Request) {
+func (c *caller) authorize(r *http.Request, cv callEnv) {
 	switch c.dsn.Auth {
 	case AuthBearer:
-		r.Header.Set("Authorization", "Bearer "+c.dsn.Token)
+		r.Header.Set("Authorization", "Bearer "+cv.token)
 	case AuthBasic:
-		r.SetBasicAuth(c.dsn.User, c.dsn.Password)
+		r.SetBasicAuth(cv.user, cv.password)
 	case AuthAPIKey:
 		if !c.dsn.KeyInQuery {
-			r.Header.Set(c.dsn.KeyName, c.dsn.Key)
+			r.Header.Set(c.dsn.KeyName, cv.key)
 		}
 	}
 }

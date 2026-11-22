@@ -223,9 +223,31 @@ type EgressClient struct {
 	ServerUrl string `protobuf:"bytes,5,opt,name=server_url,json=serverUrl,proto3" json:"server_url,omitempty"`
 	// SOAP clients (generated from a WSDL): the SOAP version of the binding,
 	// "1.1" or "1.2". Empty for an OpenAPI client.
-	SoapVersion   string `protobuf:"bytes,6,opt,name=soap_version,json=soapVersion,proto3" json:"soap_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SoapVersion string `protobuf:"bytes,6,opt,name=soap_version,json=soapVersion,proto3" json:"soap_version,omitempty"`
+	// The credential comes with each CALL, not with the deployment: a
+	// customer's own token for their account at the upstream. The project's
+	// getter then takes it as a parameter (`egress.Fio(egress.Bearer(tok))`),
+	// so a call without one does not compile, and it is carried as a secret
+	// like the DSN's. The DSN still names the host and the scheme, with the
+	// credential written `per_call` (`?auth=bearer&token=per_call`); a DSN
+	// that carries a real one for this client, or `per_call` for a client
+	// that does not declare it, is refused at boot. `w17ctl client generate
+	// --per-call-credential`.
+	PerCallCredential bool `protobuf:"varint,7,opt,name=per_call_credential,json=perCallCredential,proto3" json:"per_call_credential,omitempty"`
+	// The destination comes with each call: a customer's webhook URL, a row of
+	// data rather than configuration. The getter takes it
+	// (`egress.Webhooks(dest)`, dest from `egress.To(url)`), and the DSN is a
+	// POLICY instead of an address: `dynamic?timeout=5s&max_attempts=3`.
+	// Every destination is checked when it is dialled: a private, loopback,
+	// link-local, multicast or unspecified address is refused unless the DSN
+	// allows it (`allow=private,loopback`), and a redirect is never followed.
+	// A destination that keeps failing is suspended for a while (`budget=`
+	// consecutive failures, `cooldown=`), so one customer's dead endpoint does
+	// not spend everyone's capacity. `w17ctl client generate
+	// --per-call-destination`.
+	PerCallDestination bool `protobuf:"varint,8,opt,name=per_call_destination,json=perCallDestination,proto3" json:"per_call_destination,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *EgressClient) Reset() {
@@ -298,6 +320,20 @@ func (x *EgressClient) GetSoapVersion() string {
 		return x.SoapVersion
 	}
 	return ""
+}
+
+func (x *EgressClient) GetPerCallCredential() bool {
+	if x != nil {
+		return x.PerCallCredential
+	}
+	return false
+}
+
+func (x *EgressClient) GetPerCallDestination() bool {
+	if x != nil {
+		return x.PerCallDestination
+	}
+	return false
 }
 
 // EgressCall — one HTTP operation.
@@ -722,7 +758,7 @@ var File_w17_egress_proto protoreflect.FileDescriptor
 
 const file_w17_egress_proto_rawDesc = "" +
 	"\n" +
-	"\x10w17/egress.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xc4\x01\n" +
+	"\x10w17/egress.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xa6\x02\n" +
 	"\fEgressClient\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1f\n" +
@@ -731,7 +767,9 @@ const file_w17_egress_proto_rawDesc = "" +
 	"\x0fopenapi_version\x18\x04 \x01(\tR\x0eopenapiVersion\x12\x1d\n" +
 	"\n" +
 	"server_url\x18\x05 \x01(\tR\tserverUrl\x12!\n" +
-	"\fsoap_version\x18\x06 \x01(\tR\vsoapVersion\"\xab\x03\n" +
+	"\fsoap_version\x18\x06 \x01(\tR\vsoapVersion\x12.\n" +
+	"\x13per_call_credential\x18\a \x01(\bR\x11perCallCredential\x120\n" +
+	"\x14per_call_destination\x18\b \x01(\bR\x12perCallDestination\"\xab\x03\n" +
 	"\n" +
 	"EgressCall\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
