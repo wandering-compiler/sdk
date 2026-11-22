@@ -61,9 +61,10 @@ export function App({ spec, slots }: AppProps) {
   // it — see i18n.ts::translatorFor.
   const t = translatorFor(spec);
   // The tab says which admin this is (AdminApi.title), not "Admin".
+  const tabTitle = t(spec.title || spec.name);
   useEffect(() => {
-    document.title = t(spec.title || spec.name);
-  }, [spec.title, spec.name]);
+    document.title = tabTitle;
+  }, [tabTitle]);
   // FIRST, before anything reads the hash: a federated sign-in comes
   // back with the session (or a one-time code) in the fragment, and the
   // fragment is also this SPA's router. The lazy initialiser runs once,

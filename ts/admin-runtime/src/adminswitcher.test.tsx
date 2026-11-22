@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 function stubLinks(links: Record<string, string>, ok = true) {
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok, json: async () => ({ links }) })));
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok, json: () => Promise.resolve({ links }) })));
 }
 
 describe("AdminSwitcher", () => {
