@@ -181,6 +181,24 @@ message AdminApi {
   // only — an admin action is not a marketing signal, so `marketing` is
   // refused. Absent = no records.
   RequestEvents request_events = 6;
+
+  // The admin's name as people see it: the browser tab's title and, unless
+  // `heading` says otherwise, the heading in the header. Empty = `name`.
+  // Translated like any other text of the admin (its catalogs).
+  string title = 13;
+
+  // The header's heading, when it should differ from `title` (a shorter one,
+  // say). Empty = `title`.
+  string heading = 14;
+
+  // Other admins of the project to switch to — another domain's admin,
+  // offered in a picker beside the heading. A link names the DOMAIN; codegen
+  // resolves it to that domain's admin and gives this one the address through
+  // its environment (`<PREFIX>_LINK_<DOMAIN>`): the local stack's published
+  // port on a developer's machine, the surface's public host on a deployed
+  // environment, so the code is the same everywhere. A link whose address the
+  // environment does not carry is left out of the picker.
+  repeated AdminLink links = 15;
 }
 
 // AdminAuth declares the thin shim over hand-written storage
@@ -961,4 +979,13 @@ enum AdminWidgetSize {
   ADMIN_WIDGET_SIZE_MEDIUM = 2;
   // LARGE — full row width.
   ADMIN_WIDGET_SIZE_LARGE = 3;
+}
+
+// AdminLink is one entry of `AdminApi.links`: another domain's admin.
+message AdminLink {
+  // The w17 domain whose admin it opens (`billing`). Required; it must have
+  // an admin surface.
+  string domain = 1;
+  // What the picker shows. Empty = that admin's `title`, else the domain.
+  string label = 2;
 }

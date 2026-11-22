@@ -34,7 +34,7 @@ import { ListPage } from "./ListPage";
 import { DetailPage } from "./DetailPage";
 import { CreatePage } from "./CreatePage";
 import { OverviewPage } from "./OverviewPage";
-import { Brand, NavMonogram, ThemeToggle } from "./components";
+import { AdminSwitcher, Brand, NavMonogram, ThemeToggle } from "./components";
 import { IconChevronRight, IconDashboard, IconLogout } from "./icons";
 import { pageLabel } from "./format";
 import { apiGet } from "./api";
@@ -60,6 +60,10 @@ export function App({ spec, slots }: AppProps) {
   // One translator for the whole tree, derived the way every surface derives
   // it — see i18n.ts::translatorFor.
   const t = translatorFor(spec);
+  // The tab says which admin this is (AdminApi.title), not "Admin".
+  useEffect(() => {
+    document.title = t(spec.title || spec.name);
+  }, [spec.title, spec.name]);
   // FIRST, before anything reads the hash: a federated sign-in comes
   // back with the session (or a one-time code) in the fragment, and the
   // fragment is also this SPA's router. The lazy initialiser runs once,
@@ -221,7 +225,10 @@ export function App({ spec, slots }: AppProps) {
           <Group h="100%" px="md" justify="space-between" wrap="nowrap">
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-              <Brand name={spec.name} />
+              <Brand name={t(spec.heading || spec.title || spec.name)} />
+              {spec.links && spec.links.length > 0 && spec.links_endpoint ? (
+                <AdminSwitcher links={spec.links} endpoint={spec.links_endpoint} t={t} />
+              ) : null}
             </Group>
             <Group gap="xs" wrap="nowrap">
               {identity && (

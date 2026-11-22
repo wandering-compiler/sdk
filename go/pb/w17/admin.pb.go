@@ -409,6 +409,21 @@ type AdminApi struct {
 	// only — an admin action is not a marketing signal, so `marketing` is
 	// refused. Absent = no records.
 	RequestEvents *RequestEvents `protobuf:"bytes,6,opt,name=request_events,json=requestEvents,proto3" json:"request_events,omitempty"`
+	// The admin's name as people see it: the browser tab's title and, unless
+	// `heading` says otherwise, the heading in the header. Empty = `name`.
+	// Translated like any other text of the admin (its catalogs).
+	Title string `protobuf:"bytes,13,opt,name=title,proto3" json:"title,omitempty"`
+	// The header's heading, when it should differ from `title` (a shorter one,
+	// say). Empty = `title`.
+	Heading string `protobuf:"bytes,14,opt,name=heading,proto3" json:"heading,omitempty"`
+	// Other admins of the project to switch to — another domain's admin,
+	// offered in a picker beside the heading. A link names the DOMAIN; codegen
+	// resolves it to that domain's admin and gives this one the address through
+	// its environment (`<PREFIX>_LINK_<DOMAIN>`): the local stack's published
+	// port on a developer's machine, the surface's public host on a deployed
+	// environment, so the code is the same everywhere. A link whose address the
+	// environment does not carry is left out of the picker.
+	Links         []*AdminLink `protobuf:"bytes,15,rep,name=links,proto3" json:"links,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -502,6 +517,27 @@ func (x *AdminApi) GetOverview() *AdminOverview {
 func (x *AdminApi) GetRequestEvents() *RequestEvents {
 	if x != nil {
 		return x.RequestEvents
+	}
+	return nil
+}
+
+func (x *AdminApi) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *AdminApi) GetHeading() string {
+	if x != nil {
+		return x.Heading
+	}
+	return ""
+}
+
+func (x *AdminApi) GetLinks() []*AdminLink {
+	if x != nil {
+		return x.Links
 	}
 	return nil
 }
@@ -2210,6 +2246,62 @@ func (x *AdminWidgetValue) GetLabel() string {
 	return ""
 }
 
+// AdminLink is one entry of `AdminApi.links`: another domain's admin.
+type AdminLink struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The w17 domain whose admin it opens (`billing`). Required; it must have
+	// an admin surface.
+	Domain string `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
+	// What the picker shows. Empty = that admin's `title`, else the domain.
+	Label         string `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminLink) Reset() {
+	*x = AdminLink{}
+	mi := &file_w17_admin_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminLink) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminLink) ProtoMessage() {}
+
+func (x *AdminLink) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_admin_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminLink.ProtoReflect.Descriptor instead.
+func (*AdminLink) Descriptor() ([]byte, []int) {
+	return file_w17_admin_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *AdminLink) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *AdminLink) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
 var file_w17_admin_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.FileOptions)(nil),
@@ -2349,7 +2441,7 @@ var File_w17_admin_proto protoreflect.FileDescriptor
 
 const file_w17_admin_proto_rawDesc = "" +
 	"\n" +
-	"\x0fw17/admin.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xd9\x02\n" +
+	"\x0fw17/admin.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x18w17/request_events.proto\"\xaf\x03\n" +
 	"\bAdminApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\"\n" +
@@ -2360,7 +2452,10 @@ const file_w17_admin_proto_rawDesc = "" +
 	" \x03(\v2\x0e.w17.AdminPageR\x05pages\x12$\n" +
 	"\x03nav\x18\v \x03(\v2\x12.w17.AdminNavGroupR\x03nav\x12.\n" +
 	"\boverview\x18\f \x01(\v2\x12.w17.AdminOverviewR\boverview\x129\n" +
-	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\"\xe8\x01\n" +
+	"\x0erequest_events\x18\x06 \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12\x14\n" +
+	"\x05title\x18\r \x01(\tR\x05title\x12\x18\n" +
+	"\aheading\x18\x0e \x01(\tR\aheading\x12$\n" +
+	"\x05links\x18\x0f \x03(\v2\x0e.w17.AdminLinkR\x05links\"\xe8\x01\n" +
 	"\tAdminAuth\x12!\n" +
 	"\flogin_method\x18\x01 \x01(\tR\vloginMethod\x12\x1f\n" +
 	"\vuser_lookup\x18\x02 \x01(\tR\n" +
@@ -2462,6 +2557,9 @@ const file_w17_admin_proto_rawDesc = "" +
 	"\x06series\x18\t \x03(\v2\x15.w17.AdminWidgetValueR\x06series\">\n" +
 	"\x10AdminWidgetValue\x12\x14\n" +
 	"\x05field\x18\x01 \x01(\tR\x05field\x12\x14\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\"9\n" +
+	"\tAdminLink\x12\x16\n" +
+	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label*\xb2\x01\n" +
 	"\x11AdminActionTarget\x12#\n" +
 	"\x1fADMIN_ACTION_TARGET_UNSPECIFIED\x10\x00\x12\x1c\n" +
@@ -2510,7 +2608,7 @@ func file_w17_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_w17_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_w17_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_w17_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_w17_admin_proto_goTypes = []any{
 	(AdminActionTarget)(0),              // 0: w17.AdminActionTarget
 	(AdminInlineLayout)(0),              // 1: w17.AdminInlineLayout
@@ -2534,51 +2632,53 @@ var file_w17_admin_proto_goTypes = []any{
 	(*AdminOverview)(nil),               // 19: w17.AdminOverview
 	(*AdminWidget)(nil),                 // 20: w17.AdminWidget
 	(*AdminWidgetValue)(nil),            // 21: w17.AdminWidgetValue
-	(*RequestEvents)(nil),               // 22: w17.RequestEvents
-	(*descriptorpb.FileOptions)(nil),    // 23: google.protobuf.FileOptions
-	(*descriptorpb.MessageOptions)(nil), // 24: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 25: google.protobuf.FieldOptions
-	(*descriptorpb.MethodOptions)(nil),  // 26: google.protobuf.MethodOptions
+	(*AdminLink)(nil),                   // 22: w17.AdminLink
+	(*RequestEvents)(nil),               // 23: w17.RequestEvents
+	(*descriptorpb.FileOptions)(nil),    // 24: google.protobuf.FileOptions
+	(*descriptorpb.MessageOptions)(nil), // 25: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 26: google.protobuf.FieldOptions
+	(*descriptorpb.MethodOptions)(nil),  // 27: google.protobuf.MethodOptions
 }
 var file_w17_admin_proto_depIdxs = []int32{
 	6,  // 0: w17.AdminApi.auth:type_name -> w17.AdminAuth
 	8,  // 1: w17.AdminApi.pages:type_name -> w17.AdminPage
 	18, // 2: w17.AdminApi.nav:type_name -> w17.AdminNavGroup
 	19, // 3: w17.AdminApi.overview:type_name -> w17.AdminOverview
-	22, // 4: w17.AdminApi.request_events:type_name -> w17.RequestEvents
-	7,  // 5: w17.AdminAuth.sign_in_options:type_name -> w17.AdminSignInOption
-	9,  // 6: w17.AdminPage.list:type_name -> w17.AdminList
-	13, // 7: w17.AdminPage.detail:type_name -> w17.AdminDetail
-	15, // 8: w17.AdminPage.actions:type_name -> w17.AdminAction
-	17, // 9: w17.AdminPage.inlines:type_name -> w17.AdminInline
-	10, // 10: w17.AdminList.columns:type_name -> w17.AdminColumn
-	12, // 11: w17.AdminList.field_refs:type_name -> w17.AdminFieldRef
-	11, // 12: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
-	14, // 13: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
-	12, // 14: w17.AdminDetail.field_refs:type_name -> w17.AdminFieldRef
-	0,  // 15: w17.AdminAction.target:type_name -> w17.AdminActionTarget
-	16, // 16: w17.AdminAction.result:type_name -> w17.AdminActionResult
-	12, // 17: w17.AdminAction.field_refs:type_name -> w17.AdminFieldRef
-	1,  // 18: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
-	12, // 19: w17.AdminInline.field_refs:type_name -> w17.AdminFieldRef
-	20, // 20: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
-	4,  // 21: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
-	2,  // 22: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
-	21, // 23: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
-	3,  // 24: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
-	21, // 25: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
-	23, // 26: w17.admin_api:extendee -> google.protobuf.FileOptions
-	24, // 27: w17.admin_title:extendee -> google.protobuf.MessageOptions
-	25, // 28: w17.admin_filter:extendee -> google.protobuf.FieldOptions
-	25, // 29: w17.admin_search:extendee -> google.protobuf.FieldOptions
-	25, // 30: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
-	26, // 31: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
-	5,  // 32: w17.admin_api:type_name -> w17.AdminApi
-	33, // [33:33] is the sub-list for method output_type
-	33, // [33:33] is the sub-list for method input_type
-	32, // [32:33] is the sub-list for extension type_name
-	26, // [26:32] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	23, // 4: w17.AdminApi.request_events:type_name -> w17.RequestEvents
+	22, // 5: w17.AdminApi.links:type_name -> w17.AdminLink
+	7,  // 6: w17.AdminAuth.sign_in_options:type_name -> w17.AdminSignInOption
+	9,  // 7: w17.AdminPage.list:type_name -> w17.AdminList
+	13, // 8: w17.AdminPage.detail:type_name -> w17.AdminDetail
+	15, // 9: w17.AdminPage.actions:type_name -> w17.AdminAction
+	17, // 10: w17.AdminPage.inlines:type_name -> w17.AdminInline
+	10, // 11: w17.AdminList.columns:type_name -> w17.AdminColumn
+	12, // 12: w17.AdminList.field_refs:type_name -> w17.AdminFieldRef
+	11, // 13: w17.AdminColumn.ref:type_name -> w17.AdminColumnRef
+	14, // 14: w17.AdminDetail.fieldsets:type_name -> w17.AdminFieldset
+	12, // 15: w17.AdminDetail.field_refs:type_name -> w17.AdminFieldRef
+	0,  // 16: w17.AdminAction.target:type_name -> w17.AdminActionTarget
+	16, // 17: w17.AdminAction.result:type_name -> w17.AdminActionResult
+	12, // 18: w17.AdminAction.field_refs:type_name -> w17.AdminFieldRef
+	1,  // 19: w17.AdminInline.layout:type_name -> w17.AdminInlineLayout
+	12, // 20: w17.AdminInline.field_refs:type_name -> w17.AdminFieldRef
+	20, // 21: w17.AdminOverview.widgets:type_name -> w17.AdminWidget
+	4,  // 22: w17.AdminWidget.size:type_name -> w17.AdminWidgetSize
+	2,  // 23: w17.AdminWidget.kind:type_name -> w17.AdminWidgetKind
+	21, // 24: w17.AdminWidget.values:type_name -> w17.AdminWidgetValue
+	3,  // 25: w17.AdminWidget.chart_kind:type_name -> w17.AdminChartKind
+	21, // 26: w17.AdminWidget.series:type_name -> w17.AdminWidgetValue
+	24, // 27: w17.admin_api:extendee -> google.protobuf.FileOptions
+	25, // 28: w17.admin_title:extendee -> google.protobuf.MessageOptions
+	26, // 29: w17.admin_filter:extendee -> google.protobuf.FieldOptions
+	26, // 30: w17.admin_search:extendee -> google.protobuf.FieldOptions
+	26, // 31: w17.admin_sortable:extendee -> google.protobuf.FieldOptions
+	27, // 32: w17.admin_bypass_acl:extendee -> google.protobuf.MethodOptions
+	5,  // 33: w17.admin_api:type_name -> w17.AdminApi
+	34, // [34:34] is the sub-list for method output_type
+	34, // [34:34] is the sub-list for method input_type
+	33, // [33:34] is the sub-list for extension type_name
+	27, // [27:33] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_w17_admin_proto_init() }
@@ -2594,7 +2694,7 @@ func file_w17_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_admin_proto_rawDesc), len(file_w17_admin_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 6,
 			NumServices:   0,
 		},

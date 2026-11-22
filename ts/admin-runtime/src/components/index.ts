@@ -24,3 +24,5 @@ export { ChartWidgetLazy as ChartWidget } from "./ChartWidgetLazy";
 export type { ChartWidgetProps } from "./ChartWidgetLazy";
 export { NavMonogram, monogramLetter, monogramColor } from "./NavMonogram";
 export type { NavMonogramProps } from "./NavMonogram";
+export { AdminSwitcher } from "./AdminSwitcher";
+export type { AdminSwitcherLink, AdminSwitcherProps } from "./AdminSwitcher";
