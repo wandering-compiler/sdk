@@ -40,16 +40,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProjectRegistry_RegisterProject_FullMethodName     = "/w17.registry.ProjectRegistry/RegisterProject"
-	ProjectRegistry_ListMigrations_FullMethodName      = "/w17.registry.ProjectRegistry/ListMigrations"
-	ProjectRegistry_PushSchema_FullMethodName          = "/w17.registry.ProjectRegistry/PushSchema"
-	ProjectRegistry_PushRawMigration_FullMethodName    = "/w17.registry.ProjectRegistry/PushRawMigration"
-	ProjectRegistry_PushFixture_FullMethodName         = "/w17.registry.ProjectRegistry/PushFixture"
-	ProjectRegistry_ReleaseProjectToOrg_FullMethodName = "/w17.registry.ProjectRegistry/ReleaseProjectToOrg"
-	ProjectRegistry_ClaimProject_FullMethodName        = "/w17.registry.ProjectRegistry/ClaimProject"
-	ProjectRegistry_ResetHistory_FullMethodName        = "/w17.registry.ProjectRegistry/ResetHistory"
-	ProjectRegistry_VerifyHistory_FullMethodName       = "/w17.registry.ProjectRegistry/VerifyHistory"
-	ProjectRegistry_ImportProject_FullMethodName       = "/w17.registry.ProjectRegistry/ImportProject"
+	ProjectRegistry_RegisterProject_FullMethodName      = "/w17.registry.ProjectRegistry/RegisterProject"
+	ProjectRegistry_ListMigrations_FullMethodName       = "/w17.registry.ProjectRegistry/ListMigrations"
+	ProjectRegistry_PushSchema_FullMethodName           = "/w17.registry.ProjectRegistry/PushSchema"
+	ProjectRegistry_PushRawMigration_FullMethodName     = "/w17.registry.ProjectRegistry/PushRawMigration"
+	ProjectRegistry_PushDataMigration_FullMethodName    = "/w17.registry.ProjectRegistry/PushDataMigration"
+	ProjectRegistry_CompileDataMigration_FullMethodName = "/w17.registry.ProjectRegistry/CompileDataMigration"
+	ProjectRegistry_PushFixture_FullMethodName          = "/w17.registry.ProjectRegistry/PushFixture"
+	ProjectRegistry_ReleaseProjectToOrg_FullMethodName  = "/w17.registry.ProjectRegistry/ReleaseProjectToOrg"
+	ProjectRegistry_ClaimProject_FullMethodName         = "/w17.registry.ProjectRegistry/ClaimProject"
+	ProjectRegistry_ResetHistory_FullMethodName         = "/w17.registry.ProjectRegistry/ResetHistory"
+	ProjectRegistry_VerifyHistory_FullMethodName        = "/w17.registry.ProjectRegistry/VerifyHistory"
+	ProjectRegistry_ImportProject_FullMethodName        = "/w17.registry.ProjectRegistry/ImportProject"
 )
 
 // ProjectRegistryClient is the client API for ProjectRegistry service.
@@ -81,6 +83,19 @@ type ProjectRegistryClient interface {
 	// bypassing the schema-driven planner (the TRANSFORM_FIELD escape hatch).
 	// Console validates + signs + stores. `w17ctl migrate migration` calls it.
 	PushRawMigration(ctx context.Context, in *PushRawMigrationRequest, opts ...grpc.CallOption) (*PushRawMigrationResponse, error)
+	// PushDataMigration stores a DQL data migration — a data fix written in DQL
+	// over the project's models (`UPDATE billing.Invoice SET … WHERE …`). The
+	// console compiles it against the stored schema into the connection's SQL,
+	// wraps it with the history bookkeeping, signs it and appends it to the
+	// connection's history: every deployed environment applies it with the
+	// rest, in order. A local stack does not run the history; check a data
+	// migration there with CompileDataMigration (`w17ctl migrate try-data`).
+	PushDataMigration(ctx context.Context, in *PushDataMigrationRequest, opts ...grpc.CallOption) (*PushDataMigrationResponse, error)
+	// CompileDataMigration compiles DQL data-migration statements against the
+	// stored schema without storing anything: the SQL `w17ctl migrate
+	// try-data` runs in a transaction it rolls back, and a preview before
+	// PushDataMigration.
+	CompileDataMigration(ctx context.Context, in *CompileDataMigrationRequest, opts ...grpc.CallOption) (*CompileDataMigrationResponse, error)
 	// PushFixture stores (or replaces) a fixture body for (project, domain,
 	// name). The raw JSON is validated SERVER-side against the project's stored
 	// schema (table / column / pk-arity) before storing — the client ships the
@@ -202,6 +217,26 @@ func (c *projectRegistryClient) PushRawMigration(ctx context.Context, in *PushRa
 	return out, nil
 }
 
+func (c *projectRegistryClient) PushDataMigration(ctx context.Context, in *PushDataMigrationRequest, opts ...grpc.CallOption) (*PushDataMigrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushDataMigrationResponse)
+	err := c.cc.Invoke(ctx, ProjectRegistry_PushDataMigration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *projectRegistryClient) CompileDataMigration(ctx context.Context, in *CompileDataMigrationRequest, opts ...grpc.CallOption) (*CompileDataMigrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompileDataMigrationResponse)
+	err := c.cc.Invoke(ctx, ProjectRegistry_CompileDataMigration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *projectRegistryClient) PushFixture(ctx context.Context, in *PushFixtureRequest, opts ...grpc.CallOption) (*PushFixtureResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PushFixtureResponse)
@@ -291,6 +326,19 @@ type ProjectRegistryServer interface {
 	// bypassing the schema-driven planner (the TRANSFORM_FIELD escape hatch).
 	// Console validates + signs + stores. `w17ctl migrate migration` calls it.
 	PushRawMigration(context.Context, *PushRawMigrationRequest) (*PushRawMigrationResponse, error)
+	// PushDataMigration stores a DQL data migration — a data fix written in DQL
+	// over the project's models (`UPDATE billing.Invoice SET … WHERE …`). The
+	// console compiles it against the stored schema into the connection's SQL,
+	// wraps it with the history bookkeeping, signs it and appends it to the
+	// connection's history: every deployed environment applies it with the
+	// rest, in order. A local stack does not run the history; check a data
+	// migration there with CompileDataMigration (`w17ctl migrate try-data`).
+	PushDataMigration(context.Context, *PushDataMigrationRequest) (*PushDataMigrationResponse, error)
+	// CompileDataMigration compiles DQL data-migration statements against the
+	// stored schema without storing anything: the SQL `w17ctl migrate
+	// try-data` runs in a transaction it rolls back, and a preview before
+	// PushDataMigration.
+	CompileDataMigration(context.Context, *CompileDataMigrationRequest) (*CompileDataMigrationResponse, error)
 	// PushFixture stores (or replaces) a fixture body for (project, domain,
 	// name). The raw JSON is validated SERVER-side against the project's stored
 	// schema (table / column / pk-arity) before storing — the client ships the
@@ -383,6 +431,12 @@ func (UnimplementedProjectRegistryServer) PushSchema(context.Context, *PushSchem
 }
 func (UnimplementedProjectRegistryServer) PushRawMigration(context.Context, *PushRawMigrationRequest) (*PushRawMigrationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PushRawMigration not implemented")
+}
+func (UnimplementedProjectRegistryServer) PushDataMigration(context.Context, *PushDataMigrationRequest) (*PushDataMigrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PushDataMigration not implemented")
+}
+func (UnimplementedProjectRegistryServer) CompileDataMigration(context.Context, *CompileDataMigrationRequest) (*CompileDataMigrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompileDataMigration not implemented")
 }
 func (UnimplementedProjectRegistryServer) PushFixture(context.Context, *PushFixtureRequest) (*PushFixtureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PushFixture not implemented")
@@ -491,6 +545,42 @@ func _ProjectRegistry_PushRawMigration_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ProjectRegistryServer).PushRawMigration(ctx, req.(*PushRawMigrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProjectRegistry_PushDataMigration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushDataMigrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectRegistryServer).PushDataMigration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectRegistry_PushDataMigration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectRegistryServer).PushDataMigration(ctx, req.(*PushDataMigrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProjectRegistry_CompileDataMigration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompileDataMigrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectRegistryServer).CompileDataMigration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectRegistry_CompileDataMigration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectRegistryServer).CompileDataMigration(ctx, req.(*CompileDataMigrationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -625,6 +715,14 @@ var ProjectRegistry_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PushRawMigration",
 			Handler:    _ProjectRegistry_PushRawMigration_Handler,
+		},
+		{
+			MethodName: "PushDataMigration",
+			Handler:    _ProjectRegistry_PushDataMigration_Handler,
+		},
+		{
+			MethodName: "CompileDataMigration",
+			Handler:    _ProjectRegistry_CompileDataMigration_Handler,
 		},
 		{
 			MethodName: "PushFixture",
