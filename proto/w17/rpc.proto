@@ -213,6 +213,31 @@ message RpcApi {
   // that is not in `exclude_auth` is refused. The gateway's own auth
   // methods are FAILED_ONLY without being listed.
   repeated RpcPublicLimit public_limits = 11;
+
+  // principal_rate limits how often one authenticated caller may call this
+  // surface — `RestApi.principal_rate`, with the same rules; the
+  // transport's variables are `<PREFIX>_PRINCIPAL_RATELIMIT_RPC_*`. A
+  // method public on REST is still limited here, being authenticated here.
+  PrincipalRate principal_rate = 12;
+
+  // What one call of a method spends of that budget, by ref (as
+  // `groups[].refs` name them): the gRPC twin of
+  // `RestEndpoint.principal_cost` / `principal_exempt`. A method not listed
+  // spends 1. A ref not on this surface, one in `exclude_auth`, a duplicate,
+  // or an entry with both `cost` and `exempt` (or neither) is refused.
+  // Declared without `principal_rate`, the costs apply when the deployment
+  // switches the limit on.
+  repeated RpcPrincipalCost principal_costs = 13;
+}
+
+// RpcPrincipalCost is one entry of `RpcApi.principal_costs`.
+message RpcPrincipalCost {
+  // The method, as `groups[].refs` names it.
+  string ref = 1;
+  // Tokens one call spends; > 0.
+  uint32 cost = 2;
+  // Spends nothing.
+  bool exempt = 3;
 }
 
 // RpcPublicLimit is one entry of `RpcApi.public_limits`.

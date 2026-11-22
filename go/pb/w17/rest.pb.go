@@ -702,8 +702,29 @@ type RestApi struct {
 	// `(w17.db.scope)`). Same field as `RpcApi.unauthenticated` and
 	// `McpApi.unauthenticated`.
 	Unauthenticated bool `protobuf:"varint,12,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// principal_rate limits how often ONE authenticated caller may call this
+	// surface: a token bucket per principal (the auth method's `user_id`),
+	// refilled at `per_minute`, holding at most `burst`. It is the
+	// authenticated twin of the per-address limit on the methods that take
+	// no credential (`RestEndpoint.public_limit`): those bound guesses, this
+	// bounds what one token holder may ask of the backend — an API token
+	// calling as fast as it can, a script in a loop.
+	//
+	// One bucket per principal for the whole surface; a method spends
+	// `RestEndpoint.principal_cost` tokens of it (1 by default), or none with
+	// `principal_exempt`. A stream spends its cost once, when it opens. A
+	// refused call is 429 `RESOURCE_EXHAUSTED` with `Retry-After`.
+	//
+	// Unset: not limited — unless the deployment switches it on with
+	// `<PREFIX>_PRINCIPAL_RATELIMIT_PER_MINUTE` / `_BURST` (the transport's
+	// `_REST_` variant overrides; `<= 0` switches a declared limit off).
+	// In-process, per gateway replica, like the per-address limit. Refused on
+	// a surface without auth: there is no principal to count. A
+	// `principal_cost` declared without it applies when the deployment
+	// switches the limit on.
+	PrincipalRate *PrincipalRate `protobuf:"bytes,13,opt,name=principal_rate,json=principalRate,proto3" json:"principal_rate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestApi) Reset() {
@@ -818,6 +839,13 @@ func (x *RestApi) GetUnauthenticated() bool {
 		return x.Unauthenticated
 	}
 	return false
+}
+
+func (x *RestApi) GetPrincipalRate() *PrincipalRate {
+	if x != nil {
+		return x.PrincipalRate
+	}
+	return nil
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
@@ -1767,9 +1795,18 @@ type RestEndpoint struct {
 	// `_BURST`). Either way the operator can override it for this method
 	// alone: `<PREFIX>_PUBLIC_RATELIMIT_<SERVICE>_<METHOD>_PER_MINUTE` /
 	// `_BURST` (the generated `.env` files list the names).
-	PublicRate    *PublicRate `protobuf:"bytes,24,opt,name=public_rate,json=publicRate,proto3" json:"public_rate,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PublicRate *PublicRate `protobuf:"bytes,24,opt,name=public_rate,json=publicRate,proto3" json:"public_rate,omitempty"`
+	// principal_cost is how many tokens of the caller's per-principal budget
+	// (`RestApi.principal_rate`) one call of this endpoint spends: a heavy
+	// search 10, a cheap read 1. Unset (0) is 1. Not with `exclude_auth`
+	// (no principal) or `principal_exempt`.
+	PrincipalCost uint32 `protobuf:"varint,25,opt,name=principal_cost,json=principalCost,proto3" json:"principal_cost,omitempty"`
+	// principal_exempt: this endpoint spends nothing of the per-principal
+	// budget — a token refresh, a "who am I", a health read the client polls.
+	// Not with `exclude_auth` or `principal_cost`.
+	PrincipalExempt bool `protobuf:"varint,26,opt,name=principal_exempt,json=principalExempt,proto3" json:"principal_exempt,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RestEndpoint) Reset() {
@@ -1947,6 +1984,20 @@ func (x *RestEndpoint) GetPublicRate() *PublicRate {
 		return x.PublicRate
 	}
 	return nil
+}
+
+func (x *RestEndpoint) GetPrincipalCost() uint32 {
+	if x != nil {
+		return x.PrincipalCost
+	}
+	return 0
+}
+
+func (x *RestEndpoint) GetPrincipalExempt() bool {
+	if x != nil {
+		return x.PrincipalExempt
+	}
+	return false
 }
 
 // RawResponse names the response fields the HTTP answer is made of.
@@ -2425,10 +2476,14 @@ type RestStream struct {
 	// per opened stream, FAILED_ONLY included: a stream's outcome is not one
 	// status. Undeclared, a public GET stream is not limited; a POST stream is
 	// refused until it says how.
-	PublicLimit   PublicLimit `protobuf:"varint,11,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
-	PublicRate    *PublicRate `protobuf:"bytes,12,opt,name=public_rate,json=publicRate,proto3" json:"public_rate,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PublicLimit PublicLimit `protobuf:"varint,11,opt,name=public_limit,json=publicLimit,proto3,enum=w17.PublicLimit" json:"public_limit,omitempty"`
+	PublicRate  *PublicRate `protobuf:"bytes,12,opt,name=public_rate,json=publicRate,proto3" json:"public_rate,omitempty"`
+	// principal_cost / principal_exempt: as on RestEndpoint; a stream spends
+	// its cost once, when it opens.
+	PrincipalCost   uint32 `protobuf:"varint,13,opt,name=principal_cost,json=principalCost,proto3" json:"principal_cost,omitempty"`
+	PrincipalExempt bool   `protobuf:"varint,14,opt,name=principal_exempt,json=principalExempt,proto3" json:"principal_exempt,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RestStream) Reset() {
@@ -2536,6 +2591,20 @@ func (x *RestStream) GetPublicRate() *PublicRate {
 		return x.PublicRate
 	}
 	return nil
+}
+
+func (x *RestStream) GetPrincipalCost() uint32 {
+	if x != nil {
+		return x.PrincipalCost
+	}
+	return 0
+}
+
+func (x *RestStream) GetPrincipalExempt() bool {
+	if x != nil {
+		return x.PrincipalExempt
+	}
+	return false
 }
 
 // DownloadEndpoint binds a static download route under the
@@ -2769,6 +2838,65 @@ func (x *PublicRate) GetBurst() uint32 {
 	return 0
 }
 
+// PrincipalRate is a surface's threshold per authenticated caller: a token
+// bucket refilled at `per_minute` that holds at most `burst`. See
+// RestApi.principal_rate.
+type PrincipalRate struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Tokens a minute one principal may keep up. Required, > 0.
+	PerMinute uint32 `protobuf:"varint,1,opt,name=per_minute,json=perMinute,proto3" json:"per_minute,omitempty"`
+	// Tokens one principal may spend at once, before the rate applies.
+	// Required, > 0, and at least the largest `principal_cost` on the
+	// surface (a call that costs more than the bucket holds could never run).
+	Burst         uint32 `protobuf:"varint,2,opt,name=burst,proto3" json:"burst,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrincipalRate) Reset() {
+	*x = PrincipalRate{}
+	mi := &file_w17_rest_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrincipalRate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrincipalRate) ProtoMessage() {}
+
+func (x *PrincipalRate) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rest_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrincipalRate.ProtoReflect.Descriptor instead.
+func (*PrincipalRate) Descriptor() ([]byte, []int) {
+	return file_w17_rest_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *PrincipalRate) GetPerMinute() uint32 {
+	if x != nil {
+		return x.PerMinute
+	}
+	return 0
+}
+
+func (x *PrincipalRate) GetBurst() uint32 {
+	if x != nil {
+		return x.Burst
+	}
+	return 0
+}
+
 var file_w17_rest_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.FileOptions)(nil),
@@ -2796,7 +2924,7 @@ var File_w17_rest_proto protoreflect.FileDescriptor
 
 const file_w17_rest_proto_rawDesc = "" +
 	"\n" +
-	"\x0ew17/rest.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\x83\x04\n" +
+	"\x0ew17/rest.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\"\xbe\x04\n" +
 	"\aRestApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
@@ -2810,7 +2938,8 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\x0erequest_events\x18\n" +
 	" \x01(\v2\x12.w17.RequestEventsR\rrequestEvents\x12)\n" +
 	"\baudience\x18\v \x01(\v2\r.w17.AudienceR\baudience\x12(\n" +
-	"\x0funauthenticated\x18\f \x01(\bR\x0funauthenticated\"=\n" +
+	"\x0funauthenticated\x18\f \x01(\bR\x0funauthenticated\x129\n" +
+	"\x0eprincipal_rate\x18\r \x01(\v2\x12.w17.PrincipalRateR\rprincipalRate\"=\n" +
 	"\rPluginInclude\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x14\n" +
 	"\x05mount\x18\x02 \x01(\tR\x05mount\"\xb9\x01\n" +
@@ -2846,7 +2975,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\tendpoints\x18\x03 \x03(\v2\x11.w17.RestEndpointR\tendpoints\x12)\n" +
 	"\astreams\x18\x04 \x03(\v2\x0f.w17.RestStreamR\astreams\x123\n" +
 	"\tdownloads\x18\x05 \x03(\v2\x15.w17.DownloadEndpointR\tdownloads\x12\x12\n" +
-	"\x04name\x18\x06 \x01(\tR\x04name\"\xf0\x06\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"\xc2\a\n" +
 	"\fRestEndpoint\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12'\n" +
 	"\x06method\x18\x02 \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x12\x12\n" +
@@ -2872,7 +3001,9 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\acaptcha\x18\x16 \x01(\x0e2\f.w17.CaptchaR\acaptcha\x123\n" +
 	"\fraw_response\x18\x17 \x01(\v2\x10.w17.RawResponseR\vrawResponse\x120\n" +
 	"\vpublic_rate\x18\x18 \x01(\v2\x0f.w17.PublicRateR\n" +
-	"publicRateJ\x04\b\x05\x10\x06R\vauth_scopes\"\xe1\x01\n" +
+	"publicRate\x12%\n" +
+	"\x0eprincipal_cost\x18\x19 \x01(\rR\rprincipalCost\x12)\n" +
+	"\x10principal_exempt\x18\x1a \x01(\bR\x0fprincipalExemptJ\x04\b\x05\x10\x06R\vauth_scopes\"\xe1\x01\n" +
 	"\vRawResponse\x12\x1d\n" +
 	"\n" +
 	"body_field\x18\x01 \x01(\tR\tbodyField\x12!\n" +
@@ -2895,7 +3026,7 @@ const file_w17_rest_proto_rawDesc = "" +
 	"\fFieldBinding\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12$\n" +
 	"\x04from\x18\x02 \x01(\x0e2\x10.w17.FieldSourceR\x04from\x12\x1b\n" +
-	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xff\x03\n" +
+	"\thttp_name\x18\x03 \x01(\tR\bhttpName\"\xd1\x04\n" +
 	"\n" +
 	"RestStream\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
@@ -2912,7 +3043,9 @@ const file_w17_rest_proto_rawDesc = "" +
 	" \x01(\x0e2\x0f.w17.HttpMethodR\x06method\x123\n" +
 	"\fpublic_limit\x18\v \x01(\x0e2\x10.w17.PublicLimitR\vpublicLimit\x120\n" +
 	"\vpublic_rate\x18\f \x01(\v2\x0f.w17.PublicRateR\n" +
-	"publicRateJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
+	"publicRate\x12%\n" +
+	"\x0eprincipal_cost\x18\r \x01(\rR\rprincipalCost\x12)\n" +
+	"\x10principal_exempt\x18\x0e \x01(\bR\x0fprincipalExemptJ\x04\b\x05\x10\x06R\vauth_scopes\"\xf0\x02\n" +
 	"\x10DownloadEndpoint\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\ainclude\x18\x02 \x03(\tR\ainclude\x12\x18\n" +
@@ -2926,6 +3059,10 @@ const file_w17_rest_proto_rawDesc = "" +
 	" \x01(\x0e2\f.w17.URLFormR\aurlFormJ\x04\b\x05\x10\x06R\vauth_scopes\"A\n" +
 	"\n" +
 	"PublicRate\x12\x1d\n" +
+	"\n" +
+	"per_minute\x18\x01 \x01(\rR\tperMinute\x12\x14\n" +
+	"\x05burst\x18\x02 \x01(\rR\x05burst\"D\n" +
+	"\rPrincipalRate\x12\x1d\n" +
 	"\n" +
 	"per_minute\x18\x01 \x01(\rR\tperMinute\x12\x14\n" +
 	"\x05burst\x18\x02 \x01(\rR\x05burst*\x82\x01\n" +
@@ -2987,7 +3124,7 @@ func file_w17_rest_proto_rawDescGZIP() []byte {
 }
 
 var file_w17_rest_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_w17_rest_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_w17_rest_proto_goTypes = []any{
 	(TokenType)(0),                   // 0: w17.TokenType
 	(FieldSource)(0),                 // 1: w17.FieldSource
@@ -3013,50 +3150,52 @@ var file_w17_rest_proto_goTypes = []any{
 	(*RestStream)(nil),               // 21: w17.RestStream
 	(*DownloadEndpoint)(nil),         // 22: w17.DownloadEndpoint
 	(*PublicRate)(nil),               // 23: w17.PublicRate
-	(*RequestEvents)(nil),            // 24: w17.RequestEvents
-	(*Audience)(nil),                 // 25: w17.Audience
-	(*descriptorpb.FileOptions)(nil), // 26: google.protobuf.FileOptions
+	(*PrincipalRate)(nil),            // 24: w17.PrincipalRate
+	(*RequestEvents)(nil),            // 25: w17.RequestEvents
+	(*Audience)(nil),                 // 26: w17.Audience
+	(*descriptorpb.FileOptions)(nil), // 27: google.protobuf.FileOptions
 }
 var file_w17_rest_proto_depIdxs = []int32{
 	11, // 0: w17.RestApi.auth_methods:type_name -> w17.AuthMethod
 	15, // 1: w17.RestApi.groups:type_name -> w17.RestGroup
 	13, // 2: w17.RestApi.metadata_propagation:type_name -> w17.MetadataPropagation
 	9,  // 3: w17.RestApi.include:type_name -> w17.PluginInclude
-	24, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
-	25, // 5: w17.RestApi.audience:type_name -> w17.Audience
-	0,  // 6: w17.AuthMethod.token_types:type_name -> w17.TokenType
-	14, // 7: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
-	16, // 8: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
-	21, // 9: w17.RestGroup.streams:type_name -> w17.RestStream
-	22, // 10: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
-	6,  // 11: w17.RestEndpoint.method:type_name -> w17.HttpMethod
-	20, // 12: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
-	19, // 13: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
-	18, // 14: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
-	12, // 15: w17.RestEndpoint.credential:type_name -> w17.Credential
-	10, // 16: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
-	4,  // 17: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
-	5,  // 18: w17.RestEndpoint.captcha:type_name -> w17.Captcha
-	17, // 19: w17.RestEndpoint.raw_response:type_name -> w17.RawResponse
-	23, // 20: w17.RestEndpoint.public_rate:type_name -> w17.PublicRate
-	1,  // 21: w17.MetadataBinding.from:type_name -> w17.FieldSource
-	1,  // 22: w17.FieldBinding.from:type_name -> w17.FieldSource
-	7,  // 23: w17.RestStream.transport_override:type_name -> w17.StreamTransport
-	18, // 24: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
-	20, // 25: w17.RestStream.fields:type_name -> w17.FieldBinding
-	12, // 26: w17.RestStream.credential:type_name -> w17.Credential
-	6,  // 27: w17.RestStream.method:type_name -> w17.HttpMethod
-	4,  // 28: w17.RestStream.public_limit:type_name -> w17.PublicLimit
-	23, // 29: w17.RestStream.public_rate:type_name -> w17.PublicRate
-	3,  // 30: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
-	2,  // 31: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
-	26, // 32: w17.rest_api:extendee -> google.protobuf.FileOptions
-	8,  // 33: w17.rest_api:type_name -> w17.RestApi
-	34, // [34:34] is the sub-list for method output_type
-	34, // [34:34] is the sub-list for method input_type
-	33, // [33:34] is the sub-list for extension type_name
-	32, // [32:33] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	25, // 4: w17.RestApi.request_events:type_name -> w17.RequestEvents
+	26, // 5: w17.RestApi.audience:type_name -> w17.Audience
+	24, // 6: w17.RestApi.principal_rate:type_name -> w17.PrincipalRate
+	0,  // 7: w17.AuthMethod.token_types:type_name -> w17.TokenType
+	14, // 8: w17.MetadataPropagation.header_renames:type_name -> w17.HeaderRename
+	16, // 9: w17.RestGroup.endpoints:type_name -> w17.RestEndpoint
+	21, // 10: w17.RestGroup.streams:type_name -> w17.RestStream
+	22, // 11: w17.RestGroup.downloads:type_name -> w17.DownloadEndpoint
+	6,  // 12: w17.RestEndpoint.method:type_name -> w17.HttpMethod
+	20, // 13: w17.RestEndpoint.fields:type_name -> w17.FieldBinding
+	19, // 14: w17.RestEndpoint.paged:type_name -> w17.PagedConfig
+	18, // 15: w17.RestEndpoint.metadata_bindings:type_name -> w17.MetadataBinding
+	12, // 16: w17.RestEndpoint.credential:type_name -> w17.Credential
+	10, // 17: w17.RestEndpoint.browser_redirect:type_name -> w17.BrowserRedirect
+	4,  // 18: w17.RestEndpoint.public_limit:type_name -> w17.PublicLimit
+	5,  // 19: w17.RestEndpoint.captcha:type_name -> w17.Captcha
+	17, // 20: w17.RestEndpoint.raw_response:type_name -> w17.RawResponse
+	23, // 21: w17.RestEndpoint.public_rate:type_name -> w17.PublicRate
+	1,  // 22: w17.MetadataBinding.from:type_name -> w17.FieldSource
+	1,  // 23: w17.FieldBinding.from:type_name -> w17.FieldSource
+	7,  // 24: w17.RestStream.transport_override:type_name -> w17.StreamTransport
+	18, // 25: w17.RestStream.metadata_bindings:type_name -> w17.MetadataBinding
+	20, // 26: w17.RestStream.fields:type_name -> w17.FieldBinding
+	12, // 27: w17.RestStream.credential:type_name -> w17.Credential
+	6,  // 28: w17.RestStream.method:type_name -> w17.HttpMethod
+	4,  // 29: w17.RestStream.public_limit:type_name -> w17.PublicLimit
+	23, // 30: w17.RestStream.public_rate:type_name -> w17.PublicRate
+	3,  // 31: w17.DownloadEndpoint.content_disposition:type_name -> w17.ContentDisposition
+	2,  // 32: w17.DownloadEndpoint.url_form:type_name -> w17.URLForm
+	27, // 33: w17.rest_api:extendee -> google.protobuf.FileOptions
+	8,  // 34: w17.rest_api:type_name -> w17.RestApi
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	34, // [34:35] is the sub-list for extension type_name
+	33, // [33:34] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_w17_rest_proto_init() }
@@ -3072,7 +3211,7 @@ func file_w17_rest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rest_proto_rawDesc), len(file_w17_rest_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 1,
 			NumServices:   0,
 		},
