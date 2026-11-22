@@ -49,7 +49,29 @@ type DSN struct {
 	MaxAttempts int
 	// Proxy is a static egress proxy; nil = none (not even the environment's).
 	Proxy *url.URL
+
+	// PerCall: the credential is written `per_call` — it comes with each
+	// call (a client declaring per_call_credential), never from the DSN.
+	PerCall bool
+
+	// Dynamic: the DSN is `dynamic?…`, a policy without an address — the
+	// destination comes with each call (per_call_destination). Base is nil.
+	Dynamic bool
+	// Allow are the address classes a dynamic destination may resolve to
+	// beyond the public internet: "private", "loopback", "link_local".
+	Allow map[string]bool
+	// Budget is how many consecutive failures suspend one destination;
+	// Cooldown how long the first suspension lasts (it doubles, to
+	// MaxCooldown, while the destination keeps failing). Zero = defaults.
+	Budget   int
+	Cooldown time.Duration
 }
+
+// PerCallValue is how a DSN writes a credential that comes with the call.
+const PerCallValue = "per_call"
+
+// The address classes a dynamic DSN's allow= may name.
+var allowClasses = map[string]bool{"private": true, "loopback": true, "link_local": true}
 
 // ParseDSN reads a DSN. An unknown parameter, or one that does not belong to
 // the auth scheme, is an error: a misspelt `tokn=` must not quietly send
@@ -59,24 +81,33 @@ func ParseDSN(s string) (*DSN, error) {
 	if err != nil {
 		return nil, fmt.Errorf("egress DSN: not a URL")
 	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, fmt.Errorf("egress DSN: scheme %q, want https (or http)", u.Scheme)
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("egress DSN: no host")
+	dynamic := u.Scheme == "" && u.Host == "" && u.Path == "dynamic"
+	if !dynamic {
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return nil, fmt.Errorf("egress DSN: scheme %q, want https (or http), or `dynamic?…` for a client whose destination comes with the call", u.Scheme)
+		}
+		if u.Host == "" {
+			return nil, fmt.Errorf("egress DSN: no host")
+		}
 	}
 	q := u.Query()
-	d := &DSN{Auth: AuthNone}
+	d := &DSN{Auth: AuthNone, Dynamic: dynamic}
 	if a := q.Get("auth"); a != "" {
 		d.Auth = Auth(a)
 	}
 	allowed := map[string]bool{"auth": true, "timeout": true, "max_attempts": true, "proxy": true}
+	if dynamic {
+		allowed["allow"], allowed["budget"], allowed["cooldown"] = true, true, true
+	}
 	switch d.Auth {
 	case AuthNone:
 	case AuthBearer:
 		allowed["token"] = true
 		if d.Token = q.Get("token"); d.Token == "" {
-			return nil, fmt.Errorf("egress DSN: auth=bearer needs token=")
+			return nil, fmt.Errorf("egress DSN: auth=bearer needs token= (token=per_call when it comes with the call)")
+		}
+		if d.Token == PerCallValue {
+			d.Token, d.PerCall = "", true
 		}
 	case AuthBasic:
 		allowed["user"], allowed["password"] = true, true
@@ -89,12 +120,23 @@ func ParseDSN(s string) (*DSN, error) {
 			d.Password, _ = u.User.Password()
 		}
 		if d.User == "" {
-			return nil, fmt.Errorf("egress DSN: auth=basic needs user= (or userinfo in the URL)")
+			return nil, fmt.Errorf("egress DSN: auth=basic needs user= (or userinfo in the URL; user=per_call when it comes with the call)")
+		}
+		if d.User == PerCallValue {
+			if d.Password != "" && d.Password != PerCallValue {
+				return nil, fmt.Errorf("egress DSN: user=per_call with a password — both come with the call")
+			}
+			d.User, d.Password, d.PerCall = "", "", true
+		} else if d.Password == PerCallValue {
+			return nil, fmt.Errorf("egress DSN: password=per_call with a fixed user — write user=per_call, and the call brings both")
 		}
 	case AuthAPIKey:
 		allowed["key"], allowed["in"], allowed["key_name"] = true, true, true
 		if d.Key = q.Get("key"); d.Key == "" {
-			return nil, fmt.Errorf("egress DSN: auth=api_key needs key=")
+			return nil, fmt.Errorf("egress DSN: auth=api_key needs key= (key=per_call when it comes with the call)")
+		}
+		if d.Key == PerCallValue {
+			d.Key, d.PerCall = "", true
 		}
 		switch in := q.Get("in"); in {
 		case "", "header":
@@ -139,6 +181,28 @@ func ParseDSN(s string) (*DSN, error) {
 			return nil, fmt.Errorf("egress DSN: proxy is not a URL")
 		}
 	}
+	if dynamic {
+		if a := q.Get("allow"); a != "" {
+			d.Allow = map[string]bool{}
+			for _, c := range strings.Split(a, ",") {
+				if !allowClasses[c] {
+					return nil, fmt.Errorf("egress DSN: allow=%q — want private, loopback or link_local (a comma list)", c)
+				}
+				d.Allow[c] = true
+			}
+		}
+		if b := q.Get("budget"); b != "" {
+			if d.Budget, err = strconv.Atoi(b); err != nil || d.Budget < 1 {
+				return nil, fmt.Errorf("egress DSN: budget=%q is not a positive integer", b)
+			}
+		}
+		if c := q.Get("cooldown"); c != "" {
+			if d.Cooldown, err = time.ParseDuration(c); err != nil || d.Cooldown <= 0 || d.Cooldown > MaxCooldown {
+				return nil, fmt.Errorf("egress DSN: cooldown=%q is not a positive Go duration of at most %s", c, MaxCooldown)
+			}
+		}
+		return d, nil
+	}
 	base := *u
 	base.User, base.RawQuery, base.ForceQuery, base.Fragment = nil, "", false, ""
 	base.Path = strings.TrimSuffix(base.Path, "/")
@@ -150,5 +214,8 @@ func ParseDSN(s string) (*DSN, error) {
 // String is the DSN with its credentials masked: the base URL and the auth
 // scheme. It is what logs, spans and errors may print.
 func (d *DSN) String() string {
+	if d.Dynamic {
+		return "dynamic (auth=" + string(d.Auth) + ")"
+	}
 	return d.Base.String() + " (auth=" + string(d.Auth) + ")"
 }
