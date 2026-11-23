@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
+	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
 func registerCS(t *testing.T, msgid, msgstr string) {
@@ -48,7 +49,7 @@ func TestRequestLanguage(t *testing.T) {
 // The Origin guard's refusal is the catalog sentence in the request's
 // language, not an English literal.
 func TestOriginGuard_Translated(t *testing.T) {
-	registerCS(t, MsgidForbiddenOrigin, "Tento web nesmí používat tento server.")
+	registerCS(t, restgw.MsgidForbiddenOrigin, "Tento web nesmí používat tento server.")
 	h := originGuard(map[string]bool{"https://ok.example": true}, http.NotFoundHandler())
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	req.Header.Set("Origin", "https://evil.example")
@@ -71,10 +72,12 @@ func TestToolErrorResult_EmptySentenceIsTranslated(t *testing.T) {
 	}
 }
 
-func TestVocabulary(t *testing.T) {
-	v := Vocabulary()
-	if len(v) != 2 || v[0] != MsgidAuthUnavailable || v[1] != MsgidForbiddenOrigin {
-		t.Errorf("Vocabulary() = %v", v)
+func TestVocabulary_HarvestsTheMCPSentences(t *testing.T) {
+	v := strings.Join(restgw.Vocabulary(), "\n")
+	for _, m := range []string{restgw.MsgidForbiddenOrigin, restgw.MsgidAuthUnavailable} {
+		if !strings.Contains(v, m) {
+			t.Errorf("restgw.Vocabulary() lacks %q", m)
+		}
 	}
 }
 

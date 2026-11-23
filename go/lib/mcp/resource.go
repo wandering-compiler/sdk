@@ -189,7 +189,7 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 			s.challenge(w, http.StatusUnauthorized, "invalid_token", "the token is not valid for this resource")
 		default:
 			observx.ReportError(r.Context(), fmt.Errorf("mcp: token check: %w", err))
-			http.Error(w, i18n.T(requestContext(r), MsgidAuthUnavailable, nil), http.StatusServiceUnavailable)
+			http.Error(w, i18n.T(requestContext(r), restgw.MsgidAuthUnavailable, nil), http.StatusServiceUnavailable)
 		}
 	})
 }

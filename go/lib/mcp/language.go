@@ -10,23 +10,6 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 )
 
-// The sentences this package answers with itself, outside a tool call's
-// status — plain-text HTTP refusals a client shows as they come.
-const (
-	// MsgidForbiddenOrigin answers a browser origin the deployment did not
-	// allow (the 403 of the Origin guard).
-	MsgidForbiddenOrigin = "This site is not allowed to use this server."
-	// MsgidAuthUnavailable answers a token check that could not be made
-	// (the authorization service is down): a fault, not a refusal.
-	MsgidAuthUnavailable = "Signing in is temporarily unavailable. Please try again shortly."
-)
-
-// Vocabulary is every msgid this package renders itself, for the catalog
-// harvest (beside restgw.Vocabulary and grpcerr.Vocabulary).
-func Vocabulary() []string {
-	return []string{MsgidAuthUnavailable, MsgidForbiddenOrigin}
-}
-
 // requestLanguage is the language a connection asked for: the HTTP
 // request's Accept-Language, else an initialize parameter (`accept-language`
 // or `w17-language`) or the stdio server's W17_LANGUAGE. "" = none: the
