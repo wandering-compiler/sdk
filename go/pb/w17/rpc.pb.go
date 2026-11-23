@@ -144,8 +144,15 @@ type RpcApi struct {
 	// Declared without `principal_rate`, the costs apply when the deployment
 	// switches the limit on.
 	PrincipalCosts []*RpcPrincipalCost `protobuf:"bytes,13,rep,name=principal_costs,json=principalCosts,proto3" json:"principal_costs,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// geo — the surface's country policy: `RestApi.geo`, with the same rules,
+	// checked in the interceptor before the rate limits. A refused caller gets
+	// PERMISSION_DENIED.
+	Geo *GeoPolicy `protobuf:"bytes,14,opt,name=geo,proto3" json:"geo,omitempty"`
+	// A method's own country policy, by ref (as `groups[].refs` name them),
+	// replacing `geo`. A ref not on this surface, or a duplicate, is refused.
+	GeoMethods    []*RpcGeo `protobuf:"bytes,15,rep,name=geo_methods,json=geoMethods,proto3" json:"geo_methods,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RpcApi) Reset() {
@@ -265,6 +272,20 @@ func (x *RpcApi) GetPrincipalRate() *PrincipalRate {
 func (x *RpcApi) GetPrincipalCosts() []*RpcPrincipalCost {
 	if x != nil {
 		return x.PrincipalCosts
+	}
+	return nil
+}
+
+func (x *RpcApi) GetGeo() *GeoPolicy {
+	if x != nil {
+		return x.Geo
+	}
+	return nil
+}
+
+func (x *RpcApi) GetGeoMethods() []*RpcGeo {
+	if x != nil {
+		return x.GeoMethods
 	}
 	return nil
 }
@@ -536,6 +557,60 @@ func (x *RpcGroup) GetCallers() []string {
 	return nil
 }
 
+// RpcGeo is one entry of `RpcApi.geo_methods`.
+type RpcGeo struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The method, as `groups[].refs` names it.
+	Ref           string     `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Geo           *GeoPolicy `protobuf:"bytes,2,opt,name=geo,proto3" json:"geo,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RpcGeo) Reset() {
+	*x = RpcGeo{}
+	mi := &file_w17_rpc_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RpcGeo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RpcGeo) ProtoMessage() {}
+
+func (x *RpcGeo) ProtoReflect() protoreflect.Message {
+	mi := &file_w17_rpc_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RpcGeo.ProtoReflect.Descriptor instead.
+func (*RpcGeo) Descriptor() ([]byte, []int) {
+	return file_w17_rpc_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RpcGeo) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *RpcGeo) GetGeo() *GeoPolicy {
+	if x != nil {
+		return x.Geo
+	}
+	return nil
+}
+
 var file_w17_rpc_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MethodOptions)(nil),
@@ -615,7 +690,7 @@ var File_w17_rpc_proto protoreflect.FileDescriptor
 
 const file_w17_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xbb\x04\n" +
+	"\rw17/rpc.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\x8b\x05\n" +
 	"\x06RpcApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -632,7 +707,10 @@ const file_w17_rpc_proto_rawDesc = "" +
 	" \x03(\tR\vexcludeAuth\x128\n" +
 	"\rpublic_limits\x18\v \x03(\v2\x13.w17.RpcPublicLimitR\fpublicLimits\x129\n" +
 	"\x0eprincipal_rate\x18\f \x01(\v2\x12.w17.PrincipalRateR\rprincipalRate\x12>\n" +
-	"\x0fprincipal_costs\x18\r \x03(\v2\x15.w17.RpcPrincipalCostR\x0eprincipalCosts\"P\n" +
+	"\x0fprincipal_costs\x18\r \x03(\v2\x15.w17.RpcPrincipalCostR\x0eprincipalCosts\x12 \n" +
+	"\x03geo\x18\x0e \x01(\v2\x0e.w17.GeoPolicyR\x03geo\x12,\n" +
+	"\vgeo_methods\x18\x0f \x03(\v2\v.w17.RpcGeoR\n" +
+	"geoMethods\"P\n" +
 	"\x10RpcPrincipalCost\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
 	"\x04cost\x18\x02 \x01(\rR\x04cost\x12\x16\n" +
@@ -647,7 +725,10 @@ const file_w17_rpc_proto_rawDesc = "" +
 	"\x04refs\x18\x03 \x03(\tR\x04refs\x12\x1d\n" +
 	"\n" +
 	"public_fqn\x18\x04 \x01(\tR\tpublicFqn\x12\x18\n" +
-	"\acallers\x18\x05 \x03(\tR\acallers:2\n" +
+	"\acallers\x18\x05 \x03(\tR\acallers\"<\n" +
+	"\x06RpcGeo\x12\x10\n" +
+	"\x03ref\x18\x01 \x01(\tR\x03ref\x12 \n" +
+	"\x03geo\x18\x02 \x01(\v2\x0e.w17.GeoPolicyR\x03geo:2\n" +
 	"\x03rpc\x12\x1e.google.protobuf.MethodOptions\x18\xbf\x87\x03 \x01(\bR\x03rpc:A\n" +
 	"\vrpc_service\x12\x1e.google.protobuf.MethodOptions\x18\xc0\x87\x03 \x01(\tR\n" +
 	"rpcService:D\n" +
@@ -665,40 +746,45 @@ func file_w17_rpc_proto_rawDescGZIP() []byte {
 	return file_w17_rpc_proto_rawDescData
 }
 
-var file_w17_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_w17_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_w17_rpc_proto_goTypes = []any{
 	(*RpcApi)(nil),                     // 0: w17.RpcApi
 	(*RpcPrincipalCost)(nil),           // 1: w17.RpcPrincipalCost
 	(*RpcPublicLimit)(nil),             // 2: w17.RpcPublicLimit
 	(*RpcGroup)(nil),                   // 3: w17.RpcGroup
-	(*AuthMethod)(nil),                 // 4: w17.AuthMethod
-	(*RequestEvents)(nil),              // 5: w17.RequestEvents
-	(*Audience)(nil),                   // 6: w17.Audience
-	(*PrincipalRate)(nil),              // 7: w17.PrincipalRate
-	(PublicLimit)(0),                   // 8: w17.PublicLimit
-	(*PublicRate)(nil),                 // 9: w17.PublicRate
-	(*descriptorpb.MethodOptions)(nil), // 10: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 11: google.protobuf.FileOptions
+	(*RpcGeo)(nil),                     // 4: w17.RpcGeo
+	(*AuthMethod)(nil),                 // 5: w17.AuthMethod
+	(*RequestEvents)(nil),              // 6: w17.RequestEvents
+	(*Audience)(nil),                   // 7: w17.Audience
+	(*PrincipalRate)(nil),              // 8: w17.PrincipalRate
+	(*GeoPolicy)(nil),                  // 9: w17.GeoPolicy
+	(PublicLimit)(0),                   // 10: w17.PublicLimit
+	(*PublicRate)(nil),                 // 11: w17.PublicRate
+	(*descriptorpb.MethodOptions)(nil), // 12: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 13: google.protobuf.FileOptions
 }
 var file_w17_rpc_proto_depIdxs = []int32{
-	4,  // 0: w17.RpcApi.auth_methods:type_name -> w17.AuthMethod
+	5,  // 0: w17.RpcApi.auth_methods:type_name -> w17.AuthMethod
 	3,  // 1: w17.RpcApi.groups:type_name -> w17.RpcGroup
-	5,  // 2: w17.RpcApi.request_events:type_name -> w17.RequestEvents
-	6,  // 3: w17.RpcApi.audience:type_name -> w17.Audience
+	6,  // 2: w17.RpcApi.request_events:type_name -> w17.RequestEvents
+	7,  // 3: w17.RpcApi.audience:type_name -> w17.Audience
 	2,  // 4: w17.RpcApi.public_limits:type_name -> w17.RpcPublicLimit
-	7,  // 5: w17.RpcApi.principal_rate:type_name -> w17.PrincipalRate
+	8,  // 5: w17.RpcApi.principal_rate:type_name -> w17.PrincipalRate
 	1,  // 6: w17.RpcApi.principal_costs:type_name -> w17.RpcPrincipalCost
-	8,  // 7: w17.RpcPublicLimit.limit:type_name -> w17.PublicLimit
-	9,  // 8: w17.RpcPublicLimit.rate:type_name -> w17.PublicRate
-	10, // 9: w17.rpc:extendee -> google.protobuf.MethodOptions
-	10, // 10: w17.rpc_service:extendee -> google.protobuf.MethodOptions
-	11, // 11: w17.rpc_api:extendee -> google.protobuf.FileOptions
-	0,  // 12: w17.rpc_api:type_name -> w17.RpcApi
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	12, // [12:13] is the sub-list for extension type_name
-	9,  // [9:12] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	9,  // 7: w17.RpcApi.geo:type_name -> w17.GeoPolicy
+	4,  // 8: w17.RpcApi.geo_methods:type_name -> w17.RpcGeo
+	10, // 9: w17.RpcPublicLimit.limit:type_name -> w17.PublicLimit
+	11, // 10: w17.RpcPublicLimit.rate:type_name -> w17.PublicRate
+	9,  // 11: w17.RpcGeo.geo:type_name -> w17.GeoPolicy
+	12, // 12: w17.rpc:extendee -> google.protobuf.MethodOptions
+	12, // 13: w17.rpc_service:extendee -> google.protobuf.MethodOptions
+	13, // 14: w17.rpc_api:extendee -> google.protobuf.FileOptions
+	0,  // 15: w17.rpc_api:type_name -> w17.RpcApi
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	15, // [15:16] is the sub-list for extension type_name
+	12, // [12:15] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_w17_rpc_proto_init() }
@@ -715,7 +801,7 @@ func file_w17_rpc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_rpc_proto_rawDesc), len(file_w17_rpc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 3,
 			NumServices:   0,
 		},

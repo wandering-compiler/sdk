@@ -228,6 +228,15 @@ message RpcApi {
   // Declared without `principal_rate`, the costs apply when the deployment
   // switches the limit on.
   repeated RpcPrincipalCost principal_costs = 13;
+
+  // geo — the surface's country policy: `RestApi.geo`, with the same rules,
+  // checked in the interceptor before the rate limits. A refused caller gets
+  // PERMISSION_DENIED.
+  GeoPolicy geo = 14;
+
+  // A method's own country policy, by ref (as `groups[].refs` name them),
+  // replacing `geo`. A ref not on this surface, or a duplicate, is refused.
+  repeated RpcGeo geo_methods = 15;
 }
 
 // RpcPrincipalCost is one entry of `RpcApi.principal_costs`.
@@ -323,4 +332,11 @@ message RpcGroup {
   // surface. Where a whole service and one of its methods are both named,
   // the method's own group decides for it. Refused on any other surface.
   repeated string callers = 5;
+}
+
+// RpcGeo is one entry of `RpcApi.geo_methods`.
+message RpcGeo {
+  // The method, as `groups[].refs` names it.
+  string ref = 1;
+  GeoPolicy geo = 2;
 }
