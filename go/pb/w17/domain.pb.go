@@ -269,6 +269,10 @@ type PluginActivation struct {
 	//
 	// Empty when the plugin's `connections:` list is empty
 	// (plugin binds tables to the project's default connection).
+	//
+	// In an option a map is written as key/value entries:
+	// `connections: [ { key: "main", value: "app-postgres" } ]` —
+	// `connections: { main: "app-postgres" }` does not parse.
 	Connections map[string]string `protobuf:"bytes,3,rep,name=connections,proto3" json:"connections,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Channel alias → project channel name. Every alias declared
 	// in `plugin.yaml.channels` MUST appear as a key here; every
@@ -279,6 +283,9 @@ type PluginActivation struct {
 	//
 	// Empty when the plugin's `channels:` list is empty (plugin
 	// emits no events).
+	//
+	// Written as key/value entries:
+	// `channels: [ { key: "events", value: "auth-bus" } ]`.
 	Channels map[string]string `protobuf:"bytes,4,rep,name=channels,proto3" json:"channels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Optional configuration for plugins shipping a turnkey
 	// AuthService.Authenticate RPC. The plugin codegen reads
