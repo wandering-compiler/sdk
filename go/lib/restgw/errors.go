@@ -337,7 +337,7 @@ func fieldErrorsFromStatus(st *status.Status) []FieldError {
 	var out []FieldError
 	for _, d := range st.Details() {
 		if ed, ok := d.(*w17pb.ErrorDetail); ok {
-			out = append(out, FieldError{Field: ed.GetField(), Code: ed.GetCode(), Message: ed.GetMessage()})
+			out = append(out, FieldError{Field: ed.GetField(), Code: ed.GetCode(), Message: ed.GetMessage(), Msgid: ed.GetMsgid(), Params: ed.GetParams()})
 		}
 	}
 	return out

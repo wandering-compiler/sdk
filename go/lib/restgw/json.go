@@ -564,6 +564,12 @@ type FieldError struct {
 	Field   string `json:"field"`
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
+	// Msgid is the catalog key Message was translated from, and Params the
+	// values substituted into it (w17.ErrorDetail.msgid / params): a client
+	// with the same catalogs re-translates the failure with them. Empty for
+	// a message that is no catalog entry.
+	Msgid  string            `json:"msgid,omitempty"`
+	Params map[string]string `json:"params,omitempty"`
 }
 
 // errorEnvelope is the on-the-wire shape every error response

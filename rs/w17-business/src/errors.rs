@@ -77,10 +77,13 @@ pub fn for_user_dev(
     field: &str,
     dev: &str,
 ) -> Status {
+    // msgid / params stay empty: this sentence is the author's own text,
+    // not a catalog entry a client could re-translate.
     let detail = ErrorDetail {
         code: detail_code.to_string(),
         message: message.to_string(),
         field: field.to_string(),
+        ..Default::default()
     };
     let any = Any {
         type_url: format!("{TYPE_PREFIX}w17.ErrorDetail"),

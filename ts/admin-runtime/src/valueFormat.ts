@@ -87,7 +87,14 @@ for (const [code, row] of Object.entries(
   (formatsDoc as { currencies?: Record<string, { symbol?: string; decimals: number }> })
     .currencies ?? {},
 )) {
-  CURRENCIES.set(code, { code, symbol: row.symbol, decimals: row.decimals });
+  // The key is left out when the table names no symbol: an explicit
+  // `symbol: undefined` is not a `symbol?: string` under
+  // exactOptionalPropertyTypes, a strict option a consumer's tsconfig may
+  // set for the generated client this file is copied into.
+  CURRENCIES.set(
+    code,
+    row.symbol !== undefined ? { code, symbol: row.symbol, decimals: row.decimals } : { code, decimals: row.decimals },
+  );
 }
 
 /** Lowercases and switches `_` to `-` so `CS`, `cs` and `cs_CZ` agree. */

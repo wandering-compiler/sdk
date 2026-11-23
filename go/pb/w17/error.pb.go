@@ -100,7 +100,17 @@ type ErrorDetail struct {
 	// errors). Empty for non-field-specific errors (DB-level
 	// failures with no obvious field association, business-logic
 	// errors, etc.).
-	Field         string `protobuf:"bytes,3,opt,name=field,proto3" json:"field,omitempty"`
+	Field string `protobuf:"bytes,3,opt,name=field,proto3" json:"field,omitempty"`
+	// The catalog key `message` was translated from — the English source
+	// sentence with its `{placeholder}`s ("must be at most {max}
+	// characters"). Set wherever w17 or an author built the message from a
+	// catalog (validation, constraint violations, refusals,
+	// grpcerr.ForUser…). A client holding the same catalogs re-translates
+	// the failure into its own language with it: t(lang, msgid, params).
+	// Empty for a message that is not a catalog entry.
+	Msgid string `protobuf:"bytes,4,opt,name=msgid,proto3" json:"msgid,omitempty"`
+	// The values substituted into msgid's placeholders.
+	Params        map[string]string `protobuf:"bytes,5,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -156,15 +166,34 @@ func (x *ErrorDetail) GetField() string {
 	return ""
 }
 
+func (x *ErrorDetail) GetMsgid() string {
+	if x != nil {
+		return x.Msgid
+	}
+	return ""
+}
+
+func (x *ErrorDetail) GetParams() map[string]string {
+	if x != nil {
+		return x.Params
+	}
+	return nil
+}
+
 var File_w17_error_proto protoreflect.FileDescriptor
 
 const file_w17_error_proto_rawDesc = "" +
 	"\n" +
-	"\x0fw17/error.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"Q\n" +
+	"\x0fw17/error.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\"\xd8\x01\n" +
 	"\vErrorDetail\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x14\n" +
-	"\x05field\x18\x03 \x01(\tR\x05fieldB3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
+	"\x05field\x18\x03 \x01(\tR\x05field\x12\x14\n" +
+	"\x05msgid\x18\x04 \x01(\tR\x05msgid\x124\n" +
+	"\x06params\x18\x05 \x03(\v2\x1c.w17.ErrorDetail.ParamsEntryR\x06params\x1a9\n" +
+	"\vParamsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B3Z1github.com/wandering-compiler/sdk/go/pb/w17;w17pbb\x06proto3"
 
 var (
 	file_w17_error_proto_rawDescOnce sync.Once
@@ -178,16 +207,18 @@ func file_w17_error_proto_rawDescGZIP() []byte {
 	return file_w17_error_proto_rawDescData
 }
 
-var file_w17_error_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_w17_error_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_w17_error_proto_goTypes = []any{
 	(*ErrorDetail)(nil), // 0: w17.ErrorDetail
+	nil,                 // 1: w17.ErrorDetail.ParamsEntry
 }
 var file_w17_error_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1, // 0: w17.ErrorDetail.params:type_name -> w17.ErrorDetail.ParamsEntry
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_w17_error_proto_init() }
@@ -201,7 +232,7 @@ func file_w17_error_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_w17_error_proto_rawDesc), len(file_w17_error_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

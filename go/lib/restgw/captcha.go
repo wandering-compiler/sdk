@@ -69,6 +69,6 @@ func RequireCaptcha(v *captcha.Verifier, w http.ResponseWriter, r *http.Request)
 	reportByCode(ctx, code, status.Error(code, fmt.Sprintf("captcha (%s): %v", detail, err)))
 	sentence := i18n.T(ctx, msgid, nil)
 	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(code), GRPCCodeName(code), sentence,
-		[]FieldError{{Code: detail, Message: sentence}})
+		[]FieldError{{Code: detail, Message: sentence, Msgid: msgid}})
 	return false
 }
