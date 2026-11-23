@@ -11734,9 +11734,15 @@ type GatewayTarget struct {
 	// gRPC surface its `(w17.private_api)` declares, served to other domains'
 	// services only: mutual TLS, :50061, callers admitted by domain, never on
 	// the public edge. It serves no REST / MCP.
-	Private       bool `protobuf:"varint,24,opt,name=private,proto3" json:"private,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Private bool `protobuf:"varint,24,opt,name=private,proto3" json:"private,omitempty"`
+	// AbsorbedBusinessEnv is the declared env of the business tier a composed
+	// -server folds (absorb_business; the lock's business_bundles[].env): the
+	// folded tier reads it at boot, so the server's .env.defaults /
+	// .env.example / .secrets.example name it, as the business bundle's own
+	// do in a split stack. Empty unless absorb_business.
+	AbsorbedBusinessEnv []*BusinessEnv `protobuf:"bytes,25,rep,name=absorbed_business_env,json=absorbedBusinessEnv,proto3" json:"absorbed_business_env,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *GatewayTarget) Reset() {
@@ -11928,6 +11934,13 @@ func (x *GatewayTarget) GetPrivate() bool {
 		return x.Private
 	}
 	return false
+}
+
+func (x *GatewayTarget) GetAbsorbedBusinessEnv() []*BusinessEnv {
+	if x != nil {
+		return x.AbsorbedBusinessEnv
+	}
+	return nil
 }
 
 // AbsorbedGateway — one audience gateway folded into a composed binary.
@@ -13728,7 +13741,7 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\anats_go\x18\v \x01(\tR\x06natsGo\x12\x15\n" +
 	"\x06mcp_go\x18\f \x01(\tR\x05mcpGo\x12\x15\n" +
 	"\x06sdk_go\x18\r \x01(\tR\x05sdkGo\x12\x10\n" +
-	"\x03pgx\x18\x0e \x01(\tR\x03pgxJ\x04\b\a\x10\bR\x03gox\"\xba\b\n" +
+	"\x03pgx\x18\x0e \x01(\tR\x03pgxJ\x04\b\a\x10\bR\x03gox\"\x90\t\n" +
 	"\rGatewayTarget\x12\x1b\n" +
 	"\tgo_module\x18\x01 \x01(\tR\bgoModule\x12\x1d\n" +
 	"\n" +
@@ -13756,7 +13769,8 @@ const file_w17compiler_codegen_proto_rawDesc = "" +
 	"\flibrary_only\x18\x16 \x01(\bR\vlibraryOnly\x12\x1f\n" +
 	"\vport_offset\x18\x17 \x01(\x05R\n" +
 	"portOffset\x12\x18\n" +
-	"\aprivate\x18\x18 \x01(\bR\aprivateJ\x04\b\x12\x10\x13R\bemit_ctl\"\xf4\x01\n" +
+	"\aprivate\x18\x18 \x01(\bR\aprivate\x12T\n" +
+	"\x15absorbed_business_env\x18\x19 \x03(\v2 .w17.storage.codegen.BusinessEnvR\x13absorbedBusinessEnvJ\x04\b\x12\x10\x13R\bemit_ctl\"\xf4\x01\n" +
 	"\x0fAbsorbedGateway\x12\x1a\n" +
 	"\baudience\x18\x01 \x01(\tR\baudience\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12!\n" +
@@ -14190,83 +14204,84 @@ var file_w17compiler_codegen_proto_depIdxs = []int32{
 	149, // 128: w17.storage.codegen.GenerateRequest.existing_po:type_name -> w17.storage.codegen.GeneratedFile
 	107, // 129: w17.storage.codegen.GenerateRequest.handler_msgids:type_name -> w17.storage.codegen.HandlerMsgids
 	140, // 130: w17.storage.codegen.GatewayTarget.absorbed_gateways:type_name -> w17.storage.codegen.AbsorbedGateway
-	149, // 131: w17.storage.codegen.GenerateResponse.files:type_name -> w17.storage.codegen.GeneratedFile
-	147, // 132: w17.storage.codegen.PluginCatalog.plugins:type_name -> w17.storage.codegen.CataloguePlugin
-	2,   // 133: w17.storage.codegen.CodegenError.stage:type_name -> w17.storage.codegen.Stage
-	151, // 134: w17.storage.codegen.CodegenError.diagnostics:type_name -> w17.storage.codegen.Diagnostic
-	24,  // 135: w17.storage.codegen.LockInfraPluginDeploy.ServicesEntry.value:type_name -> w17.storage.codegen.LockInfraAdopterService
-	130, // 136: w17.storage.codegen.ObservedTable.CheckMembersEntry.value:type_name -> w17.storage.codegen.CheckMemberSet
-	135, // 137: w17.storage.codegen.CodegenService.Generate:input_type -> w17.storage.codegen.GenerateRequest
-	112, // 138: w17.storage.codegen.CodegenService.CompileIR:input_type -> w17.storage.codegen.CompileIRRequest
-	110, // 139: w17.storage.codegen.CodegenService.GenerateCi:input_type -> w17.storage.codegen.GenerateCiRequest
-	105, // 140: w17.storage.codegen.CodegenService.GenerateEventbus:input_type -> w17.storage.codegen.GenerateEventbusRequest
-	104, // 141: w17.storage.codegen.CodegenService.GenerateGrpcClients:input_type -> w17.storage.codegen.GenerateGrpcClientsRequest
-	103, // 142: w17.storage.codegen.CodegenService.GenerateMcp:input_type -> w17.storage.codegen.GenerateMcpRequest
-	102, // 143: w17.storage.codegen.CodegenService.GenerateAcl:input_type -> w17.storage.codegen.GenerateAclRequest
-	99,  // 144: w17.storage.codegen.CodegenService.GenerateBusiness:input_type -> w17.storage.codegen.GenerateBusinessRequest
-	98,  // 145: w17.storage.codegen.CodegenService.GenerateProjectMap:input_type -> w17.storage.codegen.GenerateProjectMapRequest
-	97,  // 146: w17.storage.codegen.CodegenService.GenerateE2e:input_type -> w17.storage.codegen.GenerateE2eRequest
-	106, // 147: w17.storage.codegen.CodegenService.GenerateProject:input_type -> w17.storage.codegen.GenerateProjectRequest
-	69,  // 148: w17.storage.codegen.CodegenService.SignAclLock:input_type -> w17.storage.codegen.SignAclLockRequest
-	94,  // 149: w17.storage.codegen.CodegenService.VerifyAcl:input_type -> w17.storage.codegen.VerifyRequest
-	94,  // 150: w17.storage.codegen.CodegenService.VerifyEventbus:input_type -> w17.storage.codegen.VerifyRequest
-	71,  // 151: w17.storage.codegen.CodegenService.GenerateEgressClient:input_type -> w17.storage.codegen.GenerateEgressClientRequest
-	73,  // 152: w17.storage.codegen.CodegenService.VerifyEgressClient:input_type -> w17.storage.codegen.VerifyEgressClientRequest
-	96,  // 153: w17.storage.codegen.CodegenService.VerifyLock:input_type -> w17.storage.codegen.VerifyLockRequest
-	114, // 154: w17.storage.codegen.CodegenService.Classify:input_type -> w17.storage.codegen.ClassifyIRRequest
-	117, // 155: w17.storage.codegen.CodegenService.Plan:input_type -> w17.storage.codegen.PlanIRRequest
-	120, // 156: w17.storage.codegen.CodegenService.DumpFixtures:input_type -> w17.storage.codegen.DumpFixturesRequest
-	93,  // 157: w17.storage.codegen.CodegenService.GenerateClient:input_type -> w17.storage.codegen.GenerateClientRequest
-	89,  // 158: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:input_type -> w17.storage.codegen.DiscoverPluginSandboxesRequest
-	88,  // 159: w17.storage.codegen.CodegenService.GeneratePluginPb:input_type -> w17.storage.codegen.GeneratePluginPbRequest
-	86,  // 160: w17.storage.codegen.CodegenService.MergePo:input_type -> w17.storage.codegen.MergePoRequest
-	85,  // 161: w17.storage.codegen.CodegenService.RenderProjectScaffold:input_type -> w17.storage.codegen.RenderProjectScaffoldRequest
-	59,  // 162: w17.storage.codegen.CodegenService.EditLock:input_type -> w17.storage.codegen.EditLockRequest
-	75,  // 163: w17.storage.codegen.CodegenService.DescribeLock:input_type -> w17.storage.codegen.DescribeLockRequest
-	9,   // 164: w17.storage.codegen.CodegenService.InspectPluginManifest:input_type -> w17.storage.codegen.InspectPluginManifestRequest
-	12,  // 165: w17.storage.codegen.CodegenService.SignPluginRelease:input_type -> w17.storage.codegen.SignPluginReleaseRequest
-	145, // 166: w17.storage.codegen.CodegenService.ListPluginCatalog:input_type -> w17.storage.codegen.ListPluginCatalogRequest
-	148, // 167: w17.storage.codegen.CodegenService.FetchPlugin:input_type -> w17.storage.codegen.FetchPluginRequest
-	6,   // 168: w17.storage.codegen.CodegenService.Guide:input_type -> w17.storage.codegen.GuideRequest
-	7,   // 169: w17.storage.codegen.CodegenService.AdmissionStatus:input_type -> w17.storage.codegen.AdmissionStatusRequest
-	144, // 170: w17.storage.codegen.CodegenService.Generate:output_type -> w17.storage.codegen.GenerateResponse
-	113, // 171: w17.storage.codegen.CodegenService.CompileIR:output_type -> w17.storage.codegen.CompileIRResponse
-	111, // 172: w17.storage.codegen.CodegenService.GenerateCi:output_type -> w17.storage.codegen.GenerateCiResponse
-	149, // 173: w17.storage.codegen.CodegenService.GenerateEventbus:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 174: w17.storage.codegen.CodegenService.GenerateGrpcClients:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 175: w17.storage.codegen.CodegenService.GenerateMcp:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 176: w17.storage.codegen.CodegenService.GenerateAcl:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 177: w17.storage.codegen.CodegenService.GenerateBusiness:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 178: w17.storage.codegen.CodegenService.GenerateProjectMap:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 179: w17.storage.codegen.CodegenService.GenerateE2e:output_type -> w17.storage.codegen.GeneratedFile
-	108, // 180: w17.storage.codegen.CodegenService.GenerateProject:output_type -> w17.storage.codegen.GeneratedOp
-	70,  // 181: w17.storage.codegen.CodegenService.SignAclLock:output_type -> w17.storage.codegen.SignAclLockResponse
-	95,  // 182: w17.storage.codegen.CodegenService.VerifyAcl:output_type -> w17.storage.codegen.VerifyResult
-	95,  // 183: w17.storage.codegen.CodegenService.VerifyEventbus:output_type -> w17.storage.codegen.VerifyResult
-	72,  // 184: w17.storage.codegen.CodegenService.GenerateEgressClient:output_type -> w17.storage.codegen.GenerateEgressClientResponse
-	95,  // 185: w17.storage.codegen.CodegenService.VerifyEgressClient:output_type -> w17.storage.codegen.VerifyResult
-	95,  // 186: w17.storage.codegen.CodegenService.VerifyLock:output_type -> w17.storage.codegen.VerifyResult
-	115, // 187: w17.storage.codegen.CodegenService.Classify:output_type -> w17.storage.codegen.ClassifyIRResponse
-	133, // 188: w17.storage.codegen.CodegenService.Plan:output_type -> w17.storage.codegen.PlanIRResponse
-	122, // 189: w17.storage.codegen.CodegenService.DumpFixtures:output_type -> w17.storage.codegen.DumpFixturesResponse
-	149, // 190: w17.storage.codegen.CodegenService.GenerateClient:output_type -> w17.storage.codegen.GeneratedFile
-	90,  // 191: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:output_type -> w17.storage.codegen.PluginSandboxes
-	149, // 192: w17.storage.codegen.CodegenService.GeneratePluginPb:output_type -> w17.storage.codegen.GeneratedFile
-	87,  // 193: w17.storage.codegen.CodegenService.MergePo:output_type -> w17.storage.codegen.MergePoResponse
-	149, // 194: w17.storage.codegen.CodegenService.RenderProjectScaffold:output_type -> w17.storage.codegen.GeneratedFile
-	60,  // 195: w17.storage.codegen.CodegenService.EditLock:output_type -> w17.storage.codegen.EditLockResponse
-	76,  // 196: w17.storage.codegen.CodegenService.DescribeLock:output_type -> w17.storage.codegen.LockView
-	11,  // 197: w17.storage.codegen.CodegenService.InspectPluginManifest:output_type -> w17.storage.codegen.InspectPluginManifestResponse
-	13,  // 198: w17.storage.codegen.CodegenService.SignPluginRelease:output_type -> w17.storage.codegen.SignPluginReleaseResponse
-	146, // 199: w17.storage.codegen.CodegenService.ListPluginCatalog:output_type -> w17.storage.codegen.PluginCatalog
-	149, // 200: w17.storage.codegen.CodegenService.FetchPlugin:output_type -> w17.storage.codegen.GeneratedFile
-	149, // 201: w17.storage.codegen.CodegenService.Guide:output_type -> w17.storage.codegen.GeneratedFile
-	8,   // 202: w17.storage.codegen.CodegenService.AdmissionStatus:output_type -> w17.storage.codegen.AdmissionStatusResponse
-	170, // [170:203] is the sub-list for method output_type
-	137, // [137:170] is the sub-list for method input_type
-	137, // [137:137] is the sub-list for extension type_name
-	137, // [137:137] is the sub-list for extension extendee
-	0,   // [0:137] is the sub-list for field type_name
+	101, // 131: w17.storage.codegen.GatewayTarget.absorbed_business_env:type_name -> w17.storage.codegen.BusinessEnv
+	149, // 132: w17.storage.codegen.GenerateResponse.files:type_name -> w17.storage.codegen.GeneratedFile
+	147, // 133: w17.storage.codegen.PluginCatalog.plugins:type_name -> w17.storage.codegen.CataloguePlugin
+	2,   // 134: w17.storage.codegen.CodegenError.stage:type_name -> w17.storage.codegen.Stage
+	151, // 135: w17.storage.codegen.CodegenError.diagnostics:type_name -> w17.storage.codegen.Diagnostic
+	24,  // 136: w17.storage.codegen.LockInfraPluginDeploy.ServicesEntry.value:type_name -> w17.storage.codegen.LockInfraAdopterService
+	130, // 137: w17.storage.codegen.ObservedTable.CheckMembersEntry.value:type_name -> w17.storage.codegen.CheckMemberSet
+	135, // 138: w17.storage.codegen.CodegenService.Generate:input_type -> w17.storage.codegen.GenerateRequest
+	112, // 139: w17.storage.codegen.CodegenService.CompileIR:input_type -> w17.storage.codegen.CompileIRRequest
+	110, // 140: w17.storage.codegen.CodegenService.GenerateCi:input_type -> w17.storage.codegen.GenerateCiRequest
+	105, // 141: w17.storage.codegen.CodegenService.GenerateEventbus:input_type -> w17.storage.codegen.GenerateEventbusRequest
+	104, // 142: w17.storage.codegen.CodegenService.GenerateGrpcClients:input_type -> w17.storage.codegen.GenerateGrpcClientsRequest
+	103, // 143: w17.storage.codegen.CodegenService.GenerateMcp:input_type -> w17.storage.codegen.GenerateMcpRequest
+	102, // 144: w17.storage.codegen.CodegenService.GenerateAcl:input_type -> w17.storage.codegen.GenerateAclRequest
+	99,  // 145: w17.storage.codegen.CodegenService.GenerateBusiness:input_type -> w17.storage.codegen.GenerateBusinessRequest
+	98,  // 146: w17.storage.codegen.CodegenService.GenerateProjectMap:input_type -> w17.storage.codegen.GenerateProjectMapRequest
+	97,  // 147: w17.storage.codegen.CodegenService.GenerateE2e:input_type -> w17.storage.codegen.GenerateE2eRequest
+	106, // 148: w17.storage.codegen.CodegenService.GenerateProject:input_type -> w17.storage.codegen.GenerateProjectRequest
+	69,  // 149: w17.storage.codegen.CodegenService.SignAclLock:input_type -> w17.storage.codegen.SignAclLockRequest
+	94,  // 150: w17.storage.codegen.CodegenService.VerifyAcl:input_type -> w17.storage.codegen.VerifyRequest
+	94,  // 151: w17.storage.codegen.CodegenService.VerifyEventbus:input_type -> w17.storage.codegen.VerifyRequest
+	71,  // 152: w17.storage.codegen.CodegenService.GenerateEgressClient:input_type -> w17.storage.codegen.GenerateEgressClientRequest
+	73,  // 153: w17.storage.codegen.CodegenService.VerifyEgressClient:input_type -> w17.storage.codegen.VerifyEgressClientRequest
+	96,  // 154: w17.storage.codegen.CodegenService.VerifyLock:input_type -> w17.storage.codegen.VerifyLockRequest
+	114, // 155: w17.storage.codegen.CodegenService.Classify:input_type -> w17.storage.codegen.ClassifyIRRequest
+	117, // 156: w17.storage.codegen.CodegenService.Plan:input_type -> w17.storage.codegen.PlanIRRequest
+	120, // 157: w17.storage.codegen.CodegenService.DumpFixtures:input_type -> w17.storage.codegen.DumpFixturesRequest
+	93,  // 158: w17.storage.codegen.CodegenService.GenerateClient:input_type -> w17.storage.codegen.GenerateClientRequest
+	89,  // 159: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:input_type -> w17.storage.codegen.DiscoverPluginSandboxesRequest
+	88,  // 160: w17.storage.codegen.CodegenService.GeneratePluginPb:input_type -> w17.storage.codegen.GeneratePluginPbRequest
+	86,  // 161: w17.storage.codegen.CodegenService.MergePo:input_type -> w17.storage.codegen.MergePoRequest
+	85,  // 162: w17.storage.codegen.CodegenService.RenderProjectScaffold:input_type -> w17.storage.codegen.RenderProjectScaffoldRequest
+	59,  // 163: w17.storage.codegen.CodegenService.EditLock:input_type -> w17.storage.codegen.EditLockRequest
+	75,  // 164: w17.storage.codegen.CodegenService.DescribeLock:input_type -> w17.storage.codegen.DescribeLockRequest
+	9,   // 165: w17.storage.codegen.CodegenService.InspectPluginManifest:input_type -> w17.storage.codegen.InspectPluginManifestRequest
+	12,  // 166: w17.storage.codegen.CodegenService.SignPluginRelease:input_type -> w17.storage.codegen.SignPluginReleaseRequest
+	145, // 167: w17.storage.codegen.CodegenService.ListPluginCatalog:input_type -> w17.storage.codegen.ListPluginCatalogRequest
+	148, // 168: w17.storage.codegen.CodegenService.FetchPlugin:input_type -> w17.storage.codegen.FetchPluginRequest
+	6,   // 169: w17.storage.codegen.CodegenService.Guide:input_type -> w17.storage.codegen.GuideRequest
+	7,   // 170: w17.storage.codegen.CodegenService.AdmissionStatus:input_type -> w17.storage.codegen.AdmissionStatusRequest
+	144, // 171: w17.storage.codegen.CodegenService.Generate:output_type -> w17.storage.codegen.GenerateResponse
+	113, // 172: w17.storage.codegen.CodegenService.CompileIR:output_type -> w17.storage.codegen.CompileIRResponse
+	111, // 173: w17.storage.codegen.CodegenService.GenerateCi:output_type -> w17.storage.codegen.GenerateCiResponse
+	149, // 174: w17.storage.codegen.CodegenService.GenerateEventbus:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 175: w17.storage.codegen.CodegenService.GenerateGrpcClients:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 176: w17.storage.codegen.CodegenService.GenerateMcp:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 177: w17.storage.codegen.CodegenService.GenerateAcl:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 178: w17.storage.codegen.CodegenService.GenerateBusiness:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 179: w17.storage.codegen.CodegenService.GenerateProjectMap:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 180: w17.storage.codegen.CodegenService.GenerateE2e:output_type -> w17.storage.codegen.GeneratedFile
+	108, // 181: w17.storage.codegen.CodegenService.GenerateProject:output_type -> w17.storage.codegen.GeneratedOp
+	70,  // 182: w17.storage.codegen.CodegenService.SignAclLock:output_type -> w17.storage.codegen.SignAclLockResponse
+	95,  // 183: w17.storage.codegen.CodegenService.VerifyAcl:output_type -> w17.storage.codegen.VerifyResult
+	95,  // 184: w17.storage.codegen.CodegenService.VerifyEventbus:output_type -> w17.storage.codegen.VerifyResult
+	72,  // 185: w17.storage.codegen.CodegenService.GenerateEgressClient:output_type -> w17.storage.codegen.GenerateEgressClientResponse
+	95,  // 186: w17.storage.codegen.CodegenService.VerifyEgressClient:output_type -> w17.storage.codegen.VerifyResult
+	95,  // 187: w17.storage.codegen.CodegenService.VerifyLock:output_type -> w17.storage.codegen.VerifyResult
+	115, // 188: w17.storage.codegen.CodegenService.Classify:output_type -> w17.storage.codegen.ClassifyIRResponse
+	133, // 189: w17.storage.codegen.CodegenService.Plan:output_type -> w17.storage.codegen.PlanIRResponse
+	122, // 190: w17.storage.codegen.CodegenService.DumpFixtures:output_type -> w17.storage.codegen.DumpFixturesResponse
+	149, // 191: w17.storage.codegen.CodegenService.GenerateClient:output_type -> w17.storage.codegen.GeneratedFile
+	90,  // 192: w17.storage.codegen.CodegenService.DiscoverPluginSandboxes:output_type -> w17.storage.codegen.PluginSandboxes
+	149, // 193: w17.storage.codegen.CodegenService.GeneratePluginPb:output_type -> w17.storage.codegen.GeneratedFile
+	87,  // 194: w17.storage.codegen.CodegenService.MergePo:output_type -> w17.storage.codegen.MergePoResponse
+	149, // 195: w17.storage.codegen.CodegenService.RenderProjectScaffold:output_type -> w17.storage.codegen.GeneratedFile
+	60,  // 196: w17.storage.codegen.CodegenService.EditLock:output_type -> w17.storage.codegen.EditLockResponse
+	76,  // 197: w17.storage.codegen.CodegenService.DescribeLock:output_type -> w17.storage.codegen.LockView
+	11,  // 198: w17.storage.codegen.CodegenService.InspectPluginManifest:output_type -> w17.storage.codegen.InspectPluginManifestResponse
+	13,  // 199: w17.storage.codegen.CodegenService.SignPluginRelease:output_type -> w17.storage.codegen.SignPluginReleaseResponse
+	146, // 200: w17.storage.codegen.CodegenService.ListPluginCatalog:output_type -> w17.storage.codegen.PluginCatalog
+	149, // 201: w17.storage.codegen.CodegenService.FetchPlugin:output_type -> w17.storage.codegen.GeneratedFile
+	149, // 202: w17.storage.codegen.CodegenService.Guide:output_type -> w17.storage.codegen.GeneratedFile
+	8,   // 203: w17.storage.codegen.CodegenService.AdmissionStatus:output_type -> w17.storage.codegen.AdmissionStatusResponse
+	171, // [171:204] is the sub-list for method output_type
+	138, // [138:171] is the sub-list for method input_type
+	138, // [138:138] is the sub-list for extension type_name
+	138, // [138:138] is the sub-list for extension extendee
+	0,   // [0:138] is the sub-list for field type_name
 }
 
 func init() { file_w17compiler_codegen_proto_init() }

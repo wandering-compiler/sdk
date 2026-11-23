@@ -3247,6 +3247,13 @@ message GatewayTarget {
   // services only: mutual TLS, :50061, callers admitted by domain, never on
   // the public edge. It serves no REST / MCP.
   bool private = 24;
+
+  // AbsorbedBusinessEnv is the declared env of the business tier a composed
+  // -server folds (absorb_business; the lock's business_bundles[].env): the
+  // folded tier reads it at boot, so the server's .env.defaults /
+  // .env.example / .secrets.example name it, as the business bundle's own
+  // do in a split stack. Empty unless absorb_business.
+  repeated BusinessEnv absorbed_business_env = 25;
 }
 
 // AbsorbedGateway — one audience gateway folded into a composed binary.

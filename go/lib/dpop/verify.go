@@ -116,6 +116,12 @@ type Config struct {
 	// (e.g. https://api.example.com). Required. htu is compared against
 	// Origin + Request.Path, never against a Host header.
 	Origin string
+	// AlsoOrigins are further public origins the same surface is reached at
+	// (scheme://host[:port], no path): the white-label hosts a gateway that
+	// takes the organization from the host answers on. A proof's htu may name
+	// any of them; it is still compared against this configured set, never
+	// against the request's Host.
+	AlsoOrigins []string
 	// Nonces issues and checks server nonces. nil turns nonces off: then
 	// iat must lie within IATWindow of the verifier's clock.
 	Nonces NonceSource
@@ -220,6 +226,7 @@ type Request struct {
 // Verifier checks DPoP proofs. It is safe for concurrent use.
 type Verifier struct {
 	origin   string
+	also     []string // AlsoOrigins, normalised, no trailing slash
 	nonces   NonceSource
 	jtis     JTIStore
 	mintJTIs JTIStore
@@ -240,7 +247,16 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	if err != nil || !strings.HasSuffix(origin, "/") || strings.Count(origin, "/") != 3 {
 		return nil, fmt.Errorf("dpop: Origin %q: want scheme://host[:port] with no path", cfg.Origin)
 	}
+	var also []string
+	for _, o := range cfg.AlsoOrigins {
+		n, err := NormalizeHTU(o)
+		if err != nil || !strings.HasSuffix(n, "/") || strings.Count(n, "/") != 3 {
+			return nil, fmt.Errorf("dpop: AlsoOrigins %q: want scheme://host[:port] with no path", o)
+		}
+		also = append(also, strings.TrimSuffix(n, "/"))
+	}
 	v := &Verifier{
+		also:     also,
 		origin:   strings.TrimSuffix(origin, "/"),
 		nonces:   cfg.Nonces,
 		jtis:     cfg.JTIs,
@@ -431,7 +447,7 @@ func (v *Verifier) verify(ctx context.Context, req Request) (string, bool, error
 	if err != nil {
 		return "", false, fmt.Errorf("%w: request path %q: %w", ErrHTUMismatch, req.Path, err)
 	}
-	if gotHTU, err := NormalizeHTU(*c.HTU); err != nil || gotHTU != want {
+	if gotHTU, err := NormalizeHTU(*c.HTU); err != nil || !v.htuMatches(gotHTU, want, path) {
 		return "", false, fmt.Errorf("%w: htu %q, want %q", ErrHTUMismatch, *c.HTU, want)
 	}
 
@@ -683,4 +699,18 @@ func (v *Verifier) remember(hash string, now time.Time) {
 		}
 	}
 	v.cache[hash] = now.Add(v.reuse)
+}
+
+// htuMatches reports whether got is the configured origin plus path, or one
+// of AlsoOrigins plus path.
+func (v *Verifier) htuMatches(got, want, path string) bool {
+	if got == want {
+		return true
+	}
+	for _, o := range v.also {
+		if w, err := NormalizeHTU(o + path); err == nil && got == w {
+			return true
+		}
+	}
+	return false
 }
