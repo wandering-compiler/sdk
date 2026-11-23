@@ -10,7 +10,6 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
-	"github.com/wandering-compiler/sdk/go/lib/geoip"
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 )
 
@@ -47,7 +46,7 @@ const MsgidMalformedValue = "This value is not in the expected format."
 // English. A msgid with no catalog entry falls back to itself.
 func Vocabulary() []string {
 	return []string{MsgidMalformedValue, MsgidUploadMissing, MsgidUploadTooLarge, MsgidUploadBadType,
-		MsgidCaptchaRequired, MsgidCaptchaInvalid, MsgidCaptchaUnavailable, geoip.MsgidRefused}
+		MsgidCaptchaRequired, MsgidCaptchaInvalid, MsgidCaptchaUnavailable}
 }
 
 // WriteRefusal writes the canonical envelope for a refusal the gateway itself

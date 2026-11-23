@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
 var testDB = map[string]string{
@@ -234,5 +236,30 @@ func BenchmarkCheck(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		p.Check(d, ip)
+	}
+}
+
+func TestRequireHTTP(t *testing.T) {
+	g := &Gate{DB: loadedDB(t)}
+	p := MustPolicy(nil, []string{"RU"}, false, false)
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if RequireHTTP(g, p, w, r) {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	if Admit(g, nil) != nil || Admit(&Gate{Off: true}, p) != nil {
+		t.Error("Admit without a check is not nil")
+	}
+	for addr, want := range map[string]int{"198.51.100.4:1": http.StatusForbidden, "203.0.113.4:1": http.StatusNoContent} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = addr
+		rec := httptest.NewRecorder()
+		restgw.ClientAddrMiddleware(nil)(h).ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: %d, want %d", addr, rec.Code, want)
+		}
+		if want == http.StatusForbidden && !strings.Contains(rec.Body.String(), CodeRefused) {
+			t.Errorf("%s: body %s lacks %s", addr, rec.Body.String(), CodeRefused)
+		}
 	}
 }

@@ -91,6 +91,8 @@ type Server struct {
 	// the HTTP caller's address is resolved (SetTrustedProxies); none =
 	// the peer is the caller.
 	trustedProxies []netip.Prefix
+	// admit is SetAdmit's check; nil = none.
+	admit func(w http.ResponseWriter, r *http.Request, clientAddr string) bool
 	// toolMethods maps a tool to its backing RPC's full method
 	// (SetToolMethod), told to the auth method as the call's method.
 	toolMethods map[string]string
@@ -119,6 +121,14 @@ type Server struct {
 // the HTTP caller's address is resolved for the auth method
 // (principal.ClientAddrKey). Read right to left, as the rate limiters do.
 func (s *Server) SetTrustedProxies(trusted []netip.Prefix) { s.trustedProxies = trusted }
+
+// SetAdmit installs a check every request to the MCP endpoint passes first,
+// before the Origin check, with the client address resolved behind the
+// trusted proxies: it answers the refusal itself and returns false to stop
+// the request. The gateway's country policy (geoip.Admit). nil = none.
+func (s *Server) SetAdmit(admit func(w http.ResponseWriter, r *http.Request, clientAddr string) bool) {
+	s.admit = admit
+}
 
 // SetToolMethod records the full gRPC method (`/<package>.<Service>/<Method>`)
 // a tool calls, which the auth method is told (principal.MethodKey).
@@ -542,7 +552,16 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	}
 	// The Origin check is outermost on the endpoint: a browser origin the
 	// deployment did not name opens no session and reads no body.
-	mux.Handle(EndpointPath, originGuard(s.resolvedAllowedOrigins(), limitBody(endpoint, s.maxBodyBytes())))
+	guarded := originGuard(s.resolvedAllowedOrigins(), limitBody(endpoint, s.maxBodyBytes()))
+	if admit := s.admit; admit != nil {
+		inner := guarded
+		guarded = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if admit(w, r, ratelimit.HTTPClientAddr(r, s.trustedProxies)) {
+				inner.ServeHTTP(w, r)
+			}
+		})
+	}
+	mux.Handle(EndpointPath, guarded)
 	// Liveness for `<binary> health` and any orchestrator probe. Outside the
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
