@@ -19,6 +19,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -354,13 +355,13 @@ func recoverTool(name string, h mcpserver.ToolHandlerFunc) mcpserver.ToolHandler
 		defer func() {
 			if r := recover(); r != nil {
 				observx.ReportError(ctx, fmt.Errorf("PANIC MCP tool %q: %v\n%s", name, r, debug.Stack()))
-				res = mcp.NewToolResultError("internal error")
+				res = toolErrorResult(ctx, status.Error(codes.Internal, ""))
 				err = nil
 			}
 		}()
 		res, err = h(ctx, req)
 		if err != nil {
-			return toolErrorResult(err), nil
+			return toolErrorResult(ctx, err), nil
 		}
 		return res, nil
 	}
@@ -689,6 +690,10 @@ func (s *Server) CallUnary(
 ) (result *mcp.CallToolResult, callErr error) {
 	conn := s.connInfo(ctx)
 	conn.Method = s.toolMethods[req.Params.Name]
+	// Every sentence this call answers with — the gate's, the decode's, the
+	// backend's — is in the caller's language, and the backend renders its
+	// own in it too.
+	ctx = withLanguage(ctx, requestLanguage(conn))
 
 	// The call's record in the request event stream: begun before the
 	// permission gate, so a refused call is recorded too; finished with the
