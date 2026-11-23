@@ -86,9 +86,10 @@ func TestMergePO_PreservesTranslatorEdits(t *testing.T) {
 	}
 }
 
-// TestMergePO_DropsObsoleteMsgids — msgids in prior but not in
-// the new set drop silently (no `#~ msgid` markup).
-func TestMergePO_DropsObsoleteMsgids(t *testing.T) {
+// TestMergePO_KeepsObsoleteTranslationsUnserved — a translated msgid no
+// longer harvested stays as an obsolete `#~` entry (it used to drop
+// silently, taking the translation with it), and no runtime serves it.
+func TestMergePO_KeepsObsoleteTranslationsUnserved(t *testing.T) {
 	prior, _ := i18n.MarshalPO("cs", []i18n.POEntry{
 		{Msgid: "Active", Msgstr: "Aktivní"},
 		{Msgid: "Retired", Msgstr: "Vyřazené"},
@@ -98,8 +99,8 @@ func TestMergePO_DropsObsoleteMsgids(t *testing.T) {
 		t.Fatalf("MergePO: %v", err)
 	}
 	body := string(merged)
-	if strings.Contains(body, "Retired") {
-		t.Errorf("obsolete msgid leaked into merged body:\n%s", body)
+	if strings.Contains(body, "msgid \"Retired\"\nmsgstr") || !strings.Contains(body, "#~ msgid \"Retired\"\n#~ msgstr \"Vyřazené\"") {
+		t.Errorf("obsolete msgid not kept as #~:\n%s", body)
 	}
 	if !strings.Contains(body, `msgid "Active"`+"\n"+`msgstr "Aktivní"`) {
 		t.Errorf("Active translation lost:\n%s", body)
