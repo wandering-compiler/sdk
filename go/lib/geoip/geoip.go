@@ -14,7 +14,8 @@
 // rather than mapped, so a swap only drops the old one to the garbage
 // collector — a lookup in flight never reads an unmapped page.
 //
-// Spec: docs/specs/gateway/geo-blocking.md (platform).
+// The gateway checks a surface's or a method's policy (GeoPolicy in
+// w17/rest.proto) with RequireHTTP, Admit and Gate.Status.
 package geoip
 
 import (
