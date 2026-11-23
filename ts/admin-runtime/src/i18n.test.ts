@@ -26,14 +26,16 @@ const catalogs: AdminCatalogs = {
 // getter — which is the only value that is correct no matter who ran first.
 function clearNavigatorLanguage() {
   delete (window.navigator as { language?: string }).language;
+  delete (window.navigator as { languages?: readonly string[] }).languages;
 }
 
 afterEach(() => {
   clearNavigatorLanguage();
 });
 
-function withNavigatorLanguage(lang: string) {
+function withNavigatorLanguage(lang: string, ...more: string[]) {
   Object.defineProperty(window.navigator, "language", { value: lang, configurable: true });
+  Object.defineProperty(window.navigator, "languages", { value: [lang, ...more], configurable: true });
 }
 
 describe("adminUiLanguage", () => {
@@ -48,6 +50,13 @@ describe("adminUiLanguage", () => {
   it("falls back to the base language", () => {
     withNavigatorLanguage("cs-CZ");
     expect(adminUiLanguage(catalogs, "en")).toBe("cs");
+  });
+
+  // The browser's whole preference list, in order, as the server walks
+  // Accept-Language: a Slovak reader who also reads Czech gets Czech.
+  it("walks every preferred language before the default", () => {
+    withNavigatorLanguage("sk-SK", "cs", "en");
+    expect(adminUiLanguage(catalogs, "de")).toBe("cs");
   });
 
   it("falls back to the surface default, then to en", () => {
@@ -74,12 +83,13 @@ describe("makeTranslator", () => {
     expect(makeTranslator(undefined, "cs")("Save")).toBe("Save");
   });
 
-  // Catalog selection is WHOLE-catalog, the same rule the server follows: a
-  // key a partial language lacks renders ENGLISH, never a third language.
-  it("selects a whole catalog, not a key at a time", () => {
+  // Per message, the rule the server's i18n.T follows: a key a partial
+  // language lacks takes the default language's translation of it.
+  it("falls back to the default language per message", () => {
     const t = makeTranslator(catalogs, "de", "cs");
     expect(t("Save")).toBe("Speichern");
-    expect(t("Add {name}", { name: "x" })).toBe("Add x");
+    expect(t("Add {name}", { name: "x" })).toBe("Přidat x");
+    expect(t("Search")).toBe("Search");
   });
 
   it("uses the default language's catalog when the requested one is absent", () => {

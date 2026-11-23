@@ -11,10 +11,10 @@
  * register differs.
  *
  * The lookup chain mirrors `i18n.T` on the server and `t` in the generated
- * client, so a string resolves the same way on every surface: pick the
- * viewer's catalog, else the surface default's, then fall through to the bare
- * msgid — which IS the English source text, so an untranslated admin renders
- * exactly what it rendered before catalogs existed.
+ * client, so a string resolves the same way on every surface, PER MESSAGE:
+ * the viewer's catalog, else the surface default's entry for that msgid, then
+ * the bare msgid — which IS the English source text, so an untranslated admin
+ * renders exactly what it rendered before catalogs existed.
  */
 import { createContext, useContext } from "react";
 
@@ -35,34 +35,49 @@ export type Translate = (msgid: string, params?: Record<string, unknown>) => str
  * the format table while its UI falls back to English because no `cs` catalog
  * was shipped.
  *
- * Matching walks exact tag → base language → default, because a catalog is
- * shipped per language (`cs`) while a browser announces a locale (`cs-CZ`).
+ * Matching walks the browser's languages in its order of preference
+ * (`navigator.languages`, as the server walks Accept-Language), each by exact
+ * tag then base language, then the default — a catalog is shipped per
+ * language (`cs`) while a browser announces locales (`sk-SK`, `cs`, `en`).
  */
-export function adminUiLanguage(catalogs: AdminCatalogs, defaultLanguage?: string): string {
-  const nav = typeof navigator === "undefined" ? "" : navigator.language;
-  for (const candidate of [nav, nav.split("-")[0], defaultLanguage]) {
-    if (candidate && catalogs[candidate]) return candidate;
+export function adminUiLanguage(
+  catalogs: AdminCatalogs,
+  defaultLanguage?: string,
+  preferred: readonly string[] = browserLanguages(),
+): string {
+  for (const tag of preferred) {
+    for (const candidate of [tag, tag.split("-")[0]]) {
+      if (candidate && catalogs[candidate]) return candidate;
+    }
   }
+  if (defaultLanguage && catalogs[defaultLanguage]) return defaultLanguage;
   return defaultLanguage || "en";
+}
+
+function browserLanguages(): readonly string[] {
+  if (typeof navigator === "undefined") return [];
+  if (navigator.languages && navigator.languages.length > 0) return navigator.languages;
+  return navigator.language ? [navigator.language] : [];
 }
 
 /**
  * Builds the translator for one language.
  *
- * Catalog selection is WHOLE-catalog, not per-key — the same rule the server
- * and the generated client follow. A partially translated language therefore
- * renders the bare msgid for a key it lacks rather than the default language's
- * translation of it, which keeps "what am I looking at" answerable: every
- * untranslated string is English, never a third language.
+ * Per message, as the server's `i18n.T` resolves: a msgid the viewer's
+ * catalog lacks takes the default language's translation of it, then the
+ * bare msgid. A partially translated language thus reads like the default
+ * language where it has gaps — the same sentence the server's refusals
+ * render in the same situation, so one screen never mixes the two rules.
  */
 export function makeTranslator(
   catalogs: AdminCatalogs | undefined,
   lang: string,
   defaultLanguage?: string,
 ): Translate {
-  const table = catalogs?.[lang] ?? (defaultLanguage ? catalogs?.[defaultLanguage] : undefined);
+  const own = catalogs?.[lang];
+  const fallback = defaultLanguage && defaultLanguage !== lang ? catalogs?.[defaultLanguage] : undefined;
   return (msgid, params) => {
-    const hit = table?.[msgid];
+    const hit = own?.[msgid] || fallback?.[msgid];
     const text = hit != null && hit !== "" ? hit : msgid;
     return params ? substitute(text, params) : text;
   };
