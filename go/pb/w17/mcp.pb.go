@@ -128,8 +128,12 @@ type McpApi struct {
 	// not make its method a public MCP tool. Every tool the gateway serves
 	// runs behind the auth step, the gateway's own auth methods aside.
 	Unauthenticated bool `protobuf:"varint,10,opt,name=unauthenticated,proto3" json:"unauthenticated,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// geo — which countries may reach this MCP surface: `RestApi.geo`, with
+	// the same rules, checked for every request to the endpoint. A refused
+	// caller gets 403.
+	Geo           *GeoPolicy `protobuf:"bytes,11,opt,name=geo,proto3" json:"geo,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *McpApi) Reset() {
@@ -230,6 +234,13 @@ func (x *McpApi) GetUnauthenticated() bool {
 		return x.Unauthenticated
 	}
 	return false
+}
+
+func (x *McpApi) GetGeo() *GeoPolicy {
+	if x != nil {
+		return x.Geo
+	}
+	return nil
 }
 
 // McpOAuth names where the surface's tokens come from. The public URLs are
@@ -493,7 +504,7 @@ var File_w17_mcp_proto protoreflect.FileDescriptor
 
 const file_w17_mcp_proto_rawDesc = "" +
 	"\n" +
-	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xff\x02\n" +
+	"\rw17/mcp.proto\x12\x03w17\x1a google/protobuf/descriptor.proto\x1a\x12w17/audience.proto\x1a\x18w17/request_events.proto\x1a\x0ew17/rest.proto\"\xa1\x03\n" +
 	"\x06McpApi\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -505,7 +516,8 @@ const file_w17_mcp_proto_rawDesc = "" +
 	"\baudience\x18\b \x01(\v2\r.w17.AudienceR\baudience\x122\n" +
 	"\fauth_methods\x18\t \x03(\v2\x0f.w17.AuthMethodR\vauthMethods\x12(\n" +
 	"\x0funauthenticated\x18\n" +
-	" \x01(\bR\x0funauthenticated\"+\n" +
+	" \x01(\bR\x0funauthenticated\x12 \n" +
+	"\x03geo\x18\v \x01(\v2\x0e.w17.GeoPolicyR\x03geo\"+\n" +
 	"\bMcpOAuth\x12\x1f\n" +
 	"\vauth_domain\x18\x01 \x01(\tR\n" +
 	"authDomain\"\x89\x01\n" +
@@ -540,8 +552,9 @@ var file_w17_mcp_proto_goTypes = []any{
 	(*RequestEvents)(nil),              // 3: w17.RequestEvents
 	(*Audience)(nil),                   // 4: w17.Audience
 	(*AuthMethod)(nil),                 // 5: w17.AuthMethod
-	(*descriptorpb.MethodOptions)(nil), // 6: google.protobuf.MethodOptions
-	(*descriptorpb.FileOptions)(nil),   // 7: google.protobuf.FileOptions
+	(*GeoPolicy)(nil),                  // 6: w17.GeoPolicy
+	(*descriptorpb.MethodOptions)(nil), // 7: google.protobuf.MethodOptions
+	(*descriptorpb.FileOptions)(nil),   // 8: google.protobuf.FileOptions
 }
 var file_w17_mcp_proto_depIdxs = []int32{
 	2,  // 0: w17.McpApi.tools:type_name -> w17.McpTool
@@ -549,17 +562,18 @@ var file_w17_mcp_proto_depIdxs = []int32{
 	1,  // 2: w17.McpApi.oauth:type_name -> w17.McpOAuth
 	4,  // 3: w17.McpApi.audience:type_name -> w17.Audience
 	5,  // 4: w17.McpApi.auth_methods:type_name -> w17.AuthMethod
-	6,  // 5: w17.mcp:extendee -> google.protobuf.MethodOptions
-	6,  // 6: w17.mcp_description:extendee -> google.protobuf.MethodOptions
-	6,  // 7: w17.mcp_name:extendee -> google.protobuf.MethodOptions
-	6,  // 8: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
-	7,  // 9: w17.mcp_api:extendee -> google.protobuf.FileOptions
-	0,  // 10: w17.mcp_api:type_name -> w17.McpApi
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	10, // [10:11] is the sub-list for extension type_name
-	5,  // [5:10] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	6,  // 5: w17.McpApi.geo:type_name -> w17.GeoPolicy
+	7,  // 6: w17.mcp:extendee -> google.protobuf.MethodOptions
+	7,  // 7: w17.mcp_description:extendee -> google.protobuf.MethodOptions
+	7,  // 8: w17.mcp_name:extendee -> google.protobuf.MethodOptions
+	7,  // 9: w17.mcp_scope:extendee -> google.protobuf.MethodOptions
+	8,  // 10: w17.mcp_api:extendee -> google.protobuf.FileOptions
+	0,  // 11: w17.mcp_api:type_name -> w17.McpApi
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	11, // [11:12] is the sub-list for extension type_name
+	6,  // [6:11] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_w17_mcp_proto_init() }

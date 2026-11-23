@@ -235,6 +235,17 @@ message RestApi {
   // `principal_cost` declared without it applies when the deployment
   // switches the limit on.
   PrincipalRate principal_rate = 13;
+
+  // geo — which countries may call this surface, by the caller's address
+  // (resolved behind the trusted proxies, as for the rate limits): an
+  // allow-list or a deny-list of ISO 3166-1 alpha-2 codes. Checked before
+  // the handler, against a local country database the gateway downloads
+  // and keeps current itself (`<PREFIX>_GEOIP_SOURCE`: DB-IP Lite by
+  // default, MaxMind GeoLite2 with a key, a file, or `off`). A lookup is
+  // well under a microsecond. A refused caller gets 403 PERMISSION_DENIED
+  // with details[].code GEO_REFUSED. Private and loopback addresses are
+  // always admitted. An endpoint's own `geo` replaces this one.
+  GeoPolicy geo = 14;
 }
 
 // PluginInclude opts one plugin's REST preset into a surface. `plugin`
@@ -917,6 +928,11 @@ message RestEndpoint {
   // budget — a token refresh, a "who am I", a health read the client polls.
   // Not with `exclude_auth` or `principal_cost`.
   bool principal_exempt = 26;
+
+  // geo — this endpoint's own country policy, replacing the surface's
+  // `RestApi.geo`: stricter for a sign-up, `none` for a health probe or a
+  // webhook a foreign provider calls.
+  GeoPolicy geo = 27;
 }
 
 // RawResponse names the response fields the HTTP answer is made of.
@@ -1384,4 +1400,23 @@ enum StreamTransport {
   STREAM_TRANSPORT_UNSPECIFIED = 0;
   STREAM_TRANSPORT_SSE = 1;
   STREAM_TRANSPORT_WS  = 2;
+}
+
+// GeoPolicy is a country policy (`RestApi.geo`, `RestEndpoint.geo`,
+// `RpcApi.geo`, `McpApi.geo`): exactly one of `allow` and `deny`, or
+// `none`.
+message GeoPolicy {
+  // Only these countries (ISO 3166-1 alpha-2: "CZ", "SK").
+  repeated string allow = 1;
+  // Every country but these.
+  repeated string deny = 2;
+  // Refuse a public address the database places in no country. Admitted
+  // by default.
+  bool refuse_unknown = 3;
+  // Refuse every call while the gateway has no database yet (its first
+  // download has not succeeded). Admitted by default: blocking is a filter,
+  // and a gateway that cannot reach the download stays up.
+  bool refuse_unavailable = 4;
+  // Not checked at all: on a method, it lifts the surface's policy.
+  bool none = 5;
 }

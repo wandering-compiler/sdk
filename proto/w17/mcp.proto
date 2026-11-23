@@ -198,6 +198,11 @@ message McpApi {
   // not make its method a public MCP tool. Every tool the gateway serves
   // runs behind the auth step, the gateway's own auth methods aside.
   bool unauthenticated = 10;
+
+  // geo — which countries may reach this MCP surface: `RestApi.geo`, with
+  // the same rules, checked for every request to the endpoint. A refused
+  // caller gets 403.
+  GeoPolicy geo = 11;
 }
 
 // McpOAuth names where the surface's tokens come from. The public URLs are
