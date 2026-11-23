@@ -381,9 +381,13 @@ func TestNatsBus_ConcurrentPublishSubscribe_Embedded(t *testing.T) {
 		t.Fatalf("%d/%d dispatches failed, first: %v", n, total, firstErr.Load())
 	}
 
+	// The budget is for a broker that never delivers, not a latency target.
+	// Under -race on a shared CI runner the 50 deliveries took longer than 15 s
+	// (39/50 at 15 s, 50/50 well before 60 s, with every message in the stream
+	// and acked, none redelivered): slow, not lost.
 	select {
 	case <-allSeen:
-	case <-time.After(15 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatalf("only %d/%d envelopes delivered", delivered.Load(), total)
 	}
 }
