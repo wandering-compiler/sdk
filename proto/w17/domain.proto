@@ -121,6 +121,10 @@ message PluginActivation {
   //
   // Empty when the plugin's `connections:` list is empty
   // (plugin binds tables to the project's default connection).
+  //
+  // In an option a map is written as key/value entries:
+  // `connections: [ { key: "main", value: "app-postgres" } ]` —
+  // `connections: { main: "app-postgres" }` does not parse.
   map<string, string> connections = 3;
 
   // Channel alias → project channel name. Every alias declared
@@ -132,6 +136,9 @@ message PluginActivation {
   //
   // Empty when the plugin's `channels:` list is empty (plugin
   // emits no events).
+  //
+  // Written as key/value entries:
+  // `channels: [ { key: "events", value: "auth-bus" } ]`.
   map<string, string> channels = 4;
 
   // Optional configuration for plugins shipping a turnkey
