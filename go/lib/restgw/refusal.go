@@ -102,6 +102,7 @@ func WriteBadInput(ctx context.Context, w http.ResponseWriter, where, field stri
 			Field:   field,
 			Code:    "INVALID_VALUE",
 			Message: i18n.T(ctx, MsgidMalformedValue, nil),
+			Msgid:   MsgidMalformedValue,
 		}})
 }
 
@@ -169,7 +170,7 @@ func WriteForbiddenCtx(ctx context.Context, w http.ResponseWriter, perm string) 
 	reportByCode(ctx, codes.PermissionDenied, status.Error(codes.PermissionDenied, operator))
 	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.PermissionDenied),
 		GRPCCodeName(codes.PermissionDenied), sentence,
-		[]FieldError{{Code: grpcerr.CodeMissingPermission, Message: sentence}})
+		[]FieldError{{Code: grpcerr.CodeMissingPermission, Message: sentence, Msgid: grpcerr.UserMsgid(codes.PermissionDenied)}})
 }
 
 // WriteDeniedCtx is the gate's refusal of a caller who lacks permission `id`
@@ -206,7 +207,7 @@ func WriteDeniedCtx(ctx context.Context, w http.ResponseWriter, perm string, id 
 	// ClientError.
 	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.FailedPrecondition),
 		GRPCCodeName(codes.FailedPrecondition), sentence,
-		[]FieldError{{Code: grpcerr.CodeOrganizationRequired, Message: sentence}})
+		[]FieldError{{Code: grpcerr.CodeOrganizationRequired, Message: sentence, Msgid: grpcerr.MsgidOrganizationRequired}})
 }
 
 // WriteUnauthorizedCtx writes the canonical 401 without naming the credential

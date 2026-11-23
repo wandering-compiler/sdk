@@ -45,6 +45,6 @@ func admit(g *Gate, p *Policy, w http.ResponseWriter, r *http.Request, clientAdd
 		fmt.Sprintf("geo: refused (%s, country %q, policy %s)", v.Reason, v.Country, p)))
 	sentence := i18n.T(ctx, MsgidRefused, nil)
 	restgw.WriteErrorWithDetails(w, http.StatusForbidden, restgw.GRPCCodeName(codes.PermissionDenied), sentence,
-		[]restgw.FieldError{{Code: CodeRefused, Message: sentence}})
+		[]restgw.FieldError{{Code: CodeRefused, Message: sentence, Msgid: MsgidRefused}})
 	return false
 }

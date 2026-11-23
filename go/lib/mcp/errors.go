@@ -38,7 +38,7 @@ func publicError(ctx context.Context, err error) error {
 	if len(details) > 0 {
 		pb := make([]*w17pb.ErrorDetail, 0, len(details))
 		for _, d := range details {
-			pb = append(pb, &w17pb.ErrorDetail{Field: d.Field, Code: d.Code, Message: d.Message})
+			pb = append(pb, &w17pb.ErrorDetail{Field: d.Field, Code: d.Code, Message: d.Message, Msgid: d.Msgid, Params: d.Params})
 		}
 		if withDetails, derr := withErrorDetails(st, pb); derr == nil {
 			st = withDetails

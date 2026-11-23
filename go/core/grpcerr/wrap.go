@@ -422,6 +422,8 @@ func forCallerOn(ctx context.Context, c codes.Code, method, dev, code, field, us
 		Code:    code,
 		Message: i18n.T(ctx, userMsgid, params),
 		Field:   field,
+		Msgid:   userMsgid,
+		Params:  params,
 	}))
 	if err != nil {
 		// coverage-exempt: WithDetails only fails if the detail cannot
@@ -623,8 +625,10 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// were documented and never filled: an author who wrote one put literal
 	// braces on the wire. The engine reports both; an empty one stays empty.
 	message := info.Message
+	var msgParams map[string]string
 	if message != "" {
-		message = i18n.T(ctx, message, map[string]string{"constraint": ce.Name, "table": ce.Table})
+		msgParams = map[string]string{"constraint": ce.Name, "table": ce.Table}
+		message = i18n.T(ctx, message, msgParams)
 	}
 	detail := ce.Kind + " violation"
 	if info.Field != "" && message != "" {
@@ -635,6 +639,8 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		Field:   info.Field,
 		Code:    info.Code,
 		Message: message,
+		Msgid:   info.Message,
+		Params:  msgParams,
 	}))
 	if errWith != nil {
 		// coverage-exempt: unreachable defensive guard — WithDetails
