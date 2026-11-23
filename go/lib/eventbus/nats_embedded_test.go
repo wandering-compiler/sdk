@@ -364,14 +364,22 @@ func TestNatsBus_ConcurrentPublishSubscribe_Embedded(t *testing.T) {
 		})
 
 	var wg sync.WaitGroup
+	var failed atomic.Int32
+	var firstErr atomic.Value
 	for i := 0; i < total; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_ = bus.Dispatch(context.Background(), "default", "evt", wrapperspb.Int64(int64(n)))
+			if err := bus.Dispatch(context.Background(), "default", "evt", wrapperspb.Int64(int64(n))); err != nil {
+				failed.Add(1)
+				firstErr.CompareAndSwap(nil, err)
+			}
 		}(i)
 	}
 	wg.Wait()
+	if n := failed.Load(); n > 0 {
+		t.Fatalf("%d/%d dispatches failed, first: %v", n, total, firstErr.Load())
+	}
 
 	select {
 	case <-allSeen:
