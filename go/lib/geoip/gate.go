@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -111,4 +112,35 @@ func FromEnv(prefix string) (*Gate, *Updater, string, error) {
 	}
 	u := &Updater{DB: gate.DB, Source: s, CacheDir: dir, Every: every, Log: slog.Default()}
 	return gate, u, fmt.Sprintf("geo blocking ON: database from %s, refreshed every %s", s.Name(), every), nil
+}
+
+var shared struct {
+	mu    sync.Mutex
+	gates map[string]*Gate
+}
+
+// Shared is FromEnv once per process and prefix, with its Updater running
+// for the life of the process: every surface of one gateway binary (REST,
+// gRPC, MCP) checks against one database, downloaded once. The start-up
+// line is logged on the first call; a configuration error is fatal to the
+// caller, as any other bad env.
+func Shared(prefix string) (*Gate, error) {
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	if g, ok := shared.gates[prefix]; ok {
+		return g, nil
+	}
+	g, u, line, err := FromEnv(prefix)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info(line)
+	if u != nil {
+		go u.Run(context.Background())
+	}
+	if shared.gates == nil {
+		shared.gates = map[string]*Gate{}
+	}
+	shared.gates[prefix] = g
+	return g, nil
 }

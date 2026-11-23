@@ -263,3 +263,19 @@ func TestRequireHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedOncePerPrefix(t *testing.T) {
+	t.Setenv("SHR_GEOIP_SOURCE", "off")
+	a, err := Shared("SHR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Shared("SHR")
+	if a != b || !a.Off {
+		t.Errorf("Shared built twice or not off: %p %p", a, b)
+	}
+	t.Setenv("BAD_GEOIP_SOURCE", "nope")
+	if _, err := Shared("BAD"); err == nil {
+		t.Error("bad source accepted")
+	}
+}
