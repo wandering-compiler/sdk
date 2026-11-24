@@ -305,11 +305,25 @@ func (a *Applier) runWithCursor(ctx context.Context, id, stmt string, n int) err
 	return tx.Commit(ctx)
 }
 
-// createIndexConcurrentlyRe reads the index name off a CREATE [UNIQUE] INDEX
-// CONCURRENTLY statement (IF NOT EXISTS needs nothing: it re-runs cleanly).
-// The name is taken as written — bare, quoted or schema-qualified — and
-// resolved by to_regclass, which parses it the way the statement did.
-var createIndexConcurrentlyRe = regexp.MustCompile(`(?is)^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+((?:"(?:[^"]|"")+"|[^\s"(]+)(?:\.(?:"(?:[^"]|"")+"|[^\s"(]+))?)\s+ON\b`)
+// createIndexConcurrentlyRe reads the index name and its table off a
+// CREATE [UNIQUE] INDEX CONCURRENTLY statement (IF NOT EXISTS needs nothing:
+// it re-runs cleanly). Names are taken as written — bare, quoted or
+// schema-qualified: group 1 is the index, group 2 its schema part when it has
+// one, group 3 the table after ON [ONLY].
+var createIndexConcurrentlyRe = regexp.MustCompile(`(?is)^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(` + pgIdent + `(\.` + pgIdent + `)?)\s+ON\s+(?:ONLY\s+)?(` + pgIdent + `(?:\.` + pgIdent + `)?)`)
+
+// pgIdent is one identifier as a statement spells it: quoted, or bare.
+const pgIdent = `(?:"(?:[^"]|"")+"|[^\s"(.]+)`
+
+// interruptedIndexQuery finds the index an interrupted build left. An index
+// is created in its TABLE's schema, not the search_path's, so a bare index
+// name is resolved in the schema of the table it was built on ($2) — w17's
+// own tables are schema-qualified, and to_regclass of the bare name would
+// miss every one of them. It answers the index's validity and its name as a
+// DROP must spell it.
+const interruptedIndexQuery = `SELECT i.indisvalid, i.indexrelid::regclass::text FROM pg_index i
+WHERE i.indexrelid = to_regclass(CASE WHEN $3 THEN $1 ELSE COALESCE(
+  (SELECT quote_ident(n.nspname) || '.' FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace WHERE t.oid = to_regclass($2)), '') || $1 END)`
 
 // settleInterruptedBuild decides the CONCURRENTLY build a resume starts at.
 // A build autocommits and its cursor is recorded after it, so a process that
@@ -327,7 +341,8 @@ func (a *Applier) settleInterruptedBuild(ctx context.Context, head string) (bool
 		return false, nil
 	}
 	var valid *bool
-	err := a.conn.QueryRow(ctx, `SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)`, mm[1]).Scan(&valid)
+	var name string
+	err := a.conn.QueryRow(ctx, interruptedIndexQuery, mm[1], mm[3], mm[2] != "").Scan(&valid, &name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -337,8 +352,8 @@ func (a *Applier) settleInterruptedBuild(ctx context.Context, head string) (bool
 	if valid != nil && *valid {
 		return true, nil
 	}
-	if _, err := a.conn.Exec(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+mm[1], pgx.QueryExecModeSimpleProtocol); err != nil {
-		return false, fmt.Errorf("drop the INVALID index an interrupted build left (%s): %w", mm[1], err)
+	if _, err := a.conn.Exec(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+name, pgx.QueryExecModeSimpleProtocol); err != nil {
+		return false, fmt.Errorf("drop the INVALID index an interrupted build left (%s): %w", name, err)
 	}
 	return false, nil
 }

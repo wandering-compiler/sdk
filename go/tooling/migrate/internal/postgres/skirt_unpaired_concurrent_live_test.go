@@ -14,7 +14,7 @@ import (
 
 // unpairedIndexSkirt builds an index CONCURRENTLY with no DROP … IF EXISTS
 // before it — the shape a raw post-transaction escape hatch can take.
-func unpairedIndexSkirt(unique bool) *applyfetchpb.Migration {
+func unpairedIndexSkirt(unique bool, table string) *applyfetchpb.Migration {
 	kw := "INDEX"
 	if unique {
 		kw = "UNIQUE INDEX"
@@ -24,7 +24,7 @@ func unpairedIndexSkirt(unique bool) *applyfetchpb.Migration {
 		UpSql: `BEGIN;` + ledgerCreate + `
 			INSERT INTO w17_migrations VALUES ('2026-02-01T00:00:00Z', 'aa', false);
 			COMMIT;`,
-		UpPostTx: `CREATE ` + kw + ` CONCURRENTLY books_title ON books (title);
+		UpPostTx: `CREATE ` + kw + ` CONCURRENTLY books_title ON ` + table + ` (title);
 			UPDATE w17_migrations SET post_tx_complete = true WHERE timestamp = '2026-02-01T00:00:00Z';`,
 	}
 }
@@ -49,6 +49,19 @@ func halfAppliedAtTheBuild(t *testing.T, ctx context.Context, a *postgres.Applie
 	}
 }
 
+// qualifiedTable is the schema-qualified table w17 itself emits: an index
+// built ON it lands in the table's schema, not on the search_path.
+const qualifiedTable = "app.books"
+
+// tablePrep is the setup a table needs before its index is built: none for
+// the plain books, a schema and a table of its own for app.books.
+func tablePrep(table string) []string {
+	if table == "books" {
+		return nil
+	}
+	return []string{`CREATE SCHEMA IF NOT EXISTS app`, `CREATE TABLE app.books (id BIGINT PRIMARY KEY, title TEXT)`}
+}
+
 func indexValid(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) bool {
 	t.Helper()
 	var valid bool
@@ -62,6 +75,16 @@ func indexValid(t *testing.T, ctx context.Context, conn *pgx.Conn, name string) 
 // finished finds the index built and valid: it records the statement done and
 // goes on, instead of failing "already exists" on every deploy.
 func TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live(t *testing.T) {
+	resumeAtAFinishedBuild(t, "books", "books_title")
+}
+
+// The same on a schema-qualified table — the shape w17 emits: the index is
+// in the table's schema, which the resume must look in.
+func TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_SchemaQualified_Live(t *testing.T) {
+	resumeAtAFinishedBuild(t, qualifiedTable, "app.books_title")
+}
+
+func resumeAtAFinishedBuild(t *testing.T, table, index string) {
 	dsn := liveDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -75,8 +98,8 @@ func TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer func() { _ = conn.Close(context.Background()) }()
-	m := unpairedIndexSkirt(false)
-	halfAppliedAtTheBuild(t, ctx, a, conn, m, `CREATE INDEX CONCURRENTLY books_title ON books (title)`)
+	m := unpairedIndexSkirt(false, table)
+	halfAppliedAtTheBuild(t, ctx, a, conn, m, append(tablePrep(table), `CREATE INDEX CONCURRENTLY books_title ON `+table+` (title)`)...)
 
 	if err := a.ApplyPostTx(ctx, m); err != nil {
 		t.Fatalf("resume at a build that had finished: %v", err)
@@ -84,7 +107,7 @@ func TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live(t *testing.T) {
 	if phase, err := a.MigrationPhase(ctx, m.Id); err != nil || phase != migrate.PhaseComplete {
 		t.Fatalf("phase after the resume = %v, %v; want PhaseComplete", phase, err)
 	}
-	if !indexValid(t, ctx, conn, "books_title") {
+	if !indexValid(t, ctx, conn, index) {
 		t.Fatal("books_title is not valid after the resume")
 	}
 }
@@ -93,6 +116,16 @@ func TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live(t *testing.T) {
 // the INVALID index the failure left: it drops it and builds again, instead
 // of failing "already exists" over an index that does not work.
 func TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_Live(t *testing.T) {
+	resumeAtAFailedBuild(t, "books", "books_title")
+}
+
+// The same on a schema-qualified table: the INVALID index is in the table's
+// schema, and only a DROP of that name removes it.
+func TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_SchemaQualified_Live(t *testing.T) {
+	resumeAtAFailedBuild(t, qualifiedTable, "app.books_title")
+}
+
+func resumeAtAFailedBuild(t *testing.T, table, index string) {
 	dsn := liveDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -106,14 +139,14 @@ func TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_Live(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer func() { _ = conn.Close(context.Background()) }()
-	m := unpairedIndexSkirt(true)
+	m := unpairedIndexSkirt(true, table)
 	// A unique build over duplicates fails and leaves books_title INVALID;
 	// the duplicate is then fixed, as an operator would before redeploying.
-	halfAppliedAtTheBuild(t, ctx, a, conn, m,
-		`INSERT INTO books VALUES (1, 'dup'), (2, 'dup')`,
-		`CREATE UNIQUE INDEX CONCURRENTLY books_title ON books (title)`,
-		`DELETE FROM books WHERE id = 2`)
-	if indexValid(t, ctx, conn, "books_title") {
+	halfAppliedAtTheBuild(t, ctx, a, conn, m, append(tablePrep(table),
+		`INSERT INTO `+table+` VALUES (1, 'dup'), (2, 'dup')`,
+		`CREATE UNIQUE INDEX CONCURRENTLY books_title ON `+table+` (title)`,
+		`DELETE FROM `+table+` WHERE id = 2`)...)
+	if indexValid(t, ctx, conn, index) {
 		t.Fatal("setup: the failed build left a valid index")
 	}
 
@@ -123,7 +156,7 @@ func TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_Live(t *testing.T) {
 	if phase, err := a.MigrationPhase(ctx, m.Id); err != nil || phase != migrate.PhaseComplete {
 		t.Fatalf("phase after the resume = %v, %v; want PhaseComplete", phase, err)
 	}
-	if !indexValid(t, ctx, conn, "books_title") {
+	if !indexValid(t, ctx, conn, index) {
 		t.Fatal("books_title is still INVALID after the resume")
 	}
 }
