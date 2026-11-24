@@ -6,9 +6,8 @@
 // [ExpandIn] to rewrite `IN (?)` into `IN (?, ?, …)` with N
 // placeholders, and passes the per-element args alongside.
 //
-// PG bundles do NOT use this — the lib/pq path takes the
-// `= ANY($N) + pq.Array(slice)` shape, which uses the array
-// binding directly. The dispatch happens in
+// PG bundles do NOT use this — they take the `= ANY($N)` shape
+// and bind the slice itself, which pgx sends as an array. The dispatch happens in
 // the storage codegen based on the
 // per-method dialect.
 package dqlbind
@@ -460,7 +459,7 @@ func nthPlaceholder(s string, n int) int {
 //
 // Arr's problem, one type over, and reachable the same way: proto3 has no
 // presence for `bytes`, so an empty payload arrives as a nil slice — which
-// lib/pq sends as NULL, and a NOT NULL `bytea` column refuses. The console's
+// the driver sends as NULL, and a NOT NULL `bytea` column refuses. The console's
 // deploy registry hit it on the first EMPTY fixture pushed: a fixture with no
 // rows marshals to zero bytes, the map store stores it happily, and the write
 // failed with a constraint violation naming nothing the operator wrote.
@@ -478,8 +477,8 @@ func Bytes(b []byte) []byte {
 // Arr returns a NON-NIL slice, so an empty repeated value binds as the
 // empty SQL array rather than as NULL.
 //
-// `pq.Array` is where the difference is decided: its Value() returns
-// untyped nil for a nil slice, which lib/pq sends as NULL. A repeated
+// The driver is where the difference is decided: it sends a nil slice
+// as NULL and an empty one as the empty array `{}`. A repeated
 // COLUMN is declared NOT NULL — the model says "always a list, possibly
 // empty" — so an empty list would fail the constraint instead of storing
 // `{}`. And there is nothing the caller can do about it from the proto
@@ -511,7 +510,7 @@ func Arr[T any](s []T) []T {
 //
 // Generic `any` parameter keeps one binding emit shape across
 // kinds; the type switch routes per runtime type. Untyped nil
-// is what lib/pq translates to SQL NULL — typed nil pointers
+// is what the driver translates to SQL NULL — typed nil pointers
 // go through reflect and break the cast on UUID columns.
 func NullIfEmpty(v any) any {
 	switch x := v.(type) {
@@ -582,7 +581,7 @@ func EnumFieldOrNull(parent proto.Message, field string) any {
 // (e.g. an `expires_at` that the validation guard then reads as already
 // expired) and, on a NOT NULL column, mask a missing-required-value bug
 // behind a silently-stored sentinel. A set Timestamp binds as its
-// time.Time, which lib/pq sends as TIMESTAMPTZ — same as the bare
+// time.Time, which pgx sends as TIMESTAMPTZ — same as the bare
 // `.AsTime()` the codegen used before.
 func TimestampOrNull(ts *timestamppb.Timestamp) any {
 	if ts == nil {

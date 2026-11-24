@@ -86,4 +86,16 @@ message ErrorDetail {
   // failures with no obvious field association, business-logic
   // errors, etc.).
   string field = 3;
+
+  // The catalog key `message` was translated from — the English source
+  // sentence with its `{placeholder}`s ("must be at most {max}
+  // characters"). Set wherever w17 or an author built the message from a
+  // catalog (validation, constraint violations, refusals,
+  // grpcerr.ForUser…). A client holding the same catalogs re-translates
+  // the failure into its own language with it: t(lang, msgid, params).
+  // Empty for a message that is not a catalog entry.
+  string msgid = 4;
+
+  // The values substituted into msgid's placeholders.
+  map<string, string> params = 5;
 }

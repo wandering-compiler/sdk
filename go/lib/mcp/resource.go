@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/core/observx"
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	"github.com/wandering-compiler/sdk/go/lib/ratelimit"
 	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
@@ -188,7 +189,7 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 			s.challenge(w, http.StatusUnauthorized, "invalid_token", "the token is not valid for this resource")
 		default:
 			observx.ReportError(r.Context(), fmt.Errorf("mcp: token check: %w", err))
-			http.Error(w, "the authorization service is unavailable", http.StatusServiceUnavailable)
+			http.Error(w, i18n.T(requestContext(r), restgw.MsgidAuthUnavailable, nil), http.StatusServiceUnavailable)
 		}
 	})
 }

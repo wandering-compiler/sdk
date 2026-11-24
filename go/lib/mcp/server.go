@@ -19,6 +19,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -91,6 +92,8 @@ type Server struct {
 	// the HTTP caller's address is resolved (SetTrustedProxies); none =
 	// the peer is the caller.
 	trustedProxies []netip.Prefix
+	// admit is SetAdmit's check; nil = none.
+	admit func(w http.ResponseWriter, r *http.Request, clientAddr string) bool
 	// toolMethods maps a tool to its backing RPC's full method
 	// (SetToolMethod), told to the auth method as the call's method.
 	toolMethods map[string]string
@@ -119,6 +122,14 @@ type Server struct {
 // the HTTP caller's address is resolved for the auth method
 // (principal.ClientAddrKey). Read right to left, as the rate limiters do.
 func (s *Server) SetTrustedProxies(trusted []netip.Prefix) { s.trustedProxies = trusted }
+
+// SetAdmit installs a check every request to the MCP endpoint passes first,
+// before the Origin check, with the client address resolved behind the
+// trusted proxies: it answers the refusal itself and returns false to stop
+// the request. The gateway's country policy (geoip.Admit). nil = none.
+func (s *Server) SetAdmit(admit func(w http.ResponseWriter, r *http.Request, clientAddr string) bool) {
+	s.admit = admit
+}
 
 // SetToolMethod records the full gRPC method (`/<package>.<Service>/<Method>`)
 // a tool calls, which the auth method is told (principal.MethodKey).
@@ -344,13 +355,13 @@ func recoverTool(name string, h mcpserver.ToolHandlerFunc) mcpserver.ToolHandler
 		defer func() {
 			if r := recover(); r != nil {
 				observx.ReportError(ctx, fmt.Errorf("PANIC MCP tool %q: %v\n%s", name, r, debug.Stack()))
-				res = mcp.NewToolResultError("internal error")
+				res = toolErrorResult(ctx, status.Error(codes.Internal, ""))
 				err = nil
 			}
 		}()
 		res, err = h(ctx, req)
 		if err != nil {
-			return toolErrorResult(err), nil
+			return toolErrorResult(ctx, err), nil
 		}
 		return res, nil
 	}
@@ -542,7 +553,16 @@ func (s *Server) ServeStreamableHTTP(ctx context.Context, addr string) error {
 	}
 	// The Origin check is outermost on the endpoint: a browser origin the
 	// deployment did not name opens no session and reads no body.
-	mux.Handle(EndpointPath, originGuard(s.resolvedAllowedOrigins(), limitBody(endpoint, s.maxBodyBytes())))
+	guarded := originGuard(s.resolvedAllowedOrigins(), limitBody(endpoint, s.maxBodyBytes()))
+	if admit := s.admit; admit != nil {
+		inner := guarded
+		guarded = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if admit(w, r, ratelimit.HTTPClientAddr(r, s.trustedProxies)) {
+				inner.ServeHTTP(w, r)
+			}
+		})
+	}
+	mux.Handle(EndpointPath, guarded)
 	// Liveness for `<binary> health` and any orchestrator probe. Outside the
 	// MCP endpoint and its auth: answering at all is the signal.
 	mux.Handle(healthz.Path, healthz.Handler())
@@ -670,6 +690,10 @@ func (s *Server) CallUnary(
 ) (result *mcp.CallToolResult, callErr error) {
 	conn := s.connInfo(ctx)
 	conn.Method = s.toolMethods[req.Params.Name]
+	// Every sentence this call answers with — the gate's, the decode's, the
+	// backend's — is in the caller's language, and the backend renders its
+	// own in it too.
+	ctx = withLanguage(ctx, requestLanguage(conn))
 
 	// The call's record in the request event stream: begun before the
 	// permission gate, so a refused call is recorded too; finished with the

@@ -252,6 +252,7 @@ func badArgument(ctx context.Context, field, code string, cause error) error {
 		Field:   field,
 		Code:    code,
 		Message: i18n.T(ctx, restgw.MsgidMalformedValue, nil),
+		Msgid:   restgw.MsgidMalformedValue,
 	}); err == nil {
 		st = withDetail
 	}

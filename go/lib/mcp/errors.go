@@ -38,7 +38,7 @@ func publicError(ctx context.Context, err error) error {
 	if len(details) > 0 {
 		pb := make([]*w17pb.ErrorDetail, 0, len(details))
 		for _, d := range details {
-			pb = append(pb, &w17pb.ErrorDetail{Field: d.Field, Code: d.Code, Message: d.Message})
+			pb = append(pb, &w17pb.ErrorDetail{Field: d.Field, Code: d.Code, Message: d.Message, Msgid: d.Msgid, Params: d.Params})
 		}
 		if withDetails, derr := withErrorDetails(st, pb); derr == nil {
 			st = withDetails
@@ -85,10 +85,16 @@ func report(ctx context.Context, c codes.Code, err error) {
 // call itself was malformed, and a client shows it as a broken server. err
 // is already the public status (CallUnary's errors are built by publicError
 // and refusal); anything else is reduced to its code's sentence.
-func toolErrorResult(err error) *mcp.CallToolResult {
+func toolErrorResult(ctx context.Context, err error) *mcp.CallToolResult {
 	st, ok := status.FromError(err)
 	if !ok {
-		st = status.New(codes.Internal, "internal error")
+		st = status.New(codes.Internal, "")
+	}
+	if st.Message() == "" {
+		// A status with no sentence (a recovered panic, an error that is
+		// not a status) gets its code's catalog sentence, in the caller's
+		// language — never an English literal.
+		st = status.New(st.Code(), restgw.ClientSentence(withLanguage(ctx, requestLanguageFromHeaders(HTTPHeadersFromContext(ctx))), st.Code()))
 	}
 	var b strings.Builder
 	b.WriteString(st.Code().String())

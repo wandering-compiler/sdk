@@ -130,3 +130,11 @@ export function IconChevronRight(p: IconProps) {
     </Svg>
   );
 }
+
+export function IconChevronDown(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6 9l6 6 6-6" />
+    </Svg>
+  );
+}

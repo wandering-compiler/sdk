@@ -15,6 +15,14 @@ export interface AdminSpec {
   schema_version: string;
   name: string;
   prefix: string;
+  // The admin's name as people see it (AdminApi.title): the tab's title and,
+  // without `heading`, the header's. Absent = `name`.
+  title?: string;
+  heading?: string;
+  // Other domains' admins to switch to (AdminApi.links), and the endpoint
+  // that answers their addresses from the server's environment.
+  links?: AdminLinkSpec[];
+  links_endpoint?: string;
   default_language?: string;
   auth: AdminAuthSpec;
   // A model's (w17.admin_title), the detail page's row heading, keyed by the
@@ -628,4 +636,9 @@ export interface BootstrapOptions {
   // (or empty) means it stays on JSON whatever the spec asked for.
   // See wire.ts.
   codecs?: WireCodecs;
+}
+
+export interface AdminLinkSpec {
+  domain: string;
+  label: string;
 }

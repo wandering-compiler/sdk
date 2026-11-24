@@ -46,8 +46,21 @@ const MsgidMalformedValue = "This value is not in the expected format."
 // English. A msgid with no catalog entry falls back to itself.
 func Vocabulary() []string {
 	return []string{MsgidMalformedValue, MsgidUploadMissing, MsgidUploadTooLarge, MsgidUploadBadType,
-		MsgidCaptchaRequired, MsgidCaptchaInvalid, MsgidCaptchaUnavailable}
+		MsgidCaptchaRequired, MsgidCaptchaInvalid, MsgidCaptchaUnavailable,
+		MsgidForbiddenOrigin, MsgidAuthUnavailable}
 }
+
+// The plain-text answers an MCP server (lib/mcp) gives before any tool runs.
+// Declared here, beside the gateway's other refusals, so the catalog harvest
+// reads them through Vocabulary without importing the MCP server.
+const (
+	// MsgidForbiddenOrigin answers a browser origin the deployment did not
+	// allow (the 403 of the MCP Origin guard).
+	MsgidForbiddenOrigin = "This site is not allowed to use this server."
+	// MsgidAuthUnavailable answers a token check that could not be made (the
+	// authorization service is down): a fault, not a refusal.
+	MsgidAuthUnavailable = "Signing in is temporarily unavailable. Please try again shortly."
+)
 
 // WriteRefusal writes the canonical envelope for a refusal the gateway itself
 // decided.
@@ -102,6 +115,7 @@ func WriteBadInput(ctx context.Context, w http.ResponseWriter, where, field stri
 			Field:   field,
 			Code:    "INVALID_VALUE",
 			Message: i18n.T(ctx, MsgidMalformedValue, nil),
+			Msgid:   MsgidMalformedValue,
 		}})
 }
 
@@ -169,7 +183,7 @@ func WriteForbiddenCtx(ctx context.Context, w http.ResponseWriter, perm string) 
 	reportByCode(ctx, codes.PermissionDenied, status.Error(codes.PermissionDenied, operator))
 	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.PermissionDenied),
 		GRPCCodeName(codes.PermissionDenied), sentence,
-		[]FieldError{{Code: grpcerr.CodeMissingPermission, Message: sentence}})
+		[]FieldError{{Code: grpcerr.CodeMissingPermission, Message: sentence, Msgid: grpcerr.UserMsgid(codes.PermissionDenied)}})
 }
 
 // WriteDeniedCtx is the gate's refusal of a caller who lacks permission `id`
@@ -206,7 +220,7 @@ func WriteDeniedCtx(ctx context.Context, w http.ResponseWriter, perm string, id 
 	// ClientError.
 	WriteErrorWithDetails(w, HTTPStatusFromGRPCCode(codes.FailedPrecondition),
 		GRPCCodeName(codes.FailedPrecondition), sentence,
-		[]FieldError{{Code: grpcerr.CodeOrganizationRequired, Message: sentence}})
+		[]FieldError{{Code: grpcerr.CodeOrganizationRequired, Message: sentence, Msgid: grpcerr.MsgidOrganizationRequired}})
 }
 
 // WriteUnauthorizedCtx writes the canonical 401 without naming the credential

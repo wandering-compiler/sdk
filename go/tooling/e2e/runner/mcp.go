@@ -246,15 +246,19 @@ func (c *MCPCaller) Call(ctx context.Context, ep Endpoint, input map[string]any,
 	}
 	if out.Result.IsError {
 		// A backend refusal is a tool result the model reads —
-		// "<Code>: <message>" — so it is the surface answering, and
-		// `expect_error` matches on its code.
+		// "<Code>: <message>", then one "- <field>: <CODE> — <message>"
+		// line per detail (lib/mcp toolErrorResult) — so it is the
+		// surface answering, and `expect_error` matches on its code and
+		// its details, as it does on REST.
 		for _, c := range out.Result.Content {
 			if c.Type != "text" {
 				continue
 			}
-			code, msg, ok := strings.Cut(strings.SplitN(c.Text, "\n", 2)[0], ": ")
+			lines := strings.Split(c.Text, "\n")
+			code, msg, ok := strings.Cut(lines[0], ": ")
 			if ok && code != "" && !strings.ContainsAny(code, " \t") {
-				return nil, &CallError{Op: "mcp " + ep.Ref, Code: screamingSnake(code), Message: msg, Raw: c.Text}
+				return nil, &CallError{Op: "mcp " + ep.Ref, Code: screamingSnake(code), Message: msg, Raw: c.Text,
+					Details: toolErrorDetails(lines[1:])}
 			}
 		}
 		return nil, fmt.Errorf("mcp %s: tool reported isError", ep.Ref)
@@ -365,4 +369,45 @@ func mcpChallenge(resp *http.Response, raw []byte) *CallError {
 		return &CallError{Status: resp.StatusCode, Code: "PERMISSION_DENIED", Message: resp.Header.Get("WWW-Authenticate"), Raw: truncate(raw, 256)}
 	}
 	return nil
+}
+
+// toolErrorDetails parses the detail lines of a tool error result, the
+// inverse of lib/mcp toolErrorResult: "- <field>: <CODE> — <message>", where
+// the field and the code may each be absent. A field has no space in it and a
+// code is SCREAMING_SNAKE, which is what tells them from a message that
+// happens to contain ": " or " — ". A line that is not a detail ends nothing;
+// it is skipped.
+func toolErrorDetails(lines []string) []CallErrorDetail {
+	var out []CallErrorDetail
+	for _, line := range lines {
+		rest, ok := strings.CutPrefix(line, "- ")
+		if !ok {
+			continue
+		}
+		var d CallErrorDetail
+		if field, after, ok := strings.Cut(rest, ": "); ok && field != "" && !strings.ContainsAny(field, " \t") {
+			d.Field, rest = field, after
+		}
+		if code, after, ok := strings.Cut(rest, " — "); ok && isDetailCode(code) {
+			d.Code, rest = code, after
+		} else if isDetailCode(rest) {
+			d.Code, rest = rest, ""
+		}
+		d.Message = rest
+		out = append(out, d)
+	}
+	return out
+}
+
+// isDetailCode reports whether s is an ErrorDetail code: SCREAMING_SNAKE.
+func isDetailCode(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }

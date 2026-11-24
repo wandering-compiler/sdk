@@ -364,18 +364,30 @@ func TestNatsBus_ConcurrentPublishSubscribe_Embedded(t *testing.T) {
 		})
 
 	var wg sync.WaitGroup
+	var failed atomic.Int32
+	var firstErr atomic.Value
 	for i := 0; i < total; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_ = bus.Dispatch(context.Background(), "default", "evt", wrapperspb.Int64(int64(n)))
+			if err := bus.Dispatch(context.Background(), "default", "evt", wrapperspb.Int64(int64(n))); err != nil {
+				failed.Add(1)
+				firstErr.CompareAndSwap(nil, err)
+			}
 		}(i)
 	}
 	wg.Wait()
+	if n := failed.Load(); n > 0 {
+		t.Fatalf("%d/%d dispatches failed, first: %v", n, total, firstErr.Load())
+	}
 
+	// The budget is for a broker that never delivers, not a latency target.
+	// Under -race on a shared CI runner the 50 deliveries took longer than 15 s
+	// (39/50 at 15 s, 50/50 well before 60 s, with every message in the stream
+	// and acked, none redelivered): slow, not lost.
 	select {
 	case <-allSeen:
-	case <-time.After(15 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatalf("only %d/%d envelopes delivered", delivered.Load(), total)
 	}
 }

@@ -311,6 +311,61 @@ func (IssueReport_Resolution) EnumDescriptor() ([]byte, []int) {
 	return file_domains_console_support_support_proto_rawDescGZIP(), []int{0, 4}
 }
 
+type RoadmapItem_Status int32
+
+const (
+	RoadmapItem_STATUS_UNSPECIFIED RoadmapItem_Status = 0
+	RoadmapItem_PLANNED            RoadmapItem_Status = 1
+	RoadmapItem_IN_PROGRESS        RoadmapItem_Status = 2
+	RoadmapItem_SHIPPED            RoadmapItem_Status = 3
+	RoadmapItem_DROPPED            RoadmapItem_Status = 4
+)
+
+// Enum value maps for RoadmapItem_Status.
+var (
+	RoadmapItem_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "PLANNED",
+		2: "IN_PROGRESS",
+		3: "SHIPPED",
+		4: "DROPPED",
+	}
+	RoadmapItem_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED": 0,
+		"PLANNED":            1,
+		"IN_PROGRESS":        2,
+		"SHIPPED":            3,
+		"DROPPED":            4,
+	}
+)
+
+func (x RoadmapItem_Status) Enum() *RoadmapItem_Status {
+	p := new(RoadmapItem_Status)
+	*p = x
+	return p
+}
+
+func (x RoadmapItem_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RoadmapItem_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_domains_console_support_support_proto_enumTypes[5].Descriptor()
+}
+
+func (RoadmapItem_Status) Type() protoreflect.EnumType {
+	return &file_domains_console_support_support_proto_enumTypes[5]
+}
+
+func (x RoadmapItem_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RoadmapItem_Status.Descriptor instead.
+func (RoadmapItem_Status) EnumDescriptor() ([]byte, []int) {
+	return file_domains_console_support_support_proto_rawDescGZIP(), []int{10, 0}
+}
+
 // IssueReport carries the enums a report is described by; the client never
 // holds the row itself.
 type IssueReport struct {
@@ -1048,6 +1103,202 @@ func (x *WithdrawReportResp) GetId() string {
 	return ""
 }
 
+// The public roadmap (`w17ctl roadmap`): w17's features planned for a
+// release, in progress or shipped. The console's RoadmapQuery.ReadRoadmap;
+// writing it is w17's operator's (the operator MCP surface, the backoffice).
+type RoadmapItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoadmapItem) Reset() {
+	*x = RoadmapItem{}
+	mi := &file_domains_console_support_support_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoadmapItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoadmapItem) ProtoMessage() {}
+
+func (x *RoadmapItem) ProtoReflect() protoreflect.Message {
+	mi := &file_domains_console_support_support_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoadmapItem.ProtoReflect.Descriptor instead.
+func (*RoadmapItem) Descriptor() ([]byte, []int) {
+	return file_domains_console_support_support_proto_rawDescGZIP(), []int{10}
+}
+
+type ReadRoadmapReq struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A release to keep ("0.2.0"); empty = every release.
+	Release       string `protobuf:"bytes,1,opt,name=release,proto3" json:"release,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadRoadmapReq) Reset() {
+	*x = ReadRoadmapReq{}
+	mi := &file_domains_console_support_support_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadRoadmapReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadRoadmapReq) ProtoMessage() {}
+
+func (x *ReadRoadmapReq) ProtoReflect() protoreflect.Message {
+	mi := &file_domains_console_support_support_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadRoadmapReq.ProtoReflect.Descriptor instead.
+func (*ReadRoadmapReq) Descriptor() ([]byte, []int) {
+	return file_domains_console_support_support_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ReadRoadmapReq) GetRelease() string {
+	if x != nil {
+		return x.Release
+	}
+	return ""
+}
+
+type PublicRoadmapItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Release       string                 `protobuf:"bytes,1,opt,name=release,proto3" json:"release,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Summary       string                 `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	Status        RoadmapItem_Status     `protobuf:"varint,4,opt,name=status,proto3,enum=console.support.RoadmapItem_Status" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublicRoadmapItem) Reset() {
+	*x = PublicRoadmapItem{}
+	mi := &file_domains_console_support_support_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublicRoadmapItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublicRoadmapItem) ProtoMessage() {}
+
+func (x *PublicRoadmapItem) ProtoReflect() protoreflect.Message {
+	mi := &file_domains_console_support_support_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublicRoadmapItem.ProtoReflect.Descriptor instead.
+func (*PublicRoadmapItem) Descriptor() ([]byte, []int) {
+	return file_domains_console_support_support_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *PublicRoadmapItem) GetRelease() string {
+	if x != nil {
+		return x.Release
+	}
+	return ""
+}
+
+func (x *PublicRoadmapItem) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *PublicRoadmapItem) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *PublicRoadmapItem) GetStatus() RoadmapItem_Status {
+	if x != nil {
+		return x.Status
+	}
+	return RoadmapItem_STATUS_UNSPECIFIED
+}
+
+type ReadRoadmapResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*PublicRoadmapItem   `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadRoadmapResp) Reset() {
+	*x = ReadRoadmapResp{}
+	mi := &file_domains_console_support_support_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadRoadmapResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadRoadmapResp) ProtoMessage() {}
+
+func (x *ReadRoadmapResp) ProtoReflect() protoreflect.Message {
+	mi := &file_domains_console_support_support_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadRoadmapResp.ProtoReflect.Descriptor instead.
+func (*ReadRoadmapResp) Descriptor() ([]byte, []int) {
+	return file_domains_console_support_support_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ReadRoadmapResp) GetItems() []*PublicRoadmapItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 var File_domains_console_support_support_proto protoreflect.FileDescriptor
 
 const file_domains_console_support_support_proto_rawDesc = "" +
@@ -1158,7 +1409,23 @@ const file_domains_console_support_support_proto_rawDesc = "" +
 	"\x11WithdrawReportReq\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"$\n" +
 	"\x12WithdrawReportResp\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02idBFZDgithub.com/wandering-compiler/sdk/go/pb/consoleapi/support;supportpbb\x06proto3"
+	"\x02id\x18\x01 \x01(\tR\x02id\"g\n" +
+	"\vRoadmapItem\"X\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aPLANNED\x10\x01\x12\x0f\n" +
+	"\vIN_PROGRESS\x10\x02\x12\v\n" +
+	"\aSHIPPED\x10\x03\x12\v\n" +
+	"\aDROPPED\x10\x04\"*\n" +
+	"\x0eReadRoadmapReq\x12\x18\n" +
+	"\arelease\x18\x01 \x01(\tR\arelease\"\x9a\x01\n" +
+	"\x11PublicRoadmapItem\x12\x18\n" +
+	"\arelease\x18\x01 \x01(\tR\arelease\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
+	"\asummary\x18\x03 \x01(\tR\asummary\x12;\n" +
+	"\x06status\x18\x04 \x01(\x0e2#.console.support.RoadmapItem.StatusR\x06status\"K\n" +
+	"\x0fReadRoadmapResp\x128\n" +
+	"\x05items\x18\x01 \x03(\v2\".console.support.PublicRoadmapItemR\x05itemsBFZDgithub.com/wandering-compiler/sdk/go/pb/consoleapi/support;supportpbb\x06proto3"
 
 var (
 	file_domains_console_support_support_proto_rawDescOnce sync.Once
@@ -1172,52 +1439,59 @@ func file_domains_console_support_support_proto_rawDescGZIP() []byte {
 	return file_domains_console_support_support_proto_rawDescData
 }
 
-var file_domains_console_support_support_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_domains_console_support_support_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_domains_console_support_support_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_domains_console_support_support_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_domains_console_support_support_proto_goTypes = []any{
 	(IssueReport_Kind)(0),           // 0: console.support.IssueReport.Kind
 	(IssueReport_Status)(0),         // 1: console.support.IssueReport.Status
 	(IssueReport_Severity)(0),       // 2: console.support.IssueReport.Severity
 	(IssueReport_Horizon)(0),        // 3: console.support.IssueReport.Horizon
 	(IssueReport_Resolution)(0),     // 4: console.support.IssueReport.Resolution
-	(*IssueReport)(nil),             // 5: console.support.IssueReport
-	(*SubmitIssueReportReq)(nil),    // 6: console.support.SubmitIssueReportReq
-	(*SubmitIssueReportResp)(nil),   // 7: console.support.SubmitIssueReportResp
-	(*ListOrgIssueReportsReq)(nil),  // 8: console.support.ListOrgIssueReportsReq
-	(*IssueReportRow)(nil),          // 9: console.support.IssueReportRow
-	(*ListOrgIssueReportsResp)(nil), // 10: console.support.ListOrgIssueReportsResp
-	(*GetOrgIssueReportReq)(nil),    // 11: console.support.GetOrgIssueReportReq
-	(*OrgIssueReport)(nil),          // 12: console.support.OrgIssueReport
-	(*WithdrawReportReq)(nil),       // 13: console.support.WithdrawReportReq
-	(*WithdrawReportResp)(nil),      // 14: console.support.WithdrawReportResp
-	(*timestamppb.Timestamp)(nil),   // 15: google.protobuf.Timestamp
+	(RoadmapItem_Status)(0),         // 5: console.support.RoadmapItem.Status
+	(*IssueReport)(nil),             // 6: console.support.IssueReport
+	(*SubmitIssueReportReq)(nil),    // 7: console.support.SubmitIssueReportReq
+	(*SubmitIssueReportResp)(nil),   // 8: console.support.SubmitIssueReportResp
+	(*ListOrgIssueReportsReq)(nil),  // 9: console.support.ListOrgIssueReportsReq
+	(*IssueReportRow)(nil),          // 10: console.support.IssueReportRow
+	(*ListOrgIssueReportsResp)(nil), // 11: console.support.ListOrgIssueReportsResp
+	(*GetOrgIssueReportReq)(nil),    // 12: console.support.GetOrgIssueReportReq
+	(*OrgIssueReport)(nil),          // 13: console.support.OrgIssueReport
+	(*WithdrawReportReq)(nil),       // 14: console.support.WithdrawReportReq
+	(*WithdrawReportResp)(nil),      // 15: console.support.WithdrawReportResp
+	(*RoadmapItem)(nil),             // 16: console.support.RoadmapItem
+	(*ReadRoadmapReq)(nil),          // 17: console.support.ReadRoadmapReq
+	(*PublicRoadmapItem)(nil),       // 18: console.support.PublicRoadmapItem
+	(*ReadRoadmapResp)(nil),         // 19: console.support.ReadRoadmapResp
+	(*timestamppb.Timestamp)(nil),   // 20: google.protobuf.Timestamp
 }
 var file_domains_console_support_support_proto_depIdxs = []int32{
 	0,  // 0: console.support.SubmitIssueReportReq.kind:type_name -> console.support.IssueReport.Kind
-	15, // 1: console.support.SubmitIssueReportResp.created_at:type_name -> google.protobuf.Timestamp
+	20, // 1: console.support.SubmitIssueReportResp.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: console.support.IssueReportRow.kind:type_name -> console.support.IssueReport.Kind
 	1,  // 3: console.support.IssueReportRow.status:type_name -> console.support.IssueReport.Status
 	2,  // 4: console.support.IssueReportRow.severity:type_name -> console.support.IssueReport.Severity
 	3,  // 5: console.support.IssueReportRow.horizon:type_name -> console.support.IssueReport.Horizon
 	4,  // 6: console.support.IssueReportRow.resolution:type_name -> console.support.IssueReport.Resolution
-	15, // 7: console.support.IssueReportRow.created_at:type_name -> google.protobuf.Timestamp
-	15, // 8: console.support.IssueReportRow.updated_at:type_name -> google.protobuf.Timestamp
-	9,  // 9: console.support.ListOrgIssueReportsResp.items:type_name -> console.support.IssueReportRow
+	20, // 7: console.support.IssueReportRow.created_at:type_name -> google.protobuf.Timestamp
+	20, // 8: console.support.IssueReportRow.updated_at:type_name -> google.protobuf.Timestamp
+	10, // 9: console.support.ListOrgIssueReportsResp.items:type_name -> console.support.IssueReportRow
 	0,  // 10: console.support.OrgIssueReport.kind:type_name -> console.support.IssueReport.Kind
 	1,  // 11: console.support.OrgIssueReport.status:type_name -> console.support.IssueReport.Status
 	2,  // 12: console.support.OrgIssueReport.severity:type_name -> console.support.IssueReport.Severity
 	3,  // 13: console.support.OrgIssueReport.horizon:type_name -> console.support.IssueReport.Horizon
 	4,  // 14: console.support.OrgIssueReport.resolution:type_name -> console.support.IssueReport.Resolution
-	15, // 15: console.support.OrgIssueReport.created_at:type_name -> google.protobuf.Timestamp
-	15, // 16: console.support.OrgIssueReport.updated_at:type_name -> google.protobuf.Timestamp
-	15, // 17: console.support.OrgIssueReport.closed_at:type_name -> google.protobuf.Timestamp
-	15, // 18: console.support.OrgIssueReport.released_at:type_name -> google.protobuf.Timestamp
-	15, // 19: console.support.OrgIssueReport.withdrawn_at:type_name -> google.protobuf.Timestamp
-	20, // [20:20] is the sub-list for method output_type
-	20, // [20:20] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	20, // 15: console.support.OrgIssueReport.created_at:type_name -> google.protobuf.Timestamp
+	20, // 16: console.support.OrgIssueReport.updated_at:type_name -> google.protobuf.Timestamp
+	20, // 17: console.support.OrgIssueReport.closed_at:type_name -> google.protobuf.Timestamp
+	20, // 18: console.support.OrgIssueReport.released_at:type_name -> google.protobuf.Timestamp
+	20, // 19: console.support.OrgIssueReport.withdrawn_at:type_name -> google.protobuf.Timestamp
+	5,  // 20: console.support.PublicRoadmapItem.status:type_name -> console.support.RoadmapItem.Status
+	18, // 21: console.support.ReadRoadmapResp.items:type_name -> console.support.PublicRoadmapItem
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_domains_console_support_support_proto_init() }
@@ -1230,8 +1504,8 @@ func file_domains_console_support_support_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_domains_console_support_support_proto_rawDesc), len(file_domains_console_support_support_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   10,
+			NumEnums:      6,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

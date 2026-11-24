@@ -21,6 +21,13 @@ const (
 	ReasonUnconfigured = "CLIENT_UNCONFIGURED"
 	ReasonBadRequest   = "REQUEST_UNENCODABLE"
 	ReasonSOAPFault    = "UPSTREAM_SOAP_FAULT"
+	// A per-call client called without what it takes per call.
+	ReasonNoDestination = "DESTINATION_MISSING"
+	ReasonNoCredential  = "CREDENTIAL_MISSING" //nolint:gosec // G101: a reason code, not a credential
+	// A dynamic destination resolving to an address the DSN's policy
+	// refuses (SSRF), or suspended after failing (its budget).
+	ReasonDestinationRefused   = "DESTINATION_REFUSED"
+	ReasonDestinationSuspended = "DESTINATION_SUSPENDED"
 )
 
 // maxErrorBody bounds the upstream error body an ErrorInfo carries.

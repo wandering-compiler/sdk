@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
+	"github.com/wandering-compiler/sdk/go/lib/restgw"
 )
 
 // AllowedOriginsEnv lists, comma-separated, the browser origins the HTTP
@@ -51,7 +54,7 @@ func originGuard(allowed map[string]bool, next http.Handler) http.Handler {
 	anyOrigin := allowed["*"]
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); origin != "" && !anyOrigin && !allowed[strings.ToLower(strings.TrimRight(origin, "/"))] {
-			http.Error(w, "forbidden origin", http.StatusForbidden)
+			http.Error(w, i18n.T(requestContext(r), restgw.MsgidForbiddenOrigin, nil), http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

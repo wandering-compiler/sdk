@@ -246,11 +246,30 @@ func scalarText(v any) (string, bool) {
 }
 
 func (c *RESTCaller) Call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, credential string, files []FilePart) (map[string]any, error) {
+	return c.call(ctx, ep, input, token, headers, credential, files, nil)
+}
+
+// CallWithBody is Call with the request body given verbatim instead of
+// rendered from input (which still fills the path and the query): a probe
+// that must send what no input map renders — malformed JSON, a value of
+// the wrong type — sends it through here, with the same credential and
+// device proof as any other call.
+func (c *RESTCaller) CallWithBody(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, body []byte) (map[string]any, error) {
+	if body == nil {
+		body = []byte{}
+	}
+	return c.call(ctx, ep, input, token, headers, "", nil, body)
+}
+
+func (c *RESTCaller) call(ctx context.Context, ep Endpoint, input map[string]any, token string, headers map[string]string, credential string, files []FilePart, rawBody []byte) (map[string]any, error) {
 	r, err := resolveREST(c.BaseURL, ep, input)
 	if err != nil {
 		return nil, err
 	}
 	method, target, body := r.method, r.target, r.body
+	if rawBody != nil {
+		body = rawBody
+	}
 	if c.signer != nil {
 		// A DPoP credential is a token: the signing transport writes it
 		// back with its proof.
@@ -476,6 +495,10 @@ type CallErrorDetail struct {
 // the code's generic sentence ("The request could not be accepted as sent."),
 // and which field, under which rule, is in details[] alone.
 func (e *CallError) Error() string {
+	if e.Status == 0 && e.Code != "" {
+		// A transport without HTTP statuses (RPC): the code is the answer.
+		return fmt.Sprintf("%s: %s: %s%s", e.Op, e.Code, e.Message, detailsSuffix(e))
+	}
 	if e.Code != "" {
 		return fmt.Sprintf("%s: status %d: %s: %s%s", e.Op, e.Status, e.Code, e.Message, detailsSuffix(e))
 	}

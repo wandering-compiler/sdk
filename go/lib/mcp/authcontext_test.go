@@ -80,3 +80,36 @@ func TestServeStreamableHTTP_TellsTheAuthMethodTheToolMethodAndTheResolvedAddres
 		t.Errorf("client address = %q, want the right-most hop the trusted proxy appended", got[principal.ClientAddrKey])
 	}
 }
+
+// SetAdmit runs before everything else on the endpoint, with the address
+// resolved behind the trusted proxies, and its refusal is the answer.
+func TestServeStreamableHTTP_AdmitRefusesBeforeTheEndpoint(t *testing.T) {
+	s := NewServer("x", "1", nil)
+	s.SetTrustedProxies([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})
+	var gotAddr string
+	s.SetAdmit(func(w http.ResponseWriter, _ *http.Request, addr string) bool {
+		gotAddr = addr
+		if addr == "198.51.100.9" {
+			http.Error(w, "refused", http.StatusForbidden)
+			return false
+		}
+		return true
+	})
+	s.AddTool("t", "d", json.RawMessage(`{"type":"object"}`), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
+	})
+	base := startHTTP(t, s)
+	if resp := callToolHTTP(t, base, "t", http.Header{"X-Forwarded-For": {"203.0.113.5"}}); !strings.Contains(resp, `"result"`) {
+		t.Fatalf("admitted call failed: %s", resp)
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+EndpointPath, strings.NewReader(`{}`))
+	req.Header.Set("X-Forwarded-For", "198.51.100.9")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || gotAddr != "198.51.100.9" {
+		t.Errorf("status %d, addr %q; want 403 for 198.51.100.9", resp.StatusCode, gotAddr)
+	}
+}

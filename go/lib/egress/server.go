@@ -39,6 +39,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 
+	"github.com/wandering-compiler/sdk/go/lib/egress/mail"
 	"github.com/wandering-compiler/sdk/go/lib/egress/wire"
 )
 
@@ -73,6 +74,12 @@ func Register(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, dsn
 		opt(&o)
 	}
 	client := Name(svc)
+	if IsMail(svc) {
+		return fmt.Errorf("egress client %s is a mail client: its DSN is a mail one — RegisterFromEnv, or mail.Register", client)
+	}
+	if err := matchesClient(svc, dsn); err != nil {
+		return fmt.Errorf("egress client %s: %w", client, err)
+	}
 	c := newCaller(client, dsn, o.transport)
 	desc, err := serviceDesc(svc, func(m *method, in, out proto.Message) func(context.Context) error {
 		return func(ctx context.Context) error { return c.do(ctx, m, in, out) }
@@ -84,11 +91,20 @@ func Register(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, dsn
 	return nil
 }
 
+// IsMail reports a mail client (`(w17.egress_client) = { mail: true }`):
+// its one method sends a w17.MailMessage, served by package mail.
+func IsMail(svc protoreflect.ServiceDescriptor) bool {
+	return wire.Client(svc.ParentFile()).GetMail()
+}
+
 // RegisterUnconfigured serves svc refusing every call with
 // FAILED_PRECONDITION naming env: a bundle whose environment carries no DSN
 // for the client still links its callers, and a call is how they learn.
 func RegisterUnconfigured(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, env string) error {
 	client := Name(svc)
+	if IsMail(svc) {
+		return mail.RegisterUnconfigured(reg, svc, client, env)
+	}
 	desc, err := serviceDesc(svc, func(*method, proto.Message, proto.Message) func(context.Context) error {
 		return func(context.Context) error {
 			return callError(codes.FailedPrecondition, client, ReasonUnconfigured,
@@ -108,6 +124,17 @@ func RegisterUnconfigured(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDes
 // parse is an error — a misconfiguration, reported at boot; the message
 // names the variable and never its value.
 func RegisterFromEnv(reg grpc.ServiceRegistrar, svc protoreflect.ServiceDescriptor, env string, lookup func(string) (string, bool), opts ...Option) error {
+	if IsMail(svc) {
+		var o options
+		for _, opt := range opts {
+			opt(&o)
+		}
+		var mopts []mail.Option
+		if o.transport != nil {
+			mopts = append(mopts, mail.WithTransport(o.transport))
+		}
+		return mail.RegisterFromEnv(reg, svc, Name(svc), env, lookup, mopts...)
+	}
 	v, ok := lookup(env)
 	if !ok || v == "" {
 		return RegisterUnconfigured(reg, svc, env)
@@ -177,4 +204,28 @@ func messageType(md protoreflect.MessageDescriptor) protoreflect.MessageType {
 		return mt
 	}
 	return dynamicpb.NewMessageType(md)
+}
+
+// matchesClient holds a DSN to what the client's proto declares: a client
+// that takes its credential per call needs a DSN that says `per_call` (a real
+// one there would be sent with every customer's call), and one that takes its
+// destination per call needs a `dynamic?…` policy; the reverse is refused
+// too, because the project's getter would then supply nothing the DSN expects.
+func matchesClient(svc protoreflect.ServiceDescriptor, dsn *DSN) error {
+	c := wire.Client(svc.ParentFile())
+	switch perCall := c.GetPerCallCredential(); {
+	case perCall && dsn.Auth == AuthNone:
+		return fmt.Errorf("the client takes its credential with each call; its DSN names no auth scheme (auth=bearer&token=per_call, say)")
+	case perCall && !dsn.PerCall:
+		return fmt.Errorf("the client takes its credential with each call; its DSN carries one — write it per_call (token=per_call, key=per_call or user=per_call)")
+	case !perCall && dsn.PerCall:
+		return fmt.Errorf("the DSN says the credential comes with the call (per_call), but the client does not take one — regenerate it with --per-call-credential, or put the credential in the DSN")
+	}
+	switch dyn := c.GetPerCallDestination(); {
+	case dyn && !dsn.Dynamic:
+		return fmt.Errorf("the client takes its destination with each call; its DSN must be a policy, `dynamic?…`, not an address")
+	case !dyn && dsn.Dynamic:
+		return fmt.Errorf("the DSN is `dynamic`, but the client's destination is fixed — regenerate it with --per-call-destination, or give the DSN its base URL")
+	}
+	return nil
 }

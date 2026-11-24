@@ -40,6 +40,11 @@ type POEntry struct {
 	// the flag; MergePO keeps it; EntriesFromPO reports it (with an
 	// empty Msgstr, so a catalog built from it does not serve it).
 	Fuzzy bool
+
+	// Previous is the msgid a fuzzy translation was carried over from
+	// (MergePO, when the source sentence changed), written as `#| msgid`
+	// so the translator sees what changed. Empty = none.
+	Previous string
 }
 
 // MarshalPO serialises the supplied entries into a gettext
@@ -193,27 +198,34 @@ func translatorComments(body []byte) map[string][]string {
 // entries marks Fuzzy (the gotext writer has no flag lines of its own).
 func markFuzzy(body []byte, entries []POEntry) []byte {
 	want := map[string]bool{}
+	previous := map[string]string{}
 	for _, e := range entries {
 		if e.Fuzzy && e.Msgid != "" {
 			want[e.Msgid] = true
+			if e.Previous != "" {
+				previous[e.Msgid] = e.Previous
+			}
 		}
 	}
 	if len(want) == 0 {
 		return body
 	}
 	_, found := scanPO(body)
-	at := map[int]bool{}
+	at := map[int]string{} // 1-based line → the entry's msgid
 	for _, e := range found {
 		if e.ctxt == "" && want[e.id] {
-			at[e.line] = true
+			at[e.line] = e.id
 		}
 	}
 	lines := strings.SplitAfter(string(body), "\n")
 	var b strings.Builder
 	b.Grow(len(body) + 10*len(at))
 	for i, l := range lines {
-		if at[i+1] {
+		if id, ok := at[i+1]; ok {
 			b.WriteString("#, fuzzy\n")
+			if p := previous[id]; p != "" {
+				b.WriteString("#| msgid " + quotePO(p) + "\n")
+			}
 		}
 		b.WriteString(l)
 	}
@@ -307,9 +319,14 @@ func MarshalJSON(lang string, entries []POEntry) ([]byte, error) {
 //   - new msgids (in `msgids` but not in `existing`) carry the
 //     EN baseline (msgstr=msgid) when `lang ==
 //     CompileTimeDefaultLanguage` and empty msgstr otherwise,
-//   - obsolete entries (in `existing` but not in `msgids`)
-//     drop silently, which keeps the format tight; gettext's
-//     `#~ msgid` comment-out is not emitted,
+//   - an entry no longer harvested that carries a translation
+//     is kept as an obsolete `#~` entry at the end (no runtime
+//     serves it); one without a translation is dropped,
+//   - a new msgid close to an obsolete one inherits its
+//     translation marked `#, fuzzy` with the old msgid in
+//     `#| msgid` (not served until a translator removes the
+//     flag), and a msgid that comes back gets its obsolete
+//     translation back — see obsolete.go,
 //   - an entry's `#, fuzzy` flag and its translator comments
 //     (`# …`) are kept, and so are the header fields MarshalPO
 //     does not write itself (Plural-Forms, Last-Translator,
@@ -338,15 +355,68 @@ func MergePO(existing []byte, lang string, msgids []string) ([]byte, error) {
 			priorMsgstr[t.ID] = rawMsgstr(t)
 		}
 	}
+	// What a translator wrote that this harvest no longer names: the
+	// catalog's obsolete entries, and the entries about to become obsolete.
+	// An entry carries a translation when its msgstr is set and, in the
+	// default language, differs from its msgid (the baseline copies it).
+	harvested := make(map[string]bool, len(msgids))
+	for _, m := range msgids {
+		harvested[m] = true
+	}
+	translated := func(id, str string) bool {
+		return str != "" && !(lang == CompileTimeDefaultLanguage && str == id)
+	}
+	var obsolete []obsoleteEntry
+	seenObsolete := map[string]bool{}
+	for id, str := range priorMsgstr {
+		if !harvested[id] && translated(id, str) {
+			obsolete = append(obsolete, obsoleteEntry{id: id, str: str})
+			seenObsolete[id] = true
+		}
+	}
+	for _, o := range parseObsolete(existing) {
+		if _, active := priorMsgstr[o.id]; !active && !seenObsolete[o.id] && translated(o.id, o.str) {
+			obsolete = append(obsolete, o)
+			seenObsolete[o.id] = true
+		}
+	}
+	sort.Slice(obsolete, func(i, j int) bool { return obsolete[i].id < obsolete[j].id })
+	used := make([]bool, len(obsolete))
+	byID := map[string]int{}
+	for i, o := range obsolete {
+		byID[o.id] = i
+	}
+
 	entries := make([]POEntry, 0, len(msgids))
 	for _, m := range msgids {
 		msgstr, ok := priorMsgstr[m]
-		if !ok && lang == CompileTimeDefaultLanguage {
-			msgstr = m
+		e := POEntry{Msgid: m, Msgstr: msgstr, Fuzzy: ok && priorFuzzy[m]}
+		if !ok {
+			switch i, back := byID[m]; {
+			case back && !used[i]:
+				// The msgid came back: its translation, as it was.
+				e.Msgstr, used[i] = obsolete[i].str, true
+			default:
+				if i := closest(m, obsolete, used); i >= 0 {
+					e.Msgstr, e.Fuzzy, e.Previous, used[i] = obsolete[i].str, true, obsolete[i].id, true
+				} else if lang == CompileTimeDefaultLanguage {
+					e.Msgstr = m
+				}
+			}
 		}
-		entries = append(entries, POEntry{Msgid: m, Msgstr: msgstr, Fuzzy: ok && priorFuzzy[m]})
+		entries = append(entries, e)
 	}
-	return marshalPO(lang, entries, keep, translatorComments(existing))
+	var keepObsolete []obsoleteEntry
+	for i, o := range obsolete {
+		if !used[i] {
+			keepObsolete = append(keepObsolete, o)
+		}
+	}
+	body, err := marshalPO(lang, entries, keep, translatorComments(existing))
+	if err != nil {
+		return nil, err
+	}
+	return marshalObsolete(body, keepObsolete), nil
 }
 
 // EntriesFromMsgids returns the POEntry slice that mirrors what

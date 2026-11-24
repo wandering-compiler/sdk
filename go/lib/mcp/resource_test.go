@@ -187,7 +187,7 @@ func TestSetResourceServer_RefusesABrokenConfiguration(t *testing.T) {
 
 // A failed tool call is a tool result the model reads, not a JSON-RPC error.
 func TestToolErrorResult(t *testing.T) {
-	r := toolErrorResult(status.Error(codes.NotFound, "Not found."))
+	r := toolErrorResult(context.Background(), status.Error(codes.NotFound, "Not found."))
 	if !r.IsError || len(r.Content) != 1 {
 		t.Fatalf("%+v", r)
 	}
@@ -195,7 +195,7 @@ func TestToolErrorResult(t *testing.T) {
 	if !strings.Contains(string(b), "NotFound: Not found.") {
 		t.Errorf("%s", b)
 	}
-	if b, _ := json.Marshal(toolErrorResult(errors.New("secret detail")).Content[0]); strings.Contains(string(b), "secret") {
+	if b, _ := json.Marshal(toolErrorResult(context.Background(), errors.New("secret detail")).Content[0]); strings.Contains(string(b), "secret") {
 		t.Errorf("a non-status error leaked: %s", b)
 	}
 }

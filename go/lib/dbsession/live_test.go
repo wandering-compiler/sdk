@@ -11,7 +11,7 @@ import (
 	"time"
 
 	mysqldrv "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/wandering-compiler/sdk/go/lib/dbsession"
 )
@@ -112,7 +112,7 @@ func TestPGPins_LiveServer(t *testing.T) {
 	base := liveServer(t, "W17_PG_DSN")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	admin, err := sql.Open("postgres", base)
+	admin, err := sql.Open("pgx", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestPGPins_LiveServer(t *testing.T) {
 	}
 	u.Path = "/" + name
 
-	setup, err := sql.Open("postgres", u.String())
+	setup, err := sql.Open("pgx", u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestPGPins_LiveServer(t *testing.T) {
 		}
 	}
 
-	db, err := sql.Open("postgres", dbsession.ApplyPGDSNParams(u.String()))
+	db, err := sql.Open("pgx", dbsession.ApplyPGDSNParams(u.String()))
 	if err != nil {
 		t.Fatal(err)
 	}

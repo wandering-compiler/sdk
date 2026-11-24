@@ -15,7 +15,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/lib/pq"
 	"github.com/wandering-compiler/sdk/go/core/grpcerr/dialect"
 	"github.com/wandering-compiler/sdk/go/core/observx"
 	"github.com/wandering-compiler/sdk/go/lib/dqlbind"
@@ -423,6 +422,8 @@ func forCallerOn(ctx context.Context, c codes.Code, method, dev, code, field, us
 		Code:    code,
 		Message: i18n.T(ctx, userMsgid, params),
 		Field:   field,
+		Msgid:   userMsgid,
+		Params:  params,
 	}))
 	if err != nil {
 		// coverage-exempt: WithDetails only fails if the detail cannot
@@ -624,8 +625,10 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 	// were documented and never filled: an author who wrote one put literal
 	// braces on the wire. The engine reports both; an empty one stays empty.
 	message := info.Message
+	var msgParams map[string]string
 	if message != "" {
-		message = i18n.T(ctx, message, map[string]string{"constraint": ce.Name, "table": ce.Table})
+		msgParams = map[string]string{"constraint": ce.Name, "table": ce.Table}
+		message = i18n.T(ctx, message, msgParams)
 	}
 	detail := ce.Kind + " violation"
 	if info.Field != "" && message != "" {
@@ -636,6 +639,8 @@ func Wrap(ctx context.Context, method string, err error, registry *ConstraintReg
 		Field:   info.Field,
 		Code:    info.Code,
 		Message: message,
+		Msgid:   info.Message,
+		Params:  msgParams,
 	}))
 	if errWith != nil {
 		// coverage-exempt: unreachable defensive guard — WithDetails
@@ -789,13 +794,8 @@ func lookupRegistry(r *ConstraintRegistry, ce *dialect.ConstraintError) (Constra
 func isDataException(err error, d Dialect) bool {
 	switch d {
 	case DialectPostgres:
-		var pgxErr *pgconn.PgError
-		if errors.As(err, &pgxErr) {
-			return isPgDataException(pgxErr.Code)
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return isPgDataException(string(pqErr.Code))
+		if pe, ok := dialect.PgSQLError(err); ok {
+			return isPgDataException(pe.Code)
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
@@ -860,13 +860,8 @@ func isPgDataException(code string) bool {
 func isLockNotAvailable(err error, d Dialect) bool {
 	switch d {
 	case DialectPostgres:
-		var pgxErr *pgconn.PgError
-		if errors.As(err, &pgxErr) {
-			return pgxErr.Code == "55P03"
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return pqErr.Code == "55P03"
+		if pe, ok := dialect.PgSQLError(err); ok {
+			return pe.Code == "55P03"
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError
@@ -880,13 +875,8 @@ func isLockNotAvailable(err error, d Dialect) bool {
 func isRetryable(err error, d Dialect) bool {
 	switch d {
 	case DialectPostgres:
-		var pgxErr *pgconn.PgError
-		if errors.As(err, &pgxErr) {
-			return pgxErr.Code == "40001" || pgxErr.Code == "40P01"
-		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			return pqErr.Code == "40001" || pqErr.Code == "40P01"
+		if pe, ok := dialect.PgSQLError(err); ok {
+			return pe.Code == "40001" || pe.Code == "40P01"
 		}
 	case DialectMySQL:
 		var me *mysql.MySQLError

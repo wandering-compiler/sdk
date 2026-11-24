@@ -4091,6 +4091,112 @@ var IssueReports_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	Roadmap_ReadRoadmap_FullMethodName = "/w17lock.console.rpc.Roadmap/ReadRoadmap"
+)
+
+// RoadmapClient is the client API for Roadmap service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type RoadmapClient interface {
+	// The public roadmap: what is planned, in progress or shipped — never a
+	// dropped item, never the report behind one. `w17ctl roadmap`.
+	ReadRoadmap(ctx context.Context, in *support.ReadRoadmapReq, opts ...grpc.CallOption) (*support.ReadRoadmapResp, error)
+}
+
+type roadmapClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRoadmapClient(cc grpc.ClientConnInterface) RoadmapClient {
+	return &roadmapClient{cc}
+}
+
+func (c *roadmapClient) ReadRoadmap(ctx context.Context, in *support.ReadRoadmapReq, opts ...grpc.CallOption) (*support.ReadRoadmapResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(support.ReadRoadmapResp)
+	err := c.cc.Invoke(ctx, Roadmap_ReadRoadmap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RoadmapServer is the server API for Roadmap service.
+// All implementations must embed UnimplementedRoadmapServer
+// for forward compatibility.
+type RoadmapServer interface {
+	// The public roadmap: what is planned, in progress or shipped — never a
+	// dropped item, never the report behind one. `w17ctl roadmap`.
+	ReadRoadmap(context.Context, *support.ReadRoadmapReq) (*support.ReadRoadmapResp, error)
+	mustEmbedUnimplementedRoadmapServer()
+}
+
+// UnimplementedRoadmapServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRoadmapServer struct{}
+
+func (UnimplementedRoadmapServer) ReadRoadmap(context.Context, *support.ReadRoadmapReq) (*support.ReadRoadmapResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadRoadmap not implemented")
+}
+func (UnimplementedRoadmapServer) mustEmbedUnimplementedRoadmapServer() {}
+func (UnimplementedRoadmapServer) testEmbeddedByValue()                 {}
+
+// UnsafeRoadmapServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RoadmapServer will
+// result in compilation errors.
+type UnsafeRoadmapServer interface {
+	mustEmbedUnimplementedRoadmapServer()
+}
+
+func RegisterRoadmapServer(s grpc.ServiceRegistrar, srv RoadmapServer) {
+	// If the following call panics, it indicates UnimplementedRoadmapServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&Roadmap_ServiceDesc, srv)
+}
+
+func _Roadmap_ReadRoadmap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(support.ReadRoadmapReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RoadmapServer).ReadRoadmap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Roadmap_ReadRoadmap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RoadmapServer).ReadRoadmap(ctx, req.(*support.ReadRoadmapReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Roadmap_ServiceDesc is the grpc.ServiceDesc for Roadmap service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var Roadmap_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "w17lock.console.rpc.Roadmap",
+	HandlerType: (*RoadmapServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ReadRoadmap",
+			Handler:    _Roadmap_ReadRoadmap_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "domains/console/w17.lock.rpc.proto",
+}
+
+const (
 	AuthService_SignIn_FullMethodName     = "/w17lock.console.rpc.AuthService/SignIn"
 	AuthService_VerifyMfa_FullMethodName  = "/w17lock.console.rpc.AuthService/VerifyMfa"
 	AuthService_CliToken_FullMethodName   = "/w17lock.console.rpc.AuthService/CliToken"
