@@ -558,6 +558,15 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
 	defer func() { err = joinRelease(err, ac.closeAll(ctx)) }()
 
+	// Every connection's run lock is taken here, in sorted connection order,
+	// before the preflights below open the connections they probe. They used
+	// to take those first, so two runs with different pending sets could take
+	// the locks of two shared connections in opposite orders — each holding
+	// one and waiting LockWait for the other, then both failing.
+	if err := ac.lockInOrder(ctx, pending); err != nil {
+		return err
+	}
+
 	// Before ANYTHING is written: does the target hold what the schema says it
 	// needs? `required_extensions` used to be a declaration nobody read — see
 	// preflightExtensions. Refusing here leaves the database untouched;
@@ -1260,6 +1269,27 @@ func (c *runApplierCache) get(ctx context.Context, conn string) (Applier, error)
 	return a, nil
 }
 
+// lockInOrder opens (and run-locks) every connection pending touches, in
+// sorted order, so every run takes the locks of the connections it shares
+// with another run in the same order.
+func (c *runApplierCache) lockInOrder(ctx context.Context, pending []Pending) error {
+	seen := map[string]bool{}
+	conns := make([]string, 0, len(pending))
+	for _, p := range pending {
+		if !seen[p.Connection] {
+			seen[p.Connection] = true
+			conns = append(conns, p.Connection)
+		}
+	}
+	sort.Strings(conns)
+	for _, conn := range conns {
+		if _, err := c.get(ctx, conn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // acquire takes conn's run lock, waiting up to lockWait while another run
 // holds it. The wait is said once, so an operator watching a replica that
 // sits there knows why. Whatever the holder applied, this run finds when it
@@ -1697,6 +1727,10 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 
 	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
 	defer func() { err = joinRelease(err, ac.closeAll(ctx)) }()
+	// One lock order for every run, as on apply.
+	if err := ac.lockInOrder(ctx, pending); err != nil {
+		return err
+	}
 
 	logger := newLogger(out, cfg.LogFormat)
 
