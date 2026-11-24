@@ -762,18 +762,20 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			return err
 		}
 		if cfg.Checks {
-			err := runMigrationChecks(ctx, applier, p, false, out)
-			if err == nil {
-				// The checks ran on connections of their own, but the run lock
-				// is asked again before the body all the same: a check that
-				// reached it must not leave the body running unguarded.
-				err = ac.checkHeld(ctx, p.Connection)
-			}
-			if err != nil {
+			if err := runMigrationChecks(ctx, applier, p, false, out); err != nil {
 				logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), err)
 				captureMigrationError("apply", p.Connection, p.Migration, err)
 				return err
 			}
+		}
+		// The run lock is asked again right before the body: the drift scan
+		// and the checks above can take long, and on a dialect whose lock
+		// lives on a connection of its own (MySQL) a lock session killed
+		// meanwhile would leave the body running unguarded.
+		if err := ac.checkHeld(ctx, p.Connection); err != nil {
+			logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), err)
+			captureMigrationError("apply", p.Connection, p.Migration, err)
+			return err
 		}
 		if err := applyOrResume(ctx, applier, p.Migration, out); err != nil {
 			dur := time.Since(started)
