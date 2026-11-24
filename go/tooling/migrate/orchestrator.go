@@ -112,10 +112,11 @@ type Config struct {
 	//
 	// The guard is not the operator's word. `adopt_preflight_sql` fails
 	// unless the objects, columns, nullability and primary key the migration
-	// describes are already in place, and it commits in the SAME transaction
-	// as the ledger row: a check that passed and a record that did not commit
-	// with it would leave the two disagreeing, which is the failure this
-	// exists to prevent. A migration whose preflight is EMPTY is refused —
+	// describes are already in place, and it is sent with the ledger write as
+	// ONE query string, the preflight first: a preflight that fails aborts the
+	// rest of the string, so no row is recorded after a failed check (see
+	// applyFake for what that does and does not make atomic). A migration
+	// whose preflight is EMPTY is refused —
 	// empty means the dialect cannot ask the question, not that there is
 	// nothing to ask. A preflight the content hash does not cover is refused
 	// too (see ContentHashWithPreflight): it is executed, so it has to be
@@ -710,8 +711,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		if cfg.Fake {
 			// An operator asserting "this database is already at that
 			// migration". The assertion is CHECKED — the preflight and the
-			// ledger write go in as one body, so they share one transaction
-			// and the record cannot outlive a failed check.
+			// ledger write go in as one body, and a failed preflight aborts
+			// the rest of it, so no record follows a failed check (see
+			// applyFake).
 			if err := applyFake(ctx, applier, p, out, logger, started); err != nil {
 				return err
 			}
@@ -984,13 +986,17 @@ func closingLine(applied, adopted, faked, skipped int) string {
 // applyFake records one pending migration without running its body, guarded by
 // the preflight the console rendered for it.
 //
-// Both halves are handed to the applier as ONE body so they share the
-// transaction envelope the applier already gives every migration: the
-// preflight raises, the transaction rolls back, and no ledger row survives.
-// Running them as two calls would leave a window where the schema can change
-// between the check and the record — and, worse, a failure mode where the
-// record commits after a check that passed against a database that has since
-// moved.
+// Both halves are handed to the applier as ONE body, which Postgres runs as
+// one simple-protocol query string, the preflight first. What protects the
+// ledger is that a statement which fails aborts the rest of the string: the
+// preflight raises, and the record after it never runs. It is NOT one
+// transaction — the record carries its own BEGIN … COMMIT, and an explicit
+// BEGIN ends the implicit block the preflight ran in, so the preflight's own
+// writes (the ledger's CREATE TABLE IF NOT EXISTS) commit separately. The
+// check and the record still run back to back, under the run lock, in one
+// round trip; two calls would add a window between them and a failure mode
+// where the record commits after a check that passed against a database that
+// has since moved.
 func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, logger *slog.Logger, started time.Time) error {
 	preflight := p.Migration.GetAdoptPreflightSql()
 	adoptSQL := p.Migration.GetAdoptSql()
