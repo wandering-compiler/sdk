@@ -342,6 +342,8 @@ type applyFlags struct {
 	// exitCode: status fails while anything is pending.
 	exitCode bool
 	lockWait time.Duration
+	// timeout: the deadline of an apply or rollback run; 0 = none.
+	timeout time.Duration
 }
 
 func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
@@ -366,6 +368,7 @@ func parseFlags(name string, args []string, out io.Writer) (applyFlags, error) {
 	fs.BoolVar(&f.exitCode, "exit-code", false, "status only: exit non-zero while anything is pending (for a deploy that can read an exit code, not the output)")
 	fs.IntVar(&f.parallel, "parallel", 0, "worker count for KV data migrations; 0 = the migration's own")
 	fs.DurationVar(&f.lockWait, "lock-wait", migrate.DefaultLockWait, "apply/rollback: how long to wait for another run's migration lock before giving up; 0 = fail at once")
+	fs.DurationVar(&f.timeout, "timeout", defaultRunTimeout, "apply/rollback: deadline for the whole run, after which it stops (a long migration needs more); 0 = no deadline")
 	if err := fs.Parse(args); err != nil {
 		return f, fmt.Errorf("migrate %s: %w", name, err)
 	}
@@ -433,6 +436,7 @@ var flagVerbs = map[string]map[string]bool{
 	"fetch":        {"apply": true, "status": true, "rollback": true, "fixtures apply": true},
 	"parallel":     {"apply": true, "rollback": true},
 	"lock-wait":    {"apply": true, "rollback": true},
+	"timeout":      {"apply": true, "rollback": true},
 	"dry-run":      {"apply": true, "rollback": true, "fixtures apply": true},
 	"log-format":   {"apply": true, "rollback": true},
 	"fake":         {"apply": true},
@@ -468,7 +472,7 @@ func runApply(ctx context.Context, args []string, opts Options, out io.Writer) e
 		// real thing.
 		return fmt.Errorf("migrate apply: --fake and --dry-run are different questions — --dry-run prints what WOULD happen, --fake records it. Pick one")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	ctx, cancel := runContext(ctx, f.timeout)
 	defer cancel()
 	return migrate.Run(ctx, cfg)
 }
@@ -536,7 +540,7 @@ func runRollback(ctx context.Context, args []string, opts Options, out io.Writer
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	ctx, cancel := runContext(ctx, f.timeout)
 	defer cancel()
 	return migrate.RunRollback(ctx, migrate.RollbackConfig{
 		Targets:       cfg.Targets,
@@ -941,6 +945,21 @@ func consoleAddrOf(flagVal string, getenv func(string) string) func(string) stri
 		}
 		return getenv(k)
 	}
+}
+
+// defaultRunTimeout is an apply or rollback run's deadline when --timeout is
+// not given.
+const defaultRunTimeout = 30 * time.Minute
+
+// runContext gives an apply or rollback run its deadline. A run stopped by it
+// stops mid-migration: Postgres rolls the body back (a skirt resumes from its
+// cursor), MySQL may stop mid-DDL — so a migration known to run long needs a
+// longer --timeout, not a retry. 0 is no deadline.
+func runContext(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 // lockWaitOf maps the --lock-wait flag onto migrate's LockWait: the flag's
