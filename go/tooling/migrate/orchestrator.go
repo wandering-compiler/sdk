@@ -1198,13 +1198,10 @@ func applyOrResume(ctx context.Context, applier Applier, m *applyfetchpb.Migrati
 }
 
 // runApplierCache caches one Applier per connection for the duration of a
-// Run / RunRollback loop and, for non-transactional stores (Redis / S3 / NATS that
-// implement RunLockCapable), acquires a run-lock on first open so a
-// non-idempotent TRANSFORM_FIELD data migration can't double-apply across
-// concurrent runs. Transactional SQL dialects don't implement RunLockCapable
-// (their w17_migrations PK serialises) and take the plain cached-applier path.
-// MySQL is NOT among them despite being transactional — DDL implicit-commits
-// mid-body, so it implements RunLockCapable; see lock.go.
+// Run / RunRollback loop and, for every applier that implements
+// RunLockCapable (Postgres, MySQL, Redis, S3, NATS), acquires a run-lock on
+// first open so concurrent runs cannot double-apply or collide; see lock.go.
+// SQLite does not implement it and takes the plain cached-applier path.
 type runApplierCache struct {
 	applierFor ApplierFor
 	out        io.Writer
