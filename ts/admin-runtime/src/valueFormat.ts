@@ -93,7 +93,9 @@ for (const [code, row] of Object.entries(
   // set for the generated client this file is copied into.
   CURRENCIES.set(
     code,
-    row.symbol !== undefined ? { code, symbol: row.symbol, decimals: row.decimals } : { code, decimals: row.decimals },
+    row.symbol !== undefined
+      ? { code, symbol: row.symbol, decimals: row.decimals }
+      : { code, decimals: row.decimals },
   );
 }
 

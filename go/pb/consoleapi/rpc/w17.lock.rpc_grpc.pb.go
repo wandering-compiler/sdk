@@ -2087,8 +2087,8 @@ type InitiativeMutationClient interface {
 	// find it again (snapshots carry no parent pointer). The console's concurrency
 	// test fires two of these at one row.
 	//
-	// The predicate goes through COALESCE(CAST(… AS TEXT), ”) because
-	// head_snapshot_id is a nullable UUID and proto3 has no null string: ” is
+	// The predicate goes through COALESCE(CAST(… AS TEXT), '') because
+	// head_snapshot_id is a nullable UUID and proto3 has no null string: '' is
 	// the "never pushed" expectation, any other value is an exact match.
 	SetHead(ctx context.Context, in *initiatives.SetHeadReq, opts ...grpc.CallOption) (*initiatives.SetHeadResp, error)
 	// SetStatus — close an initiative (merged / abandoned).
@@ -2148,8 +2148,8 @@ type InitiativeMutationServer interface {
 	// find it again (snapshots carry no parent pointer). The console's concurrency
 	// test fires two of these at one row.
 	//
-	// The predicate goes through COALESCE(CAST(… AS TEXT), ”) because
-	// head_snapshot_id is a nullable UUID and proto3 has no null string: ” is
+	// The predicate goes through COALESCE(CAST(… AS TEXT), '') because
+	// head_snapshot_id is a nullable UUID and proto3 has no null string: '' is
 	// the "never pushed" expectation, any other value is an exact match.
 	SetHead(context.Context, *initiatives.SetHeadReq) (*initiatives.SetHeadResp, error)
 	// SetStatus — close an initiative (merged / abandoned).
@@ -2941,8 +2941,8 @@ type EnvironmentMutationClient interface {
 	Create(ctx context.Context, in *review.CreateEnvReq, opts ...grpc.CallOption) (*review.CreateEnvResp, error)
 	SetMode(ctx context.Context, in *review.SetEnvModeReq, opts ...grpc.CallOption) (*review.SetEnvModeResp, error)
 	// SetDeployed advances the env baseline, compare-and-set on the baseline the
-	// caller read. COALESCE(CAST(… AS TEXT), ”) for the same reason
-	// as SetHead: deployed_snapshot_id is a nullable UUID and ” is the
+	// caller read. COALESCE(CAST(… AS TEXT), '') for the same reason
+	// as SetHead: deployed_snapshot_id is a nullable UUID and '' is the
 	// never-deployed expectation.
 	SetDeployed(ctx context.Context, in *review.SetEnvDeployedReq, opts ...grpc.CallOption) (*review.SetEnvDeployedResp, error)
 }
@@ -2992,8 +2992,8 @@ type EnvironmentMutationServer interface {
 	Create(context.Context, *review.CreateEnvReq) (*review.CreateEnvResp, error)
 	SetMode(context.Context, *review.SetEnvModeReq) (*review.SetEnvModeResp, error)
 	// SetDeployed advances the env baseline, compare-and-set on the baseline the
-	// caller read. COALESCE(CAST(… AS TEXT), ”) for the same reason
-	// as SetHead: deployed_snapshot_id is a nullable UUID and ” is the
+	// caller read. COALESCE(CAST(… AS TEXT), '') for the same reason
+	// as SetHead: deployed_snapshot_id is a nullable UUID and '' is the
 	// never-deployed expectation.
 	SetDeployed(context.Context, *review.SetEnvDeployedReq) (*review.SetEnvDeployedResp, error)
 	mustEmbedUnimplementedEnvironmentMutationServer()

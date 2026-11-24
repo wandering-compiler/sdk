@@ -2,11 +2,14 @@ package runner
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -38,9 +41,11 @@ type RPCCaller struct {
 	files *protoregistry.Files
 }
 
-// NewRPCCaller dials target (`localhost:8082`, plaintext h2c, as the
-// listener serves) and reads the baked descriptors, a serialized
+// NewRPCCaller dials target and reads the baked descriptors, a serialized
 // google.protobuf.FileDescriptorSet. Nothing is sent until the first call.
+// A bare `host:port` (`localhost:8082`) is plaintext h2c, as the local test
+// stack's listener serves it; `grpcs://host:port` dials TLS, verified against
+// the system roots, for an rpc port behind a TLS front.
 func NewRPCCaller(target string, descriptors []byte) (*RPCCaller, error) {
 	set := &descriptorpb.FileDescriptorSet{}
 	if err := proto.Unmarshal(descriptors, set); err != nil {
@@ -50,7 +55,11 @@ func NewRPCCaller(target string, descriptors []byte) (*RPCCaller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rpc: the baked descriptors: %w", err)
 	}
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds := insecure.NewCredentials()
+	if rest, ok := strings.CutPrefix(target, "grpcs://"); ok {
+		target, creds = rest, credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("rpc: dial %s: %w", target, err)
 	}

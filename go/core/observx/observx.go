@@ -84,7 +84,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	otellog "go.opentelemetry.io/otel/log"
-	logglobal "go.opentelemetry.io/otel/log/global"
 	lognoop "go.opentelemetry.io/otel/log/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -497,7 +496,7 @@ func initLocked(c Config) error {
 			sdklog.WithProcessor(sdklog.NewBatchProcessor(lexp)),
 			sdklog.WithResource(res),
 		)
-		logglobal.SetLoggerProvider(loggerProvider)
+		otel.SetLoggerProvider(loggerProvider)
 		requestLogger = loggerProvider
 	}
 
@@ -609,8 +608,8 @@ func shutdownLocked(ctx context.Context) error {
 		if err := loggerProvider.Shutdown(ctx); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("observx: logger shutdown: %w", err)
 		}
-		if logglobal.GetLoggerProvider() == otellog.LoggerProvider(loggerProvider) {
-			logglobal.SetLoggerProvider(lognoop.NewLoggerProvider())
+		if otel.GetLoggerProvider() == otellog.LoggerProvider(loggerProvider) {
+			otel.SetLoggerProvider(lognoop.NewLoggerProvider())
 		}
 		if requestLogger == otellog.LoggerProvider(loggerProvider) {
 			requestLogger = nil
