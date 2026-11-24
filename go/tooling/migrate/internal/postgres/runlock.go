@@ -48,7 +48,11 @@ const (
 // the client's detection of a dead server). They are set on the applier's
 // own connection, which is the lock's session, and stay for its lifetime.
 func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
-	if _, err := a.conn.Exec(ctx, lockSessionKeepalive, pgx.QueryExecModeSimpleProtocol); err != nil {
+	var version int
+	if err := a.conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&version); err != nil {
+		return nil, fmt.Errorf("postgres run lock: read the server version: %w", err)
+	}
+	if _, err := a.conn.Exec(ctx, lockSessionKeepalive(version), pgx.QueryExecModeSimpleProtocol); err != nil {
 		return nil, fmt.Errorf("postgres run lock: ask the server to probe the lock session: %w", err)
 	}
 	var got bool
@@ -67,8 +71,23 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 // every 10 s, three unanswered close it; tcp_user_timeout bounds data the
 // server sent that the client never acknowledged. A Unix-socket session
 // ignores all four.
-const lockSessionKeepalive = `SET tcp_keepalives_idle = 30; SET tcp_keepalives_interval = 10; ` +
-	`SET tcp_keepalives_count = 3; SET tcp_user_timeout = 60000`
+//
+// tcp_user_timeout exists from PostgreSQL 12 (server_version_num 120000); an
+// older server answers its SET "unrecognized configuration parameter", which
+// would refuse every apply. Below 12 it is left out and the three keepalive
+// settings (which every supported server has) still bound an idle dead
+// holder; only data the server sent into a dead link waits out the OS
+// retransmission timeout there.
+func lockSessionKeepalive(serverVersionNum int) string {
+	set := `SET tcp_keepalives_idle = 30; SET tcp_keepalives_interval = 10; SET tcp_keepalives_count = 3`
+	if serverVersionNum >= tcpUserTimeoutSince {
+		set += `; SET tcp_user_timeout = 60000`
+	}
+	return set
+}
+
+// tcpUserTimeoutSince is the first server_version_num with tcp_user_timeout.
+const tcpUserTimeoutSince = 120000
 
 type runLock struct {
 	a *Applier
