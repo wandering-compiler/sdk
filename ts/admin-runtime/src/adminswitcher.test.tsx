@@ -10,7 +10,10 @@ afterEach(() => {
 });
 
 function stubLinks(links: Record<string, string>, ok = true) {
-  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok, json: () => Promise.resolve({ links }) })));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve({ ok, json: () => Promise.resolve({ links }) })),
+  );
 }
 
 describe("AdminSwitcher", () => {
@@ -20,7 +23,10 @@ describe("AdminSwitcher", () => {
       <MantineProvider>
         <AdminSwitcher
           endpoint="/admin/api/links"
-          links={[{ domain: "billing", label: "Billing" }, { domain: "crm", label: "CRM" }]}
+          links={[
+            { domain: "billing", label: "Billing" },
+            { domain: "crm", label: "CRM" },
+          ]}
         />
       </MantineProvider>,
     );
@@ -35,7 +41,10 @@ describe("AdminSwitcher", () => {
     stubLinks({}, false);
     const { container } = render(
       <MantineProvider>
-        <AdminSwitcher endpoint="/admin/api/links" links={[{ domain: "billing", label: "Billing" }]} />
+        <AdminSwitcher
+          endpoint="/admin/api/links"
+          links={[{ domain: "billing", label: "Billing" }]}
+        />
       </MantineProvider>,
     );
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());

@@ -35,7 +35,10 @@ afterEach(() => {
 
 function withNavigatorLanguage(lang: string, ...more: string[]) {
   Object.defineProperty(window.navigator, "language", { value: lang, configurable: true });
-  Object.defineProperty(window.navigator, "languages", { value: [lang, ...more], configurable: true });
+  Object.defineProperty(window.navigator, "languages", {
+    value: [lang, ...more],
+    configurable: true,
+  });
 }
 
 describe("adminUiLanguage", () => {

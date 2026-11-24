@@ -75,7 +75,8 @@ export function makeTranslator(
   defaultLanguage?: string,
 ): Translate {
   const own = catalogs?.[lang];
-  const fallback = defaultLanguage && defaultLanguage !== lang ? catalogs?.[defaultLanguage] : undefined;
+  const fallback =
+    defaultLanguage && defaultLanguage !== lang ? catalogs?.[defaultLanguage] : undefined;
   return (msgid, params) => {
     const hit = own?.[msgid] || fallback?.[msgid];
     const text = hit != null && hit !== "" ? hit : msgid;

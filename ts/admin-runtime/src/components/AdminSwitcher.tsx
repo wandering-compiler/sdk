@@ -41,7 +41,12 @@ export function AdminSwitcher({ links, endpoint, t = (s) => s }: AdminSwitcherPr
   return (
     <Menu position="bottom-start" withinPortal>
       <Menu.Target>
-        <Button variant="subtle" size="compact-sm" rightSection={<IconChevronDown size={14} />} aria-label={t("Switch admin")}>
+        <Button
+          variant="subtle"
+          size="compact-sm"
+          rightSection={<IconChevronDown size={14} />}
+          aria-label={t("Switch admin")}
+        >
           {t("Switch admin")}
         </Button>
       </Menu.Target>
