@@ -204,7 +204,7 @@ func TestApplier_PostTxWaitsForTheAdvisoryLockAndRechecks_Live(t *testing.T) {
 
 // The run lock serialises runs on one database: a second acquirer is
 // refused at once; once the holder's session is killed the server frees
-// the lock, and the holder's Check and Release both report the loss.
+// the lock, and the holder's Check reports the loss.
 func TestRunLock_SerialisesAndReportsALostSession_Live(t *testing.T) {
 	dsn := liveDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -257,7 +257,12 @@ func TestRunLock_SerialisesAndReportsALostSession_Live(t *testing.T) {
 	if err := lock.Check(ctx); !errors.Is(err, migrate.ErrLockLost) {
 		t.Fatalf("Check after the session was killed = %v, want ErrLockLost", err)
 	}
-	if err := lock.Release(ctx); !errors.Is(err, migrate.ErrLockLost) {
-		t.Fatalf("Release after the session was killed = %v, want ErrLockLost", err)
+	// Release is different: every write of a Postgres run goes over the lock
+	// session itself, so a session that ended after the last one protected
+	// all of them, and a run that applied everything is not failed for it.
+	// It is an error (the orchestrator prints it as a warning), not a loss.
+	err = lock.Release(ctx)
+	if err == nil || errors.Is(err, migrate.ErrLockLost) {
+		t.Fatalf("Release after the session was killed = %v, want a plain error (not ErrLockLost)", err)
 	}
 }

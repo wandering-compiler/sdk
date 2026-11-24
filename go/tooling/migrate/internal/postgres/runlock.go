@@ -49,16 +49,22 @@ type runLock struct{ a *Applier }
 
 var _ migrate.CheckedRunLock = (*runLock)(nil)
 
-// Release frees the lock. An unlock that finds the lock not held by this
-// session means the session ended under the run (its locks went with it),
-// and that is reported, as on MySQL.
+// Release frees the lock. An unlock the session answers with "not held" means
+// the lock was taken from a live session under the run, and that is reported
+// as a loss.
+//
+// An unlock that cannot be sent at all is NOT a loss here, unlike on MySQL:
+// every statement of a Postgres run — bodies, skirts, ledger writes — goes
+// over this very session, so a session that is gone by release time held the
+// lock for every write that ran on it (a write after it ended could not have
+// run). The lock went with the session; the run it guarded was protected. It
+// stays an error, which the orchestrator prints as a warning, so a run that
+// applied everything is not reported failed because the connection dropped
+// at its very end.
 func (l *runLock) Release(ctx context.Context) error {
 	var released bool
 	if err := l.a.conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1, $2)`, runLockClass, runLockObj).Scan(&released); err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("postgres run lock: release: %w", err)
-		}
-		return fmt.Errorf("postgres run lock: %w: the lock session could not release it, so it had already ended: %w", migrate.ErrLockLost, err)
+		return fmt.Errorf("postgres run lock: release (the lock is freed when its session ends): %w", err)
 	}
 	if !released {
 		return fmt.Errorf("postgres run lock: %w: this session no longer held it at release", migrate.ErrLockLost)

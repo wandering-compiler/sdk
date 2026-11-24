@@ -527,7 +527,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	// non-transactional target; closeAll releases the locks then closes
 	// the drivers.
 	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
-	defer func() { err = joinRelease(err, ac.closeAll()) }()
+	defer func() { err = joinRelease(err, ac.closeAll(ctx)) }()
 
 	// Before ANYTHING is written: does the target hold what the schema says it
 	// needs? `required_extensions` used to be a declaration nobody read — see
@@ -1170,6 +1170,10 @@ const DefaultLockWait = 5 * time.Minute
 // lockRetryEvery is how often a waiting run tries the lock again.
 var lockRetryEvery = time.Second
 
+// releaseTimeout bounds each run-lock release (and the close after it) at the
+// end of a run. See closeAll.
+var releaseTimeout = 10 * time.Second
+
 func newRunApplierCache(applierFor ApplierFor, out io.Writer, lockWait time.Duration) *runApplierCache {
 	if lockWait == 0 {
 		lockWait = DefaultLockWait
@@ -1272,7 +1276,14 @@ func (c *runApplierCache) checkHeld(ctx context.Context, conn string) error {
 // success over that is the failure the lock exists to prevent. Any other
 // release failure (the store went away at the very end) leaves a lock that
 // expires on its own, and stays a warning.
-func (c *runApplierCache) closeAll() error {
+//
+// Each release gets a context of its own, bounded by releaseTimeout and
+// detached from the run's cancellation: the run's context may already be
+// done (a deadline, a signal) and the lock still has to be given back, but a
+// release over a connection that stopped answering must not hang a run that
+// applied everything. A release that runs out of time is the warning path:
+// the session or lease it was held by ends with the close that follows.
+func (c *runApplierCache) closeAll(ctx context.Context) error {
 	var lost []error
 	conns := make([]string, 0, len(c.locks))
 	for conn := range c.locks {
@@ -1280,7 +1291,10 @@ func (c *runApplierCache) closeAll() error {
 	}
 	sort.Strings(conns)
 	for _, conn := range conns {
-		if err := c.locks[conn].Release(context.Background()); err != nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+		err := c.locks[conn].Release(rctx)
+		cancel()
+		if err != nil {
 			if errors.Is(err, ErrLockLost) {
 				lost = append(lost, fmt.Errorf("connection %s: %w", conn, err))
 				continue
@@ -1634,7 +1648,7 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 	}
 
 	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
-	defer func() { err = joinRelease(err, ac.closeAll()) }()
+	defer func() { err = joinRelease(err, ac.closeAll(ctx)) }()
 
 	logger := newLogger(out, cfg.LogFormat)
 

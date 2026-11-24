@@ -414,11 +414,7 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration, re
 	if _, err := a.conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, postTxAdvisoryLockKey); err != nil {
 		return fmt.Errorf("postgres post-tx advisory lock: %w", err)
 	}
-	defer func() {
-		// Release on the background context so a cancelled ctx still frees
-		// the lock (the session would free it on disconnect anyway).
-		_, _ = a.conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, postTxAdvisoryLockKey)
-	}()
+	defer a.unlockSkirt(ctx)
 
 	// Re-check under the lock: a migrator we just waited behind may have
 	// already run + completed this skirt. Skip ONLY when the migration is
@@ -443,6 +439,19 @@ func (a *Applier) applyPostTx(ctx context.Context, m *applyfetchpb.Migration, re
 
 	return a.runSkirt(ctx, m, stmts, phase == migrate.PhasePending, resume)
 }
+
+// unlockSkirt frees the skirt's advisory lock. Detached from ctx's
+// cancellation so a cancelled run still frees it, and bounded so an unlock
+// over a connection that stopped answering cannot hang the run (the session
+// frees the lock when it ends anyway).
+func (a *Applier) unlockSkirt(ctx context.Context) {
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+	defer cancel()
+	_, _ = a.conn.Exec(uctx, `SELECT pg_advisory_unlock($1)`, postTxAdvisoryLockKey)
+}
+
+// unlockTimeout bounds an advisory unlock and the connection close.
+var unlockTimeout = 10 * time.Second
 
 // Rollback runs the migration's down payload — the inverse of
 // Apply. Order: down_pre_tx first (post-tx-equivalent skirt;
@@ -678,7 +687,11 @@ func (a *Applier) Close() error {
 	if a.conn == nil {
 		return nil
 	}
-	err := a.conn.Close(context.Background())
+	// Bounded: Close sends a Terminate message, and a connection that stopped
+	// answering must not hang the end of a run.
+	ctx, cancel := context.WithTimeout(context.Background(), unlockTimeout)
+	defer cancel()
+	err := a.conn.Close(ctx)
 	a.conn = nil
 	return err
 }
