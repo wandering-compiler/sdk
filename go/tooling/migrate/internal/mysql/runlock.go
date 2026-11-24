@@ -162,8 +162,13 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 		_ = conn.Close()
 		return nil, migrate.ErrLockHeld
 	}
-	l := &runLock{conn: conn, name: name, stop: make(chan struct{}), beatDone: make(chan struct{})}
-	go l.heartbeat()
+	// The heartbeat runs on a context the LOCK owns: derived from the
+	// caller's for its values, detached from its cancellation (the acquire
+	// context may be a short wait bound, and the lock outlives it), and
+	// cancelled by Release.
+	beatCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+	l := &runLock{conn: conn, name: name, stop: stop, beatDone: make(chan struct{})}
+	go l.heartbeat(beatCtx)
 	return l, nil
 }
 
@@ -182,7 +187,7 @@ type runLock struct {
 	mu       sync.Mutex
 	conn     *sql.Conn
 	name     string
-	stop     chan struct{}
+	stop     context.CancelFunc
 	beatDone chan struct{}
 }
 
@@ -190,18 +195,21 @@ type runLock struct {
 // is alive. A failed beat is not reported here: a session that is gone has
 // lost the lock, and Check — asked before every migration — and Release say
 // so.
-func (l *runLock) heartbeat() {
+func (l *runLock) heartbeat(ctx context.Context) {
 	defer close(l.beatDone)
 	t := time.NewTicker(lockHeartbeatEvery)
 	defer t.Stop()
 	for {
 		select {
-		case <-l.stop:
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			l.mu.Lock()
-			ctx, cancel := context.WithTimeout(context.Background(), lockHeartbeatEvery)
-			_, _ = l.conn.ExecContext(ctx, "DO 0")
+			// A beat in flight is never cut short by Release: cancelling a
+			// query makes the driver close its connection, and that would
+			// end the session — and the lock — before RELEASE_LOCK runs.
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lockHeartbeatEvery)
+			_, _ = l.conn.ExecContext(bctx, "DO 0")
 			cancel()
 			l.mu.Unlock()
 		}
@@ -211,11 +219,7 @@ func (l *runLock) heartbeat() {
 // stopHeartbeat ends the heartbeat and waits for it, so it never touches the
 // connection after Release.
 func (l *runLock) stopHeartbeat() {
-	select {
-	case <-l.stop:
-	default:
-		close(l.stop)
-	}
+	l.stop() // idempotent
 	<-l.beatDone
 }
 

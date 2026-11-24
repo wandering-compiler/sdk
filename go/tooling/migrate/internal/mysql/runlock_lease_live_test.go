@@ -36,6 +36,35 @@ func TestRunLock_ALiveHolderOutlivesTheSessionIdleLimit_Live(t *testing.T) {
 	}
 }
 
+// The heartbeat belongs to the lock, not to the call that took it: an acquire
+// context that ends right after the lock is taken (a wait bound, a request's
+// deadline) must not silence the heartbeat, or the run loses its lock at the
+// session's idle limit while it still believes it holds it.
+func TestRunLock_TheHeartbeatOutlivesTheAcquireContext_Live(t *testing.T) {
+	defer mysql.SetLockSessionTimingForTest(3*time.Second, 500*time.Millisecond)()
+	dsn, _ := liveMySQL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a, err := mysql.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = a.Close() }()
+	acquireCtx, endAcquire := context.WithCancel(ctx)
+	rl, err := a.AcquireRunLock(acquireCtx)
+	if err != nil {
+		t.Fatalf("AcquireRunLock: %v", err)
+	}
+	endAcquire()
+	time.Sleep(7 * time.Second)
+	if err := rl.(migrate.CheckedRunLock).Check(ctx); err != nil {
+		t.Fatalf("Check after the acquire context ended and the session idle limit passed = %v; the heartbeat died with the acquire context", err)
+	}
+	if err := rl.Release(ctx); err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+}
+
 // A holder that stopped talking to the server — its host lost the network —
 // loses the lock within the lock session's idle limit, so the other replicas
 // take it instead of waiting out a day-long wait_timeout.
