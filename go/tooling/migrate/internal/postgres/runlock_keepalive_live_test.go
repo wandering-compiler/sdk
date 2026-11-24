@@ -14,7 +14,7 @@ import (
 // the lock session asks the server to probe it. These are per-session server
 // settings: what the session reports is what the server's socket uses.
 // (The partition itself is proven by partition_probe_test.go, which needs a
-// container it can disconnect — see the script beside the audit report.)
+// holder container it can disconnect from the network; its header says how.)
 func TestRunLock_LockSessionIsProbedByTheServer_Live(t *testing.T) {
 	dsn := liveDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

@@ -364,6 +364,35 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 	return out, nil
 }
 
+// refuseNewHalfApplied refuses a rollback when the ledger, read under the run
+// lock, holds a half-applied migration above head (and above the rollback
+// target) that the plan for conn does not roll back.
+func refuseNewHalfApplied(ctx context.Context, applier Applier, conn, head, to string, plan []Pending) error {
+	pl, ok := applier.(PendingLister)
+	if !ok {
+		return nil
+	}
+	half, err := pl.PendingMigrations(ctx)
+	if err != nil {
+		return fmt.Errorf("connection %s: re-read half-applied migrations under the run lock: %w", conn, err)
+	}
+	planned := map[string]bool{}
+	for _, p := range plan {
+		if p.Connection == conn {
+			planned[p.Migration.GetId()] = true
+		}
+	}
+	sort.Strings(half)
+	for _, id := range half {
+		if id <= to || (head != "" && id <= head) || planned[id] {
+			continue
+		}
+		return fmt.Errorf("connection %s: refusing to roll back — migration %s became half-applied above the head while this rollback waited for the lock (another run committed its transaction and stopped in the steps after it), and the plan does not undo it; re-plan and try again",
+			conn, id)
+	}
+	return nil
+}
+
 // refuseHalfAppliedOffPlan refuses a database holding a half-applied
 // migration (its in-tx half committed, its post-tx skirt unfinished) that
 // this deploy will not resume: one the chain does not hold above the head —
@@ -609,6 +638,23 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			if h < p.PlannedHead {
 				return fmt.Errorf("connection %s: refusing to apply %s — the applied head was %q when this run was planned and is %q now, so another run rolled back while this one waited for the lock and nothing the plan decided still describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
+			}
+			// The half-applied refusal Plan made is asked again here, from
+			// the ledger as it is NOW, whether or not the head moved: an
+			// applier carrying another history (a rolling deploy of an older
+			// binary) can commit a migration's transaction and die in its
+			// skirt while this run waits for the lock. That leaves the head
+			// where Plan saw it and a half-applied row Plan never saw, and
+			// without this the replacement would be built on top of its
+			// committed DDL.
+			if pl, ok := applier.(PendingLister); ok && p.chain != nil {
+				half, pErr := pl.PendingMigrations(ctx)
+				if pErr != nil {
+					return fmt.Errorf("connection %s: re-read half-applied migrations under the run lock: %w", p.Connection, pErr)
+				}
+				if rErr := refuseHalfAppliedOffPlan(p.Connection, p.chain, h, half, cfg.Replaced[p.Connection]); rErr != nil {
+					return fmt.Errorf("%w (asked again under the run lock: it appeared while this run waited)", rErr)
+				}
 			}
 			// A head that moved FORWARD is not only a skip. Every decision
 			// Plan took from the head — the REPLACE refusals and the squash
@@ -1690,6 +1736,14 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 			if h != p.PlannedHead {
 				return fmt.Errorf("connection %s: refusing to roll back %s — the applied head was %q when this rollback was planned and is %q now, so another run applied or rolled back while this one waited for the lock and the plan no longer describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
+			}
+			// The head is not the only thing a run that held the lock before
+			// this one can change: one that died in a skirt leaves a
+			// half-applied row ABOVE an unchanged head, which the plan did
+			// not see and so would not undo — the rollback would remove what
+			// that migration was built on and leave it in place.
+			if err := refuseNewHalfApplied(ctx, applier, p.Connection, h, cfg.ToMigrationID, pending); err != nil {
+				return err
 			}
 		}
 
