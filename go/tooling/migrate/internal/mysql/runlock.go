@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
 )
@@ -122,23 +124,30 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 	}
 	name := runLockNameFor(schema.String)
 
-	// Keep the SESSION alive for the length of the run.
+	// Keep the SESSION alive for the length of the run — and no longer.
 	//
-	// ⚠️ This connection is touched exactly twice — GET_LOCK here and
-	// RELEASE_LOCK at the end — with the entire migration in between, and it
-	// is idle for all of it. MySQL reaps an idle session at `wait_timeout`
+	// ⚠️ This connection is touched only by the lock: GET_LOCK here,
+	// RELEASE_LOCK at the end, Check between migrations, with the entire
+	// migration in between. MySQL reaps an idle session at `wait_timeout`
 	// (8h by default, but deployments lower it, and a few minutes is a common
 	// setting behind a proxy), and ending the session RELEASES THE LOCK. The
 	// run would then continue believing it holds an exclusive lock that a
 	// second run is free to take.
 	//
-	// Raising it on this session only: `SET SESSION` touches nothing else on
-	// the server, and the connection is this lock's own for its lifetime.
-	// A day is chosen to be longer than any migration anyone should be
-	// running and short enough that a leaked session still ages out.
-	if _, err := conn.ExecContext(ctx, "SET SESSION wait_timeout = 86400"); err != nil {
+	// The opposite failure is a holder whose host lost the network: the
+	// server sees an idle session, not a dead one, and only `wait_timeout`
+	// ends it. At a day (what this used to set) every other replica's apply
+	// waited out LockWait and failed for that long. So the session's idle
+	// limit is SHORT (lockSessionIdle) and a heartbeat on the lock connection
+	// keeps a live run's session from ever reaching it: a run that is alive
+	// keeps its lock however long it runs, a run that vanished loses it
+	// within lockSessionIdle.
+	//
+	// `SET SESSION` touches nothing else on the server, and the connection
+	// is this lock's own for its lifetime.
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET SESSION wait_timeout = %d", int(lockSessionIdle/time.Second))); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("mysql run lock: extend the lock session's idle timeout: %w", err)
+		return nil, fmt.Errorf("mysql run lock: set the lock session's idle timeout: %w", err)
 	}
 
 	var got sql.NullInt64
@@ -153,12 +162,61 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 		_ = conn.Close()
 		return nil, migrate.ErrLockHeld
 	}
-	return &runLock{conn: conn, name: name}, nil
+	l := &runLock{conn: conn, name: name, stop: make(chan struct{}), beatDone: make(chan struct{})}
+	go l.heartbeat()
+	return l, nil
 }
 
+// lockSessionIdle is the lock session's wait_timeout: how long the server
+// keeps a lock whose holder stopped talking to it. lockHeartbeatEvery is how
+// often a live holder talks to it; well under lockSessionIdle so one slow
+// round trip does not cost the lock.
+var (
+	lockSessionIdle    = 10 * time.Minute
+	lockHeartbeatEvery = time.Minute
+)
+
 type runLock struct {
-	conn *sql.Conn
-	name string
+	// mu serialises the lock connection between the heartbeat, Check and
+	// Release.
+	mu       sync.Mutex
+	conn     *sql.Conn
+	name     string
+	stop     chan struct{}
+	beatDone chan struct{}
+}
+
+// heartbeat keeps the lock session from reaching its idle limit while the run
+// is alive. A failed beat is not reported here: a session that is gone has
+// lost the lock, and Check — asked before every migration — and Release say
+// so.
+func (l *runLock) heartbeat() {
+	defer close(l.beatDone)
+	t := time.NewTicker(lockHeartbeatEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-l.stop:
+			return
+		case <-t.C:
+			l.mu.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), lockHeartbeatEvery)
+			_, _ = l.conn.ExecContext(ctx, "DO 0")
+			cancel()
+			l.mu.Unlock()
+		}
+	}
+}
+
+// stopHeartbeat ends the heartbeat and waits for it, so it never touches the
+// connection after Release.
+func (l *runLock) stopHeartbeat() {
+	select {
+	case <-l.stop:
+	default:
+		close(l.stop)
+	}
+	<-l.beatDone
 }
 
 // Release drops the advisory lock and returns the connection.
@@ -169,6 +227,9 @@ type runLock struct {
 // listing, and it is the difference between "released" and "released
 // eventually, when the pool gets round to it".
 func (l *runLock) Release(ctx context.Context) error {
+	l.stopHeartbeat()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	// The RESULT is read, not discarded: RELEASE_LOCK answers 1 when this
 	// session held the lock, 0 when another session holds it, and NULL when
 	// nobody does. The last two mean the lock was NOT ours for some part of
@@ -202,6 +263,8 @@ func (l *runLock) Release(ctx context.Context) error {
 // orchestrator asks before every migration so a run stops before writing
 // under a lock another run may now hold.
 func (l *runLock) Check(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	var mine sql.NullInt64
 	err := l.conn.QueryRowContext(ctx, "SELECT IS_USED_LOCK(?) = CONNECTION_ID()", l.name).Scan(&mine)
 	if err != nil {
