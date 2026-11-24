@@ -117,7 +117,7 @@ refuses unknown bare words so that a mistyped verb never starts the server.
 | `--lock-wait D` | 5m (`migrate.DefaultLockWait`) | how long `apply` and `rollback` wait for another run's run lock; `0` fails at once |
 | `--allow-no-dsn` | — | `fixtures apply` only; on `apply`, `status`, `rollback` and `fetch` refused with a message naming `fixtures apply` |
 | DSN | `W17_TARGET_<CONN>` (connection name upper-cased, `-` → `_`) | no flag accepts a DSN or a token |
-| Timeout | 30 minutes, fixed | — |
+| `--timeout D` | 30m | `apply` and `rollback`: deadline of the whole run; `0` = no deadline. A run it stops is stopped mid-migration (Postgres rolls the body back and resumes a skirt from its cursor; MySQL may stop mid-DDL), so a migration known to run long needs a longer `--timeout`, not a retry |
 | A flag the verb does not read | — | refused, naming the verbs that read it (`status --fake`, `apply --to`, `apply --domain`, …) |
 
 **Guarantees.**
@@ -231,6 +231,7 @@ prints that half. `W17_DPOP_KEY` and `W17_CONSOLE_DPOP_ORIGIN` mean what they me
 | T4.5 | A fetched set MUST contain only the requested connections, and a duplicate `(connection, id)` MUST be refused. | `TestFetch_KeepsOnlyRequestedConnections`, `TestFetch_RefusesADuplicateMigration`, `TestMigrationSetFS_RefusesADuplicate` |
 | T4.9 | `apply --fetch`, `status --fetch` and `migrate fetch` (for connections whose DSN it holds) MUST send each readable pinned database's applied head with its database id; the id MUST NOT depend on credentials or query parameters; an unreadable database MUST be skipped, not fail the fetch; an empty head without an id MUST NOT be sent; a fetch without a DSN MUST send no head and still write the artefacts. | `TestAppliedHeads_ReportsWhatEachDatabaseApplied`, `TestAppliedHeads_AnEmptyHeadWithoutAnIdIsNotSent`, `TestDatabaseID_IsTheLocationWithoutCredentials`, `TestFetch_SendsTheAppliedHeadsAndReturnsWhatWasReplaced`, `TestFetchThenApply_RefusesAHeadTheConsoleReplaced`, `TestFetch_WithoutADSNReportsNoHeadAndStillWrites` |
 | T4.10 | `migrate fetch` MUST write the console's replaced list to `w17-replaced.json` beside the connection directories, recording every fetched connection (with no entries when nothing on it was replaced) and keeping the entries of connections it did not fetch, so a later `apply --migrations` refuses a replaced head exactly as `apply --fetch` does. | `TestFetchThenApply_RefusesAHeadTheConsoleReplaced`, `TestWriteReplaced_KeepsOtherConnectionsAndRecordsEmptyOnes` |
+| T4.11 | Every artefact `migrate fetch` writes (migrations, fixture seeds, the render manifest, the current-schema file) MUST replace the old file whole — written aside in its directory, synced, renamed over it — so a reader of a shared volume never sees a truncated one. | `TestWriteMigration_ReplacesTheArtefactWhole` |
 
 **Deliberate limits.**
 - The applied-head report is best effort and is the console's first guard, never the only one:
@@ -430,24 +431,34 @@ console returned with a `--fetch`; when it is nil, Plan reads the list the migra
 
 **Purpose.** Apply the plan in a fixed order:
 1. Dry-run prints `up_sql` and `up_post_tx` and applies nothing.
-2. Extension preflight (Postgres, also through decorators via `Unwrap`) refuses before anything
-   is written if a declared extension is missing.
+2. Every connection the plan touches is opened and run-locked, in sorted connection order, so
+   two runs sharing connections take their locks in one order. Extension preflight (Postgres,
+   also through decorators via `Unwrap`) then refuses before anything is written if a declared
+   extension is missing.
 3. Schema prep: `CREATE SCHEMA IF NOT EXISTS` for `required_schemas` (Postgres; also under
    `--fake`).
 4. Per migration: the applier is cached per connection and the run lock taken at first open;
    the head is re-read under the lock once per connection, and ids at or below it are skipped as
    applied by a concurrent run. A head that moved forward re-plans the connection against it
-   (T10's refusals and adopt decision, from the same replaced list). A run lock that can report whether it is still held
-   (`migrate.CheckedRunLock`) is checked before every migration, in apply and in rollback; a lost
-   lock stops the run with an error wrapping `migrate.ErrLockLost` that names the connection.
+   (T10's refusals and adopt decision, from the same replaced list). The half-applied refusal
+   (T2) is asked again under the lock from the ledger as it is then, head moved or not; a
+   rollback refuses a half-applied row that appeared above its unchanged head. A run lock that can
+   report whether it is still held (`migrate.CheckedRunLock`) is checked before every migration,
+   in apply and in rollback, and again right before the body (after the drift scan and the
+   checks); a lost lock stops the run with an error wrapping `migrate.ErrLockLost` that names the
+   connection.
 5. `--fake` → fake apply (T12); adopt → `adopt_sql`; otherwise drift gate (T13), then apply or
    resume the post-transaction half.
 6. A failure aborts the run, logs one structured line, and is reported to the error tracker when
    one is initialised.
 7. The closing line reads `apply: N migration(s) applied`, followed by the adopted,
    `--fake`-recorded and skipped counts, each shown only when non-zero.
-8. Releasing the run lock: a release that finds the lock lost fails the run with
-   `ErrLockLost`; any other release failure is a warning, because that lock expires on its own.
+8. Releasing the run lock: each release gets its own context, detached from the run's
+   cancellation and bounded (10 s), so a release over a connection that stopped answering cannot
+   hang a finished run. A release that finds the lock lost fails the run with `ErrLockLost`; any
+   other release failure — including one that runs out of time — is a warning, because that lock
+   ends with its session or lease. On Postgres a release that cannot reach the lock session is
+   such a warning, not a loss: every write of the run went over that session.
 
 **Guarantees.**
 
@@ -463,7 +474,11 @@ console returned with a `--fetch`; when it is nil, Plan reads the list the migra
 | T11.8 | A migration MUST NOT be applied twice within one run. | `TestRun_RefusesAConnectionListedTwice`, `TestApply_SkipsWhatAnotherRunAppliedWhileWeQueued` |
 | T11.9 | The run MUST NOT report success for work not done; the closing count MUST include only migrations this run applied, and report adopted, fake-recorded and skipped migrations separately. | `TestRun_ClosingLineCountsOnlyWhatThisRunApplied` |
 | T11.10 | Losing the run lock during a run MUST fail the run before the next migration, in apply and in rollback, with an error wrapping `ErrLockLost`. | `TestRun_LostRunLockStopsBeforeTheNextMigration`, `TestRunRollback_LostRunLockStopsBeforeTheNextMigration`; a lock lost during the `--checks` probes: `TestRun_LostRunLockDuringAChecksStopsTheBody`, `TestRunRollback_LostRunLockDuringAChecksStopsTheBody` |
-| T11.11 | A release that finds the run lock lost MUST fail the run; any other release failure MUST stay a warning. | `TestRun_ReleaseOfALostLockFailsTheRun`, `TestRun_OrdinaryReleaseFailureStaysAWarning` |
+| T11.11 | A release that finds the run lock lost MUST fail the run; any other release failure MUST stay a warning. A release that does not answer MUST NOT hang the run, and the release MUST still be sent when the run's context was cancelled. | `TestRun_ReleaseOfALostLockFailsTheRun`, `TestRun_OrdinaryReleaseFailureStaysAWarning`, `TestRun_HungReleaseDoesNotHangAFullyAppliedRun`, `TestRun_ReleaseRunsOnACancelledRunContext` |
+| T11.14 | Two runs over the same connections MUST take their run locks in one order (sorted, before the preflights), so neither waits on the other for a lock it holds. | `TestRun_TwoRunsTakeTheirRunLocksInOneOrder` |
+| T11.15 | A half-applied migration that appeared while the run waited for the lock MUST be refused under the lock as Plan refuses it (apply), and a rollback MUST refuse a half-applied row above its head that its plan does not undo. | `TestRun_HalfAppliedOffPlanIsAskedAgainUnderTheLock`, `TestRunRollback_HalfAppliedThatAppearedUnderTheLockIsRefused` |
+| T11.16 | A run lock lost during the drift scan MUST stop the body. | `TestRun_LockLostDuringTheDriftScanStopsTheBody` |
+| T11.17 | `apply` and `rollback` MUST run under `--timeout` (default 30 m, `0` = no deadline); other verbs MUST refuse the flag. | `TestApplyAndRollback_RunDeadlineIsTheOperators` |
 | T11.12 | A head that moved forward while the run waited for the lock MUST be judged again under the lock: a replaced or off-chain head MUST be refused before any body runs (T10.4, T10.5), a squash baseline planned as DDL for a fresh database MUST be adopted when the head is now the end of its range and refused when it is mid-range (T10.1). | `TestRun_RefusesAReplacedHeadThatAppearedWhileWaitingForTheLock`, `TestRun_RefusesAnOffChainHeadThatAppearedWhileWaitingForTheLock`, `TestRun_AdoptsABaselineWhenTheHeadReachedItsRangeWhileWaiting`, `TestRun_RefusesABaselineWhenTheHeadStoppedMidRangeWhileWaiting` |
 | T11.13 | The extension preflight and the schema prep MUST NOT write or lock the ledger: they reach an applier that implements `migrate.ScriptRunner` (Postgres) through `RunScript`, never `Apply`, so a legacy ledger is not upgraded by a probe. An apply MUST NOT `ALTER` a ledger that already carries the post-transaction column (the catalogue is asked first), so it neither takes the ledger's ACCESS EXCLUSIVE lock behind an open writer nor needs the table's owner. | `TestRun_PreparationStepsDoNotGoThroughApply`, `TestApply_DoesNotAlterALedgerThatHasThePhaseColumn_Live` |
 
@@ -480,7 +495,7 @@ the check, and it runs only when the artefact's digest covers it (T7).
 | ID | Guarantee | Test |
 |---|---|---|
 | T12.1 | An empty preflight or empty `adopt_sql` MUST be refused. | `TestFake_EmptyPreflightOrAdoptSQLIsRefused` |
-| T12.2 | Preflight and ledger write MUST run as one unit, so a failing check leaves no ledger row. | `TestFake_BoundPreflightRuns`, `TestFake_FailingPreflightLeavesNoLedgerRow_Live` |
+| T12.2 | Preflight and ledger write MUST run as one query string, preflight first, so a failing check aborts the rest and leaves no ledger row (not one transaction: the record's own `BEGIN` ends the implicit block the preflight ran in). | `TestFake_BoundPreflightRuns`, `TestFake_FailingPreflightLeavesNoLedgerRow_Live` |
 | T12.3 | `--fake` together with `--dry-run` MUST be refused. | `TestApply_FakeWithDryRunIsRefused` |
 | T12.4 | A drift refusal MUST name the fake apply as the remedy. | `TestDriftRefusal_NamesTheFakeApply` |
 | T12.5 | A migration whose digest does not cover its preflight MUST be refused before anything executes; a replaced or stripped bound preflight MUST be refused as a content mismatch. | `TestFake_RefusesAPreflightTheDigestDoesNotCover`, `TestFake_BoundPreflightCannotBeReplaced`, `TestFake_BoundPreflightCannotBeStripped` |
@@ -539,14 +554,21 @@ the dialect defines.
 **Purpose.** One applier per store kind. The factory links every one but SQLite's: that one carries
 `modernc.org/sqlite` (SQLite in pure Go, the largest module the SDK depends on), so a binary
 registers it by importing `tooling/migrate/sqlitedriver`. A generated server does when its project
-declares a SQLite connection; w17ctl always does. Run locks: Postgres takes a session advisory lock per database (`pg_try_advisory_lock`, fail-fast), plus a second advisory lock with a phase re-check for the post-transaction half; MySQL takes `GET_LOCK` on a dedicated session, per schema; SQLite relies on the ledger primary key; Redis uses `SET NX` on `w17:migrate:runlock` (TTL 5 min, heartbeat 60 s); S3 uses a conditional PUT of `w17-migrate-runlock.json`, stale after 3 min.
+declares a SQLite connection; w17ctl always does. Run locks: Postgres takes a session advisory lock per database (`pg_try_advisory_lock`, fail-fast), plus a second advisory lock with a phase re-check for the post-transaction half; MySQL takes `GET_LOCK` on a dedicated session, per schema; SQLite has no run lock and is single-applier (the body's transaction keeps a racing applier from applying twice, which fails loud on what the body ran into; a `busy_timeout` of 10 s, pinned on the applier's DSN unless it names one, makes a body wait for another writer's transaction instead of failing "database is locked"); Redis uses `SET NX` on `w17:migrate:runlock` (TTL 5 min, heartbeat 60 s); S3 uses a conditional PUT of `w17-migrate-runlock.json`, stale after 3 min.
 
 Redis, S3, MySQL and Postgres locks implement `migrate.CheckedRunLock`. Redis and S3 keep a lease on the
 local monotonic clock, counted from when the last successful acquire or refresh was sent, with a
 margin held back; a refresh that finds another owner marks the lease lost for good. Their
 appliers check the lease before every write: each command line, each per-key data-migration
 write, cursor writes and the ledger write. MySQL and Postgres `Check` ask the server whether their lock session
-still holds the lock. S3 judges staleness only on the store's clock (the lock object's
+still holds the lock. A session lock is freed when the server notices its session is gone, which for a holder that lost
+the network (not dead) is the server's own detection: the Postgres lock session sets
+`tcp_keepalives_idle = 30`, `tcp_keepalives_interval = 10`, `tcp_keepalives_count = 3` and
+`tcp_user_timeout = 60000` (per-session server settings), so the server drops it within about a
+minute; the MySQL lock session's `wait_timeout` is 10 minutes, with a heartbeat on the lock
+connection every minute so a live run keeps its lock however long it runs. Postgres `Check`
+names a transaction-mode connection pooler when another server process answers than the one the
+lock was taken on. S3 judges staleness only on the store's clock (the lock object's
 `Last-Modified` against the response `Date`); a store that reports neither is refused with a
 manual remedy. SQLite and NATS have no checked run lock.
 
@@ -565,7 +587,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.1 | Redis and S3 run locks MUST be mutually exclusive. | `TestRunLock_MutualExclusion`, `TestS3RunLock_MutualExclusion` |
 | T15.2 | A stale lock MUST be taken over; a refreshed lock MUST NOT be. | `TestRunLock_StaleTakeoverViaTTL`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp`, `TestS3RunLock_RefreshPreventsTakeover` |
 | T15.3 | Release MUST be owner-checked; a release that finds the lock held by another owner MUST return an error wrapping `ErrLockLost`. | `TestRunLock_ReleaseIsOwnerChecked`, `TestS3RunLock_StaleTakeover_ZombieReleaseNoOp`, `TestRunLock_CheckReportsALostLockSession_Live` |
-| T15.4 | The MySQL run lock MUST survive an idle server `wait_timeout`. | `TestRunLock_SurvivesAnIdleServerTimeout` (`dockertest`) |
+| T15.4 | The MySQL run lock MUST survive an idle server `wait_timeout` while its holder is alive, and a holder that stopped talking to the server MUST lose it within the lock session's idle limit. | `TestRunLock_SurvivesAnIdleServerTimeout` (`dockertest`), `TestRunLock_ALiveHolderOutlivesTheSessionIdleLimit_Live`, `TestRunLock_ASilentHolderLosesTheLockWithinTheIdleLimit_Live` |
 | T15.5 | SQLite foreign-key violations a table rebuild introduces MUST be caught: more violating rows of a key the database already had fail the migration. Violations of a key the rebuild ADDED (a key over a table that already held orphans, which the migrator adds without refusing them) MUST be reported with their count and the migration applied, and orphans an earlier such key left MUST NOT fail a later rebuild. A key MUST be recognised across a table or column the same body renames (`ALTER TABLE … RENAME …`), so a rename+rebuild that orphans rows of a key it carries still fails. | `TestApply_RebuildFKViolation_Caught`, `TestApply_RebuildAddsFKOverOrphans_Reports`, `TestApply_RenameAndRebuildOrphaningAKey_Caught`, `TestApply_RenameAndRebuildAddingAKeyOverOrphans_Reports` |
 | T15.6 | Two appliers MUST NOT run the same non-idempotent body against one store concurrently. | `TestNATSRunLock_MutualExclusion`, `TestNATSRunLock_ConcurrentAcquireHasOneWinner`, `TestNATSRunLock_RefreshPreventsTakeover`, `TestNATSRunLock_StaleTakeoverAndLostHolder` |
 | T15.7 | Postgres and MySQL apply, rollback, applied head, phase and the post-transaction advisory lock MUST behave as specified against a real database. | `TestApplier_ApplyPhaseHeadRollback_Live`, `TestApplier_PostTxWaitsForTheAdvisoryLockAndRechecks_Live`, `TestApplier_ApplyHeadRollback_Live` |
@@ -576,10 +598,14 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.12 | A Redis or S3 run lock whose lease is no longer provably held (a refresh found another owner, or the lease ran out without a refresh) MUST report itself lost for good, and the applier MUST stop before its next write. | `TestRunLock_RefreshOfATakenOverLockReportsItLost`, `TestRunLock_LostLockStopsTheNextWrite`, `TestRunLock_LeaseRunsOutWithoutARefresh`, `TestS3RunLock_LostLockStopsTheNextWrite`, `TestLease_HoldsUntilItsMarginThenRunsOut`, `TestLease_LostStaysLost`, `TestLease_RenewalExtendsFromWhenTheRefreshWasSent` |
 | T15.13 | The S3 run lock MUST judge staleness on the store's clock only, so a taker whose local clock runs ahead cannot take over a live lock; a store that reports no time MUST be refused, never judged on the local clock. | `TestS3RunLock_ClockSkewedTakerCannotTakeOverALiveLock`, `TestS3RunLock_NoStoreTimeRefusesToJudgeStaleness` |
 | T15.14 | The MySQL run lock's `Check` MUST fail with `ErrLockLost` when its lock session no longer holds the lock. | `TestRunLock_CheckReportsALostLockSession_Live` |
-| T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` and `Release`. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
+| T15.15 | Concurrent runs against one Postgres database MUST apply a migration exactly once; every other run MUST wait for the run lock (up to `LockWait`), find the work done and succeed, never failing on what the migration's body ran into; a wait that runs out MUST abort naming it; a lost lock session MUST be reported by `Check` (a `Release` that cannot reach it is an error, not a loss); a holder partitioned from the server MUST lose the lock within about a minute; behind a transaction-mode pooler `Check` MUST name the pooler. | `TestApply_ConcurrentMigratorsApplyOnce_Live`, `TestRunLock_SerialisesAndReportsALostSession_Live`, `TestRunLock_LockSessionIsProbedByTheServer_Live`, `TestPartitionWaiter` (`partitionprobe`, a holder container disconnected from the network), `TestRunLock_CheckNamesATransactionPooler_Live`, `TestRun_WaitsForAHeldLockAndApplies`, `TestRun_LockWaitIsBounded` |
 | T15.16 | A MySQL body that fails MUST NOT hand its connection back to the pool (a `FOREIGN_KEY_CHECKS` it turned off, or a transaction it left open, would reach the next borrower). A body that succeeds after turning the checks off around one `ADD … FOREIGN KEY` (save, off, add, restore — the planner's shape for a key over existing rows) MUST leave its session with the checks on. | `TestApply_AFailedBodyDoesNotReturnItsSessionToThePool`, `TestApply_FKChecksRestoredAfterASuccessfulBody` (live) |
 | T15.17 | A Postgres migration body that fails between its own `BEGIN` and `COMMIT` MUST NOT leave the applier's session in an aborted transaction: the applier issues `ROLLBACK` on a fresh context, so the next migration, a rollback or a ledger read on that connection works. | `TestApply_AFailedBodyLeavesNoTransactionOpen_Live` |
 | T15.18 | A binary that does not import `tooling/migrate/sqlitedriver` MUST NOT depend on `modernc.org/sqlite` through the packages every generated server links (`core/grpcerr`, `service/inprocgrpc`, `service/bootstrap`, `migrate/migratecli`), and MUST refuse a SQLite target naming the package to import. `grpcerr` MUST still classify the driver's errors (found by package and type name, through `%w` and `errors.Join`). | `TestServerPackagesDoNotPullInSQLite`, `TestFromTargets_SQLiteWithoutTheDriverSaysWhatToImport`, `TestAsSQLite_FindsTheDriverErrorOnly` |
+| T15.19 | Opening a connection MUST be bounded (`FromTargets` gives every dial its own deadline): a server that accepts and never answers fails the open. | `TestFromTargets_ADialThatNeverAnswersIsBounded` |
+| T15.20 | A Postgres rollback MUST hold the post-transaction advisory lock across `down_pre_tx` and `down_sql`. | `TestRollback_WaitsForTheSkirtLock_Live` |
+| T15.21 | A resume that starts at a `CREATE [UNIQUE] INDEX CONCURRENTLY` whose cursor was not recorded MUST NOT fail "already exists": a valid index of that name is recorded done and skipped, an invalid one is dropped and built again. | `TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live`, `TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_Live` |
+| T15.22 | SQLite: a body MUST wait for another writer's open transaction (busy timeout) rather than fail at once. | `TestApply_WaitsForAnotherWritersTransaction` |
 
 **Deliberate limits.**
 - NATS accepts only the `nats://` scheme, without credentials in the DSN.
