@@ -31,3 +31,13 @@ func SessionSettingForTest(ctx context.Context, a *Applier, name string) (string
 	err := a.conn.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name = $1", name).Scan(&v)
 	return v, err
 }
+
+// RunLockSeenThroughForTest returns the run lock rl, asked over other's
+// connection: what a transaction-mode pooler does to the lock's session,
+// which hands each statement to whichever server connection is free.
+func RunLockSeenThroughForTest(rl interface{}, other *Applier) interface {
+	Check(context.Context) error
+} {
+	l := rl.(*runLock)
+	return &runLock{a: other, pid: l.pid}
+}

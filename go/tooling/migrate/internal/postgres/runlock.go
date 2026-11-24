@@ -52,13 +52,14 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 		return nil, fmt.Errorf("postgres run lock: ask the server to probe the lock session: %w", err)
 	}
 	var got bool
-	if err := a.conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, $2)`, runLockClass, runLockObj).Scan(&got); err != nil {
+	var pid int32
+	if err := a.conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, $2), pg_backend_pid()`, runLockClass, runLockObj).Scan(&got, &pid); err != nil {
 		return nil, fmt.Errorf("postgres run lock: %w", err)
 	}
 	if !got {
 		return nil, migrate.ErrLockHeld
 	}
-	return &runLock{a: a}, nil
+	return &runLock{a: a, pid: pid}, nil
 }
 
 // lockSessionKeepalive makes the server drop a lock session whose client
@@ -69,7 +70,11 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 const lockSessionKeepalive = `SET tcp_keepalives_idle = 30; SET tcp_keepalives_interval = 10; ` +
 	`SET tcp_keepalives_count = 3; SET tcp_user_timeout = 60000`
 
-type runLock struct{ a *Applier }
+type runLock struct {
+	a *Applier
+	// pid is the server process the lock was taken on — this run's session.
+	pid int32
+}
 
 var _ migrate.CheckedRunLock = (*runLock)(nil)
 
@@ -97,13 +102,24 @@ func (l *runLock) Release(ctx context.Context) error {
 }
 
 // Check reports whether this run's session still holds the lock.
+//
+// The server process answering is compared with the one the lock was taken
+// on: a different one means the connection does not keep one server session
+// — a transaction-mode pooler (PgBouncer pool_mode=transaction) hands each
+// statement to whichever server connection is free — and a session lock
+// cannot work through it. That is refused like any loss, but named as what it
+// is, so it does not read as a crashed lock holder on every deploy.
 func (l *runLock) Check(ctx context.Context) error {
 	var held bool
+	var pid int32
 	err := l.a.conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks
 		WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
-		  AND classid = $1::int4::oid AND objid = $2::int4::oid AND objsubid = 2)`, runLockClass, runLockObj).Scan(&held)
+		  AND classid = $1::int4::oid AND objid = $2::int4::oid AND objsubid = 2), pg_backend_pid()`, runLockClass, runLockObj).Scan(&held, &pid)
 	if err != nil {
 		return fmt.Errorf("postgres run lock: %w: the lock session could not be asked whether it still holds the lock: %w", migrate.ErrLockLost, err)
+	}
+	if !held && pid != l.pid {
+		return fmt.Errorf("postgres run lock: %w: the lock was taken on server process %d and this statement ran on %d — the connection goes through a pooler in transaction mode (PgBouncer pool_mode=transaction, or a managed pooler like it), which cannot carry a session advisory lock; point the migrator's DSN at the database directly or at a session-mode pool", migrate.ErrLockLost, l.pid, pid)
 	}
 	if !held {
 		return fmt.Errorf("postgres run lock: %w: this run's session no longer holds it", migrate.ErrLockLost)
