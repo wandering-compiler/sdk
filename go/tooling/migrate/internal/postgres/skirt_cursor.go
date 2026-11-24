@@ -153,6 +153,10 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 		}
 	}
 	recorded := done
+	resumeAt := -1
+	if tracked && resume {
+		resumeAt = done
+	}
 	for i := done; i < len(stmts); i++ {
 		stmt := stmts[i]
 		head := effectiveHead(stmt)
@@ -168,6 +172,19 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 			_, err = a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol)
 		case concurrentStmtRe.MatchString(head):
 			advance := !rerunSafeDropRe.MatchString(head)
+			if i == resumeAt {
+				var skip bool
+				if skip, err = a.settleInterruptedBuild(ctx, head); err != nil {
+					return a.skirtFailure(ctx, m, stmts, i, recorded, tracked, err)
+				}
+				if skip {
+					if err = setSkirtDone(ctx, a.conn, m.GetId(), i+1); err != nil {
+						return a.skirtFailure(ctx, m, stmts, i, recorded, tracked, err)
+					}
+					recorded = i + 1
+					continue
+				}
+			}
 			err = a.runAlone(ctx, m.GetId(), stmt, i+1, advance)
 			if err == nil && advance {
 				recorded = i + 1
@@ -286,6 +303,59 @@ func (a *Applier) runWithCursor(ctx context.Context, id, stmt string, n int) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// createIndexConcurrentlyRe reads the index name and its table off a
+// CREATE [UNIQUE] INDEX CONCURRENTLY statement (IF NOT EXISTS needs nothing:
+// it re-runs cleanly). Names are taken as written — bare, quoted or
+// schema-qualified: group 1 is the index, group 2 its schema part when it has
+// one, group 3 the table after ON [ONLY].
+var createIndexConcurrentlyRe = regexp.MustCompile(`(?is)^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(` + pgIdent + `(\.` + pgIdent + `)?)\s+ON\s+(?:ONLY\s+)?(` + pgIdent + `(?:\.` + pgIdent + `)?)`)
+
+// pgIdent is one identifier as a statement spells it: quoted, or bare.
+const pgIdent = `(?:"(?:[^"]|"")+"|[^\s"(.]+)`
+
+// interruptedIndexQuery finds the index an interrupted build left. An index
+// is created in its TABLE's schema, not the search_path's, so a bare index
+// name is resolved in the schema of the table it was built on ($2) — w17's
+// own tables are schema-qualified, and to_regclass of the bare name would
+// miss every one of them. It answers the index's validity and its name as a
+// DROP must spell it.
+const interruptedIndexQuery = `SELECT i.indisvalid, i.indexrelid::regclass::text FROM pg_index i
+WHERE i.indexrelid = to_regclass(CASE WHEN $3 THEN $1 ELSE COALESCE(
+  (SELECT quote_ident(n.nspname) || '.' FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace WHERE t.oid = to_regclass($2)), '') || $1 END)`
+
+// settleInterruptedBuild decides the CONCURRENTLY build a resume starts at.
+// A build autocommits and its cursor is recorded after it, so a process that
+// died between the two left the cursor here with the build done — or, when it
+// died during the build, left an INVALID index. Either way the statement can
+// not simply run again: CREATE fails "already exists" on every deploy. A
+// valid index of that name is the build that finished: skip (true). An
+// invalid one is a build that did not: drop it, then run the statement.
+// A build paired with a DROP … IF EXISTS before it never starts a resume
+// (the drop is not recorded), and other CONCURRENTLY statements are run as
+// they are.
+func (a *Applier) settleInterruptedBuild(ctx context.Context, head string) (bool, error) {
+	mm := createIndexConcurrentlyRe.FindStringSubmatch(head)
+	if mm == nil {
+		return false, nil
+	}
+	var valid *bool
+	var name string
+	err := a.conn.QueryRow(ctx, interruptedIndexQuery, mm[1], mm[3], mm[2] != "").Scan(&valid, &name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the index this resume starts at (%s): %w", mm[1], err)
+	}
+	if valid != nil && *valid {
+		return true, nil
+	}
+	if _, err := a.conn.Exec(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+name, pgx.QueryExecModeSimpleProtocol); err != nil {
+		return false, fmt.Errorf("drop the INVALID index an interrupted build left (%s): %w", name, err)
+	}
+	return false, nil
 }
 
 // runAlone runs one statement in autocommit, then (advance) records it done.

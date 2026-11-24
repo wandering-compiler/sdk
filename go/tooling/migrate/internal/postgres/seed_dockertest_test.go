@@ -106,8 +106,8 @@ func seedTestPG(t *testing.T) (string, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 	// W17_SEED_TEST_DSN: a server to use instead of a container this test
-	// starts (a run inside a container, where 127.0.0.1 is not the docker
-	// host). Each call gets a database of its own there.
+	// starts (a run that cannot start containers, or cannot reach their own
+	// addresses). Each call gets a database of its own there.
 	if base := os.Getenv("W17_SEED_TEST_DSN"); base != "" {
 		admin, err := pgx.Connect(ctx, base)
 		if err != nil {
@@ -132,7 +132,7 @@ func seedTestPG(t *testing.T) (string, context.Context) {
 		_ = c.Close(ctx)
 		return dsn, ctx
 	}
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P",
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm",
 		"-e", "POSTGRES_PASSWORD=seed", "-e", "POSTGRES_DB=seed", "postgres:18").Output()
 	if err != nil {
 		t.Skipf("docker run failed (no docker?): %v", err)
@@ -140,15 +140,8 @@ func seedTestPG(t *testing.T) (string, context.Context) {
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "stop", id).Run() })
 
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "5432/tcp").Output()
-	if err != nil {
-		t.Skipf("docker port failed: %v", err)
-	}
-	hostPort := strings.TrimSpace(strings.Split(string(portOut), "\n")[0])
-	if i := strings.LastIndex(hostPort, ":"); i >= 0 {
-		hostPort = "127.0.0.1:" + hostPort[i+1:]
-	}
-	dsn := "postgres://postgres:seed@" + hostPort + "/seed?sslmode=disable"
+	ip := containerIP(ctx, t, id)
+	dsn := "postgres://postgres:seed@" + ip + ":5432/seed?sslmode=disable"
 
 	// Postgres accepts connections a moment after the container starts.
 	deadline := time.Now().Add(60 * time.Second)

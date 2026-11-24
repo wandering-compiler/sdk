@@ -93,20 +93,15 @@ func mustParse(t *testing.T, dsn string) *goredis.Options {
 
 func startThrowawayRedis(ctx context.Context, t *testing.T) string {
 	t.Helper()
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P", "redis:7-alpine").Output()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "redis:7-alpine").Output()
 	if err != nil {
 		t.Skipf("docker run failed (no docker?): %v", err)
 	}
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "stop", id).Run() })
 
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "6379/tcp").Output()
-	if err != nil {
-		t.Fatalf("docker port: %v", err)
-	}
-	first := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	port := first[strings.LastIndex(first, ":")+1:]
-	dsn := fmt.Sprintf("redis://127.0.0.1:%s/0", port)
+	ip := containerIP(ctx, t, id)
+	dsn := fmt.Sprintf("redis://%s:6379/0", ip)
 
 	deadline := time.Now().Add(60 * time.Second)
 	for {

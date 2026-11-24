@@ -133,12 +133,20 @@ func listCount(ctx context.Context, t *testing.T, cli *awss3.Client) int {
 	return len(out.Contents)
 }
 
+// minioImage is the S3 server the round trip runs against. MinIO no longer
+// publishes community images — minio/minio on Docker Hub is gone, so a
+// `docker run minio/minio` fails and this test used to SKIP ("no docker?")
+// wherever it ran. Chainguard's build is public; pinned by digest because its
+// only tag is `latest`, the same pin the kvfs-s3 CI job uses. It runs as uid
+// 65532, so its data goes under /tmp.
+const minioImage = "cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8"
+
 func startThrowawayMinio(ctx context.Context, t *testing.T) string {
 	t.Helper()
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P",
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm",
 		"-e", "MINIO_ROOT_USER="+minioUser,
 		"-e", "MINIO_ROOT_PASSWORD="+minioPass,
-		"minio/minio", "server", "/data",
+		minioImage, "server", "/tmp/data",
 	).Output()
 	if err != nil {
 		t.Skipf("docker run failed (no docker?): %v", err)
@@ -146,13 +154,8 @@ func startThrowawayMinio(ctx context.Context, t *testing.T) string {
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "stop", id).Run() })
 
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "9000/tcp").Output()
-	if err != nil {
-		t.Fatalf("docker port: %v", err)
-	}
-	first := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	port := first[strings.LastIndex(first, ":")+1:]
-	endpoint := "http://127.0.0.1:" + port
+	ip := containerIP(ctx, t, id)
+	endpoint := "http://" + ip + ":9000"
 
 	// Poll the minio health endpoint via a throwaway client list call.
 	os.Setenv("AWS_ACCESS_KEY_ID", minioUser)

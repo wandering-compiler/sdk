@@ -123,7 +123,6 @@ func startThrowawayPG(ctx context.Context, t *testing.T) string {
 		db    = "snaptest"
 	)
 	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm",
-		"-P",
 		"-e", "POSTGRES_PASSWORD="+pass,
 		"-e", "POSTGRES_DB="+db,
 		image,
@@ -136,15 +135,8 @@ func startThrowawayPG(ctx context.Context, t *testing.T) string {
 		_ = exec.Command("docker", "stop", id).Run()
 	})
 
-	// Resolve the host port mapped to 5432.
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "5432/tcp").Output()
-	if err != nil {
-		t.Fatalf("docker port: %v", err)
-	}
-	// Lines look like "0.0.0.0:49153"; take the port after the last ':'.
-	first := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	host := first[strings.LastIndex(first, ":")+1:]
-	dsn := fmt.Sprintf("postgres://postgres:%s@127.0.0.1:%s/%s?sslmode=disable", pass, host, db)
+	ip := containerIP(ctx, t, id)
+	dsn := fmt.Sprintf("postgres://postgres:%s@%s:5432/%s?sslmode=disable", pass, ip, db)
 
 	// Poll until ready.
 	deadline := time.Now().Add(90 * time.Second)

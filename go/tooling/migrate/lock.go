@@ -36,9 +36,14 @@ var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run"
 // NATS implements it too: its bodies are command lines with no
 // transaction around them, so two racing runs would both apply them.
 //
-// SQLite does NOT implement it: its up_sql runs in a transaction whose
-// w17_migrations INSERT has the migration id as a primary key, so a second
-// concurrent run cannot double-apply.
+// SQLite does NOT implement it, and is single-applier: its up_sql runs in
+// a transaction, so a second concurrent run against the same file cannot
+// double-apply — but, as on Postgres before its lock, the loser fails on
+// what the body ran into (`table … already exists`), not on the ledger key,
+// and reads as a broken migration. The applier pins a busy timeout so it
+// waits for another writer's transaction instead of failing "database is
+// locked" at once; it does not make two appliers on one file wait for each
+// other's whole run. Run one applier per SQLite file.
 //
 // Postgres was in that sentence too, and the reasoning held only half-way.
 // The transaction does keep a racing run from applying twice, but the loser
@@ -64,8 +69,7 @@ var ErrLockLost = errors.New("apply: the run-lock is no longer held by this run"
 // the label guarantees.
 //
 // The orchestrator type-asserts each applier; one that doesn't
-// implement RunLockCapable applies without a lock (SQLite: the
-// transactional guarantee covers it).
+// implement RunLockCapable applies without a lock (SQLite: see above).
 type RunLockCapable interface {
 	// AcquireRunLock takes the target's apply run-lock. It is
 	// fail-fast, not blocking: it returns ErrLockHeld immediately

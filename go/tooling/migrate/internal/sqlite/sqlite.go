@@ -595,7 +595,30 @@ func URLToDriverDSN(dsn string) string {
 	case strings.HasPrefix(dsn, "sqlite://"):
 		dsn = dsn[len("sqlite://"):]
 	}
-	return dbsession.ApplySQLitePragmas(dsn)
+	return withBusyTimeout(dbsession.ApplySQLitePragmas(dsn))
+}
+
+// applierBusyTimeout is how long an applier's statement waits for another
+// writer's transaction on the same file before failing SQLITE_BUSY.
+const applierBusyTimeout = "_pragma=busy_timeout(10000)"
+
+// withBusyTimeout pins the applier's busy timeout unless the DSN names one.
+//
+// SQLite has no run lock here (see migrate.RunLockCapable): another process
+// writing the file — the application itself, a second applier — holds the
+// write lock for the length of its transaction, and without a busy timeout
+// the driver answers "database is locked" the moment a body needs it, which
+// reads as a broken migration. The applier's own pin, not the runtime's
+// shared one: how long a request may wait is the runtime's decision.
+func withBusyTimeout(dsn string) string {
+	if strings.Contains(dsn, "busy_timeout") {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + applierBusyTimeout
 }
 
 // stampCollation records the collator this binary sorts with, and refuses

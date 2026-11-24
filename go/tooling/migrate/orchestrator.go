@@ -112,10 +112,11 @@ type Config struct {
 	//
 	// The guard is not the operator's word. `adopt_preflight_sql` fails
 	// unless the objects, columns, nullability and primary key the migration
-	// describes are already in place, and it commits in the SAME transaction
-	// as the ledger row: a check that passed and a record that did not commit
-	// with it would leave the two disagreeing, which is the failure this
-	// exists to prevent. A migration whose preflight is EMPTY is refused —
+	// describes are already in place, and it is sent with the ledger write as
+	// ONE query string, the preflight first: a preflight that fails aborts the
+	// rest of the string, so no row is recorded after a failed check (see
+	// applyFake for what that does and does not make atomic). A migration
+	// whose preflight is EMPTY is refused —
 	// empty means the dialect cannot ask the question, not that there is
 	// nothing to ask. A preflight the content hash does not cover is refused
 	// too (see ContentHashWithPreflight): it is executed, so it has to be
@@ -364,6 +365,35 @@ func Plan(ctx context.Context, cfg Config) ([]Pending, error) {
 	return out, nil
 }
 
+// refuseNewHalfApplied refuses a rollback when the ledger, read under the run
+// lock, holds a half-applied migration above head (and above the rollback
+// target) that the plan for conn does not roll back.
+func refuseNewHalfApplied(ctx context.Context, applier Applier, conn, head, to string, plan []Pending) error {
+	pl, ok := applier.(PendingLister)
+	if !ok {
+		return nil
+	}
+	half, err := pl.PendingMigrations(ctx)
+	if err != nil {
+		return fmt.Errorf("connection %s: re-read half-applied migrations under the run lock: %w", conn, err)
+	}
+	planned := map[string]bool{}
+	for _, p := range plan {
+		if p.Connection == conn {
+			planned[p.Migration.GetId()] = true
+		}
+	}
+	sort.Strings(half)
+	for _, id := range half {
+		if id <= to || (head != "" && id <= head) || planned[id] {
+			continue
+		}
+		return fmt.Errorf("connection %s: refusing to roll back — migration %s became half-applied above the head while this rollback waited for the lock (another run committed its transaction and stopped in the steps after it), and the plan does not undo it; re-plan and try again",
+			conn, id)
+	}
+	return nil
+}
+
 // refuseHalfAppliedOffPlan refuses a database holding a half-applied
 // migration (its in-tx half committed, its post-tx skirt unfinished) that
 // this deploy will not resume: one the chain does not hold above the head —
@@ -527,7 +557,16 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	// non-transactional target; closeAll releases the locks then closes
 	// the drivers.
 	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
-	defer func() { err = joinRelease(err, ac.closeAll()) }()
+	defer func() { err = joinRelease(err, ac.closeAll(ctx)) }()
+
+	// Every connection's run lock is taken here, in sorted connection order,
+	// before the preflights below open the connections they probe. They used
+	// to take those first, so two runs with different pending sets could take
+	// the locks of two shared connections in opposite orders — each holding
+	// one and waiting LockWait for the other, then both failing.
+	if err := ac.lockInOrder(ctx, pending); err != nil {
+		return err
+	}
 
 	// Before ANYTHING is written: does the target hold what the schema says it
 	// needs? `required_extensions` used to be a declaration nobody read — see
@@ -610,6 +649,23 @@ func Run(ctx context.Context, cfg Config) (err error) {
 				return fmt.Errorf("connection %s: refusing to apply %s — the applied head was %q when this run was planned and is %q now, so another run rolled back while this one waited for the lock and nothing the plan decided still describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
 			}
+			// The half-applied refusal Plan made is asked again here, from
+			// the ledger as it is NOW, whether or not the head moved: an
+			// applier carrying another history (a rolling deploy of an older
+			// binary) can commit a migration's transaction and die in its
+			// skirt while this run waits for the lock. That leaves the head
+			// where Plan saw it and a half-applied row Plan never saw, and
+			// without this the replacement would be built on top of its
+			// committed DDL.
+			if pl, ok := applier.(PendingLister); ok && p.chain != nil {
+				half, pErr := pl.PendingMigrations(ctx)
+				if pErr != nil {
+					return fmt.Errorf("connection %s: re-read half-applied migrations under the run lock: %w", p.Connection, pErr)
+				}
+				if rErr := refuseHalfAppliedOffPlan(p.Connection, p.chain, h, half, cfg.Replaced[p.Connection]); rErr != nil {
+					return fmt.Errorf("%w (asked again under the run lock: it appeared while this run waited)", rErr)
+				}
+			}
 			// A head that moved FORWARD is not only a skip. Every decision
 			// Plan took from the head — the REPLACE refusals and the squash
 			// adopt — was taken against PlannedHead, so the connection is
@@ -655,8 +711,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		if cfg.Fake {
 			// An operator asserting "this database is already at that
 			// migration". The assertion is CHECKED — the preflight and the
-			// ledger write go in as one body, so they share one transaction
-			// and the record cannot outlive a failed check.
+			// ledger write go in as one body, and a failed preflight aborts
+			// the rest of it, so no record follows a failed check (see
+			// applyFake).
 			if err := applyFake(ctx, applier, p, out, logger, started); err != nil {
 				return err
 			}
@@ -716,18 +773,20 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			return err
 		}
 		if cfg.Checks {
-			err := runMigrationChecks(ctx, applier, p, false, out)
-			if err == nil {
-				// The checks ran on connections of their own, but the run lock
-				// is asked again before the body all the same: a check that
-				// reached it must not leave the body running unguarded.
-				err = ac.checkHeld(ctx, p.Connection)
-			}
-			if err != nil {
+			if err := runMigrationChecks(ctx, applier, p, false, out); err != nil {
 				logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), err)
 				captureMigrationError("apply", p.Connection, p.Migration, err)
 				return err
 			}
+		}
+		// The run lock is asked again right before the body: the drift scan
+		// and the checks above can take long, and on a dialect whose lock
+		// lives on a connection of its own (MySQL) a lock session killed
+		// meanwhile would leave the body running unguarded.
+		if err := ac.checkHeld(ctx, p.Connection); err != nil {
+			logMigration(logger, "apply", p.Connection, p.Migration, time.Since(started), err)
+			captureMigrationError("apply", p.Connection, p.Migration, err)
+			return err
 		}
 		if err := applyOrResume(ctx, applier, p.Migration, out); err != nil {
 			dur := time.Since(started)
@@ -927,13 +986,17 @@ func closingLine(applied, adopted, faked, skipped int) string {
 // applyFake records one pending migration without running its body, guarded by
 // the preflight the console rendered for it.
 //
-// Both halves are handed to the applier as ONE body so they share the
-// transaction envelope the applier already gives every migration: the
-// preflight raises, the transaction rolls back, and no ledger row survives.
-// Running them as two calls would leave a window where the schema can change
-// between the check and the record — and, worse, a failure mode where the
-// record commits after a check that passed against a database that has since
-// moved.
+// Both halves are handed to the applier as ONE body, which Postgres runs as
+// one simple-protocol query string, the preflight first. What protects the
+// ledger is that a statement which fails aborts the rest of the string: the
+// preflight raises, and the record after it never runs. It is NOT one
+// transaction — the record carries its own BEGIN … COMMIT, and an explicit
+// BEGIN ends the implicit block the preflight ran in, so the preflight's own
+// writes (the ledger's CREATE TABLE IF NOT EXISTS) commit separately. The
+// check and the record still run back to back, under the run lock, in one
+// round trip; two calls would add a window between them and a failure mode
+// where the record commits after a check that passed against a database that
+// has since moved.
 func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, logger *slog.Logger, started time.Time) error {
 	preflight := p.Migration.GetAdoptPreflightSql()
 	adoptSQL := p.Migration.GetAdoptSql()
@@ -1141,13 +1204,10 @@ func applyOrResume(ctx context.Context, applier Applier, m *applyfetchpb.Migrati
 }
 
 // runApplierCache caches one Applier per connection for the duration of a
-// Run / RunRollback loop and, for non-transactional stores (Redis / S3 / NATS that
-// implement RunLockCapable), acquires a run-lock on first open so a
-// non-idempotent TRANSFORM_FIELD data migration can't double-apply across
-// concurrent runs. Transactional SQL dialects don't implement RunLockCapable
-// (their w17_migrations PK serialises) and take the plain cached-applier path.
-// MySQL is NOT among them despite being transactional — DDL implicit-commits
-// mid-body, so it implements RunLockCapable; see lock.go.
+// Run / RunRollback loop and, for every applier that implements
+// RunLockCapable (Postgres, MySQL, Redis, S3, NATS), acquires a run-lock on
+// first open so concurrent runs cannot double-apply or collide; see lock.go.
+// SQLite does not implement it and takes the plain cached-applier path.
 type runApplierCache struct {
 	applierFor ApplierFor
 	out        io.Writer
@@ -1169,6 +1229,10 @@ const DefaultLockWait = 5 * time.Minute
 
 // lockRetryEvery is how often a waiting run tries the lock again.
 var lockRetryEvery = time.Second
+
+// releaseTimeout bounds each run-lock release (and the close after it) at the
+// end of a run. See closeAll.
+var releaseTimeout = 10 * time.Second
 
 func newRunApplierCache(applierFor ApplierFor, out io.Writer, lockWait time.Duration) *runApplierCache {
 	if lockWait == 0 {
@@ -1206,6 +1270,27 @@ func (c *runApplierCache) get(ctx context.Context, conn string) (Applier, error)
 	}
 	c.cache[conn] = a
 	return a, nil
+}
+
+// lockInOrder opens (and run-locks) every connection pending touches, in
+// sorted order, so every run takes the locks of the connections it shares
+// with another run in the same order.
+func (c *runApplierCache) lockInOrder(ctx context.Context, pending []Pending) error {
+	seen := map[string]bool{}
+	conns := make([]string, 0, len(pending))
+	for _, p := range pending {
+		if !seen[p.Connection] {
+			seen[p.Connection] = true
+			conns = append(conns, p.Connection)
+		}
+	}
+	sort.Strings(conns)
+	for _, conn := range conns {
+		if _, err := c.get(ctx, conn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // acquire takes conn's run lock, waiting up to lockWait while another run
@@ -1272,7 +1357,14 @@ func (c *runApplierCache) checkHeld(ctx context.Context, conn string) error {
 // success over that is the failure the lock exists to prevent. Any other
 // release failure (the store went away at the very end) leaves a lock that
 // expires on its own, and stays a warning.
-func (c *runApplierCache) closeAll() error {
+//
+// Each release gets a context of its own, bounded by releaseTimeout and
+// detached from the run's cancellation: the run's context may already be
+// done (a deadline, a signal) and the lock still has to be given back, but a
+// release over a connection that stopped answering must not hang a run that
+// applied everything. A release that runs out of time is the warning path:
+// the session or lease it was held by ends with the close that follows.
+func (c *runApplierCache) closeAll(ctx context.Context) error {
 	var lost []error
 	conns := make([]string, 0, len(c.locks))
 	for conn := range c.locks {
@@ -1280,7 +1372,10 @@ func (c *runApplierCache) closeAll() error {
 	}
 	sort.Strings(conns)
 	for _, conn := range conns {
-		if err := c.locks[conn].Release(context.Background()); err != nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+		err := c.locks[conn].Release(rctx)
+		cancel()
+		if err != nil {
 			if errors.Is(err, ErrLockLost) {
 				lost = append(lost, fmt.Errorf("connection %s: %w", conn, err))
 				continue
@@ -1634,7 +1729,11 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 	}
 
 	ac := newRunApplierCache(cfg.ApplierFor, out, cfg.LockWait)
-	defer func() { err = joinRelease(err, ac.closeAll()) }()
+	defer func() { err = joinRelease(err, ac.closeAll(ctx)) }()
+	// One lock order for every run, as on apply.
+	if err := ac.lockInOrder(ctx, pending); err != nil {
+		return err
+	}
 
 	logger := newLogger(out, cfg.LogFormat)
 
@@ -1676,6 +1775,14 @@ func RunRollback(ctx context.Context, cfg RollbackConfig) (err error) {
 			if h != p.PlannedHead {
 				return fmt.Errorf("connection %s: refusing to roll back %s — the applied head was %q when this rollback was planned and is %q now, so another run applied or rolled back while this one waited for the lock and the plan no longer describes the database; re-plan and try again",
 					p.Connection, p.Migration.GetId(), p.PlannedHead, h)
+			}
+			// The head is not the only thing a run that held the lock before
+			// this one can change: one that died in a skirt leaves a
+			// half-applied row ABOVE an unchanged head, which the plan did
+			// not see and so would not undo — the rollback would remove what
+			// that migration was built on and leave it in place.
+			if err := refuseNewHalfApplied(ctx, applier, p.Connection, h, cfg.ToMigrationID, pending); err != nil {
+				return err
 			}
 		}
 
@@ -1989,11 +2096,41 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 		if err != nil {
 			return fmt.Errorf("WriteMigration: migration id %q: %w", m.GetId(), err)
 		}
-		if err := os.WriteFile(p, f.body, 0o644); err != nil {
+		if err := writeFileWhole(p, f.body); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// writeFileWhole replaces path with body by writing it aside in the same
+// directory and renaming it over path, so a reader — another container
+// applying from a shared volume while `migrate fetch` rewrites it — sees the
+// old file or the new one, never a truncated one. The aside name starts with
+// a dot and does not end in an artefact extension, so a loader listing the
+// directory never picks it up.
+func writeFileWhole(path string, body []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // checkArtifactSegment refuses a connection name or migration id that is not a

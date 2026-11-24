@@ -109,7 +109,7 @@ func connectJS(ctx context.Context, t *testing.T, dsn string) jetstream.JetStrea
 func startThrowawayNATS(ctx context.Context, t *testing.T) string {
 	t.Helper()
 	// -js enables JetStream (required for KV buckets).
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P",
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm",
 		"nats:2-alpine", "-js").Output()
 	if err != nil {
 		t.Skipf("docker run failed (no docker?): %v", err)
@@ -117,13 +117,8 @@ func startThrowawayNATS(ctx context.Context, t *testing.T) string {
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "stop", id).Run() })
 
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "4222/tcp").Output()
-	if err != nil {
-		t.Fatalf("docker port: %v", err)
-	}
-	first := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	port := first[strings.LastIndex(first, ":")+1:]
-	dsn := fmt.Sprintf("nats://127.0.0.1:%s", port)
+	ip := containerIP(ctx, t, id)
+	dsn := fmt.Sprintf("nats://%s:4222", ip)
 
 	deadline := time.Now().Add(60 * time.Second)
 	for {

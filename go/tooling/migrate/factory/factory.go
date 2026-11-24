@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
@@ -84,6 +85,9 @@ func ParseTargets(flags []string) ([]TargetSpec, error) {
 // FromTargets's positional args.
 type option func(*config)
 
+// dialTimeout bounds opening a connection. See FromTargets.
+var dialTimeout = 30 * time.Second
+
 type config struct {
 	parallel int // operator-supplied --parallel <N>; 0 = no override
 }
@@ -115,18 +119,25 @@ func FromTargets(specs []TargetSpec, opts ...option) migrate.ApplierFor {
 		if !ok {
 			return nil, fmt.Errorf("no --target configured for connection %q", connection)
 		}
+		// The dial gets a deadline of its own: ApplierFor carries no context,
+		// so neither the run's deadline nor LockWait reaches it, and a server
+		// that accepts and never answers (a black-holing proxy, a DSN without
+		// connect_timeout) would hang the run before it began. Only the
+		// relational appliers dial in New; the others connect lazily.
+		dctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		defer cancel()
 		switch dialectFromDSN(spec.DSN) {
 		case "postgres":
-			return postgres.New(context.Background(), spec.DSN)
+			return postgres.New(dctx, spec.DSN)
 		case "mysql":
-			return mysql.New(context.Background(), spec.DSN)
+			return mysql.New(dctx, spec.DSN)
 		case "sqlite":
 			if sqliteDriver.newApplier == nil {
 				return nil, errNoSQLite(connection)
 			}
-			return sqliteDriver.newApplier(context.Background(), spec.DSN)
+			return sqliteDriver.newApplier(dctx, spec.DSN)
 		case "redis":
-			a, err := redis.New(context.Background(), spec.DSN)
+			a, err := redis.New(dctx, spec.DSN)
 			if err != nil {
 				return nil, err
 			}
@@ -135,9 +146,9 @@ func FromTargets(specs []TargetSpec, opts ...option) migrate.ApplierFor {
 			}
 			return a, nil
 		case "nats":
-			return nats.New(context.Background(), spec.DSN)
+			return nats.New(dctx, spec.DSN)
 		case "s3":
-			a, err := s3.New(context.Background(), spec.DSN)
+			a, err := s3.New(dctx, spec.DSN)
 			if err != nil {
 				return nil, err
 			}

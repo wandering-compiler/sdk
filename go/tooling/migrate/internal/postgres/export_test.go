@@ -23,3 +23,21 @@ func SetCheckLimitsForTest(tempFileLimit, workMem string) func() {
 // one released with the skirt flood) ran it: every statement, in order, in
 // autocommit, recording nothing.
 var SplitStatementsForTest = splitStatements
+
+// SessionSettingForTest reads one server setting as the applier's session
+// sees it (pg_settings.setting: raw units, e.g. ms for tcp_user_timeout).
+func SessionSettingForTest(ctx context.Context, a *Applier, name string) (string, error) {
+	var v string
+	err := a.conn.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name = $1", name).Scan(&v)
+	return v, err
+}
+
+// RunLockSeenThroughForTest returns the run lock rl, asked over other's
+// connection: what a transaction-mode pooler does to the lock's session,
+// which hands each statement to whichever server connection is free.
+func RunLockSeenThroughForTest(rl interface{}, other *Applier) interface {
+	Check(context.Context) error
+} {
+	l := rl.(*runLock)
+	return &runLock{a: other, pid: l.pid}
+}

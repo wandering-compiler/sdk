@@ -164,9 +164,9 @@ func StartBeaterInterval(ctx context.Context, interval time.Duration, refresh fu
 }
 
 // Stop ends the heartbeat and waits for the goroutine to exit.
-// Idempotent — safe to call once; a second call would panic on the
-// closed channel, so callers guard with sync.Once or call exactly
-// once (the applier RunLock.Release path does the latter).
+// NOT idempotent: a second call panics on the closed channel, so callers
+// guard with sync.Once or call exactly once (the applier RunLock.Release
+// path does the latter).
 func (b *Beater) Stop() {
 	close(b.stop)
 	<-b.done
