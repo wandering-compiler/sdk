@@ -267,7 +267,7 @@ the registry dooms the transaction before waiting (D5.12).
 
 ## D8. Runtime SQL shape and binding helpers
 
-**Code.** `go/lib/dqlbind/dqlbind.go` — `ExpandIn`, `ExpandValuesPG`, `ExpandValuesQM`, `scanSQL`, `Arr`, `Bytes`, `NullIfEmpty`, `EnumFieldOrNull`, `TimestampOrNull`, `DedupKeys`.
+**Code.** `go/lib/dqlbind/dqlbind.go` — `ExpandIn`, `ExpandValuesPG`, `ExpandValuesQM`, `scanSQL`, `Arr`, `Bytes`, `NullIfEmpty`, `EnumFieldOrNull`, `TimestampOrNull`, `DedupKeys`; `go/lib/dqlbind/timescan.go` — `ScanTime`, `ScanNullTime`.
 
 **Purpose.** Runtime rewrites the generator cannot do statically, and value coercions at the bind boundary.
 
@@ -284,6 +284,7 @@ the registry dooms the transaction before waiting (D5.12).
 | `EnumFieldOrNull` | Unset optional enum at any depth, including an absent parent message → NULL; set → `int32`. |
 | `TimestampOrNull` | nil Timestamp → NULL, never year 1. |
 | `DedupKeys` | Deduplicates KV multi-fetch keys, first occurrence wins; no allocation without duplicates. |
+| `ScanTime`, `ScanNullTime` | Scan a temporal column into `time.Time` / `sql.NullTime` whatever shape the driver hands back: `time.Time`, or the text / bytes form (pgx returns PostgreSQL TIME and TIMETZ as text, MySQL sends TIME as bytes, SQLite stores it as text). A time of day is dated 0000-01-01. `ScanTime` refuses NULL; `ScanNullTime` leaves `Valid` false. |
 
 **Guarantees.**
 
@@ -300,6 +301,7 @@ the registry dooms the transaction before waiting (D5.12).
 | D8.6 | `Arr` and `Bytes` MUST NOT bind NULL into NOT NULL array or bytea columns. | `TestArr_EmptyBindsTheEmptyArrayNotNull`, `TestBytes_EmptyIsStoredInANotNullColumn` |
 | D8.7 | `EnumFieldOrNull` MUST bind NULL for an unset enum under an absent parent message. | `TestEnumFieldOrNull_AbsentParentAndUnsetFieldAreNull` |
 | D8.8 | Expanded SQL MUST execute correctly on MySQL. | `TestExpandedSQL_RunsOnMySQL_Live` |
+| D8.12 | `ScanTime` and `ScanNullTime` MUST accept a temporal value as `time.Time`, text or bytes, and MUST refuse a MySQL TIME outside a day (negative or past 24 h) rather than wrap it. | `TestScanTime_DriverShapes`, `TestScanTime_Refusals` |
 
 **Deliberate limits.**
 - The scanner understands only single-quoted literals; it relies on the emitter never producing double-quoted strings, dollar-quoted bodies, comments or backslash-escaped quotes.
