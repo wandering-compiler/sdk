@@ -465,7 +465,18 @@ var unlockTimeout = 10 * time.Second
 // row with a recorded resume cursor, whose skirt operations are
 // marked) it skips the inverses of the operations that never ran
 // (rollbackPreTx).
+//
+// The whole rollback holds the skirt's advisory lock (applyPostTx's): the
+// run lock keeps two current appliers apart, but an applier predating it
+// resumes a half-applied skirt under this lock alone, and a rollback that
+// did not take it could undo the skirt statement by statement while that
+// applier rebuilt it. Held across down_sql too, so the skirt cannot be
+// resumed between its undo and the removal of its ledger row.
 func (a *Applier) Rollback(ctx context.Context, m *applyfetchpb.Migration) error {
+	if _, err := a.conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, postTxAdvisoryLockKey); err != nil {
+		return fmt.Errorf("postgres rollback: post-tx advisory lock: %w", err)
+	}
+	defer a.unlockSkirt(ctx)
 	// A half-applied skirt undoes only what ran (rollbackPreTx).
 	if err := a.rollbackPreTx(ctx, m); err != nil {
 		return err
