@@ -153,6 +153,10 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 		}
 	}
 	recorded := done
+	resumeAt := -1
+	if tracked && resume {
+		resumeAt = done
+	}
 	for i := done; i < len(stmts); i++ {
 		stmt := stmts[i]
 		head := effectiveHead(stmt)
@@ -168,6 +172,19 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 			_, err = a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol)
 		case concurrentStmtRe.MatchString(head):
 			advance := !rerunSafeDropRe.MatchString(head)
+			if i == resumeAt {
+				var skip bool
+				if skip, err = a.settleInterruptedBuild(ctx, head); err != nil {
+					return a.skirtFailure(ctx, m, stmts, i, recorded, tracked, err)
+				}
+				if skip {
+					if err = setSkirtDone(ctx, a.conn, m.GetId(), i+1); err != nil {
+						return a.skirtFailure(ctx, m, stmts, i, recorded, tracked, err)
+					}
+					recorded = i + 1
+					continue
+				}
+			}
 			err = a.runAlone(ctx, m.GetId(), stmt, i+1, advance)
 			if err == nil && advance {
 				recorded = i + 1
@@ -286,6 +303,44 @@ func (a *Applier) runWithCursor(ctx context.Context, id, stmt string, n int) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// createIndexConcurrentlyRe reads the index name off a CREATE [UNIQUE] INDEX
+// CONCURRENTLY statement (IF NOT EXISTS needs nothing: it re-runs cleanly).
+// The name is taken as written — bare, quoted or schema-qualified — and
+// resolved by to_regclass, which parses it the way the statement did.
+var createIndexConcurrentlyRe = regexp.MustCompile(`(?is)^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+((?:"(?:[^"]|"")+"|[^\s"(]+)(?:\.(?:"(?:[^"]|"")+"|[^\s"(]+))?)\s+ON\b`)
+
+// settleInterruptedBuild decides the CONCURRENTLY build a resume starts at.
+// A build autocommits and its cursor is recorded after it, so a process that
+// died between the two left the cursor here with the build done — or, when it
+// died during the build, left an INVALID index. Either way the statement can
+// not simply run again: CREATE fails "already exists" on every deploy. A
+// valid index of that name is the build that finished: skip (true). An
+// invalid one is a build that did not: drop it, then run the statement.
+// A build paired with a DROP … IF EXISTS before it never starts a resume
+// (the drop is not recorded), and other CONCURRENTLY statements are run as
+// they are.
+func (a *Applier) settleInterruptedBuild(ctx context.Context, head string) (bool, error) {
+	mm := createIndexConcurrentlyRe.FindStringSubmatch(head)
+	if mm == nil {
+		return false, nil
+	}
+	var valid *bool
+	err := a.conn.QueryRow(ctx, `SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)`, mm[1]).Scan(&valid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the index this resume starts at (%s): %w", mm[1], err)
+	}
+	if valid != nil && *valid {
+		return true, nil
+	}
+	if _, err := a.conn.Exec(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+mm[1], pgx.QueryExecModeSimpleProtocol); err != nil {
+		return false, fmt.Errorf("drop the INVALID index an interrupted build left (%s): %w", mm[1], err)
+	}
+	return false, nil
 }
 
 // runAlone runs one statement in autocommit, then (advance) records it done.
