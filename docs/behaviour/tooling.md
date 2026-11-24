@@ -604,7 +604,7 @@ manual remedy. SQLite and NATS have no checked run lock.
 | T15.18 | A binary that does not import `tooling/migrate/sqlitedriver` MUST NOT depend on `modernc.org/sqlite` through the packages every generated server links (`core/grpcerr`, `service/inprocgrpc`, `service/bootstrap`, `migrate/migratecli`), and MUST refuse a SQLite target naming the package to import. `grpcerr` MUST still classify the driver's errors (found by package and type name, through `%w` and `errors.Join`). | `TestServerPackagesDoNotPullInSQLite`, `TestFromTargets_SQLiteWithoutTheDriverSaysWhatToImport`, `TestAsSQLite_FindsTheDriverErrorOnly` |
 | T15.19 | Opening a connection MUST be bounded (`FromTargets` gives every dial its own deadline): a server that accepts and never answers fails the open. | `TestFromTargets_ADialThatNeverAnswersIsBounded` |
 | T15.20 | A Postgres rollback MUST hold the post-transaction advisory lock across `down_pre_tx` and `down_sql`. | `TestRollback_WaitsForTheSkirtLock_Live` |
-| T15.21 | A resume that starts at a `CREATE [UNIQUE] INDEX CONCURRENTLY` whose cursor was not recorded MUST NOT fail "already exists": a valid index of that name is recorded done and skipped, an invalid one is dropped and built again. | `TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live`, `TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_Live` |
+| T15.21 | A resume that starts at a `CREATE [UNIQUE] INDEX CONCURRENTLY` whose cursor was not recorded MUST NOT fail "already exists": a valid index of that name is recorded done and skipped, an invalid one is dropped and built again. An unqualified index name is looked up in the schema of the table it is built `ON`, where Postgres puts it. | `TestApplier_ResumeAtAFinishedUnpairedConcurrentBuild_Live`, `TestApplier_ResumeAtAFailedUnpairedConcurrentBuild_Live`, `…_SchemaQualified_Live` of both |
 | T15.22 | SQLite: a body MUST wait for another writer's open transaction (busy timeout) rather than fail at once. | `TestApply_WaitsForAnotherWritersTransaction` |
 
 **Deliberate limits.**
@@ -612,6 +612,15 @@ manual remedy. SQLite and NATS have no checked run lock.
 - A lease bounds how long a lost Redis or S3 lock can go unnoticed; it is not a fencing token,
   so the store does not refuse a write from a holder that stalled between its check and its write.
 - The S3 run lock needs a store that sends `Last-Modified` and `Date`.
+- The Postgres run-lock session sets `tcp_user_timeout` only on PostgreSQL 12 and later (the
+  setting does not exist before 12). An older server gets only the three `tcp_keepalives_*`
+  settings: a holder that dropped off the network still loses the lock within about a minute,
+  but data the server sent into a dead link waits out the OS retransmission timeout there.
+- A MySQL run-lock heartbeat is bounded at 5 s, inside the 10 s release bound. A `RELEASE_LOCK`
+  that fails because a beat started after the run's last write gave up (closing the session) is
+  a warning, not a lost lock; a beat that failed while the run was writing still loses it
+  (`TestRunLock_AHungBeatAtReleaseIsBoundedAndNotALoss_Live`,
+  `TestRunLock_ABeatThatGaveUpMidRunIsALoss_Live`).
 - Redis wipe is `FLUSHDB` on the logical database.
 
 ## T16. Data migrations
