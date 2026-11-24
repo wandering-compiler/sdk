@@ -170,7 +170,7 @@ func WriteCurrentSchema(root string, c *CurrentSchema) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(root, CurrentSchemaName), append(buf, '\n'), 0o644)
+	return writeFileWhole(filepath.Join(root, CurrentSchemaName), append(buf, '\n'))
 }
 
 // SameCurrentSchema reports whether two current-schema records say the same
@@ -272,7 +272,7 @@ func WriteRenderManifest(root string, m *RenderManifest) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(root, RenderManifestName), append(buf, '\n'), 0o644)
+	return writeFileWhole(filepath.Join(root, RenderManifestName), append(buf, '\n'))
 }
 
 // StaleRender is one seed, or one fixture, whose rendered tree no longer

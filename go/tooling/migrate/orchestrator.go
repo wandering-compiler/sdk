@@ -2093,11 +2093,41 @@ func WriteMigration(root string, m *applyfetchpb.Migration) error {
 		if err != nil {
 			return fmt.Errorf("WriteMigration: migration id %q: %w", m.GetId(), err)
 		}
-		if err := os.WriteFile(p, f.body, 0o644); err != nil {
+		if err := writeFileWhole(p, f.body); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// writeFileWhole replaces path with body by writing it aside in the same
+// directory and renaming it over path, so a reader — another container
+// applying from a shared volume while `migrate fetch` rewrites it — sees the
+// old file or the new one, never a truncated one. The aside name starts with
+// a dot and does not end in an artefact extension, so a loader listing the
+// directory never picks it up.
+func writeFileWhole(path string, body []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // checkArtifactSegment refuses a connection name or migration id that is not a

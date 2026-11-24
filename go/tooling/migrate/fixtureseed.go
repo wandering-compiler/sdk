@@ -102,7 +102,7 @@ func WriteFixtureSeed(root string, seed FixtureSeed) error {
 	// Trailing newline: this is a generated file that lands in a diff, and a
 	// last line without one shows up as "\ No newline at end of file" in every
 	// review of every fixture change.
-	return os.WriteFile(full, append(buf, '\n'), 0o644)
+	return writeFileWhole(full, append(buf, '\n'))
 }
 
 // marshalSeedStable renders a seed as JSON that is the SAME bytes every time.
