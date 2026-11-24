@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/grpc"
@@ -133,5 +134,22 @@ func TestRPCCaller(t *testing.T) {
 	bad.RPCRequest = "w17lock.shop.rpc.Nope"
 	if _, err := c.Call(ctx, bad, nil, "tok", nil, "", nil); err == nil || !strings.Contains(err.Error(), "not in the baked descriptors") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// A grpcs:// target dials TLS: against the plaintext listener the call fails
+// at the handshake instead of reaching the method.
+func TestRPCCaller_GrpcsDialsTLS(t *testing.T) {
+	addr, desc := rpcServer(t)
+	c, err := NewRPCCaller("grpcs://"+addr, desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = c.Call(ctx, getOrder, map[string]any{"id": "o-1"}, "tok", nil, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "handshake") && !strings.Contains(err.Error(), "tls") {
+		t.Fatalf("want a TLS handshake failure against a plaintext listener, got %v", err)
 	}
 }
