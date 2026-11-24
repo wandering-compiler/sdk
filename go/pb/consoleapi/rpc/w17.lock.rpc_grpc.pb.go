@@ -1343,16 +1343,18 @@ var Codegen_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ProjectRegistry_RegisterProject_FullMethodName     = "/w17lock.console.rpc.ProjectRegistry/RegisterProject"
-	ProjectRegistry_ListMigrations_FullMethodName      = "/w17lock.console.rpc.ProjectRegistry/ListMigrations"
-	ProjectRegistry_PushSchema_FullMethodName          = "/w17lock.console.rpc.ProjectRegistry/PushSchema"
-	ProjectRegistry_PushRawMigration_FullMethodName    = "/w17lock.console.rpc.ProjectRegistry/PushRawMigration"
-	ProjectRegistry_PushFixture_FullMethodName         = "/w17lock.console.rpc.ProjectRegistry/PushFixture"
-	ProjectRegistry_ResetHistory_FullMethodName        = "/w17lock.console.rpc.ProjectRegistry/ResetHistory"
-	ProjectRegistry_VerifyHistory_FullMethodName       = "/w17lock.console.rpc.ProjectRegistry/VerifyHistory"
-	ProjectRegistry_ImportProject_FullMethodName       = "/w17lock.console.rpc.ProjectRegistry/ImportProject"
-	ProjectRegistry_ReleaseProjectToOrg_FullMethodName = "/w17lock.console.rpc.ProjectRegistry/ReleaseProjectToOrg"
-	ProjectRegistry_ClaimProject_FullMethodName        = "/w17lock.console.rpc.ProjectRegistry/ClaimProject"
+	ProjectRegistry_RegisterProject_FullMethodName      = "/w17lock.console.rpc.ProjectRegistry/RegisterProject"
+	ProjectRegistry_ListMigrations_FullMethodName       = "/w17lock.console.rpc.ProjectRegistry/ListMigrations"
+	ProjectRegistry_PushSchema_FullMethodName           = "/w17lock.console.rpc.ProjectRegistry/PushSchema"
+	ProjectRegistry_PushRawMigration_FullMethodName     = "/w17lock.console.rpc.ProjectRegistry/PushRawMigration"
+	ProjectRegistry_PushDataMigration_FullMethodName    = "/w17lock.console.rpc.ProjectRegistry/PushDataMigration"
+	ProjectRegistry_CompileDataMigration_FullMethodName = "/w17lock.console.rpc.ProjectRegistry/CompileDataMigration"
+	ProjectRegistry_PushFixture_FullMethodName          = "/w17lock.console.rpc.ProjectRegistry/PushFixture"
+	ProjectRegistry_ResetHistory_FullMethodName         = "/w17lock.console.rpc.ProjectRegistry/ResetHistory"
+	ProjectRegistry_VerifyHistory_FullMethodName        = "/w17lock.console.rpc.ProjectRegistry/VerifyHistory"
+	ProjectRegistry_ImportProject_FullMethodName        = "/w17lock.console.rpc.ProjectRegistry/ImportProject"
+	ProjectRegistry_ReleaseProjectToOrg_FullMethodName  = "/w17lock.console.rpc.ProjectRegistry/ReleaseProjectToOrg"
+	ProjectRegistry_ClaimProject_FullMethodName         = "/w17lock.console.rpc.ProjectRegistry/ClaimProject"
 )
 
 // ProjectRegistryClient is the client API for ProjectRegistry service.
@@ -1363,6 +1365,8 @@ type ProjectRegistryClient interface {
 	ListMigrations(ctx context.Context, in *w17registry.ListMigrationsRequest, opts ...grpc.CallOption) (*w17registry.ListMigrationsResponse, error)
 	PushSchema(ctx context.Context, in *w17registry.PushSchemaRequest, opts ...grpc.CallOption) (*w17registry.PushSchemaResponse, error)
 	PushRawMigration(ctx context.Context, in *w17registry.PushRawMigrationRequest, opts ...grpc.CallOption) (*w17registry.PushRawMigrationResponse, error)
+	PushDataMigration(ctx context.Context, in *w17registry.PushDataMigrationRequest, opts ...grpc.CallOption) (*w17registry.PushDataMigrationResponse, error)
+	CompileDataMigration(ctx context.Context, in *w17registry.CompileDataMigrationRequest, opts ...grpc.CallOption) (*w17registry.CompileDataMigrationResponse, error)
 	PushFixture(ctx context.Context, in *w17registry.PushFixtureRequest, opts ...grpc.CallOption) (*w17registry.PushFixtureResponse, error)
 	ResetHistory(ctx context.Context, in *w17registry.ResetHistoryRequest, opts ...grpc.CallOption) (*w17registry.ResetHistoryResponse, error)
 	VerifyHistory(ctx context.Context, in *w17registry.VerifyHistoryRequest, opts ...grpc.CallOption) (*w17registry.VerifyHistoryResponse, error)
@@ -1413,6 +1417,26 @@ func (c *projectRegistryClient) PushRawMigration(ctx context.Context, in *w17reg
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(w17registry.PushRawMigrationResponse)
 	err := c.cc.Invoke(ctx, ProjectRegistry_PushRawMigration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *projectRegistryClient) PushDataMigration(ctx context.Context, in *w17registry.PushDataMigrationRequest, opts ...grpc.CallOption) (*w17registry.PushDataMigrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(w17registry.PushDataMigrationResponse)
+	err := c.cc.Invoke(ctx, ProjectRegistry_PushDataMigration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *projectRegistryClient) CompileDataMigration(ctx context.Context, in *w17registry.CompileDataMigrationRequest, opts ...grpc.CallOption) (*w17registry.CompileDataMigrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(w17registry.CompileDataMigrationResponse)
+	err := c.cc.Invoke(ctx, ProjectRegistry_CompileDataMigration_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1487,6 +1511,8 @@ type ProjectRegistryServer interface {
 	ListMigrations(context.Context, *w17registry.ListMigrationsRequest) (*w17registry.ListMigrationsResponse, error)
 	PushSchema(context.Context, *w17registry.PushSchemaRequest) (*w17registry.PushSchemaResponse, error)
 	PushRawMigration(context.Context, *w17registry.PushRawMigrationRequest) (*w17registry.PushRawMigrationResponse, error)
+	PushDataMigration(context.Context, *w17registry.PushDataMigrationRequest) (*w17registry.PushDataMigrationResponse, error)
+	CompileDataMigration(context.Context, *w17registry.CompileDataMigrationRequest) (*w17registry.CompileDataMigrationResponse, error)
 	PushFixture(context.Context, *w17registry.PushFixtureRequest) (*w17registry.PushFixtureResponse, error)
 	ResetHistory(context.Context, *w17registry.ResetHistoryRequest) (*w17registry.ResetHistoryResponse, error)
 	VerifyHistory(context.Context, *w17registry.VerifyHistoryRequest) (*w17registry.VerifyHistoryResponse, error)
@@ -1514,6 +1540,12 @@ func (UnimplementedProjectRegistryServer) PushSchema(context.Context, *w17regist
 }
 func (UnimplementedProjectRegistryServer) PushRawMigration(context.Context, *w17registry.PushRawMigrationRequest) (*w17registry.PushRawMigrationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PushRawMigration not implemented")
+}
+func (UnimplementedProjectRegistryServer) PushDataMigration(context.Context, *w17registry.PushDataMigrationRequest) (*w17registry.PushDataMigrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PushDataMigration not implemented")
+}
+func (UnimplementedProjectRegistryServer) CompileDataMigration(context.Context, *w17registry.CompileDataMigrationRequest) (*w17registry.CompileDataMigrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompileDataMigration not implemented")
 }
 func (UnimplementedProjectRegistryServer) PushFixture(context.Context, *w17registry.PushFixtureRequest) (*w17registry.PushFixtureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PushFixture not implemented")
@@ -1622,6 +1654,42 @@ func _ProjectRegistry_PushRawMigration_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ProjectRegistryServer).PushRawMigration(ctx, req.(*w17registry.PushRawMigrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProjectRegistry_PushDataMigration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(w17registry.PushDataMigrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectRegistryServer).PushDataMigration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectRegistry_PushDataMigration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectRegistryServer).PushDataMigration(ctx, req.(*w17registry.PushDataMigrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProjectRegistry_CompileDataMigration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(w17registry.CompileDataMigrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectRegistryServer).CompileDataMigration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectRegistry_CompileDataMigration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectRegistryServer).CompileDataMigration(ctx, req.(*w17registry.CompileDataMigrationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1756,6 +1824,14 @@ var ProjectRegistry_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PushRawMigration",
 			Handler:    _ProjectRegistry_PushRawMigration_Handler,
+		},
+		{
+			MethodName: "PushDataMigration",
+			Handler:    _ProjectRegistry_PushDataMigration_Handler,
+		},
+		{
+			MethodName: "CompileDataMigration",
+			Handler:    _ProjectRegistry_CompileDataMigration_Handler,
 		},
 		{
 			MethodName: "PushFixture",
