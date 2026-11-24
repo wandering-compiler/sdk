@@ -108,7 +108,7 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 // Snapshotter consumes.
 func startThrowawayMySQL(ctx context.Context, t *testing.T) (string, string) {
 	t.Helper()
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P",
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm",
 		"-e", "MYSQL_ROOT_PASSWORD="+myRootPass,
 		"-e", "MYSQL_DATABASE="+myDB,
 		"mysql:8",
@@ -119,15 +119,10 @@ func startThrowawayMySQL(ctx context.Context, t *testing.T) (string, string) {
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "stop", id).Run() })
 
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "3306/tcp").Output()
-	if err != nil {
-		t.Fatalf("docker port: %v", err)
-	}
-	first := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	port := first[strings.LastIndex(first, ":")+1:]
+	ip := containerIP(ctx, t, id)
 
-	driverDSN := fmt.Sprintf("root:%s@tcp(127.0.0.1:%s)/%s?multiStatements=true", myRootPass, port, myDB)
-	urlDSN := fmt.Sprintf("mysql://root:%s@127.0.0.1:%s/%s", myRootPass, port, myDB)
+	driverDSN := fmt.Sprintf("root:%s@tcp(%s:3306)/%s?multiStatements=true", myRootPass, ip, myDB)
+	urlDSN := fmt.Sprintf("mysql://root:%s@%s:3306/%s", myRootPass, ip, myDB)
 
 	// MySQL takes a while to initialise; poll until it accepts queries.
 	deadline := time.Now().Add(3 * time.Minute)

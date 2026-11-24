@@ -143,9 +143,7 @@ const minioImage = "cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca94
 
 func startThrowawayMinio(ctx context.Context, t *testing.T) string {
 	t.Helper()
-	// `-p 9000`, not `-P`: the image declares no EXPOSE, so -P publishes
-	// nothing and `docker port` has no answer.
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "9000",
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm",
 		"-e", "MINIO_ROOT_USER="+minioUser,
 		"-e", "MINIO_ROOT_PASSWORD="+minioPass,
 		minioImage, "server", "/tmp/data",
@@ -156,13 +154,8 @@ func startThrowawayMinio(ctx context.Context, t *testing.T) string {
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "stop", id).Run() })
 
-	portOut, err := exec.CommandContext(ctx, "docker", "port", id, "9000/tcp").Output()
-	if err != nil {
-		t.Fatalf("docker port: %v", err)
-	}
-	first := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	port := first[strings.LastIndex(first, ":")+1:]
-	endpoint := "http://127.0.0.1:" + port
+	ip := containerIP(ctx, t, id)
+	endpoint := "http://" + ip + ":9000"
 
 	// Poll the minio health endpoint via a throwaway client list call.
 	os.Setenv("AWS_ACCESS_KEY_ID", minioUser)
