@@ -42,7 +42,9 @@ func TestRollback_WaitsForTheSkirtLock_Live(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- a.Rollback(ctx, &applyfetchpb.Migration{Id: m.Id, DownPreTx: m.DownPreTx, DownSql: m.DownSql}) }()
+	go func() {
+		done <- a.Rollback(ctx, &applyfetchpb.Migration{Id: m.Id, DownPreTx: m.DownPreTx, DownSql: m.DownSql})
+	}()
 	select {
 	case err := <-done:
 		t.Fatalf("Rollback returned (%v) while another applier held the skirt lock", err)

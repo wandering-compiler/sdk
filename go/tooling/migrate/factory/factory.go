@@ -6,10 +6,10 @@
 package factory
 
 import (
-	"time"
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/wandering-compiler/sdk/go/lib/dsnredact"
 	"github.com/wandering-compiler/sdk/go/tooling/migrate"
