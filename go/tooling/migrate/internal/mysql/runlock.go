@@ -179,6 +179,13 @@ func (a *Applier) AcquireRunLock(ctx context.Context) (migrate.RunLock, error) {
 var (
 	lockSessionIdle    = 10 * time.Minute
 	lockHeartbeatEvery = time.Minute
+	// lockHeartbeatTimeout bounds one beat. Release waits for a beat in
+	// flight, and the orchestrator bounds a release at 10 s, so a beat that
+	// hangs (the holder's network died) must give up well inside that — a
+	// bound of the interval made a release take up to 70 s.
+	lockHeartbeatTimeout = 5 * time.Second
+	// heartbeatStmt is what a beat says to the server.
+	heartbeatStmt = "DO 0"
 )
 
 type runLock struct {
@@ -189,6 +196,13 @@ type runLock struct {
 	name     string
 	stop     context.CancelFunc
 	beatDone chan struct{}
+	// beatFailedAtRelease is set when a beat failed after Release had begun
+	// and none had failed before: the run's writes were over, so a
+	// connection that beat closed is no loss of the lock. beatFailedMidRun
+	// is a beat that failed while the run was going — the connection may
+	// have been gone for the rest of it.
+	beatFailedAtRelease error
+	beatFailedMidRun    bool
 }
 
 // heartbeat keeps the lock session from reaching its idle limit while the run
@@ -208,9 +222,19 @@ func (l *runLock) heartbeat(ctx context.Context) {
 			// A beat in flight is never cut short by Release: cancelling a
 			// query makes the driver close its connection, and that would
 			// end the session — and the lock — before RELEASE_LOCK runs.
-			bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lockHeartbeatEvery)
-			_, _ = l.conn.ExecContext(bctx, "DO 0")
+			// A beat that runs past its bound is cut short all the same — the
+			// driver closes the connection — because Release waits for it. A
+			// beat that failed once Release had begun is remembered: the run
+			// was over by then (see Release).
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lockHeartbeatTimeout)
+			_, err := l.conn.ExecContext(bctx, heartbeatStmt)
 			cancel()
+			switch {
+			case err != nil && ctx.Err() == nil:
+				l.beatFailedMidRun = true
+			case err != nil && !l.beatFailedMidRun:
+				l.beatFailedAtRelease = err
+			}
 			l.mu.Unlock()
 		}
 	}
@@ -243,7 +267,16 @@ func (l *runLock) Release(ctx context.Context) error {
 	// a lost lock indistinguishable from a clean release.
 	var released sql.NullInt64
 	err := l.conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", l.name).Scan(&released)
-	if err != nil && ctx.Err() == nil {
+	if err != nil && ctx.Err() == nil && l.beatFailedAtRelease != nil {
+		// The last beat was in flight when Release began and gave up, which
+		// closed the connection — after every write of the run. The session
+		// held the lock until then (the beat before it answered, well inside
+		// the session's idle limit), so the run was protected; the server
+		// frees the lock with the session. Said, but not as a loss.
+		err = fmt.Errorf("mysql run lock: release %s: the lock connection was closed when its last "+
+			"heartbeat, in flight at release, did not answer (%v); the run had finished under the "+
+			"lock, and the server frees it with the session: %w", l.name, l.beatFailedAtRelease, err)
+	} else if err != nil && ctx.Err() == nil {
 		// A session that cannot be asked no longer holds the lock: the server
 		// released it when the session ended. Same reading as Check. A
 		// cancelled caller is not that: the session may be alive, and closing

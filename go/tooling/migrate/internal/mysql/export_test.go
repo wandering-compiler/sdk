@@ -18,3 +18,11 @@ func SilenceForTest(rl interface{}) {
 		l.stopHeartbeat()
 	}
 }
+
+// SetHeartbeatForTest replaces the heartbeat's statement and its per-beat
+// bound until the returned func restores them.
+func SetHeartbeatForTest(stmt string, bound time.Duration) func() {
+	s, b := heartbeatStmt, lockHeartbeatTimeout
+	heartbeatStmt, lockHeartbeatTimeout = stmt, bound
+	return func() { heartbeatStmt, lockHeartbeatTimeout = s, b }
+}
