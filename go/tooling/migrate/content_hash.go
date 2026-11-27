@@ -427,3 +427,18 @@ func canonicalExtensions(exts []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// extsBound reports whether m's digest binds its required-extension set —
+// trivially so when it declares none. The extensions' [schemasBound]: the
+// loader accepts a digest minted before the extension segment
+// ([ContentHashMatches]'s legacy formula), and such a digest cannot tell a
+// list edited onto the artifact from one it was minted with. Bound means the
+// digest matches a formula WITH the extension segment — with or without the
+// schema segment, with the preflight and checks it carries or without them.
+func extsBound(m *applyfetchpb.Migration) bool {
+	if len(canonicalExtensions(requiredExtensionsFromManifest(m.GetManifestJson()))) == 0 {
+		return true
+	}
+	return boundWithOrWithoutSchemas(m, m.GetAdoptPreflightSql(), m.GetChecks()) ||
+		boundWithOrWithoutSchemas(m, "", nil)
+}
