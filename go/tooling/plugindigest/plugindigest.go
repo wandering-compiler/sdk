@@ -235,76 +235,147 @@ func Of(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// regenerated reports whether a directory is one the digest skips because its
-// content is produced by a toolchain rather than written by the author:
-// `src/gen`, and `node_modules` and `.w17dev` at any depth. `.git` is skipped
-// too but is not among them — it is the clone's metadata, never compiled or
-// served, and pruning it would take a working tree's history with it.
-func regenerated(dir, p string, name string) bool {
-	if p == dir {
-		return false
+// Class is what a file's location means for a plugin's pin. Every file in a
+// plugin tree has exactly one, and it is decided by the same skip rules Of
+// applies, so a reader that ships or stages the tree one path at a time
+// answers as the digest does.
+type Class int
+
+const (
+	// Covered: Of hashes the file. A pin vouches for it.
+	Covered Class = iota
+	// Metadata: Of leaves the file out and nothing reads it as plugin
+	// content — the plugin root's own `.git`, the root `plugin.sig`, and
+	// `.DS_Store` files. A reader that ships or stages files DROPS it: it is
+	// never sent, staged or compiled.
+	Metadata
+	// NotCovered: Of leaves the file out and a consumer could compile, load or
+	// serve it — anything under `src/gen`, under a `node_modules` or
+	// `.w17dev` directory, or under a `.git` directory below the root (git
+	// cannot commit one, so no release carries it). A reader REFUSES it,
+	// ToolchainWritten aside.
+	NotCovered
+)
+
+func (c Class) String() string {
+	switch c {
+	case Covered:
+		return "covered"
+	case Metadata:
+		return "metadata"
+	case NotCovered:
+		return "uncovered"
 	}
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && regeneratedDir(name, filepath.ToSlash(rel))
+	return "class(" + strconv.Itoa(int(c)) + ")"
 }
 
-// regeneratedDir is the one rule behind regenerated and Regenerated: a
-// directory named in skipDirs (other than `.git`) wherever it sits, or one of
-// the root-relative skipPaths.
-func regeneratedDir(name, rel string) bool {
-	return (name != ".git" && skipDirs[name]) || skipPaths[rel]
-}
-
-// Regenerated reports whether rel — a slash-separated path RELATIVE TO THE
-// PLUGIN ROOT — lies inside a location Of does not cover because a toolchain
-// regenerates it: under `src/gen`, or under a `node_modules` or `.w17dev`
-// directory at any depth. It is the per-path form of Uncovered: for a file in
-// a tree, Uncovered lists it exactly when Regenerated says so (clone metadata
-// and `.DS_Store` aside, which Uncovered leaves out because nothing compiles
-// them).
+// Classify returns the Class of rel, a slash-separated path RELATIVE TO THE
+// PLUGIN ROOT naming a file.
 //
-// It exists for the readers that see a plugin's files one path at a time — an
-// upload, a staging walk — and have to refuse what the pin does not vouch for
-// with the same answer the digest gives, rather than a second list of
+// It is the per-path form of Of's skip rules, for the readers that see a
+// plugin's files one path at a time — the verify gate, an upload, the
+// console's staging walkers — so each of them refuses what the pin does not
+// vouch for with the digest's own answer rather than a second list of
 // directory names that agrees until somebody edits one of them.
-func Regenerated(rel string) bool {
+// TestClassify_EverySkipLocationIsClassified walks the skip rules themselves,
+// so a rule added to Of without a class here fails there.
+func Classify(rel string) Class {
 	rel = path.Clean(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
 	segs := strings.Split(rel, "/")
+	if len(segs) > 1 && segs[0] == ".git" {
+		return Metadata // the clone's own metadata
+	}
+	if skipRootFiles[rel] || skipFiles[segs[len(segs)-1]] {
+		return Metadata
+	}
 	for i := 0; i < len(segs)-1; i++ {
-		if regeneratedDir(segs[i], strings.Join(segs[:i+1], "/")) {
-			return true
+		if skipDirs[segs[i]] || skipPaths[strings.Join(segs[:i+1], "/")] {
+			// `.git` here is below the root (i ≥ 1, the root's is handled
+			// above): not metadata any clone writes, and outside the digest.
+			return NotCovered
 		}
 	}
-	return false
+	return Covered
 }
 
-// CodegenPB is the one regenerated location a consumer's tree legitimately
-// carries: the plugin's standalone pb, which codegen writes back under
-// `src/gen/pb` on every run and which no bundle compiles (each activation gets
-// its own pb from the staged protos). A reader refusing what Regenerated
-// reports carves this out and nothing else.
+// CodegenPB is the regenerated location codegen writes back on every run: the
+// plugin's standalone pb, which no bundle compiles (each activation gets its
+// own pb from the staged protos).
 const CodegenPB = "src/gen/pb"
 
-// WrittenByCodegen reports whether rel (relative to the plugin root) is inside
-// CodegenPB.
-func WrittenByCodegen(rel string) bool {
-	rel = path.Clean(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
-	return strings.HasPrefix(rel, CodegenPB+"/")
+// toolchainFiles are the two files `w17ctl plugin gen` writes into a plugin's
+// `src/gen` so it compiles standalone — the contract and the feature
+// constants. The console's staging writes its own for each activation in their
+// place, so the author's copies never reach a bundle.
+var toolchainFiles = map[string]bool{
+	"src/gen/interfaces.go": true,
+	"src/gen/features.go":   true,
 }
 
-// Uncovered lists the files under dir that Of does NOT cover and that a
-// consumer could still compile, load or serve: everything inside the
-// regenerated locations (`src/gen`, `node_modules`, `.w17dev`). Paths are
-// slash-separated, relative to dir, and sorted. Clone metadata (`.git`), the
-// root `plugin.sig` and `.DS_Store` files are not listed — nothing compiles
-// them.
+// ToolchainWritten reports whether rel (relative to the plugin root) is a file
+// w17's own toolchain writes into a NotCovered location: anything under
+// CodegenPB, and the two files `w17ctl plugin gen` writes. Those are the one
+// carve-out from "refuse what Classify calls Uncovered", and every reader asks
+// this predicate rather than keeping its own list — so a tree the verify gate
+// accepts is one codegen and the console accept, and the other way round.
+func ToolchainWritten(rel string) bool {
+	rel = path.Clean(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
+	return strings.HasPrefix(rel, CodegenPB+"/") || toolchainFiles[rel]
+}
+
+// UncoveredSamples returns, for every skip rule Of applies, file paths (relative
+// to the plugin root, at each depth the rule reaches) that the rule leaves out
+// of the digest — `.proto` and `.go` leaves for the directory rules, the name
+// itself for the file rules. It is derived from the rules, not written beside
+// them, so a reader's test that plants every sample and asserts "refused, or
+// not shipped" cannot be outrun by a new rule.
+func UncoveredSamples() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	leaves := []string{"x.proto", "x.go"}
+	for name := range skipDirs {
+		for _, at := range []string{"", "proto/", "proto/domains/d/", "src/handlers/", "src/gen/"} {
+			for _, leaf := range leaves {
+				add(at + name + "/" + leaf)
+			}
+		}
+	}
+	for p := range skipPaths {
+		for _, leaf := range leaves {
+			add(p + "/" + leaf)
+			add(p + "/sub/" + leaf)
+		}
+	}
+	for name := range skipFiles {
+		for _, at := range []string{"", "proto/", "src/handlers/", "src/gen/"} {
+			add(at + name)
+		}
+	}
+	for name := range skipRootFiles {
+		add(name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Uncovered lists the files under dir that Classify calls NotCovered — the
+// files Of does not cover and a consumer could still compile, load or serve.
+// Paths are slash-separated, relative to dir, and sorted. Metadata (the root
+// `.git`, the root `plugin.sig`, `.DS_Store`) is not listed.
 //
 // The digest leaves those locations out because their content is regenerated
-// from covered input, and covering it would make every codegen run break the
-// pin. The flip side is that a signature says nothing about a file placed
-// there by anything else — a hand-written `src/gen/x.go` that regeneration does
-// not overwrite is compiled under a valid pin. Uncovered names such files so a
-// consumer can refuse a fetched tree that carries any; Prune removes them.
+// from covered input (or, for a nested `.git`, because no release can carry
+// one), and covering them would make every codegen run break the pin. The flip
+// side is that a signature says nothing about a file placed there by anything
+// else — a hand-written `src/gen/x.go` that regeneration does not overwrite is
+// compiled under a valid pin. Uncovered names such files so a consumer can
+// refuse a tree that carries any; Prune removes them.
 func Uncovered(dir string) ([]string, error) {
 	if err := isDir(dir); err != nil {
 		return nil, err
@@ -314,33 +385,21 @@ func Uncovered(dir string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() || !regenerated(dir, p, d.Name()) {
+		rel, rerr := filepath.Rel(dir, p)
+		if rerr != nil {
+			return rerr
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == ".git" {
+				return filepath.SkipDir // the clone's metadata: nothing in it is listed
+			}
 			return nil
 		}
-		werr := filepath.WalkDir(p, func(q string, e fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if e.IsDir() {
-				if q != p && e.Name() == ".git" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if skipFiles[e.Name()] {
-				return nil
-			}
-			rel, rerr := filepath.Rel(dir, q)
-			if rerr != nil {
-				return rerr
-			}
-			out = append(out, filepath.ToSlash(rel))
-			return nil
-		})
-		if werr != nil {
-			return werr
+		if Classify(rel) == NotCovered {
+			out = append(out, rel)
 		}
-		return filepath.SkipDir
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("plugin digest: %w", err)
@@ -349,9 +408,17 @@ func Uncovered(dir string) ([]string, error) {
 	return out, nil
 }
 
-// Prune removes every regenerated location from dir — `src/gen`, and every
-// `node_modules` and `.w17dev` — so the tree holds only what Of covers (plus
-// `.git` and the root `plugin.sig`, which nothing compiles).
+// prunable reports whether the directory at rel (relative to the plugin root)
+// holds only NotCovered files: a skipped directory other than the root `.git`,
+// or a root-relative skip path.
+func prunable(name, rel string) bool {
+	return rel != ".git" && (skipDirs[name] || skipPaths[rel])
+}
+
+// Prune removes every location whose files Classify calls NotCovered —
+// `src/gen`, every `node_modules` and `.w17dev`, and every `.git` below the
+// root — so the tree holds only what Of covers (plus the Metadata: the root
+// `.git`, the root `plugin.sig`, `.DS_Store`).
 //
 // Run it on a fetched tree before anything regenerates into it or compiles
 // it: what the toolchain then writes into those locations is derived from
@@ -367,9 +434,24 @@ func Prune(dir string) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && regenerated(dir, p, d.Name()) {
-			doomed = append(doomed, p)
+		if p == dir {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, p)
+		if rerr != nil {
+			return rerr
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == ".git" && d.IsDir() {
 			return filepath.SkipDir
+		}
+		// A symlink named like a skipped directory is removed too, never
+		// followed (WalkDir does not descend into one).
+		if (d.IsDir() || d.Type()&fs.ModeSymlink != 0) && prunable(d.Name(), rel) {
+			doomed = append(doomed, p)
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 		}
 		return nil
 	})

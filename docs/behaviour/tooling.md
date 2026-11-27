@@ -64,7 +64,7 @@ generated e2e test → runner.RunScenario(steps, callers, opts)
 | T26 | Stress | `go/tooling/e2e/stress/` — `engine.go`, `report.go` — `Check` |
 | T27 | Dev PKI | `go/tooling/certgen/certgen.go` — `EnsureCerts` |
 | T28 | Path guard | `go/tooling/pathguard/pathguard.go` — `Join`, `Contains`, `ValidateRel` |
-| T29 | Plugin digest | `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`, `Uncovered`, `Prune` |
+| T29 | Plugin digest | `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`, `Classify`, `ToolchainWritten`, `UncoveredSamples`, `Uncovered`, `Prune` |
 | T30 | E2E device keys (DPoP) | `go/tooling/e2e/runner/devices.go` — `Devices`, `Signer`; `go/tooling/e2e/dpope2e/dpope2e.go` — `Signer`; `go/tooling/e2e/stress/caller.go` — `WithSigner`, `FireAs` |
 
 ## T1. Command dispatch of built-in roots
@@ -987,17 +987,23 @@ directory `0700` with a `.gitignore` ignoring everything.
 
 ## T29. Plugin digest
 
-**Code.** `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`, `Uncovered`, `Prune`
+**Code.** `go/tooling/plugindigest/plugindigest.go` — `Of`, `Check`, `Classify`, `ToolchainWritten`, `UncoveredSamples`, `Uncovered`, `Prune`
 
 **Purpose.** The canonical digest of a plugin tree, pinned in the lock and bound by the plugin
 signature. Length-prefixed, versioned, over sorted paths; covers each regular file's path,
 executable bit and content. Skipped: directories named `.git`, `node_modules`, `.w17dev` at any
 depth; the path `src/gen`; files named `.DS_Store`; the root `plugin.sig` only.
 
-`Uncovered(dir)` lists, sorted and slash-separated, every file inside the regenerated locations
-(`src/gen`, `node_modules`, `.w17dev`), which the digest does not cover. `Prune(dir)` removes
-those locations without following symlinks, so a fetched tree holds only covered content plus
-`.git` and the root `plugin.sig`. Neither changes the digest value.
+`Classify(rel)` gives every file path one class, from the same skip rules: `Covered` (hashed),
+`Metadata` (the plugin root's own `.git`, the root `plugin.sig`, `.DS_Store` — nothing reads it
+as plugin content; a reader that ships or stages files drops it) or `NotCovered` (under `src/gen`,
+`node_modules`, `.w17dev`, or a `.git` directory BELOW the root, which git cannot commit and no
+release carries — a reader refuses it). `ToolchainWritten(rel)` is the one carve-out from that
+refusal: `src/gen/pb/**`, `src/gen/interfaces.go` and `src/gen/features.go`, which w17's own
+toolchain writes. `UncoveredSamples()` derives sample paths from the skip rules for readers' tests.
+`Uncovered(dir)` lists, sorted and slash-separated, every file `Classify` calls `NotCovered`.
+`Prune(dir)` removes those locations without following symlinks, so a fetched tree holds only
+covered content plus the metadata. Neither changes the digest value.
 
 **Guarantees.**
 
@@ -1010,8 +1016,10 @@ those locations without following symlinks, so a fetched tree holds only covered
 | T29.5 | Symlinks and other non-regular files MUST be refused. | `TestOf_RefusesASymlink`, `TestOf_RefusesANamedPipe` |
 | T29.6 | `Check` MUST require 64 lower-case hex characters. | `TestCheck_RequiresLowerCaseHexOfTheRightLength` |
 | T29.7 | After `Prune`, every file in a plugin tree MUST be covered by the digest, so whatever is compiled or loaded from it is covered or regenerated from covered input. | `TestPrune_LeavesOnlyCoveredContent` |
-| T29.8 | `Uncovered` MUST name every file the digest does not cover in a regenerated location. | `TestUncovered_NamesEveryFileOutsideTheDigest` |
+| T29.8 | `Uncovered` MUST name every file the digest does not cover in a location a consumer could compile from, a `.git` below the root included. | `TestUncovered_NamesEveryFileOutsideTheDigest` |
 | T29.9 | `Prune` MUST NOT follow a symlink out of the tree, and MUST leave the digest unchanged. | `TestPrune_DoesNotFollowSymlinks`, `TestPrune_LeavesOnlyCoveredContent` |
+| T29.10 | Every location the digest skips MUST be classified `Metadata` or `NotCovered`, never `Covered`, and `Uncovered` MUST list a file exactly when `Classify` says `NotCovered`; only the root `.git` is metadata. | `TestClassify_EverySkipLocationIsClassified`, `TestClassify_OnlyTheRootGitIsMetadata`, `TestClassify_AgreesWithOfAndUncovered` |
+| T29.11 | `ToolchainWritten` MUST be exactly `src/gen/pb/**`, `src/gen/interfaces.go` and `src/gen/features.go`. | `TestToolchainWritten_IsExactlyThePbAndTheTwoGeneratedFiles` |
 
 **Deliberate limits.**
 - The digest value does not change with `Uncovered` and `Prune`, so existing pins stay valid. The
