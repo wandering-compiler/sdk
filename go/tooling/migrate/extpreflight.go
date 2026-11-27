@@ -184,8 +184,17 @@ func isPostgresApplier(a Applier) bool {
 
 func preflightExtensions(ctx context.Context, ac *runApplierCache, pending []Pending) error {
 	byConn := map[string]map[string]bool{}
+	// unbound[conn] = the migrations whose extension list their digest does
+	// not bind (extsBound): still probed — the preflight is a read, and for a
+	// genuine legacy artifact an early refusal is the safer outcome — but a
+	// refusal over such a list must not claim the schema declared it.
+	unbound := map[string][]string{}
 	for _, p := range pending {
-		for _, e := range requiredExtensions(p.Migration) {
+		exts := requiredExtensions(p.Migration)
+		if len(exts) > 0 && !extsBound(p.Migration) {
+			unbound[p.Connection] = append(unbound[p.Connection], p.Migration.GetId())
+		}
+		for _, e := range exts {
 			e = strings.TrimSpace(e)
 			if e == "" {
 				continue
@@ -228,6 +237,13 @@ func preflightExtensions(ctx context.Context, ac *runApplierCache, pending []Pen
 			UpSql:      extensionPreflightSQL(exts),
 		}
 		if err := runScript(ctx, applier, probe); err != nil {
+			if ids := unbound[conn]; len(ids) > 0 {
+				return fmt.Errorf(
+					"apply %s: this database is missing an extension of %s, declared by migration(s) %s whose content digest does not bind the extension list (minted before the digest covered extensions, or the list was edited on the artifact): %w\n"+
+						"  Compare the list with the migration the console serves (the binary's `migrate apply --fetch` re-fetches it);\n"+
+						"  if it is right, provision the extension before apply. Nothing was written.",
+					conn, strings.Join(exts, ", "), strings.Join(ids, ", "), err)
+			}
 			return fmt.Errorf(
 				"apply %s: this database is missing an extension the schema declares (%s): %w\n"+
 					"  Migrations deliberately do not CREATE EXTENSION — provisioning is the deploying\n"+
