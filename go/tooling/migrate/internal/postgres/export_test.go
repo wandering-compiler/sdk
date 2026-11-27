@@ -41,3 +41,7 @@ func RunLockSeenThroughForTest(rl interface{}, other *Applier) interface {
 	l := rl.(*runLock)
 	return &runLock{a: other, pid: l.pid}
 }
+
+// CompletesAPendingRowForTest is completesAPendingRow, so a test can feed it
+// the served (decorated) shape of a skirt.
+var CompletesAPendingRowForTest = completesAPendingRow

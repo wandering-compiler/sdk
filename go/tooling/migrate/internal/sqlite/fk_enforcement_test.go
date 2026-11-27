@@ -228,3 +228,53 @@ func TestApply_RenameAndRebuildAddingAKeyOverOrphans_Reports(t *testing.T) {
 		t.Fatalf("a rename+rebuild adding a key over existing orphans must apply, got: %v", err)
 	}
 }
+
+// Two keys between the same child and parent, both renamed by a rebuild's
+// copy (no RENAME statement names them) so their sort order flips, with an
+// orphan the database already held on ONE of them. The applier used to pair
+// the renamed keys by sort order and blame the orphan on the other key — a
+// false "introduced foreign-key violation" after COMMIT. A rebuild that does
+// introduce an orphan on one of them is still caught.
+func TestApply_RebuildRenamingTwoKeysToOneParent(t *testing.T) {
+	seed := func(t *testing.T) (*sqlite.Applier, context.Context) {
+		a, ctx := fkApplier(t)
+		if err := a.Apply(ctx, &applyfetchpb.Migration{
+			Id: "m1",
+			UpSql: "BEGIN;\n" +
+				"CREATE TABLE users (id INTEGER PRIMARY KEY);\n" +
+				"CREATE TABLE child (id INTEGER PRIMARY KEY, a_by INTEGER, b_by INTEGER);\n" +
+				"INSERT INTO users (id) VALUES (1);\n" +
+				"INSERT INTO child (id, a_by, b_by) VALUES (1, 1, 999);\n" +
+				"COMMIT;",
+		}); err != nil {
+			t.Fatalf("Apply seed: %v", err)
+		}
+		// Both keys added over the rows: the orphan on b_by is the data's.
+		keyed := fkRebuild("child", "CREATE TABLE child_new (id INTEGER PRIMARY KEY, a_by INTEGER REFERENCES users(id), b_by INTEGER REFERENCES users(id));", true)
+		if err := a.Apply(ctx, &applyfetchpb.Migration{Id: "m2", UpSql: keyed}); err != nil {
+			t.Fatalf("Apply keys: %v", err)
+		}
+		return a, ctx
+	}
+	rename := func(sel string) string {
+		return "PRAGMA foreign_keys=OFF;\n\nBEGIN;\n\n" +
+			"CREATE TABLE \"child__w17_new\" (id INTEGER PRIMARY KEY, z_by INTEGER REFERENCES users(id), c_by INTEGER REFERENCES users(id));\n" +
+			"INSERT INTO \"child__w17_new\" (\"id\", \"z_by\", \"c_by\") SELECT " + sel + " FROM \"child\";\n" +
+			"DROP TABLE \"child\";\n" +
+			"ALTER TABLE \"child__w17_new\" RENAME TO \"child\";\n\n" +
+			"PRAGMA foreign_key_check;\n\nCOMMIT;\n\nPRAGMA foreign_keys=ON;\n"
+	}
+	t.Run("carried orphan", func(t *testing.T) {
+		a, ctx := seed(t)
+		if err := a.Apply(ctx, &applyfetchpb.Migration{Id: "m3", UpSql: rename(`"id", "a_by", "b_by"`)}); err != nil {
+			t.Fatalf("a rebuild that only renames both keys (carrying the earlier orphan) must apply, got: %v", err)
+		}
+	})
+	t.Run("introduced orphan", func(t *testing.T) {
+		a, ctx := seed(t)
+		err := a.Apply(ctx, &applyfetchpb.Migration{Id: "m3", UpSql: rename(`"id", 777, "b_by"`)})
+		if err == nil || !strings.Contains(err.Error(), "introduced foreign-key violation") {
+			t.Fatalf("a rebuild that orphans a row of one renamed key must fail, got: %v", err)
+		}
+	})
+}

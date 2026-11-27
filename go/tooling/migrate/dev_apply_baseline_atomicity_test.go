@@ -11,10 +11,10 @@ import (
 //
 // Building a schema from scratch writes an applied-ledger BASELINE so the
 // next `migrate apply` knows the database already holds everything up to
-// that point. The two have to land together: a schema with no baseline is
-// silently treated as "already at that state" by `storeHasSchema`, which
-// green-skips it forever, so the crash window between them is not
-// a retry away from being fixed — it is permanent and silent.
+// that point. The two have to land together: a built schema with no
+// baseline is a store the ledger says is at no migration, so the next apply
+// offers it migrations its schema already holds — the crash window between
+// the two halves is the state the baseline exists to prevent.
 //
 // The code appended the baseline AFTER the schema body. The existing test
 // asserted the batch carries no `BEGIN;` and passed, because it fed a
@@ -45,8 +45,7 @@ func TestDevApplySQL_RecordsTheBaselineInsideTheSchemaTransaction(t *testing.T) 
 	if baseline > commit {
 		t.Errorf("the baseline is written AFTER the schema transaction commits.\n\n%s\n\n"+
 			"A crash between the COMMIT and the baseline leaves a built schema with an empty "+
-			"ledger — and `storeHasSchema` then green-skips that database forever, so it is "+
-			"not a state a retry recovers from.", got)
+			"ledger — the next apply then offers that database migrations its schema already holds.", got)
 	}
 }
 

@@ -315,12 +315,25 @@ func (st *fkState) renamed(body string) *fkState {
 	return out
 }
 
+// fkGroup is the keys between one child and one parent that a rebuild
+// re-keyed by its copy, when there is more than one on each side: which new
+// key is which old one is not knowable from the keys (no RENAME names the
+// columns), so the group is judged as a whole.
+type fkGroup struct {
+	added, gone []fkKey
+}
+
 // matchAfter pairs each of after's keys with the key of st (renamed) it is:
 // the same key exactly, or — when a rebuild changed its columns' names by
 // the copy, which no RENAME states — the one key of st between the same
 // child and parent that after no longer holds. A key with no pair is one the
 // migration added.
-func (st *fkState) matchAfter(after *fkState) map[fkKey]fkKey {
+//
+// When several keys between the same child and parent were re-keyed at once
+// (as many gone as added), pairing them by name order would compare one key's
+// orphans against another's: they are returned as a group instead, and their
+// violations are compared summed.
+func (st *fkState) matchAfter(after *fkState) (map[fkKey]fkKey, []fkGroup) {
 	out := map[fkKey]fkKey{}
 	gone := map[[2]string][]fkKey{}
 	for k := range st.keys {
@@ -341,7 +354,29 @@ func (st *fkState) matchAfter(after *fkState) map[fkKey]fkKey {
 		}
 	}
 	sort.Slice(added, func(i, j int) bool { return added[i].String() < added[j].String() })
+	addedIn := map[[2]string][]fkKey{}
 	for _, k := range added {
+		g := [2]string{k.table, k.parent}
+		addedIn[g] = append(addedIn[g], k)
+	}
+	var groups []fkGroup
+	for g, ks := range addedIn {
+		if len(ks) > 1 && len(ks) == len(gone[g]) {
+			groups = append(groups, fkGroup{added: ks, gone: gone[g]})
+			delete(gone, g)
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].added[0].String() < groups[j].added[0].String() })
+	inGroup := map[fkKey]bool{}
+	for _, gr := range groups {
+		for _, k := range gr.added {
+			inGroup[k] = true
+		}
+	}
+	for _, k := range added {
+		if inGroup[k] {
+			continue
+		}
 		if _, ok := out[k]; ok {
 			continue
 		}
@@ -351,7 +386,7 @@ func (st *fkState) matchAfter(after *fkState) map[fkKey]fkKey {
 			gone[g] = cands[1:]
 		}
 	}
-	return out
+	return out, groups
 }
 
 // tableForeignKeys maps each of table's foreign key ids to its fkKey.
@@ -438,9 +473,28 @@ func assertNoForeignKeyViolations(ctx context.Context, conn *sql.Conn, body, mig
 	// migration, and a key it carried across must still be recognised as the
 	// key it was — its new orphans are the rebuild's, not the data's.
 	prev := before.renamed(body)
-	existed := prev.matchAfter(after)
+	existed, groups := prev.matchAfter(after)
 	var introduced []string
+	inGroup := map[fkKey]bool{}
+	for _, gr := range groups {
+		now, had := 0, 0
+		var names []string
+		for _, k := range gr.added {
+			inGroup[k] = true
+			now += after.violations[k]
+			names = append(names, k.String())
+		}
+		for _, k := range gr.gone {
+			had += prev.violations[k]
+		}
+		if now > had {
+			introduced = append(introduced, fmt.Sprintf("%s: %d row(s) together, %d before", strings.Join(names, ", "), now, had))
+		}
+	}
 	for k, n := range after.violations {
+		if inGroup[k] {
+			continue
+		}
 		old, ok := existed[k]
 		if !ok {
 			slog.Warn("sqlite: a foreign key this migration added over existing rows has orphans: the rows were left as they are (no parent row matches them) and new writes are checked; repair them without deleting — re-create the missing parent or end the child",

@@ -36,8 +36,11 @@ func TestFake_NoPreflightRefusalNamesPostgreSQLOnly(t *testing.T) {
 	if other == nil || !strings.Contains(other.Error(), "PostgreSQL only") || strings.Contains(other.Error(), "fetch the migration again") {
 		t.Errorf("on a store that is not PostgreSQL the refusal promises a preflight a fetch never brings:\n%v", other)
 	}
+	// On PostgreSQL a re-fetch returns the same artefact (a digest is minted
+	// once) and the console renders a preflight only for CREATE TABLEs, so the
+	// way past an ALTER-only migration is a squash, never a fetch.
 	pg := run(stub.New())
-	if pg == nil || !strings.Contains(pg.Error(), "fetch the migration again") {
-		t.Errorf("on PostgreSQL the refusal does not name the fetch:\n%v", pg)
+	if pg == nil || !strings.Contains(pg.Error(), "w17ctl migrate squash") || strings.Contains(pg.Error(), "fetch the migration again") {
+		t.Errorf("on PostgreSQL the refusal does not name the squash (or still sends the operator to fetch):\n%v", pg)
 	}
 }
