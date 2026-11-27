@@ -120,3 +120,62 @@ func TestCheck_RequiresLowerCaseHexOfTheRightLength(t *testing.T) {
 		}
 	}
 }
+
+// The per-path rule and the walk agree: for every file in a tree, Of moves
+// when the file changes exactly when neither Uncovered nor Regenerated claims
+// it. One rule with three readers is only one rule while they stay in step,
+// and this is what keeps them there.
+func TestRegenerated_AgreesWithOfAndUncovered(t *testing.T) {
+	files := map[string]string{
+		"plugin.yaml":                     "name: p\n",
+		"proto/types/a.proto":             "syntax = \"proto3\";\n",
+		"proto/node_modules/x.proto":      "x\n",
+		"src/handlers/h.go":               "package h\n",
+		"src/handlers/node_modules/y.go":  "package y\n",
+		"src/gen/pb/p.pb.go":              "package pb\n",
+		"src/gen/evil.go":                 "package gen\n",
+		"src/general/ok.go":               "package general\n",
+		"src/x/.w17dev/y.go":              "package y\n",
+		".w17dev/proto/domains/d/w.proto": "w\n",
+		"gen/top.go":                      "package gen\n",
+		"node_modules.go":                 "package p\n",
+	}
+	dir := t.TempDir()
+	write(t, dir, files)
+	unc, err := Uncovered(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, u := range unc {
+		listed[u] = true
+	}
+	base, err := Of(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel := range files {
+		full := filepath.Join(dir, filepath.FromSlash(rel))
+		orig, _ := os.ReadFile(full)
+		if err := os.WriteFile(full, append(orig, 'z'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		moved, err := Of(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, orig, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		covered := moved != base
+		if covered == listed[rel] {
+			t.Errorf("%s: covered by Of = %v, listed by Uncovered = %v — exactly one must hold", rel, covered, listed[rel])
+		}
+		if Regenerated(rel) != listed[rel] {
+			t.Errorf("%s: Regenerated = %v, Uncovered lists it = %v", rel, Regenerated(rel), listed[rel])
+		}
+	}
+	if !WrittenByCodegen("src/gen/pb/p.pb.go") || WrittenByCodegen("src/gen/evil.go") || WrittenByCodegen("src/gen/pbx/a.go") {
+		t.Error("WrittenByCodegen does not carve out exactly src/gen/pb/**")
+	}
+}

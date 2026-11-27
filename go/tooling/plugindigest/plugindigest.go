@@ -27,6 +27,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -243,11 +244,52 @@ func regenerated(dir, p string, name string) bool {
 	if p == dir {
 		return false
 	}
-	if name != ".git" && skipDirs[name] {
-		return true
-	}
 	rel, err := filepath.Rel(dir, p)
-	return err == nil && skipPaths[filepath.ToSlash(rel)]
+	return err == nil && regeneratedDir(name, filepath.ToSlash(rel))
+}
+
+// regeneratedDir is the one rule behind regenerated and Regenerated: a
+// directory named in skipDirs (other than `.git`) wherever it sits, or one of
+// the root-relative skipPaths.
+func regeneratedDir(name, rel string) bool {
+	return (name != ".git" && skipDirs[name]) || skipPaths[rel]
+}
+
+// Regenerated reports whether rel — a slash-separated path RELATIVE TO THE
+// PLUGIN ROOT — lies inside a location Of does not cover because a toolchain
+// regenerates it: under `src/gen`, or under a `node_modules` or `.w17dev`
+// directory at any depth. It is the per-path form of Uncovered: for a file in
+// a tree, Uncovered lists it exactly when Regenerated says so (clone metadata
+// and `.DS_Store` aside, which Uncovered leaves out because nothing compiles
+// them).
+//
+// It exists for the readers that see a plugin's files one path at a time — an
+// upload, a staging walk — and have to refuse what the pin does not vouch for
+// with the same answer the digest gives, rather than a second list of
+// directory names that agrees until somebody edits one of them.
+func Regenerated(rel string) bool {
+	rel = path.Clean(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
+	segs := strings.Split(rel, "/")
+	for i := 0; i < len(segs)-1; i++ {
+		if regeneratedDir(segs[i], strings.Join(segs[:i+1], "/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// CodegenPB is the one regenerated location a consumer's tree legitimately
+// carries: the plugin's standalone pb, which codegen writes back under
+// `src/gen/pb` on every run and which no bundle compiles (each activation gets
+// its own pb from the staged protos). A reader refusing what Regenerated
+// reports carves this out and nothing else.
+const CodegenPB = "src/gen/pb"
+
+// WrittenByCodegen reports whether rel (relative to the plugin root) is inside
+// CodegenPB.
+func WrittenByCodegen(rel string) bool {
+	rel = path.Clean(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
+	return strings.HasPrefix(rel, CodegenPB+"/")
 }
 
 // Uncovered lists the files under dir that Of does NOT cover and that a
