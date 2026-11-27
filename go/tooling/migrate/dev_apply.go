@@ -282,10 +282,16 @@ func devApplySQL(m *applyplanpb.DevMigration) string {
 	// EVERYTHING inside the schema's own transaction when there is one.
 	//
 	// The schema, its post-tx statements and its applied-ledger baseline
-	// have to land together: a built schema with an empty ledger is not a
-	// state a retry recovers from, because `storeHasSchema` reads any
-	// non-empty fingerprint as "already done" and green-skips that database
-	// forever. The crash window is permanent and silent.
+	// have to land together: a built schema with an empty ledger is the
+	// state the baseline exists to prevent — the ledger is the only record
+	// of which migration a built store is at, and a schema without it makes
+	// the next `migrate apply` offer that store migrations its schema
+	// already holds. A crash between the two halves would leave exactly that.
+	//
+	// (A baseline arrives only when the plan request carries lock pins in
+	// `baselines`. No client passes them since the live database became the
+	// dev planning base, so this branch has no caller today; it stays atomic
+	// for the one that passes them again.)
 	//
 	// ⚠️ Two earlier versions each got half of this. Appending everything
 	// left the baseline after an explicit COMMIT. Splicing ONLY the
