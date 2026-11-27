@@ -1007,10 +1007,18 @@ func applyFake(ctx context.Context, applier Applier, p Pending, out io.Writer, l
 		// hand-written ledger INSERT this command replaces.
 		// The console renders a preflight for PostgreSQL only: on any other
 		// store no fetch ever brings one, so the text must not send the
-		// operator to fetch.
+		// operator to fetch. On PostgreSQL a fetch does not bring one either:
+		// the artefact (and the digest that binds its preflight) is minted
+		// once, and the console renders a preflight only for a migration that
+		// CREATEs tables — an ALTER describes a change to a schema that must
+		// already be there, which an adopt has no licence to ask about. What
+		// gets an existing database past such a migration is a squash: the
+		// baseline describes the whole schema as CREATE TABLEs, so it carries
+		// a preflight, and --fake records it instead of the history.
 		fix := "the console renders one for PostgreSQL only, so --fake cannot record a migration on this store: apply it for real"
 		if isPostgresApplier(applier) {
-			fix = "fetch the migration again from a console that renders one (PostgreSQL only), or apply it for real"
+			fix = "the console renders an adopt preflight only for a migration that creates tables (only those can be checked against an existing database), and fetching again returns the same artefact. " +
+				"Squash the history (`w17ctl migrate squash`) so the console mints a baseline describing the whole schema, then --fake the baseline; or, if this database does NOT already hold the change, apply it for real"
 		}
 		err := fmt.Errorf("fake apply %s/%s: this migration carries no adopt preflight, so there is nothing to check the claim against\n"+
 			"  why: --fake records a migration without running it, and the licence for that is the database ALREADY holding what the migration describes\n"+
