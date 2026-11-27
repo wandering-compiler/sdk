@@ -300,6 +300,12 @@ func TestApplier_RollbackOfAHalfRunUnnamedOperationNamesTheWayOut_Live(t *testin
 			t.Fatalf("the failed rollback does not say %q:\n%v", want, err)
 		}
 	}
+	// T1-3 pass #6 review 1, R1-1: an unnamed inverse is not proof of an
+	// older console — an emitter that names nothing lands here too — so the
+	// message must not say when the migration was minted.
+	if strings.Contains(err.Error(), "minted") {
+		t.Fatalf("the failed rollback asserts when the migration was minted:\n%v", err)
+	}
 	if _, err := conn.Exec(ctx, hint); err != nil {
 		t.Fatal(err)
 	}

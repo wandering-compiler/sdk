@@ -777,9 +777,12 @@ func (a *Applier) rollbackPreTx(ctx context.Context, m *applyfetchpb.Migration) 
 // halfRunOpUndo is the explanation of a failed inverse that belongs to an
 // operation the skirt stopped inside (some of its statements recorded, not
 // all) when the migration does not name, per inverse statement, the UP
-// statement it undoes (minted before `-- w17:skirt-op N.k`): the rollback
-// runs that operation's whole inverse, and the failing statement may undo
-// one that never ran. "" when that is not the case.
+// statement it undoes (no `-- w17:skirt-op N.k` line — a console that
+// predates the lines, or a renderer that writes none): the rollback runs that
+// operation's whole inverse, and the failing statement may undo one that
+// never ran. "" when that is not the case. The message does not say why the
+// names are missing: the applier cannot tell an old migration from a gap in
+// the renderer.
 func (a *Applier) halfRunOpUndo(m *applyfetchpb.Migration, down []string, i, done int) string {
 	up := splitStatements(m.GetUpPostTx())
 	cur, k := "always", -1
@@ -805,7 +808,7 @@ func (a *Applier) halfRunOpUndo(m *applyfetchpb.Migration, down []string, i, don
 	if s < 0 || done <= s || done >= end {
 		return ""
 	}
-	return fmt.Sprintf("  operation %s of migration %s's non-transactional part stopped after %d of its %d statement(s), and the migration does not name which UP statement each inverse undoes (minted before it did), so this rollback runs the operation's whole inverse — this statement may undo one that never ran\n"+
+	return fmt.Sprintf("  operation %s of migration %s's non-transactional part stopped after %d of its %d statement(s), and the migration does not name which UP statement each of the operation's inverse statements undoes, so this rollback runs the operation's whole inverse — this statement may undo one that never ran\n"+
 		"  fix: if what this statement re-creates or restores is still in place, skip it — `UPDATE w17_migrations SET post_tx_undone = %d WHERE timestamp = '%s';` — and roll back again; otherwise correct the cause and roll back again (the rollback resumes at statement %d)",
 		cur, m.GetId(), done-s, end-s, i+1, ledgerTimestamp(m.GetId()), i+1)
 }
