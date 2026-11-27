@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,11 +118,11 @@ func (a *Applier) runSkirt(ctx context.Context, m *applyfetchpb.Migration, stmts
 		// A rollback of this migration that stopped part-way undid some of
 		// it: running it forward now would apply the rest over a half-undone
 		// schema, and a later rollback would skip inverses on a stale record.
-		if undone, err := a.undoneSoFar(ctx, m.GetId()); err != nil {
+		if started, undone, err := a.undoneSoFar(ctx, m.GetId()); err != nil {
 			return fmt.Errorf("postgres post-tx resume point: %w", err)
-		} else if undone > 0 {
-			return fmt.Errorf("postgres apply up_post_tx: a rollback of migration %s stopped part-way — %d statement(s) of its down_pre_tx ran — so it is not applied forward over the half-undone schema\n"+
-				"  fix: finish the rollback (`migrate rollback`, which resumes where it stopped), then deploy again", m.GetId(), undone)
+		} else if started {
+			return fmt.Errorf("postgres apply up_post_tx: a rollback of migration %s stopped part-way — %d statement(s) of its down_pre_tx are recorded as done — so it is not applied forward over the half-undone schema\n"+
+				"  fix: finish the rollback (`migrate rollback`, which resumes where it stopped), then deploy again; or, when you have checked that none of its inverses changed the database, abandon it — `UPDATE w17_migrations SET post_tx_undone = NULL WHERE timestamp = '%s';` — and deploy again", m.GetId(), undone, ledgerTimestamp(m.GetId()))
 		}
 		var known bool
 		var err error
@@ -487,36 +488,90 @@ func (a *Applier) skirtFailure(ctx context.Context, m *applyfetchpb.Migration, s
 // statement in up_post_tx and its inverse in down_pre_tx; `-- w17:skirt-op
 // always` for an inverse with no up of its own, and for the ledger erase).
 // With the cursor, that says which operations ran.
+//
+// An operation can itself be several statements, and stop part-way: a
+// DropTable is `DROP INDEX …; DROP TABLE …;`, and when the DROP TABLE fails
+// (a dependent view) the index is gone and the table is not. Its inverse
+// (`CREATE TABLE …; CREATE INDEX …;`) run whole failed on the CREATE TABLE —
+// 42P07 on every retry. So an inverse statement may also name the UP
+// statement of its operation it undoes, `-- w17:skirt-op N.k` (k = the
+// offset of that statement inside operation N; UP and DOWN do not pair one
+// to one — a DropTable's inverse re-creates the table before its indexes),
+// and runs only when that statement ran; the statements after it, up to the
+// next marker, undo the same one. An operation whose inverse names none runs
+// whole whenever it started, as before. An applier that does not
+// know the form reads the plain `N` line ahead of it and ignores it.
 
-// skirtOpRe reads an operation marker from a statement's leading comments.
-var skirtOpRe = regexp.MustCompile(`(?m)^\s*--\s*w17:skirt-op\s+(\d+|always)\s*$`)
+// skirtOpRe reads an operation marker from a statement's leading comments:
+// the operation, and the UP statement inside it the statement undoes.
+var skirtOpRe = regexp.MustCompile(`(?m)^\s*--\s*w17:skirt-op\s+(\d+|always)(?:\.(\d+))?\s*$`)
 
-// skirtOpOf is the marker heading stmt ("" when none): its leading comment
-// lines only, so a marker-shaped line inside a statement's body never counts.
-func skirtOpOf(stmt string) string {
+// skirtMark is the marker heading one statement: its operation ("" when none,
+// "always"), and the offset of the UP statement it undoes (k < 0: none named).
+type skirtMark struct {
+	op string
+	k  int
+}
+
+// skirtOpOf is the marker heading stmt: its leading comment lines only, so a
+// marker-shaped line inside a statement's body never counts. The first line
+// names the operation; an `N.k` line names the statement it undoes.
+func skirtOpOf(stmt string) skirtMark {
 	lead := strings.TrimSpace(stmt)
 	head := effectiveHead(stmt)
 	lead = lead[:len(lead)-len(head)]
-	if mm := skirtOpRe.FindStringSubmatch(lead); mm != nil {
-		return mm[1]
+	mk := skirtMark{k: -1}
+	for _, mm := range skirtOpRe.FindAllStringSubmatch(lead, -1) {
+		if mk.op == "" {
+			mk.op = mm[1]
+		}
+		if mm[2] != "" && mm[1] == mk.op {
+			if k, err := strconv.Atoi(mm[2]); err == nil {
+				mk.k = k
+			}
+		}
 	}
-	return ""
+	return mk
+}
+
+// skirtUndoMark advances the operation and named UP statement a down_pre_tx
+// statement belongs to: a marker of another operation starts it (with the
+// statement it names, or none), an `N.k` line names the statement, and an
+// unmarked statement keeps both — a statement named once covers the ones
+// after it up to the next marker.
+func skirtUndoMark(stmt, cur string, k int) (string, int) {
+	mk := skirtOpOf(stmt)
+	if mk.op != "" && mk.op != cur {
+		return mk.op, mk.k
+	}
+	if mk.k >= 0 {
+		return cur, mk.k
+	}
+	return cur, k
 }
 
 // skirtUndoPlan decides which down_pre_tx statements a rollback runs: nil
 // (all of them, as always) unless the migration is half-applied with a
 // recorded cursor and marks its operations — then every inverse but those of
-// the operations that never started. An operation started when one of its
-// statements is recorded as done, or when the first unrecorded statement is
-// its CONCURRENTLY one (a failed concurrent build leaves an INVALID index its
-// inverse drops). pending reports a half-applied migration, for the message
-// of an inverse that fails anyway.
+// the operations that never started, and, inside a started operation, but
+// those that name an UP statement that never ran. An UP statement ran when
+// the cursor records it, or when the cursor stops at a run of CONCURRENTLY
+// statements that reaches it (a failed concurrent build leaves an INVALID
+// index its inverse drops; the `DROP … IF EXISTS` ahead of it is not recorded
+// on its own). pending reports a half-applied migration, for the message of
+// an inverse that fails anyway; ops lists, per down_pre_tx statement, the
+// operation it belongs to.
 func (a *Applier) skirtUndoPlan(ctx context.Context, m *applyfetchpb.Migration, down []string) (run []bool, pending bool, done int, err error) {
 	if len(down) == 0 || m.GetUpPostTx() == "" {
 		return nil, false, 0, nil
 	}
 	phase, err := a.MigrationPhase(ctx, m.GetId())
 	if err != nil || phase != migrate.PhasePending {
+		return nil, false, 0, err
+	}
+	// A complete migration whose rollback stopped part-way reads as pending
+	// (appliedRowExpr), and every one of its inverses is due.
+	if complete, err := a.rowComplete(ctx, m.GetId()); err != nil || complete {
 		return nil, false, 0, err
 	}
 	up := splitStatements(m.GetUpPostTx())
@@ -543,13 +598,26 @@ func (a *Applier) skirtUndoPlan(ctx context.Context, m *applyfetchpb.Migration, 
 	starts := map[string]int{}
 	var order []string
 	for i, stmt := range up {
-		if op := skirtOpOf(stmt); op != "" && op != "always" {
+		if op := skirtOpOf(stmt).op; op != "" && op != "always" {
 			starts[op] = i
 			order = append(order, op)
 		}
 	}
 	if len(order) == 0 {
 		return nil, true, done, nil // minted before the markers: every inverse, as before
+	}
+	// ran reports whether UP statement j ran (or may have left something an
+	// inverse must undo).
+	ran := func(j int) bool {
+		if done > j || j >= len(up) {
+			return true
+		}
+		for i := done; i <= j; i++ {
+			if !concurrentStmtRe.MatchString(effectiveHead(up[i])) {
+				return false
+			}
+		}
+		return true
 	}
 	started := map[string]bool{}
 	for j, op := range order {
@@ -561,15 +629,37 @@ func (a *Applier) skirtUndoPlan(ctx context.Context, m *applyfetchpb.Migration, 
 		started[op] = done > s || (done >= s && done < end && concurrentStmtRe.MatchString(effectiveHead(up[done])))
 	}
 	run = make([]bool, len(down))
-	cur := "always"
+	cur, k := "always", -1
 	for i, stmt := range down {
-		if op := skirtOpOf(stmt); op != "" {
-			cur = op
+		cur, k = skirtUndoMark(stmt, cur, k)
+		s, marked := starts[cur]
+		switch {
+		case cur == "always" || !marked:
+			run[i] = true
+		case !started[cur]:
+			run[i] = false
+		case k >= 0:
+			run[i] = ran(s + k)
+		default:
+			run[i] = true
 		}
-		_, marked := starts[cur]
-		run[i] = cur == "always" || !marked || started[cur]
 	}
 	return run, true, done, nil
+}
+
+// rowComplete reports whether the migration's ledger row records its post-tx
+// half complete (a ledger without the column holds only complete rows).
+func (a *Applier) rowComplete(ctx context.Context, id string) (bool, error) {
+	has, err := a.hasPhaseColumn(ctx)
+	if err != nil || !has {
+		return true, err
+	}
+	var complete bool
+	err = a.conn.QueryRow(ctx, `SELECT post_tx_complete FROM w17_migrations WHERE `+skirtRowWhere1, id).Scan(&complete)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return complete, err
 }
 
 // rollbackPreTx runs down_pre_tx statement by statement, skipping what
@@ -577,6 +667,14 @@ func (a *Applier) skirtUndoPlan(ctx context.Context, m *applyfetchpb.Migration, 
 // did not record as done: an inverse that ran — a RENAME back, a re-added
 // column — cannot run twice, and the rollback that stopped on the data used
 // to run every one again and wedge on the first.
+//
+// A CONCURRENTLY inverse is resumed the way the forward skirt resumes one: a
+// `DROP INDEX CONCURRENTLY IF EXISTS` is not recorded on its own, so a resume
+// runs it again with the build after it (an INVALID leftover of a failed
+// build is dropped, never met by `already exists`), and a build the resume
+// starts at (the first statement it runs) is settled first — skipped when a
+// valid index of its name stands (it finished and the record did not), its
+// INVALID leftover dropped.
 func (a *Applier) rollbackPreTx(ctx context.Context, m *applyfetchpb.Migration) error {
 	down := splitStatements(m.GetDownPreTx())
 	if len(down) == 0 {
@@ -586,26 +684,62 @@ func (a *Applier) rollbackPreTx(ctx context.Context, m *applyfetchpb.Migration) 
 	if err != nil {
 		return fmt.Errorf("postgres rollback down_pre_tx: read the half-applied migration's resume point: %w", err)
 	}
-	tracked, from, untracked := a.undoStart(ctx, m.GetId())
+	tracked, from, resumed, untracked := a.undoStart(ctx, m.GetId())
 	if from > len(down) {
 		return fmt.Errorf("postgres rollback down_pre_tx: the ledger records %d statements of migration %s's down_pre_tx as done, and it has %d — this is not the migration that ran here", from, m.GetId(), len(down))
 	}
+	recorded := from
+	first := true
 	for i := from; i < len(down); i++ {
 		if run != nil && !run[i] {
 			continue
 		}
+		settle := first
+		first = false
 		stmt := down[i]
+		if settle && tracked && !resumed {
+			// The row says a rollback is under way before its first inverse
+			// runs: a CONCURRENTLY drop runs unrecorded, and a rollback that
+			// stops right after one has changed the schema with nothing
+			// counted. From here the ledger's readers do not call the
+			// migration applied (appliedRowExpr) and the forward resume
+			// refuses (runSkirt).
+			if err := setUndone(ctx, a.conn, m.GetId(), from); err != nil {
+				return fmt.Errorf("postgres rollback down_pre_tx: record the rollback's start: %w", err)
+			}
+		}
+		head := effectiveHead(stmt)
 		var err error
 		switch {
 		case !tracked:
 			_, err = a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol)
-		case concurrentStmtRe.MatchString(effectiveHead(stmt)):
-			err = a.runAloneUndo(ctx, m.GetId(), stmt, i+1)
+		case concurrentStmtRe.MatchString(head):
+			advance := !rerunSafeDropRe.MatchString(head)
+			if settle {
+				var skip bool
+				if skip, err = a.settleInterruptedBuild(ctx, head); err == nil && skip {
+					err = setUndone(ctx, a.conn, m.GetId(), i+1)
+					if err == nil {
+						recorded = i + 1
+						continue
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+			err = a.runAloneUndo(ctx, m.GetId(), stmt, i+1, advance)
+			if err == nil && advance {
+				recorded = i + 1
+			}
 		default:
 			err = a.runWithUndo(ctx, m.GetId(), stmt, i+1)
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "25001" {
-				err = a.runAloneUndo(ctx, m.GetId(), stmt, i+1)
+				err = a.runAloneUndo(ctx, m.GetId(), stmt, i+1, true)
+			}
+			if err == nil {
+				recorded = i + 1
 			}
 		}
 		if err == nil {
@@ -623,32 +757,77 @@ func (a *Applier) rollbackPreTx(ctx context.Context, m *applyfetchpb.Migration) 
 				"  fix: correct the cause, then run statements %d–%d of its down_pre_tx and its down_sql by hand",
 				i+1, len(down), err, untracked, i, i+1, len(down))
 		}
+		if pending && run != nil {
+			if why := a.halfRunOpUndo(m, down, i, done); why != "" {
+				return fmt.Errorf("postgres rollback down_pre_tx: statement %d of %d: %w\n%s", i+1, len(down), err, why)
+			}
+		}
+		again := ""
+		if recorded < i {
+			again = fmt.Sprintf("; statements %d–%d ran and are not recorded (a DROP INDEX CONCURRENTLY IF EXISTS ahead of a concurrent build, which the resume runs again with the build)", recorded+1, i)
+		}
 		return fmt.Errorf("postgres rollback down_pre_tx: statement %d of %d: %w\n"+
-			"  the rollback of migration %s stopped part-way: the first %d statement(s) of its down_pre_tx are recorded as done (or skipped as inverses of statements that never ran)\n"+
+			"  the rollback of migration %s stopped part-way: the first %d statement(s) of its down_pre_tx are recorded as done (or skipped as inverses of statements that never ran)%s\n"+
 			"  fix: correct the cause and roll back again — the rollback resumes at statement %d and never runs the recorded ones again",
-			i+1, len(down), err, m.GetId(), i, i+1)
+			i+1, len(down), err, m.GetId(), recorded, again, recorded+1)
 	}
 	return nil
 }
 
+// halfRunOpUndo is the explanation of a failed inverse that belongs to an
+// operation the skirt stopped inside (some of its statements recorded, not
+// all) when the migration does not name, per inverse statement, the UP
+// statement it undoes (minted before `-- w17:skirt-op N.k`): the rollback
+// runs that operation's whole inverse, and the failing statement may undo
+// one that never ran. "" when that is not the case.
+func (a *Applier) halfRunOpUndo(m *applyfetchpb.Migration, down []string, i, done int) string {
+	up := splitStatements(m.GetUpPostTx())
+	cur, k := "always", -1
+	for j := 0; j <= i; j++ {
+		cur, k = skirtUndoMark(down[j], cur, k)
+	}
+	if cur == "always" || k >= 0 {
+		return ""
+	}
+	s, end := -1, len(up)
+	for j, stmt := range up {
+		op := skirtOpOf(stmt).op
+		if op == cur {
+			s = j
+		} else if s >= 0 && op != "" {
+			end = j
+			break
+		}
+	}
+	if end == len(up) && completesAPendingRow(up) {
+		end-- // the completing UPDATE belongs to no operation
+	}
+	if s < 0 || done <= s || done >= end {
+		return ""
+	}
+	return fmt.Sprintf("  operation %s of migration %s's non-transactional part stopped after %d of its %d statement(s), and the migration does not name which UP statement each inverse undoes (minted before it did), so this rollback runs the operation's whole inverse — this statement may undo one that never ran\n"+
+		"  fix: if what this statement re-creates or restores is still in place, skip it — `UPDATE w17_migrations SET post_tx_undone = %d WHERE timestamp = '%s';` — and roll back again; otherwise correct the cause and roll back again (the rollback resumes at statement %d)",
+		cur, m.GetId(), done-s, end-s, i+1, ledgerTimestamp(m.GetId()), i+1)
+}
+
 // undoStart reads where a rollback of the migration's down_pre_tx starts: the
 // statement after the last one a stopped rollback recorded (post_tx_undone;
-// NULL is 0). The column is added when missing; a ledger this role cannot
-// ALTER, or a migration with no ledger row, rolls back untracked as before,
-// and why is the third value.
-func (a *Applier) undoStart(ctx context.Context, id string) (bool, int, string) {
+// NULL is 0, and no rollback has started — resumed false). The column is
+// added when missing; a ledger this role cannot ALTER, or a migration with no
+// ledger row, rolls back untracked as before, and why is the last value.
+func (a *Applier) undoStart(ctx context.Context, id string) (tracked bool, from int, resumed bool, untracked string) {
 	if err := a.ensureUndoColumn(ctx); err != nil {
-		return false, 0, "the ledger has no post_tx_undone column and this role cannot add it: " + err.Error()
+		return false, 0, false, "the ledger has no post_tx_undone column and this role cannot add it: " + err.Error()
 	}
 	var n *int
 	err := a.conn.QueryRow(ctx, `SELECT post_tx_undone FROM w17_migrations WHERE `+skirtRowWhere1, id).Scan(&n)
 	if err != nil {
-		return false, 0, "the migration's ledger row could not be read: " + err.Error()
+		return false, 0, false, "the migration's ledger row could not be read: " + err.Error()
 	}
 	if n == nil {
-		return true, 0, ""
+		return true, 0, false, ""
 	}
-	return true, *n, ""
+	return true, *n, true, ""
 }
 
 // skirtRowWhere1 is skirtRowWhere with the id as the only parameter.
@@ -673,10 +852,13 @@ func (a *Applier) runWithUndo(ctx context.Context, id, stmt string, n int) error
 }
 
 // runAloneUndo runs one inverse PostgreSQL refuses in a transaction, then
-// records it done.
-func (a *Applier) runAloneUndo(ctx context.Context, id, stmt string, n int) error {
+// (advance) records it done.
+func (a *Applier) runAloneUndo(ctx context.Context, id, stmt string, n int, advance bool) error {
 	if _, err := a.conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
 		return err
+	}
+	if !advance {
+		return nil
 	}
 	return setUndone(ctx, a.conn, id, n)
 }
@@ -721,20 +903,22 @@ func (a *Applier) hasLedgerColumn(ctx context.Context, col string) (bool, error)
 	return has, nil
 }
 
-// undoneSoFar reads how many down_pre_tx statements a stopped rollback of the
-// migration recorded (0 when none ran, or the ledger has no such column).
-func (a *Applier) undoneSoFar(ctx context.Context, id string) (int, error) {
+// undoneSoFar reads whether a rollback of the migration started and stopped
+// (post_tx_undone not NULL) and how many down_pre_tx statements it recorded
+// (0 also when only an unrecorded CONCURRENTLY drop ran). No row, or a ledger
+// without the column: none started.
+func (a *Applier) undoneSoFar(ctx context.Context, id string) (bool, int, error) {
 	has, err := a.hasLedgerColumn(ctx, "post_tx_undone")
 	if err != nil || !has {
-		return 0, err
+		return false, 0, err
 	}
 	var n *int
 	err = a.conn.QueryRow(ctx, `SELECT post_tx_undone FROM w17_migrations WHERE `+skirtRowWhere1, id).Scan(&n)
 	if errors.Is(err, pgx.ErrNoRows) || n == nil {
-		return 0, nil
+		return false, 0, nil
 	}
 	if err != nil {
-		return 0, err
+		return false, 0, err
 	}
-	return *n, nil
+	return true, *n, nil
 }

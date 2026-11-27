@@ -129,10 +129,11 @@ func (a *Applier) AppliedHead(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("postgres AppliedHead: %w", err)
 	}
-	query := `SELECT COALESCE(to_char(MAX(timestamp) AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"'), '') FROM w17_migrations`
-	if hasPhase {
-		query += ` WHERE post_tx_complete`
+	applied, err := a.appliedRowExpr(ctx, hasPhase)
+	if err != nil {
+		return "", fmt.Errorf("postgres AppliedHead: %w", err)
 	}
+	query := `SELECT COALESCE(to_char(MAX(timestamp) AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"'), '') FROM w17_migrations WHERE ` + applied
 	var head string
 	err = a.conn.QueryRow(ctx, query).Scan(&head)
 	if err != nil {
@@ -166,6 +167,34 @@ func (a *Applier) hasPhaseColumn(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("read the ledger's columns: %w", err)
 	}
 	return has, nil
+}
+
+// appliedRowExpr is the condition a ledger row meets when its migration is
+// applied: its post-tx half completed (post_tx_complete, when the ledger has
+// the column) AND no rollback of it has started undoing its non-transactional
+// part (post_tx_undone, when it has that one). A rollback that stopped
+// part-way leaves `post_tx_complete = true` with some inverses run; read as
+// applied, that row was the head, `status` called it applied, and a deploy
+// applied the next migration forward over the half-undone schema. It is
+// pending instead — being undone: the resume (ApplyPostTx) refuses with
+// "finish the rollback", and the rollback resumes where it stopped.
+// Read-only: asks the catalogue, never ALTERs.
+func (a *Applier) appliedRowExpr(ctx context.Context, hasPhase bool) (string, error) {
+	expr := "true"
+	if hasPhase {
+		expr = "post_tx_complete"
+	}
+	hasUndo := a.undoColEnsured
+	if !hasUndo {
+		var err error
+		if hasUndo, err = a.hasLedgerColumn(ctx, "post_tx_undone"); err != nil {
+			return "", err
+		}
+	}
+	if hasUndo {
+		expr += " AND post_tx_undone IS NULL"
+	}
+	return expr, nil
 }
 
 // ensurePhaseColumn idempotently adds the `post_tx_complete`
@@ -225,7 +254,11 @@ func (a *Applier) PendingMigrations(ctx context.Context) ([]string, error) {
 		}
 		return nil, err
 	}
-	rows, err := a.conn.Query(ctx, `SELECT to_char(timestamp AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"') FROM w17_migrations WHERE NOT post_tx_complete ORDER BY timestamp`)
+	applied, err := a.appliedRowExpr(ctx, hasPhase)
+	if err != nil {
+		return nil, fmt.Errorf("postgres PendingMigrations: %w", err)
+	}
+	rows, err := a.conn.Query(ctx, `SELECT to_char(timestamp AT TIME ZONE 'UTC', 'YYYYMMDD"T"HH24MISS"Z"') FROM w17_migrations WHERE NOT (`+applied+`) ORDER BY timestamp`)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
@@ -247,9 +280,9 @@ func (a *Applier) MigrationPhase(ctx context.Context, id string) (migrate.Phase,
 	if err != nil {
 		return migrate.PhaseFresh, fmt.Errorf("postgres MigrationPhase: %w", err)
 	}
-	completeExpr := "post_tx_complete"
-	if !hasPhase {
-		completeExpr = "true"
+	completeExpr, err := a.appliedRowExpr(ctx, hasPhase)
+	if err != nil {
+		return migrate.PhaseFresh, fmt.Errorf("postgres MigrationPhase: %w", err)
 	}
 	var complete bool
 	// Canonicalise the stored TIMESTAMPTZ back to the migration id
@@ -509,7 +542,15 @@ func splitStatements(sql string) []string {
 	flush := func() {
 		s := strings.TrimSpace(buf.String())
 		buf.Reset()
-		if s != "" {
+		// A fragment of comments alone is no statement: the signature
+		// footer decorate appends after a served skirt's last `;`
+		// (`-- w17:content_signature: …`). Kept, it ran as an empty
+		// statement, was counted in every "statement i of N", and stood
+		// LAST — where completesAPendingRow looks for the completing
+		// UPDATE, so the pre-commit cursor gate never fired on a served
+		// skirt. Only the tail can be one (a `;` inside a comment is not a
+		// boundary), so no recorded cursor ever counted it.
+		if s != "" && effectiveHead(s) != "" {
 			out = append(out, s+";")
 		}
 	}
