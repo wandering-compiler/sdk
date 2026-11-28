@@ -111,3 +111,8 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+retract (
+	v0.2.1 // Carries the retraction of v0.2.0 only.
+	v0.2.0 // Published by mistake before 0.2 was ready. Use v0.2.2 or later.
+)
